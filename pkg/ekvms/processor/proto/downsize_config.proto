@@ -1,0 +1,45 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file shouldn't be modified directly. Its source of truth is located
+// in the GKE codebase:
+// cs///depot/google3/cloud/kubernetes/proto/internal.proto
+// If you want to change anything, first submit the changes there and get the
+// EK team approval, then sync this file and generate the go file using
+// "protoc --go_out=. --go_opt=paths=source_relative  --proto_path=. downsize_config.proto"
+syntax = "proto3";
+
+package downsizer;
+
+import "google/protobuf/duration.proto";
+option go_package = "./pkg/ekvms/processor/proto";
+
+message DownsizeConfig {
+  // DownsizeBehavior defines conditions for downsizing an EK node and whether
+  // it's a suitable scaledown candidate.
+  message DownsizeBehavior {
+    // Max allowed size fraction for a node relative to its physical maximum size.
+    double max_desired_size_fraction = 1;
+    // Minimum allowed size fraction after a downsize.
+    double min_downsize_fraction = 2;
+    // Delay in duration before a downsize is performed after it's allowed.
+    google.protobuf.Duration downsize_delay = 3;
+    // Indicates if the node is a valid scaledown candidate.
+    bool allowed_for_scaledown = 4;
+  }
+  // List of downsizing behaviors sorted by MaxDesiredSizeFraction.
+  repeated DownsizeBehavior behaviors = 1;
+  // Time window duration for applying max function to avoid unnecessary resize patterns.
+  google.protobuf.Duration smoothing_window_length = 2;
+}
