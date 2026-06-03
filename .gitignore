@@ -1,0 +1,14 @@
+/cluster-autoscaler
+/cluster_autoscaler
+/go-build
+.cover
+
+# Vim-related files
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+*.un~
+Session.vim
+.netrwhist
+
+vendor/**/OWNERS
+vendor/**/OWNERS_ALIASES
