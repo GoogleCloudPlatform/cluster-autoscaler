@@ -39,43 +39,53 @@ func NewProvider(experimentsManager experiments.Manager) *Provider {
 func (c *Provider) GetConfig() Controller {
 	val := c.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ColdStandbyNodesControllerConfigV1Flag, "")
 	if val == "" {
-		klog.V(4).Infof("CSN Node Controller: config not found in experiments manager, default config applied: %v", defaultConfig)
-		return defaultConfig
+		defaultCfg := getDefaultConfig()
+		klog.V(4).Infof("CSN Node Controller: config not found in experiments manager, default config applied: %v", defaultCfg)
+		return defaultCfg
 	}
 
-	var cfg Controller
+	// Initialize with defaults first so that any omitted fields in the experiment
+	// config JSON will retain their fallback values after unmarshalling.
+	cfg := getDefaultConfig()
 	if err := json.Unmarshal([]byte(val), &cfg); err != nil {
-		klog.Errorf("CSN Node Controller: default config %v will be applied because unmarshalling experiment config failed: %v", defaultConfig, err)
-		return defaultConfig
+		defaultCfg := getDefaultConfig()
+		klog.Errorf("CSN Node Controller: default config %v will be applied because unmarshalling experiment config failed: %v", defaultCfg, err)
+		return defaultCfg
 	}
 	klog.V(4).Infof("CSN Node Controller: found experiment config: %v", val)
 	return cfg
 }
 
-// defaultConfig provides a sensible config that will be used
+// getDefaultConfig provides a sensible config that will be used
 // when the config cannot be found via experiments.
-var defaultConfig = Controller{
-	WorkQueue: WorkQueue{
-		MaxSize: 1000,
-	},
-	Dispatcher: Dispatcher{
-		WorkerCount: 100,
-		Retry: Retry{
-			MaxRetries:   3,
-			InitialDelay: metav1.Duration{Duration: 5 * time.Second},
-			MaxDelay:     metav1.Duration{Duration: 5 * time.Minute},
+func getDefaultConfig() Controller {
+	return Controller{
+		WorkQueue: WorkQueue{
+			MaxSize: 1000,
 		},
-	},
-	Suspend: Suspend{
-		MinNodeLifetime: metav1.Duration{Duration: 5 * time.Minute},
-		PreSuspendDelay: metav1.Duration{Duration: 1 * time.Second},
-	},
-	Reconciliation: Reconciliation{
-		Interval:        metav1.Duration{Duration: 15 * time.Second},
-		MaxInvalidCount: 3,
-	},
-	StateManager: StateManager{
-		StopTrackingDelay:   metav1.Duration{Duration: 10 * time.Minute},
-		MetricsSyncInterval: metav1.Duration{Duration: 5 * time.Second},
-	},
+		Dispatcher: Dispatcher{
+			WorkerCount: 100,
+			Retry: Retry{
+				MaxRetries: 6,
+				MaxRetriesByOp: map[string]int{
+					"CONSUME": 6,
+					"SUSPEND": 6,
+				},
+				InitialDelay: metav1.Duration{Duration: 5 * time.Second},
+				MaxDelay:     metav1.Duration{Duration: 5 * time.Minute},
+			},
+		},
+		Suspend: Suspend{
+			MinNodeLifetime: metav1.Duration{Duration: 5 * time.Minute},
+			PreSuspendDelay: metav1.Duration{Duration: 1 * time.Second},
+		},
+		Reconciliation: Reconciliation{
+			Interval:        metav1.Duration{Duration: 15 * time.Second},
+			MaxInvalidCount: 3,
+		},
+		StateManager: StateManager{
+			StopTrackingDelay:   metav1.Duration{Duration: 10 * time.Minute},
+			MetricsSyncInterval: metav1.Duration{Duration: 5 * time.Second},
+		},
+	}
 }

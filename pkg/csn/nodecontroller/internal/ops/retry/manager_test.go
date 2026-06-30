@@ -356,3 +356,129 @@ func TestBackoffManager_Run(t *testing.T) {
 		})
 	}
 }
+
+func TestConfig_GetMaxRetries(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   Config
+		opType   ops.OperationType
+		expected int
+	}{
+		{
+			name: "fallback_to_max_retries_when_map_is_nil",
+			config: Config{
+				MaxRetries: 5,
+			},
+			opType:   ops.ConsumeOp,
+			expected: 5,
+		},
+		{
+			name: "fallback_to_max_retries_when_key_is_missing_in_map",
+			config: Config{
+				MaxRetries: 5,
+				MaxRetriesByOp: map[ops.OperationType]int{
+					ops.SuspendOp: 3,
+				},
+			},
+			opType:   ops.ConsumeOp,
+			expected: 5,
+		},
+		{
+			name: "use_overridden_value_from_map",
+			config: Config{
+				MaxRetries: 5,
+				MaxRetriesByOp: map[ops.OperationType]int{
+					ops.ConsumeOp: 0,
+					ops.SuspendOp: 3,
+				},
+			},
+			opType:   ops.ConsumeOp,
+			expected: 0,
+		},
+		{
+			name: "use_overridden_value_from_map_for_other_op",
+			config: Config{
+				MaxRetries: 5,
+				MaxRetriesByOp: map[ops.OperationType]int{
+					ops.ConsumeOp: 0,
+					ops.SuspendOp: 3,
+				},
+			},
+			opType:   ops.SuspendOp,
+			expected: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, tc.config.GetMaxRetries(tc.opType))
+		})
+	}
+}
+
+func TestBackoffManager_AddFailedNodes_WithOverrides(t *testing.T) {
+	config := Config{
+		MaxRetries: 5,
+		MaxRetriesByOp: map[ops.OperationType]int{
+			ops.ConsumeOp: 0,
+			ops.SuspendOp: 2,
+		},
+		InitialDelay: time.Second,
+		MaxDelay:     time.Second,
+	}
+
+	tests := []struct {
+		name            string
+		opType          ops.OperationType
+		nodes           set.Set[string]
+		setup           func(*BackoffManager)
+		expectBackedOff set.Set[string]
+		expectFailed    set.Set[string]
+	}{
+		{
+			name:            "consume_fails_instantly_with_zero_max_retries_override",
+			opType:          ops.ConsumeOp,
+			nodes:           set.New("node1"),
+			expectBackedOff: set.New[string](),
+			expectFailed:    set.New("node1"),
+		},
+		{
+			name:            "suspend_backed_off_on_first_failure_with_override",
+			opType:          ops.SuspendOp,
+			nodes:           set.New("node1"),
+			expectBackedOff: set.New("node1"),
+			expectFailed:    set.New[string](),
+		},
+		{
+			name:   "suspend_failed_permanently_at_max_retries",
+			opType: ops.SuspendOp,
+			nodes:  set.New("node1"),
+			setup: func(m *BackoffManager) {
+				op := ops.Operation{Type: ops.SuspendOp}
+				m.AddFailedNodes(op, set.New("node1"))
+				m.AddFailedNodes(op, set.New("node1"))
+			},
+			expectBackedOff: set.New[string](),
+			expectFailed:    set.New("node1"),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClock := testingclock.NewFakeClock(time.Now())
+			m := NewBackoffManager(fakeClock, config,
+				func(ops.Operation) error { return nil },
+			)
+			op := ops.Operation{Type: tc.opType}
+
+			if tc.setup != nil {
+				tc.setup(m)
+			}
+
+			result := m.AddFailedNodes(op, tc.nodes)
+
+			assert.Equal(t, tc.expectBackedOff, result.BackedOffNodes, "unexpected backed off nodes")
+			assert.Equal(t, tc.expectFailed, result.FailedNodes, "unexpected permanently failed nodes")
+		})
+	}
+}

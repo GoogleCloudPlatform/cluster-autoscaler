@@ -140,10 +140,22 @@ func NewCSNNodeController(
 		state.WithExperimentsManager(experimentsManager),
 	)
 	wq := queue.NewWorkQueue(config.WorkQueue.MaxSize, nsm)
+	var maxRetriesByOp map[ops.OperationType]int
+	if config.Dispatcher.Retry.MaxRetriesByOp != nil {
+		maxRetriesByOp = make(map[ops.OperationType]int)
+		for k, v := range config.Dispatcher.Retry.MaxRetriesByOp {
+			if opType, err := ops.ParseOperationType(k); err == nil {
+				maxRetriesByOp[opType] = v
+			} else {
+				klog.Warningf("%s error parsing MaxRetriesByOp: %v", logPrefix, err)
+			}
+		}
+	}
 	d := dispatch.NewDispatcher(config.Dispatcher.WorkerCount, retry.Config{
-		MaxRetries:   config.Dispatcher.Retry.MaxRetries,
-		InitialDelay: config.Dispatcher.Retry.InitialDelay.Duration,
-		MaxDelay:     config.Dispatcher.Retry.MaxDelay.Duration,
+		MaxRetries:     config.Dispatcher.Retry.MaxRetries,
+		MaxRetriesByOp: maxRetriesByOp,
+		InitialDelay:   config.Dispatcher.Retry.InitialDelay.Duration,
+		MaxDelay:       config.Dispatcher.Retry.MaxDelay.Duration,
 	}, wq, func(op ops.OperationType, nodeNames set.Set[string]) {
 		// best-effort clear operation.
 		nsm.SetPendingOperation(op, false, nodeNames)
@@ -238,7 +250,7 @@ func (c *csnNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.S
 		if tn.State != csn.NodeStateChilling {
 			continue
 		}
-		if nodeLifetime, minLifetime := time.Now().Sub(node.Node().CreationTimestamp.Time), c.minLifetimeForSuspend(&tn); nodeLifetime <= minLifetime {
+		if nodeLifetime, minLifetime := time.Since(node.Node().CreationTimestamp.Time), c.minLifetimeForSuspend(&tn); nodeLifetime <= minLifetime {
 			continue
 		}
 		if tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp) {

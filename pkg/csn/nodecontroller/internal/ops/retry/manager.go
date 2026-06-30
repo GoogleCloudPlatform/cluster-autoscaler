@@ -32,9 +32,10 @@ const logPrefix = "CSN BackoffManager:"
 
 // Config holds configuration parameters for BackoffManager.
 type Config struct {
-	MaxRetries   int
-	InitialDelay time.Duration
-	MaxDelay     time.Duration
+	MaxRetries     int
+	MaxRetriesByOp map[ops.OperationType]int
+	InitialDelay   time.Duration
+	MaxDelay       time.Duration
 }
 
 // Event is emitted by the BackoffManager on each execution of the internal
@@ -106,7 +107,7 @@ func (m *BackoffManager) AddFailedNodes(op ops.Operation, failedNodes set.Set[st
 		k := Key{NodeName: nodeName, OpType: op.Type}
 		count := m.retryCounts[k]
 		count++
-		if count > m.config.MaxRetries {
+		if count > m.config.GetMaxRetries(op.Type) {
 			klog.Errorf("%s max retries reached for node %q, operation %v. Dropping.", logPrefix, nodeName, op.Type)
 			delete(m.retryCounts, k)
 			result.FailedNodes.Insert(nodeName)
@@ -242,4 +243,14 @@ func safeStop(timer clock.Timer) {
 	case <-timer.C():
 	default:
 	}
+}
+
+// GetMaxRetries returns the max retry count for the given operation type.
+func (c Config) GetMaxRetries(opType ops.OperationType) int {
+	if c.MaxRetriesByOp != nil {
+		if max, exists := c.MaxRetriesByOp[opType]; exists {
+			return max
+		}
+	}
+	return c.MaxRetries
 }

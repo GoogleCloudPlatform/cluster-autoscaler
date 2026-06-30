@@ -40,9 +40,10 @@ type WorkQueue struct {
 
 // Retry defines the parameters for retrying failed operations.
 type Retry struct {
-	MaxRetries   int             `json:"maxRetries,omitempty"`
-	InitialDelay metav1.Duration `json:"initialDelay,omitempty"`
-	MaxDelay     metav1.Duration `json:"maxDelay,omitempty"`
+	MaxRetries     int             `json:"maxRetries,omitempty"`
+	MaxRetriesByOp map[string]int  `json:"maxRetriesByOp,omitempty"`
+	InitialDelay   metav1.Duration `json:"initialDelay,omitempty"`
+	MaxDelay       metav1.Duration `json:"maxDelay,omitempty"`
 }
 
 // Dispatcher defines the execution model for processing node operations.

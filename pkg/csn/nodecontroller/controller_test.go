@@ -964,3 +964,38 @@ func TestCustomCallerFilters(t *testing.T) {
 		assert.ElementsMatch(t, []string{"n3"}, names)
 	})
 }
+
+func TestInitWithMaxRetriesByOp(t *testing.T) {
+	experimentsManager := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		nil,
+		map[string]string{
+			experiments.ColdStandbyNodesControllerConfigV1Flag: `{
+				"dispatcher": {
+					"workerCount": 10,
+					"retry": {
+						"maxRetries": 6,
+						"maxRetriesByOp": {
+							"CONSUME": 0,
+							"SUSPEND": 3,
+							"INVALID_OP": 5
+						}
+					}
+				}
+			}`,
+		},
+	)
+	factory := informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0)
+	c := NewCSNNodeController(factory, fake.NewSimpleClientset(), &test.MockCloudProvider{}, experimentsManager, &test.MockBackoff{}, kube_record.NewFakeRecorder(100))
+
+	assert.NotNil(t, c.dispatcher)
+	// We can't easily inspect c.dispatcher.backoffManager.config because it's private/unexported
+	// from the dispatcher pkg. But we can assert the config parsed by Provider matches what we expect
+	// and was passed through.
+	assert.Equal(t, 6, c.cfg.Dispatcher.Retry.MaxRetries)
+	assert.Equal(t, map[string]int{
+		"CONSUME":    0,
+		"SUSPEND":    3,
+		"INVALID_OP": 5,
+	}, c.cfg.Dispatcher.Retry.MaxRetriesByOp)
+}

@@ -288,13 +288,75 @@ func TestResult_AddResult(t *testing.T) {
 			wantErrs:    map[string]error{"node-2": errB},
 		},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.result.AddResult(tc.other)
-
 			assert.ElementsMatch(t, tc.wantSuccess, tc.result.Success.UnsortedList())
 			assert.Equal(t, tc.wantErrs, tc.result.Errs)
+		})
+	}
+}
+
+func TestParseOperationType(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantOp  OperationType
+		wantErr bool
+	}{
+		{
+			name:    "suspend",
+			input:   "SUSPEND",
+			wantOp:  SuspendOp,
+			wantErr: false,
+		},
+		{
+			name:    "consume",
+			input:   "CONSUME",
+			wantOp:  ConsumeOp,
+			wantErr: false,
+		},
+		{
+			name:    "assign_buffer",
+			input:   "ASSIGN_BUFFER",
+			wantOp:  AssignBufferOp,
+			wantErr: false,
+		},
+		{
+			name:    "assign_soft_taint",
+			input:   "ASSIGN_SOFT_TAINT",
+			wantOp:  AssignSoftTaintOp,
+			wantErr: false,
+		},
+		{
+			name:    "no_op",
+			input:   "NO_OP",
+			wantOp:  NoOp,
+			wantErr: false,
+		},
+		{
+			name:    "empty",
+			input:   "",
+			wantOp:  NoOp,
+			wantErr: true,
+		},
+		{
+			name:    "unknown",
+			input:   "UNKNOWN_OP",
+			wantOp:  NoOp,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotOp, err := ParseOperationType(tc.input)
+			assert.Equal(t, tc.wantOp, gotOp)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

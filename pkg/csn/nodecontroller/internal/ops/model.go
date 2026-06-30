@@ -16,6 +16,7 @@ package ops
 
 import (
 	"context"
+	"fmt"
 	"maps"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -57,6 +58,24 @@ func (ot OperationType) String() string {
 		return "NO_OP"
 	default:
 		return "UNKNOWN"
+	}
+}
+
+// ParseOperationType parses a string into an OperationType.
+func ParseOperationType(s string) (OperationType, error) {
+	switch s {
+	case "SUSPEND":
+		return SuspendOp, nil
+	case "CONSUME":
+		return ConsumeOp, nil
+	case "ASSIGN_BUFFER":
+		return AssignBufferOp, nil
+	case "ASSIGN_SOFT_TAINT":
+		return AssignSoftTaintOp, nil
+	case "NO_OP":
+		return NoOp, nil
+	default:
+		return NoOp, fmt.Errorf("unknown operation type: %q", s)
 	}
 }
 

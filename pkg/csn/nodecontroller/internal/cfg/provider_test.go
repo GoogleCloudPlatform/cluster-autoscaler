@@ -33,24 +33,54 @@ func TestProvider_GetConfig(t *testing.T) {
 			name:      "valid json string",
 			flagValue: ExampleControllerJSON,
 			hasFlag:   true,
-			expected:  ExampleControllerStruct,
+			expected: func() Controller {
+				c := ExampleControllerStruct
+				c.Dispatcher.Retry.MaxRetriesByOp = map[string]int{
+					"CONSUME": 6,
+					"SUSPEND": 6,
+				}
+				return c
+			}(),
+		},
+		{
+			name: "valid json string with maxRetriesByOp",
+			flagValue: `{
+				"dispatcher": {
+					"retry": {
+						"maxRetries": 6,
+						"maxRetriesByOp": {
+							"CONSUME": 0,
+							"SUSPEND": 3
+						}
+					}
+				}
+			}`,
+			hasFlag: true,
+			expected: func() Controller {
+				c := getDefaultConfig()
+				c.Dispatcher.Retry.MaxRetriesByOp = map[string]int{
+					"CONSUME": 0,
+					"SUSPEND": 3,
+				}
+				return c
+			}(),
 		},
 		{
 			name:      "empty string",
 			flagValue: "",
 			hasFlag:   true,
-			expected:  defaultConfig,
+			expected:  getDefaultConfig(),
 		},
 		{
 			name:     "flag not set (fallback to empty string)",
 			hasFlag:  false,
-			expected: defaultConfig,
+			expected: getDefaultConfig(),
 		},
 		{
 			name:      "malformed json",
 			flagValue: `{"workQueue": {"maxSize": "invalid"}}`,
 			hasFlag:   true,
-			expected:  defaultConfig,
+			expected:  getDefaultConfig(),
 		},
 	}
 
