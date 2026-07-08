@@ -238,11 +238,11 @@ func setNodeAsForProcessors(node *apiv1.Node, desiredState csn.NodeState) (*apiv
 	if err != nil {
 		return nil, err
 	}
-	if currentState == csn.NodeStateSuspended {
-		makeSuspendedNodeReady(node)
-	}
 	if desiredState == csn.NodeStateSuspended {
 		node.Spec.Unschedulable = false
+	}
+	if currentState == csn.NodeStateSuspended || desiredState == csn.NodeStateFailed {
+		makeNodeReadyInSnapshot(node)
 	}
 	if desiredState == csn.NodeStateConsumed {
 		removeBufferAssignmentForProcessors(node)
@@ -250,7 +250,16 @@ func setNodeAsForProcessors(node *apiv1.Node, desiredState csn.NodeState) (*apiv
 	return node, nil
 }
 
-func makeSuspendedNodeReady(node *apiv1.Node) {
+// makeNodeReadyInSnapshot fakes a node's status in the cluster snapshot to make it appear ready and schedulable.
+//
+// This helper unifies two snapshot preparation routines:
+// 1. For Suspended nodes - allows pod list processors to simulate pod placement.
+// 2. For Failed nodes - allows the Defrag processor to select failed nodes as candidates for scale-down and replacement.
+//
+// Note: While this enables Defrag processing, in edge cases standard scale-down can target an empty node immediately
+// before Defrag's CreateBeforeDelete pacing completes.
+// TODO(b/532162884): Find a clean design to allow Defrag to process failed nodes without faking snapshot states.
+func makeNodeReadyInSnapshot(node *apiv1.Node) {
 	node.Spec.Taints, _ = taints.DeleteTaintsByKey(node.Spec.Taints, apiv1.TaintNodeUnreachable)
 	node.Spec.Taints, _ = taints.DeleteTaintsByKey(node.Spec.Taints, apiv1.TaintNodeUnschedulable)
 	node.Spec.Unschedulable = false

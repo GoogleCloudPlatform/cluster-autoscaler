@@ -481,6 +481,26 @@ func TestNodeReconciliationProcess(t *testing.T) {
 				"test-node": csn.NodeStateConsumed,
 			},
 		},
+		{
+			name: "Successful reconciliation to Failed",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "test-node", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "test-node", DesiredState: csn.NodeStateFailed},
+			},
+			expectErr: false,
+			expectedNodeStates: map[string]csn.NodeState{
+				"test-node": csn.NodeStateFailed,
+			},
+			expectedNodeBuffers: map[string]string{
+				"test-node": "unknown",
+			},
+			additionalNodeAssertions: func(t *testing.T, node *apiv1.Node) {
+				assert.False(t, node.Spec.Unschedulable, "Expected failed node to be schedulable in snapshot due to defrag workaround")
+				assert.True(t, taints.HasTaint(node, metadata.FailedTaintKey), "Expected failed taint on node")
+			},
+		},
 	}
 
 	for _, tc := range testCases {

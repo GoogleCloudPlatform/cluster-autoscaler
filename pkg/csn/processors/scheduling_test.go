@@ -824,12 +824,34 @@ func TestSetNodeAsForProcessors(t *testing.T) {
 			expectedCSNPodSchdulable:      false,
 			expectedBufferAssignmentExist: false,
 		},
+		{
+			description:                   "Chilling to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
+		{
+			description:                   "Suspended to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateSuspended, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
+		{
+			description:                   "Failed to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateFailed, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			node, err := setNodeAsForProcessors(tc.node, tc.desiredState)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.desiredState, csn.ClassifyNode(node))
+			assert.False(t, node.Spec.Unschedulable, "Expected node to be schedulable in snapshot")
 
 			hasBufferAssignmentTaint := taints.HasTaint(node, metadata.BufferAssignmentKey)
 			if tc.expectedBufferAssignmentExist {
@@ -869,7 +891,7 @@ func TestSuspendedNodesBecomesReadySuccessfully(t *testing.T) {
 		{Type: apiv1.NodePIDPressure, Status: apiv1.ConditionUnknown},
 	}
 
-	makeSuspendedNodeReady(suspendedNode)
+	makeNodeReadyInSnapshot(suspendedNode)
 
 	readiness, err := kubernetes.GetNodeReadiness(suspendedNode)
 	assert.NoError(t, err)

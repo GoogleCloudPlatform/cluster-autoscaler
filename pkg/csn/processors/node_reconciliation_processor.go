@@ -221,6 +221,7 @@ func NodeInCSNNodeGroup(node *apiv1.Node, cp cloudProvider) bool {
 	}
 	spec := mig.Spec()
 	if spec == nil {
+		// no spec == no labels
 		return false
 	}
 	if spec.Labels == nil {

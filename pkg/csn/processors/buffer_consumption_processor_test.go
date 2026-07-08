@@ -502,6 +502,23 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectedAllConsumedNodes:  []string{"node-1"},
 		},
 		{
+			name: "Failed nodes are filtered out and not consumed",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+				create8CPUTestNode(t, "node-2", csn.NodeStateFailed),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+				{Name: "node-2", DesiredState: csn.NodeStateFailed},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p1", 1000, 1*GiB),
+			},
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1"},
+		},
+		{
 			name: "Pod age fallback enabled: old pod is excluded from suspended node and falls back to NAP",
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
