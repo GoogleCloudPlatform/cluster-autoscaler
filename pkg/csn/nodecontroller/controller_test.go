@@ -729,7 +729,7 @@ func withSkipCacheSync() suiteOpt {
 
 // createSuite configures and runs a CSN Node Controller. The controller
 // makes use of dependencies destined to be used in unit tests.
-func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controllerTestSuite) {
+func createSuite(t *testing.T, opts ...suiteOpt) (*CSNNodeController, controllerTestSuite) {
 	suite := controllerTestSuite{
 		ClientSet:     fake.NewSimpleClientset(),
 		CloudProvider: &test.MockCloudProvider{},
@@ -998,4 +998,74 @@ func TestInitWithMaxRetriesByOp(t *testing.T) {
 		"SUSPEND":    3,
 		"INVALID_OP": 5,
 	}, c.cfg.Dispatcher.Retry.MaxRetriesByOp)
+}
+
+func TestPermanentFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		node := test.CreateNode("node-to-suspend", test.StateOpt(csn.NodeStateChilling), func(n *v1.Node) {
+			n.CreationTimestamp = metav1.Time{Time: time.Now().Add(-15 * time.Minute)}
+		})
+		mig := gke.NewTestGkeMigBuilder().
+			SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}).
+			Build()
+
+		c, suite := createSuite(t,
+			withInitialNodes(node),
+			withCloudProvider(&test.MockCloudProvider{
+				NodeNameToMIG: map[string]*gke.GkeMig{node.Name: mig},
+				Instances: func(gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "RUNNING"}
+				},
+				SuspendErr: fmt.Errorf("injected suspend error"),
+			}),
+			withSkipCacheSync(),
+		)
+		synctest.Wait()
+
+		// Trigger suspension
+		nodes := []*framework.NodeInfo{framework.NewTestNodeInfo(node)}
+		_ = c.MarkAsSuspendable(nodes)
+
+		// Wait for dispatcher to execute all retries and fail permanently,
+		// which should enqueue FailNodeOp and patch the node to FAILED.
+		waitForNodeState(t, suite.ClientSet, node.Name, csn.NodeStateFailed)
+		synctest.Wait()
+
+		// Verify the node is marked FAILED in K8s
+		updatedNode, err := suite.ClientSet.CoreV1().Nodes().Get(t.Context(), node.Name, metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.Equal(t, csn.NodeStateFailed, csn.ClassifyNode(updatedNode))
+
+		// Verify it appears in GetFailedNodes()
+		failedNodes := c.GetFailedNodes()
+		assert.ElementsMatch(t, []string{node.Name}, failedNodes)
+	})
+}
+
+func waitForNodeState(t *testing.T, client kubernetes.Interface, nodeName string, expectedState csn.NodeState) {
+	t.Helper()
+	watcher, err := client.CoreV1().Nodes().Watch(t.Context(), metav1.ListOptions{
+		FieldSelector: "metadata.name=" + nodeName,
+	})
+	if err != nil {
+		t.Fatalf("failed to setup watch: %v", err)
+	}
+	defer watcher.Stop()
+
+	for {
+		select {
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				t.Fatalf("watcher closed before reaching expected state")
+			}
+			if event.Type == watch.Modified {
+				node := event.Object.(*v1.Node)
+				if csn.ClassifyNode(node) == expectedState {
+					return
+				}
+			}
+		case <-t.Context().Done():
+			t.Fatalf("timeout waiting for node state %s", expectedState)
+		}
+	}
 }

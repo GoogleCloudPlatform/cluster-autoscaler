@@ -156,9 +156,9 @@ func (h *SuspendHandler) categorizeNodeNames(ctx context.Context, nodeNames set.
 	errs := make(map[string]error)
 	result := categorizedNodeNames{ToSuspend: set.New[string](), ToConsume: set.New[string]()}
 	for nodeName := range nodeNames {
-		blocked, err := h.k8sClient.IsSuspensionBlocked(ctx, nodeName)
+		blocked, err := h.k8sClient.IsWorkloadPresent(ctx, nodeName)
 		if err != nil {
-			errs[nodeName] = fmt.Errorf("failed to check whether suspension is blocked for node %q: %w", nodeName, err)
+			errs[nodeName] = fmt.Errorf("failed to check whether workload is present for node %q: %w", nodeName, err)
 			continue
 		}
 		if blocked {

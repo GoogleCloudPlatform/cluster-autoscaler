@@ -338,6 +338,8 @@ func (m *NodeStateManager) setDesiredState(opType ops.OperationType, tn *Tracked
 		tn.DesiredState = csn.NodeStateSuspended
 	case ops.ConsumeOp:
 		tn.DesiredState = csn.NodeStateConsumed
+	case ops.FailNodeOp:
+		tn.DesiredState = csn.NodeStateFailed
 	}
 }
 
@@ -418,6 +420,7 @@ func (m *NodeStateManager) onUpdate(n *v1.Node) {
 		// Deletion is delayed so the callers of NodeStateManager
 		// can verify that the node has been consumed via List or Get for some time.
 		m.nodeNamesToStopTracking[nodeName] = m.clock.Now()
+		tn.DesiredState = ""
 	}
 }
 
@@ -427,8 +430,8 @@ func (m *NodeStateManager) onDelete(n *v1.Node) {
 }
 
 func (m *NodeStateManager) stopTrackingNodes(nodeNames ...string) {
+	nodesToEmit := make([]*v1.Node, 0, len(nodeNames))
 	m.nodeMutex.Lock()
-	defer m.nodeMutex.Unlock()
 	for _, n := range nodeNames {
 		tn, ok := m.trackedNodes[n]
 		if !ok {
@@ -436,7 +439,12 @@ func (m *NodeStateManager) stopTrackingNodes(nodeNames ...string) {
 		}
 		delete(m.trackedNodes, n)
 		delete(m.nodeNamesToStopTracking, n)
-		m.emitEvent(NodeUntracked{Node: tn.Node})
+		nodesToEmit = append(nodesToEmit, tn.Node)
+	}
+	m.nodeMutex.Unlock()
+
+	for _, n := range nodesToEmit {
+		m.emitEvent(NodeUntracked{Node: n})
 	}
 }
 
@@ -479,4 +487,10 @@ func (m *NodeStateManager) emitEvent(e NodeEvent) {
 	for _, f := range m.eventHandlers {
 		f(e)
 	}
+}
+
+func (m *NodeStateManager) AddEventHandler(eh EventHandler) {
+	m.nodeMutex.Lock()
+	defer m.nodeMutex.Unlock()
+	m.eventHandlers = append(m.eventHandlers, eh)
 }

@@ -37,6 +37,7 @@ type Queue interface {
 	Enqueue(o ops.Operation) error
 }
 type ClearPendingOperationF func(op ops.OperationType, nodeNames set.Set[string])
+type OnPermanentFailureF func(op ops.OperationType, nodeNames set.Set[string])
 
 type eventEmitter interface {
 	emitSuccess(opType ops.OperationType, nodeNames set.Set[string])
@@ -48,6 +49,7 @@ type eventEmitter interface {
 type Dispatcher struct {
 	queue                 Queue
 	clearPendingOperation ClearPendingOperationF
+	onPermanentFailure    OnPermanentFailureF
 	handlers              map[ops.OperationType]ops.OperationHandler
 	workerCount           int
 	backoffManager        *retry.BackoffManager
@@ -56,10 +58,11 @@ type Dispatcher struct {
 
 // NewDispatcher returns a concrete Dispatcher struct.
 // It uses the queue to dequeue and enqueue operations.
-func NewDispatcher(workerCount int, retryCfg retry.Config, queue Queue, clearOpF ClearPendingOperationF, emitter eventEmitter) *Dispatcher {
+func NewDispatcher(workerCount int, retryCfg retry.Config, queue Queue, clearOpF ClearPendingOperationF, onPermFailureF OnPermanentFailureF, emitter eventEmitter) *Dispatcher {
 	return &Dispatcher{
 		queue:                 queue,
 		clearPendingOperation: clearOpF,
+		onPermanentFailure:    onPermFailureF,
 		handlers:              make(map[ops.OperationType]ops.OperationHandler),
 		workerCount:           workerCount,
 		backoffManager: retry.NewBackoffManager(
@@ -163,6 +166,9 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 	// then pending operation should be cleared.
 	if d.eventEmitter != nil {
 		d.eventEmitter.emitFailure(op.Type, backoffResult.FailedNodes, res.Errs)
+	}
+	if d.onPermanentFailure != nil {
+		d.onPermanentFailure(op.Type, backoffResult.FailedNodes)
 	}
 	d.clearPendingOperation(op.Type, backoffResult.FailedNodes)
 }

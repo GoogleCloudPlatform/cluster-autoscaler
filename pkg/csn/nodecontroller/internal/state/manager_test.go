@@ -419,12 +419,16 @@ func TestList_WithFilters(t *testing.T) {
 	mustRunManager(t, m)
 
 	failedNode := test.CreateNode("failed-node", test.StateOpt(csn.NodeStateFailed))
-	fs.AddNodes(suspendedNode, chillingNode, consumedNode, bufferAssignNode, failedNode)
+	desiredFailedNode := test.CreateNode("desired-failed-node", test.StateOpt(csn.NodeStateChilling))
+	fs.AddNodes(suspendedNode, chillingNode, consumedNode, bufferAssignNode, failedNode, desiredFailedNode)
 
 	// Mark some nodes as having a pending operation
 	assert.Empty(t, m.SetPendingOperation(ops.SuspendOp, true, set.New(suspendedNode.Name)))
 	assert.Empty(t, m.SetPendingOperation(ops.ConsumeOp, true, set.New(consumedNode.Name)))
 	assert.Empty(t, m.SetPendingOperation(ops.AssignBufferOp, true, set.New(bufferAssignNode.Name)))
+
+	// Mark desiredFailedNode as having a pending FailNodeOp
+	assert.Empty(t, m.SetPendingOperation(ops.FailNodeOp, true, set.New(desiredFailedNode.Name)))
 
 	testCases := []struct {
 		name           string
@@ -463,6 +467,12 @@ func TestList_WithFilters(t *testing.T) {
 					State:             csn.NodeStateFailed,
 					PendingOperations: ops.NoOp,
 				},
+				{
+					Node:              desiredFailedNode,
+					State:             csn.NodeStateChilling,
+					PendingOperations: ops.FailNodeOp,
+					DesiredState:      csn.NodeStateFailed,
+				},
 			},
 			expectedCounts: map[string]int{},
 		},
@@ -485,6 +495,12 @@ func TestList_WithFilters(t *testing.T) {
 					State:             csn.NodeStateFailed,
 					PendingOperations: ops.NoOp,
 				},
+				{
+					Node:              desiredFailedNode,
+					State:             csn.NodeStateChilling,
+					PendingOperations: ops.FailNodeOp,
+					DesiredState:      csn.NodeStateFailed,
+				},
 			},
 			expectedCounts: map[string]int{"WithoutPendingOperations": 2},
 		},
@@ -496,6 +512,12 @@ func TestList_WithFilters(t *testing.T) {
 					Node:              failedNode,
 					State:             csn.NodeStateFailed,
 					PendingOperations: ops.NoOp,
+				},
+				{
+					Node:              desiredFailedNode,
+					State:             csn.NodeStateChilling,
+					PendingOperations: ops.FailNodeOp,
+					DesiredState:      csn.NodeStateFailed,
 				},
 			},
 			expectedCounts: map[string]int{"FailedNodes": 4},
@@ -521,6 +543,12 @@ func TestList_WithFilters(t *testing.T) {
 					Node:              failedNode,
 					State:             csn.NodeStateFailed,
 					PendingOperations: ops.NoOp,
+				},
+				{
+					Node:              desiredFailedNode,
+					State:             csn.NodeStateChilling,
+					PendingOperations: ops.FailNodeOp,
+					DesiredState:      csn.NodeStateFailed,
 				},
 			},
 			expectedCounts: map[string]int{

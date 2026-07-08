@@ -30,7 +30,7 @@ import (
 // K8sClient is responsible for performing actions on nodes.
 type K8sClient interface {
 	ApplyNodePatch(ctx context.Context, node *v1.Node, desiredState csn.NodeState) error
-	IsSuspensionBlocked(ctx context.Context, nodeName string) (bool, error)
+	IsWorkloadPresent(ctx context.Context, nodeName string) (bool, error)
 	ApplyNodeToBufferAssignmentPatch(ctx context.Context, node *v1.Node, buffer *v1beta1.CapacityBuffer) error
 	ApplyAdditionalSoftTaintsPatch(ctx context.Context, node *v1.Node, taintCount int) error
 }

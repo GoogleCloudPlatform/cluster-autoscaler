@@ -39,7 +39,7 @@ func NewClientAdapter(c clientset.Interface) *ClientAdapter {
 	return &ClientAdapter{clientSet: c}
 }
 
-func (c *ClientAdapter) IsSuspensionBlocked(ctx context.Context, nodeName string) (bool, error) {
+func (c *ClientAdapter) IsWorkloadPresent(ctx context.Context, nodeName string) (bool, error) {
 	pods, err := c.clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
 	})

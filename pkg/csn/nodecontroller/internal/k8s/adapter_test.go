@@ -38,7 +38,7 @@ func TestNewClientAdapter(t *testing.T) {
 	assert.Equal(t, fakeClient, adapter.clientSet)
 }
 
-func TestIsSuspensionBlocked(t *testing.T) {
+func TestIsWorkloadPresent(t *testing.T) {
 	nodeName := "test-node"
 
 	daemonSetPod := &v1.Pod{
@@ -138,7 +138,7 @@ func TestIsSuspensionBlocked(t *testing.T) {
 			}
 
 			adapter := NewClientAdapter(fakeClient)
-			res, err := adapter.IsSuspensionBlocked(context.Background(), nodeName)
+			res, err := adapter.IsWorkloadPresent(context.Background(), nodeName)
 
 			if tc.expectedError {
 				assert.Error(t, err)

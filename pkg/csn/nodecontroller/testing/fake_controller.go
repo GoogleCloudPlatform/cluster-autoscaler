@@ -88,6 +88,11 @@ func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nod
 	return nodes, filteredCounts, m.listErr
 }
 
+// GetFailedNodes returns a list of node names in FAILED desired state.
+func (m *MockCSNNodeController) GetFailedNodes() []string {
+	return m.NodesWithState(csn.NodeStateFailed)
+}
+
 func (m *MockCSNNodeController) Consume(nodes []string) set.Set[string] {
 	consumedNodes := set.New[string]()
 	for _, node := range nodes {

@@ -261,7 +261,7 @@ func (m *MockK8sClient) GetPatchCalls() []PatchCall {
 	return m.patchCalls
 }
 
-func (m *MockK8sClient) IsSuspensionBlocked(_ context.Context, nodeName string) (bool, error) {
+func (m *MockK8sClient) IsWorkloadPresent(_ context.Context, nodeName string) (bool, error) {
 	return m.SuspensionBlocked[nodeName], m.SuspensionBlockedErr
 }
 

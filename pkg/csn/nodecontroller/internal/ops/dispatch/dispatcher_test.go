@@ -53,6 +53,11 @@ type clearPendingOpCall struct {
 	NodeNames set.Set[string]
 }
 
+type onPermFailureCall struct {
+	Op        ops.OperationType
+	NodeNames set.Set[string]
+}
+
 func toUpdatePendingOpCalls(calls []clearPendingOpCall) []statetest.SetPendingOperationCall {
 	setCalls := make([]statetest.SetPendingOperationCall, 0, len(calls))
 	for _, call := range calls {
@@ -137,6 +142,7 @@ func TestDispatcher(t *testing.T) {
 		expectedCounts              map[ops.OperationType]int
 		expectedClearPendingOpCalls []clearPendingOpCall
 		expectedEventCalls          []emittedEventCall
+		expectedOnPermFailureCalls  []onPermFailureCall
 	}{
 		{
 			name: "process_mixed_ops",
@@ -230,7 +236,7 @@ func TestDispatcher(t *testing.T) {
 			},
 		},
 		{
-			name: "permanent_failure_should_eventually_be_cleared",
+			name: "permanent_failure_triggers_callback",
 			ops: []ops.Operation{
 				{MIG: mig1, Type: ops.SuspendOp, NodeNames: set.New("n1")},
 			},
@@ -248,6 +254,32 @@ func TestDispatcher(t *testing.T) {
 			expectedEventCalls: []emittedEventCall{
 				{Op: ops.SuspendOp, Success: false, NodeNames: set.New("n1")},
 			},
+			expectedOnPermFailureCalls: []onPermFailureCall{
+				{Op: ops.SuspendOp, NodeNames: set.New("n1")},
+			},
+		},
+		{
+			name: "permanent_failure_of_fail_node_op",
+			ops: []ops.Operation{
+				{MIG: mig1, Type: ops.FailNodeOp, NodeNames: set.New("n1")},
+			},
+			workerCount: 1,
+			nodeErrs: map[string]error{
+				"n1": errors.New("some-error"),
+			},
+			expectedCounts: map[ops.OperationType]int{
+				// first call + 6 retry attempts
+				ops.FailNodeOp: 7,
+			},
+			expectedClearPendingOpCalls: []clearPendingOpCall{
+				{Op: ops.FailNodeOp, NodeNames: set.New("n1")},
+			},
+			expectedEventCalls: []emittedEventCall{
+				{Op: ops.FailNodeOp, Success: false, NodeNames: set.New("n1")},
+			},
+			expectedOnPermFailureCalls: []onPermFailureCall{
+				{Op: ops.FailNodeOp, NodeNames: set.New("n1")},
+			},
 		},
 	}
 
@@ -261,6 +293,7 @@ func TestDispatcher(t *testing.T) {
 			q := &fakeQueue{opsCh: opsCh}
 			sm := &statetest.MockStateManager{}
 			emitter := &fakeEventEmitter{}
+			var onPermFailureCalls []onPermFailureCall
 			d := NewDispatcher(
 				tc.workerCount,
 				retry.Config{
@@ -272,12 +305,15 @@ func TestDispatcher(t *testing.T) {
 				func(op ops.OperationType, nodeNames set.Set[string]) {
 					sm.SetPendingOperation(op, false, nodeNames)
 				},
+				func(op ops.OperationType, nodeNames set.Set[string]) {
+					onPermFailureCalls = append(onPermFailureCalls, onPermFailureCall{Op: op, NodeNames: nodeNames})
+				},
 				emitter,
 			)
 
 			handlers := make(map[ops.OperationType]*fakeHandler)
 			handleChan := make(chan ops.OperationType, len(tc.ops))
-			for _, opType := range []ops.OperationType{ops.SuspendOp, ops.ConsumeOp} {
+			for _, opType := range []ops.OperationType{ops.SuspendOp, ops.ConsumeOp, ops.FailNodeOp} {
 				handler := &fakeHandler{
 					HandleChan:     handleChan,
 					Err:            tc.errs[opType],
@@ -310,6 +346,7 @@ func TestDispatcher(t *testing.T) {
 			close(opsCh)
 			<-dispatcherDone
 			assert.ElementsMatch(t, toUpdatePendingOpCalls(tc.expectedClearPendingOpCalls), sm.GetPendingOperationUpdateCalls())
+			assert.ElementsMatch(t, tc.expectedOnPermFailureCalls, onPermFailureCalls)
 			assert.Zero(t, d.NodesAwaitingRetry())
 			assert.ElementsMatch(t, tc.expectedEventCalls, emitter.calls)
 		})
