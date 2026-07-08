@@ -418,7 +418,8 @@ func TestList_WithFilters(t *testing.T) {
 	m := NewNodeStateManager(fs.RegisterNodeHandler)
 	mustRunManager(t, m)
 
-	fs.AddNodes(suspendedNode, chillingNode, consumedNode, bufferAssignNode)
+	failedNode := test.CreateNode("failed-node", test.StateOpt(csn.NodeStateFailed))
+	fs.AddNodes(suspendedNode, chillingNode, consumedNode, bufferAssignNode, failedNode)
 
 	// Mark some nodes as having a pending operation
 	assert.Empty(t, m.SetPendingOperation(ops.SuspendOp, true, set.New(suspendedNode.Name)))
@@ -457,6 +458,11 @@ func TestList_WithFilters(t *testing.T) {
 					State:             csn.NodeStateChilling,
 					PendingOperations: ops.AssignBufferOp,
 				},
+				{
+					Node:              failedNode,
+					State:             csn.NodeStateFailed,
+					PendingOperations: ops.NoOp,
+				},
 			},
 			expectedCounts: map[string]int{},
 		},
@@ -474,8 +480,25 @@ func TestList_WithFilters(t *testing.T) {
 					State:             csn.NodeStateChilling,
 					PendingOperations: ops.AssignBufferOp,
 				},
+				{
+					Node:              failedNode,
+					State:             csn.NodeStateFailed,
+					PendingOperations: ops.NoOp,
+				},
 			},
 			expectedCounts: map[string]int{"WithoutPendingOperations": 2},
+		},
+		{
+			name:    "failed_nodes",
+			filters: []NodeFilter{FailedNodesFilter},
+			expectedNodes: []TrackedNode{
+				{
+					Node:              failedNode,
+					State:             csn.NodeStateFailed,
+					PendingOperations: ops.NoOp,
+				},
+			},
+			expectedCounts: map[string]int{"FailedNodes": 4},
 		},
 		{
 			name: "multiple_filters_different_keys",
@@ -493,6 +516,11 @@ func TestList_WithFilters(t *testing.T) {
 					Node:              bufferAssignNode,
 					State:             csn.NodeStateChilling,
 					PendingOperations: ops.AssignBufferOp,
+				},
+				{
+					Node:              failedNode,
+					State:             csn.NodeStateFailed,
+					PendingOperations: ops.NoOp,
 				},
 			},
 			expectedCounts: map[string]int{

@@ -328,6 +328,71 @@ func TestSetNodeAs(t *testing.T) {
 			},
 		},
 		//
+		// Desired State: Failed
+		//
+		{
+			description:  "Failed_from_empty_node",
+			desiredState: NodeStateFailed,
+			initialNode:  &apiv1.Node{},
+			expectedNode: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Spec: apiv1.NodeSpec{
+					Unschedulable: true,
+					Taints: []apiv1.Taint{
+						FailedTaint,
+					},
+				},
+			},
+		},
+		{
+			description:  "Failed_from_suspended_node",
+			desiredState: NodeStateFailed,
+			initialNode: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Unschedulable: true,
+					Taints: []apiv1.Taint{
+						SuspendedTaint,
+					},
+				},
+			},
+			expectedNode: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Spec: apiv1.NodeSpec{
+					Unschedulable: true,
+					Taints: []apiv1.Taint{
+						SuspendedTaint,
+						FailedTaint,
+					},
+				},
+			},
+		},
+		{
+			description:  "Consumed_from_failed_node",
+			desiredState: NodeStateConsumed,
+			initialNode: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Unschedulable: true,
+					Taints: []apiv1.Taint{
+						FailedTaint,
+					},
+				},
+			},
+			expectedNode: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Unschedulable: false,
+					Taints:        []apiv1.Taint{},
+				},
+			},
+		},
+		//
 		// Desired State: Unknown
 		//
 		{
@@ -487,6 +552,34 @@ func TestClassifyNode(t *testing.T) {
 				},
 			},
 			expected: NodeStateChilling,
+		},
+		{
+			description: "Failed_node_CSN_label_and_Failed_taint",
+			node: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Spec: apiv1.NodeSpec{
+					Taints: []apiv1.Taint{FailedTaint},
+				},
+			},
+			expected: NodeStateFailed,
+		},
+		{
+			description: "Failed_node_with_both_taints_should_prioritize_failed",
+			node: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Spec: apiv1.NodeSpec{
+					Taints: []apiv1.Taint{SuspendedTaint, FailedTaint},
+				},
+			},
+			expected: NodeStateFailed,
 		},
 	}
 
@@ -791,7 +884,7 @@ func setCommonTime(force bool, now metav1.Time, nodes ...*apiv1.Node) {
 			}
 		}
 		for i := range node.Spec.Taints {
-			if node.Spec.Taints[i].Key == metadata.SuspendedTaintKey {
+			if node.Spec.Taints[i].Key == metadata.SuspendedTaintKey || node.Spec.Taints[i].Key == metadata.FailedTaintKey {
 				node.Spec.Taints[i].TimeAdded = &now
 			}
 		}

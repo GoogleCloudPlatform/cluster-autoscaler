@@ -228,6 +228,11 @@ func TestOperationType_String(t *testing.T) {
 			want: "NO_OP",
 		},
 		{
+			name: "fail_node_op",
+			op:   FailNodeOp,
+			want: "FAIL_NODE",
+		},
+		{
 			name: "unknown_op",
 			op:   OperationType(3),
 			want: "UNKNOWN",
@@ -332,6 +337,12 @@ func TestParseOperationType(t *testing.T) {
 			name:    "no_op",
 			input:   "NO_OP",
 			wantOp:  NoOp,
+			wantErr: false,
+		},
+		{
+			name:    "fail_node",
+			input:   "FAIL_NODE",
+			wantOp:  FailNodeOp,
 			wantErr: false,
 		},
 		{
