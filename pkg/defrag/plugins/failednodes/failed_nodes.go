@@ -33,6 +33,7 @@ const (
 
 type plugin struct {
 	resizableVmManager    operationtracker.Manager
+	csnFailedNodeProvider config.CSNFailedNodeProvider
 	maxCandidateNodeCount int
 	latestUnfitNodesCount int
 }
@@ -42,6 +43,7 @@ type plugin struct {
 func NewPlugin(config config.PluginsConfig) defrag.Plugin {
 	return &plugin{
 		resizableVmManager:    config.ResizableVmManager,
+		csnFailedNodeProvider: config.CSNFailedNodeProvider,
 		maxCandidateNodeCount: config.MaxCandidateNodeCount,
 	}
 }
@@ -86,15 +88,17 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 }
 
 func (p *plugin) getFailedNodes() map[string]bool {
-	if p.resizableVmManager == nil {
-		return map[string]bool{}
-	}
-
 	failedNodes := map[string]bool{}
-	for _, nodeName := range p.resizableVmManager.UnhealthyNodesWithStatus(operationtracker.FailedResizeStatus) {
-		failedNodes[nodeName] = true
+	if p.resizableVmManager != nil {
+		for _, nodeName := range p.resizableVmManager.UnhealthyNodesWithStatus(operationtracker.FailedResizeStatus) {
+			failedNodes[nodeName] = true
+		}
 	}
-
+	if p.csnFailedNodeProvider != nil {
+		for _, nodeName := range p.csnFailedNodeProvider.GetFailedNodes() {
+			failedNodes[nodeName] = true
+		}
+	}
 	return failedNodes
 }
 

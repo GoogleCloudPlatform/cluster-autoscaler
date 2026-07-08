@@ -33,6 +33,7 @@ func TestNewCandidate(t *testing.T) {
 		isResizingEnabled         bool
 		maxCandidateNodeCount     int
 		failedNodes               []string
+		csnFailedNodes            []string
 		nodeNames                 []string
 		wantCandidateNodeNames    []string
 		wantLatestUnfitNodesCount int
@@ -80,6 +81,25 @@ func TestNewCandidate(t *testing.T) {
 			wantCandidateNodeNames:    []string{"ek-node-1", "ek-node-4"},
 			wantLatestUnfitNodesCount: 2,
 		},
+		{
+			name:                      "a CSN failed node - a candidate",
+			isResizingEnabled:         true,
+			maxCandidateNodeCount:     1,
+			csnFailedNodes:            []string{"csn-node"},
+			nodeNames:                 []string{"csn-node"},
+			wantCandidateNodeNames:    []string{"csn-node"},
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                      "both EK failed and CSN failed nodes",
+			isResizingEnabled:         true,
+			maxCandidateNodeCount:     2,
+			failedNodes:               []string{"ek-node"},
+			csnFailedNodes:            []string{"csn-node"},
+			nodeNames:                 []string{"ek-node", "csn-node", "normal-node"},
+			wantCandidateNodeNames:    []string{"ek-node", "csn-node"},
+			wantLatestUnfitNodesCount: 2,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -91,8 +111,12 @@ func TestNewCandidate(t *testing.T) {
 				tc.isResizingEnabled)
 			resizableVmManager.On("UnhealthyNodesWithStatus", mock.Anything).Return(tc.failedNodes)
 
+			csnProvider := &mockCSNFailedNodeProvider{}
+			csnProvider.On("GetFailedNodes").Return(tc.csnFailedNodes)
+
 			plugin := NewPlugin(config.PluginsConfig{
 				ResizableVmManager:    resizableVmManager,
+				CSNFailedNodeProvider: csnProvider,
 				MaxCandidateNodeCount: tc.maxCandidateNodeCount,
 			})
 			candidate := plugin.NewCandidate(ctx, tc.nodeNames)
@@ -120,6 +144,7 @@ func TestValidCandidateNodes(t *testing.T) {
 		isResizingEnabled     bool
 		maxCandidateNodeCount int
 		failedNodes           []string
+		csnFailedNodes        []string
 		nodeNames             []string
 		want                  []string
 	}{
@@ -155,6 +180,23 @@ func TestValidCandidateNodes(t *testing.T) {
 			nodeNames:             []string{"ek-node-1", "ek-node-2"},
 			want:                  []string{"ek-node-1"},
 		},
+		{
+			name:                  "CSN failed node is valid",
+			isResizingEnabled:     true,
+			maxCandidateNodeCount: 1,
+			csnFailedNodes:        []string{"csn-node"},
+			nodeNames:             []string{"csn-node"},
+			want:                  []string{"csn-node"},
+		},
+		{
+			name:                  "mixed failed nodes - some invalid",
+			isResizingEnabled:     true,
+			maxCandidateNodeCount: 1,
+			failedNodes:           []string{"ek-node"},
+			csnFailedNodes:        []string{"csn-node"},
+			nodeNames:             []string{"ek-node", "csn-node", "other-node"},
+			want:                  []string{"ek-node", "csn-node"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -166,8 +208,12 @@ func TestValidCandidateNodes(t *testing.T) {
 				tc.isResizingEnabled)
 			resizableVmManager.On("UnhealthyNodesWithStatus", mock.Anything).Return(tc.failedNodes)
 
+			csnProvider := &mockCSNFailedNodeProvider{}
+			csnProvider.On("GetFailedNodes").Return(tc.csnFailedNodes)
+
 			plugin := NewPlugin(config.PluginsConfig{
 				ResizableVmManager:    resizableVmManager,
+				CSNFailedNodeProvider: csnProvider,
 				MaxCandidateNodeCount: tc.maxCandidateNodeCount,
 			})
 
@@ -188,5 +234,14 @@ func (m *mockResizableVmManager) IsResizingEnabled(machineFamily string) bool {
 
 func (m *mockResizableVmManager) UnhealthyNodesWithStatus(status operationtracker.UnhealthyResizableNodeStatus) []string {
 	args := m.Called(status)
+	return args.Get(0).([]string)
+}
+
+type mockCSNFailedNodeProvider struct {
+	mock.Mock
+}
+
+func (m *mockCSNFailedNodeProvider) GetFailedNodes() []string {
+	args := m.Called()
 	return args.Get(0).([]string)
 }

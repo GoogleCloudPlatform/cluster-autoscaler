@@ -603,6 +603,25 @@ func setUpProcessors(
 
 	sharedFairnessManager := fairness.NewSharedEnforcerManager(options.MaxLoopsBeforeAdmission)
 
+	var csnPodsInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
+	var csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor
+	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
+	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
+	var csnNodeController *nodecontroller.CSNNodeController
+	if options.CSNEnabled && cbReady {
+		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
+		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
+		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
+		csnNodeController = nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
+		go csnNodeController.Run(context)
+		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
+		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
+		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
+		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
+			return nil, err
+		}
+	}
+
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
 			CandidateLimit:   options.DefragCandidateLimit,
@@ -617,6 +636,7 @@ func setUpProcessors(
 			Provider:              provider,
 			Autopilot:             options.AutopilotEnabled,
 			ResizableVmManager:    resizableVmManager,
+			CSNFailedNodeProvider: csnNodeController,
 			ExperimentsManager:    experimentsManager,
 		})
 		plugins, err := defrag_plugins.BuildPlugins(strings.Split(options.DefragPlugins, ","), pluginsConfig)
@@ -676,25 +696,6 @@ func setUpProcessors(
 		podtopologyspread.NewNodeBasedDomainDiscovery(experimentsManager, clusterSnapshot, provider),
 	}
 	podTopologySpreadProcessor := podtopologyspread.NewPodTopologySpreadProcessor(ptsDomainDiscoveries)
-
-	var csnPodsInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
-	var csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor
-	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
-	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
-	if options.CSNEnabled && cbReady {
-		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
-		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
-		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
-		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
-		go csnNodeController.Run(context)
-		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
-		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
-		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
-		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
-			return nil, err
-		}
-	}
-
 	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled && cbReady)
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor

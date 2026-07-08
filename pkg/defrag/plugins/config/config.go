@@ -118,6 +118,10 @@ func (n *NodeMigration) NodeCreationDateLessThan() string {
 	return n.nodeCreationDateLessThan
 }
 
+type CSNFailedNodeProvider interface {
+	GetFailedNodes() []string
+}
+
 type PluginBuilder func(pluginsConfig PluginsConfig) defrag.Plugin
 
 type PluginsConfig struct {
@@ -126,6 +130,7 @@ type PluginsConfig struct {
 	Provider              pluginProvider
 	Autopilot             bool
 	ResizableVmManager    operationtracker.Manager
+	CSNFailedNodeProvider CSNFailedNodeProvider
 	ExperimentsManager    experiments.Manager
 }
 
@@ -135,6 +140,7 @@ type Options struct {
 	Provider              pluginProvider
 	Autopilot             bool
 	ResizableVmManager    operationtracker.Manager
+	CSNFailedNodeProvider CSNFailedNodeProvider
 	ExperimentsManager    experiments.Manager
 }
 
@@ -145,6 +151,7 @@ func New(opts Options) PluginsConfig {
 		Provider:              opts.Provider,
 		Autopilot:             opts.Autopilot,
 		ResizableVmManager:    opts.ResizableVmManager,
+		CSNFailedNodeProvider: opts.CSNFailedNodeProvider,
 		ExperimentsManager:    opts.ExperimentsManager,
 	}
 }
