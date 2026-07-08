@@ -142,6 +142,7 @@ func (r *Reconciler) Reconcile() {
 
 func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string], deviatingCounts map[deviatingNodeKey]int) {
 	nodesToConsume := set.New[string]()
+	nodesToFail := set.New[string]()
 	for nodeName := range nodeNames {
 		tn, ok := r.stateManager.Get(nodeName)
 		if !ok {
@@ -154,10 +155,29 @@ func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string], dev
 			continue
 		}
 
+		// Reconcile failed nodes drift (desired FAILED but actual is not FAILED).
+		// State drift can occur if a user or transient K8s API server failure
+		// drops the failed taint or uncordons the node while in-memory DesiredState remains FAILED.
+		// The reconciler detects this discrepancy and re-enqueues FailNodeOp to enforce state consistency.
+		if tn.DesiredState == csn.NodeStateFailed {
+			if tn.State != csn.NodeStateFailed {
+				r.invalidCount[nodeName] += 1
+				if r.invalidCount[nodeName] >= r.cfg.MaxInvalidCount {
+					klog.Warningf("%s node %q desired state is FAILED but actual state is %s, re-enqueueing FailNodeOp", logPrefix, nodeName, tn.State)
+					nodesToFail.Insert(nodeName)
+					delete(r.invalidCount, nodeName)
+				}
+			} else {
+				delete(r.invalidCount, nodeName)
+			}
+			continue
+		}
+
 		instanceRef, err := gce.GceRefFromProviderId(tn.Node.Spec.ProviderID)
 		if err != nil {
 			klog.Errorf("%s skipping reconciliation of node %q because "+
 				"calculating instance ref failed: %v", logPrefix, tn.Node.Name, err)
+			continue
 		}
 
 		instance := r.cloudProvider.InstanceByRef(instanceRef)
@@ -192,16 +212,22 @@ func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string], dev
 		nodesToConsume.Insert(tn.Node.Name)
 		delete(r.invalidCount, nodeName)
 	}
-	if nodesToConsume.Len() == 0 {
+
+	r.enqueueOp(mig, ops.ConsumeOp, nodesToConsume)
+	r.enqueueOp(mig, ops.FailNodeOp, nodesToFail)
+}
+
+func (r *Reconciler) enqueueOp(mig gce.GceRef, opType ops.OperationType, nodeNames set.Set[string]) {
+	if nodeNames.Len() == 0 {
 		return
 	}
 	if err := r.workQueue.EnqueueWithOpts(ops.Operation{
 		MIG:       mig,
-		Type:      ops.ConsumeOp,
-		NodeNames: nodesToConsume,
+		Type:      opType,
+		NodeNames: nodeNames,
 	}, state.ExclusiveOp); err != nil {
-		klog.Errorf("%s failed to enqueue Consume operation for nodes %v: %v",
-			logPrefix, nodesToConsume.UnsortedList(), err)
+		klog.Errorf("%s failed to enqueue %s operation for nodes %v: %v",
+			logPrefix, opType, nodeNames.UnsortedList(), err)
 	}
 }
 
@@ -214,6 +240,8 @@ func (r *Reconciler) isStatusAsExpected(tn state.TrackedNode, instanceStatus str
 	switch nodeState {
 	case csn.NodeStateSuspended:
 		return internal.IsSuspended(instanceStatus)
+	case csn.NodeStateFailed:
+		return true // GCE status doesn't matter for failed nodes.
 	default:
 		return !internal.IsSuspended(instanceStatus)
 	}
