@@ -88,11 +88,73 @@ func NewPodAnnotator(kubeClient kubernetes.Interface, aggregator *metrics_proces
 	}
 }
 
-// Process annotates unhelpable pods based on scaleUpStatus.
-func (a *PodAnnotator) Process(_ *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
-	now := a.clock.Now()
-	for _, noScaleUp := range scaleUpStatus.PodsRemainUnschedulable {
+type podKey struct {
+	namespace string
+	name      string
+}
+
+func getRealPods(ctx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) map[podKey]*corev1.Pod {
+	if len(scaleUpStatus.PodsRemainUnschedulable) == 0 {
+		return nil
+	}
+	if ctx == nil || ctx.ListerRegistry == nil || ctx.AllPodLister() == nil {
+		klog.V(4).Infof("Real pod state not available for pod annotator")
+		return nil
+	}
+
+	podList, err := ctx.AllPodLister().List()
+	if err != nil {
+		klog.Warningf("Failed to list pods for annotator: %v", err)
+		return nil
+	}
+
+	targetKeys := make(map[podKey]bool, len(scaleUpStatus.PodsRemainUnschedulable))
+	for _, p := range scaleUpStatus.PodsRemainUnschedulable {
+		targetKeys[podKey{namespace: p.Pod.Namespace, name: p.Pod.Name}] = true
+	}
+
+	realPods := make(map[podKey]*corev1.Pod, len(targetKeys))
+	for _, p := range podList {
+		key := podKey{namespace: p.Namespace, name: p.Name}
+		if targetKeys[key] {
+			realPods[key] = p
+			if len(realPods) == len(targetKeys) {
+				break
+			}
+		}
+	}
+	return realPods
+}
+
+func filterOutScheduledPods(unschedulablePods []status.NoScaleUpInfo, realPods map[podKey]*corev1.Pod) []status.NoScaleUpInfo {
+	if len(realPods) == 0 {
+		return unschedulablePods
+	}
+	var filtered []status.NoScaleUpInfo
+	for _, noScaleUp := range unschedulablePods {
 		pod := noScaleUp.Pod
+		if realPod, exists := realPods[podKey{namespace: pod.Namespace, name: pod.Name}]; exists {
+			// Skip pods where UID doesn't match because the original pod might have been deleted and recreated with the same name.
+			// Skip pods with NodeName != "" because they are actually scheduled and their presence in PodsRemainUnschedulable is an artifact of defragmentation simulation.
+			if realPod.UID != pod.UID || realPod.Spec.NodeName != "" {
+				continue
+			}
+		}
+		filtered = append(filtered, noScaleUp)
+	}
+	return filtered
+}
+
+// Process annotates unhelpable pods based on scaleUpStatus.
+func (a *PodAnnotator) Process(ctx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+	now := a.clock.Now()
+
+	realPods := getRealPods(ctx, scaleUpStatus)
+	unschedulablePods := filterOutScheduledPods(scaleUpStatus.PodsRemainUnschedulable, realPods)
+
+	for _, noScaleUp := range unschedulablePods {
+		pod := noScaleUp.Pod
+
 		if _, found := a.unhelpablePods[pod.UID]; !found {
 			a.unhelpablePods[pod.UID] = &unhelpablePod{
 				name:            pod.Name,
