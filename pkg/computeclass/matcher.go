@@ -27,8 +27,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// matcherCloudProvider provides the required methods from GkeCloudProvider.
-type matcherCloudProvider interface {
+// MatcherCloudProvider provides the required methods from GkeCloudProvider.
+type MatcherCloudProvider interface {
 	IsAutopilotEnabled() bool
 }
 
@@ -48,11 +48,11 @@ type Matcher interface {
 // matcher implements Matcher interface.
 type matcher struct {
 	lister   lister.Lister
-	provider matcherCloudProvider
+	provider MatcherCloudProvider
 }
 
 // NewMatcher returns the default implementation of Matcher interface.
-func NewMatcher(lister lister.Lister, provider matcherCloudProvider) Matcher {
+func NewMatcher(lister lister.Lister, provider MatcherCloudProvider) Matcher {
 	return &matcher{
 		lister:   lister,
 		provider: provider,

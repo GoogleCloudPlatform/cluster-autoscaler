@@ -49,10 +49,19 @@ var (
 	scaleUpAttempts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
-			Name:      cccMetricName("node_provisioning_attempts_count"),
+			Name:      cccMetricName("cluster_node_provisioning_attempts_count"),
 			Help:      "Number of node provisioning attempts per CCC.",
 		},
 		[]string{entityTypeLabel, entityNameLabel},
+	)
+
+	failedScaleUpAttempts = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      cccMetricName("cluster_node_provisioning_failures_count"),
+			Help:      "Number of node provisioning failures per CCC.",
+		},
+		[]string{entityTypeLabel, entityNameLabel, "reason"},
 	)
 )
 var (
@@ -65,6 +74,7 @@ var (
 func init() {
 	registry.MustRegister(podSchedulingDuration)
 	registry.MustRegister(scaleUpAttempts)
+	registry.MustRegister(failedScaleUpAttempts)
 }
 
 func MetricsRegistryHandler() http.Handler {
@@ -83,6 +93,10 @@ func (m *prometheusMetrics) ObservePodSchedulingDuration(duration time.Duration,
 
 func (m *prometheusMetrics) RegisterScaleUp(cccName string, delta int) {
 	scaleUpAttempts.WithLabelValues(cccEntityType, cccName).Add(float64(delta))
+}
+
+func (m *prometheusMetrics) RegisterFailedScaleUp(cccName string, reason string) {
+	failedScaleUpAttempts.WithLabelValues(cccEntityType, cccName, reason).Inc()
 }
 
 // cccMetricName adds the _per_ccc suffix to the given metric name.

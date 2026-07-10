@@ -92,7 +92,7 @@ var (
 	PerformanceClass = RegisterComputeClass(
 		PredefinedComputeClass{
 			name:                          "Performance",
-			machineFamilies:               []MachineFamily{C4, C4A, C4D, C3, C3D, C2, C2D, H3, H4D, E2, M4, N1, N2, N2D, N4, N4A, N4D, T2D, T2A, Z3},
+			machineFamilies:               []MachineFamily{C4, C4A, C4D, C3, C3D, C2, C2D, H3, H4D, E2, M4, N1, N2, N2D, N4, N4A, N4D, T2D, T2A, Z3, Z4D},
 			machineFamilyBalancingEnabled: false,
 			sliceOfHardware:               true,
 			napLargerBootDisk:             true,

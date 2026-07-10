@@ -58,10 +58,11 @@ type cccCrd struct {
 	computedGrouped [][]rules.Rule
 
 	optionsTracker *optstracking.OptionsTracker
-	provider       dataProvider
+	provider       DataProvider
 }
 
-type dataProvider interface {
+// DataProvider defines GKE cloud provider methods required by compute class CRD.
+type DataProvider interface {
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 	GetAIZones() ([]string, error)
 	GetStandardZones() ([]string, error)
@@ -70,7 +71,7 @@ type dataProvider interface {
 }
 
 // NewCccCrd returns new crd based on ComputeClass CRD
-func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, provider dataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
+func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
 	return &cccCrd{
 		ComputeClass:     ccc,
 		projectId:        projectId,
@@ -78,6 +79,11 @@ func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, pr
 		optionsTracker:   optionsTracker,
 		provider:         provider,
 	}
+}
+
+// ResourceVersion returns resource version
+func (ccc *cccCrd) ResourceVersion() string {
+	return ccc.ComputeClass.ResourceVersion
 }
 
 // Label is the node label used for specifying the CCC.
@@ -190,7 +196,7 @@ func (ccc *cccCrd) withPriorityScore() bool {
 // buildRuleFromPriority builds Rule from CCC priority.
 func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 	if p.Nodepools != nil {
-		return rules.NewRule(rules.WithNodePoolsRule(p.Nodepools))
+		return rules.NewRule(rules.WithNodePoolsRule(p.Nodepools), rules.WithAllocationStrategyRule(p.AllocationStrategy))
 	}
 
 	ruleOpts := []rules.RuleOption{
@@ -203,6 +209,7 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		rules.WithPodFamilyRule(p.PodFamily),
 		rules.WithMinCpuPlatformRule(p.MinCpuPlatform),
 		rules.WithLabelsRule(p.NodeLabels),
+		rules.WithAllocationStrategyRule(p.AllocationStrategy),
 	}
 
 	var taints []apiv1.Taint
@@ -333,7 +340,7 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 	result := []v1.Priority{}
 	for i := range ccc.Spec.Priorities {
 		priority := ccc.Spec.Priorities[i]
-		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults)
+		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults, ccc.Spec.AllocationStrategyDefaults)
 		result = append(result, priority)
 	}
 
@@ -341,20 +348,27 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 }
 
 // applyDefaultsToPriority applies the default field to priority if it is not present in priority.
-func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults) {
-	if defaults == nil {
-		return
+func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults, allocationStrategyDefaults *v1.AllocationStrategyDefaults) {
+	if defaults != nil {
+		// Check for Node System Config.
+		if priority.NodeSystemConfig == nil {
+			priority.NodeSystemConfig = defaults.NodeSystemConfig
+		}
+
+		if priority.Location == nil {
+			priority.Location = defaults.Location
+		}
 	}
 
-	// Check for Node System Config.
-	if priority.NodeSystemConfig == nil {
-		priority.NodeSystemConfig = defaults.NodeSystemConfig
+	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil {
+		if priority.FlexStart != nil && priority.FlexStart.Enabled {
+			priority.AllocationStrategy = allocationStrategyDefaults.FlexStart
+		} else if priority.Spot != nil && *priority.Spot {
+			priority.AllocationStrategy = allocationStrategyDefaults.Spot
+		} else {
+			priority.AllocationStrategy = allocationStrategyDefaults.OnDemand
+		}
 	}
-
-	if priority.Location == nil {
-		priority.Location = defaults.Location
-	}
-
 }
 
 func checkSecondaryBootDiskRules(priority v1.Priority, ccc *cccCrd, ruleOpts []rules.RuleOption) []rules.RuleOption {
@@ -645,6 +659,14 @@ func (ccc *cccCrd) TpuDriverMode() crd.TpuDriverMode {
 		klog.Warningf("Unknown TPU driver mode for CCC (%s): %v, defaulting to device plugin", ccc.Name(), ccc.Spec.NodePoolConfig.Tpu.DriverMode)
 		return crd.TpuDriverModeDevicePlugin
 	}
+}
+
+// AllocationStrategyDefaults returns the global AllocationStrategyDefaults for the CCC.
+func (ccc *cccCrd) AllocationStrategyDefaults() *v1.AllocationStrategyDefaults {
+	if ccc.ComputeClass == nil {
+		return nil
+	}
+	return ccc.Spec.AllocationStrategyDefaults
 }
 
 func (ccc *cccCrd) getGPURequest(machineType *string, gpu *v1.GPU) (gpuRequest *machinetypes.GpuRequest) {

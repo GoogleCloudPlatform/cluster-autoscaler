@@ -15,13 +15,18 @@
 package flexadvisor
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 	"strconv"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	container "google.golang.org/api/container/v1beta1"
+	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -29,6 +34,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/klog/v2"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
@@ -56,6 +62,8 @@ type mockInstanceConfigCloudProvider struct {
 	defaultMachineFamily      machinetypes.MachineFamily
 	availableByDefault        bool
 	machineTypes              map[string]set.Set[string]
+	autopilotEnabled          bool
+	getMachineTypeCallsQty    int
 }
 
 func (m *mockInstanceConfigCloudProvider) GetAutoprovisioningLocations() []string {
@@ -81,6 +89,8 @@ func (m *mockInstanceConfigCloudProvider) GetAutoprovisioningDefaultFamily() mac
 }
 
 func (m *mockInstanceConfigCloudProvider) GetMachineType(machineType string, zone string) (gce.MachineType, error) {
+
+	m.getMachineTypeCallsQty++
 	if m.availableByDefault {
 		return gce.MachineType{}, nil
 	}
@@ -99,17 +109,57 @@ func (m *mockInstanceConfigCloudProvider) MachineConfigProvider() *machinetypes.
 	return machinetypes.NewMachineConfigProvider(nil)
 }
 
-func newMockInstanceConfigCloudProvider(autoprovisioningLocations []string, gkeMigs []*gke.GkeMig, defaultMachineFamily machinetypes.MachineFamily, availableByDefault bool, machineTypes map[string]set.Set[string]) *mockInstanceConfigCloudProvider {
-	return &mockInstanceConfigCloudProvider{
+func (m *mockInstanceConfigCloudProvider) GetClusterInfo() (projectId, location, clusterName string) {
+	return "project1", "us-central1", "cluster1"
+}
+
+func (m *mockInstanceConfigCloudProvider) IsAutopilotEnabled() bool {
+	return m.autopilotEnabled
+}
+
+func (m *mockInstanceConfigCloudProvider) GetAIZones() ([]string, error) {
+	panic("not implemented")
+}
+func (m *mockInstanceConfigCloudProvider) GetStandardZones() ([]string, error) {
+	panic("not implemented")
+}
+func (m *mockInstanceConfigCloudProvider) TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string {
+	panic("not implemented")
+}
+
+type mockProviderOption func(*mockInstanceConfigCloudProvider)
+
+func withAutopilotEnabled(enabled bool) mockProviderOption {
+	return func(m *mockInstanceConfigCloudProvider) {
+		m.autopilotEnabled = enabled
+	}
+}
+
+func newMockInstanceConfigCloudProvider(autoprovisioningLocations []string, gkeMigs []*gke.GkeMig, defaultMachineFamily machinetypes.MachineFamily, availableByDefault bool, machineTypes map[string]set.Set[string], opts ...mockProviderOption) *mockInstanceConfigCloudProvider {
+	m := &mockInstanceConfigCloudProvider{
 		autoprovisioningLocations: autoprovisioningLocations,
 		gkeMigs:                   gkeMigs,
 		defaultMachineFamily:      defaultMachineFamily,
 		availableByDefault:        availableByDefault,
 		machineTypes:              machineTypes,
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 func TestGenerateInstanceConfigs(t *testing.T) {
+	// register custom PCC for testing
+	machinetypes.RegisterComputeClass(
+		machinetypes.NewTestPredefinedComputeClass(
+			"test-pcc",
+			[]machinetypes.MachineFamily{machinetypes.A4},
+			false,
+			false,
+		),
+	)
+
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "crd1",
@@ -241,13 +291,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 	}, "", false, crd.TestDefaultDataProvider(), nil)
 	mig1 := gke.NewTestGkeMigBuilder().SetNodePoolName("node-pool1").SetSpec(&gkeclient.NodePoolSpec{Locations: []string{"us-central1-a", "us-central1-b", "us-central1-c"}, MachineType: "n2-standard-2", Spot: true}).Build()
 	mig2 := gke.NewTestGkeMigBuilder().SetNodePoolName("node-pool2").SetSpec(&gkeclient.NodePoolSpec{Locations: []string{"us-central1-a", "us-central1-b", "us-central1-c"}, MachineType: "a2-highgpu-1g", Spot: false, Accelerators: []*container.AcceleratorConfig{{AcceleratorType: "nvidia-tesla-a100", AcceleratorCount: 1}}}).Build()
-	provider := newMockInstanceConfigCloudProvider(
-		[]string{"us-west1-a", "us-west1-b", "us-west1-c"},
-		[]*gke.GkeMig{mig1, mig2},
-		machinetypes.E2,
-		true,
-		nil,
-	)
 
 	testCases := map[string]struct {
 		flexibilityScopeKey string
@@ -255,6 +298,8 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 		wantInstanceConfigs map[string]*api.InstanceConfig
 		wantErrs            []error
 		enabledFeatures     []string
+		disabledFeatures    []string
+		autopilotEnabled    bool
 	}{
 		"machine type rules": {
 			flexibilityScopeKey: "crd1",
@@ -468,6 +513,28 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 3, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 		},
+		"PCC - FlexAdvisorPCC disabled - doesnt generate configs": {
+			flexibilityScopeKey: "test-pcc",
+			disabledFeatures: []string{
+				experiments.FlexAdvisorPCCSupportEnabledFlag,
+			},
+			wantErrs: []error{fmt.Errorf("predefined compute class \"test-pcc\" is not supported: FlexAdvisorPCCSupport is disabled")},
+		},
+		"PCC - FlexAdvisorPCC enabled, standard cluster - doesnt generate configs": {
+			flexibilityScopeKey: "test-pcc",
+			wantErrs:            []error{fmt.Errorf("predefined compute classes are only available in Autopilot clusters")},
+		},
+		"PCC - FlexAdvisorPCC enabled, autopilot cluster - generates configs": {
+			flexibilityScopeKey: "test-pcc",
+			autopilotEnabled:    true,
+			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
+				api.NewInstanceConfigWithZones("a4-highgpu-8g", "nvidia-b200", 8, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
+				api.NewInstanceConfigWithZones("a4-highgpu-8g", "nvidia-b200", 8, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
+				api.NewInstanceConfigWithZones("a4-highgpu-8g-nolssd", "nvidia-b200", 8, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
+				api.NewInstanceConfigWithZones("a4-highgpu-8g-nolssd", "nvidia-b200", 8, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
+			}),
+			wantErrs: []error{},
+		},
 	}
 
 	for des, tc := range testCases {
@@ -484,8 +551,27 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			if tc.crd != nil {
 				availableCrds = append(availableCrds, tc.crd)
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
-			g := NewInstanceConfigGenerator(lister.NewMockCrdLister(availableCrds), provider, optionsTracker)
+			boolFlags := map[string]bool{}
+			for _, f := range tc.enabledFeatures {
+				boolFlags[f] = true
+			}
+			for _, f := range tc.disabledFeatures {
+				boolFlags[f] = false
+			}
+			optionsTracker := optstracking.FakeOptionsTracker(
+				options.AutoscalingOptions{},
+				gkeclient.Cluster{},
+				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
+			)
+			provider := newMockInstanceConfigCloudProvider(
+				[]string{"us-west1-a", "us-west1-b", "us-west1-c"},
+				[]*gke.GkeMig{mig1, mig2},
+				machinetypes.E2,
+				true,
+				nil,
+				withAutopilotEnabled(tc.autopilotEnabled),
+			)
+			g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister(availableCrds), provider, optionsTracker)
 			generated, errs := g.generateInstanceConfigs(tc.flexibilityScopeKey)
 			var configs map[string]*api.InstanceConfig
 			if generated != nil {
@@ -555,7 +641,7 @@ func TestDeriveMachineConfigsFromRule(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, provider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 			assert.Equal(t, tc.wantErr, err)
@@ -621,7 +707,7 @@ func TestDeriveMachineConfigsFromRule_MinCpuPlatform(t *testing.T) {
 		t.Run(des, func(t *testing.T) {
 			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{})
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
-			g := NewInstanceConfigGenerator(nil, provider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -694,7 +780,7 @@ func TestExpandConfigsByProvisioningMode(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
-			g := NewInstanceConfigGenerator(nil, nil, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.expandConfigsByProvisioningMode(tc.rule, tc.instanceConfigs)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 		})
@@ -751,7 +837,7 @@ func TestExpandConfigsByMaxRunDuration(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
-			g := NewInstanceConfigGenerator(nil, nil, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.expandConfigsByMaxRunDuration(tc.rule, tc.instanceConfigs)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 		})
@@ -948,7 +1034,7 @@ func TestAssignZonesToConfigs(t *testing.T) {
 					ZoneTypesEnabled: tc.zoneTypesEnabled,
 				},
 			}, gkeclient.Cluster{}, manager)
-			g := NewInstanceConfigGenerator(nil, provider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, errs := g.assignZonesToConfigs(tc.rule, tc.instanceConfigs)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 			if len(tc.wantErrors) > 0 || len(errs) > 0 {
@@ -1023,7 +1109,7 @@ func TestInstanceConfigsForNodePools(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
-			g := NewInstanceConfigGenerator(nil, provider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, errors := g.instanceConfigsForNodePools(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 			assert.ElementsMatch(t, tc.wantErrors, errors)
@@ -1083,7 +1169,7 @@ func TestInstanceConfigForMachineType(t *testing.T) {
 		t.Run(des, func(t *testing.T) {
 			provider := newMockInstanceConfigCloudProvider(nil, nil, machinetypes.A4X, true, nil)
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, provider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 			assert.Equal(t, tc.wantErr, err)
@@ -1127,7 +1213,7 @@ func TestInstanceConfigForMachineTypeFromN1Family(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.instanceConfigsForMachineTypeFromN1Family(tc.rule, tc.machineType, machinetypes.N1, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 		})
@@ -1184,7 +1270,7 @@ func TestInstanceConfigsForGpuTypes(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			assert.NoError(t, err)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -1222,6 +1308,14 @@ func compareInstanceConfigMaps(t *testing.T, want, got map[string]*api.InstanceC
 }
 
 func TestMatchingCrd(t *testing.T) {
+	provider := newMockInstanceConfigCloudProvider(
+		nil,
+		nil,
+		machinetypes.E2,
+		false,
+		nil,
+		withAutopilotEnabled(true),
+	)
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "crd1",
@@ -1233,29 +1327,118 @@ func TestMatchingCrd(t *testing.T) {
 				},
 			},
 		},
-	}, "test-project", false, nil, nil)
+	}, "test-project", false, provider, nil)
+
+	userSuppliedCrdWithOverlappingPCCName := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "Balanced",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("g2-standard-12"),
+				},
+			},
+		},
+	}, "test-project", false, provider, nil)
+
+	testCccCrdFromPcc := func(name string, optionsTracker *optstracking.OptionsTracker) crd.CRD {
+		pcc, err := machinetypes.ToPredefinedComputeClass(name)
+		if err != nil {
+			klog.Fatalf("failed to convert %s to PCC: %v", name, err)
+		}
+		var priorities []v1.Priority
+		for _, family := range pcc.MachineFamilies() {
+			familyRef := family.Name()
+			priorities = append(priorities, v1.Priority{
+				MachineFamily: &familyRef,
+			})
+		}
+		ccScaleOut := &v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name,
+			},
+			Spec: v1.ComputeClassSpec{
+				Priorities: priorities,
+			},
+		}
+		return ccc.NewCccCrd(ccScaleOut, "project1", provider.IsAutopilotEnabled(), provider, optionsTracker)
+	}
+
 	testCases := map[string]struct {
 		flexibilityScopeKey string
-		wantCrd             crd.CRD
+		lister              lister.Lister
+		boolFlags           map[string]bool
+		wantCrd             func(*optstracking.OptionsTracker) crd.CRD
 		wantErr             error
 	}{
 		"matching crd exist": {
-			"crd1",
-			crd1,
-			nil,
+			flexibilityScopeKey: "crd1",
+			lister:              lister.NewMockCrdLister([]crd.CRD{crd1}),
+			wantCrd:             func(_ *optstracking.OptionsTracker) crd.CRD { return crd1 },
+			wantErr:             nil,
 		},
 		"matching crd not exist": {
-			"crd2",
-			nil,
-			fmt.Errorf("failed to get CRD for flexibilityScopeKey \"crd2\": %w", fmt.Errorf("crd doesnt exist")),
+			flexibilityScopeKey: "crd2",
+			lister:              lister.NewMockCrdLister([]crd.CRD{crd1}),
+			wantCrd:             nil,
+			wantErr:             fmt.Errorf("failed to get CRD for flexibilityScopeKey \"crd2\": %w", fmt.Errorf("crd doesnt exist")),
+		},
+		"PCC - FlexAdvisorPCCSupport disabled - returns error": {
+			flexibilityScopeKey: "Balanced",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorPCCSupportEnabledFlag: false,
+			},
+			wantCrd: nil,
+			wantErr: fmt.Errorf("predefined compute class \"Balanced\" is not supported: FlexAdvisorPCCSupport is disabled"),
+		},
+		"PCC - FlexAdvisorPCCSupport enabled - returns CCC CRD built from PCC": {
+			flexibilityScopeKey: "Balanced",
+			wantCrd: func(optionsTracker *optstracking.OptionsTracker) crd.CRD {
+				return testCccCrdFromPcc("Balanced", optionsTracker)
+			},
+			wantErr: nil,
+		},
+		// User should not be able to create such CCC. This case is just to verify if someone changes this behavior through some refactorings
+		"PCC - FlexAdvisorPCCSupport disabled - user's CCC name overlaps with name of a PCC - returns error": {
+			flexibilityScopeKey: "Balanced",
+			lister:              lister.NewMockCrdLister([]crd.CRD{userSuppliedCrdWithOverlappingPCCName}),
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorPCCSupportEnabledFlag: false,
+			},
+			wantCrd: nil,
+			wantErr: fmt.Errorf("predefined compute class \"Balanced\" is not supported: FlexAdvisorPCCSupport is disabled"),
+		},
+		"PCC - FlexAdvisorPCCSupport enabled - user's CCC name overlaps with name of a PCC - returns PCC": {
+			flexibilityScopeKey: "Balanced",
+			lister:              lister.NewMockCrdLister([]crd.CRD{userSuppliedCrdWithOverlappingPCCName}),
+			wantCrd: func(optionsTracker *optstracking.OptionsTracker) crd.CRD {
+				return testCccCrdFromPcc("Balanced", optionsTracker)
+			},
+			wantErr: nil,
 		},
 	}
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(lister.NewMockCrdLister([]crd.CRD{crd1}), nil, optionsTracker)
-			crd, err := g.matchingCrd(tc.flexibilityScopeKey)
-			assert.Equal(t, tc.wantCrd, crd)
+			boolFlags := tc.boolFlags
+			if boolFlags == nil {
+				boolFlags = map[string]bool{
+					experiments.FlexAdvisorPCCSupportEnabledFlag:      true,
+					experiments.FlexAdvisorPCCSupportMinCAVersionFlag: true,
+				}
+			}
+			optionsTracker := optstracking.FakeOptionsTracker(
+				options.AutoscalingOptions{},
+				gkeclient.Cluster{},
+				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
+			)
+			g := NewInstanceConfigGenerator(context.Background(), tc.lister, provider, optionsTracker)
+			gotCrd, err := g.matchingCrd(tc.flexibilityScopeKey)
+			var expectedCrd crd.CRD
+			if tc.wantCrd != nil {
+				expectedCrd = tc.wantCrd(optionsTracker)
+			}
+			assert.Equal(t, expectedCrd, gotCrd)
 			assert.Equal(t, tc.wantErr, err)
 		})
 	}
@@ -1304,7 +1487,7 @@ func TestMachineFamilies(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, mockInstanceConfigCloudProvider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, mockInstanceConfigCloudProvider, optionsTracker)
 			machineFamilies, err := g.machineFamiliesForRule(tc.rule)
 			gotNames := []string{}
 			for _, mf := range machineFamilies {
@@ -1456,7 +1639,7 @@ func TestCapGeneratedInstanceConfigs(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(nil, nil, optionsTracker, WithMaxInstanceConfigs(tc.maxInstanceConfigs))
+			g := NewInstanceConfigGenerator(context.Background(), nil, nil, optionsTracker, WithMaxInstanceConfigs(tc.maxInstanceConfigs))
 			got, gotCappedKeysMap := g.capGeneratedInstanceConfigs(tc.instanceConfigs, "")
 			assert.Equal(t, len(tc.wantInstanceConfigs), len(got))
 			assert.Equal(t, tc.wantInstanceConfigs, got)
@@ -1507,7 +1690,7 @@ func TestGenerationValidation_Metrics(t *testing.T) {
 	)
 
 	optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-	g := NewInstanceConfigGenerator(lister.NewMockCrdLister(availableCrds), provider, optionsTracker)
+	g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister(availableCrds), provider, optionsTracker)
 
 	// 1. Test general generation error (unknown machine type)
 	initialVal, err := metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.ZeroConfigsGeneratedForRule)
@@ -1526,4 +1709,231 @@ func TestGenerationValidation_Metrics(t *testing.T) {
 	newVal, err = metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.ZeroConfigsGeneratedForRule)
 	assert.NoError(t, err)
 	assert.Equal(t, initialVal, newVal, "Metric ZeroConfigsGeneratedForRule should NOT be incremented for zone unavailability errors")
+}
+
+func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "crd1",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+	crd2 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "crd2",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-4"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	testCases := map[string]struct {
+		boolFlags map[string]bool
+		run       func(t *testing.T, g *instanceConfigGenerator, provider *mockInstanceConfigCloudProvider)
+	}{
+		"GCE doesnt return errors - cache is not used": {
+			run: func(t *testing.T, g *instanceConfigGenerator, provider *mockInstanceConfigCloudProvider) {
+				provider.machineTypes = map[string]set.Set[string]{
+					"e2-standard-2": set.New("us-west1-a"),
+					"e2-standard-4": set.New("us-west1-a"),
+				}
+
+				baseline := 0
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, baseline+2, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, baseline+4, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, baseline+6, provider.getMachineTypeCallsQty)
+			},
+		},
+		"GCE returns errors - doesnt call GCE if cached": {
+			run: func(t *testing.T, g *instanceConfigGenerator, provider *mockInstanceConfigCloudProvider) {
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, 1, provider.getMachineTypeCallsQty)
+
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, 1, provider.getMachineTypeCallsQty)
+
+				// e2-standard-4 is not cached yet
+				g.generateInstanceConfigs("crd2")
+				assert.Equal(t, 2, provider.getMachineTypeCallsQty)
+
+				// Sleep to let it expire
+				time.Sleep(machineErrorCacheTtl + 1*time.Second)
+
+				// Third generation: should trigger FetchMachineType again because cache entry expired
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, 3, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, 3, provider.getMachineTypeCallsQty)
+
+				provider.machineTypes = map[string]set.Set[string]{
+					"e2-standard-2": set.New("us-west1-a"),
+					"e2-standard-4": set.New("us-west1-a"),
+				}
+				// after GCE stops returning error, cache is not used
+				baseline := 3
+				g.generateInstanceConfigs("crd2")
+				// for each machineType SPOT and STANDARD are generated
+				assert.Equal(t, baseline+2, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd2")
+				assert.Equal(t, baseline+4, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd2")
+				assert.Equal(t, baseline+6, provider.getMachineTypeCallsQty)
+			},
+		},
+		"FlexAdvisorMachineErrorCache disabled - doesnt use cache": {
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag: false,
+			},
+			run: func(t *testing.T, g *instanceConfigGenerator, provider *mockInstanceConfigCloudProvider) {
+				for i := 0; i < 100; i++ {
+					g.generateInstanceConfigs("crd1")
+
+					// for each machine type SPOT and STANDARD are generated
+					assert.Equal(t, (i+1)*2, provider.getMachineTypeCallsQty)
+					time.Sleep(1 * time.Minute)
+				}
+			},
+		},
+	}
+
+	for des, tc := range testCases {
+		t.Run(des, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				provider := newMockInstanceConfigCloudProvider(
+					[]string{"us-west1-a"},
+					nil,
+					machinetypes.E2,
+					false,
+					nil,
+				)
+
+				optionsTracker := optstracking.FakeOptionsTracker(
+					options.AutoscalingOptions{},
+					gkeclient.Cluster{},
+					experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{}),
+				)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				g := NewInstanceConfigGenerator(ctx, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), provider, optionsTracker)
+
+				tc.run(t, g, provider)
+			})
+		})
+	}
+}
+
+// TestGuardPredefinedComputeClassFields is a fuse that should fail if PredefinedComputeClass struct is edited (fields added/removed). Generator's code in such case should be evaluated it's compatible
+// and supports the new changes
+func TestGuardPredefinedComputeClassFields(t *testing.T) {
+	expectedFields := []string{
+		"name",
+		"machineFamilies",
+		"machineFamilyBalancingEnabled",
+		"sliceOfHardware",
+		"acceleratorClass",
+		"napLargerBootDisk",
+	}
+
+	structType := reflect.TypeOf(machinetypes.PredefinedComputeClass{})
+	var actualFields []string
+	for i := 0; i < structType.NumField(); i++ {
+		actualFields = append(actualFields, structType.Field(i).Name)
+	}
+
+	assert.ElementsMatch(t, expectedFields, actualFields, "PredefinedComputeClass fields change detected, please verify InstanceConfigGenerator is compatible with the changes/supports new fields")
+}
+
+func TestNewPredefinedComputeClassCrd(t *testing.T) {
+
+	testCases := map[string]struct {
+		flexibilityScopeKey string
+		wantName            string
+		wantFamilies        []string
+		wantErr             bool
+		autopilotEnabled    bool
+		disabledFeatures    []string
+	}{
+		"Balanced compute class": {
+			flexibilityScopeKey: "Balanced",
+			autopilotEnabled:    true,
+			wantName:            "Balanced",
+			wantFamilies:        []string{"n2", "n2d"},
+		},
+		"unsupported compute class": {
+			flexibilityScopeKey: "Unsupported-Class",
+			autopilotEnabled:    true,
+			wantErr:             true,
+		},
+		"Scale-Out compute class - FlexAdvisorPCCSupport disabled - returns error": {
+			flexibilityScopeKey: "Scale-Out",
+			disabledFeatures: []string{
+				experiments.FlexAdvisorPCCSupportEnabledFlag,
+			},
+			wantErr: true,
+		},
+		"Scale-Out compute class - standard cluster - returns error": {
+			flexibilityScopeKey: "Scale-Out",
+			wantErr:             true,
+		},
+		"Scale-Out compute class": {
+			flexibilityScopeKey: "Scale-Out",
+			autopilotEnabled:    true,
+			wantName:            "Scale-Out",
+			wantFamilies:        []string{"t2a", "t2d"},
+		},
+	}
+
+	for des, tc := range testCases {
+		t.Run(des, func(t *testing.T) {
+			provider := newMockInstanceConfigCloudProvider(
+				[]string{"us-west1-a", "us-west1-b"},
+				nil,
+				machinetypes.E2,
+				true,
+				nil,
+				withAutopilotEnabled(tc.autopilotEnabled),
+			)
+			boolFlags := map[string]bool{}
+			for _, f := range tc.disabledFeatures {
+				boolFlags[f] = false
+			}
+			optionsTracker := optstracking.FakeOptionsTracker(
+				options.AutoscalingOptions{},
+				gkeclient.Cluster{},
+				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
+			)
+			g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{}), provider, optionsTracker)
+			crd, err := g.cccCrdFromPCC(tc.flexibilityScopeKey)
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, crd)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, crd)
+			assert.Equal(t, tc.wantName, crd.Name())
+			assert.False(t, crd.AutopilotManaged())
+
+			var families []string
+			for _, rule := range crd.Rules() {
+				if rule.MachineFamily() != "" {
+					families = append(families, rule.MachineFamily())
+				}
+			}
+			assert.ElementsMatch(t, tc.wantFamilies, families)
+		})
+	}
 }

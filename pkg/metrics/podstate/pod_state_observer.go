@@ -412,6 +412,12 @@ func (o *PodStateObserver) calculatePendingPodsPerCcc() []podstatetypes.PendingP
 	for _, pod := range podData {
 		podsPerCcc[pod.cccName] = append(podsPerCcc[pod.cccName], pod)
 	}
+	cccNames := o.getCCCNames()
+	for cccName := range cccNames {
+		if _, ok := podsPerCcc[cccName]; !ok {
+			podsPerCcc[cccName] = nil
+		}
+	}
 
 	var result []podstatetypes.PendingPodsPerCccMetric
 	for cccName, podData := range podsPerCcc {
@@ -422,6 +428,23 @@ func (o *PodStateObserver) calculatePendingPodsPerCcc() []podstatetypes.PendingP
 	}
 
 	return result
+}
+
+func (o *PodStateObserver) getCCCNames() map[string]bool {
+	cccNames := make(map[string]bool)
+	crds, err := o.npcCrdLister.ListCrds()
+	if err != nil {
+		klog.Warningf("PodStateObserver.getCCCNames: failed to list CRDs: %v", err)
+	} else {
+		for _, crd := range crds {
+			cccNames[crd.Name()] = true
+		}
+	}
+
+	if defaultCrd, _, found := o.npcCrdLister.Default(); found {
+		cccNames[defaultCrd] = true
+	}
+	return cccNames
 }
 
 func (o *PodStateObserver) getPodUnschedulableTime(pod *v1.Pod) *time.Time {

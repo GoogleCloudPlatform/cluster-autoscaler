@@ -20,11 +20,13 @@ package v1
 // with apply.
 type MachineFamilyApplyConfiguration struct {
 	Name              *string                                 `json:"name,omitempty"`
+	UsagePolicy       *UsagePolicyApplyConfiguration          `json:"usagePolicy,omitempty"`
 	DefaultProperties *MachinePropertiesApplyConfiguration    `json:"defaultProperties,omitempty"`
 	Weights           *MachineFamilyWeightsApplyConfiguration `json:"weights,omitempty"`
 	MachineTypes      []MachineTypeApplyConfiguration         `json:"machineTypes,omitempty"`
 	Accelerators      []AcceleratorApplyConfiguration         `json:"accelerators,omitempty"`
 	ComputeClasses    []string                                `json:"computeClasses,omitempty"`
+	PageType          *string                                 `json:"pageType,omitempty"`
 }
 
 // MachineFamilyApplyConfiguration constructs an declarative configuration of the MachineFamily type for use with
@@ -38,6 +40,14 @@ func MachineFamily() *MachineFamilyApplyConfiguration {
 // If called multiple times, the Name field is set to the value of the last call.
 func (b *MachineFamilyApplyConfiguration) WithName(value string) *MachineFamilyApplyConfiguration {
 	b.Name = &value
+	return b
+}
+
+// WithUsagePolicy sets the UsagePolicy field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the UsagePolicy field is set to the value of the last call.
+func (b *MachineFamilyApplyConfiguration) WithUsagePolicy(value *UsagePolicyApplyConfiguration) *MachineFamilyApplyConfiguration {
+	b.UsagePolicy = value
 	return b
 }
 
@@ -90,5 +100,13 @@ func (b *MachineFamilyApplyConfiguration) WithComputeClasses(values ...string) *
 	for i := range values {
 		b.ComputeClasses = append(b.ComputeClasses, values[i])
 	}
+	return b
+}
+
+// WithPageType sets the PageType field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the PageType field is set to the value of the last call.
+func (b *MachineFamilyApplyConfiguration) WithPageType(value string) *MachineFamilyApplyConfiguration {
+	b.PageType = &value
 	return b
 }

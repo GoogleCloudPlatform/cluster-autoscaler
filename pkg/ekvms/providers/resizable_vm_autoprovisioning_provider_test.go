@@ -15,6 +15,7 @@
 package providers
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -99,16 +100,16 @@ func TestRun(t *testing.T) {
 			}
 
 			callCount := 0
-			stopCh := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
 			fakeClient.PrependReactor("create", "pods", func(action clienttesting.Action) (handled bool, ret runtime.Object, err error) {
 				callCount++
 				if callCount == len(tc.dryRunErrors) { // Stop the clock exactly when all calls are executed
-					close(stopCh)
+					cancel()
 				}
 				return true, nil, tc.dryRunErrors[callCount-1]
 			})
 
-			provider.Run(stopCh)
+			provider.Run(ctx)
 
 			assert.Equal(t, tc.expectedIsBalloonPodCreatable, provider.balloonPodChecker.isBalloonPodCreatable)
 			assert.Equal(t, tc.expectedBalloonPodCreationErrorCount, provider.balloonPodChecker.balloonPodCreationErrorCount)
@@ -120,24 +121,28 @@ func TestRun(t *testing.T) {
 
 func TestNodesCount(t *testing.T) {
 	mockMetrics := &mockResizableVmMetrics{}
-	em := experiments.NewManager(version.Version{}, nil)
+	em := experiments.NewMockManagerWithOptions(version.Version{}, nil, nil)
 	bpChecker := &balloonPodChecker{isBalloonPodCreatable: true}
 
 	ekProvider, _ := newEkAutoprovisioningProvider(string(resizable_vm_types.EkAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
+	e4Provider := newE4AutoprovisioningProvider(em, bpChecker, true, true, mockMetrics)
 	e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 
 	provider := &ResizableVmAutoprovisioningProvider{
 		machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
 		ekAutoprovisioningProvider:  ekProvider,
+		e4AutoprovisioningProvider:  e4Provider,
 		e4aAutoprovisioningProvider: e4aProvider,
 	}
 
 	countProvider := &mockNodesCountProvider{}
 	countProvider.On("NodesCount", machinetypes.EK.Name()).Return(5)
+	countProvider.On("NodesCount", machinetypes.E4.Name()).Return(4)
 	countProvider.On("NodesCount", machinetypes.E4A.Name()).Return(3)
 	provider.RegisterNodesCountProvider(countProvider)
 
 	assert.Equal(t, 5, provider.NodesCount(machinetypes.EK.Name()))
+	assert.Equal(t, 4, provider.NodesCount(machinetypes.E4.Name()))
 	assert.Equal(t, 3, provider.NodesCount(machinetypes.E4A.Name()))
 }
 
@@ -145,7 +150,7 @@ func TestHasActiveResizableNodes(t *testing.T) {
 	mockMetrics := &mockResizableVmMetrics{}
 	mockMetrics.On("UpdateResizableVmLaunchStatus", mock.Anything, mock.Anything, mock.Anything).Return()
 	mockMetrics.On("UpdateResizableVmAutopilotComputeClassStatus", mock.Anything, mock.Anything).Return()
-	em := experiments.NewManager(version.Version{}, nil)
+	em := experiments.NewMockManagerWithOptions(version.Version{}, nil, nil)
 	bpChecker := &balloonPodChecker{isBalloonPodCreatable: true}
 
 	tests := []struct {
@@ -209,11 +214,13 @@ func TestHasActiveResizableNodes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ekProvider, _ := newEkAutoprovisioningProvider(tc.ekMode, em, bpChecker, true, true, mockMetrics)
+			e4Provider := newE4AutoprovisioningProvider(em, bpChecker, true, true, mockMetrics)
 			e4aProvider, _ := newE4aAutoprovisioningProvider(tc.e4aMode, em, bpChecker, true, true, mockMetrics)
 
 			provider := &ResizableVmAutoprovisioningProvider{
 				machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
 				ekAutoprovisioningProvider:  ekProvider,
+				e4AutoprovisioningProvider:  e4Provider,
 				e4aAutoprovisioningProvider: e4aProvider,
 			}
 
@@ -222,6 +229,7 @@ func TestHasActiveResizableNodes(t *testing.T) {
 			provider.Refresh()
 
 			countProvider.On("NodesCount", machinetypes.EK.Name()).Return(tc.ekNodes)
+			countProvider.On("NodesCount", machinetypes.E4.Name()).Return(0)
 			countProvider.On("NodesCount", machinetypes.E4A.Name()).Return(tc.e4aNodes)
 
 			assert.Equal(t, tc.expectedResult, provider.HasActiveResizableNodes())

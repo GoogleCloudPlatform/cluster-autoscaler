@@ -398,6 +398,7 @@ type TestAutoprovisioningCloudProvider struct {
 	validMachineTypes                 map[gce.MachineTypeKey]bool
 	isEkSpotEnabled                   bool
 	isEkEdpEnabled                    bool
+	isArmMachineFallbacksEnabled      bool
 	machineTypesPerZone               map[string][]string
 	machineConfigProvider             *machinetypes.MachineConfigProvider
 	nodePoolSpec                      *gkeclient.NodePoolSpec
@@ -660,6 +661,12 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithEkSpotEnabled(enabled boo
 	return b
 }
 
+func (b *TestAutoprovisioningCloudProviderBuilder) WithArmMachineFallbacksEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		p.isArmMachineFallbacksEnabled = enabled
+	})
+	return b
+}
 func (b *TestAutoprovisioningCloudProviderBuilder) WithNetwork(network *gce_api.Network) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
 		p.network = network
@@ -779,6 +786,10 @@ func (cp *TestAutoprovisioningCloudProvider) IsResizableVmWithinPodFamilyEnabled
 
 func (cp *TestAutoprovisioningCloudProvider) IsE2lessRegion() bool {
 	return cp.GetAutoprovisioningDefaultFamily().Name() == machinetypes.E4.Name()
+}
+
+func (cp *TestAutoprovisioningCloudProvider) IsArmMachineFallbacksEnabled() bool {
+	return cp.isArmMachineFallbacksEnabled
 }
 
 // AreConfidentialNodesEnabled checks if ConfidentialNodes are enabled in cluster.
@@ -1529,6 +1540,7 @@ type FakeGkeManager struct {
 	instances                         []gce.GceInstance
 	resizableVmInAutopilotEnabled     map[string]bool
 	resizableVmWithinPodFamilyEnabled map[string]bool
+	isArmMachineFallbacksEnabled      bool
 
 	suspensionStatuses    map[suspensionKey]SuspensionStatus
 	machineConfigProvider *machinetypes.MachineConfigProvider
@@ -1915,6 +1927,9 @@ func (fake *FakeGkeManager) InvalidateNodesScaleDownAllowedCache() {
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) IsArmMachineFallbacksEnabled() bool {
+	return fake.isArmMachineFallbacksEnabled
+}
 func (fake *FakeGkeManager) GetInjectedMig(mig *GkeMig) *GkeMig {
 	if fake.injectedMigs == nil {
 		return nil
@@ -2151,6 +2166,12 @@ func (m *GkeManagerMock) IsResizableVmWithinPodFamilyEnabled(machineFamily strin
 func (m *GkeManagerMock) IsMigStable(mig gce.Mig) (bool, error) {
 	args := m.Called(mig)
 	return args.Bool(0), args.Error(1)
+}
+
+// IsArmMachineFallbacksEnabled is a mocked method.
+func (m *GkeManagerMock) IsArmMachineFallbacksEnabled() bool {
+	args := m.Called()
+	return args.Get(0).(bool)
 }
 
 // SetScaleUpTimeProvider is a mocked method

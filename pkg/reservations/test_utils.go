@@ -253,7 +253,7 @@ func (f *FakeBlocksPullerProvider) GetReservationSubBlocksInReservationBlock(res
 func NewTestingReservationsPuller(localProject string, sharedPrjs []string, rsv []*gce_api.Reservation) *gceclient.ReservationsPuller {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-c"}, nil })
-	puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
+	puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
 	if len(sharedPrjs) != 0 {
 		for _, project := range sharedPrjs {
 			puller.AddProject(project)

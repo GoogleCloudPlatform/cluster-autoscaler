@@ -34,6 +34,9 @@ func (m *MockBalancer) FindSimilarNodeGroups(autoscalingCtx *ca_context.Autoscal
 
 func (m *MockBalancer) BalanceScaleUpBetweenGroups(autoscalingCtx *ca_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 	args := m.Called(autoscalingCtx, groups, newNodes)
+	if fn, ok := args.Get(0).(func(*ca_context.AutoscalingContext, []cloudprovider.NodeGroup, int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError)); ok {
+		return fn(autoscalingCtx, groups, newNodes)
+	}
 	var err auto_errors.AutoscalerError
 	if args.Get(1) != nil {
 		err = args.Get(1).(auto_errors.AutoscalerError)

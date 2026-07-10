@@ -39,8 +39,18 @@ import (
 
 type nodePoolCreationStatus string
 type nodePoolTerminationStatus string
+type initializationStatus string
 
 const (
+	// initializationIdle represents a node pool that doesn't need initialization and is not being initialized
+	initializationIdle initializationStatus = "idle"
+	// initializationPending represents a node pool that needs initialization and is not being initialized
+	initializationPending initializationStatus = "pending"
+	// initializationInProgress represents a node pool being initialized and doesn't need further initialization
+	initializationInProgress initializationStatus = "in-progress"
+	// initializationInProgressDirty represents a node pool being initialized and already needs further initialization
+	initializationInProgressDirty initializationStatus = "in-progress-dirty"
+
 	// nodePoolCreationStatusQueued represents a node pool that is queued to start the creation process and awaits available worker
 	nodePoolCreationStatusQueued nodePoolCreationStatus = "queued"
 	// nodePoolCreationStatusProvisioning represents a node pool that awaits GKE provisioning operation to finish
@@ -237,7 +247,7 @@ func (m *asyncGkeManager) dropFinalizedNodePoolsLocked() bool {
 	defer m.mutex.Unlock()
 	dropped := false
 	for nodePoolName, upcoming := range m.upcomingNodePools {
-		if status, _ := upcoming.status(); status == nodePoolCreationStatusProcessed {
+		if upcoming.canBeDropped() {
 			klog.Infof("Async node pool creation process finished %s. Dropping upcoming migs during refresh.", nodePoolName)
 			m.dropNodePoolReferences(nodePoolName)
 			dropped = true
@@ -390,15 +400,16 @@ func (m *asyncGkeManager) createUpcomingNodePool(
 	}
 	now := time.Now()
 	upcoming := &upcomingNodePool{
-		mainMig:                mainMig,
-		migs:                   migs,
-		injectedMig:            mig,
-		updater:                updater,
-		initializer:            initializer,
-		spec:                   nodePoolSpec,
-		statusSynced:           nodePoolCreationStatusQueued,
-		createdAt:              now,
-		lastStatusChangeSynced: now,
+		mainMig:                    mainMig,
+		migs:                       migs,
+		injectedMig:                mig,
+		updater:                    updater,
+		initializer:                initializer,
+		spec:                       nodePoolSpec,
+		statusSynced:               nodePoolCreationStatusQueued,
+		createdAt:                  now,
+		lastStatusChangeSynced:     now,
+		initializationStatusSynced: initializationIdle,
 	}
 	m.upcomingNodePools[mig.NodePoolName()] = upcoming
 	m.measureOngoingOperations()
@@ -492,12 +503,23 @@ func (m *asyncGkeManager) syncNodePool(upcoming *upcomingNodePool) {
 }
 
 func (m *asyncGkeManager) runNodePoolInitalizer(upcoming *upcomingNodePool) {
+	if !upcoming.startInitialization() {
+		klog.Infof("Initialization for node pool %s is already in progress, skipping...", upcoming.nodePoolName())
+		return
+	}
+	defer func() {
+		if upcoming.finishInitializationAndCheckIfReinitializationRequired() {
+			klog.Infof("Re-triggering initialization for node pool %s due to concurrent scale-up", upcoming.nodePoolName())
+			go m.runNodePoolInitalizer(upcoming)
+		} else {
+			m.processedNodePoolListener(upcoming.nodePoolName())
+		}
+	}()
+
 	creationResult, err := upcoming.creationResult()
 	status, _ := upcoming.status()
 	if err != nil {
-		for _, mig := range creationResult.AllCreatedMigs() {
-			m.uninitializedGkeMigs[mig.Id()] = mig
-		}
+		m.addUninitializedMigs(creationResult.AllCreatedMigs())
 	}
 	for _, mig := range creationResult.AllCreatedMigs() {
 		// It is also necessary to mark mig as injected for backoff
@@ -523,7 +545,14 @@ func (m *asyncGkeManager) runNodePoolInitalizer(upcoming *upcomingNodePool) {
 	} else {
 		m.changeUpcomingStatusSynced(upcoming, nodePoolCreationStatusProcessed)
 	}
-	m.processedNodePoolListener(upcoming.nodePoolName())
+}
+
+func (m *asyncGkeManager) addUninitializedMigs(migs []*GkeMig) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for _, mig := range migs {
+		m.uninitializedGkeMigs[mig.Id()] = mig
+	}
 }
 
 func (m *asyncGkeManager) runNodePoolFinalizer(terminating *terminatingNodePool) {
@@ -819,7 +848,6 @@ func (m *asyncGkeManager) SetMigSize(mig gce.Mig, size int64) error {
 		return m.GkeManager.SetMigSize(createdMig, size)
 	}
 	return nil
-
 }
 
 // GetMigNodes return mig nodes or nil for upcoming node pools.
@@ -879,13 +907,16 @@ func (m *asyncGkeManager) getUpcomingMigForInstanceLocked(instance gce.GceRef) g
 func (m *asyncGkeManager) CreateInstances(mig gce.Mig, delta int64) error {
 	if upcoming := m.getUpcomingNodePoolByMigIdLocked(mig.Id()); upcoming != nil {
 		klog.Infof("Scheduling addition of %d new instances to upcoming mig %v", delta, mig.Id())
-		upcoming.updater.ChangeTargetSize(mig.Id(), delta)
 		if createdMig := upcoming.getCreatedMigByZone(mig.GceRef().Zone); createdMig != nil {
-			klog.Infof("Adding %d new instances to async created mig %v (upcomingMig: %v)", delta, createdMig.Id(), mig.Id())
+			klog.Infof("Adding %d new instances in parallel to async created mig %v (upcomingMig: %v)", delta, createdMig.Id(), mig.Id())
 			// Invalidate cache for mig as it doesn't contain VM names that were added in the initial async scale-up.
 			// This invalidation happens at most once per newly created mig in the loop following mig async creation.
 			m.cache.InvalidateMigInstances(createdMig.GceRef())
-			return m.GkeManager.CreateInstances(createdMig, delta)
+			upcoming.updater.ChangeTargetSize(mig.Id(), delta)
+			upcoming.markInProgressDirty()
+			m.runNodePoolInitalizer(upcoming)
+		} else {
+			upcoming.updater.ChangeTargetSize(mig.Id(), delta)
 		}
 		return nil
 	}
@@ -1061,11 +1092,20 @@ type upcomingNodePool struct {
 	updater     interfaces.AsyncNodeGroupUpdater
 	createdAt   time.Time
 	// guards *Synced fields
-	mutex                  sync.Mutex
-	statusSynced           nodePoolCreationStatus
+	mutex sync.Mutex
+	// statusSynced tracks the high-level creation lifecycle of the node pool (e.g., Scheduling, Provisioning, Running, Processed).
+	statusSynced nodePoolCreationStatus
+	// lastStatusChangeSynced records the timestamp of the last statusSynced transition, used for metrics.
 	lastStatusChangeSynced time.Time
-	errSynced              error
-	creationResultSynced   MigCreateNodePoolResult
+	// errSynced holds any terminal error encountered during the node pool creation or initialization process.
+	errSynced error
+	// creationResultSynced stores the newly created MIGs once the cloud provider confirms their creation.
+	creationResultSynced MigCreateNodePoolResult
+	// initializationStatusSynced tracks the state of the post-creation initialization process (Idle, Pending, InProgress, InProgressDirty).
+	// It ensures that concurrent scale-ups trigger re-initialization if the target size changes during an ongoing initialization.
+	initializationStatusSynced initializationStatus
+	// reinitializationCounterSynced limits the number of times initialization can be re-triggered to prevent infinite loops.
+	reinitializationCounterSynced int
 }
 
 func (n *upcomingNodePool) extraMigs() []*GkeMig {
@@ -1103,6 +1143,47 @@ func (n *upcomingNodePool) setStatus(status nodePoolCreationStatus) {
 
 func (n *upcomingNodePool) nodePoolName() string {
 	return n.mainMig.NodePoolName()
+}
+
+func (n *upcomingNodePool) startInitialization() bool {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	if n.initializationStatusSynced == initializationInProgress || n.initializationStatusSynced == initializationInProgressDirty {
+		return false
+	}
+	n.initializationStatusSynced = initializationInProgress
+	return true
+}
+
+const maxReinitializationCount = 3
+
+func (n *upcomingNodePool) finishInitializationAndCheckIfReinitializationRequired() bool {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	if n.initializationStatusSynced == initializationInProgressDirty {
+		if n.reinitializationCounterSynced < maxReinitializationCount {
+			n.initializationStatusSynced = initializationPending
+			n.reinitializationCounterSynced++
+			return true
+		}
+		klog.Warningf("Max re-initialization count reached for node pool %s. Skipping further re-initializations.", n.nodePoolName())
+	}
+	n.initializationStatusSynced = initializationIdle
+	return false
+}
+
+func (n *upcomingNodePool) markInProgressDirty() {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	if n.initializationStatusSynced == initializationInProgress {
+		n.initializationStatusSynced = initializationInProgressDirty
+	}
+}
+
+func (n *upcomingNodePool) canBeDropped() bool {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	return n.statusSynced == nodePoolCreationStatusProcessed && n.initializationStatusSynced == initializationIdle
 }
 
 func (n *upcomingNodePool) migIds() []string {

@@ -32,8 +32,9 @@ func (m *MockProvider) GetInstanceAvailability(flexibilityScopeKey, instanceConf
 	return args.Get(0).(*Snapshot)
 }
 
-func (m *MockProvider) RegisterFlexibilityScope(flexibilityScopeKey string) {
-	m.Called(flexibilityScopeKey)
+func (m *MockProvider) RegisterFlexibilityScope(flexibilityScopeKey string) error {
+	args := m.Called(flexibilityScopeKey)
+	return args.Error(0)
 }
 
 func (m *MockProvider) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error) {

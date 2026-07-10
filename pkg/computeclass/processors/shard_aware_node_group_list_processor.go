@@ -69,6 +69,10 @@ func (p *shardAwareNodeGroupListProcessor) filterNodeGroupsByCccShardHomogeneity
 		return nodeGroups
 	}
 
+	toleratedCccs, toleratesAllCccs := p.getToleratedCccsMetadata(unschedulablePods)
+	if targetCCCName == "" && toleratesAllCccs {
+		return nodeGroups
+	}
 	klog.V(4).Infof("Filtering node groups to match homogeneous shard requirement, selected compute-class: %q", targetCCCName)
 	var filteredNodeGroups []cloudprovider.NodeGroup
 	for _, ng := range nodeGroups {
@@ -86,6 +90,10 @@ func (p *shardAwareNodeGroupListProcessor) filterNodeGroupsByCccShardHomogeneity
 
 		if ngCrdName == targetCCCName {
 			filteredNodeGroups = append(filteredNodeGroups, ng)
+		} else if targetCCCName == "" && isNodeGroupCCC {
+			if toleratedCccs[ngCrdName] {
+				filteredNodeGroups = append(filteredNodeGroups, ng)
+			}
 		}
 	}
 	return filteredNodeGroups
@@ -97,4 +105,38 @@ func (p *shardAwareNodeGroupListProcessor) getPodCccName(pod *apiv1.Pod) string 
 		return ""
 	}
 	return name
+}
+
+func (p *shardAwareNodeGroupListProcessor) getToleratedCccsMetadata(pods []*apiv1.Pod) (toleratedCccs map[string]bool, toleratedAllCccs bool) {
+	crdLabels := p.getCrdLabelsMap()
+	if len(crdLabels) == 0 {
+		return nil, false
+	}
+	toleratedCccs = make(map[string]bool)
+
+	for _, pod := range pods {
+		for _, toleration := range pod.Spec.Tolerations {
+			if toleration.Key == "" && toleration.Operator == apiv1.TolerationOpExists {
+				toleratedAllCccs = true
+				continue
+			}
+			if !crdLabels[toleration.Key] {
+				continue
+			}
+			if toleration.Operator == apiv1.TolerationOpExists {
+				toleratedAllCccs = true
+			} else if toleration.Operator == apiv1.TolerationOpEqual {
+				toleratedCccs[toleration.Value] = true
+			}
+		}
+	}
+	return
+}
+
+func (p *shardAwareNodeGroupListProcessor) getCrdLabelsMap() map[string]bool {
+	labelsMap := make(map[string]bool)
+	for _, label := range p.lister.Labels() {
+		labelsMap[label] = true
+	}
+	return labelsMap
 }

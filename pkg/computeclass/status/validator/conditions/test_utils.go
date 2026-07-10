@@ -28,7 +28,7 @@ import (
 func newMockReservationsPuller(localProject string, projects []string, rsvs []*gceapiv1.Reservation) *gceclient.ReservationsPuller {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-c"}, nil })
-	puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
+	puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
 	for _, project := range projects {
 		puller.AddProject(project)
 	}

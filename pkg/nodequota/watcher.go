@@ -14,6 +14,8 @@
 
 package nodequota
 
+import "context"
+
 const (
 	// QuotaUnset means that quota is either not set or QuotaWatcher
 	// was unable to poll it.
@@ -23,7 +25,7 @@ const (
 // Watcher monitors quotas that need to be applied by CA.
 type Watcher interface {
 	GetNodeQuota() int
-	Run(stopCh <-chan struct{})
+	Run(ctx context.Context)
 }
 
 type noOpWatcher struct{}
@@ -32,7 +34,7 @@ func (*noOpWatcher) GetNodeQuota() int {
 	return QuotaUnset
 }
 
-func (*noOpWatcher) Run(stopCh <-chan struct{}) {}
+func (*noOpWatcher) Run(ctx context.Context) {}
 
 func NewNoOpWatcher() Watcher {
 	return &noOpWatcher{}

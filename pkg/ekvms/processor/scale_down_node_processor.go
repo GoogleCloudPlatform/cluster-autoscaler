@@ -41,7 +41,7 @@ import (
 )
 
 const (
-	processResizableDownsizes = "scaleDown:ekProcessDownsizes"
+	processResizableVmDownsizes = "scaleDown:processResizableVmDownsizes"
 )
 
 type nodeInfoLister interface {
@@ -103,7 +103,7 @@ func (p *ScaleDownNodeProcessor) process(ctx *context.AutoscalingContext, nodes 
 		return nodes, nodes, nil
 	}
 
-	defer metrics.UpdateDurationFromStart(processResizableDownsizes, time.Now())
+	defer metrics.UpdateDurationFromStart(processResizableVmDownsizes, time.Now())
 
 	var filterMode operationtracker.SnapshotFilterMode
 	if p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.EkDownsizeNonResizableFlag, false) {

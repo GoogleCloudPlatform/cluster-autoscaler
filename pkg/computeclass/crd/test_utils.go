@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
@@ -30,6 +31,7 @@ import (
 )
 
 type testCrd struct {
+	resourceVersion               string
 	label                         string
 	crdType                       string
 	name                          string
@@ -48,6 +50,7 @@ type testCrd struct {
 	userDefinedLabels             map[string]string
 	userDefinedTaints             []apiv1.Taint
 	resourceManagerTags           []Tag
+	allocationStrategyDefaults    *cccv1.AllocationStrategyDefaults
 	conditions                    []metav1.Condition
 	ruleConditions                map[string][]metav1.Condition
 
@@ -61,6 +64,10 @@ type testCrd struct {
 
 func (t *testCrd) ArchitectureTaintBehavior() string {
 	return t.architectureTaintBehavior
+}
+
+func (t *testCrd) ResourceVersion() string {
+	return t.resourceVersion
 }
 
 func (t *testCrd) Label() string {
@@ -169,6 +176,10 @@ func (t *testCrd) UserDefinedTaints() []apiv1.Taint {
 
 func (t *testCrd) ResourceManagerTags() []Tag {
 	return t.resourceManagerTags
+}
+
+func (t *testCrd) AllocationStrategyDefaults() *cccv1.AllocationStrategyDefaults {
+	return t.allocationStrategyDefaults
 }
 
 func (t *testCrd) TpuDriverMode() TpuDriverMode {
@@ -331,6 +342,12 @@ func WithUserDefinedTaints(taints []apiv1.Taint) TestCrdOption {
 func WithResourceManagerTags(tags []Tag) TestCrdOption {
 	return func(crd *testCrd) {
 		crd.resourceManagerTags = tags
+	}
+}
+
+func WithAllocationStrategyDefaults(defaults *cccv1.AllocationStrategyDefaults) TestCrdOption {
+	return func(c *testCrd) {
+		c.allocationStrategyDefaults = defaults
 	}
 }
 

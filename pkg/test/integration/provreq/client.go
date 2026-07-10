@@ -20,19 +20,19 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	prfake "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/clientset/versioned/fake"
+	"k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/clientset/versioned"
 	prexternalversions "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/informers/externalversions"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqclient"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqwrapper"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/kubernetes"
 )
 
-// NewFakeClientForTB creates a fake provisioning request client specifically tailored for tests.
-func NewFakeClientForTB(ctx context.Context, t testing.TB, prs ...*provreqwrapper.ProvisioningRequest) *provreqclient.ProvisioningRequestClient {
+// NewFakeClientForTB creates a fake provisioning request client tailored for tests.
+// It also implements a reactor for the "patch" verb to simulate patch updates properly.
+func NewFakeClientForTB(ctx context.Context, t testing.TB, provReqClient versioned.Interface, podTemplClient kubernetes.Interface, prs ...*provreqwrapper.ProvisioningRequest) *provreqclient.ProvisioningRequestClient {
 	t.Helper()
-	provReqClient := prfake.NewSimpleClientset()
-	podTemplClient := fake.NewSimpleClientset()
+
 	for _, pr := range prs {
 		if pr == nil {
 			continue

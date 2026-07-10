@@ -2096,6 +2096,9 @@ func TestCCCEnsureAllDaemonSetPodsRunning(t *testing.T) {
 }
 
 func TestPriorities(t *testing.T) {
+	fleetStrategy := v1.AllocationStrategyFleetEfficiency
+	costStrategy := v1.AllocationStrategyLowestCost
+
 	nodeSystemConfigDefault := &v1.NodeSystemConfig{
 		LinuxNodeConfig: &v1.LinuxNodeConfig{
 			Sysctls: &v1.SysctlsConfig{
@@ -2212,6 +2215,50 @@ func TestPriorities(t *testing.T) {
 				{
 					NodeSystemConfig: nodeSystemConfigDefault,
 					Location:         locationConfigA,
+				},
+			},
+		},
+		"allocation strategy defaults": {
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("m2"), // OnDemand
+						},
+						{
+							Spot: proto.Bool(true), // Spot
+						},
+						{
+							FlexStart: &v1.FlexStart{Enabled: true}, // FlexStart
+						},
+						{
+							MachineFamily:      proto.String("n2"),
+							AllocationStrategy: &costStrategy, // Explicitly set, overrides default
+						},
+					},
+					AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+						OnDemand:  &fleetStrategy,
+						Spot:      &costStrategy,
+						FlexStart: &fleetStrategy,
+					},
+				},
+			},
+			exopectedPriorities: []v1.Priority{
+				{
+					MachineFamily:      proto.String("m2"),
+					AllocationStrategy: &fleetStrategy,
+				},
+				{
+					Spot:               proto.Bool(true),
+					AllocationStrategy: &costStrategy,
+				},
+				{
+					FlexStart:          &v1.FlexStart{Enabled: true},
+					AllocationStrategy: &fleetStrategy,
+				},
+				{
+					MachineFamily:      proto.String("n2"),
+					AllocationStrategy: &costStrategy,
 				},
 			},
 		},

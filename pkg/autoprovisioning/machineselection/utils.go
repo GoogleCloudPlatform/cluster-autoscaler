@@ -104,6 +104,20 @@ func crdMachineFamilies(provider napprovider.AutoprovisioningCloudProvider, rule
 			return nil, true, NewPodFamilyUnknownError(rule.PodFamilyName())
 		}
 
+		if rule.MachineFamily() != "" {
+			familyName := rule.MachineFamily()
+			family, err := provider.MachineConfigProvider().ToMachineFamily(familyName)
+			if err != nil {
+				return nil, true, NewMachineFamilyUnknownError(familyName)
+			}
+			for _, f := range podFamilyMachineFamilies {
+				if f.Equal(family) {
+					return []machinetypes.MachineFamily{family}, true, nil
+				}
+			}
+			return nil, true, NewMachineFamilyUnknownError(familyName + " (not in pod family " + rule.PodFamilyName() + ")")
+		}
+
 		return podFamilyMachineFamilies, true, nil
 	}
 	if rule.MachineType() != "" {

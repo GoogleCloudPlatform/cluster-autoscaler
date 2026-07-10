@@ -19,6 +19,7 @@ import (
 	"slices"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/klog/v2"
 )
 
@@ -39,13 +40,14 @@ type MachineFamilyPricingInfo struct {
 
 // Constraints contain parameters that can limit the set of compatible machine types from a given machine family.
 type Constraints struct {
-	CpuPlatform             CpuPlatform
-	GpuType                 string
-	TpuType                 string
-	DiskType                string
-	ExplicitMachineTypes    []string
-	AllExplicitTypesAllowed bool
-	ConfidentialNodeType    string
+	CpuPlatform               CpuPlatform
+	GpuType                   string
+	TpuType                   string
+	DiskType                  string
+	ExplicitMachineTypes      []string
+	AllExplicitTypesAllowed   bool
+	ConfidentialNodeType      string
+	ConfidentialNodesRequired bool
 }
 
 // String returns a human-readable representation of the constraints.
@@ -60,19 +62,37 @@ func (c Constraints) isNoConstraints() bool {
 		c.DiskType == "" &&
 		len(c.ExplicitMachineTypes) == 0 &&
 		c.AllExplicitTypesAllowed &&
-		c.ConfidentialNodeType == ""
+		c.ConfidentialNodeType == "" &&
+		!c.ConfidentialNodesRequired
 }
 
 // NoConstraints is a constraint object compatible with every machine type. It should be passed to family methods to
 // ensure every machine type is returned.
-var NoConstraints = Constraints{CpuPlatform: AnyPlatform, GpuType: "", TpuType: "", AllExplicitTypesAllowed: true}
+var NoConstraints = Constraints{
+	CpuPlatform:               AnyPlatform,
+	GpuType:                   "",
+	TpuType:                   "",
+	AllExplicitTypesAllowed:   true,
+	ConfidentialNodesRequired: false,
+}
 
 // UnknownMachineType is a placeholder representing unknown machine type
 var UnknownMachineType = NewMachineTypeInfo("unknown-machine-type", 0, 0)
 
+// UsagePolicy specifies how a MachineFamily configuration can be used.
+type UsagePolicy struct {
+	// Whether to use the machine properties.
+	MachineProperties bool
+	// Whether to use machine weights.
+	Weights bool
+}
+
 // MachineFamily contains information about a machine family.
 type MachineFamily struct {
 	name string
+	// usagePolicy specifies how the configuration within this object can be used.
+	// Nil value means no usage restriction.
+	usagePolicy *UsagePolicy
 	// systemArchitecture defines the system architecture associated with the machine family
 	systemArchitecture gce.SystemArchitecture
 	// autoprovisionedMachineTypes contains the types of machines from this family that can be used for autoprovisioning.
@@ -115,9 +135,13 @@ type MachineFamily struct {
 	// For more details, see gkecl/1463324
 	supportedAttachDiskTypes map[string]ConfidentialMode
 	// defaultDiskType should be in sync with persistent_disk_config.default_persistent_disk_type
+	// ref: http://google3/configs/cloud/cluster/vmfamilies/sot/textproto/common_metadata/vm_family_metadata/
 	defaultDiskType string
 	// supportHugepageSize1g defines if the machine family supports 1-gigabyte-sized huge pages.
 	supportHugepageSize1g bool
+	// numaAlignmentUnsupported defines if the machine family NOT support NUMA Alignment used by Kubelet Topology manager and Memory manager.
+	// SoT: http://google3/configs/cloud/cluster/vmfamilies/sot/gen_rules/gke/overrides/machine_family_overrides.textproto
+	numaAlignmentUnsupported bool
 	// supportsAcceleratorSlice defines if the machine family supports GCE accelerator slices.
 	// Slice is a group of VMs with specified accelerator topology that enables high performant
 	// connectivity between accelerators to run jobs distributed among multiple VMs.
@@ -241,6 +265,11 @@ func (f MachineFamily) IsHugepageSize1gSupported() bool {
 	return f.supportHugepageSize1g
 }
 
+// IsNumaAlignmentSupported returns whether the given machine family supports NUMA Alignment used by Kubelet Topology manager and Memory manager.
+func (f MachineFamily) IsNumaAlignmentSupported() bool {
+	return !f.numaAlignmentUnsupported
+}
+
 // MaxCompactPlacementNodes returns the maximum number of nodes for compact placement if the machine family supports compact placement
 // and the value for maxCompactPlacementNodes is set.
 func (f MachineFamily) MaxCompactPlacementNodes() (int64, error) {
@@ -250,9 +279,23 @@ func (f MachineFamily) MaxCompactPlacementNodes() (int64, error) {
 	return f.maxCompactPlacementNodes, nil
 }
 
-// IsConfidentialNodesSupported returns whether the given machine family supports confidential nodes
+// IsConfidentialNodesSupported returns whether the given machine family supports confidential nodes.
 func (f MachineFamily) IsConfidentialNodesSupported() bool {
-	return f.supportConfidentialNodes
+	// 1. Fallback: Check if legacy family-level CVM support is explicitly enabled.
+	if f.supportConfidentialNodes {
+		return true
+	}
+	// 2. Standard: Check if family supports any modern technology-specific CVM profiles.
+	if len(f.supportConfidentialNodeTypes) > 0 {
+		return true
+	}
+	// 3. Override: Check if CVM is explicitly enabled via type-level overrides on individual shapes.
+	for _, mt := range f.AllMachineTypes(NoConstraints) {
+		if mt.confidentialNodeCfg != nil && len(mt.confidentialNodeCfg.supportConfidentialNodeTypes) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (f MachineFamily) PricingInfo() MachineFamilyPricingInfo {
@@ -261,6 +304,51 @@ func (f MachineFamily) PricingInfo() MachineFamilyPricingInfo {
 
 func (f MachineFamily) CustomPricingInfo() *MachineFamilyPricingInfo {
 	return f.customPricingInfo
+}
+
+// Clone creates a shallow copy of the MachineFamily, but allocates new maps
+// for its MachineTypes. This allows the caller to safely mutate the MachineType
+// entries without affecting the original object.
+func (f MachineFamily) Clone() MachineFamily {
+	if len(f.autoprovisionedMachineTypes) > 0 {
+		newAuto := make(map[string]MachineType, len(f.autoprovisionedMachineTypes))
+		for k, v := range f.autoprovisionedMachineTypes {
+			newAuto[k] = v
+		}
+		f.autoprovisionedMachineTypes = newAuto
+	}
+
+	if len(f.otherMachineTypes) > 0 {
+		newOther := make(map[string]MachineType, len(f.otherMachineTypes))
+		for k, v := range f.otherMachineTypes {
+			newOther[k] = v
+		}
+		f.otherMachineTypes = newOther
+	}
+
+	f.precomputeAllMachineTypes()
+	return f
+}
+
+// ApplyPricing is only called for weights-only mode and applies a pricing update onto the current MachineFamily.
+// Because the CRD conversion lacks context during a weights-only parse, it drops all incoming machine types
+// exclusively into otherMachineTypes. We iterate through them and route the pricing data to the correct map
+// based on where the machine type actually lives in the fallback cache.
+func (f *MachineFamily) ApplyPricing(pricing MachineFamily) {
+	f.pricingInfo = pricing.pricingInfo
+	f.customPricingInfo = pricing.customPricingInfo
+
+	for mtName, mfMt := range pricing.otherMachineTypes {
+		if mt, ok := f.autoprovisionedMachineTypes[mtName]; ok {
+			mt.priceInfo = mfMt.priceInfo
+			f.autoprovisionedMachineTypes[mtName] = mt
+		} else if mt, ok := f.otherMachineTypes[mtName]; ok {
+			mt.priceInfo = mfMt.priceInfo
+			f.otherMachineTypes[mtName] = mt
+		}
+	}
+
+	f.precomputeAllMachineTypes()
 }
 
 // precomputeAllMachineTypes precomputes data that is frequently used but doesn't change.
@@ -399,8 +487,15 @@ func (f MachineFamily) supportedMachineTypes(machineTypes map[string]MachineType
 			}
 		}
 
-		if constraints.ConfidentialNodeType != "" && !machineType.IsConfidentialNodeTypeSupported(constraints.ConfidentialNodeType) {
-			continue
+		// CVM support validation:
+		if constraints.ConfidentialNodeType != "" {
+			if !machineType.IsConfidentialNodeTypeSupported(constraints.ConfidentialNodeType) {
+				continue
+			}
+		} else if constraints.ConfidentialNodesRequired {
+			if !machineType.IsConfidentialNodesSupported() {
+				continue
+			}
 		}
 
 		result[machineType.Name] = machineType
@@ -466,8 +561,21 @@ func (f MachineFamily) IsGpuAcceleratorSliceSupported() bool {
 
 // IsConfidentialNodeTypeSupported returns whether the machine family supports a given confidential node type
 func (f MachineFamily) IsConfidentialNodeTypeSupported(confidentialNodeType string) bool {
-	// Since individual machine types can override the family-level configuration, we need to check them all
-	return f.AreConstraintsSupported(Constraints{CpuPlatform: AnyPlatform, ConfidentialNodeType: confidentialNodeType})
+	// 1. Check family-level modern configurations
+	if f.supportConfidentialNodeTypes != nil && f.supportConfidentialNodeTypes[confidentialNodeType] {
+		return true
+	}
+	// 2. Check family-level legacy configurations (SEV fallback)
+	if f.supportConfidentialNodes && confidentialNodeType == labels.SEVConfidentialNodeTypeValue {
+		return true
+	}
+	// 3. Check if any predefined shape in the family explicitly supports it
+	for _, mt := range f.AllMachineTypes(NoConstraints) {
+		if mt.confidentialNodeCfg != nil && mt.confidentialNodeCfg.supportConfidentialNodeTypes != nil && mt.confidentialNodeCfg.supportConfidentialNodeTypes[confidentialNodeType] {
+			return true
+		}
+	}
+	return false
 }
 
 // DraComputeDomainAutoDetection returns whether Cluster Autoscaler should try to automatically detect

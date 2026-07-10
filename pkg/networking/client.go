@@ -15,6 +15,7 @@
 package networking
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -31,11 +32,11 @@ func NewClientset(kubeConfig *rest.Config) (*network_clientset.Clientset, error)
 }
 
 // NewLister initialises the GKE Network ParamSets lister and returns it.
-func NewLister(client network_clientset.Interface, stopChannel <-chan struct{}) (network_lister.GKENetworkParamSetLister, error) {
+func NewLister(ctx context.Context, client network_clientset.Interface) (network_lister.GKENetworkParamSetLister, error) {
 	factory := network_informer.NewSharedInformerFactory(client, 1*time.Hour)
 	lister := factory.Networking().V1().GKENetworkParamSets().Lister()
-	go factory.Start(stopChannel)
-	informersSynced := factory.WaitForCacheSync(stopChannel)
+	factory.Start(ctx.Done())
+	informersSynced := factory.WaitForCacheSync(ctx.Done())
 	for _, synced := range informersSynced {
 		if !synced {
 			return nil, fmt.Errorf("can't create GKE Network ParamSets lister")

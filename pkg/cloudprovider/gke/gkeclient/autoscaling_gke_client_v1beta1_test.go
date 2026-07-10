@@ -462,6 +462,38 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "MicroVM specified",
+			spec: &NodePoolSpec{
+				SandboxType: sandbox.MicroVM,
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						SandboxConfig: &gke_api_beta.SandboxConfig{
+							Type: sandbox.MicroVM.String(),
+						},
+						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
+							EnableNestedVirtualization: true,
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "System architecture is Arm64",
 			spec: &NodePoolSpec{
 				SystemArchitecture: &arm64,
@@ -1347,6 +1379,7 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
 							EnableSecureBoot:          true,
 							EnableIntegrityMonitoring: true,
+							ForceSendFields:           []string{"EnableSecureBoot", "EnableIntegrityMonitoring"},
 						},
 					},
 					Name:          nodePoolName,
@@ -1434,6 +1467,40 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					Config: &gke_api_beta.NodeConfig{
 						SandboxConfig: &gke_api_beta.SandboxConfig{
 							Type: "gvisor",
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "Sandbox is set (e.g. microvm)",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: map[string]string{
+					labels.SandboxLabelKey: sandbox.MicroVMLabelValue,
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    1000,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						SandboxConfig: &gke_api_beta.SandboxConfig{
+							Type: "microvm",
+						},
+						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
+							EnableNestedVirtualization: true,
 						},
 					},
 					Name:          nodePoolName,
@@ -1793,6 +1860,38 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					Management: &gke_api_beta.NodeManagement{
 						AutoRepair:  true,
 						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with maintenance exclusion on static cluster enables EoS native setting",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					labels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config:        &gke_api_beta.NodeConfig{},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					MaintenancePolicy: &gke_api_beta.NodePoolMaintenancePolicy{
+						ExclusionUntilEndOfSupport: &gke_api_beta.ExclusionUntilEndOfSupport{
+							Enabled: true,
+						},
 					},
 				},
 			},

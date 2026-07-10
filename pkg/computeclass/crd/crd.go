@@ -17,6 +17,7 @@ package crd
 import (
 	"time"
 
+	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
@@ -40,6 +41,7 @@ const (
 
 // CRD is a representation of different node provisioning CRDs
 type CRD interface {
+	ResourceVersion() string
 	Label() string
 	CrdType() string
 
@@ -63,6 +65,7 @@ type CRD interface {
 	UserDefinedLabels() map[string]string
 	UserDefinedTaints() []apiv1.Taint
 	ResourceManagerTags() []Tag
+	AllocationStrategyDefaults() *cccv1.AllocationStrategyDefaults
 
 	ConsolidationDelay() *time.Duration
 	ConsolidationThreshold() *int

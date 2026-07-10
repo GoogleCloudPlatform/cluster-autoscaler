@@ -29,26 +29,29 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 // PriorityIdxNodeInfoProvider augments nodeInfos by injecting Compute Class priority index label.
 // It is chaining provider that wraps another TemplateNodeInfoProvider and calls its Process function first and then injects priority index label into nodeInfos.
 type PriorityIdxNodeInfoProvider struct {
-	nodeInfoProvider nodeinfosprovider.TemplateNodeInfoProvider
-	matcher          computeclass.Matcher
-	lister           lister.Lister
-	nodeGroupQuota   *klogx.Quota
-	nodeCrdQuota     *klogx.Quota
+	nodeInfoProvider   nodeinfosprovider.TemplateNodeInfoProvider
+	matcher            computeclass.Matcher
+	lister             lister.Lister
+	nodeGroupQuota     *klogx.Quota
+	nodeCrdQuota       *klogx.Quota
+	experimentsManager experiments.Manager
 }
 
 // NewPriorityIdxNodeInfoProvider returns a new instance of PriorityIdxNodeInfoProvider.
-func NewPriorityIdxNodeInfoProvider(nodeInfoProvider nodeinfosprovider.TemplateNodeInfoProvider, matcher computeclass.Matcher, lister lister.Lister) nodeinfosprovider.TemplateNodeInfoProvider {
+func NewPriorityIdxNodeInfoProvider(nodeInfoProvider nodeinfosprovider.TemplateNodeInfoProvider, matcher computeclass.Matcher, lister lister.Lister, experimentsManager experiments.Manager) nodeinfosprovider.TemplateNodeInfoProvider {
 	return &PriorityIdxNodeInfoProvider{
-		nodeInfoProvider: nodeInfoProvider,
-		matcher:          matcher,
-		lister:           lister,
-		nodeGroupQuota:   klogx.NewLoggingQuota(5),
-		nodeCrdQuota:     klogx.NewLoggingQuota(5),
+		nodeInfoProvider:   nodeInfoProvider,
+		matcher:            matcher,
+		lister:             lister,
+		nodeGroupQuota:     klogx.NewLoggingQuota(5),
+		nodeCrdQuota:       klogx.NewLoggingQuota(5),
+		experimentsManager: experimentsManager,
 	}
 }
 
@@ -57,6 +60,10 @@ func (p *PriorityIdxNodeInfoProvider) Process(ctx *context.AutoscalingContext, n
 	nodeInfos, err := p.nodeInfoProvider.Process(ctx, nodes, daemonsets, taintConfig, now)
 	if err != nil {
 		return nodeInfos, err
+	}
+
+	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
+		return nodeInfos, nil
 	}
 
 	for _, nodeInfo := range nodeInfos {

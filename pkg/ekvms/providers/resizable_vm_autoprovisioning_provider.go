@@ -15,6 +15,7 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -38,6 +39,7 @@ type ResizableVmAutoprovisioningProvider struct {
 	clientSet                   clientset.Interface
 	ekNodesCountProvider        nodesCountProvider
 	ekAutoprovisioningProvider  autoprovisioningProvider
+	e4AutoprovisioningProvider  autoprovisioningProvider
 	e4aAutoprovisioningProvider autoprovisioningProvider
 	balloonPodChecker           *balloonPodChecker
 }
@@ -57,6 +59,8 @@ func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *
 		return nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
 	}
 
+	e4AutoprovisioningProvider := newE4AutoprovisioningProvider(em, &bpChecker, autopilotEnabled, false, metrics)
+
 	e4aAutoprovisioningProvider, err := newE4aAutoprovisioningProvider(e4aAutoprovisioning, em, &bpChecker, autopilotEnabled, e4aOnManagedNodesEnabledCAFlag, metrics)
 	if err != nil {
 		return nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
@@ -66,6 +70,7 @@ func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *
 		machineConfigProvider:       mcp,
 		clientSet:                   clientSet,
 		ekAutoprovisioningProvider:  ekAutoprovisioningProvider,
+		e4AutoprovisioningProvider:  e4AutoprovisioningProvider,
 		e4aAutoprovisioningProvider: e4aAutoprovisioningProvider,
 		balloonPodChecker:           &bpChecker,
 	}
@@ -73,14 +78,15 @@ func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *
 	return provider, nil
 }
 
-func (p *ResizableVmAutoprovisioningProvider) Run(stopCh <-chan struct{}) {
-	p.balloonPodChecker.Run(stopCh)
+func (p *ResizableVmAutoprovisioningProvider) Run(ctx context.Context) {
+	p.balloonPodChecker.Run(ctx)
 }
 
 // Refresh refreshes dynamic configuration values for EK launch. It's important that
 // Refresh is called one per loop and config is cached for the duration of the loop to guarantee consistency within a loop.
 func (p *ResizableVmAutoprovisioningProvider) Refresh() {
 	p.ekAutoprovisioningProvider.refresh()
+	p.e4AutoprovisioningProvider.refresh()
 	p.e4aAutoprovisioningProvider.refresh()
 }
 
@@ -88,6 +94,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutopilot(ma
 	switch machineFamily {
 	case machinetypes.EK.Name():
 		return p.ekAutoprovisioningProvider.isEnabledInAutopilot()
+	case machinetypes.E4.Name():
+		return p.e4AutoprovisioningProvider.isEnabledInAutopilot()
 	case machinetypes.E4A.Name():
 		return p.e4aAutoprovisioningProvider.isEnabledInAutopilot()
 	default:
@@ -99,6 +107,8 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmWithinPodFamilyEnable
 	switch machineFamily {
 	case machinetypes.EK.Name():
 		return p.ekAutoprovisioningProvider.managedNodesEnabled()
+	case machinetypes.E4.Name():
+		return p.e4AutoprovisioningProvider.managedNodesEnabled()
 	case machinetypes.E4A.Name():
 		return p.e4aAutoprovisioningProvider.managedNodesEnabled()
 	default:
@@ -110,6 +120,8 @@ func (p *ResizableVmAutoprovisioningProvider) ResizingEnabled(machineFamily stri
 	switch machineFamily {
 	case machinetypes.EK.Name():
 		return p.ekAutoprovisioningProvider.resizingEnabled()
+	case machinetypes.E4.Name():
+		return p.e4AutoprovisioningProvider.resizingEnabled()
 	case machinetypes.E4A.Name():
 		return p.e4aAutoprovisioningProvider.resizingEnabled()
 	default:
@@ -123,6 +135,7 @@ func (p *ResizableVmAutoprovisioningProvider) MachineConfigProvider() *machinety
 
 func (p *ResizableVmAutoprovisioningProvider) RegisterNodesCountProvider(countProvider nodesCountProvider) {
 	p.ekAutoprovisioningProvider.registerNodesCountProvider(countProvider)
+	p.e4AutoprovisioningProvider.registerNodesCountProvider(countProvider)
 	p.e4aAutoprovisioningProvider.registerNodesCountProvider(countProvider)
 }
 
@@ -130,6 +143,8 @@ func (p *ResizableVmAutoprovisioningProvider) NodesCount(machineFamily string) i
 	switch machineFamily {
 	case machinetypes.EK.Name():
 		return p.ekAutoprovisioningProvider.nodesCount()
+	case machinetypes.E4.Name():
+		return p.e4AutoprovisioningProvider.nodesCount()
 	case machinetypes.E4A.Name():
 		return p.e4aAutoprovisioningProvider.nodesCount()
 	default:

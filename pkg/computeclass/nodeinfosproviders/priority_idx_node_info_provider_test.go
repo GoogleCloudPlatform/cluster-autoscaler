@@ -131,7 +131,7 @@ func TestPriorityIdxNodeInfoProvider_Process(t *testing.T) {
 			}
 
 			matcher := computeclass.NewMatcher(mockLister, &computeclass.MockGKEProvider{})
-			provider := NewPriorityIdxNodeInfoProvider(fakeBaseProvider, matcher, mockLister)
+			provider := NewPriorityIdxNodeInfoProvider(fakeBaseProvider, matcher, mockLister, nil)
 
 			ctx := &context.AutoscalingContext{}
 			nodes := []*apiv1.Node{}

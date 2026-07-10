@@ -3,7 +3,7 @@ all: build
 
 FLAGS=
 ENVVAR=CGO_ENABLED=0
-GITROOT=$(if $(HOST_INPUT_ROOT),$(HOST_INPUT_ROOT)/src/git/gke-autoscaling,$(shell pwd)/..)
+GITROOT=$(if $(HOST_INPUT_ROOT),$(HOST_INPUT_ROOT)/src/git/cluster-autoscaler,$(shell pwd)/..)
 GOARCH?=amd64
 GOOS?=linux
 BUILD_DEBUG_VERSION?=false
@@ -106,11 +106,11 @@ build-binary-no-internal-client: clean-binary compile-proto compute-version
 
 .PHONY: test-unit
 test-unit: clean-binary build
-	CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} GO111MODULE=off go test --test.short ${ARM_EMULATOR_PARAMS} ./... $(FLAGS)
+	CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} go test --test.short ${ARM_EMULATOR_PARAMS} ./... $(FLAGS)
 
 .PHONY: test-unit-oss
 test-unit-oss: clean-binary build
-	GO111MODULE=off go test --test.short ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler) $(FLAGS)
+	go test --test.short ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler) $(FLAGS)
 
 .PHONY: clean
 clean:
@@ -203,7 +203,7 @@ test-in-docker: clean-binary docker-builder
 	docker run -e GODEBUG=asynctimerchan=0 -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make compile-proto && \
-	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GO111MODULE=off GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${ARM_EMULATOR_PARAMS} ./...'
+	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-no-internal-client
 test-in-docker-no-internal-client: clean-binary docker-builder
@@ -214,13 +214,13 @@ test-in-docker-no-internal-client: clean-binary docker-builder
 		autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make compile-proto && \
-	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GO111MODULE=off GOOS=$(GOOS) GOARCH=$(GOARCH) go test -tags no_internal_clients ${ARM_EMULATOR_PARAMS} ./...'
+	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test -tags no_internal_clients ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-oss
 test-in-docker-oss: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		GO111MODULE=off GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler)'
+		GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler)'
 
 .PHONY: compile-proto
 compile-proto:
@@ -231,14 +231,14 @@ test-scaledown: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/ -v /tmp/:/tmp/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make compile-proto && \
-	  CA_MANUAL_TEST=true GO111MODULE=off go test ./pkg/impostor -run "TestScaleDown" -timeout=24h -race'
+	  CA_MANUAL_TEST=true go test ./pkg/impostor -run "TestScaleDown" -timeout=24h -race'
 
 .PHONY: test-largescaleuprequest
 test-largescaleuprequest: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/ -v /tmp/:/tmp/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make compile-proto && \
-	  CA_MANUAL_TEST=true GO111MODULE=off go test ./pkg/expander/test -run "TestLargeScaleUpRequest" -timeout=1h -race'
+	  CA_MANUAL_TEST=true go test ./pkg/expander/test -run "TestLargeScaleUpRequest" -timeout=1h -race'
 
 .PHONY: deploy
 deploy: check-registry-defined compute-tag

@@ -44,6 +44,16 @@ const (
 	MaxCSNPodsLogged = 20
 	// Max number of CSN pods logged at once at verbosity >= 5.
 	MaxCSNPodsLoggedV5 = 500
+	// MaxFlexAdvisorResponseErrorsLogged is the maximum number of FlexAdvisor response validation issues we will
+	// log every loop at verbosity < 5.
+	MaxFlexAdvisorResponseErrorsLogged = 20
+	// MaxFlexAdvisorResponseErrorsLoggedV5 is the maximum number of FlexAdvisor response validation issues we will
+	// log every loop at verbosity >= 5.
+	MaxFlexAdvisorResponseErrorsLoggedV5 = 100
+	// MaxFlexAdvisorMachineErrorCacheLogged max machine error cache debug logs per rule
+	MaxFlexAdvisorMachineErrorCacheLogged = 5
+	// MaxFlexAdvisorMachineErrorCacheLoggedV5  max machine error cache debug logs per rule at verbosity >= 5
+	MaxFlexAdvisorMachineErrorCacheLoggedV5 = 5
 )
 
 // ProvisioningRequestsLoggingQuota returns a new quota with default limit for ProvisioningRequests at current verbosity.
@@ -84,4 +94,20 @@ func CSNPodLoggingQuota() *klogx.Quota {
 		return klogx.NewLoggingQuota(MaxCSNPodsLoggedV5)
 	}
 	return klogx.NewLoggingQuota(MaxCSNPodsLogged)
+}
+
+// FlexAdvisorResponseErrorsLoggingQuota returns a new quota with default limit for FlexAdvisor response validation issues at current verbosity.
+func FlexAdvisorResponseErrorsLoggingQuota() *klogx.Quota {
+	if klog.V(5).Enabled() {
+		return klogx.NewLoggingQuota(MaxFlexAdvisorResponseErrorsLoggedV5)
+	}
+	return klogx.NewLoggingQuota(MaxFlexAdvisorResponseErrorsLogged)
+}
+
+// FlexAdvisorGeneratorMachineErrorsLoggingQuota returns a new quota with default limit for FlexAdvisor generator machine errors cache at current verbosity.
+func FlexAdvisorMachineErrorCacheLoggingQuota() *klogx.Quota {
+	if klog.V(5).Enabled() {
+		return klogx.NewLoggingQuota(MaxFlexAdvisorMachineErrorCacheLoggedV5)
+	}
+	return klogx.NewLoggingQuota(MaxFlexAdvisorMachineErrorCacheLogged)
 }

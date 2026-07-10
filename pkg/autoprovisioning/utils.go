@@ -42,8 +42,10 @@ import (
 )
 
 const (
+	fieldCpuCfsQuota                         = "CpuCfsQuota"
 	fieldShutdownGracePeriod                 = "ShutdownGracePeriodSeconds"
 	fieldShutdownGracePeriodCriticalPods     = "ShutdownGracePeriodCriticalPodsSeconds"
+	fieldCpuCfsQuotaJSON                     = "cpuCfsQuota"
 	fieldShutdownGracePeriodJSON             = "shutdownGracePeriodSeconds"
 	fieldShutdownGracePeriodCriticalPodsJSON = "shutdownGracePeriodCriticalPodsSeconds"
 )
@@ -103,6 +105,23 @@ func linuxNodeConfigFromCCRule(rule rules.Rule) *gkeclient.LinuxNodeConfig {
 		linuxNodeConfig.AccurateTimeConfig = &gkeclient.AccurateTimeConfig{}
 		if enabled := accurateTimeConfig.EnablePtpKvmTimeSync; enabled != nil {
 			linuxNodeConfig.AccurateTimeConfig.EnablePtpKvmTimeSync = *enabled
+		}
+	}
+
+	if nodeVfioConfig := rule.NodeVfioConfig(); nodeVfioConfig != nil {
+		linuxNodeConfig.NodeVfioConfig = &gkeclient.NodeVfioConfig{}
+		if dmaEntryLimit := nodeVfioConfig.DmaEntryLimit; dmaEntryLimit != nil {
+			linuxNodeConfig.NodeVfioConfig.DmaEntryLimit = int64(*dmaEntryLimit)
+		}
+	}
+
+	if diskIoScheduler := rule.DiskIoScheduler(); diskIoScheduler != nil {
+		linuxNodeConfig.DiskIoScheduler = &gkeclient.DiskIoScheduler{}
+		if diskIoScheduler.NodeSystemIoScheduler != "" {
+			linuxNodeConfig.DiskIoScheduler.NodeSystemIoScheduler = diskIoScheduler.NodeSystemIoScheduler
+		}
+		if diskIoScheduler.NodeAttachedDiskIoScheduler != "" {
+			linuxNodeConfig.DiskIoScheduler.NodeAttachedDiskIoScheduler = diskIoScheduler.NodeAttachedDiskIoScheduler
 		}
 	}
 
@@ -197,6 +216,7 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gke_api_beta.NodeKubeletConfig {
 	kubeletConfig := &gke_api_beta.NodeKubeletConfig{}
 	if cpuCfsQuota := rule.CpuCfsQuota(); cpuCfsQuota != nil {
 		kubeletConfig.CpuCfsQuota = *cpuCfsQuota
+		kubeletConfig.ForceSendFields = append(kubeletConfig.ForceSendFields, fieldCpuCfsQuota)
 	}
 	if cpuCfsQuotaPeriod := rule.CpuCfsQuotaPeriod(); cpuCfsQuotaPeriod != nil {
 		kubeletConfig.CpuCfsQuotaPeriod = *cpuCfsQuotaPeriod
@@ -436,6 +456,14 @@ func linuxNodeConfigSignature(linuxNodeConfig *gkeclient.LinuxNodeConfig) string
 		linuxConfigParts = append(linuxConfigParts, fmt.Sprintf("AccurateTimeConfig: <%s>", strings.Join(entries, ", ")))
 	}
 
+	if nodeVfioConfig := linuxNodeConfig.NodeVfioConfig; nodeVfioConfig != nil {
+		linuxConfigParts = append(linuxConfigParts, fmt.Sprintf("NodeVfioConfig: <dmaEntryLimit: %d>", nodeVfioConfig.DmaEntryLimit))
+	}
+
+	if diskIoScheduler := linuxNodeConfig.DiskIoScheduler; diskIoScheduler != nil {
+		linuxConfigParts = append(linuxConfigParts, fmt.Sprintf("DiskIoScheduler: <nodeSystemIoScheduler: %q, nodeAttachedDiskIoScheduler: %q>", diskIoScheduler.NodeSystemIoScheduler, diskIoScheduler.NodeAttachedDiskIoScheduler))
+	}
+
 	if swapConfig := linuxNodeConfig.SwapConfig; swapConfig != nil {
 		var parts []string
 		parts = append(parts, fmt.Sprintf("enabled: %t", swapConfig.Enabled))
@@ -523,6 +551,9 @@ func deserializeKubeletConfig(kubeletConfig string) (*gke_api_beta.NodeKubeletCo
 	if err != nil {
 		return nil, err
 	}
+	if _, ok := deserializedKubeletConfigMap[fieldCpuCfsQuotaJSON]; ok {
+		deserializedKubeletConfig.ForceSendFields = append(deserializedKubeletConfig.ForceSendFields, fieldCpuCfsQuota)
+	}
 	if _, ok := deserializedKubeletConfigMap[fieldShutdownGracePeriodJSON]; ok {
 		deserializedKubeletConfig.ForceSendFields = append(deserializedKubeletConfig.ForceSendFields, fieldShutdownGracePeriod)
 	}
@@ -602,7 +633,7 @@ func kubeletConfigSignature(kubeletConfig *gke_api_beta.NodeKubeletConfig) strin
 	}
 
 	var kubeletConfigParts []string
-	if kubeletConfig.CpuCfsQuota {
+	if kubeletConfig.CpuCfsQuota || slices.Contains(kubeletConfig.ForceSendFields, "CpuCfsQuota") {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("CpuCfsQuota: %t", kubeletConfig.CpuCfsQuota))
 	}
 	if kubeletConfig.CpuCfsQuotaPeriod != "" {

@@ -36,8 +36,11 @@ import (
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	mccclient "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned"
+	mccinformers "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/informers/externalversions"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkeapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/api"
@@ -50,6 +53,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	http_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/httpclient"
+	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
 	prmanager "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
@@ -158,8 +162,8 @@ func MustCreateNpcCrdClient(config *rest.Config) npc_client.Client {
 }
 
 // MustCreateNpcCrdLister creates a new crd lister.
-func MustCreateNpcCrdLister(optionsTracker *optstracking.OptionsTracker, stopCh chan struct{}, client npc_client.Client) npc_lister.Lister {
-	npcCrdLister, err := npc_lister.NewCccLister(client, stopCh, optionsTracker)
+func MustCreateNpcCrdLister(ctx context.Context, optionsTracker *optstracking.OptionsTracker, client npc_client.Client) npc_lister.Lister {
+	npcCrdLister, err := npc_lister.NewCccLister(ctx, client, optionsTracker)
 	if err != nil {
 		klog.Fatalf("cannot create CCC Lister. Error: %v", err)
 	}
@@ -167,7 +171,7 @@ func MustCreateNpcCrdLister(optionsTracker *optstracking.OptionsTracker, stopCh 
 }
 
 // MustCreateGCEConfig returns the ProjectID, Location, and TokenSource.
-func MustCreateGCEConfig(opts internalopts.AutoscalingOptions, ctx context.Context) (string, string, oauth2.TokenSource) {
+func MustCreateGCEConfig(ctx context.Context, opts internalopts.AutoscalingOptions) (string, string, oauth2.TokenSource) {
 	gceProviderConfig, err := gcecfg.GceConfigProvider(opts.CloudConfig)
 	if err != nil {
 		klog.Fatalf("error getting GCE provider config: %v", err)
@@ -187,7 +191,7 @@ func MustCreateGCEConfig(opts internalopts.AutoscalingOptions, ctx context.Conte
 }
 
 // MustCreateProvReqClient returns the ProvisioningRequestClient.
-func MustCreateProvReqClient(kubeConfigJSON *rest.Config, sharedInformerFactory informers.SharedInformerFactory, ctx context.Context) *provreqclient.ProvisioningRequestClient {
+func MustCreateProvReqClient(ctx context.Context, kubeConfigJSON *rest.Config, sharedInformerFactory informers.SharedInformerFactory) *provreqclient.ProvisioningRequestClient {
 	podTemplLister := sharedInformerFactory.Core().V1().PodTemplates().Lister()
 	prClient, err := provreqclientset.NewForConfig(kubeConfigJSON)
 	if err != nil {
@@ -316,11 +320,11 @@ func MustCreateGKEAPIClient(httpClient *http.Client, userAgent, endpoint string)
 }
 
 // MustCreateGKEClient returns the gke client.
-func MustCreateGKEClient(apiClient gkeapi.Client, nodePoolTranslator gkeclient.NodePoolTranslator, projectID, location string, opts internalopts.AutoscalingOptions, observer multitenancy.ProviderConfigObserver, machineConfigProvider *machinetypes.MachineConfigProvider) gkeclient.AutoscalingGkeClient {
+func MustCreateGKEClient(apiClient gkeapi.Client, nodePoolTranslator gkeclient.NodePoolTranslator, projectID, location string, opts internalopts.AutoscalingOptions, observer multitenancy.ProviderConfigObserver, machineConfigProvider *machinetypes.MachineConfigProvider, experimentsManager experiments.Manager) gkeclient.AutoscalingGkeClient {
 	var client gkeclient.AutoscalingGkeClient
 	var err error
 	if opts.MultitenancyEnabled && observer != nil {
-		mtClient, err := gkeclient.NewMultitenancyGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes)
+		mtClient, err := gkeclient.NewMultitenancyGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
 		if err != nil {
 			klog.Fatalf("Failed to create MT GKE Client: %v", err)
 		}
@@ -356,16 +360,21 @@ func MustCreatePRManager(
 	gceClient gce.AutoscalingGceClient,
 	cache *gce.GceCache,
 ) prmanager.ProvisioningRequestManager {
+	queuedResizeRequestService, err := resizerequestclient.NewResizeRequestClientV1(httpClient, projectID, opts.UserAgent, opts.GceEndpoint, resizerequestclient.ResizeRequestModeQueued)
+	if err != nil {
+		klog.Fatalf("failed to create queuedResizeRequestService: %v", err)
+	}
+	bulkMigClient, err := bulkmig.NewBulkMigClientBeta(httpClient, projectID, opts.UserAgent, opts.GceEndpoint, gceClient, cache)
+	if err != nil {
+		klog.Fatalf("failed to create bulkMigClient: %v", err)
+	}
 	manager, err := prmanager.NewProvisioningRequestManager(
 		prClient,
-		httpClient,
+		queuedResizeRequestService,
+		bulkMigClient,
 		projectID,
-		opts.UserAgent,
-		opts.GceEndpoint,
 		prCache,
 		experimentsManager,
-		gceClient,
-		cache,
 	)
 	if err != nil {
 		klog.Fatalf("failed to create ProvisioningRequestManager: %v", err)
@@ -373,16 +382,26 @@ func MustCreatePRManager(
 	return manager
 }
 
-// CreateMachineConfigProvider returns the machine config provider.
-func CreateMachineConfigProvider(opts internalopts.AutoscalingOptions, kubeConfig *rest.Config) *machinetypes.MachineConfigProvider {
-	var source *machinetypes.Source
-	var err error
-	if opts.MachineConfigEnabled {
-		source, err = machinetypes.NewSourceFromKubeConfig(kubeConfig, opts.MachineConfigRefreshInterval, opts.CvmMachineConfigEnabled)
-		if err != nil {
-			// Fall back to hardcoded configuration.
-			klog.Errorf("Failed to create machine config source, will use hard-coded configuration: %v", err)
-		}
+// CreateMachineConfigClient returns a new clientset for MachineConfigs.
+func CreateMachineConfigClient(kubeConfig *rest.Config) mccclient.Interface {
+	client, err := mccclient.NewForConfig(kubeConfig)
+	if err != nil {
+		klog.Errorf("Failed to create MachineConfig client, will use hard-coded configuration: %v", err)
+		return nil
 	}
-	return machinetypes.NewMachineConfigProvider(source)
+	return client
+}
+
+// CreateMachineConfigProvider returns the machine config provider.
+func CreateMachineConfigProvider(ctx context.Context, opts internalopts.AutoscalingOptions, mccClient mccclient.Interface, experimentsManager experiments.Manager) *machinetypes.MachineConfigProvider {
+	var source *machinetypes.Source
+	if opts.MachineConfigEnabled && mccClient != nil {
+		mccInformerFactory := mccinformers.NewSharedInformerFactory(mccClient, opts.MachineConfigRefreshInterval)
+		source = machinetypes.NewSource(mccInformerFactory, opts.CvmMachineConfigEnabled)
+		go source.Run(ctx)
+	}
+	provider := machinetypes.NewMachineConfigProvider(source)
+	provider.SetExperimentsManager(experimentsManager)
+	provider.SetMetrics(internalmetrics.Metrics)
+	return provider
 }

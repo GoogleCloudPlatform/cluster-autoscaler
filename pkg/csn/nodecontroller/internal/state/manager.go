@@ -15,6 +15,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sync"
@@ -113,7 +114,7 @@ func NewNodeStateManager(nodeSource RegisterNodeHandler, opts ...Option) *NodeSt
 	return m
 }
 
-func (m *NodeStateManager) Run(stopCh <-chan struct{}) error {
+func (m *NodeStateManager) Run(ctx context.Context) error {
 	if err := m.registerNodeHandler(NodeHandler{
 		OnAdd:    m.onAdd,
 		OnUpdate: m.onUpdate,
@@ -122,19 +123,19 @@ func (m *NodeStateManager) Run(stopCh <-chan struct{}) error {
 		return fmt.Errorf("failed to register node handler: %w", err)
 	}
 
-	m.runPeriodically(m.stopTrackingDelay, stopCh, m.stopTrackingExpiredNodes)
-	m.runPeriodically(m.metricsSyncInterval, stopCh, m.emitNodeCounts)
+	m.runPeriodically(ctx, m.stopTrackingDelay, m.stopTrackingExpiredNodes)
+	m.runPeriodically(ctx, m.metricsSyncInterval, m.emitNodeCounts)
 	return nil
 }
 
-func (m *NodeStateManager) runPeriodically(interval time.Duration, stopCh <-chan struct{}, f func()) {
+func (m *NodeStateManager) runPeriodically(ctx context.Context, interval time.Duration, f func()) {
 	ticker := m.clock.NewTicker(interval)
 	go func() {
 		for {
 			select {
 			case <-ticker.C():
 				f()
-			case <-stopCh:
+			case <-ctx.Done():
 				ticker.Stop()
 				return
 			}

@@ -16,12 +16,14 @@ package processor
 
 import (
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	testprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/test"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/annotations"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
@@ -32,10 +34,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
+	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/eligibility"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/pdb"
+	"k8s.io/autoscaler/cluster-autoscaler/processors/customresources"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/testsnapshot"
+	csisnapshot "k8s.io/autoscaler/cluster-autoscaler/simulator/csi/snapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
+	drasnapshot "k8s.io/autoscaler/cluster-autoscaler/simulator/dynamicresources/snapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
@@ -143,7 +150,7 @@ func TestNewValidCandidateNodes(t *testing.T) {
 				allCandidateNodes[node] = true
 			}
 
-			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, options.NodeDeleteOptions{}, rules.Default(options.NodeDeleteOptions{}))
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, options.NodeDeleteOptions{}, rules.Default(options.NodeDeleteOptions{}), newTestTrackerFactory(nil))
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -277,7 +284,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 			}
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts))
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 			nodeFilter.filterInvalidCandidateNodes(ctx, pdbTracker, tc.candidate)
@@ -373,7 +380,7 @@ func TestIsCandidateNodeValid(t *testing.T) {
 			assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(tc.node, tc.pods...)))
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts))
+			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -478,7 +485,7 @@ func TestHasBlockingPods(t *testing.T) {
 			assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(tc.node, tc.pods...)))
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts))
+			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -548,8 +555,10 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			},
 		},
 		{
-			name: "skip nodes across multiple candidates, skip ng2_n3, ng1_n5 and ng4_n1",
+			name: "nodes are skipped across multiple candidates (cross-candidate pollution is present)",
 			// ng1 size: 5, min: 3 | ng2 size: 3, min: 2 | ng3 size: 3, min: 0
+			// We expect candidate evaluations to affect subsequent ones in the same loop
+			// because f.nodeGroupSize is modified in-place and shared.
 			candidateInfos: []*candidateInfo{
 				{
 					candidate: &defrag.Candidate{
@@ -607,6 +616,7 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 				deletionsCountsByGroup: map[string]int{
 					"ng2": 1,
 				},
+				emptyNodesList: []string{ng2_nodes[0].Name}, // Simulate ng2-0 is being deleted
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
@@ -662,7 +672,10 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 					return nodes
 				},
 			}
-			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts))
+
+			trackerFactory := newTestTrackerFactory(nil)
+
+			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -672,6 +685,120 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFilterNodesViolatingMinQuotas(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ng1_nodes := buildNodeGroup(provider, "ng1", 0, 3)
+
+	quota := &resourcequotas.FakeQuota{
+		Name: "min-2-nodes",
+		AppliesToFn: func(node *apiv1.Node) bool {
+			return true
+		},
+		LimitsVal: map[string]int64{
+			resourcequotas.ResourceNodes: 2,
+		},
+	}
+
+	testCases := []struct {
+		name      string
+		nodes     []string
+		wantNodes []string
+	}{
+		{
+			name:      "scale down one node is allowed, second is blocked",
+			nodes:     []string{ng1_nodes[0].Name, ng1_nodes[1].Name},
+			wantNodes: []string{ng1_nodes[0].Name},
+		},
+		{
+			name:      "scale down all is blocked after first",
+			nodes:     []string{ng1_nodes[0].Name, ng1_nodes[1].Name, ng1_nodes[2].Name},
+			wantNodes: []string{ng1_nodes[0].Name},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &context.AutoscalingContext{
+				CloudProvider:   provider,
+				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+			}
+
+			for _, node := range ng1_nodes {
+				node.Spec.ProviderID = fmt.Sprintf("test://%s", node.Name)
+				assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+			}
+
+			deleteOpts := options.NodeDeleteOptions{}
+			processor := &mockScaleDownNodeProcessor{
+				candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node {
+					return nodes
+				},
+			}
+
+			trackerFactory := newTestTrackerFactory([]resourcequotas.Quota{quota})
+
+			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
+			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
+			assert.NoError(t, err)
+
+			resultNames, err := nodeFilter.filterNodesViolatingMinQuotas(ctx, tc.nodes)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantNodes, resultNames)
+		})
+	}
+}
+
+func TestFilterNodesViolatingMinQuotas_MultipleCandidates(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ng1_nodes := buildNodeGroup(provider, "ng1", 0, 3)
+
+	quota := &resourcequotas.FakeQuota{
+		Name: "min-2-nodes",
+		AppliesToFn: func(node *apiv1.Node) bool {
+			return true
+		},
+		LimitsVal: map[string]int64{
+			resourcequotas.ResourceNodes: 2,
+		},
+	}
+
+	ctx := &context.AutoscalingContext{
+		CloudProvider:   provider,
+		ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+	}
+
+	for _, node := range ng1_nodes {
+		node.Spec.ProviderID = fmt.Sprintf("test://%s", node.Name)
+		assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+	}
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := &mockScaleDownNodeProcessor{
+		candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node {
+			return nodes
+		},
+	}
+
+	trackerFactory := newTestTrackerFactory([]resourcequotas.Quota{quota})
+
+	factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
+	nodeFilter, err := factory.NewDefragNodeFilter(ctx)
+	assert.NoError(t, err)
+
+	// Candidate 1: attempts to remove ng1-0. Allowed (since total nodes = 3, min = 2, so 3 - 1 >= 2).
+	res1, err := nodeFilter.filterNodesViolatingMinQuotas(ctx, []string{ng1_nodes[0].Name})
+	assert.NoError(t, err)
+	assert.Equal(t, []string{ng1_nodes[0].Name}, res1)
+
+	// Candidate 2: attempts to remove ng1-1.
+	// Since quota was consumed by Candidate 1, remaining nodes is 2, min is 2.
+	// Removing ng1-1 would bring it to 1, which violates the quota.
+	// So Candidate 2's node should be skipped.
+	res2, err := nodeFilter.filterNodesViolatingMinQuotas(ctx, []string{ng1_nodes[1].Name})
+	assert.NoError(t, err)
+	assert.Empty(t, res2)
 }
 
 func createTestPod(name, uid, namespace, nodeName string, annotations, labels map[string]string, creationTimestamp time.Time) *apiv1.Pod {
@@ -794,3 +921,53 @@ func (p *mockScaleDownNodeProcessor) GetScaleDownCandidates(_ *context.Autoscali
 }
 
 func (p *mockScaleDownNodeProcessor) CleanUp() {}
+
+type testNodeFilter struct {
+	actuator scaledown.Actuator
+}
+
+func (f *testNodeFilter) ExcludeFromTracking(node *apiv1.Node) bool {
+	if f.actuator == nil || reflect.ValueOf(f.actuator).IsNil() {
+		return false
+	}
+	status := f.actuator.CheckStatus()
+	if status == nil || reflect.ValueOf(status).IsNil() {
+		return false
+	}
+	empty, drained := status.DeletionsInProgress()
+	for _, name := range empty {
+		if name == node.Name {
+			return true
+		}
+	}
+	for _, name := range drained {
+		if name == node.Name {
+			return true
+		}
+	}
+	return false
+}
+
+type dummyCustomResourcesProcessor struct{}
+
+func (f *dummyCustomResourcesProcessor) FilterOutNodesWithUnreadyResources(context *context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+	return allNodes, readyNodes
+}
+
+func (f *dummyCustomResourcesProcessor) GetNodeResourceTargets(context *context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+	return nil, nil
+}
+
+func (f *dummyCustomResourcesProcessor) CleanUp() {}
+
+func newTestTrackerFactory(quotas []resourcequotas.Quota) *resourcequotas.TrackerFactory {
+	return newTestTrackerFactoryWithActuator(quotas, nil)
+}
+
+func newTestTrackerFactoryWithActuator(quotas []resourcequotas.Quota, actuator scaledown.Actuator) *resourcequotas.TrackerFactory {
+	return resourcequotas.NewTrackerFactory(resourcequotas.TrackerOptions{
+		CustomResourcesProcessor: &dummyCustomResourcesProcessor{},
+		QuotaProvider:            resourcequotas.NewFakeProvider(quotas),
+		NodeFilter:               &testNodeFilter{actuator: actuator},
+	})
+}

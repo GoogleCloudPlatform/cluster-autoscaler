@@ -16,12 +16,10 @@ package machinetypes
 
 import (
 	"context"
+	"reflect"
 	"sync"
-	"time"
 
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned"
 	informers "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/informers/externalversions"
 	mcv1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	"k8s.io/klog/v2"
@@ -38,6 +36,7 @@ type Source struct {
 	cpSource     *cpuPlatformsSource
 	lock         sync.RWMutex
 	enableCvmSot bool
+	updateCount  uint64
 }
 
 // NewSource creates a new machine config source of truth.
@@ -49,16 +48,6 @@ func NewSource(f informers.SharedInformerFactory, enableCvmSot bool) *Source {
 		cpSource:     newCpuPlatformsSource(),
 		enableCvmSot: enableCvmSot,
 	}
-}
-
-// NewSourceFromKubeConfig creates a new source from kubeconfig.
-func NewSourceFromKubeConfig(config *rest.Config, refreshInterval time.Duration, enableCvmSot bool) (*Source, error) {
-	clientset, err := versioned.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	factory := informers.NewSharedInformerFactory(clientset, refreshInterval)
-	return NewSource(factory, enableCvmSot), nil
 }
 
 // Run starts watching MachineConfig objects.
@@ -76,9 +65,16 @@ func (p *Source) Run(ctx context.Context) {
 	p.informer.Run(ctx.Done())
 }
 
-// Snapshot returns a copy of current cache state.
-func (s *Source) Snapshot() map[string]MachineFamily {
-	return s.copyCache()
+// Snapshot returns a copy of current cache state and its generation.
+func (s *Source) Snapshot() (map[string]MachineFamily, uint64) {
+	s.lock.RLock()
+	defer s.lock.RUnlock()
+
+	result := make(map[string]MachineFamily, len(s.mfCache))
+	for k, v := range s.mfCache {
+		result[k] = v
+	}
+	return result, s.updateCount
 }
 
 func (s *Source) onAdd(obj interface{}) {
@@ -122,6 +118,7 @@ func (s *Source) processMachineConfig(mc *mcv1.MachineConfig) {
 			mc.Spec.Version,
 			warnsAndErrs.Err,
 		)
+		return
 	}
 	s.updateCache(mf, mc.Spec.Version)
 }
@@ -149,7 +146,14 @@ func (s *Source) updateCache(mf MachineFamily, version string) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if old, exists := s.mfCache[mf.Name()]; exists {
+		if reflect.DeepEqual(old, mf) {
+			return
+		}
+	}
+
 	s.mfCache[mf.Name()] = mf
+	s.updateCount++
 	klog.Infof("MachineConfig Source: internal cache state updated for %s, version %s", mf.Name(), version)
 }
 
@@ -157,17 +161,12 @@ func (s *Source) removeFromCache(mfName string, version string) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	delete(s.mfCache, mfName)
-	klog.Infof("MachineConfig Source: removed %s, version %s, from cache", mfName, version)
-}
-
-func (s *Source) copyCache() map[string]MachineFamily {
-	s.lock.RLock()
-	defer s.lock.RUnlock()
-
-	result := make(map[string]MachineFamily, len(s.mfCache))
-	for k, v := range s.mfCache {
-		result[k] = v
+	if _, exists := s.mfCache[mfName]; !exists {
+		klog.Infof("MachineConfig Source: removal of %s, version %s, skipped (not in cache)", mfName, version)
+		return
 	}
-	return result
+
+	delete(s.mfCache, mfName)
+	s.updateCount++
+	klog.Infof("MachineConfig Source: removed %s, version %s, from cache", mfName, version)
 }

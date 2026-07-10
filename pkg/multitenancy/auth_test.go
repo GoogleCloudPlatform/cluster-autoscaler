@@ -118,3 +118,60 @@ func TestGenerateTenantProjectTokenURL(t *testing.T) {
 		})
 	}
 }
+
+func TestTenantTokenSource_Validation(t *testing.T) {
+	tests := []struct {
+		name        string
+		tokenURL    string
+		expectLeak  bool // true if it bypasses validation and would leak token
+		expectError string
+	}{
+		{
+			name:        "Malicious external URL",
+			tokenURL:    "http://evil.com/v1/projects/12345678/locations/us-central1/tenants/tenant-1:generateTenantToken",
+			expectLeak:  false,
+			expectError: "is not a trusted Google API domain",
+		},
+		{
+			name:        "Malicious IP address",
+			tokenURL:    "http://192.168.1.100/v1/projects/12345678/locations/us-central1/tenants/tenant-1:generateTenantToken",
+			expectLeak:  false,
+			expectError: "is not a trusted Google API domain",
+		},
+		{
+			name:        "Google APIs URL (trusted)",
+			tokenURL:    "https://container.googleapis.com/v1/projects/12345678/locations/us-central1/tenants/tenant-1:generateTenantToken",
+			expectLeak:  true, // It should pass validation (and then fail on actual HTTP call in test environment)
+			expectError: "",   // We do not expect the "not a trusted" error
+		},
+		{
+			name:        "Staging Google APIs URL (trusted)",
+			tokenURL:    "https://staging-container.sandbox.googleapis.com/v1/projects/12345678/locations/us-central1/tenants/tenant-1:generateTenantToken",
+			expectLeak:  true,
+			expectError: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authConfig := &AuthConfig{
+				TokenURL:  tt.tokenURL,
+				TokenBody: `{"clusterId":"test-cluster"}`,
+			}
+			ts := NewTenantTokenSource(authConfig, 87654321, 12345678)
+			_, err := ts.Token()
+
+			if tt.expectError != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectError)
+			} else {
+				// For trusted URLs, it should pass validation. Since there is no real metadata server or
+				// internet access/GKE API in the unit test, it will fail with a different error (e.g., connection refused,
+				// or oauth2 error), but it must NOT return the validation error.
+				if err != nil {
+					assert.NotContains(t, err.Error(), "is not a trusted Google API domain")
+				}
+			}
+		})
+	}
+}

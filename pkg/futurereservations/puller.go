@@ -15,6 +15,7 @@
 package futurereservations
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -38,7 +39,7 @@ type noOpPuller struct{}
 func (*noOpPuller) GetLocalFutureReservations() []*gceclient.GceFutureReservation {
 	return []*gceclient.GceFutureReservation{}
 }
-func (*noOpPuller) Run(_ <-chan struct{}) {
+func (*noOpPuller) Run(_ context.Context) {
 	// noop
 }
 func NewNoOpPuller() *noOpPuller {
@@ -85,11 +86,11 @@ func (p *frPuller) GetLocalFutureReservations() []*gceclient.GceFutureReservatio
 }
 
 // Run implements FutureReservationsPuller.Run
-func (p *frPuller) Run(stopCh <-chan struct{}) {
+func (p *frPuller) Run(ctx context.Context) {
 	// wait before first run of the loop to let cluster-autoscaler initialize
 	klog.V(1).Infof("Starting Future Reservations puller, will sleep %v before first fetch from GCE...", runDelay)
 	time.Sleep(runDelay)
-	wait.NonSlidingUntil(p.loop, loopDelay, stopCh)
+	wait.NonSlidingUntil(p.loop, loopDelay, ctx.Done())
 }
 
 // loop is a puller loop where GCE Future Reservations are fetched

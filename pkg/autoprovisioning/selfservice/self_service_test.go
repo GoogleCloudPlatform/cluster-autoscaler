@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	container "google.golang.org/api/container/v1beta1"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	gkesandbox "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/utils/ptr"
 )
@@ -403,7 +404,8 @@ func TestNodepoolMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{
-				secureBootMetadataKey: "true",
+				secureBootMetadataKey:          "true",
+				integrityMonitoringMetadataKey: "false",
 			},
 		},
 		{
@@ -414,6 +416,37 @@ func TestNodepoolMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{
+				secureBootMetadataKey:          "false",
+				integrityMonitoringMetadataKey: "true",
+			},
+		},
+		{
+			name: "Nodepool with secure boot and integrity monitoring disabled is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableSecureBoot:          false,
+						EnableIntegrityMonitoring: false,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				secureBootMetadataKey:          "false",
+				integrityMonitoringMetadataKey: "false",
+			},
+		},
+		{
+			name: "Nodepool with secure boot and integrity monitoring enabled is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableSecureBoot:          true,
+						EnableIntegrityMonitoring: true,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				secureBootMetadataKey:          "true",
 				integrityMonitoringMetadataKey: "true",
 			},
 		},
@@ -428,6 +461,19 @@ func TestNodepoolMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				"instance-metadata.cloud.google.com/foo": "bar",
+			},
+		},
+		{
+			name: "Nodepool with native EoS exclusion enabled is processed correctly",
+			nodepool: &container.NodePool{
+				MaintenancePolicy: &container.NodePoolMaintenancePolicy{
+					ExclusionUntilEndOfSupport: &container.ExclusionUntilEndOfSupport{
+						Enabled: true,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
 			},
 		},
 	}
@@ -528,6 +574,17 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				gkelabels.SandboxLabelKey: "gvisor",
+			},
+		},
+		{
+			name: "Sandbox configuration feature with microvm is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					Sandbox: &v1.Sandbox{Type: "microvm"},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.SandboxLabelKey: gkesandbox.MicroVMLabelValue,
 			},
 		},
 		{
@@ -732,6 +789,17 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 		},
 		{
+			name: "Secure boot disabled",
+			spec: v1.ComputeClassSpec{
+				NodePoolAutoCreation: &v1.NodePoolAutoCreation{
+					ShieldedInstanceConfig: &v1.ShieldedInstanceConfig{EnableSecureBoot: ptr.To(false)},
+				},
+			},
+			wantMetadata: Metadata{
+				secureBootMetadataKey: "false",
+			},
+		},
+		{
 			name: "Integrity monitoring enabled",
 			spec: v1.ComputeClassSpec{
 				NodePoolAutoCreation: &v1.NodePoolAutoCreation{
@@ -739,6 +807,32 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{
+				integrityMonitoringMetadataKey: "true",
+			},
+		},
+		{
+			name: "Integrity monitoring disabled",
+			spec: v1.ComputeClassSpec{
+				NodePoolAutoCreation: &v1.NodePoolAutoCreation{
+					ShieldedInstanceConfig: &v1.ShieldedInstanceConfig{EnableIntegrityMonitoring: ptr.To(false)},
+				},
+			},
+			wantMetadata: Metadata{
+				integrityMonitoringMetadataKey: "false",
+			},
+		},
+		{
+			name: "Secure boot and integrity monitoring enabled",
+			spec: v1.ComputeClassSpec{
+				NodePoolAutoCreation: &v1.NodePoolAutoCreation{
+					ShieldedInstanceConfig: &v1.ShieldedInstanceConfig{
+						EnableSecureBoot:          ptr.To(true),
+						EnableIntegrityMonitoring: ptr.To(true),
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				secureBootMetadataKey:          "true",
 				integrityMonitoringMetadataKey: "true",
 			},
 		},
@@ -753,6 +847,17 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				"instance-metadata.cloud.google.com/foo": "bar",
+			},
+		},
+		{
+			name: "MaintenanceExclusion in CCC is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					MaintenanceExclusion: ptr.To(v1.MaintenanceExclusionUntilEndOfSupport),
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
 			},
 		},
 	}
@@ -1114,6 +1219,17 @@ func TestUpdateNodepool(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Sandbox microvm label is processed correctly",
+			metadata: Metadata{
+				gkelabels.SandboxLabelKey: gkesandbox.MicroVMLabelValue,
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					SandboxConfig: &container.SandboxConfig{Type: "microvm"},
+				},
+			},
+		},
 
 		{
 			name: "All self-service features are processed correctly",
@@ -1174,7 +1290,24 @@ func TestUpdateNodepool(t *testing.T) {
 			},
 			wantNodepool: &container.NodePool{
 				Config: &container.NodeConfig{
-					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{EnableSecureBoot: true},
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableSecureBoot: true,
+						ForceSendFields:  []string{"EnableSecureBoot"},
+					},
+				},
+			},
+		},
+		{
+			name: "Secure boot is disabled",
+			metadata: Metadata{
+				secureBootMetadataKey: "false",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableSecureBoot: false,
+						ForceSendFields:  []string{"EnableSecureBoot"},
+					},
 				},
 			},
 		},
@@ -1185,7 +1318,40 @@ func TestUpdateNodepool(t *testing.T) {
 			},
 			wantNodepool: &container.NodePool{
 				Config: &container.NodeConfig{
-					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{EnableIntegrityMonitoring: true},
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableIntegrityMonitoring: true,
+						ForceSendFields:           []string{"EnableIntegrityMonitoring"},
+					},
+				},
+			},
+		},
+		{
+			name: "Integrity monitoring is disabled",
+			metadata: Metadata{
+				integrityMonitoringMetadataKey: "false",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableIntegrityMonitoring: false,
+						ForceSendFields:           []string{"EnableIntegrityMonitoring"},
+					},
+				},
+			},
+		},
+		{
+			name: "Secure boot and integrity monitoring are enabled",
+			metadata: Metadata{
+				secureBootMetadataKey:          "true",
+				integrityMonitoringMetadataKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ShieldedInstanceConfig: &container.ShieldedInstanceConfig{
+						EnableSecureBoot:          true,
+						EnableIntegrityMonitoring: true,
+						ForceSendFields:           []string{"EnableSecureBoot", "EnableIntegrityMonitoring"},
+					},
 				},
 			},
 		},

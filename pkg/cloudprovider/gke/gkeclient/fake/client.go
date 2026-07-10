@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"testing"
+	"time"
 
 	gcev1 "google.golang.org/api/compute/v1"
 	gkeapibeta "google.golang.org/api/container/v1beta1"
@@ -31,12 +33,15 @@ type Client struct {
 	sync.Mutex
 
 	// --- Internal State ---
-	cluster    *gkeapibeta.Cluster
-	operations map[string]*gkeapibeta.Operation
-	gceClient  *fakegce.GceClient
-	project    string
-	location   string
-	opCounter  int64
+	cluster               *gkeapibeta.Cluster
+	operations            map[string]*gkeapibeta.Operation
+	gceClient             *fakegce.GceClient
+	project               string
+	location              string
+	opCounter             int64
+	maxNodePoolCount      int
+	disableOperationDelay bool
+	createNodePoolDelay   time.Duration
 
 	k8s *fakek8s.Kubernetes
 }
@@ -48,6 +53,78 @@ func NewClient(gceClient *fakegce.GceClient, k8s *fakek8s.Kubernetes) *Client {
 		gceClient:  gceClient,
 		k8s:        k8s,
 	}
+}
+
+func (f *Client) MustGetTargetSize(t testing.TB, np *gkeapibeta.NodePool) int64 {
+	t.Helper()
+	var size int64
+	for _, loc := range np.Locations {
+		migs, err := f.gceClient.FetchAllMigs(loc)
+		if err != nil {
+			t.Fatalf("Failed to fetch MIGs in zone %s: %v", loc, err)
+		}
+		found := false
+		for _, mig := range migs {
+			if mig.Name == np.Name {
+				size += mig.TargetSize
+				found = true
+				break
+			}
+		}
+		if !found {
+			// If the MIG is not found in a specific zone, its size is effectively 0.
+			// While the NodePool itself spans across multiple zones of a region, GKE
+			// Autoscaler may only instantiate the underlying MIG in a single specific zone
+			// (e.g. for TPUs where topologies are strictly zonal). We must gracefully skip
+			// the zones where a MIG was not created.
+			continue
+		}
+	}
+	return size
+}
+
+func (f *Client) MustGetNodePool(t testing.TB, name string) *gkeapibeta.NodePool {
+	f.Lock()
+	defer f.Unlock()
+	for _, np := range f.cluster.NodePools {
+		if np.Name == name {
+			return np
+		}
+	}
+	t.Fatalf("NodePool %q not found", name)
+	return nil
+}
+
+// GetAutoprovisionedNodePools returns all node pools marked as Autoprovisioned.
+func (f *Client) GetAutoprovisionedNodePools() []*gkeapibeta.NodePool {
+	f.Lock()
+	defer f.Unlock()
+
+	var autoprovisionedNPs []*gkeapibeta.NodePool
+	for _, np := range f.cluster.NodePools {
+		if np.Autoscaling != nil && np.Autoscaling.Autoprovisioned {
+			autoprovisionedNPs = append(autoprovisionedNPs, np)
+		}
+	}
+	return autoprovisionedNPs
+}
+
+// MustGetAutoprovisionedNodePools returns all node pools marked as Autoprovisioned. It fails the test if no such node pool is found.
+func (f *Client) MustGetAutoprovisionedNodePools(t testing.TB) []*gkeapibeta.NodePool {
+	autoprovisionedNPs := f.GetAutoprovisionedNodePools()
+	if len(autoprovisionedNPs) == 0 {
+		t.Fatalf("Autoprovisioned NodePool not found")
+	}
+	return autoprovisionedNPs
+}
+
+// MustGetSingleAutoprovisionedNodePool returns the only node pool marked as Autoprovisioned. It fails the test if there are zero or multiple such node pools.
+func (f *Client) MustGetSingleAutoprovisionedNodePool(t testing.TB) *gkeapibeta.NodePool {
+	nps := f.MustGetAutoprovisionedNodePools(t)
+	if len(nps) > 1 {
+		t.Fatalf("Found multiple autoprovisioned NodePools, expected exactly 1")
+	}
+	return nps[0]
 }
 
 // --- State Builders ---
@@ -63,6 +140,9 @@ func (f *Client) WithCluster(c *gkeapibeta.Cluster) (*Client, error) {
 	}
 
 	for _, np := range c.NodePools {
+		if err := validateNodePool(np); err != nil {
+			return nil, fmt.Errorf("node pool validation failed for %s: %w", np.Name, err)
+		}
 		if len(np.InstanceGroupUrls) == 0 {
 			np.InstanceGroupUrls = f.instanceGroupURLs(np)
 		}
@@ -109,6 +189,18 @@ func (f *Client) GetCluster(clusterPath string) (*gkeapibeta.Cluster, error) {
 	return &clusterCopy, nil
 }
 
+// validateNodePool checks real-world constraints on node pool creation.
+func validateNodePool(np *gkeapibeta.NodePool) error {
+	if np.Config != nil && np.Config.Labels != nil {
+		if topology := np.Config.Labels["cloud.google.com/gke-tpu-topology"]; topology != "" && topology != "1x1" {
+			if len(np.Locations) > 1 {
+				return fmt.Errorf("multi-host TPU node pools must be zonal, got locations: %v", np.Locations)
+			}
+		}
+	}
+	return nil
+}
+
 // CreateNodePool simulates node pool creation.
 //
 // Quiet assumption: It directly manipulates the fake GCE client to create the
@@ -118,10 +210,26 @@ func (f *Client) GetCluster(clusterPath string) (*gkeapibeta.Cluster, error) {
 // unless explicitly configured otherwise (though GetOperation simulates a 1-retry delay).
 func (f *Client) CreateNodePool(clusterPath string, req *gkeapibeta.CreateNodePoolRequest) (*gkeapibeta.Operation, error) {
 	f.Lock()
+	delay := f.createNodePoolDelay
+	f.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+
+	f.Lock()
 	defer f.Unlock()
 
 	if f.cluster == nil {
 		return nil, fmt.Errorf("cluster not found")
+	}
+
+	if f.maxNodePoolCount > 0 && len(f.cluster.NodePools) >= f.maxNodePoolCount {
+		return nil, fmt.Errorf("exceeded maximum node pool count %d", f.maxNodePoolCount)
+	}
+
+	if err := validateNodePool(req.NodePool); err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
 	npName := req.NodePool.Name
@@ -221,7 +329,10 @@ func (f *Client) GetOperation(operationPath string) (*gkeapibeta.Operation, erro
 	// and allow returning the RUNNING state once before marking it DONE.
 	opCopy := *op
 
-	if op.Status == "RUNNING" {
+	if f.disableOperationDelay {
+		opCopy.Status = "DONE"
+		op.Status = "DONE"
+	} else if op.Status == "RUNNING" {
 		op.Status = "DONE"
 	}
 	return &opCopy, nil
@@ -250,6 +361,9 @@ func (f *Client) newMig(np *gkeapibeta.NodePool, zone string) *gcev1.InstanceGro
 		InstanceTemplate: fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/global/instanceTemplates/%s-%s-tmpl", f.project, np.Name, zone),
 		TargetSize:       np.InitialNodeCount,
 		BaseInstanceName: np.Name,
+		Status: &gcev1.InstanceGroupManagerStatus{
+			IsStable: true,
+		},
 	}
 }
 
@@ -268,15 +382,17 @@ func (f *Client) instanceGroupURLs(np *gkeapibeta.NodePool) []string {
 func (f *Client) newNodePool(np *gkeapibeta.NodePool, clusterPath string) *gkeapibeta.NodePool {
 	nodePoolPath := fmt.Sprintf("%s/nodePools/%s", clusterPath, np.Name)
 	return &gkeapibeta.NodePool{
-		Name:              np.Name,
-		SelfLink:          nodePoolPath,
-		Status:            "RUNNING",
-		Locations:         np.Locations,
-		InitialNodeCount:  np.InitialNodeCount,
-		InstanceGroupUrls: f.instanceGroupURLs(np),
-		Config:            np.Config,
-		Autoscaling:       np.Autoscaling,
-		PlacementPolicy:   np.PlacementPolicy,
+		Name:                   np.Name,
+		SelfLink:               nodePoolPath,
+		Status:                 "RUNNING",
+		Locations:              np.Locations,
+		InitialNodeCount:       np.InitialNodeCount,
+		InstanceGroupUrls:      f.instanceGroupURLs(np),
+		Config:                 np.Config,
+		Autoscaling:            np.Autoscaling,
+		PlacementPolicy:        np.PlacementPolicy,
+		QueuedProvisioning:     np.QueuedProvisioning,
+		BestEffortProvisioning: np.BestEffortProvisioning,
 	}
 }
 
@@ -303,4 +419,25 @@ func ignoreAlreadyExists(err error) error {
 		return nil
 	}
 	return err
+}
+
+// SetMaxNodePoolCount sets the maximum number of node pools allowed in the simulated cluster.
+func (f *Client) SetMaxNodePoolCount(max int) {
+	f.Lock()
+	defer f.Unlock()
+	f.maxNodePoolCount = max
+}
+
+// DisableOperationDelay sets whether the simulated 1-retry operation delay should be disabled.
+func (f *Client) DisableOperationDelay(disable bool) {
+	f.Lock()
+	defer f.Unlock()
+	f.disableOperationDelay = disable
+}
+
+// SetCreateNodePoolDelay sets the delay for CreateNodePool operations.
+func (f *Client) SetCreateNodePoolDelay(delay time.Duration) {
+	f.Lock()
+	defer f.Unlock()
+	f.createNodePoolDelay = delay
 }

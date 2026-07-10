@@ -64,6 +64,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/preemption"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	ccpkg "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	computeclass "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	computeclass_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
@@ -698,8 +699,8 @@ func (trg TpuRequestGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, 
 
 	spec.Labels[gkelabels.TPULabel] = tpuType
 	spec.TpuType = tpuType
-	tpuTopology, found := systemLabels[gkelabels.TPUTopologyLabel]
-	if found {
+	tpuTopology, isTopologyLabelPresent := systemLabels[gkelabels.TPUTopologyLabel]
+	if isTopologyLabelPresent {
 		spec.Labels[gkelabels.TPUTopologyLabel] = tpuTopology
 		spec.TpuTopology = tpuTopology
 	}
@@ -721,12 +722,16 @@ func (trg TpuRequestGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, 
 		}
 	}
 	spec.Labels[gkelabels.AcceleratorCountLabel] = fmt.Sprintf("%v", tpuChipsPerVM)
-	isMultiHost, err := trg.provider.MachineConfigProvider().IsMultiHostTpuPodslice(tpuType, tpuTopology, tpuChipsPerVM)
-	if err != nil {
-		metrics.Metrics.RegisterUnexpectedPod(metrics.ReasonInvalidTPUTopology)
-		return err
+	if isTopologyLabelPresent {
+		isMultiHost, err := trg.provider.MachineConfigProvider().IsMultiHostTpuPodslice(tpuType, tpuTopology, tpuChipsPerVM)
+		if err != nil {
+			metrics.Metrics.RegisterUnexpectedPod(metrics.ReasonInvalidTPUTopology)
+			return err
+		}
+		spec.TpuMultiHost = isMultiHost
+	} else {
+		spec.TpuMultiHost = false
 	}
-	spec.TpuMultiHost = isMultiHost
 
 	// Add taint for TPU for simulation purposes. Later removed by gke_manager while creating node pool.
 	taint := apiv1.Taint{
@@ -1023,6 +1028,7 @@ func NewMachineSelectionGenerator(cloudProvider napcloudprovider.Autoprovisionin
 func (msg MachineSelectionGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, podReq *podrequirements.Requirements, _ machinetypes.GpuRequest, _ TpuRequest) caerrors.AutoscalerError {
 	autopilotEnabled := msg.cloudProvider.IsAutopilotEnabled()
 	autopilotManaged := ngReq.computeClass != nil && ngReq.computeClass.AutopilotManaged()
+	isStateless := !isStatefulWorkload(ngReq)
 	machineSpec, machineSelectionType, err := msg.machineSelector.Select(
 		podReq.LabelReq,
 		ngReq.gpuRequest.Config.GpuType,
@@ -1033,6 +1039,7 @@ func (msg MachineSelectionGenerator) UpdateRequirements(ngReq *nodeGroupRequirem
 		ngReq.reservation.machineType,
 		autopilotEnabled,
 		autopilotManaged,
+		isStateless,
 	)
 	if err != nil {
 		return err
@@ -1063,7 +1070,7 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 	var minCores, minMemoryGb int64 = 0, 0
 	var hugepage1g, hugepage2m, totalHugepageSizeInMB int64
 	var evictionMemoryAvailableStr string
-	var overcommitSysctlSet bool
+	var overcommitSysctlSet, numaAlignmentNeeded bool
 	var overcommitSysctlMachineMemoryLowerBound int64 = 15 * units.GiB
 
 	if requirements.computeClassRule != nil {
@@ -1084,11 +1091,10 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 				overcommitSysctlSet = true
 			}
 		}
-	}
-	if requirements.kubeletConfig != nil {
-		// If not specified by nodeprovisioning rule, attempt to pull from kubelet config.
-		if evictionMemoryAvailableStr == "" && requirements.kubeletConfig.EvictionSoft != nil {
-			evictionMemoryAvailableStr = requirements.kubeletConfig.EvictionSoft.MemoryAvailable
+		if requirements.computeClassRule.MemoryManagerPolicy() != nil ||
+			requirements.computeClassRule.TopologyManagerPolicy() != nil ||
+			requirements.computeClassRule.TopologyManagerScope() != nil {
+			numaAlignmentNeeded = true
 		}
 	}
 
@@ -1105,12 +1111,6 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 	if msg.resizableMachineTypesProvider != nil {
 		supportedResizableMachineTypes = msg.resizableMachineTypesProvider.Provide()
 	}
-	var hasMemoryManager, hasTopologyManager bool
-	if requirements.kubeletConfig != nil {
-		hasMemoryManager = requirements.kubeletConfig.MemoryManager != nil
-		hasTopologyManager = requirements.kubeletConfig.TopologyManager != nil
-	}
-	supportedNumaAlignmentFamilies := sets.New[string]("a2", "a3", "a4", "c4a", "c3", "c4", "m3", "n4", "g2", "a4x", "g4", "tpu7x", "tpu7")
 	var result []NodeGroupOptions
 	for _, option := range options {
 		for _, machine := range requirements.machineSpec.AutoprovisionedMachineTypes() {
@@ -1129,6 +1129,17 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 				continue
 			}
 
+			if numaAlignmentNeeded {
+				mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
+				if err != nil {
+					klog.V(5).Infof("Skipping machine type %s: unable to determine family for NUMA alignment check", machine.Name)
+					continue
+				}
+				if !mf.IsNumaAlignmentSupported() {
+					continue
+				}
+			}
+
 			if evictionMemoryAvailable > 0 {
 				if evictionMemoryAvailable >= machine.MaximumAllowedEvictionMemory() {
 					continue
@@ -1137,18 +1148,6 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 
 			if overcommitSysctlSet {
 				if machine.Memory < overcommitSysctlMachineMemoryLowerBound {
-					continue
-				}
-			}
-
-			// Filter out machine types that do not support Memory Manager or Topology Manager.
-			if hasMemoryManager || hasTopologyManager {
-				mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
-				if err != nil {
-					klog.V(5).Infof("Skipping machine type %s: unable to determine family for NUMA alignment check", machine.Name)
-					continue
-				}
-				if !supportedNumaAlignmentFamilies.Has(mf.Name()) {
 					continue
 				}
 			}
@@ -1220,11 +1219,13 @@ func (msg MachineSelectionGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePool
 	// Set "cloud.google.com/gke-cpu-scaling-level" node label for the number of vCPUs in the node VM.
 	// This label is used to allow system pods to have different DaemonSets based on the number of VM vCPUs.
 	// See go/gke-metrics-agent-vertical-scaling-vm-size
+	// Control plane xref: http://cs/google3/cloud/kubernetes/distro/legacy/kube_env.go;rcl=586955697;l=4521
 	spec.Labels[gkelabels.CpuScalingLevelLabel] = strconv.FormatInt(machineType.CPU, 10)
 
 	// Set "cloud.google.com/gke-memory-scaling-level" node label for the memory size (GB) in the node VM.
 	// This label is used to allow system pods to have different DaemonSets based on the memory size (GB) of VMs.
 	// See go/dpv2-deployment-ekvm
+	// Control plane xref: http://cs/google3/cloud/kubernetes/distro/legacy/kube_env.go;rcl=586955697;l=4521
 	spec.Labels[gkelabels.MemoryScalingLevelLabel] = strconv.FormatInt(machineType.Memory/units.GB, 10)
 
 	// Autopilot pods are billed depending on the family /compute class of the node they get scheduled on. We want
@@ -1806,14 +1807,16 @@ type ComputeClassGenerator struct {
 	cloudProvider                 napcloudprovider.AutoprovisioningCloudProvider
 	lister                        computeclass_lister.Lister
 	enableComputeClassMinCapacity bool
+	experimentsManager            experiments.Manager
 }
 
 // NewComputeClassGenerator creates a new generator.
-func NewComputeClassGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, lister computeclass_lister.Lister, enableComputeClassMinCapacity bool) *ComputeClassGenerator {
+func NewComputeClassGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, lister computeclass_lister.Lister, enableComputeClassMinCapacity bool, experimentsManager experiments.Manager) *ComputeClassGenerator {
 	return &ComputeClassGenerator{
 		cloudProvider:                 cloudProvider,
 		lister:                        lister,
 		enableComputeClassMinCapacity: enableComputeClassMinCapacity,
+		experimentsManager:            experimentsManager,
 	}
 }
 
@@ -1917,8 +1920,12 @@ func (ng ComputeClassGenerator) UpdateParameters(params *nodeGroupParameters, ng
 	// Mark node group to use BPSoHW if cluster is Autopilot and pod family is not set
 	usesAutopilotMode := ng.cloudProvider.IsAutopilotEnabled() || ngReq.computeClass.AutopilotManaged()
 	usesPodFamily := ngReq.computeClassRule != nil && ngReq.computeClassRule.PodFamilyName() != ""
-	if usesAutopilotMode && !usesPodFamily {
-		params.systemLabels[gkelabels.PodsPerNodeKey] = gkelabels.BinpackedSliceOfHardwareValue
+	if usesAutopilotMode {
+		if usesPodFamily {
+			params.systemLabels[gkelabels.GeneralPurposePodFamilyLabel] = "true"
+		} else {
+			params.systemLabels[gkelabels.PodsPerNodeKey] = gkelabels.BinpackedSliceOfHardwareValue
+		}
 	}
 
 	// Mark node group to have DynamicBootDiskSize enabled (required for NapResourceAnalyzerFunc)
@@ -1938,24 +1945,25 @@ func (ng ComputeClassGenerator) UpdateParameters(params *nodeGroupParameters, ng
 		params.systemLabels[gkelabels.DraTpuNodeLabel] = "true"
 	}
 
-	// Set compute class priority index label
-	if ng.enableComputeClassMinCapacity {
-		priorityIdx := -1
-		if ngReq.computeClassRule != nil {
-			for idx, rule := range ngReq.computeClass.Rules() {
-				if rule == ngReq.computeClassRule {
-					priorityIdx = idx
-					break
-				}
-			}
-		}
-		params.systemLabels[gkelabels.ComputeClassPriorityIdxLabel] = strconv.Itoa(priorityIdx)
-	}
-
 	params.taints = appendTaintsWithOverride(params.taints, ngReq.computeClass.UserDefinedTaints())
 	if ngReq.computeClassRule != nil {
 		params.taints = appendTaintsWithOverride(params.taints, ngReq.computeClassRule.UserDefinedTaints())
 	}
+
+	// Set compute class priority index label
+	if !ng.enableComputeClassMinCapacity || !ccpkg.IsComputeClassMinCapacityEnabled(ng.experimentsManager) {
+		return nil
+	}
+	priorityIdx := -1
+	if ngReq.computeClassRule != nil {
+		for idx, rule := range ngReq.computeClass.Rules() {
+			if rule == ngReq.computeClassRule {
+				priorityIdx = idx
+				break
+			}
+		}
+	}
+	params.systemLabels[gkelabels.ComputeClassPriorityIdxLabel] = strconv.Itoa(priorityIdx)
 
 	return nil
 }
@@ -2059,6 +2067,9 @@ func (ng ComputeClassGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec,
 	if val := systemLabels[gkelabels.ComputeClassPriorityIdxLabel]; val != "" {
 		spec.Labels[gkelabels.ComputeClassPriorityIdxLabel] = val
 	}
+	if val := systemLabels[gkelabels.GeneralPurposePodFamilyLabel]; val == "true" {
+		spec.Labels[gkelabels.GeneralPurposePodFamilyLabel] = val
+	}
 
 	return nil
 }
@@ -2159,8 +2170,10 @@ func NewSandboxTypeGenerator() *SandboxTypeGenerator {
 }
 
 func (stg SandboxTypeGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, podReq *podrequirements.Requirements, _ machinetypes.GpuRequest, _ TpuRequest) caerrors.AutoscalerError {
-	if v, ok := podReq.LabelReq.GetSingleValue(sandbox.GVisorLabelKey); ok && v == sandbox.GVisorLabelValue {
-		ngReq.sandboxType = sandbox.GVisor
+	if v, ok := podReq.LabelReq.GetSingleValue(sandbox.RuntimeLabelKey); ok {
+		if st, err := sandbox.TypeFromString(v); err == nil && st != sandbox.None && st != sandbox.Unsupported {
+			ngReq.sandboxType = st
+		}
 	}
 	return nil
 }
@@ -2170,27 +2183,32 @@ func (stg SandboxTypeGenerator) ValidateRequirements(_ *nodeGroupRequirements) c
 }
 
 func (stg SandboxTypeGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGroupRequirements, _ NodeGroupOptions) error {
-	if ngReq.sandboxType == sandbox.GVisor {
-		params.systemLabels[sandbox.GVisorLabelKey] = sandbox.GVisorLabelValue
+	if ngReq.sandboxType != sandbox.None && ngReq.sandboxType != sandbox.Unsupported {
+		params.systemLabels[sandbox.RuntimeLabelKey] = ngReq.sandboxType.String()
 	}
 	return nil
 }
 
 func (stg SandboxTypeGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, systemLabels map[string]string,
 	extraResources map[string]resource.Quantity) error {
-	if v, ok := systemLabels[sandbox.GVisorLabelKey]; !ok || v != sandbox.GVisorLabelValue {
+	v, ok := systemLabels[sandbox.RuntimeLabelKey]
+	if !ok {
+		return nil
+	}
+	st, err := sandbox.TypeFromString(v)
+	if err != nil || st == sandbox.None || st == sandbox.Unsupported {
 		return nil
 	}
 
-	spec.SandboxType = sandbox.GVisor
+	spec.SandboxType = st
 	// Propagate the label to the Mig to ensure scheduler can use it
-	// in simulations when trying to schedule gVisor pods.
-	spec.Labels[sandbox.GVisorLabelKey] = sandbox.GVisorLabelValue
+	// in simulations when trying to schedule sandboxed pods.
+	spec.Labels[sandbox.RuntimeLabelKey] = v
 	// Add matching taint.
 	spec.Taints = append(spec.Taints, apiv1.Taint{
 		Effect: apiv1.TaintEffectNoSchedule,
-		Key:    sandbox.GVisorTaintKey,
-		Value:  sandbox.GVisorTaintValue,
+		Key:    sandbox.RuntimeTaintKey,
+		Value:  v,
 	})
 	return nil
 }
@@ -4104,4 +4122,13 @@ func sanitizeTaints(taints []apiv1.Taint) []apiv1.Taint {
 		result = append(result, t)
 	}
 	return result
+}
+
+func isStatefulWorkload(ngReq *nodeGroupRequirements) bool {
+	for _, pod := range ngReq.pods {
+		if podrequirements.IsPodStateful(pod) {
+			return true
+		}
+	}
+	return false
 }

@@ -15,11 +15,14 @@
 package gke
 
 import (
+	"errors"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/api/googleapi"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -374,4 +377,52 @@ func TestNodePoolSpecCache(t *testing.T) {
 	spec, found = cache.GetNodePoolSpec("something")
 	assert.True(t, found)
 	assert.Equal(t, registeredSpec, spec)
+}
+
+func TestMachineTypeErrorCachePolicy(t *testing.T) {
+	tests := []struct {
+		name            string
+		err             error
+		wantTTL         time.Duration
+		wantShouldCache bool
+	}{
+		{
+			name:            "429 rate limit error is cacheable with 30s TTL",
+			err:             &googleapi.Error{Code: http.StatusTooManyRequests, Message: "Too Many Requests"},
+			wantTTL:         machineTypeRateLimitCacheValidity,
+			wantShouldCache: true,
+		},
+		{
+			name:            "404 API error is cacheable with 5m TTL",
+			err:             &googleapi.Error{Code: http.StatusNotFound, Message: "Not Found"},
+			wantTTL:         MachineTypeErrorCacheValidity,
+			wantShouldCache: true,
+		},
+		{
+			name:            "400 API error is cacheable with 5m TTL",
+			err:             &googleapi.Error{Code: http.StatusBadRequest, Message: "Bad Request"},
+			wantTTL:         MachineTypeErrorCacheValidity,
+			wantShouldCache: true,
+		},
+		{
+			name:            "500 API error is not cacheable",
+			err:             &googleapi.Error{Code: http.StatusInternalServerError, Message: "Internal Server Error"},
+			wantTTL:         0,
+			wantShouldCache: false,
+		},
+		{
+			name:            "Generic non-API error is not cacheable",
+			err:             errors.New("some generic error"),
+			wantTTL:         0,
+			wantShouldCache: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTTL, gotShouldCache := machineTypeErrorCachePolicy(tc.err)
+			assert.Equal(t, tc.wantTTL, gotTTL)
+			assert.Equal(t, tc.wantShouldCache, gotShouldCache)
+		})
+	}
 }

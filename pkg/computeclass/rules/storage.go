@@ -27,6 +27,7 @@ import (
 const (
 	diskImageTemplate = "projects/%s/global/images/%s"
 
+	// Defined in http://google3/cloud/kubernetes/engine/common/constants.go;l=103;rcl=737468291
 	DefaultBootDiskSizeGb = 100
 )
 

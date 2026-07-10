@@ -30,11 +30,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodesnowflake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // initBuilder returns the CA Builder without any Google-restricted clients.
 // When updating, please reflect the changes in all the initBuilder implementations.
-func initBuilder(ctx context.Context, stopCh chan struct{}, optsTracker *optstracking.OptionsTracker) *internalautoscaler.Builder {
+func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, manager ctrl.Manager) *internalautoscaler.Builder {
 	options := optsTracker.Options()
 	experimentsManager := optsTracker.ExperimentsManager()
 
@@ -44,22 +45,23 @@ func initBuilder(ctx context.Context, stopCh chan struct{}, optsTracker *optstra
 	informerFactory := internalautoscaler.NewSharedInformerFactory(options, kubeClient, 0)
 
 	// GCE config and HTTP client
-	projectID, location, tokenSource := internalautoscaler.MustCreateGCEConfig(options, ctx)
+	projectID, location, tokenSource := internalautoscaler.MustCreateGCEConfig(ctx, options)
 	httpClient := internalautoscaler.MustCreateHttpClient(tokenSource)
 
 	// Internal CA caches
 	nodeTemplateCache := nodetemplate.NewCache()
 	gceCache, gkeCache := internalautoscaler.MustCreateCaches(nodeTemplateCache)
-	machineConfigProvider := internalautoscaler.CreateMachineConfigProvider(options, kubeConfigJSON)
+	mccClient := internalautoscaler.CreateMachineConfigClient(kubeConfigJSON)
+	machineConfigProvider := internalautoscaler.CreateMachineConfigProvider(ctx, options, mccClient, experimentsManager)
 
 	// Clients and related objects for GKE-specific CRDs
 	// UpdateInfo CRD
 	updateInfoFactory, updateInfoLister := internalautoscaler.MustCreateUpdateInfoLister(kubeConfigJSON)
 	// NodeProvisioningConfig (NPC) / CustomProvisioningClass (CCC) CRDs
 	npcCrdClient := internalautoscaler.MustCreateNpcCrdClient(kubeConfigJSON)
-	npcCrdLister := internalautoscaler.MustCreateNpcCrdLister(optsTracker, stopCh, npcCrdClient)
+	npcCrdLister := internalautoscaler.MustCreateNpcCrdLister(ctx, optsTracker, npcCrdClient)
 	// ProvisioningRequest CRD
-	prClient := internalautoscaler.MustCreateProvReqClient(kubeConfigJSON, informerFactory, ctx)
+	prClient := internalautoscaler.MustCreateProvReqClient(ctx, kubeConfigJSON, informerFactory)
 	prInjector := internalautoscaler.MustCreateProvReqInjector(options, prClient)
 	prCache := internalautoscaler.MustCreatePRCache(prClient)
 	// ProviderConfig CRD (related to MultiTenancy)
@@ -83,6 +85,7 @@ func initBuilder(ctx context.Context, stopCh chan struct{}, optsTracker *optstra
 		WithInformerFactory(informerFactory).
 		WithProjectID(projectID).
 		WithLocation(location).
+		WithManager(manager).
 		WithTokenSource(tokenSource).
 		WithHttpClient(httpClient).
 		WithNodeTemplateCache(nodeTemplateCache).
@@ -101,7 +104,7 @@ func initBuilder(ctx context.Context, stopCh chan struct{}, optsTracker *optstra
 		WithAtomicResizeRequestClient(atomicRRClient).
 		WithFlexResizeRequestClient(flexRRClient)
 
-	return configureGKEInternalClients(builder, ctx, stopCh)
+	return configureGKEInternalClients(ctx, builder)
 }
 
 // configureGKEInternalClients is used to configure a Builder with the internal clients that are cut out from GKE Cluster Autoscaler in OSS.
@@ -110,7 +113,7 @@ var configureGKEInternalClients = configureStubClients
 
 // configureStubClients configures the provided Builder with stub/no-op implementations of the internal clients - so that the code still compiles
 // in OSS with the actual internal client code cut out.
-func configureStubClients(builder *internalautoscaler.Builder, ctx context.Context, stopCh chan struct{}) *internalautoscaler.Builder {
+func configureStubClients(ctx context.Context, builder *internalautoscaler.Builder) *internalautoscaler.Builder {
 	// WARN: All the .With() lines below have to be kept in sync with configureActualClients(). If you're adding a new line here, you should
 	//       add a new one there as well.
 
@@ -126,7 +129,7 @@ func configureStubClients(builder *internalautoscaler.Builder, ctx context.Conte
 	location := builder.GetLocation()
 	provConfigInformer := builder.GetProviderConfigInformer()
 	machineConfigProvider := builder.GetMachineConfigProvider()
-	gkeClient := internalautoscaler.MustCreateGKEClient(gkeApiClient, nil, projectID, location, options, provConfigInformer, machineConfigProvider)
+	gkeClient := internalautoscaler.MustCreateGKEClient(gkeApiClient, nil, projectID, location, options, provConfigInformer, machineConfigProvider, optsTracker.ExperimentsManager())
 
 	return builder.
 		WithNodeSizeRecommenderFactory(nodesizerecommender.DefaultFactory).

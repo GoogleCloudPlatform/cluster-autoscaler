@@ -37,12 +37,21 @@ import (
 const (
 	refreshInterval           = 10 * time.Second
 	keepAliveInterval         = 10 * time.Minute
+	defaultMaxScopes          = 50
 	defaultMaxInstanceConfigs = 200
 	firstFetchTimeout         = 15 * time.Second
+	scopeStalenessThreshold   = 30 * time.Second
 )
 
+func formatBoolPtr(b *bool) string {
+	if b == nil {
+		return "nil"
+	}
+	return strconv.FormatBool(*b)
+}
+
 type flexAdvisorMetrics interface {
-	IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, isScaleUpAnyway *bool, keyGenerationState metrics.KeyGenerationState)
+	IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, cccState metrics.CccState, isScaleUpAnyway *bool, keyGenerationState metrics.KeyGenerationState)
 }
 
 type flexAdvisor struct {
@@ -72,7 +81,7 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 		return nil, fmt.Errorf("flex advisor expects a non nil flexadvisor.instanceConfigCloudProvider")
 	}
 
-	ig := NewInstanceConfigGenerator(cccLister, instanceConfigCloudProvider, optionsTracker)
+	ig := NewInstanceConfigGenerator(ctx, cccLister, instanceConfigCloudProvider, optionsTracker)
 
 	f := &flexAdvisor{
 		scopes:                  make(map[string]*flexibilityScope),
@@ -96,10 +105,25 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 // GetInstanceAvailability tries to get InstanceAvailability from cache. Unlike AwaitInstanceAvailability if cache is not available, it does not wait for background job to fetch it.
 // WARNING: THIS METHOD DOES NOT UPDATE KEEP-ALIVE. This method is meant to be as non-blocking as possible, acquiring only RLocks in happy path. See b/514258103 for more
 func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *instanceavailability.Snapshot {
-	scope, scopeFound := f.getScope(flexibilityScopeKey)
+	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
 	if !scopeFound || scope == nil {
-		scope = f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+		if isAtCapacity {
+			klog.Warningf("FlexAdvisor: failed to add scope during GetInstanceAvailability, flexibilityScopeKey=%v, err=active scope limit reached", flexibilityScopeKey)
+			return nil
+		}
+		var err error
+		scope, err = f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+		if err != nil {
+			klog.Warningf("FlexAdvisor: failed to add scope during GetInstanceAvailability, flexibilityScopeKey=%v, err=%v", flexibilityScopeKey, err)
+			return nil
+		}
 	}
+
+	if f.isStale(scope) {
+		klog.Errorf("FlexAdvisor: scope is stale while trying to GetInstanceAvailability, not using availability data. flexibilityScopeKey=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", flexibilityScopeKey, scope.getLastSuccessfulRefreshAt(), scope.getLastErr())
+		return nil
+	}
+
 	config := scope.getInstanceConfig(instanceConfigKey)
 	if config == nil {
 		return nil
@@ -107,8 +131,9 @@ func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfi
 	return config.NewSnapshot()
 }
 
-func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) {
-	f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error {
+	_, err := f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+	return err
 }
 
 func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
@@ -125,16 +150,23 @@ func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceCon
 			}
 		}
 	}()
-	scope := f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+	scope, addErr := f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+	if addErr != nil {
+		return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=%v", addErr)
+	}
 	err = f.waitForFirstFetchOrTimeOut(scope)
 	if err != nil {
 		return nil, err
 	}
 
+	if f.isStale(scope) {
+		return nil, fmt.Errorf("scope is stale, not using availability data, flexibilityScopeKey=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", flexibilityScopeKey, scope.getLastSuccessfulRefreshAt(), scope.getLastErr())
+	}
+
 	value := scope.getInstanceConfig(instanceConfigKey)
 	if value == nil {
 		lastErr := scope.getLastErr()
-		err = fmt.Errorf("instanceConfigKey=%v not present in availability data after refresh, flexibilityScopeKey=%v, lastRefreshErr=%v, cccUsesScaleUpAnyway=%v, keyGenerationState=%v", instanceConfigKey, flexibilityScopeKey, lastErr, formatBoolPtr(f.isScaleUpAnyway(scope)), f.keyGenerationState(scope, instanceConfigKey))
+		err = fmt.Errorf("instanceConfigKey=%v not present in availability data after refresh, flexibilityScopeKey=%v, lastRefreshErr=%v, cccState=%v, cccUsesScaleUpAnyway=%v, keyGenerationState=%v", instanceConfigKey, flexibilityScopeKey, lastErr, f.cccState(scope), formatBoolPtr(f.isScaleUpAnyway(scope)), f.keyGenerationState(scope, instanceConfigKey))
 		if lastErr != nil {
 			f.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissFetchFailed, flexibilityScopeKey, instanceConfigKey)
 		} else {
@@ -142,6 +174,7 @@ func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceCon
 		}
 		return nil, err
 	}
+
 	return value.NewSnapshot(), nil
 }
 
@@ -188,14 +221,57 @@ func (f *flexAdvisor) calculateFirstFetchTimeout() time.Duration {
 	return time.Duration(parsedSeconds) * time.Second
 }
 
+// isStale returns whether scope has not been updated within required threshold. If not initial fetch has been done yet returns false
+func (f *flexAdvisor) isStale(scope *flexibilityScope) bool {
+	if scope == nil {
+		return false
+	}
+	lastRefresh := scope.getLastSuccessfulRefreshAt()
+	if lastRefresh.IsZero() {
+		// There was no single successful fetch, data array should be empty
+		return false
+	}
+	return f.clock.Since(lastRefresh) > scopeStalenessThreshold
+}
+
 // IncrementFlexAdvisorCacheQueryCount gathers additional debugging info and calls underlying prometheus' IncrementFlexAdvisorCacheQueryCount
 func (f *flexAdvisor) IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, flexibilityScopeKey string, instanceConfigKey string) {
-	scope, _ := f.getScope(flexibilityScopeKey)
+	if result == metrics.FACacheHit {
+		// we don't care for debugging data in case of HIT and gathering it may be costly
+		f.metrics.IncrementFlexAdvisorCacheQueryCount(result, metrics.CccStateEmpty, nil, "")
+		return
+	}
 
+	scope, _, _ := f.getScope(flexibilityScopeKey)
+
+	cccState := f.cccState(scope)
 	isScaleUpAnyway := f.isScaleUpAnyway(scope)
-	state := f.keyGenerationState(scope, instanceConfigKey)
+	keyGenerationState := f.keyGenerationState(scope, instanceConfigKey)
 
-	f.metrics.IncrementFlexAdvisorCacheQueryCount(result, isScaleUpAnyway, state)
+	f.metrics.IncrementFlexAdvisorCacheQueryCount(result, cccState, isScaleUpAnyway, keyGenerationState)
+}
+
+// cccState whether scope keys where generated using outdated CRD
+func (f *flexAdvisor) cccState(scope *flexibilityScope) metrics.CccState {
+	if scope == nil {
+		return metrics.CccStateEmpty
+	}
+	crd, err := f.cccLister.GetCrd(scope.flexibilityScopeKey)
+	if err != nil {
+		klog.Errorf("FlexAdvisor: error getting crd flexibilityScopeKey=%v, err=%v", scope.flexibilityScopeKey, err)
+		return metrics.CccStateEmpty
+	}
+	if crd == nil {
+		return metrics.CccStateEmpty
+	}
+	generatedUsing := scope.getGeneratedUsing()
+	if generatedUsing == nil {
+		return metrics.CccStateEmpty
+	}
+	if crd.ResourceVersion() != generatedUsing.ResourceVersion() {
+		return metrics.CccStateStale
+	}
+	return metrics.CccStateEmpty
 }
 
 // isScaleUpAnyway returns true/false based on CCC ScaleUpAnyway field, nil if cannot determine
@@ -208,14 +284,11 @@ func (f *flexAdvisor) isScaleUpAnyway(scope *flexibilityScope) *bool {
 		klog.Errorf("FlexAdvisor: error getting crd flexibilityScopeKey=%v, err=%v", scope.flexibilityScopeKey, err)
 		return nil
 	}
-	return ptr.To(crd.ScaleUpAnyway())
-}
-
-func formatBoolPtr(b *bool) string {
-	if b == nil {
-		return "nil"
+	if crd == nil {
+		// TODO(b/514250091): at the time of writing no PCC uses ScaleUpAnyway, we should query them here dynamically
+		return ptr.To(false)
 	}
-	return strconv.FormatBool(*b)
+	return ptr.To(crd.ScaleUpAnyway())
 }
 
 // keyGenerationState returns KeyGenerationState val for emitting flexadvisor_cache_query_count
@@ -223,7 +296,8 @@ func (f *flexAdvisor) keyGenerationState(scope *flexibilityScope, instanceConfig
 	if scope == nil {
 		return ""
 	}
-	val, ok := scope.cappedKeysMap[instanceConfigKey]
+
+	val, ok := scope.getKeyCapState(instanceConfigKey)
 	if !ok {
 		return metrics.KeyGenerationStateNotGenerated
 	}
@@ -234,7 +308,7 @@ func (f *flexAdvisor) keyGenerationState(scope *flexibilityScope, instanceConfig
 }
 
 func (f *flexAdvisor) MarkUsed(flexibilityScopeKey, instanceConfigKey, guidanceId, decisionId string, zonalInstancesToProvision map[string]int) error {
-	scope, scopeFound := f.getScope(flexibilityScopeKey)
+	scope, scopeFound, _ := f.getScope(flexibilityScopeKey)
 	if !scopeFound || scope == nil {
 		return fmt.Errorf("flexibility scope not found for key: %s", flexibilityScopeKey)
 	}
@@ -272,21 +346,42 @@ func (f *flexAdvisor) scopeExpired(key string, now time.Time) bool {
 	return now.After(expireTime)
 }
 
-func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, bool) {
+func (f *flexAdvisor) getMaxScopes() int {
+	maxScopes := 0
+	if f.optionsTracker != nil {
+		maxScopes = f.optionsTracker.ExperimentsManager().EvaluateIntFlagOrFailsafe(experiments.FlexAdvisorMaxActiveScopes, defaultMaxScopes)
+	}
+	if maxScopes <= 0 {
+		maxScopes = defaultMaxScopes
+	}
+	return maxScopes
+}
+
+func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, bool, bool) {
 	f.rwMutex.RLock()
 	defer f.rwMutex.RUnlock()
 	scope, scopeFound := f.scopes[flexibilityScopeKey]
-	return scope, scopeFound
+
+	maxScopes := f.getMaxScopes()
+	isAtCapacity := len(f.scopes) >= maxScopes
+
+	return scope, scopeFound, isAtCapacity
 }
 
-func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) *flexibilityScope {
+func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) (*flexibilityScope, error) {
 	f.rwMutex.Lock()
 	defer f.rwMutex.Unlock()
 
 	scope, found := f.scopes[flexibilityScopeKey]
 	if found {
 		f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(keepAliveInterval)
-		return scope
+		return scope, nil
+	}
+
+	maxScopes := f.getMaxScopes()
+
+	if len(f.scopes) >= maxScopes {
+		return nil, fmt.Errorf("active scope limit of %d reached", maxScopes)
 	}
 	ctx, cancel := context.WithCancel(f.context)
 	scope = newFlexibilityScope(f, flexibilityScopeKey, cancel)
@@ -301,7 +396,7 @@ func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) 
 	go worker.run(ctx)
 	klog.V(4).Infof("FlexAdvisor: Registered a new flexibility scope: %s", flexibilityScopeKey)
 
-	return scope
+	return scope, nil
 }
 
 type backOffManager struct {
@@ -340,4 +435,36 @@ func isFlexAdvisorZoneTypesEnabled(manager experiments.Manager) bool {
 func isFlexAdvisorMinCpuPlatformSupportEnabled(manager experiments.Manager) bool {
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorMinCpuPlatformEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorMinCpuPlatformMinCAVersionFlag, true)
+}
+
+func isFlexAdvisorPCCSupportEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorPCCSupportEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorPCCSupportMinCAVersionFlag, true)
+}
+
+// FlexAdvisorProcessingEnabledFlag can be used to disable FA without restarting CAs
+func IsFlexAdvisorProcessingEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorProcessingEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorProcessingMinCAVersionFlag, true)
+}
+
+func isFlexAdvisorGeneratorMachineErrorsCacheEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag, true)
+}
+
+func isFlexAdvisorDebugLogsEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorEnableDebugLogsFlag, false)
 }

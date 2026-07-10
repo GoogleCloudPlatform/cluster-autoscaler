@@ -32,10 +32,6 @@ const (
 	// cccNodeAnnotatotPluginName is the registered name for this node annotator plugin.
 	cccNodeAnnotatotPluginName = "CCC-NodeAnnotator"
 
-	// cccPriorityIndexAnnotationKey is the annotation key used to store the index of the
-	// first matching rule.
-	cccPriorityIndexAnnotationKey = "ccc_priority_index"
-
 	// cccDeletedAnnotationValue is the annotation value indicating the CCC
 	// referenced by the node's compute class label was not found.
 	cccDeletedAnnotationValue = "ccc_deleted"
@@ -103,7 +99,7 @@ func (p *cccNodeAnnotatorPlugin) GetAnnotation(node *apiv1.Node) (map[string]str
 	cccExists, ccc := cccExists(crds, cccName)
 	if !cccExists {
 		// The CRD associated with the node's label doesn't exist (e.g., was deleted).
-		return map[string]string{cccPriorityIndexAnnotationKey: cccDeletedAnnotationValue}, nil
+		return map[string]string{gkelabels.CCCPriorityIndexAnnotationKey: cccDeletedAnnotationValue}, nil
 	}
 
 	nodeGroup, err := p.annotationCloudprovider.NodeGroupForNode(node)
@@ -129,15 +125,15 @@ func (p *cccNodeAnnotatorPlugin) GetAnnotation(node *apiv1.Node) (map[string]str
 		// No rule in the CRD matched the node's group.
 		if ccc.ScaleUpAnyway() {
 			// CCC specified ScaleUpAnyway, allows scale-up even without a matching rule.
-			return map[string]string{cccPriorityIndexAnnotationKey: cccScaleUpAnywayAnnotationValue}, nil
+			return map[string]string{gkelabels.CCCPriorityIndexAnnotationKey: cccScaleUpAnywayAnnotationValue}, nil
 		}
 		// No rule matched, and ScaleUpAnyway is false.
 		// This is a misconfiguration, but may happen (eg. node pool created with CCC label with no rule matching).
-		return map[string]string{cccPriorityIndexAnnotationKey: noRuleMatchingAnnotationValue}, nil
+		return map[string]string{gkelabels.CCCPriorityIndexAnnotationKey: noRuleMatchingAnnotationValue}, nil
 	}
 
 	// A rule matched. Annotate the node with the index (priority) of the first matching rule.
-	return map[string]string{cccPriorityIndexAnnotationKey: fmt.Sprintf("%d", idx)}, nil
+	return map[string]string{gkelabels.CCCPriorityIndexAnnotationKey: fmt.Sprintf("%d", idx)}, nil
 }
 
 // cccNameFromNode extracts the value of the ComputeClassLabel from a node's labels.

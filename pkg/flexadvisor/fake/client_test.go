@@ -17,8 +17,8 @@ package fake
 import (
 	"context"
 	"errors"
-	"maps"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	flexadvisorapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
@@ -133,7 +133,8 @@ func TestFakeFlexAdvisorClientPreciseMocking(t *testing.T) {
 			}
 
 			for zone, wantScore := range tc.expectedScore {
-				gotScore := snapshot.GcePreferenceScore(zone)
+				gotScore, found := snapshot.GcePreferenceScore(zone)
+				assert.True(t, found)
 				assert.Equal(t, wantScore, gotScore)
 			}
 		})
@@ -379,8 +380,10 @@ func TestFakeFlexAdvisorClientFilters(t *testing.T) {
 			}
 
 			gotCap, _ := snap.MaxAvailableInstances(targetZone)
+			gotScore, found := snap.GcePreferenceScore(targetZone)
+			assert.True(t, found)
 			assert.Equal(t, tc.expectedCapacity, gotCap)
-			assert.Equal(t, tc.expectedScore, snap.GcePreferenceScore(targetZone))
+			assert.Equal(t, tc.expectedScore, gotScore)
 		})
 	}
 }
@@ -409,64 +412,36 @@ func TestFakeFlexAdvisorClientGetFetchCapacityCalls(t *testing.T) {
 	assert.Equal(t, 2, client.GetFetchCapacityCalls())
 }
 
-func TestFakeFlexAdvisorClientSetCapacityGuidanceResponseModifier(t *testing.T) {
+func TestFakeFlexAdvisorClientOmit(t *testing.T) {
 	client := &FakeFlexAdvisorClient{}
 	machineType := "n1-standard-4"
 	client.AddCapacityGuidances(FakeCapacityGuidance{
-		MachineType:   &machineType,
-		InstanceCount: 15,
+		MachineType: &machineType,
+		Omit:        true,
 	})
 
 	ctx := context.Background()
 	reqConfigs := map[string]*flexadvisorapi.InstanceConfig{
 		"req": flexadvisorapi.NewInstanceConfigWithZones(machineType, "", 0, 0, instanceavailability.Standard, "", set.New("zone-a")),
 	}
-
-	client.SetCapacityGuidanceResponseModifier(func(res map[string]*flexadvisorapi.InstanceAvailability, err error) (map[string]*flexadvisorapi.InstanceAvailability, error) {
-		newRes := maps.Clone(res)
-		if _, found := newRes["req"]; found {
-			newRes["req"] = flexadvisorapi.NewTestInstanceAvailabilityBuilder("scope", "req").
-				WithZonalInstanceCount(map[string]int{"zone-a": 99}).
-				WithZonalGcePreferenceScore(map[string]float64{"zone-a": 0.99}).
-				Build()
-		}
-		return newRes, err
-	})
 
 	results, err := client.FetchCapacityGuidance(ctx, "scope", reqConfigs)
 	assert.NoError(t, err)
 
-	snap := results["req"].NewSnapshot()
-	capVal, _ := snap.MaxAvailableInstances("zone-a")
-	assert.Equal(t, 99, capVal)
-	assert.Equal(t, 0.99, snap.GcePreferenceScore("zone-a"))
+	// Omitted config should not be present in results
+	_, found := results["req"]
+	assert.False(t, found)
 }
 
-func TestFakeFlexAdvisorClientSetCapacityGuidanceResponseModifierError(t *testing.T) {
+func TestFakeFlexAdvisorClientDelay(t *testing.T) {
 	client := &FakeFlexAdvisorClient{}
-	machineType := "n1-standard-4"
-	mockErr := errors.New("original mock error")
-	client.AddCapacityGuidances(FakeCapacityGuidance{
-		MachineType: &machineType,
-		Error:       mockErr,
-	})
+	client.SetDelay(50 * time.Millisecond)
 
-	ctx := context.Background()
-	reqConfigs := map[string]*flexadvisorapi.InstanceConfig{
-		"req": flexadvisorapi.NewInstanceConfigWithZones(machineType, "", 0, 0, instanceavailability.Standard, "", set.New("zone-a")),
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
 
-	customErr := errors.New("custom error from modifier")
-	client.SetCapacityGuidanceResponseModifier(func(res map[string]*flexadvisorapi.InstanceAvailability, err error) (map[string]*flexadvisorapi.InstanceAvailability, error) {
-		assert.Equal(t, mockErr, err)
-		assert.Nil(t, res)
-		return nil, customErr
-	})
-
-	results, err := client.FetchCapacityGuidance(ctx, "scope", reqConfigs)
-	assert.Error(t, err)
-	assert.Nil(t, results)
-	assert.Equal(t, customErr, err)
+	_, err := client.FetchCapacityGuidance(ctx, "scope", nil)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestFakeFlexAdvisorClientClearCapacityGuidances(t *testing.T) {
@@ -530,8 +505,7 @@ func TestFakeFlexAdvisorClientDefensiveNilHandling(t *testing.T) {
 	// The nil-config should be skipped and not exist in results
 	assert.NotContains(t, results, "nil-config")
 
-	// The nil-zones config should be processed successfully (with 0 zones processed)
-	avail, found := results["nil-zones"]
-	assert.True(t, found)
-	assert.NotNil(t, avail)
+	// The nil-zones config results in 0 capacity entries, so it is omitted
+	_, found := results["nil-zones"]
+	assert.False(t, found)
 }

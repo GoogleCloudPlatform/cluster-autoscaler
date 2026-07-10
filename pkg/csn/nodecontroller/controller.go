@@ -15,6 +15,7 @@
 package nodecontroller
 
 import (
+	"context"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -148,11 +149,11 @@ func NewCSNNodeController(
 }
 
 // Run initializes all background processes of the node controller.
-func (c *csnNodeController) Run(stopCh <-chan struct{}) {
-	if err := c.nodeStateManager.Run(stopCh); err != nil {
+func (c *csnNodeController) Run(ctx context.Context) {
+	if err := c.nodeStateManager.Run(ctx); err != nil {
 		klog.Errorf("%s failed to run node state manager: %v", logPrefix, err)
 	}
-	go c.dispatcher.Run(stopCh)
+	go c.dispatcher.Run(ctx)
 }
 
 func (c *csnNodeController) Consume(nodes []string) error {

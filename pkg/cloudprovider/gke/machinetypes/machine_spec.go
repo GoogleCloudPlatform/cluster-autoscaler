@@ -22,13 +22,15 @@ import (
 
 // MachineSpec combines information about machine family and min-cpu-platform.
 type MachineSpec struct {
-	Families             []MachineFamily
-	MinCpuPlatform       CpuPlatform
-	GpuType              string
-	TpuType              string
-	BootDiskType         string
-	ComputeClassName     string
-	ExplicitMachineTypes []string
+	Families                 []MachineFamily
+	MinCpuPlatform           CpuPlatform
+	GpuType                  string
+	TpuType                  string
+	BootDiskType             string
+	ComputeClassName         string
+	ExplicitMachineTypes     []string
+	ConfidentialNodesEnabled bool
+	ConfidentialNodeType     string
 }
 
 // String returns a human-readable description of the spec.
@@ -50,8 +52,17 @@ func (s MachineSpec) Signature() string {
 // Custom unknown but supported and specified in ExplicitMachineTypes machine types are also included.
 func (s MachineSpec) AutoprovisionedMachineTypes() []MachineType {
 	var result []MachineType
+	constraints := Constraints{
+		GpuType:                   s.GpuType,
+		CpuPlatform:               s.MinCpuPlatform,
+		TpuType:                   s.TpuType,
+		ExplicitMachineTypes:      s.ExplicitMachineTypes,
+		ConfidentialNodesRequired: s.ConfidentialNodesEnabled,
+		ConfidentialNodeType:      s.ConfidentialNodeType,
+	}
 	for _, family := range s.Families {
-		for _, machine := range family.AutoprovisionedMachineTypes(Constraints{GpuType: s.GpuType, CpuPlatform: s.MinCpuPlatform, TpuType: s.TpuType, ExplicitMachineTypes: s.ExplicitMachineTypes}) {
+
+		for _, machine := range family.AutoprovisionedMachineTypes(constraints) {
 			result = append(result, machine)
 		}
 	}
@@ -61,8 +72,17 @@ func (s MachineSpec) AutoprovisionedMachineTypes() []MachineType {
 // LargestAutoprovisionedMachineType returns the largest machine type for this spec.
 func (s MachineSpec) LargestAutoprovisionedMachineType() MachineType {
 	largestMachineType := UnknownMachineType
+	constraints := Constraints{
+		GpuType:                   s.GpuType,
+		CpuPlatform:               s.MinCpuPlatform,
+		TpuType:                   s.TpuType,
+		ExplicitMachineTypes:      s.ExplicitMachineTypes,
+		ConfidentialNodesRequired: s.ConfidentialNodesEnabled,
+		ConfidentialNodeType:      s.ConfidentialNodeType,
+	}
 	for _, family := range s.Families {
-		machineType := family.LargestAutoprovisionedMachineType(Constraints{GpuType: s.GpuType, CpuPlatform: s.MinCpuPlatform, TpuType: s.TpuType, ExplicitMachineTypes: s.ExplicitMachineTypes})
+
+		machineType := family.LargestAutoprovisionedMachineType(constraints)
 		if IsLargerThan(machineType, largestMachineType) {
 			largestMachineType = machineType
 		}

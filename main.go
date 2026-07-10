@@ -19,22 +19,28 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	cqv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacityquota/autoscaling.x-k8s.io/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/server/mux"
 	"k8s.io/apiserver/pkg/server/routes"
-	"k8s.io/autoscaler/cluster-autoscaler/core"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/loop"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	kube_client "k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/leaderelection"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	kube_flag "k8s.io/component-base/cli/flag"
@@ -60,41 +66,47 @@ const (
 	defaultRetryPeriod   = 2 * time.Second
 )
 
-func registerSignalHandlers(autoscaler core.Autoscaler, stopCh chan struct{}) {
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
-	klog.V(1).Info("Registered cleanup signal handler")
+var (
+	scheme = runtime.NewScheme()
+)
 
-	go func() {
-		<-sigs
-		klog.V(1).Info("Received signal, attempting cleanup")
-		close(stopCh)
-		autoscaler.ExitCleanUp()
-		klog.V(1).Info("Cleaned up, exiting...")
-		klog.Flush()
-		os.Exit(0)
-	}()
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cbv1beta1.AddToScheme(scheme))
+	utilruntime.Must(cqv1beta1.AddToScheme(scheme))
 }
 
 func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter) {
+	context := ctrl.SetupSignalHandler()
+
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
 
-	stopCh := make(chan struct{})
+	opts := optsTracker.Options()
+	restConfig := kube_util.GetKubeConfig(opts.KubeClientOpts)
+	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
+		Scheme: scheme,
+		Cache: cache.Options{
+			DefaultTransform: cache.TransformStripManagedFields(),
+		},
+		// TODO: migrate leader election, metrics, healthcheck, pprof servers to Manager
+		LeaderElection:          false,
+		Metrics:                 metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress:  "0",
+		PprofBindAddress:        "0",
+		GracefulShutdownTimeout: new(time.Duration(-1)), // disabled timeout for compatibility, TODO: configure reasonable timeout
+	})
+	if err != nil {
+		klog.Fatalf("Failed to create manager: %v", err)
+	}
 
-	context, cancel := ctx.WithCancel(ctx.Background())
-	defer cancel()
-
-	builder := initBuilder(context, stopCh, optsTracker)
-	autoscaler, trigger, err := builder.Build(context, gkeDebuggingSnapshotter, stopCh, config.OsReservedContent)
+	builder := initBuilder(context, optsTracker, mgr)
+	autoscaler, trigger, err := builder.Build(context, gkeDebuggingSnapshotter, config.OsReservedContent)
 
 	if err != nil {
 		klog.Fatalf("Failed to create autoscaler: %v", err)
 	}
-
-	// Register signal handlers for graceful shutdown.
-	registerSignalHandlers(autoscaler, stopCh)
 
 	// Start updating health check endpoint.
 	healthCheck.StartMonitoring()
@@ -105,18 +117,38 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 	}
 
 	// Autoscale ad infinitum.
-	loopStart := time.Now()
-	lastRun := time.Now()
-	for {
-		trigger.Wait(lastRun)
-		lastRun = time.Now()
-		loop.RunAutoscalerOnce(autoscaler, healthCheck, lastRun)
-		// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
-		if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
-			// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.
-			klog.Fatalf("Cluster Autoscaler configuration changed, restarting to pick up a new configuration.")
+	err = mgr.Add(manager.RunnableFunc(func(ctx ctx.Context) error {
+		loopStart := time.Now()
+		lastRun := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				klog.V(1).Info("Received signal, attempting cleanup")
+
+				autoscaler.ExitCleanUp()
+				return nil
+			default:
+				trigger.Wait(lastRun)
+				lastRun = time.Now()
+				// TODO: Pass ctx to RunAutoscalerOnce and down to RunOnce for graceful termination without waiting for the loop to finish, including passing it down to all I/O calls.
+				loop.RunAutoscalerOnce(autoscaler, healthCheck, lastRun)
+				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
+				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
+					// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.
+					klog.Fatalf("Cluster Autoscaler configuration changed, restarting to pick up a new configuration.")
+				}
+			}
 		}
+	}))
+	if err != nil {
+		klog.Fatalf("Failed to add runnable to manager: %v", err)
 	}
+
+	if err := mgr.Start(context); err != nil {
+		klog.Fatalf("Manager exited with error: %v", err)
+	}
+	klog.V(1).Info("Cleaned up, exiting...")
+	klog.Flush()
 }
 
 func updateMachineFamiliesOnFlag(options internalopts.AutoscalingOptions) {
@@ -144,6 +176,7 @@ func main() {
 	// Contextual logging is hard-coded to be enabled
 	// This overwrites the default value
 	klog.EnableContextualLogging(false)
+	ctrl.SetLogger(klog.NewKlogr())
 
 	leaderElection := defaultLeaderElectionConfiguration()
 	leaderElection.LeaderElect = true

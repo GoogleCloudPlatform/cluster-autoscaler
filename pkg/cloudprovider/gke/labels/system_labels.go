@@ -42,6 +42,10 @@ const (
 	// ComputeClassLabel specifies the compute class.
 	ComputeClassLabel = "cloud.google.com/compute-class"
 
+	// CCCPriorityIndexAnnotationKey is the annotation key used to store the index of the
+	// first matching rule.
+	CCCPriorityIndexAnnotationKey = "ccc_priority_index"
+
 	// GkeConfidentialNodes specifis if the node is confidential node.
 	GkeConfidentialNodes = "cloud.google.com/gke-confidential-nodes"
 
@@ -316,6 +320,9 @@ const (
 	// ManagedNodeLabel specifies that a node is Autopilot managed.
 	ManagedNodeLabel = "cloud.google.com/autopilot-managed-node"
 
+	// GeneralPurposePodFamilyLabel indicates general purpose pod family for pod-based billing.
+	GeneralPurposePodFamilyLabel = "cloud.google.com/general-purpose-pod-family"
+
 	// NodeVersionLabelKey is for node version
 	// CA internal use only
 	NodeVersionLabelKey = "ccc-node-version"
@@ -358,6 +365,10 @@ const (
 	// AutoUpgradeLabelKey is for CCC node auto upgrade setting.
 	// CA internal use only
 	AutoUpgradeLabelKey = "auto-upgrade"
+
+	// MaintenanceExclusionLabelKey is for CCC node pool maintenance exclusion setting.
+	// CA internal use only
+	MaintenanceExclusionLabelKey = "maintenance-exclusion"
 
 	// DefaultMaxPodsPerNode defines the default max pods per node value used by GKE.
 	DefaultMaxPodsPerNode = int64(110)
@@ -443,6 +454,7 @@ var (
 		ConsolidationDelayLabelKey,
 		GPUDriverVersionLabel,
 		ManagedNodeLabel,
+		GeneralPurposePodFamilyLabel,
 		NodeRecycleLeadTimeSecondsLabelKey,
 		CapacityCheckWaitTimeSecondsLabel,
 		ProvisioningRequestLabelKey,
@@ -452,6 +464,7 @@ var (
 		csn.SoftWorkloadSeparationKey,
 		AcceleratorNetworkProfileLabel,
 		GpuDirectLabel,
+		MaintenanceExclusionLabelKey,
 	)
 	bootDiskLabels = sets.NewString(
 		BootDiskSizeLabelKey,

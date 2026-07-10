@@ -421,6 +421,28 @@ func TestValidateNodeSystemConfig(t *testing.T) {
 			wantReason:  EvictionSoftMemoryTooHighReason,
 			wantMessage: fmt.Sprintf(EvictionSoftMemoryTooHighMessage, "300Gi", "64Gi", "e2-standard-32"),
 		},
+		{
+			name: "valid machine family for topology manager",
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(&n4Family),
+				rules.WithTopologyManagerScopeRule("container"),
+			),
+		},
+		{
+			name: "valid machine type for memory manager",
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(&c3Standard4),
+				rules.WithMemoryManagerPolicyRule("Static"),
+			),
+		},
+		{
+			name: "invalid default machine family for topology manager",
+			rule: rules.NewRule(
+				rules.WithTopologyManagerPolicyRule("best-effort"),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(UnsupportedDefaultMachineFamilyForNumaAlignment, machinetypes.E2.Name()),
+		},
 	}
 
 	for _, tc := range testCases {

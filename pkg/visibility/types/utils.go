@@ -120,10 +120,10 @@ func ScaleUpFailureToVisMessage(failureReason string, nodeGroupId string, err er
 		return NewScaleUpErrorReservationIncompatibleMsg(nodeGroupId)
 	}
 	if failureReason == gce.ErrorAutomaticReservationsNotAvailable {
-		return NewScaleUpErrorAutomaticReservationsNotAvailableMsg(nodeGroupId)
+		return NewScaleUpErrorAnyAffinityReservationsNotAvailableMsg(nodeGroupId)
 	}
 	if failureReason == gce.ErrorAutomaticReservationsNoCapacity {
-		return NewScaleUpErrorAutomaticReservationsNoCapacityMsg(nodeGroupId)
+		return NewScaleUpErrorAnyAffinityReservationsNoCapacityMsg(nodeGroupId)
 	}
 	klog.Warningf("CA Viz scale-up failure unexpected reason encountered: %v", failureReason)
 	return NewScaleUpErrorOtherMsg(nodeGroupId)

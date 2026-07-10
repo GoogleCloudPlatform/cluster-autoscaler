@@ -15,6 +15,7 @@
 package capacitybuffers
 
 import (
+	"context"
 	capacitybuffer "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer"
 	cbclient "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/client"
 	controller "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/controller"
@@ -34,12 +35,12 @@ const (
 )
 
 func InitializeAndRunBufferController(
+	ctx context.Context,
 	capacitybufferClient *cbclient.CapacityBufferClient,
 	fakePodsResolver fakepods.Resolver,
 	cccLister lister.Lister,
 	autopilotEnabled bool,
 	csnEnabled bool,
-	stopCh chan struct{},
 ) {
 	if capacitybufferClient == nil {
 		return
@@ -57,7 +58,7 @@ func InitializeAndRunBufferController(
 		reconciledBuffersCache,
 	)
 
-	go controller.Run(stopCh)
+	go controller.Run(ctx.Done())
 	cbmetrics.RegisterReconciliationTimestampCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
 }
 

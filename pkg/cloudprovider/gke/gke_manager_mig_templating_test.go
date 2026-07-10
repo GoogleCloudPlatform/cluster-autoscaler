@@ -34,6 +34,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	kubeletapis "k8s.io/kubelet/pkg/apis"
 )
 
 // params: machineType, serialized guestAccelerators, serialized labels, additional properties field if needed
@@ -213,7 +214,7 @@ func (c *testMigConfig) createMig(t *testing.T, gkeManager *gkeManagerImpl, gceS
 
 	maxPodsPerNode := c.mppn
 	if maxPodsPerNode == 0 {
-		maxPodsPerNode = gkeManager.defaultMaxPodsPerNode
+		maxPodsPerNode = gkeManager.defaultMaxPodsPerNode.Load()
 	}
 
 	// Create the MIG with parts that are common for real and NAP-created MIGs.
@@ -548,7 +549,7 @@ func TestGetMigTemplateNodeInfo(t *testing.T) {
 			// Set up the tested GKE manager. Most parameters don't matter for GetMigTemplateNodeInfo().
 			gkeManager := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
 			gkeManager.dataplaneV2Enabled = !tc.dataPlaneV2Disabled
-			gkeManager.defaultMaxPodsPerNode = tc.clusterMPPN
+			gkeManager.defaultMaxPodsPerNode.Store(tc.clusterMPPN)
 			// newTestGkeManager seeds the machine-types cache with 2 arbitrary machine types, which makes reasoning about GCE calls very difficult (there's no
 			// GCE call for the 2 types in cache, but there is one for all other types). Clear the cache so that we can always expect a GCE call.
 			gkeManager.cache.SetMachines(nil)
@@ -603,4 +604,31 @@ func TestGetMigTemplateNodeInfo(t *testing.T) {
 			assert.Equal(t, tc.wantResourceSlices, gotResourceSlices)
 		})
 	}
+}
+
+func TestGetMigTemplateNodeInfo_DeprecatedLabelsAndCaching(t *testing.T) {
+	server := test_utils.NewHttpServerMock()
+	t.Cleanup(server.Close)
+
+	gkeManager := newTestGkeManager(t, server.URL, false, false, false, nil, false, nil)
+	gkeManager.cache.SetMachines(nil)
+
+	migConfig := testMigConfig{
+		machineType: "e2-standard-2",
+		napCreated:  true,
+	}
+	mig := migConfig.createMig(t, gkeManager, server)
+	mig.spec.Labels[apiv1.LabelArchStable] = "amd64"
+
+	// populate cache
+	nodeInfo, err := gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.NotNil(t, nodeInfo.Node())
+	assert.Equal(t, "amd64", nodeInfo.Node().Labels[kubeletapis.LabelArch])
+
+	// read from cache
+	nodeInfo, err = gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.NotNil(t, nodeInfo.Node())
+	assert.Equal(t, "amd64", nodeInfo.Node().Labels[kubeletapis.LabelArch])
 }

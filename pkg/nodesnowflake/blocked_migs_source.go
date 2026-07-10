@@ -15,6 +15,8 @@
 package nodesnowflake
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleblocking"
 )
@@ -33,7 +35,6 @@ type CloudProvider interface {
 type BlockedMigsSource struct {
 	cloudProvider CloudProvider
 	sw            Watcher
-	stop          chan struct{}
 }
 
 // NewBlockedMigsSource returns a BlockedMigsSource which provides blocked MIGs based on information from the snowflake watcher.
@@ -63,12 +64,10 @@ func (s *BlockedMigsSource) BlockedMigs() scaleblocking.BlockedMigs {
 }
 
 // Run starts the watcher goroutine
-func (s *BlockedMigsSource) Run() {
-	s.stop = make(chan struct{})
-	go s.sw.Run(s.stop)
+func (s *BlockedMigsSource) Run(ctx context.Context) {
+	go s.sw.Run(ctx)
 }
 
-// CleanUp stops the watcher goroutine
+// CleanUp is a no-op as the watcher goroutine is stopped by context cancellation.
 func (s *BlockedMigsSource) CleanUp() {
-	close(s.stop)
 }

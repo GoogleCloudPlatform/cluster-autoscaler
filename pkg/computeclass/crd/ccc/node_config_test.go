@@ -468,6 +468,29 @@ func TestRuleOptsForNodeSystemConfig(t *testing.T) {
 				rules.WithTimeZoneRule("UTC"),
 			},
 		},
+		{
+			desc: "linux node config NodeVfioConfig and DiskIoScheduler",
+			nodeSystemConfig: &ccc_api.NodeSystemConfig{
+				LinuxNodeConfig: &ccc_api.LinuxNodeConfig{
+					NodeVfioConfig: &ccc_api.NodeVfioConfig{
+						DmaEntryLimit: int32Ptr(65536),
+					},
+					DiskIoScheduler: &ccc_api.DiskIoScheduler{
+						NodeSystemIoScheduler:       "mq-deadline",
+						NodeAttachedDiskIoScheduler: "bfq",
+					},
+				},
+			},
+			expected: []rules.RuleOption{
+				rules.WithNodeVfioConfigRule(ccc_api.NodeVfioConfig{
+					DmaEntryLimit: int32Ptr(65536),
+				}),
+				rules.WithDiskIoSchedulerRule(ccc_api.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
+				}),
+			},
+		},
 	} {
 		tc := tc
 		t.Run(tc.desc, func(t *testing.T) {

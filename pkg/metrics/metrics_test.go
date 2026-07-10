@@ -393,3 +393,18 @@ func TestUpdateUnscheduleableLookaheadPodsCount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, float64(3), val)
 }
+
+func TestUpdateFlexAdvisorRejectedScopes(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	pm := &prometheusMetrics{}
+
+	pm.UpdateFlexAdvisorRejectedScopes(5)
+	val, err := testutil.GetGaugeMetricValue(flexAdvisorRejectedScopes)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(5), val)
+
+	pm.UpdateFlexAdvisorRejectedScopes(2)
+	val, err = testutil.GetGaugeMetricValue(flexAdvisorRejectedScopes)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2), val)
+}

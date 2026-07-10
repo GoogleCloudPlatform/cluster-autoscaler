@@ -42,7 +42,7 @@ func TestIncreasedNapLimitEnabledFieldSetValue(t *testing.T) {
 		},
 		{
 			testName:         "flag_default_value_both_experiments_undefined", // Manually overridden nap limit to the default value of 1k
-			flagValue:        defaultDecreasedNapMaxNodes,
+			flagValue:        DecreasedNapMaxNodesCount,
 			experimentValues: nil,
 			wantValue:        1000,
 		},
@@ -56,7 +56,7 @@ func TestIncreasedNapLimitEnabledFieldSetValue(t *testing.T) {
 			testName:         "flag_2k_version_experiment_false", // Issues found during standard rollout, version-based mitigation experiment applied
 			flagValue:        2000,
 			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesMinCAVersionFlag: false}, // This mocks CA version being lower than the value of MinCAVersion
-			wantValue:        defaultDecreasedNapMaxNodes,                                              // 2k by flag, but the override version-based experiment is defined and CA version is lower -> 1k
+			wantValue:        DecreasedNapMaxNodesCount,                                                // 2k by flag, but the override version-based experiment is defined and CA version is lower -> 1k
 		},
 		{
 			testName:         "flag_2k_version_experiment_true", // Issues found during standard rollout, version-based mitigation experiment applied
@@ -68,19 +68,19 @@ func TestIncreasedNapLimitEnabledFieldSetValue(t *testing.T) {
 			testName:         "flag_2k_bool_experiment_false", // Issues found during standard rollout, bool mitigation experiment applied
 			flagValue:        2000,
 			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesEnabledFlag: false},
-			wantValue:        defaultDecreasedNapMaxNodes, // 2k by flag, but the override bool experiment is defined as false -> 1k
+			wantValue:        DecreasedNapMaxNodesCount, // 2k by flag, but the override bool experiment is defined as false -> 1k
 		},
 		{
 			testName:         "flag_2k_both_experiments_false", // Issues found during standard rollout, both mitigation experiments applied
 			flagValue:        2000,
 			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesEnabledFlag: false, experiments.IncreasedNapMaxNodesMinCAVersionFlag: false},
-			wantValue:        defaultDecreasedNapMaxNodes, // 2k by flag, but both experiments override to disabled -> 1k
+			wantValue:        DecreasedNapMaxNodesCount, // 2k by flag, but both experiments override to disabled -> 1k
 		},
 		{
 			testName:         "flag_2k_version_experiment_true_bool_experiment_false", // Issues found during standard rollout, both mitigation experiments applied
 			flagValue:        2000,
 			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesMinCAVersionFlag: true, experiments.IncreasedNapMaxNodesEnabledFlag: false},
-			wantValue:        defaultDecreasedNapMaxNodes, // Any of the two experiments alone should still override the limit to 1k
+			wantValue:        DecreasedNapMaxNodesCount, // Any of the two experiments alone should still override the limit to 1k
 		},
 		{
 			testName:         "flag_2k_bool_experiment_true", // This should never happen, the bool experiment should only have the "false" value. Tested for completeness.
@@ -98,7 +98,7 @@ func TestIncreasedNapLimitEnabledFieldSetValue(t *testing.T) {
 			testName:         "flag_2k_version_experiment_false_bool_experiment_true", // This should never happen, the bool experiment should only have the "false" value. Tested for completeness.
 			flagValue:        2000,
 			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesMinCAVersionFlag: true, experiments.IncreasedNapMaxNodesEnabledFlag: false},
-			wantValue:        defaultDecreasedNapMaxNodes, // If the bool experiment were to have the "true" value, it'd be a no-op.
+			wantValue:        DecreasedNapMaxNodesCount, // If the bool experiment were to have the "true" value, it'd be a no-op.
 		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {

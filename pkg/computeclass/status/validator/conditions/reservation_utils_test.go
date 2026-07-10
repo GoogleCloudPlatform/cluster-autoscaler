@@ -103,7 +103,8 @@ func TestReservationsCacheAddProject(t *testing.T) {
 
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
-			puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, clusterProject, false, "us-central1")
+			puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, clusterProject, false, "us-central1")
+			assert.NoError(t, err)
 			puller.AddProject(sharedProject1)
 			puller.AddProject(sharedProject2)
 			puller.SetReservations(test.reservations)

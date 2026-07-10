@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"sync"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -37,6 +38,7 @@ type backoffInfo struct {
 // The goal is to backoff an entire NodeConfig rule to allow a quick
 // fallback to other rules.
 type npcCrdBackoff struct {
+	mu        sync.RWMutex
 	npcLister npc_lister.Lister
 	matcher   computeclass.Matcher
 	backoffs  map[string]backoffInfo
@@ -57,6 +59,9 @@ func NewNpcCrdBackoff(backoffDuration time.Duration, npcLister npc_lister.Lister
 
 // Backoff execution for npc crd. Returns time till execution is backed off.
 func (b *npcCrdBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if !IsStockout(nodeGroup, nodeInfo, errorInfo) {
 		return currentTime
 	}
@@ -120,6 +125,9 @@ func (b *npcCrdBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *fra
 
 // BackoffStatus returns whether the execution is backed off for the given node group and error info when the node group is backed off.
 func (b *npcCrdBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, _ *framework.NodeInfo, currentTime time.Time) base_backoff.Status {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	npcCrd, npcCrdName, err := b.npcLister.NodeGroupCrd(nodeGroup)
 	if err != nil {
 		klog.Errorf("Failed to fetch npc crd when trying to check npc crd backoff: %v", err)
@@ -149,6 +157,9 @@ func (b *npcCrdBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, _ *fram
 
 // RuleBackoffStatus returns whether the execution is backed off for the given rule and error info when rule is backed off.
 func (b *npcCrdBackoff) RuleBackoffStatus(npcCrd crd.CRD, ruleIdx int, currentTime time.Time) base_backoff.Status {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	if npcCrd == nil || npcCrd.Name() == "" {
 		return base_backoff.Status{IsBackedOff: false}
 	}
@@ -175,6 +186,9 @@ func (b *npcCrdBackoff) RemoveBackoff(_ cloudprovider.NodeGroup, _ *framework.No
 
 // RemoveStaleBackoffData removes stale backoff data.
 func (b *npcCrdBackoff) RemoveStaleBackoffData(currentTime time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for npcName, bi := range b.backoffs {
 		if bi.until.Before(currentTime) {
 			delete(b.backoffs, npcName)

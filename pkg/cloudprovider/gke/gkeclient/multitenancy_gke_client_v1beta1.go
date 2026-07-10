@@ -21,6 +21,7 @@ import (
 
 	gkeapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/klog/v2"
 )
@@ -33,12 +34,13 @@ type MultitenancyGKEClient interface {
 type multitenancyGkeClientV1beta1 struct {
 	autoscalingGkeClient          AutoscalingGkeClient
 	providerConfigToNetworkConfig map[string]*multitenancy.ProviderNetworkConfig
+	experimentsManager            experiments.Manager
 	mutex                         sync.Mutex
 }
 
 var _ MultitenancyGKEClient = &multitenancyGkeClientV1beta1{}
 
-func NewMultitenancyGkeClientV1beta1(client gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, machineConfigProvider *machinetypes.MachineConfigProvider, napMaxNodes int) (*multitenancyGkeClientV1beta1, error) {
+func NewMultitenancyGkeClientV1beta1(client gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, machineConfigProvider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*multitenancyGkeClientV1beta1, error) {
 	autoscalingGkeClient, err := NewAutoscalingGkeClientV1beta1(client, nodePoolTranslator, projectId, location, clusterName, machineConfigProvider, napMaxNodes)
 	if err != nil {
 		return nil, err
@@ -46,6 +48,7 @@ func NewMultitenancyGkeClientV1beta1(client gkeapi.Client, nodePoolTranslator No
 	return &multitenancyGkeClientV1beta1{
 		autoscalingGkeClient:          autoscalingGkeClient,
 		providerConfigToNetworkConfig: map[string]*multitenancy.ProviderNetworkConfig{},
+		experimentsManager:            experimentsManager,
 		mutex:                         sync.Mutex{},
 	}, nil
 }
@@ -97,9 +100,18 @@ func (m *multitenancyGkeClientV1beta1) CreateNodePool(name string, spec *NodePoo
 	if !exists {
 		return fmt.Errorf("unable to find network config for provider config %s", providerConfigName)
 	}
-	// TODO(b/391807976): Switch to setting fields in nodepool proto when new fields are available.
-	spec.Labels[multitenancy.VPCLabel] = resourceNameFromFullPath(networkConfig.Network)
-	spec.Labels[multitenancy.SubnetLabel] = resourceNameFromFullPath(networkConfig.Subnetwork)
+	networkName := resourceNameFromFullPath(networkConfig.Network)
+	subnetName := resourceNameFromFullPath(networkConfig.Subnetwork)
+	flagStatus := false
+	if m.experimentsManager != nil {
+		flagStatus = m.experimentsManager.DirectLaunchBoolFlag(experiments.MultitenancyKCPEnableServerAcceptNetworkApiFieldFlag)
+		if flagStatus {
+			spec.Network = networkName
+			spec.Subnetwork = subnetName
+		}
+	}
+	spec.Labels[multitenancy.VPCLabel] = networkName
+	spec.Labels[multitenancy.SubnetLabel] = subnetName
 	spec.PodRange = networkConfig.PodRange
 	return m.autoscalingGkeClient.CreateNodePool(name, spec)
 }

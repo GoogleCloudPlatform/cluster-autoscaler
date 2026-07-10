@@ -30,7 +30,7 @@ const (
 
 var podFamilyMachineFamilies = map[string][]machinetypes.MachineFamily{
 	GeneralPurposePodFamily:    {machinetypes.E2, machinetypes.EK, machinetypes.E4},
-	GeneralPurposeArmPodFamily: {machinetypes.E4A},
+	GeneralPurposeArmPodFamily: {machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
 }
 
 // PodFamilyRule is an interface for rules with podFamily defined.

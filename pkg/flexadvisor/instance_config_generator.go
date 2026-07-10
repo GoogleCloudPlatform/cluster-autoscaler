@@ -15,34 +15,71 @@
 package flexadvisor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+	"time"
 
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/klogx"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
 
+const (
+	machineErrorCacheTtl = 10 * time.Minute
+)
+
+type machineErrorCacheKey struct {
+	machineType string
+	zone        string
+}
+
+type machineErrorCache struct {
+	cache          *cache.Expiring
+	optionsTracker *optstracking.OptionsTracker
+}
+
+func (c *machineErrorCache) Get(key interface{}) (interface{}, bool) {
+	if !isFlexAdvisorGeneratorMachineErrorsCacheEnabled(c.optionsTracker.ExperimentsManager()) {
+		return nil, false
+	}
+	return c.cache.Get(key)
+}
+
+func (c *machineErrorCache) Set(key interface{}, val interface{}, ttl time.Duration) {
+	if !isFlexAdvisorGeneratorMachineErrorsCacheEnabled(c.optionsTracker.ExperimentsManager()) {
+		return
+	}
+	c.cache.Set(key, val, ttl)
+}
+
 type instanceConfigCloudProvider interface {
-	GetAutoprovisioningLocations() []string
+	ccc.DataProvider
 	GetGkeMigs() []*gke.GkeMig
 	ExistingMigsInNodePool(nodePoolName string) []*gke.GkeMig
 	GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily
 	GetMachineType(machineType string, zone string) (gce.MachineType, error)
-	MachineConfigProvider() *machinetypes.MachineConfigProvider
+	GetClusterInfo() (projectId, location, clusterName string)
+	IsAutopilotEnabled() bool
 }
 
 // instanceConfigGenerator generates all possible instance configurations(InstanceConfig) for a flexibility Scope (a.k.a. CCC)
@@ -51,17 +88,22 @@ type instanceConfigGenerator struct {
 	provider           instanceConfigCloudProvider
 	optionsTracker     *optstracking.OptionsTracker
 	maxInstanceConfigs int
+	machineErrorCache  *machineErrorCache
 }
 
 type generatorOption func(*instanceConfigGenerator)
 
 // NewInstanceConfigGenerator returns an instance of instanceConfigGenerator
-func NewInstanceConfigGenerator(cccLister lister.Lister, provider instanceConfigCloudProvider, optionsTracker *optstracking.OptionsTracker, opts ...generatorOption) *instanceConfigGenerator {
+func NewInstanceConfigGenerator(ctx context.Context, cccLister lister.Lister, provider instanceConfigCloudProvider, optionsTracker *optstracking.OptionsTracker, opts ...generatorOption) *instanceConfigGenerator {
 	g := &instanceConfigGenerator{
 		cccLister:          cccLister,
 		provider:           provider,
 		optionsTracker:     optionsTracker,
 		maxInstanceConfigs: defaultMaxInstanceConfigs,
+		machineErrorCache: &machineErrorCache{
+			cache:          cache.NewExpiring(),
+			optionsTracker: optionsTracker,
+		},
 	}
 	for _, opt := range opts {
 		opt(g)
@@ -71,12 +113,18 @@ func NewInstanceConfigGenerator(cccLister lister.Lister, provider instanceConfig
 
 // GeneratorArtifacts wraps generated instance configs and a map indicating capped keys.
 type GeneratorArtifacts struct {
-	Configs       map[string]*api.InstanceConfig
-	CappedKeysMap map[string]bool
+	Configs        map[string]*api.InstanceConfig
+	CappedKeysMap  map[string]bool
+	GeneratedUsing crd.CRD
 }
 
 // generateInstanceConfigs returns all possible instance configurations(InstanceConfig) for a flexibility Scope (a.k.a. CCC) wrapped in GeneratorArtifacts, and errors occurred during the generation process.
 func (g *instanceConfigGenerator) generateInstanceConfigs(flexibilityScopeKey string) (*GeneratorArtifacts, []error) {
+
+	startTime := time.Now()
+	if isFlexAdvisorDebugLogsEnabled(g.optionsTracker.ExperimentsManager()) {
+		klog.Infof("FlexAdvisor[async-worker]: starting key generation, flexibilityScopeKey=%v", flexibilityScopeKey)
+	}
 	crd, err := g.matchingCrd(flexibilityScopeKey)
 	if err != nil {
 		return nil, []error{err}
@@ -116,13 +164,14 @@ func (g *instanceConfigGenerator) generateInstanceConfigs(flexibilityScopeKey st
 
 	metrics.Metrics.UpdateFlexAdvisorGeneratedInstanceConfigCount(flexibilityScopeKey, len(allInstanceConfigs))
 
-	klog.V(4).Infof("FlexAdvisor[async-worker]: generated %d instance configs for flexibility scope: %s, rulesCount=%d", len(allInstanceConfigs), flexibilityScopeKey, len(crd.GroupedRules()))
+	klog.V(4).Infof("FlexAdvisor[async-worker]: generated %d instance configs for flexibility scope: %s, rulesCount=%d, latency=%v", len(allInstanceConfigs), flexibilityScopeKey, len(crd.GroupedRules()), time.Since(startTime))
 
 	allInstanceConfigs, cappedKeysMap := g.capGeneratedInstanceConfigs(allInstanceConfigs, flexibilityScopeKey)
 
 	return &GeneratorArtifacts{
-		Configs:       allInstanceConfigs,
-		CappedKeysMap: cappedKeysMap,
+		Configs:        allInstanceConfigs,
+		CappedKeysMap:  cappedKeysMap,
+		GeneratedUsing: crd,
 	}, allErrors
 }
 
@@ -328,6 +377,7 @@ func (g *instanceConfigGenerator) assignZonesToConfigs(rule rules.Rule, instance
 	var zones []string
 	var instanceConfigsWithZones []*api.InstanceConfig
 	var allErrors []error
+	loggingQuota := logging.FlexAdvisorMachineErrorCacheLoggingQuota()
 	if len(rule.Zones()) > 0 {
 		zones = rule.Zones()
 	} else if len(rule.ZoneTypes()) > 0 && isFlexAdvisorZoneTypesEnabled(g.optionsTracker.ExperimentsManager()) && g.optionsTracker.Options().ZoneTypesEnabled {
@@ -341,12 +391,31 @@ func (g *instanceConfigGenerator) assignZonesToConfigs(rule rules.Rule, instance
 	} else {
 		zones = g.provider.GetAutoprovisioningLocations()
 	}
+
 	for _, instanceConfig := range instanceConfigs {
 		for _, zone := range zones {
-			_, err := g.provider.GetMachineType(instanceConfig.MachineType(), zone)
-			if err != nil {
+			// TODO(b/507745549): our cache should be removed after core team implements it at GetMachineType level
+			if cachedErr, hasCachedErr := g.machineErrorCache.Get(machineErrorCacheKey{
+				instanceConfig.MachineType(),
+				zone,
+			}); hasCachedErr && cachedErr != nil {
+				if isFlexAdvisorDebugLogsEnabled(g.optionsTracker.ExperimentsManager()) {
+					klogx.V(4).UpTo(loggingQuota).Infof("FlexAdvisor[async-worker]: error cache is set for machineType=%v zone=%v, skipping assigning zone", instanceConfig.MachineType(), zone)
+				}
 				continue
 			}
+
+			_, err := g.provider.GetMachineType(instanceConfig.MachineType(), zone)
+			if err != nil {
+				// we set cache iff err != nil, reasoning: if we arrive at place where we call GetMachineType it means cache check before it did not return result,
+				// so we don't have record for that machineType, zone combo
+				g.machineErrorCache.Set(machineErrorCacheKey{
+					machineType: instanceConfig.MachineType(),
+					zone:        zone,
+				}, err, machineErrorCacheTtl)
+				continue
+			}
+
 			instanceConfig.InsertZone(zone)
 		}
 		if len(instanceConfig.Zones()) == 0 {
@@ -354,6 +423,9 @@ func (g *instanceConfigGenerator) assignZonesToConfigs(rule rules.Rule, instance
 			continue
 		}
 		instanceConfigsWithZones = append(instanceConfigsWithZones, instanceConfig)
+	}
+	if isFlexAdvisorDebugLogsEnabled(g.optionsTracker.ExperimentsManager()) {
+		klogx.V(4).Over(loggingQuota).Infof("FlexAdvisor[async-worker]: used error cache for %d other machineType/zones configurations", -loggingQuota.Left())
 	}
 	return instanceConfigsWithZones, allErrors
 }
@@ -440,13 +512,12 @@ func (g *instanceConfigGenerator) findGkeMig(nodePoolName string) *gke.GkeMig {
 }
 
 func (g *instanceConfigGenerator) matchingCrd(flexibilityScopeKey string) (crd.CRD, error) {
+	if machinetypes.IsPredefinedComputeClass(flexibilityScopeKey) {
+		return g.cccCrdFromPCC(flexibilityScopeKey)
+	}
 	crd, err := g.cccLister.GetCrd(flexibilityScopeKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get CRD for flexibilityScopeKey %q: %w", flexibilityScopeKey, err)
-	}
-	if crd == nil {
-		// TODO(b/514250091): GetCrd returns nil for predefined compute class.
-		return nil, fmt.Errorf("no CRD found for flexibilityScopeKey %q", flexibilityScopeKey)
 	}
 	return crd, nil
 }
@@ -501,4 +572,39 @@ type ErrMachineUnavailableInZones struct {
 
 func (e *ErrMachineUnavailableInZones) Error() string {
 	return fmt.Sprintf("machineType=%s was removed due to not being available in any of the zones", e.MachineType)
+}
+
+// cccCrdFromPCC builds CustomComputeClass CRD from PredefinedComputeClass object
+func (g *instanceConfigGenerator) cccCrdFromPCC(flexibilityScopeKey string) (crd.CRD, error) {
+	if !isFlexAdvisorPCCSupportEnabled(g.optionsTracker.ExperimentsManager()) {
+		return nil, fmt.Errorf("predefined compute class %q is not supported: FlexAdvisorPCCSupport is disabled", flexibilityScopeKey)
+	}
+	if !g.provider.IsAutopilotEnabled() {
+		return nil, fmt.Errorf("predefined compute classes are only available in Autopilot clusters")
+	}
+	pcc, err := machinetypes.ToPredefinedComputeClass(flexibilityScopeKey)
+	if err != nil {
+		return nil, err
+	}
+	var priorities []v1.Priority
+	for _, family := range pcc.MachineFamilies() {
+		familyRef := family.Name()
+		priority := v1.Priority{
+			MachineFamily: &familyRef,
+		}
+		priorities = append(priorities, priority)
+	}
+
+	cc := &v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: flexibilityScopeKey,
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: priorities,
+		},
+	}
+
+	projectId, _, _ := g.provider.GetClusterInfo()
+	autopilotEnabled := g.provider.IsAutopilotEnabled()
+	return ccc.NewCccCrd(cc, projectId, autopilotEnabled, g.provider, g.optionsTracker), nil
 }

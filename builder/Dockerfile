@@ -13,12 +13,16 @@
 # limitations under the License.
 
 FROM google-go.pkg.dev/golang:1.26.1
+LABEL maintainer="Marcin Wielgus <mwielgus@google.com>"
 
-ENV GOPATH=/tmpfs/gopath/
-ENV PATH=$GOPATH/bin:$PATH
 ENV GO111MODULE=auto
 
-RUN apt-get update && apt-get --yes install libseccomp-dev autoconf automake libtool curl make g++ unzip qemu-user-static
+# Install tools for build verification
+RUN \
+    apt-get update && \
+    apt-get --yes --no-install-recommends install libseccomp-dev autoconf automake libtool curl make g++ unzip qemu-user-static rsync jq && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install protoc v3.21.12
 ARG PROTOC_VERSION=21.12
@@ -30,9 +34,15 @@ RUN curl -fLO https://github.com/protocolbuffers/protobuf/releases/download/v${P
     unzip -o ${PROTOC_ZIP} -d /usr/local 'include/*' && \
     rm -f ${PROTOC_ZIP}
 
-RUN go version
-RUN go install github.com/tools/godep@latest
-RUN GO111MODULE=on go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
-RUN godep version
-RUN protoc --version
+
+ARG PROTOC_GEN_GO_VERSION=v1.31.0
+ARG GOLANGCI_LINT_VERSION=v2.9.0
+ARG MISSPEL_VERSION=v0.3.4
+RUN \
+    go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION} && \
+    go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION} && \
+    go install github.com/client9/misspell/cmd/misspell@${MISSPEL_VERSION}
+
+RUN go version && protoc --version
+
 CMD ["/bin/bash"]

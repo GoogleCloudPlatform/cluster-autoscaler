@@ -15,6 +15,7 @@
 package validator
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -98,13 +99,13 @@ func NewValidator(
 }
 
 // Run runs the NPC Crd objects validator.
-func (v *validator) Run(stopCh <-chan struct{}) {
+func (v *validator) Run(ctx context.Context) {
 	klog.V(0).Infof("Enabling NPC Crd Conditions")
 	v.loop()
 
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			return
 		case <-time.After(validationInterval):
 			v.loop()

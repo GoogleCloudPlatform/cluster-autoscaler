@@ -229,6 +229,7 @@ func TestGetMachineFamilyFromMachineName(t *testing.T) {
 		machineName   string
 		family        MachineFamily
 		expectedError bool
+		injectConfig  bool
 	}{
 		"standard machine name": {
 			machineName:   machineTypeA2,
@@ -248,15 +249,46 @@ func TestGetMachineFamilyFromMachineName(t *testing.T) {
 			machineName:   "badfamily-standard-21",
 			expectedError: true,
 		},
+		"n2d-standard-2-sev resolves to n2d-vm-sev when registered": {
+			machineName:   "n2d-standard-2-sev",
+			family:        MachineFamily{name: "n2d-vm-sev"},
+			expectedError: false,
+			injectConfig:  true,
+		},
+		"n2d-standard-2-sev-snp resolves to n2d-vm-sev-snp when registered": {
+			machineName:   "n2d-standard-2-sev-snp",
+			family:        MachineFamily{name: "n2d-vm-sev-snp"},
+			expectedError: false,
+			injectConfig:  true,
+		},
+		"n2d-standard-2 resolves to n2d": {
+			machineName:   "n2d-standard-2",
+			family:        N2D,
+			expectedError: false,
+		},
+		"n2d-standard-2-sev falls back to n2d when variant is not registered": {
+			machineName:   "n2d-standard-2-sev",
+			family:        N2D,
+			expectedError: false,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			mcp := NewMachineConfigProvider(nil)
+			if tc.injectConfig {
+				families := make(map[string]MachineFamily)
+				for k, v := range mcp.cache.machineFamilies() {
+					families[k] = v
+				}
+				families["n2d-vm-sev"] = MachineFamily{name: "n2d-vm-sev"}
+				families["n2d-vm-sev-snp"] = MachineFamily{name: "n2d-vm-sev-snp"}
+				mcp.cache.update(families)
+			}
 			actualFamily, err := mcp.GetMachineFamilyFromMachineName(tc.machineName)
 			if tc.expectedError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, actualFamily, tc.family)
+				assert.Equal(t, tc.family, actualFamily)
 			}
 		})
 	}
@@ -2290,6 +2322,7 @@ func TestToMachineType(t *testing.T) {
 			machineTypeName:         "n2-custom-6-3072",
 			expectedMachineTypeInfo: MachineType{MachineType: customMachineType},
 			expectedError:           nil,
+			expectedFamily:          true,
 		},
 		"Unknown predefined type": {
 			machineTypeName:         "n2-standard-9999",
@@ -2428,7 +2461,7 @@ func TestIsHugepageSize1gSupported(t *testing.T) {
 		expected bool
 	}{
 		"supported": {
-			families: []MachineFamily{A3, A4, A4X, C2D, C3, C3D, C4, CT5L, CT5LP, CT6E, G4, H3, M2, M3, Z3, TPU7X}, // C3A, CT5E supports 1G hugepages but not supported by CA;
+			families: []MachineFamily{A3, A4, A4X, C2D, C3, C3D, C4, CT5L, CT5LP, CT6E, G4, H3, M2, M3, Z3, Z4D, TPU7X}, // C3A, CT5E supports 1G hugepages but not supported by CA;
 			expected: true,
 		},
 		"unsupported": {
@@ -2558,7 +2591,7 @@ func TestDwsDisablementForMachineFamily(t *testing.T) {
 			expected: true,
 		},
 		"supported": {
-			families: []MachineFamily{A3, A4, A4X, C2, C2D, C3, C3D, C4, CT5P, CT5LP, CT6E, E4, E2, H3, M2, M3, N2, Z3, TPU7X}, // All other machine families than in "unsupported" above
+			families: []MachineFamily{A3, A4, A4X, C2, C2D, C3, C3D, C4, CT5P, CT5LP, CT6E, E4, E2, H3, M2, M3, N2, Z3, Z4D, TPU7X}, // All other machine families than in "unsupported" above
 			expected: false,
 		},
 	} {
@@ -2684,12 +2717,23 @@ func TestIsConfidentialNodeTypeSupported(t *testing.T) {
 	assert.NoError(t, err)
 	c3Standard4, err := mcp.ToMachineType("c3-standard-4")
 	assert.NoError(t, err)
+	c3Standard4Lssd, err := mcp.ToMachineType("c3-standard-4-lssd")
+	assert.NoError(t, err)
 	c3Highcpu4, err := mcp.ToMachineType("c3-highcpu-4")
 	assert.NoError(t, err)
 	e2Standard2, err := mcp.ToMachineType("e2-standard-2")
 	assert.NoError(t, err)
 	c4Standard4, err := mcp.ToMachineType("c4-standard-4")
 	assert.NoError(t, err)
+
+	legacyCvmFamily := MachineFamily{
+		name:                     "legacy-cvm",
+		supportConfidentialNodes: true,
+	}
+	legacyCvmType := MachineType{
+		MachineType: gce.MachineType{Name: "legacy-cvm-standard-2"},
+		family:      &legacyCvmFamily,
+	}
 
 	testCases := []struct {
 		name                 string
@@ -2717,6 +2761,16 @@ func TestIsConfidentialNodeTypeSupported(t *testing.T) {
 			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
 			expected:             false,
 		},
+		{name: "c3-standard-4-lssd supports tdx",
+			machineType:          c3Standard4Lssd,
+			confidentialNodeType: labels.TDXConfidentialNodeTypeValue,
+			expected:             true,
+		},
+		{name: "c3-standard-4-lssd does not support sev",
+			machineType:          c3Standard4Lssd,
+			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
+			expected:             false,
+		},
 		{name: "c3-highcpu-4 does not support tdx",
 			machineType:          c3Highcpu4,
 			confidentialNodeType: labels.TDXConfidentialNodeTypeValue,
@@ -2737,10 +2791,202 @@ func TestIsConfidentialNodeTypeSupported(t *testing.T) {
 			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
 			expected:             false,
 		},
+		{name: "legacy cvm family supports sev",
+			machineType:          legacyCvmType,
+			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
+			expected:             true,
+		},
+		{name: "legacy cvm family does not support tdx",
+			machineType:          legacyCvmType,
+			confidentialNodeType: labels.TDXConfidentialNodeTypeValue,
+			expected:             false,
+		},
+		{name: "legacy cvm family does not support sev-snp",
+			machineType:          legacyCvmType,
+			confidentialNodeType: labels.SEVSNPConfidentialNodeTypeValue,
+			expected:             false,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.machineType.IsConfidentialNodeTypeSupported(tc.confidentialNodeType))
+		})
+	}
+}
+
+// TestKnownMachineFamilies verifies that all GKE machine families registered in the
+// provider are accounted for in the test's knownMachineFamilies list. If a new GKE
+// machine family is introduced, this test will fail to ensure developers take appropriate
+// action:
+//   - If it is internal-only, they must update gke-common-webhooks to enforce constraints.
+//   - If it is public, they can simply add it to the knownMachineFamilies list.
+func TestKnownMachineFamilies(t *testing.T) {
+	knownMachineFamilies := map[string]bool{
+		"a2":    true,
+		"a3":    true,
+		"a4":    true,
+		"a4x":   true,
+		"c2":    true,
+		"c2d":   true,
+		"c3":    true,
+		"c3d":   true,
+		"c4":    true,
+		"c4a":   true,
+		"c4d":   true,
+		"c4n":   true,
+		"ct3":   true,
+		"ct3p":  true,
+		"ct4l":  true,
+		"ct4p":  true,
+		"ct5l":  true,
+		"ct5lp": true,
+		"ct5p":  true,
+		"ct6e":  true,
+		"e2":    true,
+		"e4":    true,
+		"e4a":   true,
+		"ek":    true,
+		"g2":    true,
+		"g4":    true,
+		"h3":    true,
+		"h4d":   true,
+		"m1":    true,
+		"m2":    true,
+		"m3":    true,
+		"m4":    true,
+		"n1":    true,
+		"n2":    true,
+		"n2d":   true,
+		"n4":    true,
+		"n4a":   true,
+		"n4d":   true,
+		"t2a":   true,
+		"t2d":   true,
+		"tpu7":  true,
+		"tpu7x": true,
+		"z3":    true,
+		"z4d":   true,
+	}
+
+	mcp := NewMachineConfigProvider(nil)
+	for _, family := range mcp.AllMachineFamilies() {
+		name := family.Name()
+		if !knownMachineFamilies[name] {
+			t.Errorf("New GKE machine family %q detected!\n"+
+				"- If this family IS intended to be internal-only, you MUST update go/gcw-internal-machine-family-constraint. GCW will enforce the constraint on selecting internal only machine families. Once updated, add %q to the 'knownMachineFamilies' list in this test to bypass.\n"+
+				"- If this family is NOT internal-only, it is safe to simply add %q to the 'knownMachineFamilies' list in this test to bypass.", name, name, name)
+		}
+	}
+}
+
+func TestIsConfidentialNodesSupported(t *testing.T) {
+	mcp := NewMachineConfigProvider(nil)
+
+	// Families
+	c2dFamily, err := mcp.ToMachineFamily("c2d")
+	assert.NoError(t, err)
+	assert.True(t, c2dFamily.IsConfidentialNodesSupported())
+
+	c3Family, err := mcp.ToMachineFamily("c3")
+	assert.NoError(t, err)
+	assert.True(t, c3Family.IsConfidentialNodesSupported())
+
+	e2Family, err := mcp.ToMachineFamily("e2")
+	assert.NoError(t, err)
+	assert.False(t, e2Family.IsConfidentialNodesSupported())
+
+	// Machine types table-driven assertions
+	testCases := []struct {
+		name        string
+		machineType string
+		expected    bool
+	}{
+		{"c3-standard-4 supports CVM", "c3-standard-4", true},
+		{"c3-highcpu-4 does not support CVM", "c3-highcpu-4", false},
+		{"e2-standard-2 does not support CVM", "e2-standard-2", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mt, err := mcp.ToMachineType(tc.machineType)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expected, mt.IsConfidentialNodesSupported())
+		})
+	}
+}
+
+func TestConfidentialNodesConstraintsMatching(t *testing.T) {
+	mcp := NewMachineConfigProvider(nil)
+	c3Family, err := mcp.ToMachineFamily("c3")
+	assert.NoError(t, err)
+
+	// When ConfidentialNodesRequired is true, c3-highcpu-4 should be filtered out.
+	constraints := Constraints{
+		CpuPlatform:               AnyPlatform,
+		ConfidentialNodesRequired: true,
+		ConfidentialNodeType:      labels.TDXConfidentialNodeTypeValue,
+	}
+
+	c3Types := c3Family.AutoprovisionedMachineTypes(constraints)
+
+	// In GKE Autoscaler registries, c3-highcpu-4 explicitly disables CVM support.
+	// When pod constraints request CVM, c3-highcpu-4 must be filtered out.
+	_, foundHighCpu := c3Types["c3-highcpu-4"]
+	assert.False(t, foundHighCpu, "c3-highcpu-4 should be filtered out when ConfidentialNodesRequired is true")
+
+	// Conversely, c3-standard-4 supports TDX CVM and must NOT be filtered out.
+	_, foundStandard := c3Types["c3-standard-4"]
+	assert.True(t, foundStandard, "c3-standard-4 should remain available when ConfidentialNodesRequired is true")
+
+	// When ConfidentialNodesRequired is false, c3-highcpu-4 should NOT be filtered out.
+	constraintsFalse := Constraints{
+		CpuPlatform:               AnyPlatform,
+		ConfidentialNodesRequired: false,
+	}
+
+	c3TypesFalse := c3Family.AutoprovisionedMachineTypes(constraintsFalse)
+	_, foundFalse := c3TypesFalse["c3-highcpu-4"]
+	assert.True(t, foundFalse, "c3-highcpu-4 should NOT be filtered out when ConfidentialNodesRequired is false")
+}
+
+func TestToCustomMachineType_FamilyBackfill(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		machineTypeName string
+		wantFamilyName  string
+		wantCvmSupport  bool
+	}{
+		{
+			name:            "N2D Custom CVM Shape",
+			machineTypeName: "n2d-custom-8-32768",
+			wantFamilyName:  "n2d",
+			wantCvmSupport:  true,
+		},
+		{
+			name:            "C3 Custom CVM Shape",
+			machineTypeName: "c3-custom-4-16384",
+			wantFamilyName:  "c3",
+			wantCvmSupport:  true,
+		},
+		{
+			name:            "E2 Custom Non-CVM Shape",
+			machineTypeName: "e2-custom-2-4096",
+			wantFamilyName:  "e2",
+			wantCvmSupport:  false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Generate the custom machine type dynamically.
+			mt, err := ToCustomMachineType(tc.machineTypeName)
+			assert.NoError(t, err)
+			assert.NotNil(t, mt)
+
+			// Verify the parent family pointer is backfilled correctly.
+			assert.NotNil(t, mt.family, "mt.family should be backfilled and non-nil on custom shapes")
+			assert.Equal(t, tc.wantFamilyName, mt.family.Name())
+
+			// Verify IsConfidentialNodesSupported executes safely on custom shapes without nil panics.
+			assert.Equal(t, tc.wantCvmSupport, mt.IsConfidentialNodesSupported())
 		})
 	}
 }

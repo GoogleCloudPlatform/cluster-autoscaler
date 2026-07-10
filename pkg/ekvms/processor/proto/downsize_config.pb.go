@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // This file shouldn't be modified directly. Its source of truth is located
-// in the GKE codebase.
+// in the GKE codebase:
+// cs///depot/google3/cloud/kubernetes/proto/internal.proto
 // If you want to change anything, first submit the changes there and get the
 // EK team approval, then sync this file and generate the go file using
 // "protoc --go_out=. --go_opt=paths=source_relative  --proto_path=. downsize_config.proto"
@@ -27,12 +28,11 @@
 package proto
 
 import (
-	reflect "reflect"
-	sync "sync"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	reflect "reflect"
+	sync "sync"
 )
 
 const (

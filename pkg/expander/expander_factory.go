@@ -27,14 +27,18 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodegroups/asyncnodegroups"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	cccLister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/edp"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/fleetefficiency"
 	gkepriceexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/mppn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	scalabilitytestexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/scalabilitytest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/snowflake"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 )
 
 // ExpanderStrategyFromString creates an expander.Strategy according to its name
@@ -50,6 +54,10 @@ func ExpanderStrategyFromString(
 	pvmUnfitnessPenaltyEnabled, autopilotEnabled bool,
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker,
+	flexAdvisor instanceavailability.Provider,
+	cccLister cccLister.Lister,
+	gceFlexAdvisorEnabled bool,
+	experimentsManager experiments.Manager,
 ) (expander.Strategy, errors.AutoscalerError) {
 
 	expanderFactory := factory.NewFactory()
@@ -75,6 +83,9 @@ func ExpanderStrategyFromString(
 	r := gkepriceexpander.NewProgressiveGroupCountReducer(cloudProvider)
 	expanderFactory.RegisterFilter(internalopts.MaxPodsPerNodeExpanderName, func() expander.Filter {
 		return mppn.NewFilter(r, autopilotEnabled)
+	})
+	expanderFactory.RegisterFilter(internalopts.FleetEfficiencyExpanderName, func() expander.Filter {
+		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, cloudProvider, localSSDDiskSizeProvider, gceFlexAdvisorEnabled, experimentsManager)
 	})
 
 	return expanderFactory.Build(expanderNames)

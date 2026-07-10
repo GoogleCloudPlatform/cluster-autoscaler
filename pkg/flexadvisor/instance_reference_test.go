@@ -87,26 +87,26 @@ func TestConstructInstanceReference(t *testing.T) {
 		name               string
 		nodeGroup          cloudprovider.NodeGroup
 		experimentsManager experiments.Manager
-		want               *instanceReference
+		want               *InstanceReference
 		wantErr            error
 	}{
 		{
 			name:      "Success - Standard VM",
 			nodeGroup: newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
 			},
 			wantErr: nil,
 		},
 		{
 			name:      "Success - Spot VM with GPU",
 			nodeGroup: newTestMig("us-central1-b", "n1-standard-8", map[string]string{labels.ComputeClassLabel: "gpu-pool"}, true, false, []*container.AcceleratorConfig{{AcceleratorType: "nvidia-tesla-t4", AcceleratorCount: 2}}, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
-			want: &instanceReference{
-				zone:                "us-central1-b",
-				flexibilityScopeKey: "gpu-pool",
-				instanceConfigKey:   "machineType: n1-standard-8, provisioningMode: SPOT, gpuType: nvidia-tesla-t4, gpuCount: 2",
+			want: &InstanceReference{
+				Zone:                "us-central1-b",
+				FlexibilityScopeKey: "gpu-pool",
+				InstanceConfigKey:   "machineType: n1-standard-8, provisioningMode: SPOT, gpuType: nvidia-tesla-t4, gpuCount: 2",
 			},
 			wantErr: nil,
 		},
@@ -153,10 +153,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "TPU - FlexAdvisorTPU enabled, empty topology - returns instance config without topology",
 			nodeGroup:          newTestMig("us-central1-a", "ct5p-hightpu-4t", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, nil, "tpu-v5p-slice", EmptyTpuTopology, api.EmptyMaxRunDuration),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD",
 			},
 			wantErr: nil,
 		},
@@ -164,10 +164,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "TPU - FlexAdvisorTPU enabled, topology is present - returns instance config with topology",
 			nodeGroup:          newTestMig("us-central1-a", "ct5p-hightpu-4t", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, nil, "tpu-v5p-slice", "2x2x5", api.EmptyMaxRunDuration),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5",
 			},
 			wantErr: nil,
 		},
@@ -175,10 +175,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "TPU with accelerators - FlexAdvisorTPU enabled, topology is present - returns instance config with topology but without GPU fields",
 			nodeGroup:          newTestMig("us-central1-a", "ct5p-hightpu-4t", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, []*container.AcceleratorConfig{{AcceleratorType: "tpu-v5p-slice", AcceleratorCount: 4}}, "tpu-v5p-slice", "2x2x5", api.EmptyMaxRunDuration),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5",
 			},
 			wantErr: nil,
 		},
@@ -186,10 +186,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "DWS TPU - FlexAdvisorTPU and FlexAdvisorDWS enabled, topology is present - returns instance config with topology",
 			nodeGroup:          newTestMig("us-central1-a", "ct5p-hightpu-4t", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, true, nil, "tpu-v5p-slice", "2x2x5", "3600"),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5",
 			},
 			wantErr: nil,
 		},
@@ -224,10 +224,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "DWS - FlexAdvisorDWS enabled - uses default MRD",
 			nodeGroup:          newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, true, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 604800",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 604800",
 			},
 			wantErr: nil,
 		},
@@ -235,10 +235,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "DWS - FlexAdvisorDWS enabled - uses supplied MRD",
 			nodeGroup:          newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, true, nil, EmptyTpuType, EmptyTpuTopology, "3600"),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600",
 			},
 			wantErr: nil,
 		},
@@ -246,10 +246,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "non-DWS spec with MRD specified - FlexAdvisorDWS experiment off - doesn't use specified MRD",
 			nodeGroup:          newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, "2000"),
 			experimentsManager: experiments.NewMockManager(),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
 			},
 			wantErr: nil,
 		},
@@ -257,10 +257,10 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:               "non-DWS spec with MRD specified - FlexAdvisorDWS enabled - uses supplied MRD",
 			nodeGroup:          newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scale-out"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, "2000"),
 			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag),
-			want: &instanceReference{
-				zone:                "us-central1-a",
-				flexibilityScopeKey: "scale-out",
-				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD, maxRunDuration: 2000",
+			want: &InstanceReference{
+				Zone:                "us-central1-a",
+				FlexibilityScopeKey: "scale-out",
+				InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD, maxRunDuration: 2000",
 			},
 			wantErr: nil,
 		},
@@ -280,7 +280,7 @@ func TestConstructInstanceReference(t *testing.T) {
 			if manager == nil {
 				manager = experiments.NewMockManager()
 			}
-			got, err := constructInstanceReference(tc.nodeGroup, mockLister, manager)
+			got, err := ConstructInstanceReference(tc.nodeGroup, mockLister, manager)
 
 			if tc.wantErr == nil {
 				assert.NoError(t, err)

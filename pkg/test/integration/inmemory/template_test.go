@@ -38,12 +38,11 @@ func templateTestAdvancedScenario(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		infra := integration.SetupInfrastructure(ctx, t)
-		stopCh := make(chan struct{})
 
 		// Given: Infrastructure and autoscaler are initialized.
-		autoscaler, err := integration.SetupAutoscaler(t, ctx, testConfig, infra, stopCh)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel, stopCh)
+		defer integration_synctest.TearDown(cancel)
 
 		// When: A trigger action occurs (e.g., adding an unschedulable pod) and the autoscaler loop executes.
 		pod := tu.BuildTestPod("my-pod", 1000, 1000, tu.MarkUnschedulable())

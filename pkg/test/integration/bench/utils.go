@@ -33,13 +33,6 @@ var (
 	disableGC  = flag.Bool("disable-gc", false, "Disable garbage collection to stabilize the runtime.")
 )
 
-// TestMain configures global benchmark and logging flags.
-func TestMain(m *testing.M) {
-	flag.Parse()
-	flag.Set("v", "4")
-	os.Exit(m.Run())
-}
-
 type scenario struct {
 	given func() *integration.TestConfig
 	when  func(infra *integration.TestInfrastructure)
@@ -64,10 +57,14 @@ func defaultBenchmarkConfig() *integration.TestConfig {
 		WithClusterWideLimits(maxNGSize, maxCores, maxMemory)
 }
 
-func (s scenario) run(b *testing.B) {
-	// Pause the benchmark timer to prevent heavy setup and initialization overhead
-	// from inflating the final benchmarking time.
-	b.StopTimer()
+func (s scenario) run(tb testing.TB) {
+	b, isBench := tb.(*testing.B)
+
+	if isBench {
+		// Pause the benchmark timer to prevent heavy setup and initialization overhead
+		// from inflating the final benchmarking time.
+		b.StopTimer()
+	}
 
 	if *disableGC {
 		oldGC := debug.SetGCPercent(-1)
@@ -79,12 +76,17 @@ func (s scenario) run(b *testing.B) {
 		var err error
 		f, err = os.Create(*profileCPU)
 		if err != nil {
-			b.Fatalf("Failed to create cpu profile file: %v", err)
+			tb.Fatalf("Failed to create cpu profile file: %v", err)
 		}
 		defer f.Close()
 	}
 
-	for i := 0; i < b.N; i++ {
+	iterations := 1
+	if isBench {
+		iterations = b.N
+	}
+
+	for i := 0; i < iterations; i++ {
 		// Create a cancellable context.
 		// Down the call stack in the new newFakeClientForTB helper,
 		// we start informers using prFactory.Start(ctx.Done()).
@@ -92,55 +94,57 @@ func (s scenario) run(b *testing.B) {
 		// The context must be cancellable so that those don't continue running forever,
 		// otherwise they stack up in each iteration and distort benchmarking metrics.
 		ctx, cancel := context.WithCancel(context.Background())
-		infra := integration.SetupInfrastructure(ctx, b)
-		stopCh := make(chan struct{})
+		infra := integration.SetupInfrastructure(ctx, tb)
 
 		var testConfig *integration.TestConfig
 		if s.given != nil {
 			testConfig = s.given()
 		} else {
-			b.Fatalf("Test cluster config is not defined. Add WithCluster func to your scenario")
+			tb.Fatalf("Test cluster config is not defined. Add WithCluster func to your scenario")
 		}
 
 		if s.when != nil {
 			s.when(infra)
 		}
 
-		autoscaler, err := integration.SetupAutoscaler(b, ctx, testConfig, infra, stopCh)
+		autoscaler, err := integration.SetupAutoscaler(ctx, tb, testConfig, infra)
 		if err != nil {
-			b.Fatalf("SetupAutoscaler failed: %v", err)
+			tb.Fatalf("SetupAutoscaler failed: %v", err)
 		}
 
-		infra.Fakes.InformerFactory.Start(stopCh)
-		infra.Fakes.InformerFactory.WaitForCacheSync(stopCh)
+		infra.Fakes.InformerFactory.Start(ctx.Done())
+		infra.Fakes.InformerFactory.WaitForCacheSync(ctx.Done())
 
 		runtime.GC()
 
 		if f != nil && i == 0 {
 			if err := pprof.StartCPUProfile(f); err != nil {
-				b.Fatalf("Failed to start cpu profile: %v", err)
+				tb.Fatalf("Failed to start cpu profile: %v", err)
 			}
 		}
 
-		b.StartTimer()
+		if isBench {
+			b.StartTimer()
+		}
 		err = autoscaler.RunOnce(time.Now().Add(10 * time.Second))
-		b.StopTimer()
+		if isBench {
+			b.StopTimer()
+		}
 
 		if f != nil && i == 0 {
 			pprof.StopCPUProfile()
 		}
 
-		// We need to call cancel() and close(stopCh) to prevent the
+		// We need to call cancel() to prevent the
 		// informers and the scheduler framework from running in the background.
-		close(stopCh)
 		cancel()
 
 		if err != nil {
-			b.Fatalf("RunOnce failed: %v", err)
+			tb.Fatalf("RunOnce failed: %v", err)
 		}
 
 		if s.then != nil {
-			s.then(b, infra)
+			s.then(tb, infra)
 		}
 	}
 }
@@ -148,13 +152,16 @@ func (s scenario) run(b *testing.B) {
 func verifyTargetNumberOfNodes(expectedTargetSize int) func(tb testing.TB, infra *integration.TestInfrastructure) {
 	return func(tb testing.TB, infra *integration.TestInfrastructure) {
 		tb.Helper()
-		migs, err := infra.Fakes.GceService.FetchAllMigs("us-central1-b")
-		if err != nil {
-			tb.Fatalf("Failed to fetch MIGs: %v", err)
-		}
+		zones := integration.DefaultNodePool().Locations
 		totalTargetSize := 0
-		for _, mig := range migs {
-			totalTargetSize += int(mig.TargetSize)
+		for _, zone := range zones {
+			migs, err := infra.Fakes.GceService.FetchAllMigs(zone)
+			if err != nil {
+				tb.Fatalf("Failed to fetch MIGs for zone %s: %v", zone, err)
+			}
+			for _, mig := range migs {
+				totalTargetSize += int(mig.TargetSize)
+			}
 		}
 		if totalTargetSize != expectedTargetSize {
 			tb.Fatalf("expected total target size %d, got %d", expectedTargetSize, totalTargetSize)

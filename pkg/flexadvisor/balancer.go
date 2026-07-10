@@ -48,7 +48,7 @@ type ScaleUpBalancer struct {
 type balancingInfo struct {
 	scaleUpInfo        nodegroupset.ScaleUpInfo
 	snapshot           *instanceavailability.Snapshot
-	instanceRef        *instanceReference
+	instanceRef        *InstanceReference
 	capacityLimit      int // capacityLimit is the max limit satisfying NodeGroup.MaxSize and capacity guidance from Flex Advisor
 	gcePreferenceScore float64
 }
@@ -75,6 +75,10 @@ func (b *ScaleUpBalancer) FindSimilarNodeGroups(context *context.AutoscalingCont
 
 // BalanceScaleUpBetweenGroups balances the scale up based on Flex Advisor guidance and notify Flex Advisor about the scale up decision.
 func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+	if !IsFlexAdvisorProcessingEnabled(b.experimentsManager) {
+		klog.Info("FlexAdvisor: balancer processing is disabled by FlexAdvisorProcessing experiment, falling back to balancing logic")
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+	}
 	sampleGkeNodeGroup, err := getSampleGkeNodeGroup(groups)
 	if err != nil {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, due to an error extracting sample gke.NodeGroup err: %v", err)
@@ -169,7 +173,7 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 	possibleMaxScaleUpSize := 0
 	guidanceIdsUsed := make(map[string]bool)
 	for _, scaleUpInfo := range scaleUpInfos {
-		instanceRef, err := constructInstanceReference(scaleUpInfo.Group, cccLister, experimentsManager)
+		instanceRef, err := ConstructInstanceReference(scaleUpInfo.Group, cccLister, experimentsManager)
 		// Currently we will not be able to generate instanceRef if pool:
 		// - doesnt use CCC
 		// - uses DWS (unless FlexAdvisorDWS::Enabled)
@@ -180,27 +184,27 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 
 		var snapshot *instanceavailability.Snapshot
 		found := false
-		scopeCache, scopeFound := snapshots[instanceRef.flexibilityScopeKey]
+		scopeCache, scopeFound := snapshots[instanceRef.FlexibilityScopeKey]
 		if scopeFound {
-			snapshot, found = scopeCache[instanceRef.instanceConfigKey]
+			snapshot, found = scopeCache[instanceRef.InstanceConfigKey]
 		} else {
-			snapshots[instanceRef.flexibilityScopeKey] = make(map[string]*instanceavailability.Snapshot)
+			snapshots[instanceRef.FlexibilityScopeKey] = make(map[string]*instanceavailability.Snapshot)
 		}
 
 		if !found {
-			snapshot, err = provider.AwaitInstanceAvailability(instanceRef.flexibilityScopeKey, instanceRef.instanceConfigKey)
+			snapshot, err = provider.AwaitInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 			if err != nil {
 				return []*balancingInfo{}, 0, err
 			}
-			snapshots[instanceRef.flexibilityScopeKey][instanceRef.instanceConfigKey] = snapshot
+			snapshots[instanceRef.FlexibilityScopeKey][instanceRef.InstanceConfigKey] = snapshot
 		}
 
-		maxAvailability, found := snapshot.MaxAvailableInstances(instanceRef.zone)
+		maxAvailability, found := snapshot.MaxAvailableInstances(instanceRef.Zone)
 		if !found {
-			provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissNoZone, instanceRef.flexibilityScopeKey, instanceRef.instanceConfigKey)
-			return []*balancingInfo{}, 0, fmt.Errorf("zone: %v not found in flex advisor snaphot for flexibility scope: %s, instance config: %s", instanceRef.zone, instanceRef.flexibilityScopeKey, instanceRef.instanceConfigKey)
+			provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissNoZone, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+			return []*balancingInfo{}, 0, fmt.Errorf("zone: %v not found in flex advisor snaphot for flexibility scope: %s, instance config: %s", instanceRef.Zone, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 		} else {
-			provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheHit, instanceRef.flexibilityScopeKey, instanceRef.instanceConfigKey)
+			provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheHit, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 		}
 		maxAvailability = min(maxAvailability, scaleUpInfo.MaxSize-scaleUpInfo.CurrentSize)
 
@@ -211,12 +215,16 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 		possibleMaxScaleUpSize += maxAvailability
 		guidanceIdsUsed[snapshot.GuidanceId()] = true
 
+		gcePreferenceScore, found := snapshot.GcePreferenceScore(instanceRef.Zone)
+		if !found {
+			klog.Warningf("FlexAdvisor: GCE Preference Score not present for scope %s and zone %s. Score value 0.0 will be used.", instanceRef.FlexibilityScopeKey, instanceRef.Zone)
+		}
 		balancingInfos = append(balancingInfos, &balancingInfo{
 			scaleUpInfo:        scaleUpInfo,
 			snapshot:           snapshot,
 			instanceRef:        instanceRef,
 			capacityLimit:      maxAvailability,
-			gcePreferenceScore: snapshot.GcePreferenceScore(instanceRef.zone),
+			gcePreferenceScore: gcePreferenceScore,
 		})
 	}
 	klog.V(4).Infof("FlexAdvisor: Max scaleup size based on FlexAdvisor: %v (looking for: %v), guidanceIds used: %v, balancingInfos: %v", possibleMaxScaleUpSize, newNodes, slices.Collect(maps.Keys(guidanceIdsUsed)), balancingInfos)
@@ -272,7 +280,7 @@ func MarkUsed(balancingInfos []*balancingInfo) {
 		}
 
 		used := balancingInfo.scaleUpInfo.NewSize - balancingInfo.scaleUpInfo.CurrentSize
-		zonalCounts[balancingInfo.instanceRef.zone] += used
+		zonalCounts[balancingInfo.instanceRef.Zone] += used
 		provisioningPlan[balancingInfo.snapshot] = zonalCounts
 		countUsed += used
 	}

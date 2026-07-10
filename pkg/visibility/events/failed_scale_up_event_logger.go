@@ -33,21 +33,23 @@ const (
 	zonalErrorMessageTemplate = "Node scale up in zones %v associated with this pod failed: %v. Pod is at risk of not being scheduled."
 
 	// error messages
-	quotaExceededMessage                     = "GCE quota exceeded"
-	outOfResourcesMessage                    = "GCE out of resources"
-	serviceAccountDeletedMessage             = "Service Account was deleted"
-	ipSpaceExhaustedMessage                  = "IP space exhausted"
-	unsupportedCompactPlacementConfigMessage = "Unsupported Compact Placement Config"
-	nodeGroupAlreadyExistsMessageTemplate    = "Node group %q already exists"
-	invalidTpuTopologyMessage                = "Invalid TPU topology"
-	invalidTpuConfigurationMessage           = "Invalid TPU configuration"
-	invalidReservationMessage                = "Invalid Reservation"
-	timeoutMessage                           = "Some nodes in node group %q failed to appear in time"
-	reservationNotReadyMessage               = "Reservation not ready"
-	reservationCapacityExceededMessage       = "Reservation capacity exceeded"
-	reservationNotFoundMessage               = "Reservation not found or incorrectly shared"
-	reservationIncompatibleMessage           = "Reservation incompatible with node group"
-	internalErrorMessage                     = "Internal error"
+	quotaExceededMessage                       = "GCE quota exceeded"
+	outOfResourcesMessage                      = "GCE out of resources"
+	serviceAccountDeletedMessage               = "Service Account was deleted"
+	ipSpaceExhaustedMessage                    = "IP space exhausted"
+	unsupportedCompactPlacementConfigMessage   = "Unsupported Compact Placement Config"
+	nodeGroupAlreadyExistsMessageTemplate      = "Node group %q already exists"
+	invalidTpuTopologyMessage                  = "Invalid TPU topology"
+	invalidTpuConfigurationMessage             = "Invalid TPU configuration"
+	invalidReservationMessage                  = "Invalid Reservation"
+	timeoutMessage                             = "Some nodes in node group %q failed to appear in time"
+	reservationNotReadyMessage                 = "Reservation not ready"
+	reservationCapacityExceededMessage         = "Reservation capacity exceeded"
+	reservationNotFoundMessage                 = "Reservation not found or incorrectly shared"
+	reservationIncompatibleMessage             = "Reservation incompatible with node group"
+	anyAffinityReservationsNotAvailableMessage = "Any affinity reservations not available"
+	anyAffinityReservationsNoCapacityMessage   = "Any affinity reservations no capacity"
+	internalErrorMessage                       = "Internal error"
 
 	messageLengthLimit = 250
 )
@@ -173,6 +175,18 @@ func failureToMessage(failureMessage *vistypes.Message) string {
 		message := reservationIncompatibleMessage
 		if len(failureMessage.Params) > 0 {
 			message = message + ": " + failureMessage.Params[0]
+		}
+		return message
+	case vistypes.ScaleUpErrorAnyAffinityReservationsNotAvailable:
+		message := anyAffinityReservationsNotAvailableMessage
+		if len(failureMessage.Params) > 0 {
+			message = message + ": " + failureMessage.Params[1]
+		}
+		return message
+	case vistypes.ScaleUpErrorAnyAffinityReservationsNoCapacity:
+		message := anyAffinityReservationsNoCapacityMessage
+		if len(failureMessage.Params) > 0 {
+			message = message + ": " + failureMessage.Params[1]
 		}
 		return message
 

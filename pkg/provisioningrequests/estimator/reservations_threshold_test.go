@@ -17,6 +17,7 @@ package estimator
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	gce_api "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -26,7 +27,11 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 )
 
@@ -40,6 +45,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		maxNodes   int
 		nodesCount int
 		zone       string
+		affinity   string
 	}
 
 	type reservationsConfig struct {
@@ -58,6 +64,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		similarNodeGroupsConfig []nodeGroupConfig
 		emptyContext            bool
 		wantThreshold           int
+		experimentEnabled       *bool
 	}{
 		{
 			name:                "Returns 0 for no reservations",
@@ -137,13 +144,50 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 			},
 			wantThreshold: 70,
 		},
+		{
+			name:                "Returns_-1_for_no_reservations_with_any-then-fail_affinity",
+			reservationsConfig:  []reservationsConfig{},
+			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.AnyThenFail},
+			wantThreshold:       -1,
+		},
+		{
+			name: "Returns_reservations_for_any-then-fail_affinity_when_available",
+			reservationsConfig: []reservationsConfig{
+				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: firstZone},
+			},
+			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.AnyThenFail},
+			wantThreshold:       3,
+		},
+		{
+			name: "Returns_0_for_none_affinity_even_when_reservations_are_available",
+			reservationsConfig: []reservationsConfig{
+				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: firstZone},
+			},
+			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.NoneAffinity},
+			wantThreshold:       0,
+		},
+		{
+			name:                "Returns_-1_for_no_reservations_with_any-then-fail_affinity_experiment_enabled",
+			reservationsConfig:  []reservationsConfig{},
+			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.AnyThenFail},
+			wantThreshold:       -1,
+			experimentEnabled:   func() *bool { b := true; return &b }(),
+		},
+		{
+			name:                "Returns_0_for_no_reservations_with_any-then-fail_affinity_experiment_disabled",
+			reservationsConfig:  []reservationsConfig{},
+			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.AnyThenFail},
+			wantThreshold:       0,
+			experimentEnabled:   func() *bool { b := false; return &b }(),
+		},
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{firstZone}, nil })
 			gkeManagerMock := &gke.GkeManagerMock{}
-			puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, firstZone)
+			puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, firstZone)
+			assert.NoError(t1, err)
 
 			res := make([]*gce_api.Reservation, 0)
 			for i, resConfig := range tt.reservationsConfig {
@@ -153,7 +197,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 
 			similarNodeGroups := make([]cloudprovider.NodeGroup, 0)
 			for _, ng := range tt.similarNodeGroupsConfig {
-				mig := newTestGkeMig(gkeManagerMock, ng.zone, defaultMachineType, "DefaultNodePool", ng.maxNodes)
+				mig := newTestGkeMig(gkeManagerMock, ng.zone, defaultMachineType, "DefaultNodePool", ng.maxNodes, ng.affinity)
 				similarNodeGroups = append(similarNodeGroups, mig)
 				gkeManagerMock.On("GetMigSize", mig).Return(int64(ng.nodesCount), nil)
 			}
@@ -162,26 +206,44 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 				context = estimator.NewEstimationContext(0, similarNodeGroups, 0)
 			}
 
-			thisNodeGroup := newTestGkeMig(gkeManagerMock, tt.thisNodeGroupConfig.zone, defaultMachineType, "DefaultNodePool", tt.thisNodeGroupConfig.maxNodes)
+			thisNodeGroup := newTestGkeMig(gkeManagerMock, tt.thisNodeGroupConfig.zone, defaultMachineType, "DefaultNodePool", tt.thisNodeGroupConfig.maxNodes, tt.thisNodeGroupConfig.affinity)
 			gkeManagerMock.On("GetMigSize", thisNodeGroup).Return(int64(tt.thisNodeGroupConfig.nodesCount), nil)
 
 			cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
+
+			var optionsTracker *optstracking.OptionsTracker
+			if tt.experimentEnabled != nil {
+				manager := experiments.NewMockManager(experiments.AnyThenFailReservationAffinityThresholdEnabledFlag)
+				if !*tt.experimentEnabled {
+					manager.DisableAllExperiments()
+				}
+				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			}
+
 			t := &reservationsThreshold{
 				reservationsPuller:       puller,
 				localSSDDiskSizeProvider: localssdsize.NewSimpleLocalSSDProvider(),
 				cloudProvider:            cloudProvider,
+				optionsTracker:           optionsTracker,
 			}
 
-			if got := t.NodeLimit(thisNodeGroup, context); got != tt.wantThreshold {
-				t1.Errorf("NodeLimit() = %v, want %v", got, tt.wantThreshold)
+			if got := t.NodeLimit(thisNodeGroup, context); got.Limit != tt.wantThreshold {
+				t1.Errorf("NodeLimit() = %v, want %v", got.Limit, tt.wantThreshold)
 			}
 		})
 	}
 }
 
-func newTestGkeMig(gkeManager gke.GkeManager, zone string, machineType string, nodePoolName string, maxSize int) *gke.GkeMig {
+func newTestGkeMig(gkeManager gke.GkeManager, zone string, machineType string, nodePoolName string, maxSize int, affinity string) *gke.GkeMig {
+	if affinity == "" {
+		affinity = reservations.AnyAffinity
+	}
+	gkeAffinity, ok := reservations.GkeAffinityFromSelectorValue(affinity)
+	if !ok {
+		gkeAffinity = gkeclient.ReservationAffinityAny
+	}
 	return gke.NewTestGkeMigBuilder().
 		SetGkeManager(gkeManager).
 		SetGceRef(gce.GceRef{
@@ -192,8 +254,11 @@ func newTestGkeMig(gkeManager gke.GkeManager, zone string, machineType string, n
 		SetMaxSize(maxSize).
 		SetSpec(&gkeclient.NodePoolSpec{
 			MachineType: machineType,
+			Labels: map[string]string{
+				gkelabels.ReservationAffinityLabel: affinity,
+			},
 			ReservationAffinity: &gke_api_beta.ReservationAffinity{
-				ConsumeReservationType: gkeclient.ReservationAffinityAny,
+				ConsumeReservationType: gkeAffinity,
 			},
 			// Required by gkeCloudProviderImpl
 			LocalSSDConfig: &gkeclient.LocalSSDConfig{LocalSsdCount: 0},

@@ -109,6 +109,9 @@ const (
 	UnsupportedMachineFamilyForHugepageSize1g            = "Machine family %s doesn't support 1-gigabyte-sized huge pages."
 	UnsupportedDefaultMachineFamilyForHugepageSize1g     = "Default autoprovisioning machine family %s doesn't support 1-gigabyte-sized huge pages."
 	UnsupportedMachineTypeForHugepageSize1g              = "Machine type %s doesn't support 1-gigabyte-sized huge pages."
+	UnsupportedMachineFamilyForNumaAlignment             = "Machine family %s doesn't support kubelet topology manager or memory manager configuration."
+	UnsupportedDefaultMachineFamilyForNumaAlignment      = "Default autoprovisioning machine family %s doesn't support kubelet topology manager or memory manager configuration."
+	UnsupportedMachineTypeForNumaAlignment               = "Machine type %s doesn't support kubelet topology manager or memory manager configuration."
 	TotalHugepagesExceedMemoryLimit                      = "Total hugepages exceeds %.1f of total machine memory. Total hugepages requested: %dMB, maximum allocatable hugepages memory in machine type %s is %dMB."
 	AllMachinesInMachineFamilyExceedHugepageMemoryLimit  = "Total hugepages exceeds %.1f of total machine memory in all machine types in machine family %s."
 	AllMachinesInDefaultFamilyExceedHugepageMemoryLimit  = "Total hugepages exceeds %.1f of total machine memory in all machine types in default autoprovisioning machine family %s."
@@ -546,6 +549,36 @@ func UnsupportedDefaultMachineFamilyForHugepageSize1gCondition(machineFamily str
 		LastTransitionTime: metav1.Now(),
 		Reason:             UnsupportedNodeSystemConfigFormatReason,
 		Message:            fmt.Sprintf(UnsupportedDefaultMachineFamilyForHugepageSize1g, machineFamily),
+	}
+}
+
+func UnsupportedMachineFamilyForNumaAlignmentCondition(machineFamily string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             UnsupportedNodeSystemConfigFormatReason,
+		Message:            fmt.Sprintf(UnsupportedMachineFamilyForNumaAlignment, machineFamily),
+	}
+}
+
+func UnsupportedMachineTypeForNumaAlignmentCondition(machineType string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             UnsupportedNodeSystemConfigFormatReason,
+		Message:            fmt.Sprintf(UnsupportedMachineTypeForNumaAlignment, machineType),
+	}
+}
+
+func UnsupportedDefaultMachineFamilyForNumaAlignmentCondition(machineFamily string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             UnsupportedNodeSystemConfigFormatReason,
+		Message:            fmt.Sprintf(UnsupportedDefaultMachineFamilyForNumaAlignment, machineFamily),
 	}
 }
 

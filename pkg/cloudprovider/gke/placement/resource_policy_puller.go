@@ -34,7 +34,7 @@ type ResourcePolicyPuller interface {
 	// GetResourcePolicy returns the cached resource policy
 	GetResourcePolicy(name string) *gceclient.GceResourcePolicy
 	// Run starts the resource policies puller
-	Run(stopCh <-chan struct{})
+	Run(ctx context.Context)
 }
 
 type resourcePolicyPullerProvider interface {
@@ -69,7 +69,7 @@ func (p *rpPuller) GetResourcePolicy(name string) *gceclient.GceResourcePolicy {
 }
 
 // Run starts the resource policies puller
-func (p *rpPuller) Run(stopCh <-chan struct{}) {
+func (p *rpPuller) Run(ctx context.Context) {
 	klog.V(0).Info("Enabling Resource Policies Puller")
 
 	p.Loop()
@@ -79,7 +79,7 @@ func (p *rpPuller) Run(stopCh <-chan struct{}) {
 
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			p.Loop()

@@ -23,6 +23,7 @@ import (
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	mcv1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
+	v1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	"k8s.io/utils/ptr"
 )
 
@@ -83,36 +84,68 @@ type GradedError struct {
 // ToMachineFamilyObject converts a MachineFamily answer from MachineConfig SoT to the MachineFamily object from machinetypes package.
 // TODO(b/517095165): make it fill all the fields in MachineFamily object.
 func ToMachineFamilyObject(mf *mcv1.MachineFamily, cpSource *cpuPlatformsSource, enableCvmSot bool) (MachineFamily, GradedError) {
+	// TODO(b/498193239): add conversion of resizable configs for EK and E4A machines
 	if mf == nil {
 		return MachineFamily{}, GradedError{}
 	}
 
-	var warnings []error
-	err := validateMachineFamily(mf)
-	if err != nil {
+	usagePolicy := extractUsagePolicy(mf.UsagePolicy)
+
+	if err := validateMachineFamily(mf, usagePolicy); err != nil {
 		return MachineFamily{}, GradedError{
 			Err: fmt.Errorf("failed to validate machine family %q: %v", mf.Name, err),
 		}
 	}
+
+	result := MachineFamily{
+		name:                  mf.Name,
+		usagePolicy:           usagePolicy,
+		supportedCpuPlatforms: noPlatformSupported,
+	}
+
+	var warnings []error
+
+	if usagePolicy == nil || usagePolicy.MachineProperties {
+		warns, err := extractCore(&result, mf, cpSource, enableCvmSot)
+		if warns != nil {
+			warnings = append(warnings, warns...)
+		}
+		if err != nil {
+			return MachineFamily{}, GradedError{Warning: errors.Join(warnings...), Err: err}
+		}
+	}
+
+	if usagePolicy == nil || usagePolicy.Weights {
+		if err := extractWeights(&result, mf); err != nil {
+			return MachineFamily{}, GradedError{Warning: errors.Join(warnings...), Err: err}
+		}
+	}
+
+	backfillAndPrecomputeIfRequired(&result, usagePolicy)
+
+	return result, GradedError{
+		Warning: errors.Join(warnings...),
+	}
+}
+
+func extractCore(result *MachineFamily, mf *mcv1.MachineFamily, cpSource *cpuPlatformsSource, enableCvmSot bool) ([]error, error) {
+	var warnings []error
 
 	cpuReqs, cpuErr := extractCPUPlatforms(mf.DefaultProperties.CPUPlatforms, cpSource)
 	if cpuErr.Warning != nil {
 		warnings = append(warnings, cpuErr.Warning)
 	}
 	if cpuErr.Err != nil {
-		return MachineFamily{}, GradedError{
-			Warning: errors.Join(warnings...),
-			Err:     fmt.Errorf("failed to extract CPU platforms for family %q: %w", mf.Name, cpuErr.Err),
-		}
+		return warnings, fmt.Errorf("failed to extract CPU platforms for family %q: %w", mf.Name, cpuErr.Err)
 	}
 
 	var supportConfidentialNodes bool
 	var supportConfidentialNodeTypes map[string]bool
 
-	cvmConfig := mf.DefaultProperties.ConfidentialNodeConfig
-	if enableCvmSot && cvmConfig != nil {
-		supportConfidentialNodes = ptr.Deref(cvmConfig.Supported, false)
+	if enableCvmSot && mf.DefaultProperties.ConfidentialNodeConfig != nil {
+		cvmConfig := mf.DefaultProperties.ConfidentialNodeConfig
 		supportConfidentialNodeTypes = extractConfidentialNodeTypes(cvmConfig)
+		supportConfidentialNodes = ptr.Deref(cvmConfig.Supported, false)
 	} else if ptr.Deref(mf.DefaultProperties.SupportsConfidentialNodes, false) {
 		supportConfidentialNodes = true
 		supportConfidentialNodeTypes = getHardcodedFamilyConfidentialTypes(mf.Name)
@@ -120,34 +153,80 @@ func ToMachineFamilyObject(mf *mcv1.MachineFamily, cpSource *cpuPlatformsSource,
 
 	autoprovisionedMachineTypes, otherMachineTypes, err := extractMachineTypes(mf, cpSource, cpuReqs, enableCvmSot)
 	if err != nil {
-		return MachineFamily{}, GradedError{Warning: errors.Join(warnings...), Err: fmt.Errorf("failed to extract machine types for family %q: %v", mf.Name, err)}
+		return warnings, fmt.Errorf("failed to extract machine types for family %q: %v", mf.Name, err)
 	}
 
-	newMf := MachineFamily{
-		name:                         mf.Name,
-		systemArchitecture:           gce.ToSystemArchitecture(ptr.Deref(mf.DefaultProperties.SystemArchitecture, "")),
-		nonDefaultThreadsPerCore:     mf.DefaultProperties.ThreadsPerCore,
-		supportedBootDiskTypes:       extractBootDiskTypes(mf.DefaultProperties.BootDiskConfig),
-		defaultDiskType:              extractDefaultBootDisk(mf.DefaultProperties.BootDiskConfig),
-		supportCompactPlacement:      extractCompactPlacementEnabled(mf.DefaultProperties.CompactPlacementConfig),
-		maxCompactPlacementNodes:     extractCompactPlacementMaxNodes(mf.DefaultProperties.CompactPlacementConfig),
-		pricingInfo:                  extractFamilyPricingInfo(mf.Weights),
-		customPricingInfo:            extractCustomFamilyPricingInfo(mf.Weights),
-		supportedCpuPlatforms:        cpuReqs,
-		autoprovisionedMachineTypes:  autoprovisionedMachineTypes,
-		otherMachineTypes:            otherMachineTypes,
-		supportConfidentialNodes:     supportConfidentialNodes,
-		supportConfidentialNodeTypes: supportConfidentialNodeTypes,
-	}
-	newMf = backfillMachineFamilyInMachineTypes(newMf)
-	newMf.precomputeAllMachineTypes()
+	result.systemArchitecture = gce.ToSystemArchitecture(ptr.Deref(mf.DefaultProperties.SystemArchitecture, ""))
+	result.nonDefaultThreadsPerCore = mf.DefaultProperties.ThreadsPerCore
+	result.supportedBootDiskTypes = extractBootDiskTypes(mf.DefaultProperties.BootDiskConfig)
+	result.defaultDiskType = extractDefaultBootDisk(mf.DefaultProperties.BootDiskConfig)
+	result.supportCompactPlacement = extractCompactPlacementEnabled(mf.DefaultProperties.CompactPlacementConfig)
+	result.maxCompactPlacementNodes = extractCompactPlacementMaxNodes(mf.DefaultProperties.CompactPlacementConfig)
+	result.supportedCpuPlatforms = cpuReqs
+	result.autoprovisionedMachineTypes = autoprovisionedMachineTypes
+	result.otherMachineTypes = otherMachineTypes
+	result.supportConfidentialNodes = supportConfidentialNodes
+	result.supportConfidentialNodeTypes = supportConfidentialNodeTypes
+	result.supportedAttachDiskTypes = extractAttachDiskTypes(mf.DefaultProperties.PersistentDiskTypeConfigs)
+	result.supportHugepageSize1g = extractSupportHugepageSize1g(mf.PageType)
+	result.numaAlignmentUnsupported = mf.DefaultProperties.NumaAlignmentUnsupported
 
-	return newMf, GradedError{
-		Warning: errors.Join(warnings...),
-	}
+	return warnings, nil
 }
 
-func validateMachineFamily(mf *mcv1.MachineFamily) error {
+func extractWeights(result *MachineFamily, mf *mcv1.MachineFamily) error {
+	result.pricingInfo = extractFamilyPricingInfo(mf.Weights)
+	result.customPricingInfo = extractCustomFamilyPricingInfo(mf.Weights)
+
+	hasCore := result.usagePolicy == nil || result.usagePolicy.MachineProperties
+	if !hasCore && result.otherMachineTypes == nil {
+		result.otherMachineTypes = make(map[string]MachineType)
+	}
+
+	for _, mt := range mf.MachineTypes {
+		pInfo := extractMachineTypePriceInfo(mt.Weights)
+
+		if !hasCore {
+			result.otherMachineTypes[mt.Name] = MachineType{
+				MachineType: gce.MachineType{Name: mt.Name},
+				priceInfo:   pInfo,
+			}
+			continue
+		}
+
+		if existing, ok := result.autoprovisionedMachineTypes[mt.Name]; ok {
+			existing.priceInfo = pInfo
+			result.autoprovisionedMachineTypes[mt.Name] = existing
+			continue
+		}
+
+		if existing, ok := result.otherMachineTypes[mt.Name]; ok {
+			existing.priceInfo = pInfo
+			result.otherMachineTypes[mt.Name] = existing
+		}
+	}
+	return nil
+}
+
+func validateMachineFamily(mf *mcv1.MachineFamily, policy *UsagePolicy) error {
+	var errs []error
+
+	if policy == nil || policy.MachineProperties {
+		if err := validateCore(mf); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if policy == nil || policy.Weights {
+		if err := validateWeights(mf); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+func validateCore(mf *mcv1.MachineFamily) error {
 	if err := validateMachineTypes(mf.MachineTypes); err != nil {
 		return err
 	}
@@ -157,11 +236,31 @@ func validateMachineFamily(mf *mcv1.MachineFamily) error {
 	if err := validateCompactPlacementConfig(mf.DefaultProperties.CompactPlacementConfig); err != nil {
 		return err
 	}
-	if err := validateMachineFamilyWeights(mf.Weights); err != nil {
+	if err := validatePersistentDiskTypeConfigs(mf.DefaultProperties.PersistentDiskTypeConfigs); err != nil {
+		return err
+	}
+	if err := validatePageType(mf.PageType); err != nil {
 		return err
 	}
 	// TODO(b/489334073): validate CPU platform settings
 	return nil
+}
+
+func validateWeights(mf *mcv1.MachineFamily) error {
+	var errs []error
+	if err := validateMachineFamilyWeights(mf.Weights); err != nil {
+		errs = append(errs, err)
+	}
+	for _, mt := range mf.MachineTypes {
+		if mt.Name == "" {
+			errs = append(errs, fmt.Errorf("machine type name is required"))
+			continue
+		}
+		if err := validateMachineTypeWeights(mt.Weights); err != nil {
+			errs = append(errs, fmt.Errorf("failed to validate weights for machine type %q: %w", mt.Name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func extractCPUPlatforms(cpuPlatforms []mcv1.CPUPlatform, cpSource *cpuPlatformsSource) (CpuPlatformRequirements, GradedError) {
@@ -196,9 +295,9 @@ func extractBootDiskTypes(bootDiskConfig *mcv1.BootDiskConfig) map[string]bool {
 	if bootDiskConfig == nil {
 		return nil
 	}
-	result := map[string]bool{}
-	bootDiskTypes := bootDiskConfig.Types
-	for _, diskType := range bootDiskTypes {
+
+	result := make(map[string]bool)
+	for _, diskType := range bootDiskConfig.Types {
 		result[diskType] = true
 	}
 	return result
@@ -221,7 +320,7 @@ func validateBootDiskConfig(bootDiskConfig *mcv1.BootDiskConfig) error {
 	}
 	if !slices.Contains(bootDiskConfig.Types, bootDiskConfig.DefaultType) {
 		return fmt.Errorf(
-			"Default boot disk '%s' not found in supported boot disk list: %s",
+			"Default boot disk '%s' not found in supported boot disk list: %v",
 			bootDiskConfig.DefaultType,
 			bootDiskConfig.Types,
 		)
@@ -367,18 +466,18 @@ func ToMachineTypeObject(
 	defaultCPUReqs CpuPlatformRequirements,
 	enableCvmSot bool,
 ) (MachineType, error) {
-	// TODO(b/498113704): Add conversion of disks and pricing, and deduce notInDWS
+	// TODO(b/498113704): Add conversion of pricing
+	// TODO(b/498193239): add conversion of resizable configs for EK and E4A machines
 	if mt == nil {
 		return MachineType{}, nil
 	}
 
 	var confidentialNodeCfg *confidentialNodeConfig
 	if mt.Properties != nil {
-		cvmConfig := mt.Properties.ConfidentialNodeConfig
-		if enableCvmSot && cvmConfig != nil {
-			if ptr.Deref(cvmConfig.Supported, false) {
+		if enableCvmSot {
+			if mt.Properties.ConfidentialNodeConfig != nil {
 				confidentialNodeCfg = &confidentialNodeConfig{
-					supportConfidentialNodeTypes: extractConfidentialNodeTypes(cvmConfig),
+					supportConfidentialNodeTypes: extractConfidentialNodeTypes(mt.Properties.ConfidentialNodeConfig),
 				}
 			}
 		} else if ptr.Deref(mt.Properties.SupportsConfidentialNodes, false) {
@@ -392,7 +491,6 @@ func ToMachineTypeObject(
 			CPU:    mt.Resources.CPUs,
 			Memory: mt.Resources.Memory * bytesPerMiB,
 		},
-		priceInfo:           extractMachineTypePriceInfo(mt.Weights),
 		confidentialNodeCfg: confidentialNodeCfg,
 	}
 
@@ -413,7 +511,47 @@ func ToMachineTypeObject(
 		newMt = newMt.withExplicitReqOnly()
 	}
 
+	if mt.Properties.BootDiskConfig != nil {
+		newMt.supportedDisksOverride = extractBootDiskTypesOrNil(mt.Properties.BootDiskConfig)
+		newMt.defaultDiskOverride = ptr.Deref(mt.Properties.BootDiskConfig, mcv1.BootDiskConfig{}).DefaultType
+	}
+
+	if mt.Resources.LocalSSDConfig != nil {
+		newMt.ephemeralLocalSsdCfg = extractSsdConfig(mt.Resources.LocalSSDConfig)
+	}
+
 	return newMt, nil
+}
+
+func extractSsdConfig(ssdConfig *v1.LocalSSDConfig) *ephemeralLocalSsdConfig {
+	if ssdConfig == nil {
+		return nil
+	}
+
+	var ac map[int]bool
+	if len(ssdConfig.AvailableCounts) > 0 {
+		ac = make(map[int]bool)
+		for _, c := range ssdConfig.AvailableCounts {
+			ac[int(c)] = true
+		}
+	}
+
+	return &ephemeralLocalSsdConfig{
+		allowedDiskCounts:  ac,
+		automaticDiskCount: ptr.To(ssdConfig.DefaultCount),
+		diskSize:           uint64(ssdConfig.DiskSize),
+	}
+}
+
+func extractBootDiskTypesOrNil(bootDiskConfig *mcv1.BootDiskConfig) *[]string {
+	if bootDiskConfig == nil || len(bootDiskConfig.Types) == 0 {
+		return nil
+	}
+	var diskTypes []string
+	for _, dt := range bootDiskConfig.Types {
+		diskTypes = append(diskTypes, dt)
+	}
+	return &diskTypes
 }
 
 func extractMachineTypes(
@@ -469,9 +607,6 @@ func validateMachineType(mt *mcv1.MachineType) error {
 	if err := validateMachineResources(mt.Resources, mt.Name); err != nil {
 		return err
 	}
-	if err := validateMachineTypeWeights(mt.Weights); err != nil {
-		return err
-	}
 	if err := validateMachineTypeProperties(mt.Properties); err != nil {
 		return err
 	}
@@ -513,6 +648,9 @@ func validateMachineTypeProperties(props *mcv1.MachineProperties) error {
 		return err
 	}
 	if err := validateCompactPlacementConfig(props.CompactPlacementConfig); err != nil {
+		return err
+	}
+	if err := validatePersistentDiskTypeConfigs(props.PersistentDiskTypeConfigs); err != nil {
 		return err
 	}
 	return nil
@@ -574,6 +712,32 @@ func extractConfidentialNodeTypes(config *mcv1.ConfidentialNodeConfig) map[strin
 	return supportedTypes
 }
 
+func extractUsagePolicy(usagePolicy *mcv1.UsagePolicy) *UsagePolicy {
+	if usagePolicy == nil || usagePolicy.Mode == nil {
+		return nil
+	}
+
+	switch *usagePolicy.Mode {
+	case mcv1.UsagePolicyModeWeightsOnly:
+		return &UsagePolicy{
+			MachineProperties: false,
+			Weights:           true,
+		}
+	case mcv1.UsagePolicyModePropertiesOnly:
+		return &UsagePolicy{
+			MachineProperties: true,
+			Weights:           false,
+		}
+	case mcv1.UsagePolicyModeLegacy:
+		return &UsagePolicy{
+			MachineProperties: false,
+			Weights:           false,
+		}
+	default:
+		return nil
+	}
+}
+
 func getHardcodedFamilyConfidentialTypes(familyName string) map[string]bool {
 	if hardcodedFamily, found := machineFamiliesByName[strings.ToLower(familyName)]; found {
 		return hardcodedFamily.supportConfidentialNodeTypes
@@ -588,4 +752,72 @@ func getHardcodedTypeConfidentialCfg(familyName, typeName string) *confidentialN
 		}
 	}
 	return nil
+}
+
+func extractAttachDiskTypes(configs []mcv1.PersistentDiskTypeConfig) map[string]ConfidentialMode {
+	if len(configs) == 0 {
+		return nil
+	}
+	result := make(map[string]ConfidentialMode)
+	for _, config := range configs {
+		mode := UnspecifiedMode
+		if config.ConfidentialMode != nil {
+			switch *config.ConfidentialMode {
+			case "CONFIDENTIAL_ONLY":
+				mode = ConfidentialOnlyMode
+			case "NON_CONFIDENTIAL_ONLY":
+				mode = NonConfidentialOnlyMode
+			default:
+				mode = UnspecifiedMode
+			}
+		}
+		result[config.Name] = mode
+	}
+	return result
+}
+
+func validatePersistentDiskTypeConfigs(configs []mcv1.PersistentDiskTypeConfig) error {
+	for _, config := range configs {
+		if config.Name == "" {
+			return fmt.Errorf("persistent disk type config name is required")
+		}
+		if config.ConfidentialMode != nil {
+			switch *config.ConfidentialMode {
+			case "CONFIDENTIAL_MODE_UNSPECIFIED", "UNSPECIFIED", "CONFIDENTIAL_ONLY", "NON_CONFIDENTIAL_ONLY", "":
+			default:
+				return fmt.Errorf("invalid confidential mode value: %q", *config.ConfidentialMode)
+			}
+		}
+	}
+	return nil
+}
+
+func validatePageType(pageType *string) error {
+	if pageType == nil {
+		return nil
+	}
+	switch *pageType {
+	case "PAGE_TYPE_UNSPECIFIED", "HUGETMPFS_SIZE2M", "HUGETLBFS_SIZE2M", "HUGETLBFS_SIZE1G":
+		return nil
+	default:
+		return fmt.Errorf("invalid page type value: %s", *pageType)
+	}
+}
+
+func extractSupportHugepageSize1g(pageType *string) bool {
+	if pageType == nil {
+		return false
+	}
+	return *pageType == "HUGETLBFS_SIZE1G"
+}
+
+// backfillAndPrecomputeIfRequired populates the parent family pointer in all extracted machine types
+// and caches the aggregated map of all machine types. This is skipped in weights-only mode
+// because the extracted struct is a partial update; the pointers and maps will come from
+// the fully populated base MachineFamily struct that this update is merged into.
+func backfillAndPrecomputeIfRequired(family *MachineFamily, usagePolicy *UsagePolicy) {
+	if usagePolicy == nil || usagePolicy.MachineProperties {
+		backfillMachineFamilyInMachineTypes(family)
+		family.precomputeAllMachineTypes()
+	}
 }

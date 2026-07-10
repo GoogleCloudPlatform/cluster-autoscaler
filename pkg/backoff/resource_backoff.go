@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"sync"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -33,6 +34,7 @@ const unknownMachineFamily = "unknown"
 
 // ResourceBackoff allows time-based backing off node groups based on resources required to provision nodes.
 type ResourceBackoff struct {
+	mu                     sync.RWMutex
 	processor              customresources.CustomResourcesProcessor
 	maxBackoffDuration     time.Duration
 	initialBackoffDuration time.Duration
@@ -67,6 +69,9 @@ func NewResourceBackoff(processor customresources.CustomResourcesProcessor, init
 
 // Backoff execution for the resources used by nodes created by given node group.
 func (b *ResourceBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if !IsStockout(nodeGroup, nodeInfo, errorInfo) {
 		return currentTime
 	}
@@ -176,6 +181,9 @@ func getNodeGroupId(nodeGroup cloudprovider.NodeGroup) any {
 // IsBackedOff returns true if execution is backed off for resources used by nodes created by given node group.
 // It checks if there exists a backed off resources object, which matches resources obtained from nodeInfo passed as parameter.
 func (b *ResourceBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, currentTime time.Time) backoff.Status {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	if nodeInfo == nil {
 		klog.Warningf("Not checking backoff for nodeGroup %v by resources because nodeInfo is not provided", nodeGroup.Id())
 		return backoff.Status{IsBackedOff: false}
@@ -201,6 +209,9 @@ func (b *ResourceBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeI
 // RemoveBackoff removes backoff data for resources used by nodes created by given node group.
 // It removes all backoff keys which match resources obtained from nodeInfo passed as parameter.
 func (b *ResourceBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if nodeInfo == nil {
 		klog.Warningf("Not removing backoff for nodeGroup %v by resources because nodeInfo is not provided", nodeGroup.Id())
 		return
@@ -222,6 +233,9 @@ func (b *ResourceBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeI
 
 // RemoveStaleBackoffData removes stale backoff data.
 func (b *ResourceBackoff) RemoveStaleBackoffData(currentTime time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for location, backoffData := range b.backoffDataByLocation {
 		newBackoffData := make(resourceBackoffData, 0)
 		for _, backoffEntry := range backoffData {

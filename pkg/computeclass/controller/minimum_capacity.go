@@ -28,6 +28,7 @@ import (
 
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 )
 
@@ -35,12 +36,13 @@ const minimumCapacityControllerName = "MinimumCapacityController"
 
 // minCapacityController tracks minimum capacity fulfillment.
 type minCapacityController struct {
-	checkInterval time.Duration
-	ccLister      cc_lister.Lister
-	nodeLister    kube_util.NodeLister
-	cloudProvider cloudprovider.CloudProvider
-	matcher       computeclass.Matcher
-	observer      processors.MinCapacityObserver
+	checkInterval      time.Duration
+	ccLister           cc_lister.Lister
+	nodeLister         kube_util.NodeLister
+	cloudProvider      cloudprovider.CloudProvider
+	matcher            computeclass.Matcher
+	observer           processors.MinCapacityObserver
+	experimentsManager experiments.Manager
 }
 
 // NewMinCapacityController creates a new minCapacityController.
@@ -51,17 +53,19 @@ func NewMinCapacityController(
 	cloudProvider cloudprovider.CloudProvider,
 	matcher computeclass.Matcher,
 	observer processors.MinCapacityObserver,
+	experimentsManager experiments.Manager,
 ) Controller {
 	if observer == nil {
 		klog.Warning("minCapacityController initialized with nil observer; metrics will not be emitted.")
 	}
 	return &minCapacityController{
-		checkInterval: checkInterval,
-		ccLister:      ccLister,
-		nodeLister:    nodeLister,
-		cloudProvider: cloudProvider,
-		matcher:       matcher,
-		observer:      observer,
+		checkInterval:      checkInterval,
+		ccLister:           ccLister,
+		nodeLister:         nodeLister,
+		cloudProvider:      cloudProvider,
+		matcher:            matcher,
+		observer:           observer,
+		experimentsManager: experimentsManager,
 	}
 }
 
@@ -81,6 +85,10 @@ func (c *minCapacityController) runOnce(ctx context.Context) {
 
 // reconcile checks if minimum capacity is fulfilled for the given CC.
 func (c *minCapacityController) reconcile(now time.Time) error {
+	if !computeclass.IsComputeClassMinCapacityEnabled(c.experimentsManager) {
+		return nil
+	}
+
 	if c.observer != nil {
 		c.observer.CheckLongUnprovisioned(now)
 	}

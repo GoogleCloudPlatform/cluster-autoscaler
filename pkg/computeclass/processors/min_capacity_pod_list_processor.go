@@ -15,37 +15,41 @@
 package processors
 
 import (
-	"fmt"
+	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-
 	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/scheduling"
+	"k8s.io/klog/v2"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
+	crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
-	"k8s.io/klog/v2"
 )
 
 const MinCapacityPodListProcessorName = "cc-min-capacity-pod-list-processor"
 
 // MinCapacityPodListProcessor injects fake pods to enforce minimum capacity defined in ComputeClass CRDs.
 type MinCapacityPodListProcessor struct {
-	ccLister         cc_lister.Lister
-	simulator        *scheduling.HintingSimulator
-	fairnessEnforcer fairness.FairnessEnforcer
+	ccLister           cc_lister.Lister
+	simulator          *scheduling.HintingSimulator
+	fairnessEnforcer   fairness.FairnessEnforcer
+	experimentsManager experiments.Manager
 }
 
 // NewMinCapacityPodListProcessor creates a MinCapacityPodListProcessor.
-func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer) *MinCapacityPodListProcessor {
+func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer, experimentsManager experiments.Manager) *MinCapacityPodListProcessor {
 	return &MinCapacityPodListProcessor{
-		ccLister:         ccLister,
-		simulator:        scheduling.NewHintingSimulator(),
-		fairnessEnforcer: fairnessEnforcer,
+		ccLister:           ccLister,
+		simulator:          scheduling.NewHintingSimulator(),
+		fairnessEnforcer:   fairnessEnforcer,
+		experimentsManager: experimentsManager,
 	}
 }
 
@@ -54,6 +58,10 @@ func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer 
 func (p *MinCapacityPodListProcessor) Process(
 	autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+
+	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
+		return unschedulablePods, nil
+	}
 
 	canBeAdmitted := true
 	if p.fairnessEnforcer != nil {
@@ -66,10 +74,8 @@ func (p *MinCapacityPodListProcessor) Process(
 		return unschedulablePods, nil
 	}
 	if len(crds) == 0 {
-		klog.V(5).Infof("MinCapacityPodListProcessor: No CRDs found, skipping")
 		return unschedulablePods, nil
 	}
-	klog.V(5).Infof("MinCapacityPodListProcessor: Running for %d CRDs", len(crds))
 
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
@@ -77,63 +83,100 @@ func (p *MinCapacityPodListProcessor) Process(
 		return unschedulablePods, nil
 	}
 
-	var fakePods []*apiv1.Pod
+	existingByCCAndRule := p.countExistingNodes(autoscalingCtx, nodeInfos, crds)
+	_, saturatedByCC := computeSaturatedNodeCounts(nodeInfos)
 
-	saturatedByCCAndRule, saturatedByCC := computeSaturatedNodeCounts(nodeInfos)
+	// In GKE Cluster Autoscaler, minimum capacity can be specified at two levels:
+	//
+	// 1. Priority-level minimum capacity (`rules[].targetNodeCount`):
+	//    Each priority rule specifies a target minimum capacity for nodes matching that rule.
+	//    The shortfall is calculated directly: rule.targetNodeCount - existing nodes matching this rule index.
+	//    We generate priority-level fake pods to cover this shortfall only when the existing node count
+	//    is unsatisfied (below the target). These fake pods are always injected directly (bypassing
+	//    the scheduling simulation) to force GKE scale-up of the target priority rule.
+	//
+	// 2. Spec-level minimum capacity (`spec.targetNodeCount`):
+	//    This represents the overall target minimum node count for the entire ComputeClass.
+	//    The shortfall is calculated as: spec.targetNodeCount - (priority-level fake pods generated + existing saturated nodes).
+	//    For this shortfall, we generate spec-level fake pods. Since some of these spec-level fake pods
+	//    can potentially be scheduled on existing under-utilized nodes (that are not yet saturated), we
+	//    run a scheduling simulation to filter out any schedulable fake pods. During this simulation,
+	//    these spec-level fake pods are expected to be present (added) in the cluster snapshot. Only the
+	//    truly unschedulable spec-level fake pods are injected, preventing unnecessary scale-up.
+	var priorityFakePods []*apiv1.Pod
+	var specFakePods []*apiv1.Pod
 
 	for _, c := range crds {
 		crdName := c.Name()
-		var totalPriorityFakePods int
+		crdPriorityFakePodsCount := 0
 
-		// Evaluate fake pods for priority rules.
+		// 1. Evaluate priority-level fake pods.
 		for ruleIdx, r := range c.Rules() {
 			if r.TargetNodeCount() == nil {
 				continue
 			}
 			target := *r.TargetNodeCount()
-
-			saturatedNodes := 0
-			if rulesMap, ok := saturatedByCCAndRule[crdName]; ok {
-				saturatedNodes = rulesMap[fmt.Sprintf("%d", ruleIdx)]
-			}
-
-			shortfall := target - saturatedNodes
-			if shortfall > 0 {
-				idx := ruleIdx
-				for i := range shortfall {
-					fakePods = append(fakePods, buildFakePod(crdName, &idx, i))
-				}
-				klog.V(4).Infof("MinCapacityPodListProcessor: Generated %d fake pods for rule %d of CRD %s (target %d, saturated %d)", shortfall, ruleIdx, crdName, target, saturatedNodes)
-				totalPriorityFakePods += shortfall
+			existingNodes := existingByCCAndRule[crdName][strconv.Itoa(ruleIdx)]
+			if rulePods := buildPriorityFakePods(crdName, ruleIdx, target, existingNodes); len(rulePods) > 0 {
+				priorityFakePods = append(priorityFakePods, rulePods...)
+				crdPriorityFakePodsCount += len(rulePods)
 			}
 		}
 
-		// Evaluate fake pods for top-level ComputeClass.
+		// 2. Evaluate spec-level fake pods.
 		if c.TargetNodeCount() != nil {
 			target := *c.TargetNodeCount()
-
 			saturatedCCCNodeCount := saturatedByCC[crdName]
-
-			if shortfall := target - totalPriorityFakePods - saturatedCCCNodeCount; shortfall > 0 {
-				for i := range shortfall {
-					fakePods = append(fakePods, buildFakePod(crdName, nil, i))
-				}
-				klog.V(4).Infof("MinCapacityPodListProcessor: Generated %d fake pods for top-level ComputeClass of CRD %s (target %d, priority pods %d, saturated CCC nodes %d)", shortfall, crdName, target, totalPriorityFakePods, saturatedCCCNodeCount)
+			if specPods := buildSpecFakePods(crdName, target, crdPriorityFakePodsCount, saturatedCCCNodeCount); len(specPods) > 0 {
+				specFakePods = append(specFakePods, specPods...)
 			}
 		}
 	}
 
-	if len(fakePods) == 0 {
-		return unschedulablePods, nil
+	// 3. Filter spec-level fake pods.
+	trulyUnschedulableSpec := p.filterOutSchedulableFakePods(autoscalingCtx, specFakePods)
+
+	// 4. Combine them.
+	var finalFakePods []*apiv1.Pod
+	if len(trulyUnschedulableSpec) > 0 {
+		finalFakePods = append(finalFakePods, trulyUnschedulableSpec...)
+	}
+	if len(priorityFakePods) > 0 {
+		finalFakePods = append(finalFakePods, priorityFakePods...)
 	}
 
-	fakePods = p.filterOutSchedulableFakePods(autoscalingCtx, fakePods)
-
-	if len(fakePods) > 0 && canBeAdmitted {
-		unschedulablePods = append(unschedulablePods, fakePods...)
+	if len(finalFakePods) > 0 && canBeAdmitted {
+		unschedulablePods = append(unschedulablePods, finalFakePods...)
 	}
 
 	return unschedulablePods, nil
+}
+
+// buildPriorityFakePods returns the list of fake pods needed to satisfy the priority rules of the ComputeClass.
+func buildPriorityFakePods(ccName string, ruleIdx int, target int, existingNodes int) []*apiv1.Pod {
+	shortfall := target - existingNodes
+	if shortfall <= 0 {
+		return nil
+	}
+	var pods []*apiv1.Pod
+	idx := ruleIdx
+	for i := 0; i < shortfall; i++ {
+		pods = append(pods, buildFakePod(ccName, &idx, i))
+	}
+	return pods
+}
+
+// buildSpecFakePods returns the list of fake pods needed to satisfy the spec-level minimum capacity target.
+func buildSpecFakePods(ccName string, target int, priorityFakePodsCount int, saturatedNodesCount int) []*apiv1.Pod {
+	shortfall := target - priorityFakePodsCount - saturatedNodesCount
+	if shortfall <= 0 {
+		return nil
+	}
+	var pods []*apiv1.Pod
+	for i := 0; i < shortfall; i++ {
+		pods = append(pods, buildFakePod(ccName, nil, i))
+	}
+	return pods
 }
 
 func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCtx *ca_context.AutoscalingContext, fakePods []*apiv1.Pod) []*apiv1.Pod {
@@ -148,8 +191,6 @@ func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCt
 	})
 	if err != nil {
 		klog.Errorf("Failed to run FilterOutSchedulable on MinCapacity fake pods: %v", err)
-		// If we fail to filter out schedulable pods, we might end up with more pods than needed.
-		// This is a safe fallback.
 		return nil
 	}
 
@@ -171,6 +212,54 @@ func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCt
 
 // CleanUp cleans up internal status.
 func (p *MinCapacityPodListProcessor) CleanUp() {}
+
+// countExistingNodes counts the active nodes for each ComputeClass and priority rule using NodeGroup TargetSizes.
+func (p *MinCapacityPodListProcessor) countExistingNodes(
+	autoscalingCtx *ca_context.AutoscalingContext,
+	nodeInfos []*framework.NodeInfo,
+	crds []crd.CRD) map[string]map[string]int {
+
+	existingByCCAndRule := make(map[string]map[string]int) // ccName -> ruleIdxStr -> count
+
+	cp, ok := autoscalingCtx.CloudProvider.(computeclass.MatcherCloudProvider)
+	if !ok || cp == nil {
+		klog.Errorf("MinCapacityPodListProcessor: CloudProvider does not implement MatcherCloudProvider")
+		return existingByCCAndRule
+	}
+	matcher := computeclass.NewMatcher(p.ccLister, cp)
+
+	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups() {
+		targetSize, err := ng.TargetSize()
+		if err != nil {
+			klog.Warningf("MinCapacityPodListProcessor: Failed to get target size for node group %s: %v", ng.Id(), err)
+			continue
+		}
+		if targetSize <= 0 {
+			continue
+		}
+
+		for _, cc := range crds {
+			ccName := cc.Name()
+			matched, ruleIdx, _ := matcher.FirstMatchedRule(ng, cc)
+			if matched {
+				ruleIdxStr := strconv.Itoa(ruleIdx)
+				if _, ok := existingByCCAndRule[ccName]; !ok {
+					existingByCCAndRule[ccName] = make(map[string]int)
+				}
+				existingByCCAndRule[ccName][ruleIdxStr] += targetSize
+				break
+			} else if matcher.MatchesCrdConfig(ng, cc) {
+				ruleIdxStr := "-1"
+				if _, ok := existingByCCAndRule[ccName]; !ok {
+					existingByCCAndRule[ccName] = make(map[string]int)
+				}
+				existingByCCAndRule[ccName][ruleIdxStr] += targetSize
+				break
+			}
+		}
+	}
+	return existingByCCAndRule
+}
 
 // computeSaturatedNodeCounts computes the number of saturated nodes for each ComputeClass and priority rule.
 func computeSaturatedNodeCounts(nodeInfos []*framework.NodeInfo) (map[string]map[string]int, map[string]int) {

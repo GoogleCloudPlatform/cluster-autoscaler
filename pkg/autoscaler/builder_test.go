@@ -70,7 +70,7 @@ func TestBuilder_Overrides(t *testing.T) {
 		WithLocation(location).
 		WithProject(project)
 
-	gkeClient := MustCreateGKEClient(fakeGkeApiClient, nil, project, location, fakeOptions, provConfigInformer, machineConfigProvider)
+	gkeClient := MustCreateGKEClient(fakeGkeApiClient, nil, project, location, fakeOptions, provConfigInformer, machineConfigProvider, fakeExperimentManager)
 	fakeInformerFactory := informers.NewSharedInformerFactory(nil, 0)
 
 	// TODO(b/450181314): Refactor this test passing fake clients once are available.

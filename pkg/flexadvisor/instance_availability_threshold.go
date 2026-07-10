@@ -17,7 +17,6 @@ package flexadvisor
 import (
 	"maps"
 	"slices"
-	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
@@ -62,7 +61,11 @@ func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, pu
 // max node limit is the sum of max node limits for nodegroup and all similar node groups.
 // In case of error, 0 is returned. Thresholds with 0 limits will be ignored in favor of thresholds with positive or negative limits.
 // -1 is returned when max node limit is zero, to disallow new nodes.
-func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) int {
+func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) estimator.NodeLimitResult {
+	if !IsFlexAdvisorProcessingEnabled(t.experimentsManager) {
+		klog.Info("FlexAdvisor: bin packer processing is disabled by FlexAdvisorProcessing experiment, skipping applying FlexAdvisor limits in bin packer")
+		return estimator.NodeLimitResult{Limit: 0}
+	}
 	maxNodeLimit := 0
 	totalReservationCount := 0
 
@@ -70,22 +73,22 @@ func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGr
 	instanceReferencesProcessed := make(map[string]bool)
 
 	for _, ng := range allUniqueNodeGroups(append(estimationContext.SimilarNodeGroups(), nodeGroup)) {
-		instanceRef, err := constructInstanceReference(ng, t.cccLister, t.experimentsManager)
+		instanceRef, err := ConstructInstanceReference(ng, t.cccLister, t.experimentsManager)
 		if err != nil {
-			return 0
+			return estimator.NodeLimitResult{Limit: 0}
 		}
 
-		snapshot := t.provider.GetInstanceAvailability(instanceRef.flexibilityScopeKey, instanceRef.instanceConfigKey)
+		snapshot := t.provider.GetInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 		if snapshot == nil {
-			return 0
+			return estimator.NodeLimitResult{Limit: 0}
 		}
 		reservationCount := t.allUnusedReservations(ng)
 		totalReservationCount += reservationCount
-		maxInstancesFromFA, ok := snapshot.MaxAvailableInstances(instanceRef.zone)
+		maxInstancesFromFA, ok := snapshot.MaxAvailableInstances(instanceRef.Zone)
 		if !ok {
 			// if we didn't receive available instances from GCE FlexAdvisor for at least one zone, we don't apply node limit to the node group at all
-			klog.Warningf("FlexAdvisor: NodeLimit not applied to nodeGroup %s due to unknown availability in the zone, zone=%v, flexibilityScopeKey=%v, guidanceId=%v", nodeGroup.Id(), instanceRef.zone, instanceRef.instanceConfigKey, snapshot.GuidanceId())
-			return 0
+			klog.Warningf("FlexAdvisor: NodeLimit not applied to nodeGroup %s due to unknown availability in the zone, zone=%v, flexibilityScopeKey=%v, guidanceId=%v", nodeGroup.Id(), instanceRef.Zone, instanceRef.InstanceConfigKey, snapshot.GuidanceId())
+			return estimator.NodeLimitResult{Limit: 0}
 		}
 
 		if reservationCount > 0 {
@@ -103,15 +106,15 @@ func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGr
 	}
 	if maxNodeLimit <= 0 {
 		klog.Infof("FlexAdvisor: removing %s from bin packing due to no capacity, instanceReferencesProcessed=%v, guidancesUsed=%v", nodeGroup.Id(), slices.Collect(maps.Keys(instanceReferencesProcessed)), slices.Collect(maps.Keys(guidanceIdsUsed)))
-		return -1
+		return estimator.NodeLimitResult{Limit: -1}
 	}
 	klog.Infof("FlexAdvisor: setting %s bin packing maxNodeLimit to %d based on instanceReferencesProcessed=%v, guidancesUsed=%v", nodeGroup.Id(), maxNodeLimit, slices.Collect(maps.Keys(instanceReferencesProcessed)), slices.Collect(maps.Keys(guidanceIdsUsed)))
-	return maxNodeLimit
+	return estimator.NodeLimitResult{Limit: maxNodeLimit}
 }
 
 // DurationLimit always returns 0. No time based limit is set.
-func (t *instanceAvailabilityThreshold) DurationLimit(_ cloudprovider.NodeGroup, _ estimator.EstimationContext) time.Duration {
-	return 0
+func (t *instanceAvailabilityThreshold) DurationLimit(_ cloudprovider.NodeGroup, _ estimator.EstimationContext) estimator.DurationLimitResult {
+	return estimator.DurationLimitResult{Duration: 0}
 }
 
 func allUniqueNodeGroups(nodeGroups []cloudprovider.NodeGroup) []cloudprovider.NodeGroup {

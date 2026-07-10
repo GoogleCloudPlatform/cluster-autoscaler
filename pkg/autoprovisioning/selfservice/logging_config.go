@@ -23,6 +23,7 @@ import (
 
 // loggingConfig is a self-service feature which lets users configure node pool logging in CCC definitions.
 // It maps the following setting in cluster service API:
+// http://google3/google/container/v1beta1/cluster_service.proto;l=7145;rcl=814061873
 type loggingConfig struct {
 	internalFeatureDefaultImplementation
 }

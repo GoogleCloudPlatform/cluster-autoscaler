@@ -19,9 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
+	"k8s.io/autoscaler/cluster-autoscaler/utils/klogx"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
@@ -30,19 +35,21 @@ import (
 const provisioningDecisionNotificationChanSize = 10
 
 type flexibilityScope struct {
-	provider            instanceavailability.Provider
-	flexibilityScopeKey string
-	instanceConfigs     map[string]*api.InstanceAvailability
-	mutex               sync.Mutex
-	firstFetchWG        sync.WaitGroup
-	cancelFunc          context.CancelFunc
-	lastErr             error
+	provider                instanceavailability.Provider
+	flexibilityScopeKey     string
+	instanceConfigs         map[string]*api.InstanceAvailability
+	mutex                   sync.Mutex
+	firstFetchWG            sync.WaitGroup
+	cancelFunc              context.CancelFunc
+	lastErr                 error
+	lastSuccessfulRefreshAt time.Time
 	// cappedKeysMap contains all generated keys:
 	// - If a key was capped locally (not sent to the backend), its value is true.
 	// - If a key was sent to the backend, its value is false.
 	// Keys that were not generated at all (filtered out by rules) are not in this map.
 	// Keys that were sent (value is false) but are missing from instanceConfigs were dropped by the backend.
-	cappedKeysMap map[string]bool
+	cappedKeysMap  map[string]bool
+	generatedUsing crd.CRD
 }
 
 type scopeWorker struct {
@@ -51,15 +58,21 @@ type scopeWorker struct {
 	adviceProvider           api.AdviceProvider
 	clock                    clock.Clock
 	instanceConfigGenerator  *instanceConfigGenerator
+	experimentsManager       experiments.Manager
 }
 
 func newScopeWorker(scope *flexibilityScope, f *flexAdvisor) *scopeWorker {
+	var experimentsManager experiments.Manager
+	if f.optionsTracker != nil {
+		experimentsManager = f.optionsTracker.ExperimentsManager()
+	}
 	return &scopeWorker{
 		scope:                    scope,
 		provisioningDecisionChan: make(chan api.ProvisioningDecisionNotification, provisioningDecisionNotificationChanSize),
 		adviceProvider:           f.adviceProvider,
 		clock:                    f.clock,
 		instanceConfigGenerator:  f.instanceConfigGenerator,
+		experimentsManager:       experimentsManager,
 	}
 }
 
@@ -86,6 +99,10 @@ func (w *scopeWorker) run(ctx context.Context) {
 // GCE guarantees that if API call for decision notification finished it will account,
 // that capacity change for the subsequent scope refreshes.
 func (w *scopeWorker) refreshScope(ctx context.Context) {
+	if !IsFlexAdvisorProcessingEnabled(w.experimentsManager) {
+		klog.Infof("FlexAdvisor[async-worker]: loop processing is disabled by FlexAdvisorProcessing experiment, background worker returning early for flexibilityScopeKey=%v", w.scope.flexibilityScopeKey)
+		return
+	}
 	instancesBeingProvisioned := w.scope.copyInstancesBeingProvisioned()
 
 	generated, errs := w.instanceConfigGenerator.generateInstanceConfigs(w.scope.flexibilityScopeKey)
@@ -97,7 +114,7 @@ func (w *scopeWorker) refreshScope(ctx context.Context) {
 	if generated == nil || len(generated.Configs) == 0 {
 		errorMsg := fmt.Sprintf("generated 0 instance configurations, not calling GCE Flex Advisor, flexibilityScopeKey=%v", w.scope.flexibilityScopeKey)
 		klog.Warningf("FlexAdvisor[async-worker]: %v", errorMsg)
-		w.scope.finishRefresh(nil, instancesBeingProvisioned, nil, errors.New(errorMsg))
+		w.scope.finishRefresh(nil, instancesBeingProvisioned, nil, nil, w.clock.Now(), errors.New(errorMsg))
 		return
 	}
 
@@ -117,10 +134,15 @@ func (w *scopeWorker) refreshScope(ctx context.Context) {
 		config.SetProvider(w.scope.provider)
 	}
 
-	w.scope.finishRefresh(results, instancesBeingProvisioned, generated.CappedKeysMap, err)
+	w.scope.finishRefresh(results, instancesBeingProvisioned, generated.GeneratedUsing, generated.CappedKeysMap, w.clock.Now(), err)
 }
 
 func (w *scopeWorker) validateResponse(generatedConfigs map[string]*api.InstanceConfig, results map[string]*api.InstanceAvailability) {
+	missingConfigQuota := logging.FlexAdvisorResponseErrorsLoggingQuota()
+	missingZoneQuota := logging.FlexAdvisorResponseErrorsLoggingQuota()
+	negativeCountQuota := logging.FlexAdvisorResponseErrorsLoggingQuota()
+	invalidScoreQuota := logging.FlexAdvisorResponseErrorsLoggingQuota()
+
 	hasMissingZone := false
 	hasNegativeCount := false
 	hasInvalidScore := false
@@ -128,7 +150,7 @@ func (w *scopeWorker) validateResponse(generatedConfigs map[string]*api.Instance
 	for instanceConfigKey, instanceConfig := range generatedConfigs {
 		availability, found := results[instanceConfigKey]
 		if !found {
-			klog.Warningf("FlexAdvisor[async-worker]: Backend response missing requested instance configuration %q for flexibilityScopeKey %q", instanceConfigKey, w.scope.flexibilityScopeKey)
+			klogx.V(4).UpTo(missingConfigQuota).Warningf("FlexAdvisor[async-worker]: Backend response missing requested instance configuration %q for flexibilityScopeKey %q", instanceConfigKey, w.scope.flexibilityScopeKey)
 			metrics.Metrics.RegisterFlexAdvisorResponseError(metrics.ResponseMissingInstanceConfig)
 			continue
 		}
@@ -138,22 +160,30 @@ func (w *scopeWorker) validateResponse(generatedConfigs map[string]*api.Instance
 		for _, zone := range instanceConfig.Zones().UnsortedList() {
 			count, found := snapshot.MaxAvailableInstances(zone)
 			if !found {
-				klog.Warningf("FlexAdvisor[async-worker]: Backend response missing requested zone %q for instance configuration %q and flexibilityScopeKey %q", zone, instanceConfigKey, w.scope.flexibilityScopeKey)
+				klogx.V(4).UpTo(missingZoneQuota).Warningf("FlexAdvisor[async-worker]: Backend response missing requested zone %q for instance configuration %q and flexibilityScopeKey %q", zone, instanceConfigKey, w.scope.flexibilityScopeKey)
 				hasMissingZone = true
 			} else {
 				if count < 0 {
-					klog.Warningf("FlexAdvisor[async-worker]: Backend response has negative instance count %d for zone %q, instance configuration %q and flexibilityScopeKey %q: %v", count, zone, instanceConfigKey, w.scope.flexibilityScopeKey, snapshot)
+					klogx.V(4).UpTo(negativeCountQuota).Warningf("FlexAdvisor[async-worker]: Backend response has negative instance count %v for zone %q, instance configuration %q and flexibilityScopeKey %q: %v", count, zone, instanceConfigKey, w.scope.flexibilityScopeKey, snapshot)
 					hasNegativeCount = true
 				}
 			}
 
-			score := snapshot.GcePreferenceScore(zone)
+			score, found := snapshot.GcePreferenceScore(zone)
+			if !found {
+				klogx.V(4).UpTo(invalidScoreQuota).Warningf("FlexAdvisor[async-worker]: Backend response missing GCE preference score for zone %q, instance configuration %q and flexibilityScopeKey %q: %v", zone, instanceConfigKey, w.scope.flexibilityScopeKey, snapshot)
+			}
 			if score < 0.0 || score > 1.0 {
-				klog.Warningf("FlexAdvisor[async-worker]: Backend response has invalid preference score %f for zone %q, instance configuration %q and flexibilityScopeKey %q: %v", score, zone, instanceConfigKey, w.scope.flexibilityScopeKey, snapshot)
+				klogx.V(4).UpTo(invalidScoreQuota).Warningf("FlexAdvisor[async-worker]: Backend response has invalid preference score %v for zone %q, instance configuration %q and flexibilityScopeKey %q: %v", score, zone, instanceConfigKey, w.scope.flexibilityScopeKey, snapshot)
 				hasInvalidScore = true
 			}
 		}
 	}
+
+	klogx.V(4).Over(missingConfigQuota).Warningf("FlexAdvisor[async-worker]: There were also %v other backend response missing requested instance configuration warnings for flexibilityScopeKey %q", -missingConfigQuota.Left(), w.scope.flexibilityScopeKey)
+	klogx.V(4).Over(missingZoneQuota).Warningf("FlexAdvisor[async-worker]: There were also %v other backend response missing requested zone warnings for flexibilityScopeKey %q", -missingZoneQuota.Left(), w.scope.flexibilityScopeKey)
+	klogx.V(4).Over(negativeCountQuota).Warningf("FlexAdvisor[async-worker]: There were also %v other backend response negative instance count warnings for flexibilityScopeKey %q", -negativeCountQuota.Left(), w.scope.flexibilityScopeKey)
+	klogx.V(4).Over(invalidScoreQuota).Warningf("FlexAdvisor[async-worker]: There were also %v other backend response invalid preference score warnings for flexibilityScopeKey %q", -invalidScoreQuota.Left(), w.scope.flexibilityScopeKey)
 
 	if hasNegativeCount {
 		metrics.Metrics.RegisterFlexAdvisorResponseError(metrics.InvalidInstanceCount)
@@ -216,7 +246,7 @@ func (s *flexibilityScope) copyInstancesBeingProvisioned() *inFlightProvisions {
 	return inflight
 }
 
-func (s *flexibilityScope) finishRefresh(newConfigs map[string]*api.InstanceAvailability, instancesBeingProvisioned *inFlightProvisions, cappedKeysMap map[string]bool, err error) {
+func (s *flexibilityScope) finishRefresh(newConfigs map[string]*api.InstanceAvailability, instancesBeingProvisioned *inFlightProvisions, generatedUsing crd.CRD, cappedKeysMap map[string]bool, refreshedAt time.Time, err error) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	s.lastErr = err
@@ -228,8 +258,10 @@ func (s *flexibilityScope) finishRefresh(newConfigs map[string]*api.InstanceAvai
 				newConfig.ReconcileAndUpdate(oldConfig, instancesBeingProvisioned.byInstanceConfig[key])
 			}
 		}
+		s.generatedUsing = generatedUsing
 		s.cappedKeysMap = cappedKeysMap
 		s.instanceConfigs = newConfigs
+		s.lastSuccessfulRefreshAt = refreshedAt
 	}
 }
 
@@ -237,4 +269,27 @@ func (s *flexibilityScope) getLastErr() error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 	return s.lastErr
+}
+
+func (s *flexibilityScope) getLastSuccessfulRefreshAt() time.Time {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.lastSuccessfulRefreshAt
+}
+
+// getKeyCapState returns instanceConfigKey generation cap state:
+// false - was generated, not capped
+// true - was generated, was capped
+// no value - was not generated
+func (s *flexibilityScope) getKeyCapState(instanceConfigKey string) (bool, bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	val, ok := s.cappedKeysMap[instanceConfigKey]
+	return val, ok
+}
+
+func (s *flexibilityScope) getGeneratedUsing() crd.CRD {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.generatedUsing
 }

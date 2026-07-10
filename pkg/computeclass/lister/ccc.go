@@ -15,6 +15,7 @@
 package lister
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -206,12 +207,12 @@ func (l *cccLister) SetCloudProvider(provider listerCloudProvider) {
 }
 
 // NewCccLister initialises the CCC lister and returns it
-func NewCccLister(client client.Client, stopChannel <-chan struct{}, optionsTracker *optstracking.OptionsTracker) (*cccLister, error) {
+func NewCccLister(ctx context.Context, client client.Client, optionsTracker *optstracking.OptionsTracker) (*cccLister, error) {
 	factory := informer.NewSharedInformerFactory(client.CccClient(), 1*time.Hour)
 	lister := factory.Cloud().V1().ComputeClasses().Lister()
-	go factory.Start(stopChannel)
+	factory.Start(ctx.Done())
 
-	informersSynced := factory.WaitForCacheSync(stopChannel)
+	informersSynced := factory.WaitForCacheSync(ctx.Done())
 	for _, synced := range informersSynced {
 		if !synced {
 			return nil, fmt.Errorf("can't create CCC lister")

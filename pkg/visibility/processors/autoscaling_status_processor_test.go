@@ -91,7 +91,9 @@ func assertResultsEventsEqual(t *testing.T, expectedEvent, event *vispb.Autoscal
 
 func TestProcessClusterStatusEvent(t *testing.T) {
 	now := time.Date(2000, 1, 1, 10, 10, 10, 0, time.UTC)
-	ctx := &context.AutoscalingContext{}
+	ctx := &context.AutoscalingContext{
+		CloudProvider: testprovider.NewTestCloudProviderBuilder().Build(),
+	}
 
 	csr := newMockVisibilityClusterStateRegistry()
 	csr.scalingNodeGroupIds["ng1"] = true
@@ -334,7 +336,10 @@ func TestProcessScaleUpFailures(t *testing.T) {
 func TestStatusEventThrottling(t *testing.T) {
 	now := time.Date(2000, 1, 1, 10, 10, 10, 0, time.UTC)
 
-	ctx := new(context.AutoscalingContext)
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ctx := &context.AutoscalingContext{
+		CloudProvider: provider,
+	}
 	logger := new(visibility.MockEventLogger)
 	processor := NewAutoscalingStatusVisibilityProcessor(logger, visibility.VisibilityOptions{}, NewSharedData(), nil)
 
@@ -342,7 +347,6 @@ func TestStatusEventThrottling(t *testing.T) {
 	// to Process(), it can't be mocked.
 	node := test.BuildTestNode("node", 1000, 1000)
 	test.SetNodeReadyState(node, true, now.Add(-time.Minute))
-	provider := testprovider.NewTestCloudProviderBuilder().Build()
 	provider.AddNodeGroup("ng", 1, 10, 5)
 	provider.AddNode("ng", node)
 	customResourcesProcessor := internal_customresources.NewProcessor(nodetemplate.NewCache())

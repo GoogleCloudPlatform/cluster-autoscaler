@@ -151,7 +151,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 
 	machineSelectionGenerator := NewMachineSelectionGenerator(opts.CloudProvider, machineSelector, opts.ResizableMachineTypesProvider)
 	preemptionGenerator := NewPreemeptionOptionGenerator(opts.Flags.ProvisioningLabelEnabled)
-	computeClassGenerator := NewComputeClassGenerator(opts.CloudProvider, opts.Lister, opts.Flags.EnableComputeClassMinCapacity)
+	computeClassGenerator := NewComputeClassGenerator(opts.CloudProvider, opts.Lister, opts.Flags.EnableComputeClassMinCapacity, opts.ExperimentsManager)
 	// initialGenerators is a slice with generators that need to be run before others.
 	// For example - GPU request generator needs to be run before machine selection generator,
 	// so that GPU is known before we select machine.
@@ -446,7 +446,6 @@ func (m *AutoprovisioningNodeGroupManager) reportNodePoolCreation(
 		}
 		metrics.RegisterFailedScaleUp(reason, gpuResource, gpuType, "")
 
-		// TODO(b/517094059): add some metric here after figuring out failure scenarios
 		return nodegroups.CreateNodeGroupResult{}, errors.ToAutoscalerError(errors.AutoscalerErrorType(reason), err)
 	}
 	newId := createResult.MainCreatedNodeGroup.Id()

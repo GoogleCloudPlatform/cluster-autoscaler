@@ -24,7 +24,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
-	"k8s.io/klog/v2"
+	klog "k8s.io/klog/v2"
 
 	napprovider "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/napcloudprovider"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -46,14 +46,14 @@ func (s Selector) Select(
 	rule rules.Rule,
 	wantsSpot bool,
 	reservationMachineType string,
-	autopilotEnabled, autopilotManaged bool,
+	autopilotEnabled, autopilotManaged, isStateless bool,
 ) (machinetypes.MachineSpec, machinetypes.SelectionType, errors.AutoscalerError) {
 	architectures, err := podArchitectures(labelReq)
 	if err != nil {
 		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
 	}
 	spec, selectionType, err := s.selectMachineSpec(labelReq, specifiedGpu,
-		specifiedTpu, specifiedBootDiskType, architectures, rule, wantsSpot, reservationMachineType, autopilotEnabled, autopilotManaged)
+		specifiedTpu, specifiedBootDiskType, architectures, rule, wantsSpot, reservationMachineType, autopilotEnabled, autopilotManaged, isStateless)
 	if err != nil {
 		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
 	}
@@ -77,9 +77,9 @@ func (s Selector) selectMachineSpec(
 	rule rules.Rule,
 	wantsSpot bool,
 	reservationMachineType string,
-	autopilotEnabled, autopilotManaged bool,
+	autopilotEnabled, autopilotManaged, isStateless bool,
 ) (machinetypes.MachineSpec, machinetypes.SelectionType, errors.AutoscalerError) {
-	families, computeClassName, selectionType, err := s.selectMachineGroup(labelReq, specifiedGpu, specifiedTpu, architectures, rule, wantsSpot, reservationMachineType, autopilotEnabled, autopilotManaged)
+	families, computeClassName, selectionType, err := s.selectMachineGroup(labelReq, specifiedGpu, specifiedTpu, architectures, rule, wantsSpot, reservationMachineType, autopilotEnabled, autopilotManaged, isStateless)
 	if err != nil {
 		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
 	}
@@ -92,13 +92,15 @@ func (s Selector) selectMachineSpec(
 		explicitMachineTypes = append(explicitMachineTypes, reservationMachineType)
 	}
 	return machinetypes.MachineSpec{
-		Families:             families,
-		ComputeClassName:     computeClassName,
-		MinCpuPlatform:       minCpuPlatform,
-		GpuType:              specifiedGpu,
-		TpuType:              specifiedTpu,
-		BootDiskType:         specifiedBootDiskType,
-		ExplicitMachineTypes: explicitMachineTypes,
+		Families:                 families,
+		ComputeClassName:         computeClassName,
+		MinCpuPlatform:           minCpuPlatform,
+		GpuType:                  specifiedGpu,
+		TpuType:                  specifiedTpu,
+		BootDiskType:             specifiedBootDiskType,
+		ExplicitMachineTypes:     explicitMachineTypes,
+		ConfidentialNodesEnabled: s.CloudProvider.AreConfidentialNodesEnabled(),
+		ConfidentialNodeType:     s.CloudProvider.GetConfidentialInstanceType(),
 	}, selectionType, nil
 }
 
@@ -106,14 +108,15 @@ func (s Selector) selectMachineSpec(
 // Note: The returned machine families and compute class is not necessarily validated here.
 func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 	specifiedGpu, specifiedTpu string, architectures map[gce.SystemArchitecture]bool,
-	rule rules.Rule, wantsSpot bool, reservationMachineType string, autopilotEnabled, autopilotManaged bool) ([]machinetypes.MachineFamily, string, machinetypes.SelectionType, errors.AutoscalerError) {
+	rule rules.Rule, wantsSpot bool, reservationMachineType string,
+	autopilotEnabled, autopilotManaged, isStateless bool) ([]machinetypes.MachineFamily, string, machinetypes.SelectionType, errors.AutoscalerError) {
 	podCrdFamilies, podCrdFamiliesSpecified, err := crdMachineFamilies(s.CloudProvider, rule)
 	if err != nil {
 		return nil, "", machinetypes.SelectionTypeNone, err
 	}
 
-	// isE4aEnabled indicates whether E4A machine family is allowed based on pod-level configuration for
-	// managed nodes or if it's enabled for the Autopilot cluster.
+	// Evaluate E4 and E4A eligibility
+	isE4Enabled := s.isE4Enabled(autopilotEnabled, autopilotManaged, isStateless)
 	isE4aEnabled := (autopilotEnabled && s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.E4A.Name())) || (autopilotManaged && s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4A.Name()))
 
 	// If crd rule specifies families, always try to use it.
@@ -122,13 +125,15 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 			podCrdFamilies = filterEkMachineFamilyIfNotEnabled(podCrdFamilies, wantsSpot, s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()))
 		}
 		podCrdFamilies = filterE4aMachineFamilyIfNotEnabled(podCrdFamilies, isE4aEnabled)
-
 		if rule.PodFamilyName() == rules.GeneralPurposePodFamily {
-			podCrdFamilies = s.filterE4MachineFamilyIfNotEnabled(podCrdFamilies)
+			podCrdFamilies = s.filterE4MachineFamilyIfNotEnabled(podCrdFamilies, isE4Enabled)
 		}
-
-		if rule.PodFamilyName() == rules.GeneralPurposeArmPodFamily && len(podCrdFamilies) == 0 {
-			return []machinetypes.MachineFamily{}, "", machinetypes.SelectionTypeSpecified, NewPodFamilyUnknownError(rule.PodFamilyName())
+		// Only filter ARM machine fallbacks if the rule is specifically for GeneralPurposeArmPodFamily.
+		if rule.PodFamilyName() == rules.GeneralPurposeArmPodFamily {
+			podCrdFamilies = filterArmMachineFallbacksIfNotEnabled(podCrdFamilies, s.CloudProvider.IsArmMachineFallbacksEnabled())
+			if len(podCrdFamilies) == 0 {
+				return []machinetypes.MachineFamily{}, "", machinetypes.SelectionTypeSpecified, NewPodFamilyUnknownError(rule.PodFamilyName())
+			}
 		}
 		if len(podCrdFamilies) == 0 {
 			return nil, "", machinetypes.SelectionTypeNone, NewPodFamilyUnknownError(rule.PodFamilyName() + " after filtering out disabled machine families")
@@ -185,6 +190,11 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 			// If pod specifies a compute class, always try to use it.
 			// Non slice of hardware compute classes should return all
 			// machine families supported by the compute class.
+
+			if podClass.Name() == "autopilot" {
+				machineFamilies = s.filterE4MachineFamilyIfNotEnabled(machineFamilies, isE4Enabled)
+			}
+
 			return machineFamilies, podClass.Name(), machinetypes.SelectionTypeSpecified, nil
 		}
 		// Slice of hardware compute class must specify valid machine family.
@@ -318,35 +328,50 @@ func filterE4aMachineFamilyIfNotEnabled(podFamilyMachineFamilies []machinetypes.
 	return filterMachineFamilyByName(podFamilyMachineFamilies, machinetypes.E4A.Name())
 }
 
-func (s Selector) useE4() bool {
-	if s.ExperimentsManager == nil {
+func (s Selector) isE4Enabled(autopilotEnabled, autopilotManaged, isStateless bool) bool {
+	isE4EnabledInAutopilot := s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name())
+	isE4EnabledOnManagedNodes := s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name())
+
+	if !(autopilotEnabled && isE4EnabledInAutopilot) && !(autopilotManaged && isE4EnabledOnManagedNodes) {
 		return false
 	}
 
-	// 1. Check if the boolean flag is enabled globally
-	e4Enabled := s.ExperimentsManager.EvaluateBoolFlagOrFailsafe("E4Autopilot::EnableE4InE2LessRegions", false)
-	if !e4Enabled {
-		return false
+	if s.CloudProvider.IsE2lessRegion() {
+		return true // E4 is mandatory in E2-less regions
 	}
 
-	// 2. Check if the currently running CA binary meets the minimum safe version.
-	versionMet := s.ExperimentsManager.EvaluateMinimumVersionFlagOrFailsafe("E4Autopilot::MinCAVersion", false)
-	if !versionMet {
-		return false
-	}
-
-	return s.CloudProvider.IsE2lessRegion()
+	// In all other regions, only enable E4 for stateless workloads
+	return isStateless
 }
 
-func (s Selector) filterE4MachineFamilyIfNotEnabled(families []machinetypes.MachineFamily) []machinetypes.MachineFamily {
-	if s.useE4() {
-		// In E2-less regions, remove E2 and EK to directly provision E4.
+func (s Selector) filterE4MachineFamilyIfNotEnabled(families []machinetypes.MachineFamily, isE4Enabled bool) []machinetypes.MachineFamily {
+	if !isE4Enabled {
+		// Remove E4 to prevent it from being used in mixed regions during Phase 1/2 for stateful workloads
+		return filterMachineFamilyByName(families, machinetypes.E4.Name())
+	}
+
+	if s.CloudProvider.IsE2lessRegion() {
+		// E2-less: Fast-path to E4 by stripping E2/EK
 		filtered := filterMachineFamilyByName(families, machinetypes.E2.Name())
 		filtered = filterMachineFamilyByName(filtered, machinetypes.EK.Name())
 		return filtered
 	}
-	// Remove E4 to prevent it from being used in mixed regions during Phase 1
-	return filterMachineFamilyByName(families, machinetypes.E4.Name())
+
+	// Stateless in other regions: Keep E4 alongside E2/EK
+	return families
+}
+
+func filterArmMachineFallbacksIfNotEnabled(podFamilyMachineFamilies []machinetypes.MachineFamily, isEnabled bool) []machinetypes.MachineFamily {
+	if isEnabled {
+		return podFamilyMachineFamilies
+	}
+	filtered := []machinetypes.MachineFamily{}
+	for _, f := range podFamilyMachineFamilies {
+		if f.Name() != machinetypes.N4A.Name() && f.Name() != machinetypes.C4A.Name() {
+			filtered = append(filtered, f)
+		}
+	}
+	return filtered
 }
 
 func filterMachineFamilyByName(families []machinetypes.MachineFamily, name string) []machinetypes.MachineFamily {
@@ -405,7 +430,7 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	}
 	if s.CloudProvider.AreConfidentialNodesEnabled() {
 		confidentialNodeType := s.CloudProvider.GetConfidentialInstanceType()
-		if (confidentialNodeType == "" && !family.IsConfidentialNodesSupported()) || (confidentialNodeType != "" && !family.IsConfidentialNodeTypeSupported(confidentialNodeType)) {
+		if (confidentialNodeType == "" && !supportsDefaultConfidentialNodes(family)) || (confidentialNodeType != "" && !family.IsConfidentialNodeTypeSupported(confidentialNodeType)) {
 			return NewConfidentialNodesIncompatibleError(machineGroupName)
 		}
 	}
@@ -422,9 +447,14 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	if len(spec.ExplicitMachineTypes) > 0 && !family.AreMachineTypesSupported(spec.ExplicitMachineTypes) {
 		return NewMachineTypesUnsupportedByFamilyError(spec.ExplicitMachineTypes, machineGroupName)
 	}
-	// Individual constraints are validated above for more distinguishable error messages, but ultimately make sure that
-	// the whole set of constraints is supported by any type from the family - otherwise NAP won't inject anything anyway.
-	if constraints := (machinetypes.Constraints{CpuPlatform: spec.MinCpuPlatform, GpuType: spec.GpuType, ExplicitMachineTypes: spec.ExplicitMachineTypes}); !family.AreConstraintsSupported(constraints) {
+	constraints := machinetypes.Constraints{
+		CpuPlatform:               spec.MinCpuPlatform,
+		GpuType:                   spec.GpuType,
+		ExplicitMachineTypes:      spec.ExplicitMachineTypes,
+		ConfidentialNodesRequired: spec.ConfidentialNodesEnabled,
+		ConfidentialNodeType:      spec.ConfidentialNodeType,
+	}
+	if !family.AreConstraintsSupported(constraints) {
 		return NewMachineConfigInvalidError(constraints.String(), "no machine types supporting all parts of the config found")
 	}
 	return nil
@@ -510,4 +540,10 @@ func (s Selector) clusterWideMinCpuPlatform() (machinetypes.CpuPlatform, bool, e
 		return machinetypes.UnknownPlatform, true, NewMinCpuPlatformUnknownError(platformName)
 	}
 	return platform, true, nil
+}
+
+// supportsDefaultConfidentialNodes returns whether the machine family supports
+// the default confidential node types (SEV).
+func supportsDefaultConfidentialNodes(family machinetypes.MachineFamily) bool {
+	return family.IsConfidentialNodeTypeSupported(gkelabels.SEVConfidentialNodeTypeValue)
 }

@@ -15,6 +15,7 @@
 package placement
 
 import (
+	"context"
 	"maps"
 	"slices"
 
@@ -43,7 +44,7 @@ func (f *FakeResourcePolicyPullerProvider) GetResourcePolicy(name string) *gcecl
 	return f.resourcePolicies[name]
 }
 
-func (*FakeResourcePolicyPullerProvider) Run(_ <-chan struct{}) {
+func (*FakeResourcePolicyPullerProvider) Run(ctx context.Context) {
 	// noop
 }
 

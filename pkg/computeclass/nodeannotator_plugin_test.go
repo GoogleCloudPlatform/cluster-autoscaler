@@ -30,6 +30,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 )
 
+const cccPriorityIndexAnnotationKey = "ccc_priority_index"
+
 type mockLister struct {
 	mock.Mock
 }

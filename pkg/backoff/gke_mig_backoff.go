@@ -58,6 +58,7 @@ func NewGkeBackoff(config Config) CompositeBackoff {
 	cidrIpBackoff := NewCidrIpBackoff(InitialNodeGroupBackoffDuration, MaxNodeGroupBackoffDuration, NodeGroupBackoffResetTimeout)
 	npcBackoff := NewNpcCrdBackoff(NpcBackoffDuration, config.NpcLister, config.CloudProvider, config.Observers...)
 	reservationsBackoff := NewReservationsBackoff(InitialNodeGroupBackoffDuration, MaxNodeGroupBackoffDuration, config.CloudProvider)
+	anyThenFailReservationsBackoff := NewAnyThenFailReservationsBackoff(InitialNodeGroupBackoffDuration, MaxNodeGroupBackoffDuration, NodeGroupBackoffResetTimeout)
 
 	backoffs := []base_backoff.Backoff{
 		nodeGroupBasedBackoff,
@@ -66,6 +67,7 @@ func NewGkeBackoff(config Config) CompositeBackoff {
 		cidrIpBackoff,
 		npcBackoff,
 		reservationsBackoff,
+		anyThenFailReservationsBackoff,
 	}
 
 	if config.FrbConfig != nil && config.FrbConfig.Enabled {

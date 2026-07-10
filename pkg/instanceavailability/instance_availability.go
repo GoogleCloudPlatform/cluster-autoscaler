@@ -32,7 +32,7 @@ type Provider interface {
 	// GetInstanceAvailability returns a Snapshot of instance availability if available, nil otherwise. Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing. non-blocking.
 	GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *Snapshot
 	// RegisterFlexibilityScope registers the flexibilityScopeKey in Provider, so it is fetched and refreshed in the background.
-	RegisterFlexibilityScope(flexibilityScopeKey string)
+	RegisterFlexibilityScope(flexibilityScopeKey string) error
 	// AwaitInstanceAvailability returns a Snapshot of instance availability in a blocking manner.
 	// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.
 	// Blocks until the background refresh operations to finish if they are running for the first time.
@@ -78,8 +78,9 @@ func (i *Snapshot) MaxAvailableInstances(zone string) (int, bool) {
 }
 
 // GcePreferenceScore returns the GCE zonal preference for the zone.
-func (i *Snapshot) GcePreferenceScore(zone string) float64 {
-	return i.zonalGcePreferenceScore[zone]
+func (i *Snapshot) GcePreferenceScore(zone string) (float64, bool) {
+	score, found := i.zonalGcePreferenceScore[zone]
+	return score, found
 }
 
 // MarkUsed internally accounts for the capacity consumption in the snapshot and inform the Provider about the capacity consumption.

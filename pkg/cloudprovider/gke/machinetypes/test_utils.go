@@ -68,3 +68,13 @@ func sliceToSet[T comparable](slice []T) map[T]bool {
 	}
 	return hashSet
 }
+
+// NewTestPredefinedComputeClass returns a new PredefinedComputeClass object to use in test code.
+func NewTestPredefinedComputeClass(name string, families []MachineFamily, balancing bool, sliceOfHardware bool) PredefinedComputeClass {
+	return PredefinedComputeClass{
+		name:                          name,
+		machineFamilies:               families,
+		machineFamilyBalancingEnabled: balancing,
+		sliceOfHardware:               sliceOfHardware,
+	}
+}

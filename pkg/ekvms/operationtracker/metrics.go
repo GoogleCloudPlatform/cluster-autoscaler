@@ -15,6 +15,7 @@
 package operationtracker
 
 import (
+	"context"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -73,10 +74,10 @@ func newMetricsExporter(nodeLister resizableNodeLister, nodeSizeRecommender node
 	}
 }
 
-func (me *metricsExporter) run(stopCh <-chan struct{}) {
+func (me *metricsExporter) run(ctx context.Context) {
 	wait.Until(func() {
 		me.observeMaxSizeRecommendationAges()
-	}, metricsExportingInterval, stopCh)
+	}, metricsExportingInterval, ctx.Done())
 }
 
 func (me *metricsExporter) observeMaxSizeRecommendationAges() {

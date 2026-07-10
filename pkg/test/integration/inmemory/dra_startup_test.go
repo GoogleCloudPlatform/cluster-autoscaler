@@ -66,8 +66,6 @@ func TestDRAStartup(t *testing.T) {
 			Locations: []string{"us-central1-b"},
 		}).
 		WithOverrides(
-			integration.WithMaxMemoryTotal(1000*1024*1024*1024),
-			integration.WithMaxCoresTotal(1000),
 			integration.WithDraEnabled(),
 		)
 
@@ -75,11 +73,9 @@ func TestDRAStartup(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		infra := integration.SetupInfrastructure(ctx, t)
 
-		stopCh := make(chan struct{})
-
-		autoscaler, err := integration.SetupAutoscaler(t, ctx, testConfig, infra, stopCh)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel, stopCh)
+		defer integration_synctest.TearDown(cancel)
 
 		var healthyNodeName string
 		for _, node := range infra.Fakes.K8s.Nodes().Items {

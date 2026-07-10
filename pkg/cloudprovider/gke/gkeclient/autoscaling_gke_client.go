@@ -219,6 +219,7 @@ type NodePoolSpec struct {
 	ResourceLabels           map[string]string
 	PodIpv4CidrBlock         string
 	PodRange                 string
+	Network                  string
 	Subnetwork               string
 	ClusterSubnetwork        string
 	ClusterNetworkPath       string

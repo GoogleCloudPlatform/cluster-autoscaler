@@ -14,13 +14,17 @@
 
 package nodesnowflake
 
-import "k8s.io/apimachinery/pkg/util/sets"
+import (
+	"context"
+
+	"k8s.io/apimachinery/pkg/util/sets"
+)
 
 // Watcher monitors node-pools that have been marked as snowflake.
 type Watcher interface {
 	NoScaleUpNodePools() sets.Set[string]
 	NoScaleDownNodePools() sets.Set[string]
-	Run(stopCh <-chan struct{})
+	Run(ctx context.Context)
 }
 
 type noOpWatcher struct{}
@@ -33,7 +37,7 @@ func (*noOpWatcher) NoScaleDownNodePools() sets.Set[string] {
 	return sets.New[string]()
 }
 
-func (*noOpWatcher) Run(stopCh <-chan struct{}) {}
+func (*noOpWatcher) Run(ctx context.Context) {}
 
 func NewNoOpWatcher() Watcher {
 	return &noOpWatcher{}

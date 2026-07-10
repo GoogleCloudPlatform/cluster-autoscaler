@@ -57,14 +57,14 @@ type balloonPodChecker struct {
 	runInterval                  time.Duration
 }
 
-func (c *balloonPodChecker) Run(stopCh <-chan struct{}) {
+func (c *balloonPodChecker) Run(ctx context.Context) {
 	wait.Until(func() {
 		if err := c.dryRunCreateBalloonPod(); err != nil {
 			c.recordFailure(err)
 			return
 		}
 		c.resetSuccess()
-	}, c.runInterval, stopCh)
+	}, c.runInterval, ctx.Done())
 }
 
 func (c *balloonPodChecker) dryRunCreateBalloonPod() error {

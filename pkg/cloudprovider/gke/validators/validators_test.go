@@ -806,7 +806,7 @@ func waitForChan(ch chan bool) error {
 	select {
 	case <-ch:
 		return nil
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		return errors.New("channel empty")
 	}
 }

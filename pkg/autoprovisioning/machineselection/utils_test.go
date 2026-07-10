@@ -28,6 +28,7 @@ import (
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+	"k8s.io/utils/ptr"
 )
 
 func TestCrdMachineFamilies(t *testing.T) {
@@ -43,6 +44,7 @@ func TestCrdMachineFamilies(t *testing.T) {
 		wantFamilies []machinetypes.MachineFamily
 		wantFound    bool
 		wantErr      bool
+		wantErrMsg   string
 	}{
 		"no rule": {
 			rule:      nil,
@@ -83,6 +85,16 @@ func TestCrdMachineFamilies(t *testing.T) {
 			rule:      rules.NewRule(),
 			wantFound: false,
 		},
+		"pod family and mismatched machine family specified": {
+			rule:       rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily), rules.WithMachineFamilyRule(ptr.To("n2"))),
+			wantErr:    true,
+			wantErrMsg: "n2 (not in pod family general-purpose)",
+		},
+		"pod family and matched machine family specified": {
+			rule:         rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily), rules.WithMachineFamilyRule(ptr.To("e2"))),
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E2},
+			wantFound:    true,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
@@ -91,6 +103,9 @@ func TestCrdMachineFamilies(t *testing.T) {
 			families, found, err := crdMachineFamilies(provider, tc.rule)
 			if tc.wantErr {
 				assert.Error(t, err)
+				if tc.wantErrMsg != "" {
+					assert.Contains(t, err.Error(), tc.wantErrMsg)
+				}
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tc.wantFamilies, families)

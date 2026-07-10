@@ -30,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/klog/v2"
 )
 
 // fakeMig implements the Mig interface for GceRef().
@@ -80,6 +81,8 @@ func buildNodeFromTemplate(
 		return nil, err
 	}
 
+	node.Name = nodeName
+
 	if node.Labels == nil {
 		node.Labels = map[string]string{}
 	}
@@ -94,6 +97,9 @@ func buildNodeFromTemplate(
 	}
 	// Needed to avoid Cluster is not ready for autoscaling warning.
 	node.Annotations["node.gke.io/last-applied-node-labels"] = "fake-node-label"
+	// Kubelet version is used by custom_resources_processor.go while calling nodetemplate.BuildKeyForNAP
+	// as the nodeVersion argument. While not being set, causes tests using NAP node pools to panic.
+	node.Status.NodeInfo.KubeletVersion = "v1.30.0"
 
 	for _, acc := range mt.Accelerators {
 		if !strings.HasPrefix(acc.GuestAcceleratorType, "nvidia") {
@@ -137,11 +143,11 @@ func predictResourceSlices(
 			})
 		}
 	}
-	mf, err := mcp.GetMachineFamilyFromMachineName(mt.Name)
+	tpuType, err := extractTpuType(mcp, mt.Name)
 	if err != nil {
 		return nil, err
 	}
-	hwConfig.TpuType, _ = mcp.TpuTypeForMachineFamily(mf.Name())
+	hwConfig.TpuType = tpuType
 	if len(hwConfig.Accelerators) > 0 && hwConfig.TpuType != "" {
 		return nil, fmt.Errorf("machine type %s has both gpu and tpu type", mt.Name)
 	}
@@ -160,4 +166,20 @@ func predictResourceSlices(
 		false,
 		false,
 	)
+}
+
+func extractTpuType(mcp *machinetypes.MachineConfigProvider, machineType string) (string, error) {
+	mf, err := mcp.GetMachineFamilyFromMachineName(machineType)
+	if err != nil {
+		klog.V(4).Infof("Unable to determine machine family for machine type %q: %v. Proceeding with empty TPU type.", machineType, err)
+		return "", nil
+	}
+	if !mf.IsTpuSupported() {
+		return "", nil
+	}
+	tpuType, err := mcp.TpuTypeForMachineFamily(mf.Name())
+	if err != nil {
+		return "", err
+	}
+	return tpuType, nil
 }

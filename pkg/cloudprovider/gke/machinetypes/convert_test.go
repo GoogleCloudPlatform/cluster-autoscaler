@@ -104,6 +104,17 @@ func TestToMachineFamilyObject_AllProperties(t *testing.T) {
 				crdAmdTurinPlatform,
 				crdAmdGenoaPlatform,
 			},
+			PersistentDiskTypeConfigs: []mcv1.PersistentDiskTypeConfig{
+				{
+					Name:             "hyperdisk-balanced",
+					ConfidentialMode: ptr.To("CONFIDENTIAL_ONLY"),
+				},
+				{
+					Name:             "pd-balanced",
+					ConfidentialMode: ptr.To("CONFIDENTIAL_MODE_UNSPECIFIED"),
+				},
+			},
+			NumaAlignmentUnsupported: true,
 		},
 		Weights: &mcv1.MachineFamilyWeights{
 			Predefined: mcv1.ResourceWeights{
@@ -133,6 +144,11 @@ func TestToMachineFamilyObject_AllProperties(t *testing.T) {
 			lowerBound: AmdTurin,
 			upperBound: AmdGenoa,
 		},
+		supportedAttachDiskTypes: map[string]ConfidentialMode{
+			"hyperdisk-balanced": ConfidentialOnlyMode,
+			"pd-balanced":        UnspecifiedMode,
+		},
+		numaAlignmentUnsupported: true,
 	}
 
 	got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
@@ -248,6 +264,79 @@ func TestToMachineFamilyObject_ThreadsPerCore(t *testing.T) {
 
 	if diff := cmp.Diff(rawMF(want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}), cmpopts.EquateEmpty()); diff != "" {
 		t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestToMachineFamilyObject_PageType(t *testing.T) {
+	testCases := []struct {
+		name              string
+		pageType          *string
+		expectedHugepages bool
+		expectedErr       bool
+	}{
+		{
+			name:              "unspecified",
+			pageType:          ptr.To("PAGE_TYPE_UNSPECIFIED"),
+			expectedHugepages: false,
+		},
+		{
+			name:              "hugepages 2m tmpfs",
+			pageType:          ptr.To("HUGETMPFS_SIZE2M"),
+			expectedHugepages: false,
+		},
+		{
+			name:              "hugepages 2m tlb",
+			pageType:          ptr.To("HUGETLBFS_SIZE2M"),
+			expectedHugepages: false,
+		},
+		{
+			name:              "hugepages 1g",
+			pageType:          ptr.To("HUGETLBFS_SIZE1G"),
+			expectedHugepages: true,
+		},
+		{
+			name:        "invalid page type",
+			pageType:    ptr.To("INVALID_SIZE"),
+			expectedErr: true,
+		},
+		{
+			name:              "nil",
+			pageType:          nil,
+			expectedHugepages: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name:     "test-family",
+				PageType: tc.pageType,
+			}
+
+			want := MachineFamily{
+				name:                  "test-family",
+				supportHugepageSize1g: tc.expectedHugepages,
+				supportedCpuPlatforms: noPlatformSupported,
+			}
+			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+
+			if tc.expectedErr {
+				if gradedErr.Err == nil {
+					t.Errorf("ToMachineFamilyObject() expected error, got nil")
+				}
+				return
+			}
+
+			if gradedErr.Warning != nil {
+				t.Errorf("ToMachineFamilyObject() unexpected warning = %v", gradedErr.Warning)
+			}
+			if gradedErr.Err != nil {
+				t.Errorf("ToMachineFamilyObject() unexpected error = %v", gradedErr.Err)
+			}
+			if diff := cmp.Diff(rawMF(want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -660,6 +749,364 @@ func TestToMachineFamilyObject_Weights(t *testing.T) {
 			}
 
 			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestToMachineFamilyObject_PersistentDiskTypeConfigs(t *testing.T) {
+	testCases := []struct {
+		name    string
+		configs []mcv1.PersistentDiskTypeConfig
+		wantErr bool
+		want    map[string]ConfidentialMode
+	}{
+		{
+			name:    "nil configs",
+			configs: nil,
+			want:    nil,
+		},
+		{
+			name:    "empty configs",
+			configs: []mcv1.PersistentDiskTypeConfig{},
+			want:    nil,
+		},
+		{
+			name: "missing name",
+			configs: []mcv1.PersistentDiskTypeConfig{
+				{
+					Name:             "",
+					ConfidentialMode: ptr.To("CONFIDENTIAL_ONLY"),
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid confidential mode",
+			configs: []mcv1.PersistentDiskTypeConfig{
+				{
+					Name:             "pd-standard",
+					ConfidentialMode: ptr.To("INVALID_MODE"),
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "valid configs - all mode types",
+			configs: []mcv1.PersistentDiskTypeConfig{
+				{
+					Name:             "pd-ssd",
+					ConfidentialMode: ptr.To("CONFIDENTIAL_ONLY"),
+				},
+				{
+					Name:             "pd-standard",
+					ConfidentialMode: ptr.To("NON_CONFIDENTIAL_ONLY"),
+				},
+				{
+					Name:             "pd-balanced",
+					ConfidentialMode: ptr.To("CONFIDENTIAL_MODE_UNSPECIFIED"),
+				},
+				{
+					Name:             "hyperdisk-balanced",
+					ConfidentialMode: nil,
+				},
+				{
+					Name:             "pd-extreme",
+					ConfidentialMode: ptr.To("UNSPECIFIED"),
+				},
+				{
+					Name:             "hyperdisk-extreme",
+					ConfidentialMode: ptr.To(""),
+				},
+			},
+			want: map[string]ConfidentialMode{
+				"pd-ssd":             ConfidentialOnlyMode,
+				"pd-standard":        NonConfidentialOnlyMode,
+				"pd-balanced":        UnspecifiedMode,
+				"hyperdisk-balanced": UnspecifiedMode,
+				"pd-extreme":         UnspecifiedMode,
+				"hyperdisk-extreme":  UnspecifiedMode,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name: "e2",
+				DefaultProperties: mcv1.MachineProperties{
+					PersistentDiskTypeConfigs: tc.configs,
+				},
+			}
+			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+
+			if (gradedErr.Err != nil) != tc.wantErr {
+				t.Errorf("ToMachineFamilyObject() error = %v, wantErr %v", gradedErr.Err, tc.wantErr)
+				return
+			}
+			if tc.wantErr {
+				return
+			}
+
+			if diff := cmp.Diff(tc.want, got.supportedAttachDiskTypes, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("supportedAttachDiskTypes mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestToMachineFamilyObject_UsagePolicy(t *testing.T) {
+	testCases := []struct {
+		name              string
+		usagePolicy       *mcv1.UsagePolicy
+		defaultProperties mcv1.MachineProperties
+		weights           *mcv1.MachineFamilyWeights
+		machineTypes      []mcv1.MachineType
+		wantErr           bool
+		want              MachineFamily
+	}{
+		{
+			name: "No usage policy - full extraction",
+			defaultProperties: mcv1.MachineProperties{
+				SystemArchitecture: ptr.To("arm64"),
+			},
+			machineTypes: []mcv1.MachineType{
+				{
+					Name:      "e2-micro",
+					Resources: mcv1.MachineResources{CPUs: 2, Memory: 1024},
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			weights: &mcv1.MachineFamilyWeights{
+				Predefined: mcv1.ResourceWeights{CPU: "1.0"},
+			},
+			want: MachineFamily{
+				name:                  "e2",
+				supportedCpuPlatforms: noPlatformSupported,
+				systemArchitecture:    gce.Arm64,
+				pricingInfo: MachineFamilyPricingInfo{
+					CpuPricePerHour: 1.0,
+				},
+				autoprovisionedMachineTypes: map[string]MachineType{
+					"e2-micro": {
+						MachineType: gce.MachineType{
+							Name:   "e2-micro",
+							CPU:    2,
+							Memory: 1024 * bytesPerMiB,
+						},
+						priceInfo: &MachinePriceInfo{
+							instancePrice: ptr.To(0.5),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Legacy - ignores all CRD data",
+			usagePolicy: &mcv1.UsagePolicy{
+				Mode: ptr.To(mcv1.UsagePolicyModeLegacy),
+			},
+			defaultProperties: mcv1.MachineProperties{
+				SystemArchitecture: ptr.To("arm64"),
+			},
+			machineTypes: []mcv1.MachineType{
+				{
+					Name:      "e2-micro",
+					Resources: mcv1.MachineResources{CPUs: 2, Memory: 1024},
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			weights: &mcv1.MachineFamilyWeights{
+				Predefined: mcv1.ResourceWeights{CPU: "1.0"},
+			},
+			want: MachineFamily{
+				name: "e2",
+				usagePolicy: &UsagePolicy{
+					MachineProperties: false,
+					Weights:           false,
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+			},
+		},
+		{
+			name: "Weights only - extracts weights, ignores rest of CRD",
+			usagePolicy: &mcv1.UsagePolicy{
+				Mode: ptr.To(mcv1.UsagePolicyModeWeightsOnly),
+			},
+			defaultProperties: mcv1.MachineProperties{
+				SystemArchitecture: ptr.To("arm64"),
+			},
+			machineTypes: []mcv1.MachineType{
+				{
+					Name:      "e2-micro",
+					Resources: mcv1.MachineResources{CPUs: 2, Memory: 1024},
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			weights: &mcv1.MachineFamilyWeights{
+				Predefined: mcv1.ResourceWeights{CPU: "1.0"},
+			},
+			want: MachineFamily{
+				name: "e2",
+				usagePolicy: &UsagePolicy{
+					MachineProperties: false,
+					Weights:           true,
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+				pricingInfo: MachineFamilyPricingInfo{
+					CpuPricePerHour: 1.0,
+				},
+				otherMachineTypes: map[string]MachineType{
+					"e2-micro": {
+						MachineType: gce.MachineType{
+							Name: "e2-micro",
+						},
+						priceInfo: &MachinePriceInfo{
+							instancePrice: ptr.To(0.5),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Weights only bypasses properties validation",
+			usagePolicy: &mcv1.UsagePolicy{
+				Mode: ptr.To(mcv1.UsagePolicyModeWeightsOnly),
+			},
+			machineTypes: []mcv1.MachineType{
+				{
+					Name: "e2-micro",
+					// Missing CPUs and Memory
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			want: MachineFamily{
+				name: "e2",
+				usagePolicy: &UsagePolicy{
+					MachineProperties: false,
+					Weights:           true,
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+				otherMachineTypes: map[string]MachineType{
+					"e2-micro": {
+						MachineType: gce.MachineType{
+							Name: "e2-micro",
+						},
+						priceInfo: &MachinePriceInfo{
+							instancePrice: ptr.To(0.5),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "PropertiesOnly - extracts properties, ignores weights",
+			usagePolicy: &mcv1.UsagePolicy{
+				Mode: ptr.To(mcv1.UsagePolicyModePropertiesOnly),
+			},
+			defaultProperties: mcv1.MachineProperties{
+				SystemArchitecture: ptr.To("arm64"),
+			},
+			machineTypes: []mcv1.MachineType{
+				{
+					Name:      "e2-micro",
+					Resources: mcv1.MachineResources{CPUs: 2, Memory: 1024},
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			weights: &mcv1.MachineFamilyWeights{
+				Predefined: mcv1.ResourceWeights{CPU: "1.0"},
+			},
+			want: MachineFamily{
+				name: "e2",
+				usagePolicy: &UsagePolicy{
+					MachineProperties: true,
+					Weights:           false,
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+				systemArchitecture:    gce.Arm64,
+				autoprovisionedMachineTypes: map[string]MachineType{
+					"e2-micro": {
+						MachineType: gce.MachineType{
+							Name:   "e2-micro",
+							CPU:    2,
+							Memory: 1024 * bytesPerMiB,
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "PropertiesOnly bypasses weights validation",
+			usagePolicy: &mcv1.UsagePolicy{
+				Mode: ptr.To(mcv1.UsagePolicyModePropertiesOnly),
+			},
+			defaultProperties: mcv1.MachineProperties{
+				SystemArchitecture: ptr.To("arm64"),
+			},
+			weights: &mcv1.MachineFamilyWeights{
+				Predefined: mcv1.ResourceWeights{CPU: "INVALID"},
+			},
+			want: MachineFamily{
+				name: "e2",
+				usagePolicy: &UsagePolicy{
+					MachineProperties: true,
+					Weights:           false,
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+				systemArchitecture:    gce.Arm64,
+			},
+		},
+		{
+			name: "Full extraction enforces properties validation",
+			machineTypes: []mcv1.MachineType{
+				{
+					Name: "e2-micro",
+					// Missing CPUs and Memory
+					Weights: &mcv1.MachineTypeWeights{
+						InstanceWeight: ptr.To("0.5"),
+					},
+				},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name:              "e2",
+				UsagePolicy:       tc.usagePolicy,
+				DefaultProperties: tc.defaultProperties,
+				Weights:           tc.weights,
+				MachineTypes:      tc.machineTypes,
+			}
+			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+
+			if gradedErr.Warning != nil {
+				t.Errorf("ToMachineFamilyObject() unexpected warning = %v", gradedErr.Warning)
+			}
+			if (gradedErr.Err != nil) != tc.wantErr {
+				t.Errorf("ToMachineFamilyObject() error = %v, wantErr %v", gradedErr.Err, tc.wantErr)
+				return
+			}
+			if tc.wantErr {
+				return
+			}
+
+			backfillAndPrecomputeIfRequired(&tc.want, got.usagePolicy)
+
+			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachinePriceInfo{}, MachineType{}), cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -1084,6 +1531,76 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Machine type with invalid PersistentDiskTypeConfigs",
+			input: &mcv1.MachineFamily{
+				Name: "c3",
+				MachineTypes: []mcv1.MachineType{
+					{
+						Name:      "c3-standard-4",
+						Resources: mcv1.MachineResources{CPUs: 4, Memory: 16},
+						Properties: &mcv1.MachineProperties{
+							PersistentDiskTypeConfigs: []mcv1.PersistentDiskTypeConfig{
+								{
+									Name:             "pd-standard",
+									ConfidentialMode: ptr.To("INVALID_MODE"),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+
+		{
+			name: "Machine type with empty persistent disk type name",
+			input: &mcv1.MachineFamily{
+				Name: "c3",
+				MachineTypes: []mcv1.MachineType{
+					{
+						Name:      "c3-standard-4",
+						Resources: mcv1.MachineResources{CPUs: 4, Memory: 16},
+						Properties: &mcv1.MachineProperties{
+							PersistentDiskTypeConfigs: []mcv1.PersistentDiskTypeConfig{
+								{
+									Name:             "",
+									ConfidentialMode: ptr.To("CONFIDENTIAL_ONLY"),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "Machine type with empty persistent disk type confidential mode",
+			input: &mcv1.MachineFamily{
+				Name: "c3",
+				MachineTypes: []mcv1.MachineType{
+					{
+						Name:      "c3-standard-4",
+						Resources: mcv1.MachineResources{CPUs: 4, Memory: 16},
+						Properties: &mcv1.MachineProperties{
+							PersistentDiskTypeConfigs: []mcv1.PersistentDiskTypeConfig{
+								{
+									Name:             "pd-standard",
+									ConfidentialMode: ptr.To(""),
+								},
+							},
+						},
+					},
+				},
+			},
+			want: MachineFamily{
+				name: "c3",
+				autoprovisionedMachineTypes: map[string]MachineType{
+					"c3-standard-4": newTestMachineTypeInfo("c3-standard-4", 4, 16),
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1098,10 +1615,13 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 				t.Errorf("ToMachineFamilyObject() error = %v, wantErr %v", warnsAndErrs.Err, tc.wantErr)
 				return
 			}
+			if tc.wantErr {
+				return
+			}
 
-			tc.want.precomputeAllMachineTypes()
+			backfillAndPrecomputeIfRequired(&tc.want, got.usagePolicy)
 			// Use cmp.AllowUnexported to compare private fields in the structs.
-			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachineType{}), cmpopts.IgnoreFields(MachineType{}, "family")); diff != "" {
+			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachineType{})); diff != "" {
 				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -1140,6 +1660,11 @@ func TestToMachineTypeObject(t *testing.T) {
 				Resources: mcv1.MachineResources{
 					CPUs:   8,
 					Memory: 32,
+					LocalSSDConfig: &mcv1.LocalSSDConfig{
+						DefaultCount:    2,
+						AvailableCounts: []int64{1, 2, 4},
+						DiskSize:        375,
+					},
 				},
 				Properties: &mcv1.MachineProperties{
 					CPUPlatforms: []mcv1.CPUPlatform{
@@ -1148,7 +1673,7 @@ func TestToMachineTypeObject(t *testing.T) {
 					ThreadsPerCore:     ptr.To(int64(1)),
 					NAPDisabled:        ptr.To(true),
 					SystemArchitecture: ptr.To("arm64"), // will be neglected
-					BootDiskConfig: &mcv1.BootDiskConfig{ // will be neglected
+					BootDiskConfig: &mcv1.BootDiskConfig{
 						DefaultType: "pd-standard",
 						Types:       []string{"pd-standard", "pd-ssd"},
 					},
@@ -1158,10 +1683,51 @@ func TestToMachineTypeObject(t *testing.T) {
 					},
 				},
 			},
-			want: newTestMachineTypeInfo("mt-1", 8, 32).
-				withCpuPlatformRequirements(NewCpuPlatformRequirements(AmdGenoa, AmdGenoa)).
-				withThreadsPerCoreOverride(1).
-				withExplicitReqOnly(),
+			want: func() MachineType {
+				mt := newTestMachineTypeInfo("mt-1", 8, 32).
+					withCpuPlatformRequirements(NewCpuPlatformRequirements(AmdGenoa, AmdGenoa)).
+					withThreadsPerCoreOverride(1).
+					withExplicitReqOnly().
+					withSupportedDisksOverride([]string{"pd-standard", "pd-ssd"}).
+					withDefaultDiskOverride("pd-standard")
+				mt.ephemeralLocalSsdCfg = &ephemeralLocalSsdConfig{
+					automaticDiskCount: ptr.To[int64](2),
+					allowedDiskCounts:  map[int]bool{1: true, 2: true, 4: true},
+					diskSize:           375,
+				}
+				return mt
+			}(),
+		},
+		{
+			name: "Machine type with empty BootDiskConfig types and empty LocalSSDConfig AvailableCounts",
+			input: &mcv1.MachineType{
+				Name: "mt-1",
+				Resources: mcv1.MachineResources{
+					CPUs:   4,
+					Memory: 16,
+					LocalSSDConfig: &mcv1.LocalSSDConfig{
+						DefaultCount:    2,
+						AvailableCounts: nil,
+						DiskSize:        375,
+					},
+				},
+				Properties: &mcv1.MachineProperties{
+					BootDiskConfig: &mcv1.BootDiskConfig{
+						DefaultType: "pd-standard",
+						Types:       []string{},
+					},
+				},
+			},
+			want: func() MachineType {
+				mt := newTestMachineTypeInfo("mt-1", 4, 16).
+					withDefaultDiskOverride("pd-standard")
+				mt.ephemeralLocalSsdCfg = &ephemeralLocalSsdConfig{
+					automaticDiskCount: ptr.To[int64](2),
+					allowedDiskCounts:  nil,
+					diskSize:           375,
+				}
+				return mt
+			}(),
 		},
 		{
 			name: "Machine type with the same CPU platforms as the one in the Machine Family DefaultProperties",
@@ -1188,7 +1754,7 @@ func TestToMachineTypeObject(t *testing.T) {
 				t.Errorf("ToMachineTypeObject() error = %v, wantErr %v", err, tc.wantErr)
 				return
 			}
-			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(CpuPlatformRequirements{}, MachineType{})); diff != "" {
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(CpuPlatformRequirements{}, MachineType{}, ephemeralLocalSsdConfig{})); diff != "" {
 				t.Errorf("ToMachineTypeObject() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -1200,14 +1766,17 @@ func TestToMachineTypeObject_ConfidentialNodeConfigs(t *testing.T) {
 	defaultCpuReqs := CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin}
 
 	testCases := []struct {
-		name         string
-		enableCvmSot bool
-		input        *mcv1.MachineType
-		wantSupport  map[string]bool
+		name            string
+		enableCvmSot    bool
+		familyCvmEnable bool // whether the parent family mock has supportConfidentialNodes = true
+		input           *mcv1.MachineType
+		wantSupport     map[string]bool
+		wantIsSupported bool // expected value of got.IsConfidentialNodesSupported()
 	}{
 		{
-			name:         "dynamic config explicitly disables cvm",
-			enableCvmSot: true,
+			name:            "dynamic config explicitly disables cvm",
+			enableCvmSot:    true,
+			familyCvmEnable: true, // parent family supports CVM
 			input: &mcv1.MachineType{
 				Name:      "n2d-standard-2",
 				Resources: mcv1.MachineResources{CPUs: 2, Memory: 8192},
@@ -1218,11 +1787,13 @@ func TestToMachineTypeObject_ConfidentialNodeConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantSupport: nil,
+			wantSupport:     nil,
+			wantIsSupported: false, // must be false because type explicitly disabled CVM!
 		},
 		{
-			name:         "dynamic config overrides to true with types",
-			enableCvmSot: true,
+			name:            "dynamic config overrides to true with types",
+			enableCvmSot:    true,
+			familyCvmEnable: false,
 			input: &mcv1.MachineType{
 				Name:      "n2d-standard-2",
 				Resources: mcv1.MachineResources{CPUs: 2, Memory: 8192},
@@ -1235,11 +1806,13 @@ func TestToMachineTypeObject_ConfidentialNodeConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantSupport: map[string]bool{"SEV": true},
+			wantSupport:     map[string]bool{"SEV": true},
+			wantIsSupported: true,
 		},
 		{
-			name:         "fallback to hardcoded list when crd is empty",
-			enableCvmSot: false,
+			name:            "fallback to hardcoded list when crd is empty",
+			enableCvmSot:    false,
+			familyCvmEnable: true,
 			input: &mcv1.MachineType{
 				Name:      "n2d-standard-2",
 				Resources: mcv1.MachineResources{CPUs: 2, Memory: 8192},
@@ -1247,7 +1820,8 @@ func TestToMachineTypeObject_ConfidentialNodeConfigs(t *testing.T) {
 					SupportsConfidentialNodes: ptr.To(true),
 				},
 			},
-			wantSupport: nil,
+			wantSupport:     nil,
+			wantIsSupported: true,
 		},
 	}
 
@@ -1258,12 +1832,22 @@ func TestToMachineTypeObject_ConfidentialNodeConfigs(t *testing.T) {
 				t.Fatalf("ToMachineTypeObject() unexpected error = %v", err)
 			}
 
+			parentFamily := MachineFamily{
+				name:                     "n2d",
+				supportConfidentialNodes: tc.familyCvmEnable,
+			}
+			got.family = &parentFamily
+
 			var gotSupport map[string]bool
 			if got.confidentialNodeCfg != nil {
 				gotSupport = got.confidentialNodeCfg.supportConfidentialNodeTypes
 			}
 			if diff := cmp.Diff(tc.wantSupport, gotSupport); diff != "" {
 				t.Errorf("confidentialNodeCfg.supportConfidentialNodeTypes mismatch (-want +got):\n%s", diff)
+			}
+
+			if got.IsConfidentialNodesSupported() != tc.wantIsSupported {
+				t.Errorf("got.IsConfidentialNodesSupported() = %t, want %t", got.IsConfidentialNodesSupported(), tc.wantIsSupported)
 			}
 		})
 	}
@@ -1413,19 +1997,20 @@ func TestToMachineFamilyObject_ConfidentialVMConfigs(t *testing.T) {
 		expectedTypeSupport   map[string]bool
 	}{
 		{
-			name:         "family level configs",
+			name:         "family level configs (AMD)",
 			enableCvmSot: true,
 			familyConfigs: &mcv1.ConfidentialNodeConfig{
 				Supported: ptr.To(true),
 				Types: []mcv1.ConfidentialNodeType{
 					{Type: "SEV"},
-					{Type: "TDX"},
+					{Type: "SEV_SNP"},
 				},
 			},
-			expectedFamilySupport: map[string]bool{"SEV": true, "TDX": true},
+			expectedFamilySupport: map[string]bool{"SEV": true, "SEV_SNP": true},
+			expectedTypeSupport:   nil,
 		},
 		{
-			name:         "type level overrides",
+			name:         "type level overrides (AMD)",
 			enableCvmSot: true,
 			familyConfigs: &mcv1.ConfidentialNodeConfig{
 				Supported: ptr.To(true),
@@ -1436,11 +2021,11 @@ func TestToMachineFamilyObject_ConfidentialVMConfigs(t *testing.T) {
 			typeConfigs: &mcv1.ConfidentialNodeConfig{
 				Supported: ptr.To(true),
 				Types: []mcv1.ConfidentialNodeType{
-					{Type: "TDX"},
+					{Type: "SEV_SNP"},
 				},
 			},
 			expectedFamilySupport: map[string]bool{"SEV": true},
-			expectedTypeSupport:   map[string]bool{"TDX": true},
+			expectedTypeSupport:   map[string]bool{"SEV_SNP": true},
 		},
 		{
 			name:                  "fallback to hardcoded list when crd is empty but sot is disabled",
@@ -1512,6 +2097,94 @@ func TestToMachineFamilyObject_ConfidentialVMConfigs(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.expectedTypeSupport, typeSupport); diff != "" {
 				t.Errorf("MachineType.supportConfidentialNodeTypes mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExtractBootDiskTypesOrNil(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input *mcv1.BootDiskConfig
+		want  *[]string
+	}{
+		{
+			name:  "nil input",
+			input: nil,
+			want:  nil,
+		},
+		{
+			name: "empty types",
+			input: &mcv1.BootDiskConfig{
+				DefaultType: "pd-standard",
+				Types:       []string{},
+			},
+			want: nil,
+		},
+		{
+			name: "valid types",
+			input: &mcv1.BootDiskConfig{
+				DefaultType: "pd-standard",
+				Types:       []string{"pd-standard", "pd-ssd", "pd-balanced"},
+			},
+			want: &[]string{"pd-standard", "pd-ssd", "pd-balanced"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractBootDiskTypesOrNil(tc.input)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("extractBootDiskTypesOrNil() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExtractSsdConfig(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input *mcv1.LocalSSDConfig
+		want  *ephemeralLocalSsdConfig
+	}{
+		{
+			name:  "nil input",
+			input: nil,
+			want:  nil,
+		},
+		{
+			name: "empty available counts",
+			input: &mcv1.LocalSSDConfig{
+				DefaultCount:    2,
+				AvailableCounts: nil,
+				DiskSize:        375,
+			},
+			want: &ephemeralLocalSsdConfig{
+				automaticDiskCount: ptr.To[int64](2),
+				allowedDiskCounts:  nil,
+				diskSize:           375,
+			},
+		},
+		{
+			name: "valid available counts",
+			input: &mcv1.LocalSSDConfig{
+				DefaultCount:    4,
+				AvailableCounts: []int64{1, 2, 4},
+				DiskSize:        375,
+			},
+			want: &ephemeralLocalSsdConfig{
+				automaticDiskCount: ptr.To[int64](4),
+				allowedDiskCounts:  map[int]bool{1: true, 2: true, 4: true},
+				diskSize:           375,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractSsdConfig(tc.input)
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(ephemeralLocalSsdConfig{})); diff != "" {
+				t.Errorf("extractSsdConfig() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

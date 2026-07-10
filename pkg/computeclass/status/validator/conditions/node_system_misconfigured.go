@@ -156,6 +156,11 @@ func (ch *nodeSystemConfigChecker) checkRule(rule rules.Rule) *metav1.Condition 
 	}
 	totalHugepageSizeInMB := hugepage2m*2 + hugepage1g*1024
 
+	var numaAlignmentNeeded bool
+	if rule.MemoryManagerPolicy() != nil || rule.TopologyManagerPolicy() != nil || rule.TopologyManagerScope() != nil {
+		numaAlignmentNeeded = true
+	}
+
 	if rule.MachineFamily() != "" {
 		if mf, err := ch.provider.MachineConfigProvider().ToMachineFamily(rule.MachineFamily()); err == nil {
 			if hugepage1g > 0 && !mf.IsHugepageSize1gSupported() {
@@ -165,10 +170,18 @@ func (ch *nodeSystemConfigChecker) checkRule(rule rules.Rule) *metav1.Condition 
 			if totalHugepageSizeInMB > largestMachineType.MaximumAllocatableHugepageCapacityInMB() {
 				return AllMachinesInMachineFamilyExceedHugepageMemoryLimitCondition(rule.MachineFamily(), largestMachineType.AllocatableHugepageRatioCap())
 			}
+			if numaAlignmentNeeded && !mf.IsNumaAlignmentSupported() {
+				return UnsupportedMachineFamilyForNumaAlignmentCondition(rule.MachineFamily())
+			}
 		}
 	} else if rule.MachineType() != "" {
-		if mf, err := ch.provider.MachineConfigProvider().GetMachineFamilyFromMachineName(rule.MachineType()); err == nil && hugepage1g > 0 && !mf.IsHugepageSize1gSupported() {
-			return UnsupportedMachineTypeForHugepageSize1gCondition(rule.MachineType())
+		if mf, err := ch.provider.MachineConfigProvider().GetMachineFamilyFromMachineName(rule.MachineType()); err == nil {
+			if hugepage1g > 0 && !mf.IsHugepageSize1gSupported() {
+				return UnsupportedMachineTypeForHugepageSize1gCondition(rule.MachineType())
+			}
+			if numaAlignmentNeeded && !mf.IsNumaAlignmentSupported() {
+				return UnsupportedMachineTypeForNumaAlignmentCondition(rule.MachineType())
+			}
 		}
 		if mt, err := ch.provider.MachineConfigProvider().ToMachineType(rule.MachineType()); err == nil && totalHugepageSizeInMB > mt.MaximumAllocatableHugepageCapacityInMB() {
 			return TotalHugepagesExceedMemoryLimitCondition(totalHugepageSizeInMB, rule.MachineType(), mt.MaximumAllocatableHugepageCapacityInMB(), mt.AllocatableHugepageRatioCap())
@@ -176,13 +189,15 @@ func (ch *nodeSystemConfigChecker) checkRule(rule rules.Rule) *metav1.Condition 
 	} else {
 		defaultFamily := ch.provider.GetAutoprovisioningDefaultFamily().Name()
 		if mf, err := ch.provider.MachineConfigProvider().ToMachineFamily(defaultFamily); err == nil {
-
 			if hugepage1g > 0 && !mf.IsHugepageSize1gSupported() {
 				return UnsupportedDefaultMachineFamilyForHugepageSize1gCondition(defaultFamily)
 			}
 			largestMachineType := mf.LargestMachineType(machinetypes.NoConstraints)
 			if totalHugepageSizeInMB > largestMachineType.MaximumAllocatableHugepageCapacityInMB() {
 				return AllMachinesInDefaultFamilyExceedHugepageMemoryLimitCondition(defaultFamily, largestMachineType.AllocatableHugepageRatioCap())
+			}
+			if numaAlignmentNeeded && !mf.IsNumaAlignmentSupported() {
+				return UnsupportedDefaultMachineFamilyForNumaAlignmentCondition(defaultFamily)
 			}
 		}
 	}

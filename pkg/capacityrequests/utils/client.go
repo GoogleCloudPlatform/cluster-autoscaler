@@ -15,6 +15,7 @@
 package utils
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -32,11 +33,11 @@ func NewCrClient(kubeConfig *rest.Config) (*cr_clientset.Clientset, error) {
 }
 
 // NewAllCrsLister creates a lister for all Capacity Requests in the cluster.
-func NewAllCrsLister(crClient cr_clientset.Interface, stopChannel <-chan struct{}) (cr_lister.CapacityRequestLister, error) {
+func NewAllCrsLister(ctx context.Context, crClient cr_clientset.Interface) (cr_lister.CapacityRequestLister, error) {
 	factory := cr_informer.NewSharedInformerFactory(crClient, 1*time.Hour)
 	crLister := factory.Internal().V1().CapacityRequests().Lister()
-	go factory.Start(stopChannel)
-	informersSynced := factory.WaitForCacheSync(stopChannel)
+	factory.Start(ctx.Done())
+	informersSynced := factory.WaitForCacheSync(ctx.Done())
 	for _, synced := range informersSynced {
 		if !synced {
 			return nil, fmt.Errorf("Can't create Capacity Request lister")

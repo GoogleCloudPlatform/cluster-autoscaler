@@ -18,21 +18,27 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments/fake"
 )
 
 func TestLocalSSDDiskSizes(t *testing.T) {
-	cache := newMachineConfigurationCache()
+	cache := newMixedMachineConfigurationCache()
 
 	// Override the disk size for a machine family that doesn't have
 	// a hard-coded override to validate the new path.
-	a3 := cache.config.families["a3"]
+	a3 := cache.machineFamilies()["a3"].Clone()
 	for mtName, mt := range a3.autoprovisionedMachineTypes {
 		if mt.ephemeralLocalSsdCfg != nil {
 			mt.ephemeralLocalSsdCfg.diskSize = 1000
 			a3.autoprovisionedMachineTypes[mtName] = mt
 		}
 	}
-	cache.config.families["a3"] = a3
+
+	cache.update(map[string]MachineFamily{
+		"a3": a3,
+	})
 
 	mcp := &MachineConfigProvider{
 		cache: cache,
@@ -219,4 +225,154 @@ func TestNumNodesFromTopology(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMachineConfigProvider_ToMachineType_FamilyBackfill(t *testing.T) {
+	mcp := NewMachineConfigProvider(nil)
+
+	for _, tc := range []struct {
+		machineTypeName string
+		wantFamilyName  string
+		wantCvmSupport  bool
+	}{
+		{
+			machineTypeName: "n2d-standard-2",
+			wantFamilyName:  "n2d",
+			wantCvmSupport:  true,
+		},
+		{
+			machineTypeName: "c3-standard-4",
+			wantFamilyName:  "c3",
+			wantCvmSupport:  true,
+		},
+		{
+			machineTypeName: "e2-standard-2",
+			wantFamilyName:  "e2",
+			wantCvmSupport:  false,
+		},
+	} {
+		t.Run(tc.machineTypeName, func(t *testing.T) {
+			mt, err := mcp.ToMachineType(tc.machineTypeName)
+			assert.NoError(t, err)
+			assert.NotNil(t, mt)
+
+			// Verify the parent family pointer is backfilled correctly.
+			assert.NotNil(t, mt.family, "mt.family should be backfilled and non-nil")
+			assert.Equal(t, tc.wantFamilyName, mt.family.Name())
+
+			// Verify IsConfidentialNodesSupported executes safely without any nil panics.
+			assert.Equal(t, tc.wantCvmSupport, mt.IsConfidentialNodesSupported())
+		})
+	}
+}
+
+func TestMachineConfigProvider_Refresh_ToggleDynamicConfig(t *testing.T) {
+	testCases := []struct {
+		name                            string
+		initialSimshipAutomationEnabled bool
+		simshipExperimentEnabled        bool
+		wantRefreshResult               bool
+		wantSimshipAutomationEnabled    bool
+	}{
+		{
+			name:                            "Set manager, flag false -> should remain disabled",
+			initialSimshipAutomationEnabled: false,
+			simshipExperimentEnabled:        false,
+			wantRefreshResult:               false,
+			wantSimshipAutomationEnabled:    false,
+		},
+		{
+			name:                            "Flag changes to true -> Refresh should enable it and return true",
+			initialSimshipAutomationEnabled: false,
+			simshipExperimentEnabled:        true,
+			wantRefreshResult:               true,
+			wantSimshipAutomationEnabled:    true,
+		},
+		{
+			name:                            "Flag remains true -> Refresh should return false (no change)",
+			initialSimshipAutomationEnabled: true,
+			simshipExperimentEnabled:        true,
+			wantRefreshResult:               false,
+			wantSimshipAutomationEnabled:    true,
+		},
+		{
+			name:                            "Flag changes to false -> Refresh should disable it and return true",
+			initialSimshipAutomationEnabled: true,
+			simshipExperimentEnabled:        false,
+			wantRefreshResult:               true,
+			wantSimshipAutomationEnabled:    false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			source := &Source{
+				mfCache: make(map[string]MachineFamily),
+			}
+			stringFlags := make(map[string]string)
+			if tc.simshipExperimentEnabled {
+				stringFlags[experiments.SimshipAutomationApplyCRDMinCAVersionFlag] = "0.0.0"
+			} else {
+				stringFlags[experiments.SimshipAutomationApplyCRDMinCAVersionFlag] = "9.9.9"
+			}
+			fakeEvaluator := fake.NewEvaluator(nil, stringFlags)
+			v, _ := version.FromString("1.26.0")
+			fm := experiments.NewManager(v, fakeEvaluator)
+			mcp := &MachineConfigProvider{
+				source:                            source,
+				cache:                             newMixedMachineConfigurationCache(),
+				experimentsManager:                fm,
+				simshipAutomationCurrentlyEnabled: tc.initialSimshipAutomationEnabled,
+			}
+
+			assert.Equal(t, tc.wantRefreshResult, mcp.Refresh())
+			assert.Equal(t, tc.wantSimshipAutomationEnabled, mcp.simshipAutomationCurrentlyEnabled)
+		})
+	}
+}
+
+func TestMachineConfigProvider_Refresh(t *testing.T) {
+	s := &Source{
+		mfCache:     make(map[string]MachineFamily),
+		updateCount: 0,
+	}
+	stringFlags := make(map[string]string)
+	stringFlags[experiments.SimshipAutomationApplyCRDMinCAVersionFlag] = "0.0.0"
+	fakeEvaluator := fake.NewEvaluator(nil, stringFlags)
+	v, _ := version.FromString("1.26.0")
+	fm := experiments.NewManager(v, fakeEvaluator)
+
+	mcp := &MachineConfigProvider{
+		source:                            s,
+		cache:                             newMixedMachineConfigurationCache(),
+		experimentsManager:                fm,
+		simshipAutomationCurrentlyEnabled: true,
+	}
+
+	familyA := NewTestMachineFamily("familyA", nil, UnknownPlatform, UnknownPlatform, nil, nil)
+	s.updateCache(familyA, "v1")
+
+	// Refresh 1: Initial cache population should return true
+	assert.True(t, mcp.Refresh(), "Refresh after initial cache population should return true")
+
+	// Refresh 2: Refresh without changes should return false
+	assert.False(t, mcp.Refresh(), "Refresh without cache mutations should return false")
+
+	// Refresh 3: Refresh after identical update should return false
+	s.updateCache(familyA, "v1")
+	assert.False(t, mcp.Refresh(), "Refresh after identical informer resync should return false")
+
+	// Refresh 4: Refresh after actual mutation should return true
+	mutatedFamilyA := NewTestMachineFamily("familyA", nil, UnknownPlatform, UnknownPlatform, nil, []string{"pd-ssd"})
+	s.updateCache(mutatedFamilyA, "v2")
+	assert.True(t, mcp.Refresh(), "Refresh after structural mutation should return true")
+
+	// Refresh 5: Refresh after removing non-existent family should return false
+	s.removeFromCache("familyB", "v1")
+	assert.False(t, mcp.Refresh(), "Refresh after non-existent family removal should return false")
+
+	// Refresh 6: Refresh after removing existing family should return true
+	s.removeFromCache("familyA", "v2")
+	assert.True(t, mcp.Refresh(), "Refresh after existing family removal should return true")
+
 }

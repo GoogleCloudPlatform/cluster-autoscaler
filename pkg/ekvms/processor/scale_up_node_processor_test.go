@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	autoscalingctx "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/store"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/testsnapshot"
@@ -843,7 +844,7 @@ func TestProcess(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.desc, func(t *testing.T) {
 				snapshot := setupSnapshot(t, tc)
-				ctx := setupContext(tc, snapshot)
+				autoscalingCtx := setupContext(tc, snapshot)
 				manager := setupManager(tc)
 				calculator := setupCalculator(tc)
 				metrics := setupMetrics(tc, family)
@@ -852,7 +853,7 @@ func TestProcess(t *testing.T) {
 				cp := &gke.GkeCloudProviderMock{}
 				cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 				p := NewScaleUpNodeProcessor(cp, manager, calculator, metrics, nil, cccLister, nil)
-				unschedulable, err := p.Process(ctx, tc.unschedulable)
+				unschedulable, err := p.Process(autoscalingCtx, tc.unschedulable)
 				assert.NoError(t, err)
 
 				verifyResults(t, tc, snapshot, unschedulable, metrics, family)
@@ -872,16 +873,16 @@ func setupSnapshot(t *testing.T, tc ProcessTestCase) clustersnapshot.ClusterSnap
 	return snapshot
 }
 
-func setupContext(tc ProcessTestCase, snapshot clustersnapshot.ClusterSnapshot) *context.AutoscalingContext {
+func setupContext(tc ProcessTestCase, snapshot clustersnapshot.ClusterSnapshot) *autoscalingctx.AutoscalingContext {
 	daemonSetLister := &mockDSLister{}
 	if tc.daemonSetListerThrowsError {
 		daemonSetLister.On("List", labels.Everything()).Return(tc.daemonSets, errors.New("listing DaemonSets error")).Once()
 	} else {
 		daemonSetLister.On("List", labels.Everything()).Return(tc.daemonSets, nil).Once()
 	}
-	return &context.AutoscalingContext{
+	return &autoscalingctx.AutoscalingContext{
 		ClusterSnapshot: snapshot,
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+		AutoscalingKubeClients: autoscalingctx.AutoscalingKubeClients{
 			ListerRegistry: kubernetes.NewListerRegistry(nil, nil, nil, nil, daemonSetLister, nil, nil, nil, nil),
 		},
 	}
@@ -1212,9 +1213,9 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				}
 				daemonSetLister := &mockDSLister{}
 				daemonSetLister.On("List", labels.Everything()).Return([]*appsv1.DaemonSet{}, nil).Once()
-				ctx := &context.AutoscalingContext{
+				autoscalingCtx := &autoscalingctx.AutoscalingContext{
 					ClusterSnapshot: snapshot,
-					AutoscalingKubeClients: context.AutoscalingKubeClients{
+					AutoscalingKubeClients: autoscalingctx.AutoscalingKubeClients{
 						ListerRegistry: kubernetes.NewListerRegistry(nil, nil, nil, nil, daemonSetLister, nil, nil, nil, nil),
 					},
 				}
@@ -1234,7 +1235,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				cp := &gke.GkeCloudProviderMock{}
 				cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 				p := NewScaleUpNodeProcessor(cp, m, calc, metrics, nil, cccLister, nil)
-				unschedulable, err := p.ScheduleLookaheadPods(ctx, tc.unschedulable)
+				unschedulable, err := p.ScheduleLookaheadPods(autoscalingCtx, tc.unschedulable)
 				assert.NoError(t, err)
 				nodeInfos, err := snapshot.ListNodeInfos()
 				assert.NoError(t, err)
@@ -1758,13 +1759,13 @@ func TestPreprocess(t *testing.T) {
 			m.On("IsResizingEnabled", mock.Anything).Return(
 				tc.isResizingEnabled)
 			m.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.ekSnapshot).Once()
-			ctx := &context.AutoscalingContext{
+			autoscalingCtx := &autoscalingctx.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
-			err = p.Preprocess(ctx)
+			err = p.Preprocess(autoscalingCtx)
 			assert.NoError(t, err)
 			nodeInfos, err := snapshot.ListNodeInfos()
 			assert.NoError(t, err)
@@ -1788,7 +1789,7 @@ func TestPreprocessRemovesBPResizeTaint(t *testing.T) {
 	snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	err = snapshot.AddNodeInfo(framework.NewTestNodeInfo(node))
 	assert.NoError(t, err)
-	ctx := &context.AutoscalingContext{
+	autoscalingCtx := &autoscalingctx.AutoscalingContext{
 		ClusterSnapshot: snapshot,
 	}
 	m := newManagerMock()
@@ -1798,9 +1799,9 @@ func TestPreprocessRemovesBPResizeTaint(t *testing.T) {
 	cp := &gke.GkeCloudProviderMock{}
 	cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 	p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
-	err = p.Preprocess(ctx)
+	err = p.Preprocess(autoscalingCtx)
 	assert.NoError(t, err)
-	nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(node.Name)
+	nodeInfo, err := autoscalingCtx.ClusterSnapshot.GetNodeInfo(node.Name)
 	assert.NoError(t, err)
 	assert.False(t, taints.TaintExists(nodeInfo.Node().Spec.Taints, ekvmtypes.BPResizeTaint))
 }
@@ -1819,7 +1820,7 @@ func TestPreprocessInjectsDefaultBalloonPods(t *testing.T) {
 	err = snapshot.AddNodeInfo(framework.NewTestNodeInfo(ekNodeWithoutBP))
 	assert.NoError(t, err)
 
-	ctx := &context.AutoscalingContext{
+	autoscalingCtx := &autoscalingctx.AutoscalingContext{
 		ClusterSnapshot: snapshot,
 	}
 
@@ -1830,7 +1831,7 @@ func TestPreprocessInjectsDefaultBalloonPods(t *testing.T) {
 	cp := &gke.GkeCloudProviderMock{}
 	cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 	p := NewScaleUpNodeProcessor(cp, m, calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil)), nil, nil, nil, nil)
-	err = p.Preprocess(ctx)
+	err = p.Preprocess(autoscalingCtx)
 	assert.NoError(t, err)
 
 	for _, tc := range []struct {
@@ -1852,7 +1853,7 @@ func TestPreprocessInjectsDefaultBalloonPods(t *testing.T) {
 			wantBalloonPodCount: 1,
 		},
 	} {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(tc.node.Name)
+		nodeInfo, err := autoscalingCtx.ClusterSnapshot.GetNodeInfo(tc.node.Name)
 		assert.NoError(t, err)
 		assert.Len(t, nodeInfo.Pods(), tc.wantBalloonPodCount)
 		if tc.wantBalloonPodCount == 1 {
@@ -2710,8 +2711,8 @@ func newManagerMock() *ManagerMock {
 }
 
 // Run is a mocked method.
-func (m *ManagerMock) Run(stopCh chan struct{}) {
-	_ = m.Called(stopCh)
+func (m *ManagerMock) Run(ctx context.Context) {
+	_ = m.Called(ctx)
 }
 
 // Upsize is a mocked method.

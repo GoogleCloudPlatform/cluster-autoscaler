@@ -36,7 +36,7 @@ var (
 		maxCpuCount: map[PhysicalGpuCount]int{
 			1: 16,
 			2: 32,
-			4: 64, // TODO(b/517096338): support 96 for selected zones
+			4: 64,
 		},
 	})
 

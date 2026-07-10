@@ -32,6 +32,8 @@ type linuxNodeConfig struct {
 	transparentHugepageDefrag        *string
 	accurateTimeConfig               *AccurateTimeConfig
 	swapConfig                       *SwapConfig
+	nodeVfioConfig                   *NodeVfioConfig
+	diskIoScheduler                  *DiskIoScheduler
 	additionalEtcHosts               []*EtcHostsEntry
 	additionalEtcResolvConf          []*ResolvedConfEntry
 	additionalEtcSystemdResolvedConf []*ResolvedConfEntry
@@ -43,6 +45,15 @@ type linuxNodeConfig struct {
 type hugepages struct {
 	hugepageSize1g *int64
 	hugepageSize2m *int64
+}
+
+type NodeVfioConfig struct {
+	DmaEntryLimit *int32
+}
+
+type DiskIoScheduler struct {
+	NodeSystemIoScheduler       string
+	NodeAttachedDiskIoScheduler string
 }
 
 type AccurateTimeConfig struct {
@@ -159,6 +170,8 @@ type NodeSystemConfigRule interface {
 	MemoryManagerPolicy() *string
 	AccurateTimeConfig() *AccurateTimeConfig
 	SwapConfig() *SwapConfig
+	NodeVfioConfig() *NodeVfioConfig
+	DiskIoScheduler() *DiskIoScheduler
 	ShutdownGracePeriodSeconds() *int64
 	ShutdownGracePeriodCriticalPodsSeconds() *int64
 	CrashLoopBackOffMaxContainerRestartPeriod() *string
@@ -309,12 +322,48 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		}
 	}
 
+	// Check for node vfio config
+	var ruleNodeVfioConfig *NodeVfioConfig
+	var npNodeVfioConfig *gkeclient.NodeVfioConfig
+	if r.linuxNodeConfig != nil {
+		ruleNodeVfioConfig = r.linuxNodeConfig.nodeVfioConfig
+	}
+	if mig.Spec() != nil && mig.Spec().LinuxNodeConfig != nil {
+		npNodeVfioConfig = mig.Spec().LinuxNodeConfig.NodeVfioConfig
+	}
+	if ruleNodeVfioConfig != nil && npNodeVfioConfig == nil {
+		return false
+	}
+	if ruleNodeVfioConfig != nil && npNodeVfioConfig != nil {
+		if ruleNodeVfioConfig.DmaEntryLimit != nil && int64(*ruleNodeVfioConfig.DmaEntryLimit) != npNodeVfioConfig.DmaEntryLimit {
+			return false
+		}
+	}
+
+	// Check for disk io scheduler
+	var ruleDiskIoScheduler *DiskIoScheduler
+	var npDiskIoScheduler *gkeclient.DiskIoScheduler
+	if r.linuxNodeConfig != nil {
+		ruleDiskIoScheduler = r.linuxNodeConfig.diskIoScheduler
+	}
+	if mig.Spec() != nil && mig.Spec().LinuxNodeConfig != nil {
+		npDiskIoScheduler = mig.Spec().LinuxNodeConfig.DiskIoScheduler
+	}
+	if ruleDiskIoScheduler != nil && npDiskIoScheduler == nil {
+		return false
+	}
+	if ruleDiskIoScheduler != nil && npDiskIoScheduler != nil {
+		if ruleDiskIoScheduler.NodeSystemIoScheduler != "" && ruleDiskIoScheduler.NodeSystemIoScheduler != npDiskIoScheduler.NodeSystemIoScheduler {
+			return false
+		}
+		if ruleDiskIoScheduler.NodeAttachedDiskIoScheduler != "" && ruleDiskIoScheduler.NodeAttachedDiskIoScheduler != npDiskIoScheduler.NodeAttachedDiskIoScheduler {
+			return false
+		}
+	}
+
 	// Check for kubelet config.
 	var npKubeletConfig *gke_api_beta.NodeKubeletConfig
-	var ruleKubeletConfig *kubeletConfig
-	if r.kubeletConfig != nil {
-		ruleKubeletConfig = r.kubeletConfig
-	}
+	var ruleKubeletConfig *kubeletConfig = r.kubeletConfig
 	if mig.Spec() != nil && mig.Spec().KubeletConfig != nil {
 		npKubeletConfig = mig.Spec().KubeletConfig
 	}
@@ -776,6 +825,20 @@ func (r *nodeSystemConfigRule) AccurateTimeConfig() *AccurateTimeConfig {
 		return nil
 	}
 	return r.linuxNodeConfig.accurateTimeConfig
+}
+
+func (r *nodeSystemConfigRule) NodeVfioConfig() *NodeVfioConfig {
+	if r.linuxNodeConfig == nil {
+		return nil
+	}
+	return r.linuxNodeConfig.nodeVfioConfig
+}
+
+func (r *nodeSystemConfigRule) DiskIoScheduler() *DiskIoScheduler {
+	if r.linuxNodeConfig == nil {
+		return nil
+	}
+	return r.linuxNodeConfig.diskIoScheduler
 }
 
 func (r *nodeSystemConfigRule) SwapConfig() *SwapConfig {
@@ -1326,6 +1389,32 @@ func WithSwapConfigRule(config ccc_api.SwapConfig) RuleOption {
 			}
 		}
 		r.nodeSystemConfigRule.linuxNodeConfig.swapConfig = swapConfig
+	}
+}
+
+func WithNodeVfioConfigRule(config ccc_api.NodeVfioConfig) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.linuxNodeConfig == nil {
+			r.nodeSystemConfigRule.linuxNodeConfig = &linuxNodeConfig{}
+		}
+		if r.nodeSystemConfigRule.linuxNodeConfig.nodeVfioConfig == nil {
+			r.nodeSystemConfigRule.linuxNodeConfig.nodeVfioConfig = &NodeVfioConfig{}
+		}
+		if config.DmaEntryLimit != nil {
+			r.nodeSystemConfigRule.linuxNodeConfig.nodeVfioConfig.DmaEntryLimit = config.DmaEntryLimit
+		}
+	}
+}
+
+func WithDiskIoSchedulerRule(config ccc_api.DiskIoScheduler) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.linuxNodeConfig == nil {
+			r.nodeSystemConfigRule.linuxNodeConfig = &linuxNodeConfig{}
+		}
+		r.nodeSystemConfigRule.linuxNodeConfig.diskIoScheduler = &DiskIoScheduler{
+			NodeSystemIoScheduler:       config.NodeSystemIoScheduler,
+			NodeAttachedDiskIoScheduler: config.NodeAttachedDiskIoScheduler,
+		}
 	}
 }
 

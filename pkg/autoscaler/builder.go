@@ -29,6 +29,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
 	coreoptions "k8s.io/autoscaler/cluster-autoscaler/core/options"
+	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
+	ca_utils "k8s.io/autoscaler/cluster-autoscaler/core/utils"
 	"k8s.io/autoscaler/cluster-autoscaler/estimator"
 	"k8s.io/autoscaler/cluster-autoscaler/loop"
 	"k8s.io/autoscaler/cluster-autoscaler/observers/loopstart"
@@ -38,6 +40,8 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/checkcapacity"
 	provreqorchestrator "k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/orchestrator"
 	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqclient"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas/capacityquota"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/predicate"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/store"
@@ -50,6 +54,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
+	internalcq "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityquota"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
@@ -63,6 +68,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+
+	cc_resourcequota "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/resourcequota"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	npc_validator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/validator"
@@ -102,10 +109,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/resizerequests"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/informers/externalversions"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/listers/nodemanagement.gke.io/v1alpha1"
+	gke_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	informer "github.com/googlecloudplatform/compute-class-api/client/informers/externalversions"
@@ -124,6 +133,8 @@ type Builder struct {
 	tokenSource oauth2.TokenSource
 	projectID   string
 	location    string
+
+	manager ctrl.Manager
 
 	// Fields to hold injectable fakes (or real clients)
 	kubeClient     kube_client.Interface
@@ -191,13 +202,13 @@ type FutureReservationsPuller interface {
 	// GetLocalFutureReservations returns a slice of future reservations in this cluster's GCP project
 	GetLocalFutureReservations() []*gceclient.GceFutureReservation
 	// Run starts asynchrounous Future Reservations pulls from GCE
-	Run(stopCh <-chan struct{})
+	Run(bgContext ctx.Context)
 }
 
 type ProviderConfigManager interface {
 	multitenancy.ProviderConfigObserver
 	// Run starts asynchrounous ProviderConfigObserver.
-	Run(stopCh <-chan struct{})
+	Run(bgContext ctx.Context)
 }
 
 func NewBuilder(optionsTracker *optstracking.OptionsTracker) *Builder {
@@ -232,6 +243,12 @@ func (b *Builder) WithKubeJSON(config *rest.Config) *Builder {
 // WithKubeClient allows injecting a Kubernetes client.
 func (b *Builder) WithKubeClient(client kube_client.Interface) *Builder {
 	b.kubeClient = client
+	return b
+}
+
+// WithManager allows injecting a controller-runtime manager.
+func (b *Builder) WithManager(mgr ctrl.Manager) *Builder {
+	b.manager = mgr
 	return b
 }
 
@@ -454,7 +471,6 @@ func (b *Builder) WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory node
 func (b *Builder) Build(
 	bgContext ctx.Context,
 	gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter,
-	stopCh chan struct{},
 	osReservedContent []byte) (*core.StaticAutoscaler, *loop.LoopTrigger, error) {
 
 	experimentsManager := b.optsTracker.ExperimentsManager()
@@ -484,8 +500,8 @@ func (b *Builder) Build(
 	}
 
 	if b.updateInfoFactory != nil {
-		go b.updateInfoFactory.Start(stopCh)
-		informersSynced := b.updateInfoFactory.WaitForCacheSync(stopCh)
+		b.updateInfoFactory.Start(bgContext.Done())
+		informersSynced := b.updateInfoFactory.WaitForCacheSync(bgContext.Done())
 		for _, synced := range informersSynced {
 			if !synced {
 				klog.Fatal("can't create updateInfo lister")
@@ -520,7 +536,8 @@ func (b *Builder) Build(
 		drainabilityRules = append([]rules.Rule{clusterScaleToZeroProcessor}, drainabilityRules...)
 	}
 
-	var loopStartObservers = []loopstart.Observer{}
+	scaleUpFailuresRegistry := scaleupfailures.NewRegistry()
+	var loopStartObservers = []loopstart.Observer{scaleUpFailuresRegistry}
 
 	rrer := resizerequests.NewErrorReporter(experimentsManager)
 	loopStartObservers = append(loopStartObservers, rrer)
@@ -530,7 +547,7 @@ func (b *Builder) Build(
 		if err != nil {
 			return nil, nil, err
 		}
-		lister, err := networking.NewLister(clientset, stopCh)
+		lister, err := networking.NewLister(bgContext, clientset)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -557,7 +574,7 @@ func (b *Builder) Build(
 	// and contains GCP specific config for managing the tenant. More at go/gke-mt-resource-model-design.
 	var providerConfigObserver multitenancy.ProviderConfigObserver
 	if autoscalingOptions.MultitenancyEnabled && b.provConfigInformer != nil {
-		go b.provConfigInformer.Run(stopCh)
+		go b.provConfigInformer.Run(bgContext)
 		providerConfigObserver = b.provConfigInformer
 	}
 
@@ -591,7 +608,10 @@ func (b *Builder) Build(
 	ekSpotEnabledCache := ekvms_providers.NewEkSpotEnabledCache(experimentsManager)
 
 	// Initialize GCE Reservations Puller.
-	reservationsPuller := gceclient.NewReservationsPuller(b.gceClient, b.consumableReservationsClient, experimentsManager, b.projectID, autoscalingOptions.EnableConsumablePuller, autoscalingOptions.Location)
+	reservationsPuller, err := gceclient.NewReservationsPuller(b.gceClient, b.consumableReservationsClient, experimentsManager, b.projectID, autoscalingOptions.EnableConsumablePuller, autoscalingOptions.Location)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create reservations puller: %v", err)
+	}
 	go reservationsPuller.Run(bgContext)
 
 	// Create GKE cloud provider.
@@ -666,17 +686,17 @@ func (b *Builder) Build(
 	var futureReservationsPuller FutureReservationsPuller = futurereservations.NewNoOpPuller()
 	if autoscalingOptions.FutureReservationsBackoffEnabled {
 		futureReservationsPuller = futurereservations.NewFutureReservationsPuller(cloudProvider, b.projectID)
-		go futureReservationsPuller.Run(stopCh)
+		go futureReservationsPuller.Run(bgContext)
 	}
 
 	resourcePolicyPuller := placement.NewResourcePolicyPuller(experimentsManager, cloudProvider, b.projectID)
-	go resourcePolicyPuller.Run(stopCh)
+	go resourcePolicyPuller.Run(bgContext)
 
 	// initializing GCE Reservation Blocks Puller
 	var reservationBlocksPuller *reservations.BlocksPuller
 	if autoscalingOptions.ReservationBlocksEnabled {
 		reservationBlocksPuller = reservations.NewBlocksPuller(cloudProvider, reservationsPuller)
-		go reservationBlocksPuller.Run(stopCh)
+		go reservationBlocksPuller.Run(bgContext)
 	}
 
 	// initializing Aggregator
@@ -704,7 +724,7 @@ func (b *Builder) Build(
 	if autoscalingOptions.EnhancedCrdStatusReporting || autoscalingOptions.EnableComputeClassMinCapacity {
 		cccInformerFactory := informer.NewSharedInformerFactory(b.npcCrdClient.CccClient(), 0)
 		cccInformer = cccInformerFactory.Cloud().V1().ComputeClasses().Informer()
-		go cccInformerFactory.Start(stopCh)
+		cccInformerFactory.Start(bgContext.Done())
 	}
 
 	if autoscalingOptions.EnhancedCrdStatusReporting {
@@ -724,6 +744,7 @@ func (b *Builder) Build(
 			cloudProvider,
 			computeclass.NewMatcher(b.npcCrdLister, cloudProvider),
 			minCapacityObserver,
+			experimentsManager,
 		)
 		if err := minCapacityController.Start(bgContext); err != nil {
 			klog.Errorf("Failed to start MinCapacityController: %v", err)
@@ -748,7 +769,7 @@ func (b *Builder) Build(
 		klog.Errorf("Cannot create NPC/CCC Crd Validator. Error: %v", err)
 		return nil, nil, err
 	}
-	go npcCrdValidator.Run(stopCh)
+	go npcCrdValidator.Run(bgContext)
 
 	var observers []gke_backoff.BackoffObserver
 	if autoscalingOptions.EnhancedCrdStatusReporting {
@@ -784,7 +805,7 @@ func (b *Builder) Build(
 		estimator.NewStaticThreshold(autoscalingOptions.MaxNodesPerScaleUp, autoscalingOptions.MaxNodeGroupBinpackingDuration),
 		estimator.NewSngCapacityThreshold(),
 		estimator.NewClusterCapacityThreshold(),
-		internal_estimator.NewReservationsThreshold(reservationsPuller, autoscalingOptions.GCEOptions.LocalSSDDiskSizeProvider, cloudProvider),
+		internal_estimator.NewReservationsThreshold(reservationsPuller, autoscalingOptions.GCEOptions.LocalSSDDiskSizeProvider, cloudProvider, b.optsTracker),
 	}
 
 	if autoscalingOptions.GCEFlexAdvisorEnabled {
@@ -822,8 +843,55 @@ func (b *Builder) Build(
 
 	capacitybufferPodsRegistry := fakepods.NewRegistry(nil)
 
+	minQuotasTrackerOptions := resourcequotas.TrackerOptions{
+		CustomResourcesProcessor: customResourcesProcessor,
+		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
+			resourcequotas.NewCloudMinProvider(cloudProvider),
+			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager),
+		}),
+		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
+			ca_utils.VirtualKubeletNodeFilter{},
+			gke_utils.TerminatingNodeFilter{},
+			surgeUpgradeResourceTracker,
+		}),
+	}
+
+	defragMinQuotasTrackerOptions := resourcequotas.TrackerOptions{
+		CustomResourcesProcessor: customResourcesProcessor,
+		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
+			resourcequotas.NewCloudMinProvider(cloudProvider),
+			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, true, experimentsManager),
+		}),
+		NodeFilter: minQuotasTrackerOptions.NodeFilter,
+	}
+	defragMinQuotasTrackerFactory := resourcequotas.NewTrackerFactory(defragMinQuotasTrackerOptions)
+
 	// initialized in setUpProcessors:
 	var defragProcessor *defrag_processor.Processor
+
+	quotaProviders := []resourcequotas.Provider{resourcequotas.NewCloudQuotasProvider(cloudProvider)}
+	if autoscalingOptions.CapacityQuotasEnabled {
+		quotaProviders = append(quotaProviders, capacityquota.NewCapacityQuotasProvider(b.manager.GetClient()))
+		cqReconciler := capacityquota.NewCapacityQuotaReconciler(b.manager.GetClient(), capacityquota.ReconcilerOptions{
+			// We do not want surgeUpgradeTracker here, as it's thread unsafe and bound to a specific loop
+			// This is fine, since NodeFilter in the controller is used only to calculate the usages for observability
+			NodeFilter: utils.VirtualKubeletNodeFilter{},
+			CustomValidators: []capacityquota.Validator{
+				internalcq.NewDefaultBlocklistedLabelsValidator(),
+			},
+		})
+		if err := cqReconciler.SetupWithManager(b.manager); err != nil {
+			return nil, nil, fmt.Errorf("failed to setup CapacityQuota reconciler: %w", err)
+		}
+	}
+	quotasTrackerOpts := resourcequotas.TrackerOptions{
+		CustomResourcesProcessor: customResourcesProcessor,
+		QuotaProvider:            resourcequotas.NewCombinedQuotasProvider(quotaProviders),
+		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
+			utils.VirtualKubeletNodeFilter{},
+			surgeUpgradeResourceTracker,
+		}),
+	}
 
 	autoscalingProcessors, err := setUpProcessors(
 		bgContext,
@@ -856,7 +924,6 @@ func (b *Builder) Build(
 		metricsFilter,
 		nodeSizeRecommender,
 		experimentsManager,
-		stopCh,
 		b.prClient,
 		b.prCache,
 		provreqProcessor,
@@ -870,7 +937,8 @@ func (b *Builder) Build(
 		b.nodeQuotaWatcher,
 		b.eventLogger,
 		updatesCh,
-		minCapacityObserver)
+		minCapacityObserver,
+		defragMinQuotasTrackerFactory)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -887,15 +955,17 @@ func (b *Builder) Build(
 		autoscalingOptions.PvmUnfitnessPenaltyEnabled,
 		autoscalingOptions.AutopilotEnabled,
 		autoscalingOptions.GCEOptions.LocalSSDDiskSizeProvider,
-		autoscalingProcessors.AsyncNodeGroupStateChecker)
+		autoscalingProcessors.AsyncNodeGroupStateChecker,
+		flexAdvisor,
+		b.npcCrdLister,
+		autoscalingOptions.GCEFlexAdvisorEnabled,
+		experimentsManager)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
 	scaleUpOrchestrator := provreqorchestrator.NewWrapperOrchestrator(prOrchestrator)
-
-	scaleUpFailuresRegistry := scaleupfailures.NewRegistry()
 
 	opts := coreoptions.AutoscalerOptions{
 		AutoscalingOptions:         autoscalingOptions.AutoscalingOptions,
@@ -916,6 +986,13 @@ func (b *Builder) Build(
 		DrainabilityRules:          drainabilityRules,
 		InformerFactory:            informerFactory,
 		CapacityBufferPodsRegistry: capacitybufferPodsRegistry,
+		QuotasTrackerOptions:       quotasTrackerOpts,
+		MinQuotasTrackerOptions:    minQuotasTrackerOptions,
+	}
+
+	if b.manager != nil {
+		opts.KubeClientNew = b.manager.GetClient()
+		opts.KubeCache = b.manager.GetCache()
 	}
 
 	// This metric should be published only once.
@@ -938,7 +1015,7 @@ func (b *Builder) Build(
 	// also marks the ProvisioningRequest as accepted or failed.
 	trigger := loop.NewLoopTrigger(autoscaler, b.prInjector, podObserver, autoscalingOptions.ScanInterval)
 
-	informerFactory.Start(stopCh)
+	informerFactory.Start(bgContext.Done())
 
 	// Cluster Autoscaler needs to wait until all K8s API informer caches are synced before starting normal operation - otherwise it can take wrong/suboptimal decisions based
 	// on inconsistent K8s state. The set of APIs/informers that CA needs to wait for changes depending on some AutoscalingOptions fields (e.g. DRA API is needed if and only if
@@ -1044,6 +1121,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.HTNAPFeatureName, "HTNAP", options.AsyncNodeGroupsEnabled)
 	logAndRecordFeatureMetric(internalmetrics.FastpathBinpackingFeatureName, "Fastpath Binpacking", options.FastpathBinpackingEnabled)
 	logAndRecordFeatureMetric(internalmetrics.IncreasedMaxNodesPerScaleUpFeatureName, "IncreasedMaxNodesPerScaleUp", options.MaxNodesPerScaleUp > optstracking.DecreasedMaxNodesPerScaleUp)
+	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

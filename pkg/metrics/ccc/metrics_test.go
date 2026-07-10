@@ -28,8 +28,8 @@ func TestCccMetricName(t *testing.T) {
 	}{
 		{
 			name:     "simple base name",
-			baseName: "node_provisioning_attempts_count",
-			expected: "node_provisioning_attempts_count_per_ccc",
+			baseName: "cluster_node_provisioning_attempts_count",
+			expected: "cluster_node_provisioning_attempts_count_per_ccc",
 		},
 		{
 			name:     "empty base name",

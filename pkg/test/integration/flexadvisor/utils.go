@@ -15,27 +15,31 @@
 package flexadvisor
 
 import (
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 )
 
 const (
 	// FA returns one instance available, but GCEClient does not limit it
-	OneInstanceAvailableMachineType = "e2-standard-4" // 4cpu, 16gb
-	StockOutMachineType             = "n2-standard-4" // 4cpu, 16gb
-	AvailableMachineType            = "n1-standard-4" // 4cpu, 16gb
-	UnknownAvailabilityMachineType  = "e2-standard-8"
+	OneInstanceAvailableMachineType       = "e2-standard-4" // 4cpu, 16gb
+	ZeroCapacityRecommendationMachineType = "n2-standard-4" // 4cpu, 16gb
+	AvailableMachineType                  = "n1-standard-4" // 4cpu, 16gb
+	UnknownAvailabilityMachineType        = "e2-standard-8"
+	ZoneA                                 = "us-central1-a"
+	ZoneB                                 = "us-central1-b"
+	ZoneC                                 = "us-central1-c"
+	ZoneF                                 = "us-central1-f"
 )
 
 func testCapacityGuidance() []fake.FakeCapacityGuidance {
 	return []fake.FakeCapacityGuidance{
-		fake.NewFakeCapacityGuidanceForMachineType(StockOutMachineType, 0, 0.5),
+		fake.NewFakeCapacityGuidanceForMachineType(ZeroCapacityRecommendationMachineType, 0, 0.5),
 		fake.NewFakeCapacityGuidanceForMachineType(AvailableMachineType, 10, 0.5),
 		fake.NewFakeCapacityGuidanceForMachineType(OneInstanceAvailableMachineType, 1, 0.5),
 	}
@@ -57,19 +61,16 @@ func annotateNodePoolWithCCCLabel(cccName string, nodePools []*gke_api_beta.Node
 }
 
 // createCCCFromNodePools creates CCC with rules based on the nodePools.
-// It also set's compute-class of each node-pool to the cccName
-func createCCCWithNodePoolsRules(nodePools []string) crd.CRD {
-	var crdRules []rules.Rule
+// One CCC priority per node-pool.
+func createCCCWithNodePoolsRules(nodePools []string) *v1.ComputeClass {
+	var priorities []v1.Priority
 	for _, name := range nodePools {
-		crdRules = append(crdRules,
-			rules.NewRule(rules.WithNodePoolsRule([]string{name})))
+		priorities = append(priorities,
+			v1.Priority{Nodepools: []string{name}})
 	}
-	crd := crd.NewTestCrd(
-		crd.WithName("test-ccc"),
-		crd.WithLabel(gkelabels.ComputeClassLabel),
-		crd.WithRules(crdRules),
-	)
-	return crd
+	return ccc.NewComputeClassBuilder("test-ccc").
+		WithPriorities(priorities...).
+		Build()
 }
 
 // The function is not in the OSS K8s test_utils,
@@ -86,7 +87,7 @@ func createEmptyNodePool(poolName string, machineType string) *gke_api_beta.Node
 		integration.WithNodePoolName(poolName),
 		integration.WithNodePoolMachineType(machineType),
 		integration.WithNodePoolSize(0),
-		integration.WithNodePoolLocations("us-central1-b"),
+		integration.WithNodePoolLocations(ZoneB),
 	)
 }
 

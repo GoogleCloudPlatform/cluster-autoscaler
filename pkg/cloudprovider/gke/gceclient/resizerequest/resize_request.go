@@ -203,6 +203,7 @@ const (
 	hashLengthCap      int = 16
 
 	// provisioningRequestPrefix is used when creating a Resize Request for a Provisioning Request.
+	// This should match http://cs/piper///depot/google3/cloud/kubernetes/engine/server/resources/node/mig.go;l=451-456;rcl=716166911
 	provisioningRequestPrefix = "gke-"
 	// flexStartNonQueuedPrefix is used when creating a Resize Request for DWS Flex Start Non-Queued (FSNQ) scale up.
 	flexStartNonQueuedPrefix = "flex-"

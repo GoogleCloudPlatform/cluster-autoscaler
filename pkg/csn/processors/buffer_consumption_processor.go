@@ -101,6 +101,9 @@ func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, un
 	return unschedulablePods, nil
 }
 
+// CleanUp cleans up the processor.
+func (p *BufferConsumptionProcessor) CleanUp() {}
+
 // Note: consumeCSNBuffers assumes that it is already under a forked snapshot.
 func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) (nodesOfScheduledPods map[*apiv1.Pod]string, err error) {
 	snapshot := ctx.ClusterSnapshot

@@ -31,20 +31,26 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/testutil"
 )
 
 func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 	mig1 := newTestNodeGroup("machine-type-2", "zone-a", 5, 10)
 	mig2 := newTestNodeGroup("machine-type-2", "zone-b", 3, 10)
 	mig3 := newTestNodeGroup("machine-type-2", "zone-c", 6, 10)
+	mig1000_1 := newTestNodeGroup("machine-type-2", "zone-a", 0, 1000)
+	mig1000_2 := newTestNodeGroup("machine-type-2", "zone-b", 0, 1000)
+	mig1000_3 := newTestNodeGroup("machine-type-2", "zone-c", 0, 1000)
+
 	testCases := []struct {
-		name               string
-		groups             []cloudprovider.NodeGroup
-		upcomingNodeGroups []cloudprovider.NodeGroup
-		reservations       []*gce_api.Reservation
-		newNodes           int
-		wantScaleUpInfo    []nodegroupset.ScaleUpInfo
-		wantReservations   []*gce_api.Reservation
+		name                  string
+		groups                []cloudprovider.NodeGroup
+		withFallbackBalancers func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor
+		upcomingNodeGroups    []cloudprovider.NodeGroup
+		reservations          []*gce_api.Reservation
+		newNodes              int
+		wantScaleUpInfo       []nodegroupset.ScaleUpInfo
+		wantReservations      []*gce_api.Reservation
 	}{
 		{
 			name: "single group, no reservations",
@@ -118,27 +124,93 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				BuildMultipleMachineReservationWithId(1, 10, 20, "machine-type-2", "zone-a"),
 			},
 		},
+		{
+			name:     "newNodes are completely handled by available reservations - doesn't call fallback balancers",
+			groups:   []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
+			newNodes: 100,
+			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := new(testutil.MockBalancer)
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("fallbackBalancer: should not be called")
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			reservations: []*gce_api.Reservation{
+				BuildMultipleMachineReservation("machine-type-2", "zone-a", 0, 100),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(mig1000_1, 0, 100, 1000),
+			},
+			wantReservations: []*gce_api.Reservation{
+				BuildMultipleMachineReservation("machine-type-2", "zone-a", 100, 100),
+			},
+		},
+		{
+			name:     "newNodes are not completely handled by available reservations - calls fallback balancers",
+			groups:   []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
+			newNodes: 1000,
+			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := new(testutil.MockBalancer)
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything).Once().Return(
+					func(ctx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+						// use OSS balancer which should distribute remaining nodes
+						ossBalancer := &nodegroupset.BalancingNodeGroupSetProcessor{}
+						return ossBalancer.BalanceScaleUpBetweenGroups(ctx, groups, newNodes)
+					},
+				)
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			reservations: []*gce_api.Reservation{
+				BuildMultipleMachineReservation("machine-type-2", "zone-a", 0, 500),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(mig1000_1, 0, 500, 1000),
+				newTestScaleUpInfo(mig1000_2, 0, 250, 1000),
+				newTestScaleUpInfo(mig1000_3, 0, 250, 1000),
+			},
+			wantReservations: []*gce_api.Reservation{
+				BuildMultipleMachineReservation("machine-type-2", "zone-a", 500, 500),
+			},
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			// store all mocks created throughout the test to verify their calls at the end
+			mocks := []*mock.Mock{}
+			registerMock := func(m *mock.Mock) {
+				mocks = append(mocks, m)
+			}
+
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"zone-a, zone-b"}, nil })
-			puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+			puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
 			puller.SetReservations(tc.reservations)
 
 			provider := &gke.GkeCloudProviderMock{}
 			provider.On("NodeGroups").Return(append(tc.groups, tc.upcomingNodeGroups...)).Once()
+			registerMock(&provider.Mock)
 
-			processor := NewReservationBalancingProcessor(&testBalancingProcessor{}, puller, localssdsize.NewSimpleLocalSSDProvider(), provider)
+			fallbackBalancers := (nodegroupset.NodeGroupSetProcessor)(nil)
+			if tc.withFallbackBalancers != nil {
+				fallbackBalancers = tc.withFallbackBalancers(registerMock)
+			} else {
+				fallbackBalancers = &noopTestBalancingProcessor{}
+			}
+			processor := NewReservationBalancingProcessor(fallbackBalancers, puller, localssdsize.NewSimpleLocalSSDProvider(), provider)
 
 			ctx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
 			scaleUpInfos, err := processor.BalanceScaleUpBetweenGroups(ctx, tc.groups, tc.newNodes)
 			assert.NoError(t, err)
+			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
 			assert.ElementsMatch(t, tc.wantReservations, puller.GetReservations())
+
+			for _, m := range mocks {
+				m.AssertExpectations(t)
+			}
 		})
 	}
 }
@@ -226,14 +298,15 @@ func TestDistributeNewNodes(t *testing.T) {
 	}
 }
 
-type testBalancingProcessor struct {
+// noopTestBalancingProcessor just returns passesd nodeGroups without changing any sizes
+type noopTestBalancingProcessor struct {
 }
 
-func (p *testBalancingProcessor) FindSimilarNodeGroups(*autoscaling_context.AutoscalingContext, cloudprovider.NodeGroup, map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+func (p *noopTestBalancingProcessor) FindSimilarNodeGroups(*autoscaling_context.AutoscalingContext, cloudprovider.NodeGroup, map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
 	return nil, nil
 }
 
-func (p *testBalancingProcessor) BalanceScaleUpBetweenGroups(_ *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, _ int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(_ *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 	var scaleUpInfos []nodegroupset.ScaleUpInfo
 	for _, group := range groups {
 		currentSize, err := group.TargetSize()
@@ -250,7 +323,8 @@ func (p *testBalancingProcessor) BalanceScaleUpBetweenGroups(_ *autoscaling_cont
 	}
 	return scaleUpInfos, nil
 }
-func (p *testBalancingProcessor) CleanUp() {}
+
+func (p *noopTestBalancingProcessor) CleanUp() {}
 
 func newTestNodeGroup(machineType, zone string, currentSize, maxSize int) cloudprovider.NodeGroup {
 	gkeManagerMock := &gke.GkeManagerMock{}

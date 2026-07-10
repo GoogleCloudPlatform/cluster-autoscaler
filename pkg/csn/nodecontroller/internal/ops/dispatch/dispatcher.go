@@ -16,6 +16,8 @@ package dispatch
 
 import (
 	"context"
+	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -64,12 +66,7 @@ func (d *Dispatcher) RegisterHandler(opType ops.OperationType, handler ops.Opera
 	d.handlers[opType] = handler
 }
 
-func (d *Dispatcher) Run(stopCh <-chan struct{}) {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-stopCh
-		cancel()
-	}()
+func (d *Dispatcher) Run(ctx context.Context) {
 	go d.backoffManager.Run(ctx)
 
 	var wg sync.WaitGroup
@@ -103,7 +100,8 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 
 		beforeOp := time.Now()
 		res, err := handler(ctx, op)
-		opLatencySeconds.WithLabelValues(op.Type.String()).Observe(time.Since(beforeOp).Seconds())
+		nodeCountLog2 := math.Log2(float64(len(op.NodeNames)))
+		opLatencySeconds.WithLabelValues(op.Type.String(), strconv.Itoa(int(nodeCountLog2))).Observe(time.Since(beforeOp).Seconds())
 		if err != nil {
 			klog.Errorf("%s error handling operation %v: %v", logPrefix, op, err)
 			d.clearPendingOperation(op.Type, op.NodeNames)

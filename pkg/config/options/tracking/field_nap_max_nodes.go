@@ -22,7 +22,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
-const defaultDecreasedNapMaxNodes = 1000
+const DecreasedNapMaxNodesCount = 1000
 
 var napMaxNodesField = trackedField{
 	name: "NapMaxNodes",
@@ -33,7 +33,7 @@ var napMaxNodesField = trackedField{
 		return fmt.Sprintf("%v", opts.NapMaxNodes)
 	},
 	setValue: func(optsFromFlags internalopts.AutoscalingOptions, experimentsManager experiments.Manager, optsToModify *internalopts.AutoscalingOptions) error {
-		if optsFromFlags.NapMaxNodes <= defaultDecreasedNapMaxNodes {
+		if optsFromFlags.NapMaxNodes <= DecreasedNapMaxNodesCount {
 			optsToModify.NapMaxNodes = optsFromFlags.NapMaxNodes
 			return nil
 		}
@@ -45,7 +45,7 @@ var napMaxNodesField = trackedField{
 		if enabled && currentVersionSupported {
 			optsToModify.NapMaxNodes = optsFromFlags.NapMaxNodes
 		} else {
-			optsToModify.NapMaxNodes = defaultDecreasedNapMaxNodes
+			optsToModify.NapMaxNodes = DecreasedNapMaxNodesCount
 			klog.Infof("Enforcing lower NAP max nodes per zone limit (rollback/mitigation). New limit: %d, limit from CA flag: %d", optsToModify.NapMaxNodes, optsFromFlags.NapMaxNodes)
 		}
 		return nil

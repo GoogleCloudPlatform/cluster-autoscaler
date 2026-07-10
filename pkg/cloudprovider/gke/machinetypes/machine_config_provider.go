@@ -15,7 +15,6 @@
 package machinetypes
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,8 +23,23 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	resizable_vm_size "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 )
+
+type ConfigSource string
+
+const (
+	// ConfigSourceHardcoded indicates that the machine family configuration is derived from legacy code.
+	ConfigSourceHardcoded ConfigSource = "hardcoded"
+	// ConfigSourceDynamic indicates that the machine family configuration is provided by the MachineConfig API.
+	ConfigSourceDynamic ConfigSource = "dynamic"
+)
+
+// Metrics interface allows updating machine config source metrics.
+type Metrics interface {
+	UpdateMachineConfigSourceInfo(machineFamily string, configSource ConfigSource, value float64)
+}
 
 // MachineConfigProvider provides machine configuration based on source if available,
 // or hard-coded configuration if the source is disabled or nil.
@@ -34,23 +48,39 @@ import (
 type MachineConfigProvider struct {
 	source *Source
 
-	cache *machineConfigurationCache
+	cache *mixedMachineConfigurationCache
 
 	// Helper caches, not refreshed on configuration update
 	// TODO(b/493869128): figure out if they ever need to be invalidated
 	maxResizableVmByMachineTypeCache sync.Map
 	minResizableVmByMachineTypeCache sync.Map
+
+	experimentsManager                experiments.Manager
+	simshipAutomationCurrentlyEnabled bool
+	refreshLock                       sync.Mutex
+	lastUpdateCount                   uint64
 }
 
 // NewMachineConfigProvider creates a new MachineConfigProvider from source.
 func NewMachineConfigProvider(source *Source) *MachineConfigProvider {
-	if source != nil {
-		go source.Run(context.Background())
-	}
 	return &MachineConfigProvider{
 		source: source,
-		cache:  newMachineConfigurationCache(),
+		cache:  newMixedMachineConfigurationCache(),
 	}
+}
+
+// SetExperimentsManager sets the experiments manager for the provider.
+// TODO(b/446152537): move the experiments manager to the MachineConfigProvider constructor
+func (p *MachineConfigProvider) SetExperimentsManager(m experiments.Manager) {
+	p.experimentsManager = m
+}
+
+// SetMetrics sets the metrics implementation for the provider.
+func (p *MachineConfigProvider) SetMetrics(m Metrics) {
+	if p == nil {
+		return
+	}
+	p.cache.setMetrics(m)
 }
 
 // Refresh triggers source refresh, if source is available.
@@ -59,9 +89,40 @@ func (p *MachineConfigProvider) Refresh() bool {
 		// This is fine, many tests don't need machine config and will set it to nil.
 		return false
 	}
-	p.cache.update(p.source.Snapshot())
-	// TODO(b/448575257): compare the new and old snapshot and return true if they're different.
-	return false
+
+	p.refreshLock.Lock()
+	defer p.refreshLock.Unlock()
+
+	shouldUseSimshipAutomation := p.isSimshipAutomationExperimentEnabled()
+	stateChanged := false
+
+	switch {
+	case !shouldUseSimshipAutomation && p.simshipAutomationCurrentlyEnabled:
+		klog.Infof("MachineConfigProvider: Disabling dynamic machine configuration, reverting to fallback")
+		p.cache.update(nil)
+		p.simshipAutomationCurrentlyEnabled = false
+		stateChanged = true
+
+	case shouldUseSimshipAutomation && !p.simshipAutomationCurrentlyEnabled:
+		klog.Infof("MachineConfigProvider: Enabling dynamic machine configuration")
+		snapshot, newCount := p.source.Snapshot()
+		p.cache.update(snapshot)
+		p.lastUpdateCount = newCount
+		p.simshipAutomationCurrentlyEnabled = true
+		stateChanged = true
+
+	case shouldUseSimshipAutomation && p.simshipAutomationCurrentlyEnabled:
+		snapshot, newCount := p.source.Snapshot()
+		if newCount > p.lastUpdateCount {
+			updatesSinceLast := newCount - p.lastUpdateCount
+			p.cache.update(snapshot)
+			klog.Infof("MachineConfigProvider: %d changes detected in informer cache since last refresh", updatesSinceLast)
+			p.lastUpdateCount = newCount
+			stateChanged = true
+		}
+	}
+
+	return stateChanged
 }
 
 // Generic methods for accessing machine configuration.
@@ -69,6 +130,16 @@ func (p *MachineConfigProvider) Refresh() bool {
 // AllMachineFamilies returns all machine families.
 func (p *MachineConfigProvider) AllMachineFamilies() []MachineFamily {
 	cachedFamilies := p.cache.machineFamilies()
+	families := make([]MachineFamily, 0, len(cachedFamilies))
+	for _, machineFamily := range cachedFamilies {
+		families = append(families, machineFamily)
+	}
+	return families
+}
+
+// AllMachinePricingFamilies returns all machine families intended for price evaluation.
+func (p *MachineConfigProvider) AllMachinePricingFamilies() []MachineFamily {
+	cachedFamilies := p.cache.pricingFamilies()
 	families := make([]MachineFamily, 0, len(cachedFamilies))
 	for _, machineFamily := range cachedFamilies {
 		families = append(families, machineFamily)
@@ -99,8 +170,40 @@ func (p *MachineConfigProvider) AllResizableMachineFamilies() []MachineFamily {
 	return families
 }
 
+// resolveVirtualFamilyName extracts GKE Autoscaler's internal virtual CVM family name
+// from a custom/predefined machine name containing CVM suffixes (like "-sev", "-sev-snp", or "-tdx").
+func resolveVirtualFamilyName(machineName string) string {
+	cleanMachineName := machineName
+	var suffix string
+
+	if strings.HasSuffix(machineName, "-sev-snp") {
+		cleanMachineName = strings.TrimSuffix(machineName, "-sev-snp")
+		suffix = "-sev-snp"
+	} else if strings.HasSuffix(machineName, "-sev") {
+		cleanMachineName = strings.TrimSuffix(machineName, "-sev")
+		suffix = "-sev"
+	} else if strings.HasSuffix(machineName, "-tdx") {
+		cleanMachineName = strings.TrimSuffix(machineName, "-tdx")
+		suffix = "-tdx"
+	} else {
+		return ""
+	}
+
+	prefix, err := gce.GetMachineFamily(cleanMachineName)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s-vm%s", prefix, suffix)
+}
+
 // GetMachineFamilyFromMachineName fetches the MachineFamily object based on the machineName else returns error
 func (p *MachineConfigProvider) GetMachineFamilyFromMachineName(machineName string) (MachineFamily, error) {
+	if virtualFamilyName := resolveVirtualFamilyName(machineName); virtualFamilyName != "" {
+		if family, found := p.cache.machineFamilies()[strings.ToLower(virtualFamilyName)]; found {
+			return family, nil
+		}
+	}
+
 	machineFamilyName, err := gce.GetMachineFamily(machineName)
 	if err != nil {
 		return MachineFamily{}, err
@@ -131,7 +234,16 @@ func (p *MachineConfigProvider) ToMachineType(machineTypeName string) (MachineTy
 			return machineType, nil
 		}
 	}
-	return ToCustomMachineType(machineTypeName)
+	mt, err := ToCustomMachineType(machineTypeName)
+	if err != nil {
+		return MachineType{}, err
+	}
+	if familyName, err := gce.GetMachineFamily(machineTypeName); err == nil {
+		if family, found := p.cache.machineFamilies()[strings.ToLower(familyName)]; found {
+			mt.family = &family
+		}
+	}
+	return mt, nil
 }
 
 // Specialized methods for determining particular properties based on machine configuration.
@@ -603,4 +715,13 @@ func (p *MachineConfigProvider) getResizableMachineType(machineType string) (Mac
 		return MachineType{}, fmt.Errorf("machine type %q is not resizable", machineType)
 	}
 	return typeInfo, nil
+}
+
+func (p *MachineConfigProvider) isSimshipAutomationExperimentEnabled() bool {
+	if p == nil || p.experimentsManager == nil {
+		return false
+	}
+	return p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.SimshipAutomationApplyCRDMinCAVersionFlag, true) &&
+		p.experimentsManager.DirectLaunchBoolFlag(experiments.SimshipAutomationApplyCRDEnabledFlag) &&
+		p.experimentsManager.DirectLaunchBoolFlag(experiments.SimshipAutomationBigRedButtonFlag)
 }

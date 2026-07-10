@@ -227,7 +227,7 @@ func (p *ReservationsPuller) updateConsumablePullerInterval() time.Duration {
 }
 
 // NewReservationsPuller builds a new Puller.
-func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableReservationsClient consumablereservations.Client, experimentsManager experiments.Manager, projectID string, enableConsumablePuller bool, location string) *ReservationsPuller {
+func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableReservationsClient consumablereservations.Client, experimentsManager experiments.Manager, projectID string, enableConsumablePuller bool, location string) (*ReservationsPuller, error) {
 	useConsumablePuller := false
 	if experimentsManager != nil {
 		// Only enable the consumable puller if experiments manager is reachable.
@@ -236,14 +236,14 @@ func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableRes
 
 	region, err := gkeutil.GetRegionFromLocation(location)
 	if err != nil {
-		klog.Errorf("Disabling puller, couldn't get region from location %s: %v, ", location, err)
-		return nil
+		klog.Errorf("Couldn't get region from location %s: %v", location, err)
+		return nil, fmt.Errorf("couldn't get region from location %s: %v", location, err)
 	}
 
 	zones, err := gceClient.FetchZones(region)
 	if err != nil {
-		klog.Errorf("Disabling puller, couldn't get zones from region %s: %v, ", region, err)
-		return nil
+		klog.Errorf("Couldn't get zones from region %s: %v", region, err)
+		return nil, fmt.Errorf("couldn't get zones from region %s: %v", region, err)
 	}
 
 	pp := &ReservationsPuller{
@@ -260,7 +260,7 @@ func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableRes
 
 	// Adding local project puller with aggregate reservations enabled
 	pp.AddProject(projectID)
-	return pp
+	return pp, nil
 }
 
 // updateExperiments queries experiments manager to check whether consumable reservation experiment

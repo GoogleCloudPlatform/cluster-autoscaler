@@ -53,6 +53,12 @@ type ScaleToZeroProcessor interface {
 	Name() string
 }
 
+type DefragProcessor interface {
+	Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
+	DefragPickedCandidate() bool
+	CleanUp()
+}
+
 // GkeInternalPodListProcessor is a PodListProcessor used in gke internal CA.
 type GkeInternalPodListProcessor struct {
 	crProcessor                    *cr_processors.CapacityRequestPodListProcessor
@@ -62,7 +68,7 @@ type GkeInternalPodListProcessor struct {
 	podStatusAggregator            *metrics_processors.PodStatusAggregator
 	podShardingProcessor           *podsharding.PodShardingProcessor
 	scaleToZeroProcessor           ScaleToZeroProcessor
-	defragProcessor                *defrag_processor.Processor
+	defragProcessor                DefragProcessor
 	podInjectionProcessor          *podinjection.PodInjectionPodListProcessor
 	ossProvReqPodsInjector         pods.PodListProcessor
 	enforceFakePodsLimitProcessor  *podinjection.EnforceInjectedPodsLimitProcessor
@@ -72,7 +78,7 @@ type GkeInternalPodListProcessor struct {
 	flexAdvisorPodListProcessor    *flexadvisor.PodListProcessor
 	cbPodInjectionProcessor        *cbprocessors.CapacityBufferPodListProcessor
 	csnNodeReconcilationProcessor  *csn_processors.NodeReconcilationProcessor
-	csnBufferConsumptionProcessor  *csn_processors.BufferConsumptionProcessor
+	csnBufferConsumptionProcessor  pods.PodListProcessor
 	csnCSNPodsLifecycleProcessor   *csn_processors.CSNPodsLifecycleProcessor
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor
 	cbFakePodStateObserver         *cb_metrics.FakePodStateObserver
@@ -105,7 +111,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	ccMinCapacityProcessor *cc_processors.MinCapacityPodListProcessor,
 	em experiments.Manager,
 ) *GkeInternalPodListProcessor {
-	return &GkeInternalPodListProcessor{
+	p := &GkeInternalPodListProcessor{
 		crProcessor:                    crProcessor,
 		defaultPodListerProcessor:      podlistprocessor.NewDefaultPodListProcessor(pr_pods.DoNotScheduleOnDWS),
 		prProcessor:                    prProcessor,
@@ -113,7 +119,6 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		podStatusAggregator:            podStatusAggregator,
 		podShardingProcessor:           podShardingProcessor,
 		scaleToZeroProcessor:           scaleToZeroProcessor,
-		defragProcessor:                defragProcessor,
 		podInjectionProcessor:          podInjectionProcessor,
 		ossProvReqPodsInjector:         ossProvReqPodsInjector,
 		enforceFakePodsLimitProcessor:  enforceFakePodsLimitProcessor,
@@ -122,7 +127,6 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		flexAdvisorPodListProcessor:    flexAdvisorPodListProcessor,
 		cbPodInjectionProcessor:        cbPodInjectionProcessor,
 		csnNodeReconcilationProcessor:  csnNodeReconcilationProcessor,
-		csnBufferConsumptionProcessor:  csnBufferConsumptionProcessor,
 		csnCSNPodsLifecycleProcessor:   csnCSNPodsLifecycleProcessor,
 		capacityBufferMetricsProcessor: capacityBufferMetricsProcessor,
 		podStateObserver:               podStateObserver,
@@ -130,6 +134,13 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		ccMinCapacityProcessor:         ccMinCapacityProcessor,
 		experimentsManager:             em,
 	}
+	if defragProcessor != nil {
+		p.defragProcessor = defragProcessor
+	}
+	if csnBufferConsumptionProcessor != nil {
+		p.csnBufferConsumptionProcessor = csnBufferConsumptionProcessor
+	}
+	return p
 }
 
 // Process calls all gke internal PodListProcessors.
@@ -274,11 +285,15 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 		klog.Infof("Unschedulable pods count after ProvisioningRequest.InjectProvisioningRequestPods: %v", len(unschedulablePods))
 	}
 
+	defragPickedCandidate := false
+	// We capture defragPickedCandidate locally rather than querying defrag state inside downstream processors.
+	// This ensures proper execution order: if a downstream processor relying on this state were moved before defragProcessor, querying the processor directly would return the value in the previous loop which is incorrect. Handling it explicitly here makes the dependency clear and enforces the correct pipeline order.
 	if p.defragProcessor != nil {
 		defragPods, err := p.defragProcessor.Process(context, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Defrag processor failed: %v", err)
 		} else {
+			defragPickedCandidate = p.defragProcessor.DefragPickedCandidate()
 			unschedulablePods = defragPods
 		}
 		klog.Infof("Unschedulable pods count after defrag processor: %v", len(unschedulablePods))
@@ -304,7 +319,13 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.csnBufferConsumptionProcessor != nil {
-		unschedulablePods, err = p.csnBufferConsumptionProcessor.Process(context, unschedulablePods)
+		if defragPickedCandidate {
+			// If defrag picked a candidate, we don't want to consider any of the unschedulable pods in CSN as we don't want to resume a node that might be a worse candidate.
+			// We still run the processor (but without any unschedulable pods) to trigger consumption of chilling CSN nodes where Kubernetes Scheduler scheduled pods on.
+			_, err = p.csnBufferConsumptionProcessor.Process(context, nil)
+		} else {
+			unschedulablePods, err = p.csnBufferConsumptionProcessor.Process(context, unschedulablePods)
+		}
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -406,6 +427,9 @@ func (p *GkeInternalPodListProcessor) CleanUp() {
 	}
 	if p.ekvmsProcessor != nil {
 		p.ekvmsProcessor.CleanUp()
+	}
+	if p.csnBufferConsumptionProcessor != nil {
+		p.csnBufferConsumptionProcessor.CleanUp()
 	}
 	if p.capacityBufferMetricsProcessor != nil {
 		p.capacityBufferMetricsProcessor.CleanUp()

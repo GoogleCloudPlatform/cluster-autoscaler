@@ -192,7 +192,7 @@ func addArch(pod *apiv1.Pod, arch string) *apiv1.Pod {
 }
 
 func addGVisorLabel(pod *apiv1.Pod) *apiv1.Pod {
-	return addRequirement(pod, sandbox.GVisorLabelKey, sandbox.GVisorLabelValue)
+	return addRequirement(pod, sandbox.RuntimeLabelKey, sandbox.GVisorLabelValue)
 }
 
 func addCompactPlacementGroupLabel(pod *apiv1.Pod, label string) *apiv1.Pod {

@@ -41,9 +41,9 @@ const (
 	// maxUnreconciledPeriod denotes the time during which the GCE object corresponding to the given Provisioning Request can be missing or in an 'incorrect' state
 	// This is necessary to correctly handle the upgrade of QueuedProvisioning nodepool, which can temporarily cause unexpected states
 	maxUnreconciledPeriod = 2 * time.Minute
-	// maxObtainabilityStrategyUnreconciledPeriod needs to be longer than maxUnreconciledPeriod, because we need to account for HTNAP having to create the node pool and finish the scale up
+	// MaxObtainabilityStrategyUnreconciledPeriod needs to be longer than maxUnreconciledPeriod, because we need to account for HTNAP having to create the node pool and finish the scale up
 	// TODO(b/495348466): consider setting this via experiment to enable addressing scenarios where the 10min turns out not to be enough
-	maxObtainabilityStrategyUnreconciledPeriod = 10 * time.Minute
+	MaxObtainabilityStrategyUnreconciledPeriod = 10 * time.Minute
 	// defaultAcceptedProvReqUpdatesLimit limits the updates per refresh to avoid starving the scale-up logic
 	defaultAcceptedProvReqUpdatesLimit = 10
 )
@@ -370,7 +370,7 @@ func shouldFailProvReqOrRecordUnreconciled(unreconciledSince map[pods.ProvReqID]
 	}
 	unreconciledPeriod := maxUnreconciledPeriod
 	if queuedwrapper.ToQueuedProvisioningRequest(*pr).ObtainabilityStrategy() {
-		unreconciledPeriod = maxObtainabilityStrategyUnreconciledPeriod
+		unreconciledPeriod = MaxObtainabilityStrategyUnreconciledPeriod
 	}
 	return now.After(t.Add(unreconciledPeriod))
 }

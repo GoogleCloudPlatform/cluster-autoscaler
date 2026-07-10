@@ -860,6 +860,7 @@ func TestCalculatePendingPodsPerCcc(t *testing.T) {
 		name                string
 		unreportedPodStates map[types.UID]*podStateData
 		reportedPodStates   map[types.UID]*podStateData
+		crds                []crd.CRD
 		want                []podstatetypes.PendingPodsPerCccMetric
 	}{
 		{
@@ -867,6 +868,22 @@ func TestCalculatePendingPodsPerCcc(t *testing.T) {
 			unreportedPodStates: map[types.UID]*podStateData{},
 			reportedPodStates:   map[types.UID]*podStateData{},
 			want:                []podstatetypes.PendingPodsPerCccMetric{},
+		},
+		{
+			name:                "no pending pods, but CCCs exist",
+			unreportedPodStates: map[types.UID]*podStateData{},
+			reportedPodStates:   map[types.UID]*podStateData{},
+			crds:                []crd.CRD{mockCrd{name: "test-ccc"}},
+			want: []podstatetypes.PendingPodsPerCccMetric{
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 0}},
+			},
 		},
 		{
 			name: "one unprocessed non-system pod",
@@ -927,7 +944,7 @@ func TestCalculatePendingPodsPerCcc(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			observer := &PodStateObserver{
-				npcCrdLister:        &mockNpcCrdLister{},
+				npcCrdLister:        &mockNpcCrdLister{crds: tc.crds},
 				unreportedPodStates: tc.unreportedPodStates,
 				reportedPodStates:   tc.reportedPodStates,
 			}
@@ -953,6 +970,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 	testCases := []struct {
 		name        string
 		events      []event
+		crds        []crd.CRD
 		want        []podstatetypes.PendingPodsPerCccMetric
 		fallbackCcc string
 	}{
@@ -1017,7 +1035,17 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				{t: st, et: newPodEvent, pod: p, scaleUp: nil},
 				{t: st.Add(time.Second * 20), et: updatePodEvent, pod: ps, scaleUp: nil},
 			},
-			want: []podstatetypes.PendingPodsPerCccMetric{},
+			crds: []crd.CRD{mockCrd{name: "test-ccc"}},
+			want: []podstatetypes.PendingPodsPerCccMetric{
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 0}},
+			},
 		},
 		{
 			name: "pod gets deleted",
@@ -1025,7 +1053,17 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				{t: st, et: newPodEvent, pod: p, scaleUp: nil},
 				{t: st.Add(time.Second * 20), et: deletePodEvent, pod: p, scaleUp: nil},
 			},
-			want: []podstatetypes.PendingPodsPerCccMetric{},
+			crds: []crd.CRD{mockCrd{name: "test-ccc"}},
+			want: []podstatetypes.PendingPodsPerCccMetric{
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0}},
+				{CccName: "test-ccc", PendingPodsMetric: podstatetypes.PendingPodsMetric{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 0}},
+			},
 		},
 		{
 			name: "pod times out",
@@ -1091,7 +1129,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc}, time.Minute, fakeClock, false, false, -10)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds}, time.Minute, fakeClock, false, false, -10)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1171,6 +1209,7 @@ func withComputeClass(computeClass string) func(*v1.Pod) {
 type mockNpcCrdLister struct {
 	npc_lister.Lister
 	fallbackCcc string
+	crds        []crd.CRD
 }
 
 func (m *mockNpcCrdLister) PodCrd(pod *v1.Pod) (crd.CRD, string, error) {
@@ -1178,4 +1217,24 @@ func (m *mockNpcCrdLister) PodCrd(pod *v1.Pod) (crd.CRD, string, error) {
 		return nil, name, nil
 	}
 	return nil, m.fallbackCcc, nil
+}
+
+func (m *mockNpcCrdLister) ListCrds() ([]crd.CRD, error) {
+	return m.crds, nil
+}
+
+func (m *mockNpcCrdLister) Default() (string, string, bool) {
+	if m.fallbackCcc != "" {
+		return m.fallbackCcc, "cloud.google.com/compute-class", true
+	}
+	return "", "", false
+}
+
+type mockCrd struct {
+	crd.CRD
+	name string
+}
+
+func (m mockCrd) Name() string {
+	return m.name
 }

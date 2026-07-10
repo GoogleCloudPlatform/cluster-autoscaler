@@ -53,7 +53,18 @@ func IsBareMetal(machineType string) bool {
 func ToCustomMachineType(machineTypeName string) (MachineType, error) {
 	if gce.IsCustomMachine(machineTypeName) {
 		machineType, err := gce.NewCustomMachineType(machineTypeName)
-		return MachineType{MachineType: machineType}, err
+		if err != nil {
+			return MachineType{}, err
+		}
+		mt := MachineType{MachineType: machineType}
+		// Backfill parent family pointer to allow custom machine types to resolve
+		// family-level properties (like Confidential VM capabilities matching).
+		if familyName, err := gce.GetMachineFamily(machineTypeName); err == nil {
+			if family, found := machineFamiliesByName[strings.ToLower(familyName)]; found {
+				mt.family = &family
+			}
+		}
+		return mt, nil
 	}
 	return MachineType{}, fmt.Errorf("unsupported machine type %q", machineTypeName)
 }

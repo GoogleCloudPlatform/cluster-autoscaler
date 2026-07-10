@@ -15,6 +15,7 @@
 package nodecontroller
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
@@ -711,14 +712,14 @@ func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controller
 	)
 	factory := informers.NewSharedInformerFactory(suite.ClientSet, 0)
 	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager)
-	stopCh := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
-		close(stopCh)
+		cancel()
 	})
-	c.Run(stopCh)
-	factory.Start(stopCh)
+	c.Run(ctx)
+	factory.Start(ctx.Done())
 	if !suite.skipCacheSync {
-		factory.WaitForCacheSync(stopCh)
+		factory.WaitForCacheSync(ctx.Done())
 	}
 	return c, suite
 }

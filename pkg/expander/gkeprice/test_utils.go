@@ -143,7 +143,7 @@ func WithReservations(gceReservations []*gce_api.Reservation) func(*gkePriceBase
 	return func(g *gkePriceBased) {
 		mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 			WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
-		puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+		puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
 		puller.SetReservations(gceReservations)
 		g.reservationsPuller = puller
 	}

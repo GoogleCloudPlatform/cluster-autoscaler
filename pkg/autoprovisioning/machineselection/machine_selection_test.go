@@ -31,15 +31,13 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-func getFamilyNames(families []machinetypes.MachineFamily) []string {
-	var names []string
-	for _, f := range families {
-		names = append(names, f.Name())
-	}
-	return names
-}
-
 func TestSelectMachineSpec(t *testing.T) {
+	machinetypes.RegisterComputeClass(machinetypes.NewTestPredefinedComputeClass(
+		"autopilot",
+		[]machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+		true,  // balancingEnabled
+		false, // sliceOfHardware
+	))
 	defaultCloudProviderFamily := gke.NewTestAutoprovisioningCloudProviderBuilder().Build().GetAutoprovisioningDefaultFamily()
 	generalPurposePodFamily := "general-purpose"
 	generalPurposeArmPodFamily := "general-purpose-arm"
@@ -66,6 +64,7 @@ func TestSelectMachineSpec(t *testing.T) {
 		resizableVmInAutopilotEnabled     map[string]bool
 		resizableVmWithinPodFamilyEnabled map[string]bool
 		isEkSpotEnabled                   bool
+		isArmMachineFallbacksEnabled      bool
 		confidentialNodes                 bool
 		confidentialInstanceType          string
 		autopilotEnabled                  bool
@@ -78,6 +77,7 @@ func TestSelectMachineSpec(t *testing.T) {
 		componentVersion                  string
 		architectures                     map[gce.SystemArchitecture]bool
 		rule                              rules.Rule
+		isStateless                       bool
 		expectedMinCpuPlatform            *machinetypes.CpuPlatform
 		expectedFamilies                  []machinetypes.MachineFamily
 		expectedComputeClassName          string
@@ -96,6 +96,12 @@ func TestSelectMachineSpec(t *testing.T) {
 			confidentialNodes:        true,
 			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
 			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.N2D},
+		},
+		"G4 used if confidential nodes enabled, instance type is SEV, and RTX PRO 6000 specified": {
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			specifiedGpu:             machinetypes.NvidiaRTXPro6000.Name(),
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.G4},
 		},
 		"N2D used if confidential nodes enabled and instance type is SEV_SNP": {
 			confidentialNodes:        true,
@@ -207,13 +213,18 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedFamilies: []machinetypes.MachineFamily{machinetypes.T2D},
 		},
 		"machine family overrides default family even if incompatible with cluster settings": {
-			machineFamily:     "t2d",
-			confidentialNodes: true,
-			expectedFamilies:  []machinetypes.MachineFamily{machinetypes.T2D},
+			machineFamily:            "t2d",
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.T2D},
 		},
 		"machine family overrides default family for c4n": {
 			machineFamily:    "c4n",
 			expectedFamilies: []machinetypes.MachineFamily{machinetypes.C4N},
+		},
+		"machine family overrides default family for z4d": {
+			machineFamily:    "z4d",
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.Z4D},
 		},
 		"unknown machine family results in an explicit error": {
 			machineFamily: "not-supported",
@@ -276,6 +287,13 @@ func TestSelectMachineSpec(t *testing.T) {
 			machineFamily:            "h3",
 			autopilotEnabled:         true,
 			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.H3},
+			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
+		},
+		"slice of hardware compute class specifies valid z4d machine family": {
+			podClass:                 machinetypes.PerformanceClass.Name(),
+			machineFamily:            "z4d",
+			autopilotEnabled:         true,
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.Z4D},
 			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
 		},
 		"slice of hardware compute class with Arm specified": {
@@ -432,9 +450,17 @@ func TestSelectMachineSpec(t *testing.T) {
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): false},
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2},
 		},
-		"general purpose arm pod family in CCC rule, E4A experiment enabled": {
+		"general purpose arm pod family in CCC rule, E4A and fallbacks experiment enabled": {
 			rule:                          rules.NewRule(rules.WithPodFamilyRule(&generalPurposeArmPodFamily)),
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4A.Name(): true},
+			isArmMachineFallbacksEnabled:  true,
+			autopilotEnabled:              true,
+			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+		},
+		"general purpose arm pod family in CCC rule, fallbacks experiment disabled": {
+			rule:                          rules.NewRule(rules.WithPodFamilyRule(&generalPurposeArmPodFamily)),
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4A.Name(): true},
+			isArmMachineFallbacksEnabled:  false,
 			autopilotEnabled:              true,
 			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4A},
 		},
@@ -449,9 +475,18 @@ func TestSelectMachineSpec(t *testing.T) {
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.E4A.Name(): true},
 			expectedErr:                       NewPodFamilyUnknownError(generalPurposeArmPodFamily),
 		},
-		"E4A used if GeneralPurposeArmPodFamily rule specified and IsResizableVmWithinPodFamilyEnabled is true (Autopilot)": {
+		"E4A, N4A, C4A used if GeneralPurposeArmPodFamily rule specified and IsResizableVmWithinPodFamilyEnabled is true (Autopilot)": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposeArmPodFamily)),
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.E4A.Name(): true},
+			isArmMachineFallbacksEnabled:      true,
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+			autopilotEnabled:                  true,
+			autopilotManaged:                  true,
+		},
+		"E4A used if GeneralPurposeArmPodFamily rule specified, IsResizableVmWithinPodFamilyEnabled is true, but fallbacks disabled (Autopilot)": {
+			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposeArmPodFamily)),
+			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.E4A.Name(): true},
+			isArmMachineFallbacksEnabled:      false,
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4A},
 			autopilotEnabled:                  true,
 			autopilotManaged:                  true,
@@ -532,12 +567,14 @@ func TestSelectMachineSpec(t *testing.T) {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:                    true,
 			isE4Enabled:                       true,
+			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
 		},
 		"E2/EK used if GeneralPurposePodFamily rule specified and is NOT E2-less region": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:                    false,
+			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
 		},
@@ -553,22 +590,76 @@ func TestSelectMachineSpec(t *testing.T) {
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.EK, defaultCloudProviderFamily},
 		},
-		"E4 not used if version check fails (version too low)": {
+		"E4 used in mixed region if pod is stateless and experiment enabled": {
+			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:                    false,
+			isE4Enabled:                       true,
+			autopilotManaged:                  true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			isStateless:                       true,
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+		},
+		"E2/EK used in mixed region if pod is stateful with PVC and experiment enabled": {
+			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:                    false,
+			isE4Enabled:                       true,
+			autopilotManaged:                  true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			isStateless:                       false,
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+		},
+		"E2/EK used in mixed region if pod is stateful with Ephemeral and experiment enabled": {
+			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:                    false,
+			isE4Enabled:                       true,
+			autopilotManaged:                  true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			isStateless:                       false,
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+		},
+		"E4 still used in E2-less region even if pod is stateful and experiment enabled": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:                    true,
 			isE4Enabled:                       true,
+			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			stringFlags:                       map[string]string{"E4Autopilot::MinCAVersion": "999.0.0"},
-			componentVersion:                  "1.0.0",
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			isStateless:                       false,
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
 		},
-		"E4 used if version check passes": {
-			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:   true,
-			isE4Enabled:      true,
-			stringFlags:      map[string]string{"E4Autopilot::MinCAVersion": "1.0.0"},
-			componentVersion: "2.0.0",
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
+		"autopilot compute class filters out E4 if isE4Enabled is false": {
+			podClass:                      "autopilot",
+			autopilotEnabled:              true,
+			isE4Enabled:                   false,
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedComputeClassName:      "autopilot",
+		},
+		"autopilot compute class keeps E4 if isE4Enabled is true": {
+			podClass:                      "autopilot",
+			autopilotEnabled:              true,
+			isE4Enabled:                   true,
+			isStateless:                   true,
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			expectedComputeClassName:      "autopilot",
+		},
+		"autopilot compute class filters out E2/EK in E2-less region if isE4Enabled is true": {
+			podClass:                      "autopilot",
+			autopilotEnabled:              true,
+			isE4Enabled:                   true,
+			isStateless:                   true,
+			isE2lessRegion:                true,
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4},
+			expectedComputeClassName:      "autopilot",
+		},
+		"E2-less region strips E2 and EK and forces E4 for general purpose": {
+			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:                    true,
+			isE4Enabled:                       true,
+			autopilotManaged:                  true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.E2.Name(): true, machinetypes.EK.Name(): true},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
@@ -587,6 +678,7 @@ func TestSelectMachineSpec(t *testing.T) {
 				WithConfidentialInstanceType(tc.confidentialInstanceType).
 				WithAutopilotEnabled(tc.autopilotEnabled).
 				WithEkSpotEnabled(tc.isEkSpotEnabled).
+				WithArmMachineFallbacksEnabled(tc.isArmMachineFallbacksEnabled).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil))
 			for family, enabled := range tc.resizableVmInAutopilotEnabled {
 				builder = builder.WithResizableVmInAutopilotEnabled(family, enabled)
@@ -594,17 +686,15 @@ func TestSelectMachineSpec(t *testing.T) {
 			for family, enabled := range tc.resizableVmWithinPodFamilyEnabled {
 				builder = builder.WithResizableVmWithinPodFamilyEnabled(family, enabled)
 			}
+			if tc.isE4Enabled {
+				builder = builder.WithResizableVmInAutopilotEnabled(machinetypes.E4.Name(), true)
+				builder = builder.WithResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name(), true)
+			}
 			if tc.isE2lessRegion {
 				builder = builder.WithAutoprovisioningDefaultFamily(machinetypes.E4)
 			}
 			provider := builder.Build()
 			boolFlags := map[string]bool{}
-			if tc.isE4Enabled {
-				boolFlags["E4Autopilot::EnableE4InE2LessRegions"] = true
-				if _, ok := tc.stringFlags["E4Autopilot::MinCAVersion"]; !ok {
-					boolFlags["E4Autopilot::MinCAVersion"] = true
-				}
-			}
 			for k, v := range tc.boolFlags {
 				boolFlags[k] = v
 			}
@@ -625,7 +715,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			}
 			gotSpec, _, gotErr := selector.selectMachineSpec(podrequirements.NewLabelRequirements(req),
 				tc.specifiedGpu, tc.specifiedTpu, tc.specifiedBootDiskType,
-				tc.architectures, tc.rule, tc.wantsSpot, tc.specifiedReservationMachineType, tc.autopilotEnabled, tc.autopilotManaged)
+				tc.architectures, tc.rule, tc.wantsSpot, tc.specifiedReservationMachineType, tc.autopilotEnabled, tc.autopilotManaged, tc.isStateless)
 			expectedPlatform := machinetypes.AnyPlatform
 			if tc.expectedErr != nil {
 				// Check that selectMachineSpec returns an empty spec if there's an error.
@@ -634,14 +724,22 @@ func TestSelectMachineSpec(t *testing.T) {
 			if tc.expectedMinCpuPlatform != nil {
 				expectedPlatform = *tc.expectedMinCpuPlatform
 			}
+			var expectedConfidentialNodesEnabled bool
+			var expectedConfidentialNodeType string
+			if tc.expectedErr == nil {
+				expectedConfidentialNodesEnabled = tc.confidentialNodes || tc.confidentialInstanceType != ""
+				expectedConfidentialNodeType = tc.confidentialInstanceType
+			}
 			expectedSpec := machinetypes.MachineSpec{
-				Families:             tc.expectedFamilies,
-				ComputeClassName:     tc.expectedComputeClassName,
-				GpuType:              tc.specifiedGpu,
-				TpuType:              tc.specifiedTpu,
-				BootDiskType:         tc.specifiedBootDiskType,
-				MinCpuPlatform:       expectedPlatform,
-				ExplicitMachineTypes: tc.expectedMachineType,
+				Families:                 tc.expectedFamilies,
+				ComputeClassName:         tc.expectedComputeClassName,
+				GpuType:                  tc.specifiedGpu,
+				TpuType:                  tc.specifiedTpu,
+				BootDiskType:             tc.specifiedBootDiskType,
+				MinCpuPlatform:           expectedPlatform,
+				ExplicitMachineTypes:     tc.expectedMachineType,
+				ConfidentialNodesEnabled: expectedConfidentialNodesEnabled,
+				ConfidentialNodeType:     expectedConfidentialNodeType,
 			}
 			assert.Equal(t, expectedSpec, gotSpec)
 			assert.Equal(t, tc.expectedErr, gotErr)
@@ -959,9 +1057,10 @@ func TestLimitMachineSpec(t *testing.T) {
 			expectedSpec:      machinetypes.NewMachineSpecSingleFamily(machinetypes.N2D, machinetypes.AnyPlatform, "", ""),
 		},
 		"C2D works with Confidential Nodes": {
-			spec:              machinetypes.NewMachineSpecSingleFamily(machinetypes.C2D, machinetypes.AnyPlatform, "", ""),
-			confidentialNodes: true,
-			expectedSpec:      machinetypes.NewMachineSpecSingleFamily(machinetypes.C2D, machinetypes.AnyPlatform, "", ""),
+			spec:                     machinetypes.NewMachineSpecSingleFamily(machinetypes.C2D, machinetypes.AnyPlatform, "", ""),
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			expectedSpec:             machinetypes.NewMachineSpecSingleFamily(machinetypes.C2D, machinetypes.AnyPlatform, "", ""),
 		},
 		"C3 does not work with Confidential Nodes if confidential instance type is not TDX": {
 			spec:              machinetypes.NewMachineSpecSingleFamily(machinetypes.C3, machinetypes.AnyPlatform, "", ""),
@@ -1001,6 +1100,12 @@ func TestLimitMachineSpec(t *testing.T) {
 			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
 			expectedSpec:             machinetypes.NewMachineSpecSingleFamily(machinetypes.N2D, machinetypes.AnyPlatform, "", ""),
 		},
+		"G4 works with Confidential Nodes if confidential instance type is SEV and RTX PRO 6000 is specified": {
+			spec:                     machinetypes.NewMachineSpecSingleFamily(machinetypes.G4, machinetypes.AnyPlatform, machinetypes.NvidiaRTXPro6000.Name(), ""),
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			expectedSpec:             machinetypes.NewMachineSpecSingleFamily(machinetypes.G4, machinetypes.AnyPlatform, machinetypes.NvidiaRTXPro6000.Name(), ""),
+		},
 		"N2D works with Confidential Nodes if confidential instance type is SEV_SNP and confidentialNodes is unset": {
 			spec:                     machinetypes.NewMachineSpecSingleFamily(machinetypes.N2D, machinetypes.AnyPlatform, "", ""),
 			confidentialInstanceType: gkelabels.SEVSNPConfidentialNodeTypeValue,
@@ -1018,14 +1123,16 @@ func TestLimitMachineSpec(t *testing.T) {
 			expectedSpec:             machinetypes.NewMachineSpecSingleFamily(machinetypes.A3, machinetypes.AnyPlatform, "", ""),
 		},
 		"ok if one of the families is incompatible with Confidential Nodes": {
-			spec:              machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.N2D, machinetypes.N1}, machinetypes.AnyPlatform, "", ""),
-			confidentialNodes: true,
-			expectedSpec:      machinetypes.NewMachineSpecSingleFamily(machinetypes.N2D, machinetypes.AnyPlatform, "", ""),
+			spec:                     machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.N2D, machinetypes.N1}, machinetypes.AnyPlatform, "", ""),
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			expectedSpec:             machinetypes.NewMachineSpecSingleFamily(machinetypes.N2D, machinetypes.AnyPlatform, "", ""),
 		},
 		"error if family is incompatible with Confidential Nodes": {
-			spec:              machinetypes.NewMachineSpecSingleFamily(machinetypes.N1, machinetypes.AnyPlatform, "", ""),
-			confidentialNodes: true,
-			expectedErr:       NewConfidentialNodesIncompatibleError(`machine family "n1"`),
+			spec:                     machinetypes.NewMachineSpecSingleFamily(machinetypes.N1, machinetypes.AnyPlatform, "", ""),
+			confidentialNodes:        true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
+			expectedErr:              NewConfidentialNodesIncompatibleError(`machine family "n1"`),
 		},
 		"error if all of the families are incompatible with Confidential Nodes": {
 			spec:              machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.N2, machinetypes.N1}, machinetypes.AnyPlatform, "", ""),

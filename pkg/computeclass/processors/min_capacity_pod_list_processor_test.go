@@ -19,13 +19,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
+	cloudprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/testsnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/test"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	gkeclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
@@ -51,6 +55,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 		name             string
 		crds             []crd.CRD
 		existingNodes    []*apiv1.Node
+		cloudProvider    cloudprovider.CloudProvider
 		expectedFakePods int
 	}{
 		{
@@ -58,10 +63,12 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithTargetNodeCount(intPtr(5)),
 				),
 			},
 			existingNodes:    []*apiv1.Node{},
+			cloudProvider:    &minCapacityMockCloudProvider{},
 			expectedFakePods: 5,
 		},
 		{
@@ -69,6 +76,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithTargetNodeCount(intPtr(5)),
 				),
 			},
@@ -76,13 +84,15 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 				buildNodeWithLabel("n1", "my-ccc"),
 				buildNodeWithLabel("n2", "my-ccc"),
 			},
-			expectedFakePods: 3, // 5 target - 2 existing
+			cloudProvider:    &minCapacityMockCloudProvider{},
+			expectedFakePods: 3,
 		},
 		{
 			name: "top-level CCC, full capacity skips injection",
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithTargetNodeCount(intPtr(3)),
 				),
 			},
@@ -91,6 +101,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 				buildNodeWithLabel("n2", "my-ccc"),
 				buildNodeWithLabel("n3", "my-ccc"),
 			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
 			expectedFakePods: 0,
 		},
 		{
@@ -98,13 +109,28 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("priority-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithTargetNodeCountRule(intPtr(4))),
+						rules.NewRule(
+							rules.WithLabelsRule(map[string]string{"cloud.google.com/compute-class-priority": "0"}),
+							rules.WithTargetNodeCountRule(intPtr(4)),
+						),
 					}),
 				),
 			},
 			existingNodes: []*apiv1.Node{
 				buildNodeWithLabel("n1", "priority-ccc"),
+			},
+			cloudProvider: &minCapacityMockCloudProvider{
+				nodeGroups: []cloudprovider.NodeGroup{
+					&minCapacityMockNodeGroup{
+						id:         "ng1",
+						targetSize: 1,
+						labels: map[string]string{
+							"cloud.google.com/compute-class": "priority-ccc",
+						},
+					},
+				},
 			},
 			expectedFakePods: 4, // 4 target - 0 match
 		},
@@ -113,8 +139,12 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("priority-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithTargetNodeCountRule(intPtr(4))),
+						rules.NewRule(
+							rules.WithLabelsRule(map[string]string{"cloud.google.com/compute-class-priority": "0"}),
+							rules.WithTargetNodeCountRule(intPtr(4)),
+						),
 					}),
 				),
 			},
@@ -125,6 +155,18 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 					return n
 				}(),
 			},
+			cloudProvider: &minCapacityMockCloudProvider{
+				nodeGroups: []cloudprovider.NodeGroup{
+					&minCapacityMockNodeGroup{
+						id:         "ng1",
+						targetSize: 1,
+						labels: map[string]string{
+							"cloud.google.com/compute-class":          "priority-ccc",
+							"cloud.google.com/compute-class-priority": "0",
+						},
+					},
+				},
+			},
 			expectedFakePods: 3, // 4 target - 1 match
 		},
 		{
@@ -132,6 +174,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithTargetNodeCount(intPtr(5)),
 				),
 			},
@@ -151,16 +194,21 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 					return n
 				}(),
 			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
 			expectedFakePods: 3, // 5 target - 2 full = 3 fake pods. 0 schedule on the 2 full nodes. Result is 3 fake pods.
 		},
 		{
-			name: "-1 priority label counts for top-level but ignores priority rules",
+			name: "ScaleUpAnyway priority label counts for top-level but ignores priority rules",
 			crds: []crd.CRD{
 				crd.NewTestCrd(
 					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
 					crd.WithTargetNodeCount(intPtr(5)),
 					crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithTargetNodeCountRule(intPtr(2))),
+						rules.NewRule(
+							rules.WithLabelsRule(map[string]string{"cloud.google.com/compute-class-priority": "0"}),
+							rules.WithTargetNodeCountRule(intPtr(2)),
+						),
 					}),
 				),
 			},
@@ -171,14 +219,54 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 					return n
 				}(),
 			},
-			expectedFakePods: 4, // 2 priority pods (target 2 - 0 match) + 2 top-level pods (target 5 - 2 priority pods - 1 existing matcher CCC)
+			cloudProvider: &minCapacityMockCloudProvider{
+				nodeGroups: []cloudprovider.NodeGroup{
+					&minCapacityMockNodeGroup{
+						id:         "ng1",
+						targetSize: 1,
+						labels: map[string]string{
+							"cloud.google.com/compute-class": "my-ccc",
+						},
+					},
+				},
+			},
+			expectedFakePods: 4, // 2 priority pods (target 2 - 0 match) + 2 top-level pods (target 3 - 1 scheduled)
+		},
+		{
+			name: "priority rule, upcoming node groups partially satisfy target, injects shortfall",
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("priority-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithRules([]rules.Rule{
+						rules.NewRule(
+							rules.WithLabelsRule(map[string]string{"cloud.google.com/compute-class-priority": "0"}),
+							rules.WithTargetNodeCountRule(intPtr(4)),
+						),
+					}),
+				),
+			},
+			existingNodes: []*apiv1.Node{},
+			cloudProvider: &minCapacityMockCloudProvider{
+				nodeGroups: []cloudprovider.NodeGroup{
+					&minCapacityMockNodeGroup{
+						id:         "ng1",
+						targetSize: 2,
+						labels: map[string]string{
+							"cloud.google.com/compute-class":          "priority-ccc",
+							"cloud.google.com/compute-class-priority": "0",
+						},
+					},
+				},
+			},
+			expectedFakePods: 2, // 4 target - 2 upcoming = 2 fake pods
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ccLister := lister.NewMockCrdLister(tc.crds)
-			processor := NewMinCapacityPodListProcessor(ccLister, nil)
+			ccLister := lister.NewMockCrdListerWithLabel(tc.crds, labels.ComputeClassLabel)
+			processor := NewMinCapacityPodListProcessor(ccLister, nil, nil)
 
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
 			for _, n := range tc.existingNodes {
@@ -188,6 +276,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 
 			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
+				CloudProvider:   tc.cloudProvider,
 			}
 
 			trulyUnschedulable, err := processor.Process(ctx, nil)
@@ -200,4 +289,66 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			}
 		})
 	}
+}
+
+type minCapacityMockNodeGroup struct {
+	cloudprovider.NodeGroup
+	id         string
+	targetSize int
+	labels     map[string]string
+}
+
+func (m *minCapacityMockNodeGroup) Id() string {
+	return m.id
+}
+
+func (m *minCapacityMockNodeGroup) TargetSize() (int, error) {
+	return m.targetSize, nil
+}
+
+func (m *minCapacityMockNodeGroup) Spec() *gkeclient.NodePoolSpec {
+	return &gkeclient.NodePoolSpec{
+		Labels: m.labels,
+	}
+}
+
+func (m *minCapacityMockNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+	return nil, nil
+}
+
+func (m *minCapacityMockNodeGroup) TemplateNodeLabels() (map[string]string, error) {
+	return m.labels, nil
+}
+
+func (m *minCapacityMockNodeGroup) GceRef() gce.GceRef {
+	return gce.GceRef{}
+}
+
+func (m *minCapacityMockNodeGroup) MachineType() string {
+	return "n1-standard-2"
+}
+
+func (m *minCapacityMockNodeGroup) NodePoolName() string {
+	return ""
+}
+
+func (m *minCapacityMockNodeGroup) NodeTpuCount() (int64, error) {
+	return 0, nil
+}
+
+func (m *minCapacityMockNodeGroup) MachineConfigProvider() *machinetypes.MachineConfigProvider {
+	return machinetypes.NewMachineConfigProvider(nil)
+}
+
+type minCapacityMockCloudProvider struct {
+	cloudprovider.CloudProvider
+	nodeGroups []cloudprovider.NodeGroup
+}
+
+func (m *minCapacityMockCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
+	return m.nodeGroups
+}
+
+func (m *minCapacityMockCloudProvider) IsAutopilotEnabled() bool {
+	return false
 }

@@ -16,6 +16,7 @@ package fake
 
 import (
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/api/googleapi"
 	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 )
 
 const (
@@ -45,10 +47,16 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 		return nil, fmt.Errorf("no config available in node pool %s", np.Name)
 	}
 
+	// Resolve accelerators early to use in labels and env vars
+	accelerators, err := buildAccelerators(config)
+	if err != nil {
+		return nil, err
+	}
+
 	machineType := config.MachineType
 	diskSize := config.DiskSizeGb
 
-	kubeLabels := buildKubeLabels(np, zone)
+	kubeLabels := buildKubeLabels(np, zone, accelerators)
 	kubeLabelsStr := toKubeLabelString(kubeLabels)
 	taintsStr := toKubeTaintString(config.Taints)
 
@@ -62,6 +70,16 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 		fmt.Sprintf("node_taints=%s", taintsStr),
 		fmt.Sprintf("kube_reserved=%s", defaultKubeReserved),
 		fmt.Sprintf("evictionHard=%s", evictionHardForAutoscaler),
+	}
+
+	var tpuCount int64
+	for _, acc := range accelerators {
+		if !strings.HasPrefix(acc.AcceleratorType, "nvidia") {
+			tpuCount += acc.AcceleratorCount
+		}
+	}
+	if tpuCount > 0 {
+		commonEnvVars = append(commonEnvVars, fmt.Sprintf("extended_resources=google.com/tpu=%d", tpuCount))
 	}
 
 	autoscalerEnvVars = append(autoscalerEnvVars, commonEnvVars...)
@@ -110,7 +128,7 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 		Metadata:          &gcev1.Metadata{Items: metadataItems},
 		ServiceAccounts:   serviceAccounts,
 		MinCpuPlatform:    config.MinCpuPlatform,
-		GuestAccelerators: buildAccelerators(config),
+		GuestAccelerators: accelerators,
 	}
 
 	if config.ReservationAffinity != nil {
@@ -121,14 +139,20 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 		}
 	}
 
+	// Hash the template name to generate a deterministic unique Id.
+	hash := fnv.New64a()
+	hash.Write([]byte(templateName))
+	templateId := hash.Sum64()
+
 	return &gcev1.InstanceTemplate{
+		Id:         templateId,
 		Name:       templateName,
 		SelfLink:   fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/global/instanceTemplates/%s", project, templateName),
 		Properties: properties,
 	}, nil
 }
 
-func buildKubeLabels(np *gkeapibeta.NodePool, zone string) map[string]string {
+func buildKubeLabels(np *gkeapibeta.NodePool, zone string, accelerators []*gcev1.AcceleratorConfig) map[string]string {
 	config := np.Config
 	kubeLabels := map[string]string{
 		"cloud.google.com/gke-nodepool":        np.Name,
@@ -148,7 +172,7 @@ func buildKubeLabels(np *gkeapibeta.NodePool, zone string) map[string]string {
 			kubeLabels[gkelabels.TPUTopologyLabel] = np.PlacementPolicy.TpuTopology
 		}
 	}
-	for _, acc := range config.Accelerators {
+	for _, acc := range accelerators {
 		if strings.HasPrefix(acc.AcceleratorType, "nvidia") {
 			kubeLabels[gkelabels.GPULabel] = acc.AcceleratorType
 		} else {
@@ -162,7 +186,7 @@ func buildKubeLabels(np *gkeapibeta.NodePool, zone string) map[string]string {
 	return kubeLabels
 }
 
-func buildAccelerators(config *gkeapibeta.NodeConfig) []*gcev1.AcceleratorConfig {
+func buildAccelerators(config *gkeapibeta.NodeConfig) ([]*gcev1.AcceleratorConfig, error) {
 	accelerators := make([]*gcev1.AcceleratorConfig, 0)
 	for _, acc := range config.Accelerators {
 		accelerators = append(accelerators, &gcev1.AcceleratorConfig{
@@ -170,7 +194,30 @@ func buildAccelerators(config *gkeapibeta.NodeConfig) []*gcev1.AcceleratorConfig
 			AcceleratorCount: acc.AcceleratorCount,
 		})
 	}
-	return accelerators
+	if len(accelerators) == 0 {
+		mcp := machinetypes.NewMachineConfigProvider(nil)
+		mtInfo, err := mcp.ToMachineType(config.MachineType)
+		if err == nil {
+			if mtInfo.HasFixedGPU() {
+				accelerators = append(accelerators, &gcev1.AcceleratorConfig{
+					AcceleratorType:  mtInfo.GpuType(),
+					AcceleratorCount: int64(mtInfo.FixedGpuCount()),
+				})
+			} else {
+				tpuType, tpuCount, err := mtInfo.TpuConfig()
+				if err != nil {
+					return nil, err
+				}
+				if tpuType != "" && tpuCount > 0 {
+					accelerators = append(accelerators, &gcev1.AcceleratorConfig{
+						AcceleratorType:  tpuType,
+						AcceleratorCount: tpuCount,
+					})
+				}
+			}
+		}
+	}
+	return accelerators, nil
 }
 
 func toKubeLabelString(labels map[string]string) string {

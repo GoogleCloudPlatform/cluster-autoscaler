@@ -56,7 +56,7 @@ func (g *GkePriceInfo) RefreshGkePrices() {
 
 func (g *GkePriceInfo) buildGkePrices() gkePrices {
 	gkePrices := newGkePrices()
-	for _, family := range g.provider.AllMachineFamilies() {
+	for _, family := range g.provider.AllMachinePricingFamilies() {
 		familyPriceInfo := family.PricingInfo()
 		familyCustomPriceInfo := family.CustomPricingInfo()
 

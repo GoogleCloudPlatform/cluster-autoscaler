@@ -159,7 +159,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 				for _, removedKey := range tc.wantRemovedInstanceConfigKeys {
 					got, err := fa.AwaitInstanceAvailability("scope-1", removedKey)
 					assert.Nil(t, got)
-					assert.Equal(t, fmt.Errorf("instanceConfigKey=%s not present in availability data after refresh, flexibilityScopeKey=scope-1, lastRefreshErr=<nil>, cccUsesScaleUpAnyway=false, keyGenerationState=not_generated", removedKey), err)
+					assert.Equal(t, fmt.Errorf("instanceConfigKey=%s not present in availability data after refresh, flexibilityScopeKey=scope-1, lastRefreshErr=<nil>, cccState=, cccUsesScaleUpAnyway=false, keyGenerationState=not_generated", removedKey), err)
 				}
 			})
 		})
@@ -188,7 +188,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 
 		instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-central1-a"}, nil, machinetypes.E2, true, nil)
 		optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-		instanceConfigGenerator := NewInstanceConfigGenerator(mockLister, instanceConfigCloudProvider, optionsTracker, WithMaxInstanceConfigs(maxInstanceConfigs))
+		instanceConfigGenerator := NewInstanceConfigGenerator(ctx, mockLister, instanceConfigCloudProvider, optionsTracker, WithMaxInstanceConfigs(maxInstanceConfigs))
 
 		fa, err := NewFlexAdvisor(ctx,
 			mockProvider,
@@ -223,7 +223,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 
 			waitForWorkers(clock)
 
-			scope, ok := fa.getScope("scope-1")
+			scope, ok, _ := fa.getScope("scope-1")
 			assert.True(t, ok)
 
 			assert.Equal(t, map[string]bool{
@@ -253,7 +253,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 			clock.Step(11 * time.Second)
 			waitForWorkers(clock)
 
-			scope, ok = fa.getScope("scope-1")
+			scope, ok, _ = fa.getScope("scope-1")
 			assert.True(t, ok)
 
 			// cappedKeysMap has less keys to reflect updated CCC
@@ -369,6 +369,43 @@ func TestResponseValidation_Metrics(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, initialVal+float64(tc.expectedInc), val)
 			})
+		})
+	}
+}
+
+func TestFlexibilityScope_LastSuccessfulRefreshAt(t *testing.T) {
+	now := time.Now()
+	later := now.Add(time.Minute)
+	testCases := []struct {
+		name        string
+		initialTime time.Time
+		refreshedAt time.Time
+		err         error
+		wantTime    time.Time
+	}{
+		{
+			name:        "successful refresh - updates lastSuccessfulRefreshAt",
+			initialTime: time.Time{},
+			refreshedAt: now,
+			err:         nil,
+			wantTime:    now,
+		},
+		{
+			name:        "failed refresh - doesn't update lastSuccessfulRefreshAt",
+			initialTime: now,
+			refreshedAt: later,
+			err:         fmt.Errorf("refresh error"),
+			wantTime:    now,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			scope := newFlexibilityScope(nil, "scope-1", func() {})
+			scope.lastSuccessfulRefreshAt = tc.initialTime
+
+			scope.finishRefresh(nil, &inFlightProvisions{}, nil, nil, tc.refreshedAt, tc.err)
+			assert.Equal(t, tc.wantTime, scope.getLastSuccessfulRefreshAt())
 		})
 	}
 }

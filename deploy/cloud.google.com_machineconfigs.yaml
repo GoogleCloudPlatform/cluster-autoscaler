@@ -240,6 +240,23 @@ spec:
                         description: Whether the machine family is excluded from NUMA
                           alignment support.
                         type: boolean
+                      persistentDiskTypeConfigs:
+                        description: PersistentDiskTypeConfigs specifies the persistent
+                          disk types configurations supported by the machine family.
+                        items:
+                          description: PersistentDiskTypeConfig represents the configuration
+                            for disk types.
+                          properties:
+                            confidentialMode:
+                              description: The confidential mode of the disk type.
+                              type: string
+                            name:
+                              description: The disk type name.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
                       supportsConfidentialNodes:
                         description: |-
                           SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
@@ -358,6 +375,25 @@ spec:
                               description: Whether the machine family is excluded
                                 from NUMA alignment support.
                               type: boolean
+                            persistentDiskTypeConfigs:
+                              description: PersistentDiskTypeConfigs specifies the
+                                persistent disk types configurations supported by
+                                the machine family.
+                              items:
+                                description: PersistentDiskTypeConfig represents the
+                                  configuration for disk types.
+                                properties:
+                                  confidentialMode:
+                                    description: The confidential mode of the disk
+                                      type.
+                                    type: string
+                                  name:
+                                    description: The disk type name.
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              type: array
                             supportsConfidentialNodes:
                               description: |-
                                 SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
@@ -469,6 +505,24 @@ spec:
                   name:
                     description: Name of this machine family.
                     type: string
+                  pageType:
+                    description: PageType specifies the page type supported by the
+                      machine family.
+                    type: string
+                  usagePolicy:
+                    description: UsagePolicy controls how this configuration entry
+                      is applied by the system.
+                    properties:
+                      mode:
+                        description: |-
+                          Mode specifies the active usage mode for this configuration entry.
+                          Supported values:
+                          - "WeightsOnly": The configuration entry is used strictly for preference weight calculations, bypassing it for other purposes.
+                          - "PropertiesOnly": The configuration entry is used strictly for machine properties, bypassing it for preference weight calculations.
+                          - "Legacy": The configuration entry is inactive, falling back to static machine type definitions.
+                          If unset, defaults to standard behavior where the configuration entry is the single source of truth for the machine family.
+                        type: string
+                    type: object
                   weights:
                     description: |-
                       Weights contains information about the preference for choosing this machine configuration.

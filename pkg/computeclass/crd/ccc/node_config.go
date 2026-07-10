@@ -89,6 +89,13 @@ func ruleOptsForNodeSystemConfig(cccNodeSystemConfig *ccc_api.NodeSystemConfig) 
 			ruleOpts = append(ruleOpts, rules.WithSwapConfigRule(*swapConfig))
 		}
 
+		if nodeVfioConfig := cccNodeSystemConfig.LinuxNodeConfig.NodeVfioConfig; nodeVfioConfig != nil {
+			ruleOpts = append(ruleOpts, rules.WithNodeVfioConfigRule(*nodeVfioConfig))
+		}
+		if diskIoScheduler := cccNodeSystemConfig.LinuxNodeConfig.DiskIoScheduler; diskIoScheduler != nil {
+			ruleOpts = append(ruleOpts, rules.WithDiskIoSchedulerRule(*diskIoScheduler))
+		}
+
 		if cccNodeSystemConfig.LinuxNodeConfig.AdditionalEtcHosts != nil {
 			var etcHosts []*rules.EtcHostsEntry
 			for _, entry := range cccNodeSystemConfig.LinuxNodeConfig.AdditionalEtcHosts {

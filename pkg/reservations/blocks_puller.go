@@ -15,6 +15,7 @@
 package reservations
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -71,7 +72,7 @@ func (p *BlocksPuller) setReservationBlocksInReservation(blocks map[gceclient.Re
 }
 
 // Run pulls reservation blocks for all reservations periodically.
-func (p *BlocksPuller) Run(stopCh <-chan struct{}) {
+func (p *BlocksPuller) Run(ctx context.Context) {
 	klog.V(0).Info("Enabling Reservation Blocks Puller")
 
 	p.Loop()
@@ -81,7 +82,7 @@ func (p *BlocksPuller) Run(stopCh <-chan struct{}) {
 
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			p.Loop()

@@ -15,6 +15,7 @@
 package operationtracker
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"testing"
@@ -1168,8 +1169,8 @@ func (m *mockBackoff) DeleteNode(machineFamily string, nodeName string) {
 	m.Called(machineFamily, nodeName)
 }
 
-func (m *mockBackoff) Run(stopCh <-chan struct{}) {
-	m.Called(stopCh)
+func (m *mockBackoff) Run(ctx context.Context) {
+	m.Called(ctx)
 }
 
 func (m *mockBackoff) RefreshCustomThresholds(em experiments.Manager) {

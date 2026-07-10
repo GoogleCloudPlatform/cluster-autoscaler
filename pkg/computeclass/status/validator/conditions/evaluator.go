@@ -243,6 +243,7 @@ func createTagClient(config string) (resourcemanager.TagClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open gce config file %s: %#v", config, err)
 	}
+	defer configReader.Close()
 	var configFile provider_gce.ConfigFile
 	if err := gcfg.ReadInto(&configFile, configReader); err != nil {
 		return nil, fmt.Errorf("couldn't read config from file %s: %v", config, err)

@@ -22,6 +22,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/klog/v2"
 )
 
@@ -100,6 +101,7 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 	var organizedNodeGroups [][]cloudprovider.NodeGroup
 	for _, ruleGroup := range crd.GroupedRules() {
 		var matchingNodeGroups, nonMatchingNodeGroups []cloudprovider.NodeGroup
+		var matchedRule rules.Rule
 		for _, ng := range nodeGroups {
 			matched := false
 			for _, rule := range ruleGroup {
@@ -108,6 +110,7 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 				}
 				if rule.Matches(ng) {
 					matched = true
+					matchedRule = rule
 					break
 				}
 			}
@@ -118,9 +121,9 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 			}
 		}
 		if len(matchingNodeGroups) > 0 {
-			if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
-				organizedByFamily := o.organizeByMachineFamily(matchingNodeGroups, machinetypes.EK)
-				organizedNodeGroups = append(organizedNodeGroups, organizedByFamily...)
+			if prioritizedFamilies := o.prioritizedFamiliesForRule(matchedRule); len(prioritizedFamilies) > 0 {
+				organizedByFamilies := o.organizeByMachineFamily(matchingNodeGroups, prioritizedFamilies...)
+				organizedNodeGroups = append(organizedNodeGroups, organizedByFamilies...)
 			} else {
 				organizedNodeGroups = append(organizedNodeGroups, matchingNodeGroups)
 			}
@@ -139,34 +142,67 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 	return organizedNodeGroups
 }
 
-// organizeByMachineFamily prioritizes node groups from the prioritized family.
-func (o *organizer) organizeByMachineFamily(nodeGroups []cloudprovider.NodeGroup, prioritizedFamily machinetypes.MachineFamily) [][]cloudprovider.NodeGroup {
+// prioritizedFamiliesForRule returns the ordered list of machine families that should be prioritized
+// for the given rule, based on the current provider configuration.
+func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.MachineFamily {
+	if rule == nil {
+		return nil
+	}
+	switch rule.PodFamilyName() {
+	case rules.GeneralPurposePodFamily:
+		if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
+			return []machinetypes.MachineFamily{machinetypes.EK}
+		}
+	case rules.GeneralPurposeArmPodFamily:
+		if families, err := rule.PodFamilyMachineFamilies(); err == nil {
+			return families
+		}
+	}
+	return nil
+}
+
+// organizeByMachineFamily prioritizes candidate node groups into absolute scale-up tiers based on an ordered list of machine families.
+// Each element of the returned outer slice represents a distinct priority tier evaluated sequentially by the Cluster Autoscaler expander.
+// Node groups within the same inner slice are treated as equal-priority alternatives.
+func (o *organizer) organizeByMachineFamily(nodeGroups []cloudprovider.NodeGroup, prioritizedFamilies ...machinetypes.MachineFamily) [][]cloudprovider.NodeGroup {
 	var organizedNodeGroups [][]cloudprovider.NodeGroup
-	var highPriorityNodeGroups, lowPriorityNodeGroups []cloudprovider.NodeGroup
+	buckets := make([][]cloudprovider.NodeGroup, len(prioritizedFamilies))
+	var unbucketedNodeGroups []cloudprovider.NodeGroup
+
 	for _, nodeGroup := range nodeGroups {
 		mig, ok := nodeGroup.(*gke.GkeMig)
 		if !ok {
 			klog.Errorf("organizeByMachineFamily expected GkeMig; got %q; will not prioritize the node group", nodeGroup.Id())
-			lowPriorityNodeGroups = append(lowPriorityNodeGroups, nodeGroup)
+			unbucketedNodeGroups = append(unbucketedNodeGroups, nodeGroup)
 			continue
 		}
 		migMachineFamily, err := o.provider.MachineConfigProvider().GetMachineFamilyFromMachineName(mig.Spec().MachineType)
 		if err != nil {
 			klog.Errorf("organizeByMachineFamily couldn't get machine family for mig %q, will not prioritize the node group: %v", mig.Id(), err)
-			lowPriorityNodeGroups = append(lowPriorityNodeGroups, nodeGroup)
+			unbucketedNodeGroups = append(unbucketedNodeGroups, nodeGroup)
 			continue
 		}
-		if migMachineFamily.Equal(prioritizedFamily) {
-			highPriorityNodeGroups = append(highPriorityNodeGroups, nodeGroup)
-		} else {
-			lowPriorityNodeGroups = append(lowPriorityNodeGroups, nodeGroup)
+		matched := false
+		for i, family := range prioritizedFamilies {
+			if migMachineFamily.Equal(family) {
+				buckets[i] = append(buckets[i], nodeGroup)
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			unbucketedNodeGroups = append(unbucketedNodeGroups, nodeGroup)
 		}
 	}
-	if len(highPriorityNodeGroups) > 0 {
-		organizedNodeGroups = append(organizedNodeGroups, highPriorityNodeGroups)
+
+	for _, bucket := range buckets {
+		if len(bucket) > 0 {
+			organizedNodeGroups = append(organizedNodeGroups, bucket)
+		}
 	}
-	if len(lowPriorityNodeGroups) > 0 {
-		organizedNodeGroups = append(organizedNodeGroups, lowPriorityNodeGroups)
+	if len(unbucketedNodeGroups) > 0 {
+		organizedNodeGroups = append(organizedNodeGroups, unbucketedNodeGroups)
 	}
+
 	return organizedNodeGroups
 }

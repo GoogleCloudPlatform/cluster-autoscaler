@@ -19,15 +19,16 @@ package v1
 // MachinePropertiesApplyConfiguration represents an declarative configuration of the MachineProperties type for use
 // with apply.
 type MachinePropertiesApplyConfiguration struct {
-	SystemArchitecture        *string                                   `json:"systemArchitecture,omitempty"`
-	CPUPlatforms              []CPUPlatformApplyConfiguration           `json:"cpuPlatforms,omitempty"`
-	CompactPlacementConfig    *CompactPlacementConfigApplyConfiguration `json:"compactPlacementConfig,omitempty"`
-	ThreadsPerCore            *int64                                    `json:"threadsPerCore,omitempty"`
-	BootDiskConfig            *BootDiskConfigApplyConfiguration         `json:"bootDiskConfig,omitempty"`
-	NAPDisabled               *bool                                     `json:"napDisabled,omitempty"`
-	SupportsConfidentialNodes *bool                                     `json:"supportsConfidentialNodes,omitempty"`
-	ConfidentialNodeConfig    *ConfidentialNodeConfigApplyConfiguration `json:"confidentialNodeConfig,omitempty"`
-	NumaAlignmentUnsupported  *bool                                     `json:"numaAlignmentUnsupported,omitempty"`
+	SystemArchitecture        *string                                      `json:"systemArchitecture,omitempty"`
+	CPUPlatforms              []CPUPlatformApplyConfiguration              `json:"cpuPlatforms,omitempty"`
+	CompactPlacementConfig    *CompactPlacementConfigApplyConfiguration    `json:"compactPlacementConfig,omitempty"`
+	ThreadsPerCore            *int64                                       `json:"threadsPerCore,omitempty"`
+	BootDiskConfig            *BootDiskConfigApplyConfiguration            `json:"bootDiskConfig,omitempty"`
+	PersistentDiskTypeConfigs []PersistentDiskTypeConfigApplyConfiguration `json:"persistentDiskTypeConfigs,omitempty"`
+	NAPDisabled               *bool                                        `json:"napDisabled,omitempty"`
+	SupportsConfidentialNodes *bool                                        `json:"supportsConfidentialNodes,omitempty"`
+	ConfidentialNodeConfig    *ConfidentialNodeConfigApplyConfiguration    `json:"confidentialNodeConfig,omitempty"`
+	NumaAlignmentUnsupported  *bool                                        `json:"numaAlignmentUnsupported,omitempty"`
 }
 
 // MachinePropertiesApplyConfiguration constructs an declarative configuration of the MachineProperties type for use with
@@ -78,6 +79,19 @@ func (b *MachinePropertiesApplyConfiguration) WithThreadsPerCore(value int64) *M
 // If called multiple times, the BootDiskConfig field is set to the value of the last call.
 func (b *MachinePropertiesApplyConfiguration) WithBootDiskConfig(value *BootDiskConfigApplyConfiguration) *MachinePropertiesApplyConfiguration {
 	b.BootDiskConfig = value
+	return b
+}
+
+// WithPersistentDiskTypeConfigs adds the given value to the PersistentDiskTypeConfigs field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the PersistentDiskTypeConfigs field.
+func (b *MachinePropertiesApplyConfiguration) WithPersistentDiskTypeConfigs(values ...*PersistentDiskTypeConfigApplyConfiguration) *MachinePropertiesApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithPersistentDiskTypeConfigs")
+		}
+		b.PersistentDiskTypeConfigs = append(b.PersistentDiskTypeConfigs, *values[i])
+	}
 	return b
 }
 

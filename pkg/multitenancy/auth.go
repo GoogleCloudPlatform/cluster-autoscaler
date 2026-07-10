@@ -87,6 +87,15 @@ func (ts *tenantTokenSource) Token() (*oauth2.Token, error) {
 	}
 
 	tokenURL := ts.tokenURL
+	u, err := url.Parse(tokenURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token URL %q: %v", tokenURL, err)
+	}
+	host := u.Hostname()
+	if host != "googleapis.com" && !strings.HasSuffix(host, ".googleapis.com") {
+		return nil, fmt.Errorf("token URL %q is not a trusted Google API domain", tokenURL)
+	}
+
 	klog.Infof("Fetching tenant token from URL: %s, Body: %s", tokenURL, ts.authConfig.TokenBody)
 
 	req, err := http.NewRequest("POST", tokenURL, bytes.NewBufferString(ts.authConfig.TokenBody))

@@ -32,6 +32,8 @@ const (
 	HTNAPFeatureName = "htnap"
 	// IncreasedMaxNodesPerScaleUpFeatureName is the name of the IncreasedMaxNodesPerScaleUp feature.
 	IncreasedMaxNodesPerScaleUpFeatureName = "increased_max_nodes_per_scale_up"
+	// IncreasedNapMaxNodesFeatureName is the name of the IncreasedNapMaxNodes feature.
+	IncreasedNapMaxNodesFeatureName = "increased_nap_max_nodes"
 )
 
 var featureEnabled = k8smetrics.NewGaugeVec(

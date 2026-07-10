@@ -84,7 +84,7 @@ func TestGetExpansionMachineTypeName(t *testing.T) {
 				mp["cloud.google.com/machine-family"] = podrequirements.NewValues(testCase.machineFamily)
 			}
 			requirements := &podrequirements.Requirements{LabelReq: podrequirements.NewLabelRequirements(mp)}
-			assert.Equal(t, testCase.expectedMachineType, getExpansionMachineTypeName(selector, requirements, testCase.gpuLabel, testCase.tpuLabel))
+			assert.Equal(t, testCase.expectedMachineType, getExpansionMachineTypeName(selector, requirements, testCase.gpuLabel, testCase.tpuLabel, nil))
 		})
 	}
 }

@@ -184,7 +184,7 @@ func TestMinCapacityController_Reconcile(t *testing.T) {
 				mockMatcher.On("FirstMatchedRule", mock.Anything, mock.Anything).Return(false, 0, nil)
 			}
 
-			controller := NewMinCapacityController(time.Minute, ccLister, mockNodeLister, mockProvider, mockMatcher, mockObserver)
+			controller := NewMinCapacityController(time.Minute, ccLister, mockNodeLister, mockProvider, mockMatcher, mockObserver, nil)
 
 			mockObserver.On("CheckLongUnprovisioned", mock.AnythingOfType("time.Time")).Return()
 

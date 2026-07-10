@@ -103,9 +103,14 @@ func (p *AutoscalingStatusVisibilityProcessor) confirmStatusEventReported(status
 }
 
 func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *context.AutoscalingContext, csr visibilityClusterStateRegistry) {
+	failures := csr.GetScaleUpFailures()
+	if len(failures) == 0 {
+		return
+	}
 	failuresAssociatedWithEvent := make(map[string][]*vistypes.Message)
 	nodeGroupsAssociatedWithEvent := make(map[string][]cloudprovider.NodeGroup)
-	for nodeGroupId, failures := range csr.GetScaleUpFailures() {
+	nodeGroupsMap := cloudprovider.NodeGroupListToMapById(ctx.CloudProvider.NodeGroups())
+	for nodeGroupId, failures := range failures {
 		errMsgs := make([]*vistypes.Message, 0)
 		for _, failure := range failures {
 			reason := failure.ErrorInfo.ErrorCode
@@ -115,14 +120,8 @@ func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *conte
 			}
 		}
 		eventIds := p.data.FailNodeGroup(nodeGroupId, errMsgs)
-		var nodeGroup cloudprovider.NodeGroup
 		// TODO(b/519143061): Node group is no longer linked in scaleupfailures.Record
-		for _, ng := range ctx.CloudProvider.NodeGroups() {
-			if ng.Id() == nodeGroupId {
-				nodeGroup = ng
-				break
-			}
-		}
+		nodeGroup := nodeGroupsMap[nodeGroupId]
 		if nodeGroup == nil {
 			klog.Warningf("AutoscalingStatusVisibilityProcessor: nodegroup %v not found in cloudprovider.NodeGroups()", nodeGroupId)
 		}

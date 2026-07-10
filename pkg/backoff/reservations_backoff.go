@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"sync"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -51,6 +52,7 @@ var outOfResourcesReservationErrs = map[string]bool{
 }
 
 type reservationsBackoff struct {
+	mu                  sync.RWMutex
 	initialDuration     time.Duration
 	maxDuration         time.Duration
 	reservationBackoffs map[reservationKey]reservationBackoffEntry
@@ -96,6 +98,9 @@ func NewReservationsBackoff(initialBackoffDuration, maxBackoffDuration time.Dura
 // Backoff triggers a backoff for the reservation defined by the given nodeInfo.
 // It returns the time until which the operation should be backed off.
 func (b *reservationsBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if !b.isInvalidReservationError(errorInfo) && !b.isReservationOutOfResources(nodeGroup, nodeInfo, errorInfo) {
 		return currentTime
 	}
@@ -164,6 +169,9 @@ func (b *reservationsBackoff) backoffExponential(backoffEntry reservationBackoff
 
 // BackoffStatus returns status of backoff for the given reservationKey.
 func (b *reservationsBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, currentTime time.Time) base_backoff.Status {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	if nodeInfo == nil {
 		if nodeGroup == nil {
 			return base_backoff.Status{IsBackedOff: false}
@@ -185,6 +193,9 @@ func (b *reservationsBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, n
 
 // RemoveBackoff removes the backoff for the reservation requested by the node of nodeInfo.
 func (b *reservationsBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if nodeInfo == nil {
 		klog.Warningf("Not removing reservation backoff for nodeGroup %v: nodeInfo is nil", nodeGroup.Id())
 		return
@@ -200,6 +211,9 @@ func (b *reservationsBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, n
 
 // RemoveStaleBackoffData removes stale backoff data.
 func (b *reservationsBackoff) RemoveStaleBackoffData(currentTime time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for reservationKey, backoffEntry := range b.reservationBackoffs {
 		if currentTime.After(backoffEntry.reset) {
 			delete(b.reservationBackoffs, reservationKey)

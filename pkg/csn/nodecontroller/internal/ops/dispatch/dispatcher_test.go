@@ -235,14 +235,14 @@ func TestDispatcher(t *testing.T) {
 				handlers[opType] = handler
 				d.RegisterHandler(opType, handler.Handle)
 			}
-			stopCh := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
 			// Ensure cleanup of the cancellation goroutine in Run
-			defer close(stopCh)
+			defer cancel()
 
 			// Run blocks until workers exit (which happens when opsCh is drained)
 			dispatcherDone := make(chan bool)
 			go func() {
-				d.Run(stopCh)
+				d.Run(ctx)
 				dispatcherDone <- true
 			}()
 

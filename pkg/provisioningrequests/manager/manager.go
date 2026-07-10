@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -142,15 +141,7 @@ const (
 )
 
 // NewProvisioningRequestManager returns new instance of the Provisioning Request manager.
-func NewProvisioningRequestManager(prClient *provreqclient.ProvisioningRequestClient, client *http.Client, projectId, userAgent, gceEndpoint string, prCache *provreqcache.QueuedProvisioningCache, experimentsManager experiments.Manager, gceService gce.AutoscalingGceClient, migCache bulkmig.GceMigCache) (*provReqManager, error) {
-	queuedResizeRequestService, err := resizerequestclient.NewResizeRequestClientV1(client, projectId, userAgent, gceEndpoint, resizerequestclient.ResizeRequestModeQueued)
-	if err != nil {
-		return nil, err
-	}
-	bulkMigClient, err := bulkmig.NewBulkMigClientBeta(client, projectId, userAgent, gceEndpoint, gceService, migCache)
-	if err != nil {
-		return nil, err
-	}
+func NewProvisioningRequestManager(prClient *provreqclient.ProvisioningRequestClient, queuedResizeRequestService resizerequestclient.ResizeRequestClient, bulkMigClient bulkmig.GceMigClient, projectId string, prCache *provreqcache.QueuedProvisioningCache, experimentsManager experiments.Manager) (*provReqManager, error) {
 	requestReconciler, err := reconciler.NewCompositeProvisioningRequestReconciler(prClient, prCache, queuedResizeRequestService, bulkMigClient, experimentsManager, projectId)
 	if err != nil {
 		return nil, err

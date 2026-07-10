@@ -42,6 +42,9 @@ type FACacheQueryResult string
 // KeyGenerationState describes the state of the key generation for Flex Advisor.
 type KeyGenerationState string
 
+// CccState describes the state of the key generation for Flex Advisor.
+type CccState string
+
 const (
 	// KeyGenerationStateNotGenerated represents a key that was not generated.
 	KeyGenerationStateNotGenerated KeyGenerationState = "not_generated"
@@ -49,6 +52,13 @@ const (
 	KeyGenerationStateGeneratedButCapped KeyGenerationState = "generated_but_capped"
 	// KeyGenerationStateGeneratedAndSent represents a key that was generated and sent to the backend.
 	KeyGenerationStateGeneratedAndSent KeyGenerationState = "generated_and_sent"
+)
+
+const (
+	// CccStateEmpty represents a key that was not generated.
+	CccStateEmpty CccState = ""
+	// CccStateStale represents a key that was not generated.
+	CccStateStale CccState = "stale"
 )
 
 // FADecisionFeedbackCategory describes Flex Advisor decision feedback category.
@@ -908,7 +918,7 @@ var (
 			Name:      "flexadvisor_cache_query_count",
 			Help:      "Number of Flex Advisor cache queries of different result.",
 		},
-		[]string{"result", "is_ccc_scale_up_anyway", "key_generation_state"},
+		[]string{"result", "ccc_state", "is_ccc_scale_up_anyway", "key_generation_state"},
 	)
 
 	flexAdvisorActiveScopes = k8smetrics.NewGauge(
@@ -916,6 +926,14 @@ var (
 			Namespace: caNamespace,
 			Name:      "flexadvisor_active_scopes",
 			Help:      "Number of active Flex Advisor scopes.",
+		},
+	)
+
+	flexAdvisorRejectedScopes = k8smetrics.NewGauge(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "flexadvisor_rejected_scopes",
+			Help:      "Number of Flex Advisor scopes rejected in the current loop due to throttling.",
 		},
 	)
 
@@ -983,99 +1001,120 @@ var (
 		},
 		[]string{"reason"},
 	)
+
+	machineConfigSourceInfo = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "machine_config_source_info",
+			Help:      "A real-time metric gauge identifying the configuration source of a machine family, labeling it as either hardcoded within the legacy codebase, or dynamically provisioned via the automated CRD pipeline.",
+		},
+		[]string{"machine_family", "config_source"},
+	)
 )
+
+// allMetrics is the single source of truth for all metrics to register.
+// When adding a new metric, add it here. Both RegisterAll and ResetAllForTest
+// (in metrics_test_accessor.go) use this slice, so new metrics are automatically
+// handled by both registration and test reset.
+var allMetrics = []k8smetrics.Registerable{
+	profile,
+	clusterType,
+	podShardCount,
+	unschedulablePodDuration,
+	podSchedulingDuration,
+	reactionTimeMilliseconds,
+	longUnschedulablePodsCount,
+	podSchedulableResets,
+	caVizLoggedBytes,
+	caVizDroppedEventTotal,
+	caVizChemistClientRequestDurationSeconds,
+	caVizChemistClientRequestsTotal,
+	napDefaultsMinCpuPlatformEnabled,
+	componentVersion,
+	worstAllocatableOverestimation,
+	worstAllocatableUnderestimation,
+	coreZonalDistribution,
+	provisioningRequestCount,
+	provisioningRequestProcessingLatencySeconds,
+	provisioningRequestQueueWaitDurationSeconds,
+	longUnprocessedProvisioningRequestCount,
+	longAcceptedProvisioningRequestCount,
+	overwrittenShortLivedNodeInfos,
+	defragScaledDownNodesTotal,
+	defragFailedScaledDownNodesTotal,
+	defragUnfitNodes,
+	defragEvictedPodsTotal,
+	defragNodeRemovalDurationSeconds,
+	defragInvalidatedCandidatesTotal,
+	defragStaleness,
+	reservationsAvailable,
+	reservationsUsed,
+	reservationsUseConsumablePuller,
+	nodeUtilization,
+	unexpectedPods,
+	npcCount,
+	npcRuleCount,
+	npcHealth,
+	crdUnhealthinessConditions,
+	scaledUpNodesPerRule,
+	scaledDownNodesPerRule,
+	binpackingNodeGroupsTotal,
+	binpackingNodeGroupsProcessed,
+	binpackingNodeGroupsSkipped,
+	missingLabels,
+	uasMaxSizeRecommendationAge,
+	ekGceResizeRequestDuration,
+	ekResizeOperation,
+	vmGceResizeRequestDuration,
+	vmResizeOperation,
+	ekBackoffStatus,
+	resizeBackoffStatus,
+	taskQueueSize,
+	taskQueueDuration,
+	taskQueueCompletedCount,
+	ekLaunchStatus,
+	resizableVmLaunchStatus,
+	ekAutopilotComputeClassStatus,
+	resizableVmAutopilotComputeClassStatus,
+	podsSchedulableOnEkUpsizes,
+	resizableVmPodsSchedulableOnUpsizes,
+	fixerEvents,
+	resizableVmFixerEvents,
+	reconcileNodeStateEvents,
+	resizableVmReconcileNodeStateEvents,
+	lookaheadLaunchStatus,
+	unscheduleableLookaheadPodsCount,
+	resizableVmUnschedulableLookaheadPodsCount,
+	lookaheadPodsCount,
+	totalEkNodesLookaheadSpaceCPU,
+	totalEkNodesLookaheadSpaceMemory,
+	resizableVmTotalNodesLookaheadSpaceCPU,
+	resizableVmTotalNodesLookaheadSpaceMemory,
+	nodesWithLookaheadPodsShape,
+	capacityBuffersPodsMetric,
+	capacityBuffersNumberMetric,
+	csnEnabled,
+	csnInvalidCondition,
+	napEnabled,
+	flexAdvisorCacheQueryCount,
+	flexAdvisorActiveScopes,
+	flexAdvisorRejectedScopes,
+	flexAdvisorDecisionFeedbackCount,
+	flexAdvisorGeneratedInstanceConfigurationCount,
+	featureEnabled,
+	ccMinTargetNodesReactionLatency,
+	ccMinTargetNodesProvisioningLatency,
+	ccLongUnprovisionedMinTargetNodesCount,
+	flexAdvisorGenerationErrors,
+	flexAdvisorResponseErrors,
+	machineConfigSourceInfo,
+}
 
 // RegisterAll registers all metrics.
 func RegisterAll() {
-	legacyregistry.MustRegister(profile)
-	legacyregistry.MustRegister(clusterType)
-	legacyregistry.MustRegister(podShardCount)
-	legacyregistry.MustRegister(unschedulablePodDuration)
-	legacyregistry.MustRegister(podSchedulingDuration)
-	legacyregistry.MustRegister(reactionTimeMilliseconds)
-	legacyregistry.MustRegister(longUnschedulablePodsCount)
-	legacyregistry.MustRegister(podSchedulableResets)
-	legacyregistry.MustRegister(caVizLoggedBytes)
-	legacyregistry.MustRegister(caVizDroppedEventTotal)
-	legacyregistry.MustRegister(caVizChemistClientRequestDurationSeconds)
-	legacyregistry.MustRegister(caVizChemistClientRequestsTotal)
-	legacyregistry.MustRegister(napDefaultsMinCpuPlatformEnabled)
-	legacyregistry.MustRegister(componentVersion)
-	legacyregistry.MustRegister(worstAllocatableOverestimation)
-	legacyregistry.MustRegister(worstAllocatableUnderestimation)
-	legacyregistry.MustRegister(coreZonalDistribution)
-	legacyregistry.MustRegister(provisioningRequestCount)
-	legacyregistry.MustRegister(provisioningRequestProcessingLatencySeconds)
-	legacyregistry.MustRegister(provisioningRequestQueueWaitDurationSeconds)
-	legacyregistry.MustRegister(longUnprocessedProvisioningRequestCount)
-	legacyregistry.MustRegister(longAcceptedProvisioningRequestCount)
-	legacyregistry.MustRegister(overwrittenShortLivedNodeInfos)
-	legacyregistry.MustRegister(defragScaledDownNodesTotal)
-	legacyregistry.MustRegister(defragFailedScaledDownNodesTotal)
-	legacyregistry.MustRegister(defragUnfitNodes)
-	legacyregistry.MustRegister(defragEvictedPodsTotal)
-	legacyregistry.MustRegister(defragNodeRemovalDurationSeconds)
-	legacyregistry.MustRegister(defragInvalidatedCandidatesTotal)
-	legacyregistry.MustRegister(defragStaleness)
-	legacyregistry.MustRegister(reservationsAvailable)
-	legacyregistry.MustRegister(reservationsUsed)
-	legacyregistry.MustRegister(reservationsUseConsumablePuller)
-	legacyregistry.MustRegister(nodeUtilization)
-	legacyregistry.MustRegister(unexpectedPods)
-	legacyregistry.MustRegister(npcCount)
-	legacyregistry.MustRegister(npcRuleCount)
-	legacyregistry.MustRegister(npcHealth)
-	legacyregistry.MustRegister(crdUnhealthinessConditions)
-	legacyregistry.MustRegister(scaledUpNodesPerRule)
-	legacyregistry.MustRegister(scaledDownNodesPerRule)
-	legacyregistry.MustRegister(binpackingNodeGroupsTotal)
-	legacyregistry.MustRegister(binpackingNodeGroupsProcessed)
-	legacyregistry.MustRegister(binpackingNodeGroupsSkipped)
-	legacyregistry.MustRegister(missingLabels)
-	legacyregistry.MustRegister(uasMaxSizeRecommendationAge)
-	legacyregistry.MustRegister(ekGceResizeRequestDuration)
-	legacyregistry.MustRegister(ekResizeOperation)
-	legacyregistry.MustRegister(vmGceResizeRequestDuration)
-	legacyregistry.MustRegister(vmResizeOperation)
-	legacyregistry.MustRegister(ekBackoffStatus)
-	legacyregistry.MustRegister(resizeBackoffStatus)
-	legacyregistry.MustRegister(taskQueueSize)
-	legacyregistry.MustRegister(taskQueueDuration)
-	legacyregistry.MustRegister(taskQueueCompletedCount)
-	legacyregistry.MustRegister(ekLaunchStatus)
-	legacyregistry.MustRegister(resizableVmLaunchStatus)
-	legacyregistry.MustRegister(ekAutopilotComputeClassStatus)
-	legacyregistry.MustRegister(resizableVmAutopilotComputeClassStatus)
-	legacyregistry.MustRegister(podsSchedulableOnEkUpsizes)
-	legacyregistry.MustRegister(resizableVmPodsSchedulableOnUpsizes)
-	legacyregistry.MustRegister(fixerEvents)
-	legacyregistry.MustRegister(resizableVmFixerEvents)
-	legacyregistry.MustRegister(reconcileNodeStateEvents)
-	legacyregistry.MustRegister(resizableVmReconcileNodeStateEvents)
-	legacyregistry.MustRegister(lookaheadLaunchStatus)
-	legacyregistry.MustRegister(unscheduleableLookaheadPodsCount)
-	legacyregistry.MustRegister(resizableVmUnschedulableLookaheadPodsCount)
-	legacyregistry.MustRegister(lookaheadPodsCount)
-	legacyregistry.MustRegister(totalEkNodesLookaheadSpaceCPU)
-	legacyregistry.MustRegister(totalEkNodesLookaheadSpaceMemory)
-	legacyregistry.MustRegister(resizableVmTotalNodesLookaheadSpaceCPU)
-	legacyregistry.MustRegister(resizableVmTotalNodesLookaheadSpaceMemory)
-	legacyregistry.MustRegister(nodesWithLookaheadPodsShape)
-	legacyregistry.MustRegister(capacityBuffersPodsMetric)
-	legacyregistry.MustRegister(capacityBuffersNumberMetric)
-	legacyregistry.MustRegister(csnEnabled)
-	legacyregistry.MustRegister(csnInvalidCondition)
-	legacyregistry.MustRegister(napEnabled)
-	legacyregistry.MustRegister(flexAdvisorCacheQueryCount)
-	legacyregistry.MustRegister(flexAdvisorActiveScopes)
-	legacyregistry.MustRegister(flexAdvisorDecisionFeedbackCount)
-	legacyregistry.MustRegister(flexAdvisorGeneratedInstanceConfigurationCount)
-	legacyregistry.MustRegister(featureEnabled)
-	legacyregistry.MustRegister(ccMinTargetNodesReactionLatency)
-	legacyregistry.MustRegister(ccMinTargetNodesProvisioningLatency)
-	legacyregistry.MustRegister(ccLongUnprovisionedMinTargetNodesCount)
-	legacyregistry.MustRegister(flexAdvisorGenerationErrors)
-	legacyregistry.MustRegister(flexAdvisorResponseErrors)
+	for _, m := range allMetrics {
+		legacyregistry.MustRegister(m)
+	}
 	recordComponentVersion()
 }
 
@@ -1133,6 +1172,11 @@ func (*prometheusMetrics) RecordClusterType(autopilotEnabled bool) {
 	} else {
 		clusterType.WithLabelValues(gkeStandardLabel).Set(1.0)
 	}
+}
+
+// UpdateMachineConfigSourceInfo records whether a machine family's config is from legacy code (hardcoded) or CRD pipeline (dynamic).
+func (*prometheusMetrics) UpdateMachineConfigSourceInfo(machineFamily string, configSource machinetypes.ConfigSource, value float64) {
+	machineConfigSourceInfo.WithLabelValues(machineFamily, string(configSource)).Set(value)
 }
 
 // UpdatePodShardCount updates number of shards for currently unschedulable pods.
@@ -1516,18 +1560,23 @@ func (*prometheusMetrics) IncrementTaskCompletedCount(taskType string, result Ta
 }
 
 // IncrementFlexAdvisorCacheQueryCount increments the cache query count of the Flex Advisor cache.
-func (*prometheusMetrics) IncrementFlexAdvisorCacheQueryCount(result FACacheQueryResult, isScaleUpAnyway *bool, keyGenerationState KeyGenerationState) {
+func (*prometheusMetrics) IncrementFlexAdvisorCacheQueryCount(result FACacheQueryResult, cccState CccState, isScaleUpAnyway *bool, keyGenerationState KeyGenerationState) {
 	var formattedIsScaleUpAnyway string
 
 	if isScaleUpAnyway != nil {
 		formattedIsScaleUpAnyway = strconv.FormatBool(*isScaleUpAnyway)
 	}
-	flexAdvisorCacheQueryCount.WithLabelValues(string(result), formattedIsScaleUpAnyway, string(keyGenerationState)).Inc()
+	flexAdvisorCacheQueryCount.WithLabelValues(string(result), string(cccState), formattedIsScaleUpAnyway, string(keyGenerationState)).Inc()
 }
 
 // UpdateFlexAdvisorActiveScopes updates the number of active Flex Advisor scopes.
 func (*prometheusMetrics) UpdateFlexAdvisorActiveScopes(count int) {
 	flexAdvisorActiveScopes.Set(float64(count))
+}
+
+// UpdateFlexAdvisorRejectedScopes updates the number of rejected Flex Advisor scopes.
+func (*prometheusMetrics) UpdateFlexAdvisorRejectedScopes(rejected int) {
+	flexAdvisorRejectedScopes.Set(float64(rejected))
 }
 
 // IncrementFlexAdvisorFeedbackDecisionCount increments the number of Flex Advisor feedback decision for each FADecisionFeedbackCategory.

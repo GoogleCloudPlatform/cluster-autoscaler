@@ -53,6 +53,8 @@ func (p *NodeGroupChangePerCccMetricsProducer) RegisterScaleDown(nodeGroup cloud
 // RegisterFailedScaleUp emits the failed scale up metric.
 func (p *NodeGroupChangePerCccMetricsProducer) RegisterFailedScaleUp(nodeGroup cloudprovider.NodeGroup,
 	delta int, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) {
+	cccName := p.getCrdNameForNodeGroup(nodeGroup)
+	Metrics.RegisterFailedScaleUp(cccName, string(errorInfo.ErrorCode))
 }
 
 // RegisterFailedScaleDown records failed scale-down for a nodegroup.

@@ -608,6 +608,72 @@ func TestOrganizeByRules(t *testing.T) {
 			},
 		},
 		{
+			name: "node groups are organized by rules - prioritize E4A over N4A over C4A in ARM buckets",
+			nodeGroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-c4a").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "c4a-standard-32",
+					}).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-n4a").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "n4a-standard-32",
+					}).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-e4a").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "e4a-standard-32",
+					}).
+					Build(),
+			},
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithAutopilotModeRule(),
+						rules.WithPodFamilyRule(stringPtr("general-purpose-arm")),
+					),
+				}),
+				crd.WithAutopilotManaged(),
+			),
+			wantGroups: [][]cloudprovider.NodeGroup{
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-e4a").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "e4a-standard-32",
+						}).
+						Build(),
+				},
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-n4a").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "n4a-standard-32",
+						}).
+						Build(),
+				},
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-c4a").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "c4a-standard-32",
+						}).
+						Build(),
+				},
+			},
+		},
+		{
 			name: "crd with priorityScore",
 			nodeGroups: []cloudprovider.NodeGroup{
 				gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-1").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build(),

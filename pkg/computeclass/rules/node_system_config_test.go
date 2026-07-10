@@ -275,6 +275,34 @@ func TestNodeSystemConfig(t *testing.T) {
 			expected: false,
 		},
 		{
+			name: "rule without kubelet config, node group with cpuCfsQuota true - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+					CpuCfsQuota:       true,
+					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+			),
+			expected: true,
+		},
+		{
+			name: "rule without kubelet config, node group with cpuCfsQuota false - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+					CpuCfsQuota:       false,
+					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+			),
+			expected: true,
+		},
+		{
 			name: "rule with kubelet config, node group with same kubelet config - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
@@ -1354,6 +1382,82 @@ func TestNodeSystemConfig(t *testing.T) {
 				WithTimeZoneRule("UTC"),
 			),
 			expected: true,
+		},
+		{
+			name: "rule with NodeVfioConfig - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LinuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					NodeVfioConfig: &gkeclient.NodeVfioConfig{
+						DmaEntryLimit: 65536,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithNodeVfioConfigRule(ccc_api.NodeVfioConfig{
+					DmaEntryLimit: ptr.To(int32(65536)),
+				}),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with NodeVfioConfig - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LinuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					NodeVfioConfig: &gkeclient.NodeVfioConfig{
+						DmaEntryLimit: 100000,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithNodeVfioConfigRule(ccc_api.NodeVfioConfig{
+					DmaEntryLimit: ptr.To(int32(65536)),
+				}),
+			),
+			expected: false,
+		},
+		{
+			name: "rule with DiskIoScheduler - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LinuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					DiskIoScheduler: &gkeclient.DiskIoScheduler{
+						NodeSystemIoScheduler:       "mq-deadline",
+						NodeAttachedDiskIoScheduler: "bfq",
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithDiskIoSchedulerRule(ccc_api.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
+				}),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with DiskIoScheduler - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LinuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					DiskIoScheduler: &gkeclient.DiskIoScheduler{
+						NodeSystemIoScheduler:       "kyber",
+						NodeAttachedDiskIoScheduler: "none",
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithDiskIoSchedulerRule(ccc_api.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
+				}),
+			),
+			expected: false,
 		},
 	}
 	for _, tc := range testCases {

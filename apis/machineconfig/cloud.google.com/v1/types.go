@@ -82,6 +82,11 @@ type MachineFamily struct {
 	// Name of this machine family.
 	Name string `json:"name"`
 
+	// UsagePolicy controls how this configuration entry is applied by the system.
+	//
+	// +optional
+	UsagePolicy *UsagePolicy `json:"usagePolicy,omitempty"`
+
 	// Default properties of this machine family.
 	DefaultProperties MachineProperties `json:"defaultProperties"`
 
@@ -103,6 +108,11 @@ type MachineFamily struct {
 	//
 	// +optional
 	ComputeClasses []string `json:"computeClasses"`
+
+	// PageType specifies the page type supported by the machine family.
+	//
+	// +optional
+	PageType *string `json:"pageType,omitempty"`
 }
 
 // MachineProperties defines properties of a machine family/type.
@@ -131,6 +141,11 @@ type MachineProperties struct {
 	//
 	// +optional
 	BootDiskConfig *BootDiskConfig `json:"bootDiskConfig"`
+
+	// PersistentDiskTypeConfigs specifies the persistent disk types configurations supported by the machine family.
+	//
+	// +optional
+	PersistentDiskTypeConfigs []PersistentDiskTypeConfig `json:"persistentDiskTypeConfigs,omitempty"`
 
 	// NAPDisabled specifies if the machine configuration is excluded from autoprovisioning support.
 	//
@@ -399,4 +414,42 @@ type ConfidentialNodeType struct {
 	//
 	// +optional
 	Type string `json:"type,omitempty"`
+}
+
+const (
+	// UsagePolicyModeWeightsOnly indicates that the configuration entry is used
+	// strictly for preference weight calculations, bypassing it for other purposes.
+	UsagePolicyModeWeightsOnly = "WeightsOnly"
+
+	// UsagePolicyModePropertiesOnly indicates that the configuration entry is used
+	// strictly for machine properties, bypassing it for preference weight calculations.
+	UsagePolicyModePropertiesOnly = "PropertiesOnly"
+
+	// UsagePolicyModeLegacy indicates that the configuration entry is inactive,
+	// falling back to static machine type definitions.
+	UsagePolicyModeLegacy = "Legacy"
+)
+
+// UsagePolicy controls how a machine family configuration is applied.
+type UsagePolicy struct {
+	// Mode specifies the active usage mode for this configuration entry.
+	// Supported values:
+	// - "WeightsOnly": The configuration entry is used strictly for preference weight calculations, bypassing it for other purposes.
+	// - "PropertiesOnly": The configuration entry is used strictly for machine properties, bypassing it for preference weight calculations.
+	// - "Legacy": The configuration entry is inactive, falling back to static machine type definitions.
+	// If unset, defaults to standard behavior where the configuration entry is the single source of truth for the machine family.
+	//
+	// +optional
+	Mode *string `json:"mode,omitempty"`
+}
+
+// PersistentDiskTypeConfig represents the configuration for disk types.
+type PersistentDiskTypeConfig struct {
+	// The disk type name.
+	Name string `json:"name"`
+
+	// The confidential mode of the disk type.
+	//
+	// +optional
+	ConfidentialMode *string `json:"confidentialMode,omitempty"`
 }

@@ -48,9 +48,9 @@ var (
 	// at `recentTimestamp` terminal ProvReqs/ResReqs will reach the terminal state, but will still be new enough to not get deleted
 	recentTimestamp                                      = exampleInitTime.Add(5 * exampleTimeInc)
 	failUnreconciledPRTimestamp                          = recentTimestamp.Add(-maxUnreconciledPeriod - time.Minute)
-	failUnreconciledObtainabilityStrategyPRTimestamp     = recentTimestamp.Add(-maxObtainabilityStrategyUnreconciledPeriod - time.Minute)
+	failUnreconciledObtainabilityStrategyPRTimestamp     = recentTimestamp.Add(-MaxObtainabilityStrategyUnreconciledPeriod - time.Minute)
 	dontFailUnreconciledPRTimestamp                      = recentTimestamp.Add(-maxUnreconciledPeriod + 10*time.Second)
-	dontFailUnreconciledObtainabilityStrategyPRTimestamp = recentTimestamp.Add(-maxObtainabilityStrategyUnreconciledPeriod + 10*time.Second)
+	dontFailUnreconciledObtainabilityStrategyPRTimestamp = recentTimestamp.Add(-MaxObtainabilityStrategyUnreconciledPeriod + 10*time.Second)
 
 	exampleErrorMessage = "some other error"
 	exampleError        = []resizerequestclient.DwsStatusError{{Code: "SOME_OTHER_CODE", Message: exampleErrorMessage}}

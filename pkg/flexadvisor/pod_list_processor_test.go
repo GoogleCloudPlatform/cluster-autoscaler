@@ -15,16 +15,20 @@
 package flexadvisor
 
 import (
+	"fmt"
 	"testing"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 )
 
@@ -81,6 +85,14 @@ func TestProcess(t *testing.T) {
 			unschedulablePods: []*apiv1.Pod{},
 			want:              []*apiv1.Pod{},
 		},
+		{
+			name: "provider error does not break loop",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("RegisterFlexibilityScope", "ccc-1").Return(fmt.Errorf("some error")).Once()
+			},
+			unschedulablePods: []*apiv1.Pod{pod1},
+			want:              []*apiv1.Pod{pod1},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -91,7 +103,7 @@ func TestProcess(t *testing.T) {
 			}
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1, crd2}, labels.ComputeClassLabel)
 
-			processor := NewPodListProcessor(provider, mockLister)
+			processor := NewPodListProcessor(provider, mockLister, experiments.NewMockManager())
 			got, err := processor.Process(nil, tc.unschedulablePods)
 
 			assert.ElementsMatch(t, tc.want, got)
@@ -109,4 +121,73 @@ func testPod(flexibilityScopeName string) *apiv1.Pod {
 			},
 		},
 	}
+}
+
+func TestProcess_FlexAdvisorDisabled(t *testing.T) {
+	pod1 := testPod("ccc-1")
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ccc-1",
+		},
+	}, "", false, nil, nil)
+
+	provider := &instanceavailability.MockProvider{}
+	// RegisterFlexibilityScope should NOT be called
+	provider.On("RegisterFlexibilityScope").Maybe().Panic("RegisterFlexibilityScope should not be called")
+
+	mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
+	boolFlags := map[string]bool{
+		experiments.FlexAdvisorProcessingEnabledFlag: false,
+	}
+	mockManager := experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{})
+
+	processor := NewPodListProcessor(provider, mockLister, mockManager)
+	got, err := processor.Process(nil, []*apiv1.Pod{pod1})
+
+	assert.ElementsMatch(t, []*apiv1.Pod{pod1}, got)
+	assert.NoError(t, err)
+	provider.AssertExpectations(t)
+}
+
+type mockPodListProcessorMetrics struct {
+	mock.Mock
+}
+
+func (m *mockPodListProcessorMetrics) UpdateFlexAdvisorRejectedScopes(rejected int) {
+	m.Called(rejected)
+}
+
+func TestProcess_RegistersScopesAndEmitsMetrics(t *testing.T) {
+	pods := make([]*apiv1.Pod, 0, 250)
+	var crds []crd.CRD
+	for i := 0; i < 250; i++ {
+		scopeName := fmt.Sprintf("ccc-%d", i)
+		pods = append(pods, testPod(scopeName))
+		crdItem := ccc.NewCccCrd(&v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: scopeName,
+			},
+		}, "", false, nil, nil)
+		crds = append(crds, crdItem)
+	}
+
+	provider := &instanceavailability.MockProvider{}
+
+	// Simulate 50 successful registrations and 200 failures
+	provider.On("RegisterFlexibilityScope", mock.Anything).Return(nil).Times(50)
+	provider.On("RegisterFlexibilityScope", mock.Anything).Return(fmt.Errorf("active scope limit of 50 reached")).Times(200)
+
+	mockLister := lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel)
+	mockManager := experiments.NewMockManager()
+
+	mockMetrics := &mockPodListProcessorMetrics{}
+	mockMetrics.On("UpdateFlexAdvisorRejectedScopes", 200).Return().Once()
+
+	processor := NewPodListProcessor(provider, mockLister, mockManager, withPodListProcessorMetrics(mockMetrics))
+	got, err := processor.Process(nil, pods)
+
+	assert.ElementsMatch(t, pods, got)
+	assert.NoError(t, err)
+	provider.AssertExpectations(t)
+	mockMetrics.AssertExpectations(t)
 }

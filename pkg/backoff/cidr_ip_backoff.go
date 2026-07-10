@@ -16,6 +16,7 @@ package backoff
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -27,10 +28,11 @@ import (
 )
 
 type CidrIpBackoff struct {
+	mu                     sync.RWMutex
 	initialDuration        time.Duration
 	maxDuration            time.Duration
 	cidrIpBackoffResetTime time.Duration
-	cidrIpBackoffs         map[string]exponentialBackoff
+	cidrIpBackoffs         map[string]*exponentialBackoff
 	napBackoff             *exponentialBackoff
 }
 
@@ -40,13 +42,16 @@ func NewCidrIpBackoff(initialBackoffDuration, maxBackoffDuration time.Duration, 
 		initialDuration:        initialBackoffDuration,
 		maxDuration:            maxBackoffDuration,
 		cidrIpBackoffResetTime: backoffResetTime,
-		cidrIpBackoffs:         make(map[string]exponentialBackoff),
+		cidrIpBackoffs:         make(map[string]*exponentialBackoff),
 		napBackoff:             NewExponentialBackoff(initialBackoffDuration, maxBackoffDuration, backoffResetTime),
 	}
 }
 
 // Backoff execution for the given node group. Returns time till execution is backed off.
 func (b *CidrIpBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	if errorInfo.ErrorCode != gce.ErrorIPSpaceExhausted {
 		return currentTime
 	}
@@ -86,8 +91,8 @@ func (b *CidrIpBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *fra
 		klog.Infof("Pod CIDR not found in error message, applying backoff for the entire subnet %q: %s", subnet, errorInfo.ErrorMessage)
 		backoffEntry := b.backoffExponential(subnet, errorInfo, currentTime)
 		b.cidrIpBackoffs[subnet] = backoffEntry
-		if backoffEntry.until.After(until) {
-			until = backoffEntry.until
+		if backoffEntry.BackoffUntil().After(until) {
+			until = backoffEntry.BackoffUntil()
 		}
 		return until
 	}
@@ -95,37 +100,54 @@ func (b *CidrIpBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *fra
 	klog.Infof("Applying backoff for cidr: %s", podIpv4CidrBlock)
 	backoffEntry := b.backoffExponential(podIpv4CidrBlock, errorInfo, currentTime)
 	b.cidrIpBackoffs[podIpv4CidrBlock] = backoffEntry
-	if backoffEntry.until.After(until) {
-		return backoffEntry.until
+	if backoffEntry.BackoffUntil().After(until) {
+		return backoffEntry.BackoffUntil()
 	}
 	return until
 }
 
 // BackoffStatus returns whether the execution is backed off for the given node group and error info when the node group is backed off.
 func (b *CidrIpBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, currentTime time.Time) base_backoff.Status {
-	if !nodeGroup.Exist() && b.napBackoff.until.After(currentTime) {
-		return base_backoff.Status{IsBackedOff: true, ErrorInfo: b.napBackoff.errorInfo}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if !nodeGroup.Exist() && b.napBackoff.BackoffUntil().After(currentTime) {
+		return base_backoff.Status{IsBackedOff: true, ErrorInfo: b.napBackoff.ErrorInfo()}
 	}
 	podIpv4CidrBlock := getPodIpv4CidrBlockForNodeGroup(nodeGroup)
 	subnet := getNodeGroupSubnetwork(nodeGroup)
 
-	var backoffEntry exponentialBackoff
+	var backoffEntry *exponentialBackoff
 	podIPEntry := b.cidrIpBackoffs[podIpv4CidrBlock]
 	subnetEntry := b.cidrIpBackoffs[subnet]
-	if subnetEntry.until.After(podIPEntry.until) {
+
+	if subnetEntry == nil && podIPEntry == nil {
+		return base_backoff.Status{IsBackedOff: false}
+	}
+	if subnetEntry == nil {
+		backoffEntry = podIPEntry
+	} else if podIPEntry == nil {
 		backoffEntry = subnetEntry
 	} else {
-		backoffEntry = podIPEntry
+		if subnetEntry.BackoffUntil().After(podIPEntry.BackoffUntil()) {
+			backoffEntry = subnetEntry
+		} else {
+			backoffEntry = podIPEntry
+		}
 	}
-	if currentTime.After(backoffEntry.until) {
+
+	if currentTime.After(backoffEntry.BackoffUntil()) {
 		return base_backoff.Status{IsBackedOff: false}
 	}
 
-	return base_backoff.Status{IsBackedOff: true, ErrorInfo: backoffEntry.errorInfo}
+	return base_backoff.Status{IsBackedOff: true, ErrorInfo: backoffEntry.ErrorInfo()}
 }
 
 // RemoveBackoff removes backoff data for the given node group.
 func (b *CidrIpBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	subnet := getNodeGroupSubnetwork(nodeGroup)
 	podIpv4CidrBlock := getPodIpv4CidrBlockForNodeGroup(nodeGroup)
 	delete(b.cidrIpBackoffs, subnet)
@@ -134,9 +156,12 @@ func (b *CidrIpBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeInf
 
 // RemoveStaleBackoffData removes stale backoff data.
 func (b *CidrIpBackoff) RemoveStaleBackoffData(currentTime time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
 	for backoffKey, backoffEntry := range b.cidrIpBackoffs {
 		// Remove backoff only on case its reset time has come
-		if currentTime.After(backoffEntry.reset) {
+		if currentTime.After(backoffEntry.ResetTime()) {
 			delete(b.cidrIpBackoffs, backoffKey)
 		}
 	}
@@ -163,11 +188,12 @@ func getPodIpv4CidrBlockForNodeGroup(nodeGroup cloudprovider.NodeGroup) string {
 	return podIpv4CidrBlock
 }
 
-func (b *CidrIpBackoff) backoffExponential(podIpv4CidrBlock string, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) exponentialBackoff {
+func (b *CidrIpBackoff) backoffExponential(podIpv4CidrBlock string, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) *exponentialBackoff {
 	backoffEntry, ok := b.cidrIpBackoffs[podIpv4CidrBlock]
 
 	if !ok {
-		backoffEntry = *NewExponentialBackoff(b.initialDuration, b.maxDuration, b.cidrIpBackoffResetTime)
+		backoffEntry = NewExponentialBackoff(b.initialDuration, b.maxDuration, b.cidrIpBackoffResetTime)
+		b.cidrIpBackoffs[podIpv4CidrBlock] = backoffEntry
 	}
 
 	backoffEntry.Backoff(errorInfo, currentTime)

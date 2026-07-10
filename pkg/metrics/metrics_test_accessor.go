@@ -29,3 +29,20 @@ func GetFlexAdvisorResponseErrorsCountForTest(reason FAResponseErrorReason) (flo
 	gauge := flexAdvisorResponseErrors.WithLabelValues(string(reason))
 	return testutil.GetCounterMetricValue(gauge)
 }
+
+// GetMachineConfigSourceInfoValueForTest returns the current value for a given family and source (only for tests).
+func GetMachineConfigSourceInfoValueForTest(machineFamily, configSource string) (float64, error) {
+	gauge := machineConfigSourceInfo.WithLabelValues(machineFamily, configSource)
+	return testutil.GetGaugeMetricValue(gauge)
+}
+
+// ResetAllForTest resets all metrics that support it, preventing cross-test
+// state contamination. It iterates the same allMetrics slice used by RegisterAll,
+// so any newly added metric is automatically handled.
+func ResetAllForTest() {
+	for _, m := range allMetrics {
+		if r, ok := m.(interface{ Reset() }); ok {
+			r.Reset()
+		}
+	}
+}

@@ -15,12 +15,15 @@
 package gke
 
 import (
+	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
 
+	"google.golang.org/api/googleapi"
 	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -30,7 +33,11 @@ import (
 	klog "k8s.io/klog/v2"
 )
 
-const maxZonesInRegionCacheValidity = 15 * time.Minute
+const (
+	maxZonesInRegionCacheValidity     = 15 * time.Minute
+	MachineTypeErrorCacheValidity     = 5 * time.Minute
+	machineTypeRateLimitCacheValidity = 30 * time.Second
+)
 
 // GceCacheInterface decouples the underlying gce.gceCache to that used in GkeCache
 // This will allow for better testing if GkeCache
@@ -105,6 +112,10 @@ type GkeCache struct {
 	capacityCheckWaitTimes map[gce.GceRef]durationResult
 	nodePoolToMigs         map[string]map[gce.GceRef]*GkeMig
 	nodePoolSpecs          map[string]*gkeclient.NodePoolSpec
+	// machineTypeErrorCache caches errors from FetchMachineType to avoid spamming GCE API calls
+	// when a machine type is not found, malformed, or unavailable in the zone.
+	// Only some errors are cached based on machineTypeErrorCachePolicy.
+	machineTypeErrorCache *cache.Expiring
 }
 
 type durationResult struct {
@@ -130,6 +141,7 @@ func NewGkeCache(gceCache GceCacheInterface, nodeTemplateCache *nodetemplate.Cac
 		capacityCheckWaitTimes:     make(map[gce.GceRef]durationResult),
 		nodePoolToMigs:             make(map[string]map[gce.GceRef]*GkeMig),
 		nodePoolSpecs:              make(map[string]*gkeclient.NodePoolSpec),
+		machineTypeErrorCache:      cache.NewExpiring(),
 	}
 }
 
@@ -568,4 +580,41 @@ func (g *GkeCache) GetNodePoolSpec(nodePoolName string) (*gkeclient.NodePoolSpec
 	defer g.mutex.Unlock()
 	spec, found := g.nodePoolSpecs[nodePoolName]
 	return spec, found
+}
+
+// AddMachineTypeError attempts to cache a machine type error.
+// It returns the TTL and true if the error was cached, or 0 and false if it was ignored.
+func (g *GkeCache) AddMachineTypeError(machineName, zone string, err error) (time.Duration, bool) {
+	if ttl, shouldCache := machineTypeErrorCachePolicy(err); shouldCache {
+		key := fmt.Sprintf("%s/%s", zone, machineName)
+		g.machineTypeErrorCache.Set(key, err, ttl)
+		return ttl, true
+	}
+	return 0, false
+}
+
+// GetMachineTypeError retrieves the cached machine type error from the error cache.
+func (g *GkeCache) GetMachineTypeError(machineName, zone string) (error, bool) {
+	key := fmt.Sprintf("%s/%s", zone, machineName)
+	val, found := g.machineTypeErrorCache.Get(key)
+	if !found {
+		return nil, false
+	}
+	return val.(error), true
+}
+
+// machineTypeErrorCachePolicy returns the TTL and whether the error should be cached.
+func machineTypeErrorCachePolicy(err error) (time.Duration, bool) {
+	var gErr *googleapi.Error
+	if !errors.As(err, &gErr) {
+		return 0, false
+	}
+	switch gErr.Code {
+	case http.StatusNotFound, http.StatusBadRequest:
+		return MachineTypeErrorCacheValidity, true
+	case http.StatusTooManyRequests:
+		return machineTypeRateLimitCacheValidity, true
+	default:
+		return 0, false
+	}
 }

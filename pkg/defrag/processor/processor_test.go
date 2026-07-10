@@ -612,10 +612,11 @@ func TestCleanUpCandidates(t *testing.T) {
 			config := Config{ScaleUpTimeout: 10 * time.Minute, ScaleDownTimeout: 5 * time.Minute}
 			deleteOpts := options.NodeDeleteOptions{}
 			processor := NewProcessor(Options{
-				ScaleDownNodeProcessor: onlyNXNodesProcessor,
-				DeleteOptions:          deleteOpts,
-				DrainabilityRules:      rules.Default(deleteOpts),
-				Config:                 config,
+				ScaleDownNodeProcessor:  onlyNXNodesProcessor,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Config:                  config,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 
 			scaleDownActuator := &mockScaleDownActuator{}
@@ -781,9 +782,10 @@ func TestShouldRemoveCandidate(t *testing.T) {
 			config := Config{ScaleUpTimeout: 10 * time.Minute, ScaleDownTimeout: 5 * time.Minute}
 			deleteOpts := options.NodeDeleteOptions{}
 			processor := NewProcessor(Options{
-				DeleteOptions:     deleteOpts,
-				DrainabilityRules: rules.Default(deleteOpts),
-				Config:            config,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Config:                  config,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			if tc.scaleDownTime != nil {
 				for _, nodeName := range tc.candidateInfo.candidate.Nodes {
@@ -1553,12 +1555,13 @@ func TestProcessCandidates(t *testing.T) {
 
 			deleteOpts := options.NodeDeleteOptions{}
 			processor := NewProcessor(Options{
-				ScaleDownNodeProcessor: allNodesProcessor,
-				DeleteOptions:          deleteOpts,
-				DrainabilityRules:      rules.Default(deleteOpts),
-				Plugins:                tc.plugins,
-				Config:                 Config{CandidateLimit: 3},
-				Clock:                  fakeClock,
+				ScaleDownNodeProcessor:  allNodesProcessor,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Plugins:                 tc.plugins,
+				Config:                  Config{CandidateLimit: 3},
+				Clock:                   fakeClock,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			processor.candidateInfos = tc.candidateInfos
 			processor.ctx = &cacontext.AutoscalingContext{
@@ -2143,10 +2146,11 @@ func TestProcessCandidate(t *testing.T) {
 			fakeClock := &FakePassiveClock{}
 			fakeClock.SetTime(timeNow)
 			processor := NewProcessor(Options{
-				DeleteOptions:     deleteOpts,
-				DrainabilityRules: rules.Default(deleteOpts),
-				Config:            Config{ScaleDownDelay: time.Minute},
-				Clock:             fakeClock,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Config:                  Config{ScaleDownDelay: time.Minute},
+				Clock:                   fakeClock,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			processor.candidateInfos = []*candidateInfo{tc.candidateInfo}
 			processor.ctx = &cacontext.AutoscalingContext{
@@ -2393,12 +2397,13 @@ func TestNewCandidate(t *testing.T) {
 				experimentsManager = experiments.NewMockManager(experiments.EnablePartialDefragFlag)
 			}
 			processor := NewProcessor(Options{
-				ScaleDownNodeProcessor: allNodesProcessor,
-				DeleteOptions:          deleteOpts,
-				DrainabilityRules:      rules.Default(deleteOpts),
-				Plugins:                tc.plugins,
-				Clock:                  fakeClock,
-				ExperimentsManager:     experimentsManager,
+				ScaleDownNodeProcessor:  allNodesProcessor,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Plugins:                 tc.plugins,
+				Clock:                   fakeClock,
+				ExperimentsManager:      experimentsManager,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			scaleDownActuator := &mockScaleDownActuator{}
 			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
@@ -2534,9 +2539,10 @@ func TestFilterExpansionOptions(t *testing.T) {
 			plugin := tc.initPlugin()
 			deleteOpts := options.NodeDeleteOptions{}
 			processor := NewProcessor(Options{
-				DeleteOptions:     deleteOpts,
-				DrainabilityRules: rules.Default(deleteOpts),
-				Plugins:           []defrag.Plugin{plugin},
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Plugins:                 []defrag.Plugin{plugin},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			tc.wantCandidateInfo.candidate = &defrag.Candidate{Plugin: plugin}
 			processor.pickedCandidateInfo = tc.wantCandidateInfo
@@ -2661,10 +2667,11 @@ func TestCleanPickedCandidate(t *testing.T) {
 			}
 			provider := testprovider.NewTestCloudProviderBuilder().Build()
 			processor := NewProcessor(Options{
-				ScaleDownNodeProcessor: allNodesProcessor,
-				DeleteOptions:          deleteOpts,
-				DrainabilityRules:      rules.Default(deleteOpts),
-				Config:                 config,
+				ScaleDownNodeProcessor:  allNodesProcessor,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Config:                  config,
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			processor.pickedCandidateInfo = &candidateInfo{}
 			maxLoopsBeforeAdmission := 5
@@ -2690,6 +2697,33 @@ func TestCleanPickedCandidate(t *testing.T) {
 			assert.NoError(t, err)
 
 			assert.Nil(t, processor.pickedCandidateInfo)
+		})
+	}
+}
+
+func TestDefragPickedCandidate(t *testing.T) {
+	testCases := []struct {
+		name     string
+		picked   *candidateInfo
+		expected bool
+	}{
+		{
+			name:     "candidate picked",
+			picked:   &candidateInfo{},
+			expected: true,
+		},
+		{
+			name:     "no candidate picked",
+			picked:   nil,
+			expected: false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &Processor{
+				pickedCandidateInfo: tc.picked,
+			}
+			assert.Equal(t, tc.expected, p.DefragPickedCandidate())
 		})
 	}
 }
@@ -2726,6 +2760,110 @@ func TestPartialEnabled(t *testing.T) {
 			got := p.partialEnabled()
 			if got != tc.want {
 				t.Errorf("partialAllowed() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+type fakeFairnessEnforcer struct {
+	admit bool
+}
+
+func (f fakeFairnessEnforcer) Admit(unschedulablePods []*apiv1.Pod) bool {
+	return f.admit
+}
+
+func TestProcessReturnedPods(t *testing.T) {
+	specialPlugin := mockPluginBuilder{
+		targetNodeName: "special",
+		mode:           defrag.CreateBeforeDelete,
+	}.build()
+
+	testCases := []struct {
+		name                   string
+		admit                  bool
+		addDefragCandidateNode bool
+		wantPickedCandidate    bool
+		wantEqual              bool
+	}{
+		{
+			name:                "When defrag is not admitted, returned pods are the same as the pods passed to the Process function",
+			admit:               false,
+			wantPickedCandidate: false,
+			wantEqual:           true,
+		},
+		{
+			name:                "When defrag is admitted but no candidate picked, returned pods are the same as the pods passed to the Process function",
+			admit:               true,
+			wantPickedCandidate: false,
+			wantEqual:           true,
+		},
+		{
+			name:                   "When defrag picked a candidate, returned pods are NOT the same as the pods passed to the Process function",
+			admit:                  true,
+			addDefragCandidateNode: true,
+			wantPickedCandidate:    true,
+			wantEqual:              false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().Build()
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			client := fake.NewSimpleClientset()
+			scaleDownActuator := &mockScaleDownActuator{}
+			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+
+			if tc.addDefragCandidateNode {
+				node := buildReadyNode("special", 900, 10)
+				pod1 := test.SetRSPodSpec(test.BuildTestPod("p1", 400, 1), "rs")
+				pod2 := test.SetRSPodSpec(test.BuildTestPod("p2", 500, 1), "rs")
+
+				provider.AddNodeGroup("ng1", 0, 10, 1)
+				provider.AddNode("ng1", node)
+				assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node, pod1, pod2)))
+				_, err := client.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+				assert.NoError(t, err)
+			}
+
+			deleteOpts := options.NodeDeleteOptions{}
+			config := Config{MaxDelay: time.Hour, CandidateLimit: 3}
+			allNodesProcessor := &mockScaleDownNodeProcessor{
+				candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node {
+					return nodes
+				},
+			}
+
+			processor := NewProcessor(Options{
+				ScaleDownNodeProcessor:  allNodesProcessor,
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Plugins:                 []defrag.Plugin{specialPlugin},
+				Config:                  config,
+				FairnessEnforcer:        fakeFairnessEnforcer{admit: tc.admit},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+			})
+
+			ctx := &cacontext.AutoscalingContext{
+				ClusterSnapshot:     snapshot,
+				CloudProvider:       provider,
+				ScaleDownActuator:   scaleDownActuator,
+				RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+				AutoscalingKubeClients: cacontext.AutoscalingKubeClients{
+					ClientSet: client,
+				},
+			}
+
+			unschedulablePods := []*apiv1.Pod{test.BuildTestPod("p3", 100, 100)}
+			returnedPods, err := processor.Process(ctx, unschedulablePods)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantPickedCandidate, processor.DefragPickedCandidate())
+
+			if tc.wantEqual {
+				assert.Equal(t, unschedulablePods, returnedPods)
+			} else {
+				assert.NotEqual(t, unschedulablePods, returnedPods)
 			}
 		})
 	}

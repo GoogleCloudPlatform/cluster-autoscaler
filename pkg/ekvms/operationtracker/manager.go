@@ -15,6 +15,7 @@
 package operationtracker
 
 import (
+	"context"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	ca_errors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
@@ -28,7 +29,7 @@ import (
 // Manager tracks and resizes nodes.
 type Manager interface {
 	// Run initializes Manager, and starts OperationTracker.
-	Run(chan struct{})
+	Run(ctx context.Context)
 	// Upsize requests an upsize of a given resizable node, or returns an error
 	// if the upsize operation cannot be queued up.
 	Upsize(*v1.Node, size.Allocatable) error
@@ -88,11 +89,11 @@ func NewManager(cloudProvider CloudProvider, tracker OperationTracker, sizeCalcu
 }
 
 // Run initializes the resizable VM manager, populates snapshot, and starts OperationTracker.
-// It blocks until stopCh is closed.
-func (m *ManagerImpl) Run(stopCh chan struct{}) {
-	go m.tracker.Run(stopCh)
-	go m.metricsExporter.run(stopCh)
-	<-stopCh
+// It blocks until ctx.Done() is closed.
+func (m *ManagerImpl) Run(ctx context.Context) {
+	go m.tracker.Run(ctx)
+	go m.metricsExporter.run(ctx)
+	<-ctx.Done()
 }
 
 // FilteredNodesSnapshot returns a copy of the snapshot filtered by resizability mode, excluding unhealthy or backed-off nodes.

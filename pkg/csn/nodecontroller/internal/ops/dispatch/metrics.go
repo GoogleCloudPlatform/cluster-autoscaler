@@ -40,7 +40,7 @@ var (
 				1024, 2048, 4096,
 			},
 		},
-		[]string{"op_type"},
+		[]string{"op_type", "node_count_bucket"}, // number of node can grow quickly, so we use log2
 	)
 )
 

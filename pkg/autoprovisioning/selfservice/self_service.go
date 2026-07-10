@@ -45,6 +45,7 @@ func InitSelfService(cp CloudProvider) {
 		newSecureBootFeature(),
 		newWorkloadMetadata(),
 		newInstanceMetadata(),
+		newMaintenanceExclusion(),
 	}
 }
 

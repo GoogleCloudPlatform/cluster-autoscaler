@@ -681,7 +681,7 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 		WithMachineTypesPerZone(map[string][]string{
 			"us-central1-c": allMachineTypes,
 		}).
-		WithConfidentialNodesEnabled(true).
+		WithConfidentialInstanceType(labels.SEVConfidentialNodeTypeValue).
 		WithAutoprovisioningEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
@@ -1052,7 +1052,8 @@ func TestInjectedLocations(t *testing.T) {
 
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
-			fakeRP := gceclient.NewReservationsPuller(mGceClient, nil, nil, "proj", false, "us-central1")
+			fakeRP, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "proj", false, "us-central1")
+			assert.NoError(t, err)
 			fakeRP.SetReservations(tc.reservations)
 			em := experiments.NewMockManager()
 
@@ -1460,7 +1461,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewPreemeptionOptionGenerator(true),
 		NewConsolidationDelayGenerator(nil),
 		NewExtendedDurationPodGenerator(provider),
-		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true),
+		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true, nil),
 		NewSelfServiceGenerator(),
 		NewPodIsolationLabelGenerator(provider),
 		NewPodCapacityLabelGenerator(provider),

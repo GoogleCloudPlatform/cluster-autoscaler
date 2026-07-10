@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"sync"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -23,6 +24,7 @@ import (
 // exponentialBackoff allows to backoff the NAP to create a new nodes.
 // It is meant to be used as a shared implementation of backoff.
 type exponentialBackoff struct {
+	mu              sync.RWMutex
 	until           time.Time
 	duration        time.Duration
 	initialDuration time.Duration
@@ -44,6 +46,8 @@ func NewExponentialBackoff(initialBackoffDuration, maxBackoffDuration, resetTime
 
 // Backoff execution. Returns time till execution is backed off.
 func (b *exponentialBackoff) Backoff(errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	// don't bump backoff multiple times in a row if there were parallel failed
 	// scale up operations.
 	if b.until.After(currentTime) {
@@ -65,6 +69,8 @@ func (b *exponentialBackoff) Backoff(errorInfo cloudprovider.InstanceErrorInfo, 
 
 // RemoveStaleBackoffData removes stale backoff data.
 func (b *exponentialBackoff) RemoveStaleBackoffData(currentTime time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if currentTime.Before(b.reset) {
 		return
 	}
@@ -74,5 +80,21 @@ func (b *exponentialBackoff) RemoveStaleBackoffData(currentTime time.Time) {
 
 // BackoffUntil returns the time until which the execution is backed off.
 func (b *exponentialBackoff) BackoffUntil() time.Time {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	return b.until
+}
+
+// ErrorInfo returns the InstanceErrorInfo associated with the backoff.
+func (b *exponentialBackoff) ErrorInfo() cloudprovider.InstanceErrorInfo {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.errorInfo
+}
+
+// ResetTime returns the time at which the backoff data becomes stale.
+func (b *exponentialBackoff) ResetTime() time.Time {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.reset
 }

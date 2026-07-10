@@ -17,6 +17,7 @@ package reservations
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -26,6 +27,7 @@ import (
 	gceapi "google.golang.org/api/compute/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/core"
 	tu "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 
@@ -33,11 +35,11 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	ccc_builder "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/recorder"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
@@ -61,19 +63,18 @@ const reservationZone = "us-central1-b"
 // 4. The reservation "InUseCount" is correctly updated to 2 by the GKE ReservationBalancingProcessor.
 func TestCCCReservationAnyThenFailSuccess(t *testing.T) {
 	testConfig := integration.NewTestConfig().
-		WithOverrides(integration.WithAutoProvisioningEnabled()).
+		WithOverrides(integration.WithAutoProvisioningEnabled(), integration.WithBalanceSimilarNodeGroups()).
 		WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).
-		WithNpcCrds(createCCCCRD()).
-		AddReservation(integration.DefaultProject(), createReservation())
+		WithCccCrds(createCCCCRD()).
+		AddReservation(integration.DefaultProject(), createReservation("n1-standard-4", "res-1", reservationZone))
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		infra := integration.SetupInfrastructure(ctx, t)
-		stopCh := make(chan struct{})
 
-		autoscaler, err := integration.SetupAutoscaler(t, ctx, testConfig, infra, stopCh)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel, stopCh)
+		defer integration_synctest.TearDown(cancel)
 
 		for i := 0; i < 2; i++ {
 			pod := tu.BuildTestPod(fmt.Sprintf(podName, i), 3000, 10000, tu.MarkUnschedulable(), pod.WithCCC("my-ccc"))
@@ -82,14 +83,159 @@ func TestCCCReservationAnyThenFailSuccess(t *testing.T) {
 		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
 
 		infra.Fakes.RunScheduler(ctx, t)
-		assertScheduledPods(t, infra, ctx, 2)
+		assertScheduledPods(ctx, t, infra, 2)
 		assertNodePoolReservationAffinity(t, infra)
-		assertNodeGroupLocation(t, autoscaler)
-		assertReservationInUseCount(t, infra)
+		assertNodeGroupLocationAndTargetSize(t, autoscaler, reservationZone, 2)
+		assertReservationInUseCount(t, infra, "res-1", 2)
 	})
 }
 
-func createCCCCRD() crd.CRD {
+// TestCCCReservationAnyThenFailRejectsNoReservation verifies that the CA will NOT scale up
+// a node pool for pods requesting a ComputeClass with "AnyThenFail" reservation affinity
+// when NO matching GCE reservation is available.
+func TestCCCReservationAnyThenFailRejectsNoReservation(t *testing.T) {
+	testConfig := integration.NewTestConfig().
+		WithOverrides(integration.WithAutoProvisioningEnabled(), integration.WithBalanceSimilarNodeGroups()).
+		WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).
+		WithCccCrds(createCCCCRD()).
+		// add reservation with non-matching machine type
+		AddReservation(integration.DefaultProject(), createReservation("n2-standard-4", "res-1", reservationZone))
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		for i := 0; i < 2; i++ {
+			pod := tu.BuildTestPod(fmt.Sprintf(podName, i), 3000, 10000, tu.MarkUnschedulable(), pod.WithCCC("my-ccc"))
+			infra.Fakes.K8s.AddPod(pod)
+		}
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		// The pods should remain unschedulable
+		infra.Fakes.RunScheduler(ctx, t)
+		assertUnscheduledPods(ctx, t, infra, 0, 2)
+		assertNoScaleUps(t, autoscaler)
+	})
+}
+
+// TestCCCReservationAnyThenFailFallsBackToSecondPriorityGracefully verifies that the CA
+// will do a scale-up only till available capacity in reservation for first priorty, and
+// that in the next loop, CA provisions remaining nodes from lower priority
+func TestCCCReservationAnyThenFailFallsBackToSecondPriorityGracefully(t *testing.T) {
+	cc := ccc_builder.NewComputeClassBuilder("my-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineFamily: ptr.To("n1"),
+				Reservations: &v1.Reservations{
+					Affinity: v1.AnyThenFail,
+				},
+			},
+			v1.Priority{
+				MachineFamily: ptr.To("n2"),
+			},
+		).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithOverrides(integration.WithAutoProvisioningEnabled(), integration.WithBalanceSimilarNodeGroups()).
+		WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).
+		WithCccCrds(cc).
+		AddReservation(integration.DefaultProject(), createReservation("n1-standard-4", "res-1", reservationZone))
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// reservation has room for 2 nodes, for 2 pods, 2 pods will be unschedulable after first loop
+		for i := 0; i < 4; i++ {
+			pod := tu.BuildTestPod(fmt.Sprintf(podName, i), 3000, 10000, tu.MarkUnschedulable(), pod.WithCCC("my-ccc"))
+			infra.Fakes.K8s.AddPod(pod)
+		}
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		// 2 pods should be scheduled on first priority and two unscheduled
+		infra.Fakes.RunScheduler(ctx, t)
+		assertScheduledPods(ctx, t, infra, 2)
+		assertUnscheduledPods(ctx, t, infra, 2, 2)
+		assertNodePoolReservationAffinity(t, infra)
+		assertNodeGroupLocationAndTargetSize(t, autoscaler, reservationZone, 2)
+		assertReservationInUseCount(t, infra, "res-1", 2)
+
+		// second loop, 2 remaining pods should be scheduled on a new, second node pool,
+		// that doesn't have reservation affinity
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		infra.Fakes.RunScheduler(ctx, t)
+		assertScheduledPods(ctx, t, infra, 4)
+		assertNodePoolNoneReservationAffinity(t, infra)
+	})
+}
+
+// TestCCCReservationAnyThenFailBackoff verifies that the CA correctly applies the
+// anyThenFailReservationsBackoff when scale-up fails due to reservation capacity
+// limits and that this backoff strictly isolates to the node shape in the failing zone,
+// allowing another zone to successfully scale up.
+func TestCCCReservationAnyThenFailBackoff(t *testing.T) {
+	zoneA := "us-central1-a"
+	zoneB := "us-central1-b"
+
+	testConfig := integration.NewTestConfig().
+		WithOverrides(integration.WithAutoProvisioningEnabled(), integration.WithBalanceSimilarNodeGroups()).
+		WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).
+		WithCccCrds(createCCCCRD()).
+		AddReservation(integration.DefaultProject(), createReservation("n1-standard-4", "res-a", zoneA)).
+		AddReservation(integration.DefaultProject(), createReservation("n1-standard-4", "res-b", zoneB))
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		autoscaler.AutoscalingContext.Recorder = recorder.SetupFakeRecorder(autoscaler)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// Create 2 pods to consume the reservation
+		for i := 0; i < 2; i++ {
+			pod := tu.BuildTestPod(fmt.Sprintf(podName, i), 3000, 10000, tu.MarkUnschedulable(), pod.WithCCC("my-ccc"))
+			infra.Fakes.K8s.AddPod(pod)
+		}
+
+		// inject the error for the zone B
+		infra.Fakes.GceService.SetCreateInstanceForZoneError(zoneB, cloudprovider.InstanceErrorInfo{
+			ErrorClass: cloudprovider.OtherErrorClass,
+			ErrorCode:  gce.ErrorAutomaticReservationsNoCapacity,
+		})
+
+		// Loop 1: NAP creates node groups
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		// Loop 2: Scale-up triggers resize and hits injected error
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		assertBackoffForMigInZone(t, autoscaler, zoneB)
+		recorder.AssertEventsContains(t, autoscaler.AutoscalingContext.Recorder, "Any affinity reservations no capacity", time.Second)
+
+		// Because zone B is backed off, CA should try to scale up zone A next.
+		integration_synctest.MustRunOnceAfter(t, autoscaler, time.Second)
+
+		infra.Fakes.RunScheduler(ctx, t)
+		assertScheduledPods(ctx, t, infra, 2)
+		assertNodeGroupLocationAndTargetSize(t, autoscaler, zoneA, 2)
+		assertReservationInUseCount(t, infra, "res-a", 2)
+	})
+}
+
+func createCCCCRD() *v1.ComputeClass {
 	cc := ccc_builder.NewComputeClassBuilder("my-ccc").
 		WithNodePoolAutoCreation(true).
 		WithPriorities(v1.Priority{
@@ -99,25 +245,37 @@ func createCCCCRD() crd.CRD {
 			},
 		}).
 		Build()
-	return ccc_builder.NewCccCrdBuilder(cc).Build()
+	return cc
 }
 
-func createReservation() *gceapi.Reservation {
-	return reservations.NewTestReservationBuilder().
-		WithName("res-1").
-		WithZone(reservationZone).
-		WithMachineType("n1-standard-4").
+func createReservation(machineType, name, zone string) *gceapi.Reservation {
+	rsv := reservations.NewTestReservationBuilder().
+		WithId(rand.Uint64()).
+		WithName(name).
+		WithZone(zone).
+		WithMachineType(machineType).
 		WithCounts(0, 2).
 		WithSpecificReservationRequired(false).
 		Build()
+	rsv.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/test-project/zones/%s/reservations/%s", zone, name)
+	return rsv
 }
 
-func assertScheduledPods(t *testing.T, infra *integration.TestInfrastructure, ctx context.Context, podCount int) {
+func assertScheduledPods(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure, podCount int) {
 	t.Helper()
 	for i := 0; i < podCount; i++ {
 		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, fmt.Sprintf(podName, i), metav1.GetOptions{})
 		assert.NoError(t, err)
 		assert.NotEmpty(t, updatedPod.Spec.NodeName, fmt.Sprintf("Expected %s to be scheduled by RunScheduler", fmt.Sprintf(podName, i)))
+	}
+}
+
+func assertUnscheduledPods(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure, startNumber int, podCount int) {
+	t.Helper()
+	for i := startNumber; i < podCount; i++ {
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, fmt.Sprintf(podName, i), metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.Empty(t, updatedPod.Spec.NodeName, fmt.Sprintf("Expected %s to not be scheduled by RunScheduler", fmt.Sprintf(podName, i)))
 	}
 }
 
@@ -132,9 +290,24 @@ func assertNodePoolReservationAffinity(t *testing.T, infra *integration.TestInfr
 	assert.Equal(t, gkeclient.ReservationAffinityAnyThenFail, np.Config.ReservationAffinity.ConsumeReservationType)
 }
 
-func assertNodeGroupLocation(t *testing.T, autoscaler *core.StaticAutoscaler) {
+func assertNodePoolNoneReservationAffinity(t *testing.T, infra *integration.TestInfrastructure) {
+	cluster, err := infra.Fakes.GkeService.GetCluster("projects/test-project/locations/us-central1/clusters/test-cluster")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(cluster.NodePools), "Expected to find exactly 2 NAP node pools")
+
+	var foundFallback bool
+	for _, np := range cluster.NodePools {
+		if np.Config != nil && (np.Config.ReservationAffinity == nil || np.Config.ReservationAffinity.ConsumeReservationType == gkeclient.ReservationAffinityNone) {
+			foundFallback = true
+		}
+	}
+	assert.True(t, foundFallback, "Expected to find a fallback node pool with NO_RESERVATION affinity or nil affinity")
+}
+
+func assertNodeGroupLocationAndTargetSize(t *testing.T, autoscaler *core.StaticAutoscaler, expectedZone string, expectedTargetSize int) {
 	t.Helper()
 	var scaledUpGroup cloudprovider.NodeGroup
+	var actualTargetSize int
 	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
 		targetSize, err := ng.TargetSize()
 		assert.NoError(t, err)
@@ -143,20 +316,43 @@ func assertNodeGroupLocation(t *testing.T, autoscaler *core.StaticAutoscaler) {
 				t.Fatalf("Expected only one node group to be scaled up, but found multiple: %s and %s", scaledUpGroup.Id(), ng.Id())
 			}
 			scaledUpGroup = ng
+			actualTargetSize = targetSize
 		}
 	}
 	if assert.NotNil(t, scaledUpGroup, "Expected to find a scaled up node group") {
 		if gkeMig, ok := scaledUpGroup.(*gke.GkeMig); ok {
-			assert.Equal(t, reservationZone, gkeMig.GceRef().Zone, "The scaled up node group should be in the reservation zone.")
+			assert.Equal(t, expectedZone, gkeMig.GceRef().Zone, "The scaled up node group should be in the reservation zone.")
+			assert.Equal(t, expectedTargetSize, actualTargetSize, "The scaled up node group should have the expected target size.")
 		} else {
 			t.Fatalf("Expected scaled up node group to be a GkeMig, but got %T", scaledUpGroup)
 		}
 	}
 }
 
-func assertReservationInUseCount(t *testing.T, infra *integration.TestInfrastructure) {
+func assertReservationInUseCount(t *testing.T, infra *integration.TestInfrastructure, resName string, expectedCount int64) {
 	t.Helper()
-	rsv, err := infra.Fakes.GceService.FetchReservation("test-project", "res-1")
+	rsv, err := infra.Fakes.GceService.FetchReservation("test-project", resName)
 	assert.NoError(t, err)
-	assert.Equal(t, int64(2), rsv.SpecificReservation.InUseCount)
+	assert.Equal(t, expectedCount, rsv.SpecificReservation.InUseCount)
+}
+
+func assertNoScaleUps(t *testing.T, autoscaler *core.StaticAutoscaler) {
+	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
+		targetSize, err := ng.TargetSize()
+		assert.NoError(t, err)
+		assert.Equal(t, 0, targetSize, "Expected node group %s to not scale up", ng.Id())
+	}
+}
+
+func assertBackoffForMigInZone(t *testing.T, autoscaler *core.StaticAutoscaler, zone string) {
+	var mig cloudprovider.NodeGroup
+	now := time.Now()
+	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
+		gkeMig, _ := ng.(*gke.GkeMig)
+		if gkeMig.GceRef().Zone == zone {
+			mig = ng
+		}
+	}
+	assert.NotNil(t, mig, "Expected to find a mig in zone %s", zone)
+	assert.True(t, autoscaler.ClusterStateRegistry.BackoffStatusForNodeGroup(mig, now).IsBackedOff, "Expected mig %s in zone %s to be backed off at time %v", mig.Id(), zone, now)
 }

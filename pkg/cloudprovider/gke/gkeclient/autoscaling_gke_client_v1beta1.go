@@ -798,12 +798,14 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		// MaxRunDuration needs to contain the unit specified at the end, because the string type actually represents 'google-duration' type,
 		// i.e. google.protobuf.Duration, which in .json representation (which CA indeed uses - container-api.json)
 		// uses format with "s" suffix, e.g."3s" or "3.000000001s",
+		// see: http://google3/google/protobuf/duration.proto;rcl=714010407;l=96-103
 		config.MaxRunDuration = fmt.Sprintf("%ss", spec.MaxRunDurationInSeconds)
 	}
 	if spec.ConsolidationDelayInSeconds != "" {
 		// ConsolidationDelay needs to contain the unit specified at the end, because the string type actually represents 'google-duration' type,
 		// i.e. google.protobuf.Duration, which in .json representation (which CA indeed uses - container-api.json)
 		// uses format with "s" suffix, e.g."3s" or "3.000000001s",
+		// see: http://google3/google/protobuf/duration.proto;rcl=714010407;l=96-103
 		config.ConsolidationDelay = fmt.Sprintf("%ss", spec.ConsolidationDelayInSeconds)
 	}
 
@@ -811,6 +813,30 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		config.SandboxConfig = &gke_api_beta.SandboxConfig{
 			Type: spec.SandboxType.String(),
 		}
+	}
+
+	var isMicroVM bool
+	if spec.SandboxType == sandbox.MicroVM {
+		isMicroVM = true
+	} else if stStr, ok := spec.SelfServiceMetadata[labels.SandboxLabelKey]; ok {
+		// Fallback to check SelfServiceMetadata if spec.SandboxType is not explicitly set.
+		// If users explicitly specify the runtime class on the Pod, then this fallback is not needed
+		// as SandboxType will be populated.
+		if st, err := sandbox.TypeFromString(stStr); err == nil && st == sandbox.MicroVM {
+			isMicroVM = true
+		}
+	}
+
+	if isMicroVM {
+		config.SandboxConfig = &gke_api_beta.SandboxConfig{
+			Type: sandbox.MicroVM.String(),
+		}
+		if config.AdvancedMachineFeatures == nil {
+			config.AdvancedMachineFeatures = &gke_api_beta.AdvancedMachineFeatures{}
+		}
+		// TODO(b/530285556): nested virtualization here is enabled for passing the API validation.
+		// We are evaluating whether to relax the validation, and this will be removed once the validation is relaxed.
+		config.AdvancedMachineFeatures.EnableNestedVirtualization = true
 	}
 
 	if spec.SystemArchitecture != nil && *spec.SystemArchitecture == gce.Arm64 {
@@ -881,12 +907,14 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		Management: &container.NodeManagement{
 			// Both fields are set to true by default.
 
-			// It mostly replicates logic from node pool management defaulter.
+			// It mostly replicates logic from node pool management defaulter:
+			// http://google3/cloud/kubernetes/server/patch/field/node/node_pool_management.go;l=39
 			// As of right now we do not specify maintenance interval explicitly for node pool
 			// which results in it defaulting to MAINTENANCE_INTERVAL_UNSPECIFIED value. This previosly resulted in autorepair
 			// being set to true if nothing else was specified.
 			AutoRepair: true,
 			// Full replication of logic from node pool management defaulter.
+			// http://google3/cloud/kubernetes/server/patch/field/node/node_pool_management.go;l=35
 			AutoUpgrade: true,
 		},
 	}
@@ -914,6 +942,12 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 	}
 	if spec.PodRange != "" {
 		createRequest.NodePool.NetworkConfig.PodRange = spec.PodRange
+	}
+	if spec.Subnetwork != "" {
+		createRequest.NodePool.NetworkConfig.Subnetwork = spec.Subnetwork
+	}
+	if spec.Network != "" {
+		createRequest.NodePool.NetworkConfig.Network = spec.Network
 	}
 
 	// Autopilot managed node pools should always have the following fields set

@@ -15,6 +15,7 @@
 package nodesnowflake
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -39,7 +40,7 @@ func (sw *mockWatcher) NoScaleDownNodePools() sets.Set[string] {
 	return sw.noScaleDown
 }
 
-func (sw *mockWatcher) Run(_ <-chan struct{}) {
+func (sw *mockWatcher) Run(_ context.Context) {
 }
 
 type mockCloudProvider struct {

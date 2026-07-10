@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/taints"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
 )
@@ -190,4 +191,12 @@ func getTwoWayMergePatchBytes(oldNode *v1.Node, newNode *v1.Node) ([]byte, error
 		return nil, err
 	}
 	return strategicpatch.CreateTwoWayMergePatch(oldData, newData, v1.Node{})
+}
+
+// TerminatingNodeFilter excludes nodes that are undergoing deletion.
+type TerminatingNodeFilter struct{}
+
+// ExcludeFromTracking returns true if the node has a non-nil deletion timestamp or has ToBeDeleted taint.
+func (f TerminatingNodeFilter) ExcludeFromTracking(node *v1.Node) bool {
+	return node.DeletionTimestamp != nil || taints.HasToBeDeletedTaint(node)
 }

@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -108,6 +109,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 		initialSetup          func(provider *instanceavailability.MockProvider)
 		wantScaleUpInfos      []nodegroupset.ScaleUpInfo
 		enabledFeatures       []string
+		disabledFeatures      []string
 		withFallbackBalancers func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor
 	}{
 		{
@@ -367,6 +369,38 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:     "global processing disabled - fallbacks early",
+			groups:   []cloudprovider.NodeGroup{mig1},
+			newNodes: 80,
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				snapshot2.SetProvider(provider)
+				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				provider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+			},
+			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := new(testutil.MockBalancer)
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{mig1}, 80).Return([]nodegroupset.ScaleUpInfo{
+					{
+						Group:       mig1,
+						CurrentSize: 100,
+						NewSize:     180,
+						MaxSize:     200,
+					},
+				}, nil)
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			disabledFeatures: []string{experiments.FlexAdvisorProcessingEnabledFlag},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       mig1,
+					CurrentSize: 100,
+					NewSize:     180,
+					MaxSize:     200,
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -387,7 +421,14 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			}
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
 
-			experimentsManager := experiments.NewMockManager(tc.enabledFeatures...)
+			featuresMap := make(map[string]bool)
+			for _, feature := range tc.enabledFeatures {
+				featuresMap[feature] = true
+			}
+			for _, feature := range tc.disabledFeatures {
+				featuresMap[feature] = false
+			}
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, featuresMap, nil)
 
 			fallbackBalancers := (nodegroupset.NodeGroupSetProcessor)(nil)
 			if tc.withFallbackBalancers != nil {

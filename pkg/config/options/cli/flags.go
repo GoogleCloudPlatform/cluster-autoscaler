@@ -141,7 +141,7 @@ var (
 	ekvmsAllocationSafetyBuffer = MapStringStringFlag("ekvms-allocation-safety-buffer", &ekvmsAllocationSafetyDefault, fmt.Sprintf("A set of ResourceName=ResourceQuantity (e.g. cpu=200m,memory=500Mi) pairs that describe resources to be used as a safety buffer in EK VMs node Allocatable calculator. Currently only cpu and memory are supported. See https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/ for more detail. [default=%v]", parsing.ResourceListString(ekvmsAllocationSafetyDefault)))
 
 	machineConfigEnabled         = flag.Bool("machine-config-enabled", false, "Whether to enable MachineConfig CRD puller")
-	cvmMachineConfigEnabled      = flag.Bool("cvm-machine-config-enabled", false, "Whether to enable parsing of CVM capabilities from MachineConfig CRD. Requires --machine-config-enabled to be true.")
+	cvmMachineConfigEnabled      = flag.Bool("cvm-machine-config-enabled", true, "Whether to enable parsing of CVM capabilities from MachineConfig CRD. Requires --machine-config-enabled to be true.")
 	machineConfigRefreshInterval = flag.Duration("machine-config-refresh-interval", 5*time.Minute, "Interval of refreshing machine config")
 
 	metricsPerCccEnabled           = flag.Bool("metrics-per-ccc-enabled", false, "Enables the emitting metrics per ccc")
@@ -212,6 +212,7 @@ func OssOptionsFromFlags() config.AutoscalingOptions {
 
 	// GKE clusterautoscaler always uses ProvReqs, forcing the flag on
 	genericOptions.ProvisioningRequestEnabled = true
+	genericOptions.ScaleDownEnabled = true
 
 	return genericOptions
 }

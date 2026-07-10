@@ -145,6 +145,23 @@ func TestLinuxNodeConfigSignature(t *testing.T) {
 			},
 			expected: "linuxNodeConfig: <AccurateTimeConfig: <EnablePtpKvmTimeSync: true>>",
 		},
+		"config with NodeVfioConfig": {
+			linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+				NodeVfioConfig: &gkeclient.NodeVfioConfig{
+					DmaEntryLimit: 65536,
+				},
+			},
+			expected: "linuxNodeConfig: <NodeVfioConfig: <dmaEntryLimit: 65536>>",
+		},
+		"config with DiskIoScheduler": {
+			linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+				DiskIoScheduler: &gkeclient.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
+				},
+			},
+			expected: "linuxNodeConfig: <DiskIoScheduler: <nodeSystemIoScheduler: \"mq-deadline\", nodeAttachedDiskIoScheduler: \"bfq\">>",
+		},
 		"config with swap boot disk": {
 			linuxNodeConfig: &gkeclient.LinuxNodeConfig{
 				SwapConfig: &gkeclient.SwapConfig{
@@ -422,6 +439,20 @@ func TestSerializeKubeletConfig(t *testing.T) {
 			expected:  `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000","shutdownGracePeriodSeconds":0}`,
 			expectErr: false,
 		},
+		"config without forcesendfields": {
+			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				CpuCfsQuota: true,
+			},
+			expected:  `{"cpuCfsQuota":true}`,
+			expectErr: false,
+		},
+		"config without forcesendfields and cpuCfsQuota=false": {
+			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				CpuCfsQuota: false,
+			},
+			expected:  `{}`,
+			expectErr: false,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			got, err := serializeKubeletConfig(tc.kubeletConfig)
@@ -431,6 +462,30 @@ func TestSerializeKubeletConfig(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Equal(t, tc.expected, got)
 			}
+		})
+	}
+}
+
+func TestKubeletConfigFromCCRuleAndSerialize(t *testing.T) {
+	testCases := map[string]struct {
+		rule         rules.Rule
+		expectedJSON string
+	}{
+		"CpuCfsQuota explicitly false": {
+			rule:         rules.NewRule(rules.WithCpuCfsQuotaRule(false)),
+			expectedJSON: `{"cpuCfsQuota":false}`,
+		},
+		"CpuCfsQuota explicitly true": {
+			rule:         rules.NewRule(rules.WithCpuCfsQuotaRule(true)),
+			expectedJSON: `{"cpuCfsQuota":true}`,
+		},
+	}
+	for tn, tc := range testCases {
+		t.Run(tn, func(t *testing.T) {
+			kubeletConfig := kubeletConfigFromCCRule(tc.rule)
+			gotJSON, err := serializeKubeletConfig(kubeletConfig)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedJSON, gotJSON)
 		})
 	}
 }
@@ -460,7 +515,8 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
-				PodPidsLimit: 10000,
+				PodPidsLimit:    10000,
+				ForceSendFields: []string{"CpuCfsQuota"},
 			},
 			expectErr: false,
 		},
@@ -472,7 +528,18 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 				CpuManagerPolicy:           "static",
 				PodPidsLimit:               10000,
 				ShutdownGracePeriodSeconds: 0,
-				ForceSendFields:            []string{"ShutdownGracePeriodSeconds"},
+				ForceSendFields:            []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds"},
+			},
+			expectErr: false,
+		},
+		"config with forcesendfields and cpuCfsQuota false": {
+			kubeletConfig: `{"cpuCfsQuota":false,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000"}`,
+			expected: &gke_api_beta.NodeKubeletConfig{
+				CpuCfsQuota:       false,
+				CpuCfsQuotaPeriod: "100ms",
+				CpuManagerPolicy:  "static",
+				PodPidsLimit:      10000,
+				ForceSendFields:   []string{"CpuCfsQuota"},
 			},
 			expectErr: false,
 		},
@@ -505,6 +572,13 @@ func TestKubeletConfigSignature(t *testing.T) {
 		"empty config": {
 			kubeletConfig: &gke_api_beta.NodeKubeletConfig{},
 			expected:      "kubelet-config: <>",
+		},
+		"config with cpuCfsQuota=false": {
+			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				CpuCfsQuota:     false,
+				ForceSendFields: []string{"CpuCfsQuota"},
+			},
+			expected: "kubelet-config: <CpuCfsQuota: false>",
 		},
 		"config with all fields": {
 			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
@@ -558,7 +632,7 @@ func TestKubeletConfigSignature(t *testing.T) {
 				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
-				ForceSendFields: []string{"ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
+				ForceSendFields: []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
 			},
 			expected: "kubelet-config: <CpuCfsQuota: true, CpuCfsQuotaPeriod: \"100ms\", CpuManagerPolicy: \"static\", PodPidsLimit: 10000, ImageGcLowThresholdPercent: 80, ImageGcHighThresholdPercent: 90, ImageMinimumGcAge: \"2m\", ImageMaximumGcAge: \"1h\", ContainerLogMaxSize: \"10M\", ContainerLogMaxFiles: 5, AllowedUnsafeSysctls: [net.ipv4.tcp_max_syn_backlog], MaxParallelImagePulls: 5, SingleProcessOomKill: true, EvictionSoft: <MemoryAvailable: \"2Gi\", NodefsAvailable: \"10%\", ImagefsAvailable: \"15%\", ImagefsInodesFree: \"5%\", NodefsInodesFree: \"5%\", PidAvailable: \"10%\">, EvictionSoftGracePeriod: <MemoryAvailable: \"2m\", NodefsAvailable: \"90s\", ImagefsAvailable: \"90s\", ImagefsInodesFree: \"90s\", NodefsInodesFree: \"90s\", PidAvailable: \"90s\">, EvictionMinimumReclaim: <MemoryAvailable: \"5%\", NodefsAvailable: \"5%\", ImagefsAvailable: \"5%\", ImagefsInodesFree: \"1%\", NodefsInodesFree: \"1%\", PidAvailable: \"1%\">, EvictionMaxPodGracePeriodSeconds: 60, TopologyManagerPolicy: \"best-effort\", TopologyManagerScope: \"container\", MemoryManagerPolicy: \"Static\", ShutdownGracePeriodSeconds: 120, ShutdownGracePeriodCriticalPodsSeconds: 0, CrashLoopBackOff: <maxContainerRestartPeriod: \"10s\">>",
 		},
@@ -881,7 +955,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
-				ForceSendFields: []string{"ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
+				ForceSendFields: []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
 			},
 		},
 	} {
@@ -910,6 +984,26 @@ func TestLinuxNodeConfigFromCCRule(t *testing.T) {
 			expected: &gkeclient.LinuxNodeConfig{
 				AccurateTimeConfig: &gkeclient.AccurateTimeConfig{
 					EnablePtpKvmTimeSync: true,
+				},
+			},
+		},
+		"rule with NodeVfioConfig and DiskIoScheduler": {
+			rule: rules.NewRule(
+				rules.WithNodeVfioConfigRule(ccc_api.NodeVfioConfig{
+					DmaEntryLimit: int32Ptr(65536),
+				}),
+				rules.WithDiskIoSchedulerRule(ccc_api.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
+				}),
+			),
+			expected: &gkeclient.LinuxNodeConfig{
+				NodeVfioConfig: &gkeclient.NodeVfioConfig{
+					DmaEntryLimit: 65536,
+				},
+				DiskIoScheduler: &gkeclient.DiskIoScheduler{
+					NodeSystemIoScheduler:       "mq-deadline",
+					NodeAttachedDiskIoScheduler: "bfq",
 				},
 			},
 		},

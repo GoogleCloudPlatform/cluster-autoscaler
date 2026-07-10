@@ -58,6 +58,9 @@ func (p *ReservationBalancingProcessor) FindSimilarNodeGroups(context *autoscali
 // New nodes are added to node groups attempting to balance the new sizes of node groups.
 // Any remaining nodes are passed to the underlying NodeGroupSetProcessor for further balancing.
 func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(context *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+
+	var scaleUpInfos []nodegroupset.ScaleUpInfo
+
 	pullerReservations := p.puller.GetReservations()
 	// Subtract resources from reservations that can be used by upcoming nodes.
 	reservations := p.consumeUpcomingScaleUps(context, pullerReservations)
@@ -72,19 +75,24 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(context *aut
 	wrappedNodeGroups, wrapErr := wrapNodeGroups(balancingInfos)
 	if wrapErr != nil {
 		klog.Infof("Falling back to balancing logic, due to an error in reservation based balancer Err: %v", wrapErr)
-		return p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, wrappedNodeGroups, newNodes-addedNodes)
+		// Ignore whatever balancing we've done so far, balance using original nodeGroups
+		return p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
 	}
-	scaleUpInfos, err := p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, wrappedNodeGroups, newNodes-addedNodes)
-	scaleUpInfos, unWrapErr := unwrapNodeGroups(scaleUpInfos)
+
+	if newNodes-addedNodes > 0 {
+		scaleUpInfos, err = p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, wrappedNodeGroups, newNodes-addedNodes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var unWrapErr error
+	scaleUpInfos, unWrapErr = unwrapNodeGroups(scaleUpInfos)
 	if unWrapErr != nil {
-		return scaleUpInfos, auto_errors.NewAutoscalerError(auto_errors.InternalError, fmt.Sprintf("Error when unWrapping node grpus. err: %v", unWrapErr.Error()))
-	}
-	if err != nil {
-		return scaleUpInfos, err
+		return nil, auto_errors.NewAutoscalerError(auto_errors.InternalError, fmt.Sprintf("Error when unWrapping node grpus. err: %v", unWrapErr.Error()))
 	}
 
 	scaleUpInfos = addMissingScaleUpInfo(scaleUpInfos, balancingInfos)
-
 	scaleUpInfos = filterEmptyScaleUpInfos(scaleUpInfos)
 
 	// Subtract resources from reservations that are used by the current scale up and update the puller.

@@ -54,10 +54,10 @@ const (
 	ScaleUpErrorReservationNotFound
 	// ScaleUpErrorReservationIncompatible - scale-up failed because the reservation is not compatible with the node group.
 	ScaleUpErrorReservationIncompatible
-	// ScaleUpErrorAutomaticReservationsNotAvailable - scale-up failed because automatic reservations are not available.
-	ScaleUpErrorAutomaticReservationsNotAvailable
-	// ScaleUpErrorAutomaticReservationsNoCapacity - scale-up failed because automatic reservations have no capacity.
-	ScaleUpErrorAutomaticReservationsNoCapacity
+	// ScaleUpErrorAnyAffinityReservationsNotAvailable - scale-up failed because any affinity reservations are not available.
+	ScaleUpErrorAnyAffinityReservationsNotAvailable
+	// ScaleUpErrorAnyAffinityReservationsNoCapacity - scale-up failed because any affinity reservations have no capacity.
+	ScaleUpErrorAnyAffinityReservationsNoCapacity
 	// ScaleUpErrorOther - scale-up failed because some of the MIGs couldn't be increased due to an unspecified error.
 	ScaleUpErrorOther
 
@@ -278,8 +278,8 @@ var MessageIdToStringMap = map[MessageId]string{
 	ScaleUpErrorReservationCapacityExceeded:            "scale.up.error.reservation.capacity.exceeded",
 	ScaleUpErrorReservationNotFound:                    "scale.up.error.reservation.not.found",
 	ScaleUpErrorReservationIncompatible:                "scale.up.error.reservation.incompatible",
-	ScaleUpErrorAutomaticReservationsNotAvailable:      "scale.up.error.automatic.reservations.not.available",
-	ScaleUpErrorAutomaticReservationsNoCapacity:        "scale.up.error.automatic.reservations.no.capacity",
+	ScaleUpErrorAnyAffinityReservationsNotAvailable:    "scale.up.error.any.affinity.reservations.not.available",
+	ScaleUpErrorAnyAffinityReservationsNoCapacity:      "scale.up.error.any.affinity.reservations.no.capacity",
 	ScaleUpErrorOther:                                  "scale.up.error.other",
 
 	ScaleDownErrorFailedToMarkToBeDeleted:          "scale.down.error.failed.to.mark.to.be.deleted",
@@ -493,14 +493,14 @@ func NewScaleUpErrorReservationIncompatibleMsg(nodeGroupId string) *Message {
 	return &Message{Id: ScaleUpErrorReservationIncompatible, Params: []string{nodeGroupId}}
 }
 
-// NewScaleUpErrorAutomaticReservationsNotAvailableMsg creates and returns a "automatic reservations not available" message.
-func NewScaleUpErrorAutomaticReservationsNotAvailableMsg(nodeGroupId string) *Message {
-	return &Message{Id: ScaleUpErrorAutomaticReservationsNotAvailable, Params: []string{nodeGroupId, "There is no automatic reservation matching the instance in your project."}}
+// NewScaleUpErrorAnyAffinityReservationsNotAvailableMsg creates and returns an "any affinity reservations not available" message.
+func NewScaleUpErrorAnyAffinityReservationsNotAvailableMsg(nodeGroupId string) *Message {
+	return &Message{Id: ScaleUpErrorAnyAffinityReservationsNotAvailable, Params: []string{nodeGroupId, "There are no any affinity reservations matching the instance in your project"}}
 }
 
-// NewScaleUpErrorAutomaticReservationsNoCapacityMsg creates and returns a "automatic reservations no capacity" message.
-func NewScaleUpErrorAutomaticReservationsNoCapacityMsg(nodeGroupId string) *Message {
-	return &Message{Id: ScaleUpErrorAutomaticReservationsNoCapacity, Params: []string{nodeGroupId, "All automatic reservations in your project, or shared with your project, are fully consumed."}}
+// NewScaleUpErrorAnyAffinityReservationsNoCapacityMsg creates and returns an "any affinity reservations no capacity" message.
+func NewScaleUpErrorAnyAffinityReservationsNoCapacityMsg(nodeGroupId string) *Message {
+	return &Message{Id: ScaleUpErrorAnyAffinityReservationsNoCapacity, Params: []string{nodeGroupId, "All any affinity reservations in your project, or shared with your project, are fully consumed"}}
 }
 
 // NewScaleUpErrorOtherMsg creates and returns a "scale-up failed because some of the MIGs couldn't be increased due to an unspecified error" message.

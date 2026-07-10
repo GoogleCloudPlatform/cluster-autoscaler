@@ -16,10 +16,8 @@ package ccc
 
 import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
-	gkev1beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	realccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
@@ -30,15 +28,13 @@ type CrdBuilder struct {
 	cc               *v1.ComputeClass
 	projectID        string
 	autopilotEnabled bool
-	dataProvider     any
 	optionsTracker   *optstracking.OptionsTracker
 }
 
 // NewCccCrdBuilder creates a new CccCrdBuilder for the given ComputeClass with default test settings.
 func NewCccCrdBuilder(cc *v1.ComputeClass) *CrdBuilder {
 	return &CrdBuilder{
-		cc:           cc,
-		dataProvider: crd.TestDefaultDataProvider(),
+		cc: cc,
 	}
 }
 
@@ -54,12 +50,6 @@ func (b *CrdBuilder) WithAutopilotEnabled(enabled bool) *CrdBuilder {
 	return b
 }
 
-// WithDataProvider sets the data provider.
-func (b *CrdBuilder) WithDataProvider(provider any) *CrdBuilder {
-	b.dataProvider = provider
-	return b
-}
-
 // WithOptionsTracker sets the options tracker.
 func (b *CrdBuilder) WithOptionsTracker(tracker *optstracking.OptionsTracker) *CrdBuilder {
 	b.optionsTracker = tracker
@@ -68,20 +58,7 @@ func (b *CrdBuilder) WithOptionsTracker(tracker *optstracking.OptionsTracker) *C
 
 // Build builds and returns the wrapped CRD.
 func (b *CrdBuilder) Build() crd.CRD {
-	var prov localDataProvider
-	if b.dataProvider != nil {
-		prov = b.dataProvider.(localDataProvider)
-	}
-	return realccc.NewCccCrd(b.cc, b.projectID, b.autopilotEnabled, prov, b.optionsTracker)
-}
-
-// localDataProvider matches the unexported ccc.dataProvider interface structurally.
-type localDataProvider interface {
-	MachineConfigProvider() *machinetypes.MachineConfigProvider
-	GetAIZones() ([]string, error)
-	GetStandardZones() ([]string, error)
-	GetAutoprovisioningLocations() []string
-	TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gkev1beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string
+	return realccc.NewCccCrd(b.cc, b.projectID, b.autopilotEnabled, crd.TestDefaultDataProvider(), b.optionsTracker)
 }
 
 // ComputeClassBuilder is a builder for v1.ComputeClass.
@@ -93,6 +70,10 @@ type ComputeClassBuilder struct {
 func NewComputeClassBuilder(name string) *ComputeClassBuilder {
 	return &ComputeClassBuilder{
 		cc: &v1.ComputeClass{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       "ComputeClass",
+				APIVersion: "cloud.google.com/v1",
+			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 			},
@@ -109,6 +90,22 @@ func (b *ComputeClassBuilder) WithNodePoolAutoCreation(enabled bool) *ComputeCla
 	return b
 }
 
+// WithWhenUnsatisfiable sets the WhenUnsatisfiable field.
+func (b *ComputeClassBuilder) WithWhenUnsatisfiable(when string) *ComputeClassBuilder {
+	b.cc.Spec.WhenUnsatisfiable = when
+	return b
+}
+
+// WithNapEnabled enables NodePoolAutoCreation.
+func (b *ComputeClassBuilder) WithNapEnabled() *ComputeClassBuilder {
+	return b.WithNodePoolAutoCreation(true)
+}
+
+// WithNapDisabled disables NodePoolAutoCreation.
+func (b *ComputeClassBuilder) WithNapDisabled() *ComputeClassBuilder {
+	return b.WithNodePoolAutoCreation(false)
+}
+
 // WithPriorities sets the priorities.
 func (b *ComputeClassBuilder) WithPriorities(priorities ...v1.Priority) *ComputeClassBuilder {
 	b.cc.Spec.Priorities = priorities
@@ -121,7 +118,41 @@ func (b *ComputeClassBuilder) AddPriority(priority v1.Priority) *ComputeClassBui
 	return b
 }
 
+// WithTargetNodeCount sets the TargetNodeCount for the MinimumCapacity.
+func (b *ComputeClassBuilder) WithTargetNodeCount(count *int) *ComputeClassBuilder {
+	if b.cc.Spec.MinimumCapacity == nil {
+		b.cc.Spec.MinimumCapacity = &v1.MinimumCapacity{}
+	}
+	b.cc.Spec.MinimumCapacity.TargetNodeCount = count
+	return b
+}
+
+// WithActiveMigration sets the ActiveMigration field.
+func (b *ComputeClassBuilder) WithActiveMigration(optimizeRulePriority bool) *ComputeClassBuilder {
+	b.cc.Spec.ActiveMigration = &v1.ActiveMigration{
+		OptimizeRulePriority: optimizeRulePriority,
+	}
+	return b
+}
+
 // Build returns the constructed ComputeClass.
 func (b *ComputeClassBuilder) Build() *v1.ComputeClass {
 	return b.cc
+}
+
+// CreateNamedCCCWithNodePoolsRules creates a ComputeClass with priorities for the specified nodepools.
+func CreateNamedCCCWithNodePoolsRules(name string, nodePools []string) *v1.ComputeClass {
+	var priorities []v1.Priority
+	for _, npName := range nodePools {
+		priorities = append(priorities,
+			v1.Priority{Nodepools: []string{npName}})
+	}
+	return NewComputeClassBuilder(name).WithPriorities(priorities...).Build()
+}
+
+// Clone creates a deep copy of the ComputeClassBuilder.
+func (b *ComputeClassBuilder) Clone() *ComputeClassBuilder {
+	return &ComputeClassBuilder{
+		cc: b.cc.DeepCopy(),
+	}
 }

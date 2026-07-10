@@ -21,6 +21,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -80,13 +82,40 @@ func TestRegisterScaleUp(t *testing.T) {
 	ng2 := gke.NewTestGkeMigBuilder().Build()
 	p.RegisterScaleUp(ng2, 2, now)
 
-	want := `# HELP cluster_autoscaler_node_provisioning_attempts_count_per_ccc [ALPHA] Number of node provisioning attempts per CCC.
-# TYPE cluster_autoscaler_node_provisioning_attempts_count_per_ccc counter
-cluster_autoscaler_node_provisioning_attempts_count_per_ccc{entity_name="default-ccc",entity_type="ccc"} 2
-cluster_autoscaler_node_provisioning_attempts_count_per_ccc{entity_name="high-cpu",entity_type="ccc"} 3
+	want := `# HELP cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc [ALPHA] Number of node provisioning attempts per CCC.
+# TYPE cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc counter
+cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="default-ccc",entity_type="ccc"} 2
+cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="high-cpu",entity_type="ccc"} 3
 `
 
-	if err := testutil.CollectAndCompare(scaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_node_provisioning_attempts_count_per_ccc"); err != nil {
+	if err := testutil.CollectAndCompare(scaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc"); err != nil {
+		t.Errorf("unexpected collecting result: %v", err)
+	}
+}
+
+func TestRegisterFailedScaleUp(t *testing.T) {
+	failedScaleUpAttempts.Reset()
+	provider.SetDefaultCrdName("default-ccc")
+	now := time.Now()
+
+	ng1 := gke.NewTestGkeMigBuilder().
+		SetSpec(gke.NewTestMigSpecBuilder().SetLabels(map[string]string{gkelabels.ComputeClassLabel: "high-cpu"}).SpecBuild()).
+		Build()
+	p.RegisterFailedScaleUp(ng1, 3, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeQuotaExceeded}, now)
+
+	ng2 := gke.NewTestGkeMigBuilder().Build()
+	p.RegisterFailedScaleUp(ng2, 2, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorReservationNotFound}, now)
+
+	p.RegisterFailedScaleUp(ng1, 1, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeResourcePoolExhausted}, now)
+
+	want := `# HELP cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc [ALPHA] Number of node provisioning failures per CCC.
+# TYPE cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc counter
+cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="default-ccc",entity_type="ccc",reason="RESERVATION_NOT_FOUND"} 1
+cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="high-cpu",entity_type="ccc",reason="QUOTA_EXCEEDED"} 1
+cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="high-cpu",entity_type="ccc",reason="RESOURCE_POOL_EXHAUSTED"} 1
+`
+
+	if err := testutil.CollectAndCompare(failedScaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc"); err != nil {
 		t.Errorf("unexpected collecting result: %v", err)
 	}
 }

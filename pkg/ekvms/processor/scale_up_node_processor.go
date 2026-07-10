@@ -54,8 +54,8 @@ import (
 )
 
 const (
-	processEkUpsizes      = "scaleUp:ekProcessUpsizes"
-	scheduleLookaheadPods = "scaleUp:scheduleLookaheadPods"
+	processResizableVmUpsizes = "scaleUp:processResizableVmUpsizes"
+	scheduleLookaheadPods     = "scaleUp:scheduleLookaheadPods"
 )
 
 type podId = types.UID
@@ -139,7 +139,7 @@ func (p *ScaleUpNodeProcessor) process(ctx *context.AutoscalingContext, unschedu
 	}
 
 	if emitMetrics {
-		defer metrics.UpdateDurationFromStart(processEkUpsizes, time.Now())
+		defer metrics.UpdateDurationFromStart(processResizableVmUpsizes, time.Now())
 	}
 
 	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(true, operationtracker.ResizableOnly)

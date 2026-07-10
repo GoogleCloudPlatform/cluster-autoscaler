@@ -51,6 +51,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates/emptycandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/scaledowncandidates/previouscandidates"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/status"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/options"
@@ -172,13 +173,13 @@ type GkeCloudProvider interface {
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
 
-func initCapacityRequestProcessors(kubeConfig *rest.Config, stopCh chan struct{}) (*cr_processors.CapacityRequestPodListProcessor, *cr_processors.CapacityRequestScaleUpProcessor, *cr_utils.CapacityRequestState, bool) {
+func initCapacityRequestProcessors(bgContext ctx.Context, kubeConfig *rest.Config) (*cr_processors.CapacityRequestPodListProcessor, *cr_processors.CapacityRequestScaleUpProcessor, *cr_utils.CapacityRequestState, bool) {
 	crClient, err := cr_utils.NewCrClient(kubeConfig)
 	if err != nil {
 		klog.Warningf("Failed to create Capacity Request client, will not use Capacity Requests. Error was: %v", err)
 		return nil, nil, nil, false
 	}
-	crLister, err := cr_utils.NewAllCrsLister(crClient, stopCh)
+	crLister, err := cr_utils.NewAllCrsLister(bgContext, crClient)
 	if err != nil {
 		klog.Warningf("Failed to create Capacity Request lister, will not use Capacity Requests. Error was: %v", err)
 		return nil, nil, nil, false
@@ -211,7 +212,6 @@ func initAutoprovisioningProcessors(
 	reservationBlocksPuller *reservations.BlocksPuller,
 	resourcePolicyPuller placement.ResourcePolicyPuller) (nodegroups.NodeGroupListProcessor, nodegroups.NodeGroupManager) {
 
-	// TODO(b/517094055): when adding support for preemtible VMs use a const from appropriate module.
 	opts := autoprovisioning.AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    gkeCloudProvider,
 		Backoff:                          backoff,
@@ -302,7 +302,6 @@ func setUpProcessors(
 	metricsFilter filter.MetricsFilter,
 	nodeSizeRecommender ekvms_recommender.NodeSizeRecommender,
 	experimentsManager experiments.Manager,
-	stopCh chan struct{},
 	prClient *provreqclient.ProvisioningRequestClient,
 	prCache *provreqcache.QueuedProvisioningCache,
 	provreqProcessor pods.PodListProcessor,
@@ -316,7 +315,8 @@ func setUpProcessors(
 	nodeQuotaWatcher nodequota.Watcher,
 	eventLogger visibility.EventLogger,
 	updatesCh chan npc_status.UpdateMessage,
-	minCapacityObserver npc_processors.MinCapacityObserver) (*processors.AutoscalingProcessors, error) {
+	minCapacityObserver npc_processors.MinCapacityObserver,
+	minQuotasTrackerFactory *resourcequotas.TrackerFactory) (*processors.AutoscalingProcessors, error) {
 
 	allowlistedSystemLabelsMatcher, err := labels.NewMatcher(systemLabelPatterns)
 	if err != nil {
@@ -354,7 +354,7 @@ func setUpProcessors(
 		}
 		capacitybufferClient, capacitybufferClientError = cbclient.NewCapacityBufferClientFromConfig(kubeConfig)
 		if capacitybufferClientError == nil {
-			capacitybuffers.InitializeAndRunBufferController(capacitybufferClient, fakePodsResolver, npcCrdLister, options.AutopilotEnabled, options.CSNEnabled, stopCh)
+			capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, npcCrdLister, options.AutopilotEnabled, options.CSNEnabled)
 		}
 	}
 
@@ -386,7 +386,7 @@ func setUpProcessors(
 	optionalInternalEventingScaleUpProcessor := scaleup_processors.NewInternalEventingScaleUpStatusProcessor()
 	if options.UseCapacityRequests {
 		klog.Infof("Enabling capacity-requests")
-		if podListProcessor, scaleUpProcessor, crState, ok := initCapacityRequestProcessors(kubeConfig, stopCh); ok {
+		if podListProcessor, scaleUpProcessor, crState, ok := initCapacityRequestProcessors(context, kubeConfig); ok {
 			optionalInternalEventingScaleUpProcessor.EnableCapacityReqProcessing(crState)
 			if err := scaleUpProcessorChain.AddProcessor(scaleUpProcessor); err != nil {
 				return nil, err
@@ -420,7 +420,7 @@ func setUpProcessors(
 	podShardingProcessor := podsharding.NewPodShardingProcessor(podSharder, podShardSelector, podShardFilter)
 
 	snowflakeBlockedMigsSource := nodesnowflake.NewBlockedMigsSource(provider, snowflakeWatcher)
-	snowflakeBlockedMigsSource.Run()
+	snowflakeBlockedMigsSource.Run(context)
 	blockedMigsSources := []scaleblocking.BlockedMigsSource{
 		bluegreen.NewBlockedMigsSource(provider),
 		snowflakeBlockedMigsSource,
@@ -508,9 +508,9 @@ func setUpProcessors(
 		}
 		resizableMachineTypesProvider = ekvms_providers.NewAllResizableMachineTypesProvider(provider.MachineConfigProvider(), experimentsManager, machineTypeFlags, experimentFlags)
 
-		go resizableVmBackoffManager.Run(stopCh)
-		go resizableVmManager.Run(stopCh)
-		go resizableVmAutoprovisioningProvider.Run(stopCh)
+		go resizableVmBackoffManager.Run(context)
+		go resizableVmManager.Run(context)
+		go resizableVmAutoprovisioningProvider.Run(context)
 	}
 
 	if options.ScaleDownDelayTypeLocal {
@@ -567,6 +567,7 @@ func setUpProcessors(
 			Plugins:                  plugins,
 			ExperimentsManager:       experimentsManager,
 			FairnessEnforcer:         sharedFairnessManager.CreateEnforcer(defrag_processor.DefragProcessorName),
+			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -576,7 +577,7 @@ func setUpProcessors(
 		// note that this is actually most likely going to be 0 (no quota) after master is (re)created
 		// as it may take a while for quota file to be updated.
 		options.MaxNodesTotal = nodeQuotaWatcher.GetNodeQuota()
-		go nodeQuotaWatcher.Run(stopCh)
+		go nodeQuotaWatcher.Run(context)
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
@@ -610,6 +611,8 @@ func setUpProcessors(
 	ptsDomainDiscoveries := []podtopologyspread.PTSDomainDiscovery{
 		podtopologyspread.NewCCCDomainDiscovery(experimentsManager, npcCrdLister),
 		podtopologyspread.NewZonalDomainDiscovery(experimentsManager, provider),
+		// Node Based DD should be the last processor as it is supposed to work only for the PTS domains for which we do not have a dedicated processor.
+		podtopologyspread.NewNodeBasedDomainDiscovery(experimentsManager, clusterSnapshot, provider),
 	}
 	podTopologySpreadProcessor := podtopologyspread.NewPodTopologySpreadProcessor(ptsDomainDiscoveries)
 
@@ -620,7 +623,7 @@ func setUpProcessors(
 	if capacitybufferClient != nil && options.CSNEnabled {
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager)
-		go csnNodeController.Run(stopCh)
+		go csnNodeController.Run(context)
 		csnNodeReconcilationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
 		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency)
@@ -630,12 +633,12 @@ func setUpProcessors(
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
 	if options.GCEFlexAdvisorEnabled {
-		flexAdvisorPodListProcessor = flexadvisor.NewPodListProcessor(instanceAvailabilityProvider, npcCrdLister)
+		flexAdvisorPodListProcessor = flexadvisor.NewPodListProcessor(instanceAvailabilityProvider, npcCrdLister, experimentsManager)
 	}
 
 	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
 	if options.EnableComputeClassMinCapacity {
-		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(npcCrdLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName))
+		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(npcCrdLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager)
 	}
 
 	autoscalingProcessors.PodListProcessor =
@@ -745,7 +748,7 @@ func setUpProcessors(
 
 	if options.EnableComputeClassMinCapacity {
 		autoscalingProcessors.TemplateNodeInfoProvider = npc_nodeinfosproviders.NewPriorityIdxNodeInfoProvider(
-			autoscalingProcessors.TemplateNodeInfoProvider, computeclass.NewMatcher(npcCrdLister, provider), npcCrdLister,
+			autoscalingProcessors.TemplateNodeInfoProvider, computeclass.NewMatcher(npcCrdLister, provider), npcCrdLister, experimentsManager,
 		)
 	}
 

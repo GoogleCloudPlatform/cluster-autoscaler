@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -95,7 +96,9 @@ type mockDefaultPodListProcessor struct {
 
 func (m *mockDefaultPodListProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
-	m.scaleToZeroCalledBefore = m.scaleToZero.called
+	if m.scaleToZero != nil {
+		m.scaleToZeroCalledBefore = m.scaleToZero.called
+	}
 	return unschedulablePods, nil
 }
 
@@ -149,5 +152,176 @@ func TestScaleToZeroLateRun(t *testing.T) {
 				t.Errorf("Expected scaleToZeroProcessor called before defaultPodListProcessor: %v, got: %v", tc.expectScaleToZeroEarly, defaultPodListProcessor.scaleToZeroCalledBefore)
 			}
 		})
+	}
+}
+
+type mockDefragProcessor struct {
+	called          bool
+	cleanedUp       bool
+	pickedCandidate bool
+	podsToReturn    []*v1.Pod
+	err             error
+}
+
+func (m *mockDefragProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+	m.called = true
+	if !m.pickedCandidate {
+		return unschedulablePods, m.err
+	}
+	if m.podsToReturn != nil {
+		return m.podsToReturn, m.err
+	}
+	return unschedulablePods, m.err
+}
+
+func (m *mockDefragProcessor) DefragPickedCandidate() bool {
+	return m.pickedCandidate
+}
+
+func (m *mockDefragProcessor) CleanUp() {
+	m.cleanedUp = true
+}
+
+type mockCSNBufferConsumptionProcessor struct {
+	called       bool
+	cleanedUp    bool
+	receivedPods []*v1.Pod
+	podsToReturn []*v1.Pod
+	err          error
+}
+
+func (m *mockCSNBufferConsumptionProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+	m.called = true
+	m.receivedPods = unschedulablePods
+	if m.podsToReturn != nil {
+		return m.podsToReturn, m.err
+	}
+	return unschedulablePods, m.err
+}
+
+func (m *mockCSNBufferConsumptionProcessor) CleanUp() {
+	m.cleanedUp = true
+}
+
+func TestNewGkeInternalPodListProcessorNil(t *testing.T) {
+	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	if processor.defragProcessor != nil {
+		t.Errorf("Expected defragProcessor to be strictly nil")
+	}
+	if processor.csnBufferConsumptionProcessor != nil {
+		t.Errorf("Expected csnBufferConsumptionProcessor to be strictly nil")
+	}
+}
+
+func TestDefragAndCSNBufferConsumptionInPodListProcessor(t *testing.T) {
+	p1 := test.BuildTestPod("p1", 100, 1)
+	p2 := test.BuildTestPod("p2", 200, 2)
+
+	initialPods := []*v1.Pod{p1}
+
+	testCases := []struct {
+		name                         string
+		defragPickedCandidate        bool
+		defragErr                    error
+		defragReturnPods             []*v1.Pod
+		csnErr                       error
+		expectCSNReceivedPods        []*v1.Pod
+		expectErr                    bool
+		expectUnschedulablePodsCount int
+	}{
+		{
+			name:                         "Defrag candidate not picked, CSN receives unschedulable pods",
+			defragPickedCandidate:        false,
+			defragReturnPods:             []*v1.Pod{p1, p2},
+			expectCSNReceivedPods:        []*v1.Pod{p1},
+			expectUnschedulablePodsCount: 1,
+		},
+		{
+			name:                         "Defrag picked candidate, CSN receives nil pods",
+			defragPickedCandidate:        true,
+			defragReturnPods:             []*v1.Pod{p1, p2},
+			expectCSNReceivedPods:        nil,
+			expectUnschedulablePodsCount: 2,
+		},
+		{
+			name:                         "Defrag fails with error, defragPickedCandidate treated as false",
+			defragPickedCandidate:        true, // Set on mock to ensure DefragPickedCandidate() isn't queried on error
+			defragErr:                    errors.New("defrag failed"),
+			defragReturnPods:             []*v1.Pod{p1, p2},
+			expectCSNReceivedPods:        []*v1.Pod{p1},
+			expectUnschedulablePodsCount: 1,
+		},
+		{
+			name:                  "CSN processor fails with error",
+			defragPickedCandidate: false,
+			defragReturnPods:      []*v1.Pod{p1},
+			csnErr:                errors.New("csn failed"),
+			expectCSNReceivedPods: []*v1.Pod{p1},
+			expectErr:             true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defragMock := &mockDefragProcessor{
+				pickedCandidate: tc.defragPickedCandidate,
+				err:             tc.defragErr,
+				podsToReturn:    tc.defragReturnPods,
+			}
+			csnMock := &mockCSNBufferConsumptionProcessor{
+				err: tc.csnErr,
+			}
+			defaultPodListProcessor := &mockDefaultPodListProcessor{}
+
+			processor := &GkeInternalPodListProcessor{
+				defaultPodListerProcessor:     defaultPodListProcessor,
+				defragProcessor:               defragMock,
+				csnBufferConsumptionProcessor: csnMock,
+				podStatusAggregator:           metrics_processors.NewPodStatusAggregator(),
+				experimentsManager:            experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
+			}
+
+			res, err := processor.Process(&context.AutoscalingContext{}, initialPods)
+			if (err != nil) != tc.expectErr {
+				t.Fatalf("Expected error: %v, got: %v", tc.expectErr, err)
+			}
+			if tc.expectErr {
+				return
+			}
+
+			if !defragMock.called {
+				t.Errorf("Expected defragProcessor to be called")
+			}
+			if !csnMock.called {
+				t.Errorf("Expected csnBufferConsumptionProcessor to be called")
+			}
+			if diff := cmp.Diff(tc.expectCSNReceivedPods, csnMock.receivedPods); diff != "" {
+				t.Errorf("csnBufferConsumptionProcessor received unexpected pods diff (-want +got):\n%s", diff)
+			}
+			if len(res) != tc.expectUnschedulablePodsCount {
+				t.Errorf("Expected %d unschedulable pods returned, got %d", tc.expectUnschedulablePodsCount, len(res))
+			}
+		})
+	}
+}
+
+func TestGkeInternalPodListProcessorCleanUp(t *testing.T) {
+	defragMock := &mockDefragProcessor{}
+	csnMock := &mockCSNBufferConsumptionProcessor{}
+	defaultPodListProcessor := &mockDefaultPodListProcessor{}
+
+	processor := &GkeInternalPodListProcessor{
+		defaultPodListerProcessor:     defaultPodListProcessor,
+		defragProcessor:               defragMock,
+		csnBufferConsumptionProcessor: csnMock,
+	}
+
+	processor.CleanUp()
+
+	if !defragMock.cleanedUp {
+		t.Errorf("Expected defragProcessor.CleanUp to be called")
+	}
+	if !csnMock.cleanedUp {
+		t.Errorf("Expected csnBufferConsumptionProcessor.CleanUp to be called")
 	}
 }

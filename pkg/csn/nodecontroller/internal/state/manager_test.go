@@ -15,6 +15,7 @@
 package state
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -57,9 +58,9 @@ func TestNodeStateManager_Run(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewNodeStateManager(tc.register)
-			stopCh := make(chan struct{})
-			defer close(stopCh)
-			err := m.Run(stopCh)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err := m.Run(ctx)
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
@@ -714,11 +715,11 @@ func (f *FakeNodeSource) DeleteNodes(nodes ...*v1.Node) {
 }
 
 func mustRunManager(t *testing.T, m *NodeStateManager) {
-	stopCh := make(chan struct{})
-	if err := m.Run(stopCh); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Run(ctx); err != nil {
 		t.Fatalf("failed to run node state manager")
 	}
 	t.Cleanup(func() {
-		close(stopCh)
+		cancel()
 	})
 }

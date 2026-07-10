@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -46,7 +47,7 @@ type Manager interface {
 	Backoff(node *v1.Node, resizeError ek_errors.ResizeError)
 	IsBackedOff(machineFamily, nodeName string) bool
 	DeleteNode(machineFamily, nodeName string)
-	Run(stopCh <-chan struct{})
+	Run(ctx context.Context)
 }
 
 type cloudProvider interface {
@@ -107,8 +108,8 @@ func NewManager(cloudProvider cloudProvider, customThresholdsProvider ekvms_cust
 	}
 }
 
-func (m *manager) Run(stopCh <-chan struct{}) {
-	wait.Until(m.updateBackoffMetrics, metricInterval, stopCh)
+func (m *manager) Run(ctx context.Context) {
+	wait.Until(m.updateBackoffMetrics, metricInterval, ctx.Done())
 }
 
 func (m *manager) Backoff(node *v1.Node, resizeError ek_errors.ResizeError) {

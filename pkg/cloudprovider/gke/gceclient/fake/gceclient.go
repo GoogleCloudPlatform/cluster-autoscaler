@@ -18,8 +18,10 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net/http"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -27,17 +29,25 @@ import (
 	"time"
 
 	gcev1 "google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	fakek8s "k8s.io/autoscaler/cluster-autoscaler/utils/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/klog/v2"
 )
 
 var (
 	letterRunes = []rune("abcdefghijklmnopqrstuvwxyz0123456789")
 )
+
+// CapacityKey uniquely identifies hardware capacity based on zone and machine type.
+type CapacityKey struct {
+	Zone        string
+	MachineType string
+}
 
 // GceClient implements the AutoscalingInternalGceClient interface using function fields for testing.
 type GceClient struct {
@@ -47,6 +57,8 @@ type GceClient struct {
 	k8s   *fakek8s.Kubernetes
 	mcp   *machinetypes.MachineConfigProvider
 	dracp machinetypes.DranetConfigProvider
+	// nextFreeId is used to assign unique IDs to GCE objects, preventing cache key collisions.
+	nextFreeId uint64
 
 	// --- Internal state
 	machineTypes          map[string]*gcev1.MachineType                 // Key: {zone}/{machineType}
@@ -57,27 +69,35 @@ type GceClient struct {
 	projectToReservations map[string][]*gcev1.Reservation
 	accelerators          *gcev1.AcceleratorTypeList
 	regionToZones         map[string][]string
+	regionToAiZones       map[string][]string
 	availableCpuPlatforms map[string][]string
 
 	// --- Behavior modifiers
-	createInstanceForMIGError map[string]cloudprovider.InstanceErrorInfo // Key: migName
+	createInstanceForMIGError  map[string]cloudprovider.InstanceErrorInfo // Key: migName
+	createInstanceForZoneError map[string]cloudprovider.InstanceErrorInfo // Key: zoneName
+	fetchMachineTypeHandler    map[string]func() error                    // Key: {zone}/{machineType}
+	capacityMap                map[CapacityKey]int64                      // Key: CapacityKey
 }
 
 // NewGceClient creates a new, empty fake GCE client.
 func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 	return &GceClient{
-		t:                         t,
-		dracp:                     machinetypes.NewDranetConfigProvider(),
-		machineTypes:              make(map[string]*gcev1.MachineType),
-		migs:                      make(map[string]*gcev1.InstanceGroupManager),
-		templates:                 make(map[string]*gcev1.InstanceTemplate),
-		instances:                 make(map[string]map[string]gceinternal.GceInstance),
-		zoneToDiskTypes:           make(map[string][]string),
-		projectToReservations:     make(map[string][]*gcev1.Reservation),
-		regionToZones:             make(map[string][]string),
-		availableCpuPlatforms:     make(map[string][]string),
-		createInstanceForMIGError: make(map[string]cloudprovider.InstanceErrorInfo),
-		k8s:                       k8s,
+		t:                          t,
+		dracp:                      machinetypes.NewDranetConfigProvider(),
+		machineTypes:               make(map[string]*gcev1.MachineType),
+		migs:                       make(map[string]*gcev1.InstanceGroupManager),
+		templates:                  make(map[string]*gcev1.InstanceTemplate),
+		instances:                  make(map[string]map[string]gceinternal.GceInstance),
+		zoneToDiskTypes:            make(map[string][]string),
+		projectToReservations:      make(map[string][]*gcev1.Reservation),
+		regionToZones:              make(map[string][]string),
+		regionToAiZones:            make(map[string][]string),
+		availableCpuPlatforms:      make(map[string][]string),
+		createInstanceForMIGError:  make(map[string]cloudprovider.InstanceErrorInfo),
+		createInstanceForZoneError: make(map[string]cloudprovider.InstanceErrorInfo),
+		fetchMachineTypeHandler:    make(map[string]func() error),
+		capacityMap:                make(map[CapacityKey]int64),
+		k8s:                        k8s,
 	}
 }
 
@@ -115,14 +135,23 @@ func (g *GceClient) withMachineTypes(names ...string) *GceClient {
 					Zone:      zone,
 				}
 				if mtInfo.HasFixedGPU() {
-					mt.Accelerators = []*gcev1.MachineTypeAccelerators{
-						{
-							GuestAcceleratorType:  mtInfo.GpuType(),
-							GuestAcceleratorCount: int64(mtInfo.FixedGpuCount()),
-						},
+					mt.Accelerators = []*gcev1.MachineTypeAccelerators{{
+						GuestAcceleratorType:  mtInfo.GpuType(),
+						GuestAcceleratorCount: int64(mtInfo.FixedGpuCount()),
+					}}
+				} else {
+					tpuType, tpuCount, err := mtInfo.TpuConfig()
+					if err != nil {
+						g.t.Fatalf("Failed to get TPU config for machine type %q: %v", name, err)
+					}
+					if tpuType != "" && tpuCount > 0 {
+						mt.Accelerators = []*gcev1.MachineTypeAccelerators{{
+							GuestAcceleratorType:  tpuType,
+							GuestAcceleratorCount: tpuCount,
+						}}
 					}
 				}
-				key := fmt.Sprintf("%s/%s", zone, name)
+				key := machineTypeKey(zone, name)
 				g.machineTypes[key] = mt
 			}
 		}
@@ -132,6 +161,8 @@ func (g *GceClient) withMachineTypes(names ...string) *GceClient {
 
 // WithReservations adds a list of reservations to the fake's internal state.
 func (g *GceClient) WithReservations(reservations map[string][]*gcev1.Reservation) *GceClient {
+	g.Lock()
+	defer g.Unlock()
 	g.projectToReservations = reservations
 	return g
 }
@@ -154,22 +185,48 @@ func (g *GceClient) WithTemplates(templates ...*gcev1.InstanceTemplate) *GceClie
 
 // WithAcceleratorTypes sets the accelerator types.
 func (g *GceClient) WithAcceleratorTypes(accelerators *gcev1.AcceleratorTypeList) *GceClient {
+	g.Lock()
+	defer g.Unlock()
 	g.accelerators = accelerators
 	return g
 }
 
 // WithDiskTypes sets the disk types.
 func (g *GceClient) WithDiskTypes(diskTypes map[string][]string) *GceClient {
+	g.Lock()
+	defer g.Unlock()
 	g.zoneToDiskTypes = diskTypes
 	return g
 }
 
-// WithZones sets the mapping of regions to zones.
-func (g *GceClient) WithZones(zones map[string][]string) *GceClient {
+// WithZones sets both standard and AI zones.
+func (g *GceClient) WithZones(standardZones map[string][]string, aiZones map[string][]string) *GceClient {
 	if len(g.machineTypes) > 0 || len(g.zoneToDiskTypes) > 0 || (g.accelerators != nil && len(g.accelerators.Items) > 0) {
 		g.t.Fatalf("WithZones called after default data was already populated. Set zones before populating defaults.")
 	}
-	g.regionToZones = zones
+	g.Lock()
+	defer g.Unlock()
+
+	// Populate regionToZones with union of standard and AI zones
+	g.regionToZones = make(map[string][]string)
+	for r, zList := range standardZones {
+		zonesCopy := make([]string, len(zList))
+		copy(zonesCopy, zList)
+		g.regionToZones[r] = zonesCopy
+	}
+
+	// Deep copy AI zones
+	g.regionToAiZones = make(map[string][]string)
+	for r, zList := range aiZones {
+		zonesCopy := make([]string, len(zList))
+		copy(zonesCopy, zList)
+		g.regionToAiZones[r] = zonesCopy
+		for _, z := range zList {
+			if !slices.Contains(g.regionToZones[r], z) {
+				g.regionToZones[r] = append(g.regionToZones[r], z)
+			}
+		}
+	}
 	return g
 }
 
@@ -194,6 +251,17 @@ func (g *GceClient) WithInstances(instanceMap map[string][]gceinternal.GceInstan
 	return g
 }
 
+// AddCustomMachineType adds a machine type to the fake's internal state.
+func (g *GceClient) AddCustomMachineType(mt *gcev1.MachineType) {
+	if mt.Zone == "" {
+		g.t.Fatalf("AddCustomMachineType: MachineType.Zone must be set")
+	}
+	g.Lock()
+	defer g.Unlock()
+	key := machineTypeKey(mt.Zone, mt.Name)
+	g.machineTypes[key] = mt
+}
+
 // WithDefaultMachineTypes populates the client with all default machine types for all configured zones.
 func (g *GceClient) WithDefaultMachineTypes() *GceClient {
 	mcp := g.mcp
@@ -209,7 +277,7 @@ func (g *GceClient) WithDefaultZones() *GceClient {
 	zones := []string{"us-central1-a", "us-central1-b", "us-central1-c"}
 	return g.WithZones(map[string][]string{
 		"us-central1": zones,
-	})
+	}, nil)
 }
 
 // WithDefaultDiskTypes populates the client with default disk types for all configured zones.
@@ -322,6 +390,12 @@ func (g *GceClient) InsertInstanceTemplate(project string, template *gcev1.Insta
 	}
 	if template.SelfLink == "" {
 		template.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/global/instanceTemplates/%s", project, template.Name)
+	}
+	if template.Id == 0 {
+		// Assign a unique ID to prevent cache key collisions in GkeManager
+		// when caching parsed node templates (which are keyed by template.Id).
+		g.nextFreeId++
+		template.Id = g.nextFreeId
 	}
 	g.templates[template.Name] = template
 	return nil
@@ -461,7 +535,14 @@ func (g *GceClient) findMachineType(name, zone string) *gcev1.MachineType {
 func (g *GceClient) FetchMachineType(zone, machineType string) (*gcev1.MachineType, error) {
 	g.Lock()
 	defer g.Unlock()
-	key := fmt.Sprintf("%s/%s", zone, machineType)
+
+	key := machineTypeKey(zone, machineType)
+	if handler, found := g.fetchMachineTypeHandler[key]; found && handler != nil {
+		if err := handler(); err != nil {
+			return nil, err
+		}
+	}
+
 	if mt, found := g.machineTypes[key]; found {
 		return mt, nil
 	}
@@ -469,7 +550,10 @@ func (g *GceClient) FetchMachineType(zone, machineType string) (*gcev1.MachineTy
 	for k := range g.machineTypes {
 		keys = append(keys, k)
 	}
-	return nil, fmt.Errorf("machine type %s in zone %s not found in fake GCE. Available: %v", machineType, zone, keys)
+	return nil, &googleapi.Error{
+		Code:    http.StatusNotFound,
+		Message: fmt.Sprintf("machine type %s in zone %s not found in fake GCE. Available: %v", machineType, zone, keys),
+	}
 }
 
 func (g *GceClient) FetchMachineTypes(zone string) ([]*gcev1.MachineType, error) {
@@ -478,6 +562,12 @@ func (g *GceClient) FetchMachineTypes(zone string) ([]*gcev1.MachineType, error)
 	var results []*gcev1.MachineType
 	for _, mt := range g.machineTypes {
 		if mt.Zone == zone {
+			key := machineTypeKey(zone, mt.Name)
+			if handler, found := g.fetchMachineTypeHandler[key]; found && handler != nil {
+				if err := handler(); err != nil {
+					return nil, err
+				}
+			}
 			results = append(results, mt)
 		}
 	}
@@ -490,7 +580,7 @@ func (g *GceClient) FetchAllMigs(zone string) ([]*gcev1.InstanceGroupManager, er
 	var results []*gcev1.InstanceGroupManager
 	for key, mig := range g.migs {
 		if strings.HasPrefix(key, zone+"/") {
-			results = append(results, mig)
+			results = append(results, cloneMig(mig))
 		}
 	}
 	return results, nil
@@ -501,7 +591,7 @@ func (g *GceClient) FetchMig(ref gceinternal.GceRef) (*gcev1.InstanceGroupManage
 	defer g.Unlock()
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	if mig, found := g.migs[key]; found {
-		return mig, nil
+		return cloneMig(mig), nil
 	}
 	return nil, fmt.Errorf("MIG %s in zone %s not found in fake GCE", ref.Name, ref.Zone)
 }
@@ -595,10 +685,7 @@ func (g *GceClient) FetchMigsWithName(zone string, filter *regexp.Regexp) ([]str
 	return links, nil
 }
 
-func (g *GceClient) FetchZones(region string) ([]string, error) {
-	g.Lock()
-	defer g.Unlock()
-
+func (g *GceClient) fetchZones(region string) ([]string, error) {
 	zones, ok := g.regionToZones[region]
 	if !ok {
 		return []string{}, nil
@@ -609,12 +696,39 @@ func (g *GceClient) FetchZones(region string) ([]string, error) {
 	return results, nil
 }
 
+func (g *GceClient) FetchZones(region string) ([]string, error) {
+	g.Lock()
+	defer g.Unlock()
+	return g.fetchZones(region)
+}
+
 func (g *GceClient) FetchAIZones(region string) ([]string, error) {
-	return g.FetchZones(region)
+	g.Lock()
+	defer g.Unlock()
+	aiZones := g.regionToAiZones[region]
+	if len(aiZones) > 0 {
+		results := make([]string, len(aiZones))
+		copy(results, aiZones)
+		return results, nil
+	}
+
+	return g.fetchZones(region)
 }
 
 func (g *GceClient) FetchStandardZones(region string) ([]string, error) {
-	return g.FetchZones(region)
+	g.Lock()
+	defer g.Unlock()
+
+	zones := g.regionToZones[region]
+	aiZones := g.regionToAiZones[region]
+
+	var results []string
+	for _, z := range zones {
+		if !slices.Contains(aiZones, z) {
+			results = append(results, z)
+		}
+	}
+	return results, nil
 }
 
 func (g *GceClient) FetchAvailableCpuPlatforms() (map[string][]string, error) {
@@ -697,14 +811,14 @@ func (g *GceClient) DeleteInstances(migRef gceinternal.GceRef, instances []gcein
 	defer g.Unlock()
 
 	migKey := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
+	klog.Infof("GceClient.DeleteInstances called for MIG %s, instances: %v", migKey, instances)
 	mig, migFound := g.migs[migKey]
 	if !migFound {
-		// This can happen if the MIG is already gone. GCE might not error.
-		return nil
+		return fmt.Errorf("fake gce: MIG %s not found during DeleteInstances", migKey)
 	}
 	currentInstances, instancesFound := g.instances[migKey]
 	if !instancesFound {
-		return nil // No instances to delete
+		return fmt.Errorf("fake gce: instances for MIG %s not found during DeleteInstances", migKey)
 	}
 
 	deletedCount := 0
@@ -721,7 +835,16 @@ func (g *GceClient) DeleteInstances(migRef gceinternal.GceRef, instances []gcein
 		if g.k8s == nil {
 			return fmt.Errorf("fake k8s client is nil")
 		}
-		g.k8s.DeleteNode(instRef.Name)
+		nodeName := instRef.Name
+		if nodeList := g.k8s.Nodes(); nodeList != nil {
+			for _, node := range nodeList.Items {
+				if strings.HasSuffix(node.Spec.ProviderID, "/"+instRef.Name) {
+					nodeName = node.Name
+					break
+				}
+			}
+		}
+		g.k8s.DeleteNode(nodeName)
 	}
 
 	return nil
@@ -834,6 +957,12 @@ func (g *GceClient) resolveTemplateName(mig *gcev1.InstanceGroupManager, templat
 }
 
 func (g *GceClient) createInstancesInternal(ref gceinternal.GceRef, mig *gcev1.InstanceGroupManager, mt *gcev1.MachineType, template *gcev1.InstanceTemplate, names []string, templateName string) error {
+	if template != nil && template.Properties != nil && template.Properties.MachineType != "" {
+		if err := g.consumeHardwareCapacityLocked(ref.Zone, template.Properties.MachineType, int64(len(names))); err != nil {
+			return err
+		}
+	}
+
 	migKey := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	if g.instances[migKey] == nil {
 		g.instances[migKey] = make(map[string]gceinternal.GceInstance)
@@ -841,18 +970,7 @@ func (g *GceClient) createInstancesInternal(ref gceinternal.GceRef, mig *gcev1.I
 
 	for _, instanceName := range names {
 		providerId := fmt.Sprintf("gce://%s/%s/%s", ref.Project, ref.Zone, instanceName)
-
-		var status *cloudprovider.InstanceStatus
-		if errInfo, hasErrInfo := g.createInstanceForMIGError[ref.Name]; hasErrInfo {
-			status = &cloudprovider.InstanceStatus{
-				State:     cloudprovider.InstanceCreating,
-				ErrorInfo: &errInfo,
-			}
-		} else {
-			status = &cloudprovider.InstanceStatus{
-				State: cloudprovider.InstanceRunning,
-			}
-		}
+		status := g.instanceStatus(ref)
 
 		instance := gceinternal.GceInstance{
 			Instance: cloudprovider.Instance{
@@ -879,6 +997,7 @@ func (g *GceClient) createInstancesInternal(ref gceinternal.GceRef, mig *gcev1.I
 			return err
 		}
 		node.Spec.ProviderID = providerId
+		node.Name = instanceName
 		g.k8s.AddNode(node)
 
 		slices, err := predictResourceSlices(g.mcp, g.dracp, mt, node)
@@ -893,6 +1012,28 @@ func (g *GceClient) createInstancesInternal(ref gceinternal.GceRef, mig *gcev1.I
 		}
 	}
 	return nil
+}
+
+func (g *GceClient) instanceStatus(ref gceinternal.GceRef) *cloudprovider.InstanceStatus {
+	errInfoMIG, hasMIGErr := g.createInstanceForMIGError[ref.Name]
+	errInfoZone, hasZoneErr := g.createInstanceForZoneError[ref.Zone]
+
+	switch {
+	case hasMIGErr:
+		return &cloudprovider.InstanceStatus{
+			State:     cloudprovider.InstanceCreating,
+			ErrorInfo: &errInfoMIG,
+		}
+	case hasZoneErr:
+		return &cloudprovider.InstanceStatus{
+			State:     cloudprovider.InstanceCreating,
+			ErrorInfo: &errInfoZone,
+		}
+	default:
+		return &cloudprovider.InstanceStatus{
+			State: cloudprovider.InstanceRunning,
+		}
+	}
 }
 
 func generateInstanceName(baseName string, existingNames map[string]bool) string {
@@ -953,8 +1094,102 @@ func (g *GceClient) SuspendInstances(migRef gceinternal.GceRef, instances []gcei
 	return nil
 }
 
+// --- Behavior modifier functions ---
+
 func (g *GceClient) SetCreateInstanceForMigError(migName string, errInfo cloudprovider.InstanceErrorInfo) {
 	g.Lock()
 	defer g.Unlock()
 	g.createInstanceForMIGError[migName] = errInfo
+}
+
+func (g *GceClient) SetCreateInstanceForZoneError(zoneName string, errInfo cloudprovider.InstanceErrorInfo) {
+	g.Lock()
+	defer g.Unlock()
+	g.createInstanceForZoneError[zoneName] = errInfo
+}
+
+// SetFetchMachineTypeHandler configures the fake GCE client to execute the given handler
+// when FetchMachineType is called for the given zone and machine type.
+// Pass nil handler to clear.
+func (g *GceClient) SetFetchMachineTypeHandler(zone, machineType string, handler func() error) {
+	g.Lock()
+	defer g.Unlock()
+	key := machineTypeKey(zone, machineType)
+	if handler == nil {
+		delete(g.fetchMachineTypeHandler, key)
+	} else {
+		g.fetchMachineTypeHandler[key] = handler
+	}
+}
+
+// machineTypeKey constructs the internal map key for a zonal machine type.
+func machineTypeKey(zone, machineType string) string {
+	return fmt.Sprintf("%s/%s", zone, machineType)
+}
+
+// SetBackendMachineCount allows simulating capacity (in machine count) constraints for a given zone and machineType.
+func (g *GceClient) SetBackendMachineCount(zone string, machineType string, capacity int64) {
+	g.Lock()
+	defer g.Unlock()
+	g.capacityMap[CapacityKey{Zone: zone, MachineType: machineType}] = capacity
+}
+
+// --- Manual Deep Cloning Functions ---
+// TODO(b/529258147): The fundamental problem here is that we are using external GCP API types directly.
+// We should follow the pattern used for reservation blocks/subblocks and create internal wrapper
+// structs (e.g. GceInstanceGroupManager) that only contain the fields actually used by the codebase.
+// Once wrapped in internal structs, we can use k8s deepcopy-gen to eliminate this manual cloning boilerplate.
+//
+// This function is used to safely return copies of fake internal state to prevent data races.
+// We explicitly use manual deep copying (instead of json.Marshal/Unmarshal) because the fakes
+// are heavily utilized in Big Unit Tests which profile CPU and memory usage to measure the
+// Autoscaler's efficiency. JSON serialization would cause significant reflection overhead and
+// heap allocations, polluting the profiling metrics. This function performs lightweight
+// shallow copies of the struct and explicitly copy only the nested pointers and slices modified by the fakes.
+
+func cloneMig(mig *gcev1.InstanceGroupManager) *gcev1.InstanceGroupManager {
+	if mig == nil {
+		return nil
+	}
+	clone := *mig
+	if mig.Status != nil {
+		statusCopy := *mig.Status
+		clone.Status = &statusCopy
+	}
+	return &clone
+}
+
+// ResetHardwareCapacity clears all simulated stockouts.
+func (g *GceClient) ResetHardwareCapacity() {
+	g.Lock()
+	defer g.Unlock()
+	g.capacityMap = make(map[CapacityKey]int64)
+}
+
+// ConsumeHardwareCapacityAtomic attempts to consume capacity for the given zone and machineType.
+// If capacity is not configured, it assumes unlimited capacity.
+func (g *GceClient) ConsumeHardwareCapacityAtomic(zone string, machineType string, count int64) error {
+	g.Lock()
+	defer g.Unlock()
+	return g.consumeHardwareCapacityLocked(zone, machineType, count)
+}
+
+func (g *GceClient) consumeHardwareCapacityLocked(zone string, machineType string, count int64) error {
+	key := CapacityKey{Zone: zone, MachineType: machineType}
+	cap, ok := g.capacityMap[key]
+	if !ok {
+		return nil // Unlimited capacity if not explicitly mocked
+	}
+
+	if cap < count {
+		return &googleapi.Error{
+			Code:    400,
+			Message: "ZONE_RESOURCE_POOL_EXHAUSTED",
+			Errors: []googleapi.ErrorItem{
+				{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED", Message: "GCE API error: stock out"},
+			},
+		}
+	}
+	g.capacityMap[key] = cap - count
+	return nil
 }

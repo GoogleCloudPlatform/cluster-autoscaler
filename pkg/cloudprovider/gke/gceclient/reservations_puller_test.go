@@ -186,7 +186,7 @@ func TestPullConsumableReservations(t *testing.T) {
 			})
 			gm := experiments.NewMockManager("ClusterAutoscaler::UseConsumableReservationsApi")
 
-			puller := NewReservationsPuller(mGceClient, crClient, gm, "", true, "us-central1")
+			puller, _ := NewReservationsPuller(mGceClient, crClient, gm, "", true, "us-central1")
 			puller.updateExperiments()
 			puller.lastConsumableReservationSeen = time.Time{}
 			puller.consumablePullerLoop(ctx)
@@ -388,7 +388,7 @@ func TestUpdateConsumablePullerInterval(t *testing.T) {
 			mGceClient := BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-centra1-b"}, nil })
 			gm := experiments.NewMockManager("ClusterAutoscaler::UseConsumableReservationsApi")
-			puller := NewReservationsPuller(mGceClient, nil, gm, "", true, "us-central1")
+			puller, _ := NewReservationsPuller(mGceClient, nil, gm, "", true, "us-central1")
 
 			puller.lastConsumableLoopFailed = tc.lastLoopFailed
 			puller.lastConsumableReservationSeen = tc.lastReservationSeen
@@ -510,7 +510,7 @@ func TestPullerPullReservations(t *testing.T) {
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
-			puller := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-b")
+			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-b")
 			puller.consumableReservations = tc.consumableReservations
 
 			for _, p := range tc.addProjectBeforeRun {
@@ -647,7 +647,7 @@ func TestPullerPullReservationsInProject(t *testing.T) {
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
-			puller := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-a")
+			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-a")
 			puller.consumableReservations = tc.consumableReservations
 
 			for _, p := range tc.addProjectBeforeRun {
@@ -690,7 +690,7 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 				return []*gce_api.Reservation{sharedRsv}, nil
 			})
 
-		puller := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
+		puller, _ := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
 		defer puller.Wait()
 		defer cancel()
 
@@ -765,7 +765,7 @@ func TestPullerPullLocalReservations(t *testing.T) {
 				WithFetchZones(func(region string) ([]string, error) { return zones, nil }).
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 
-			puller := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
+			puller, _ := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
 			puller.AddProject(sharedProject)
 
 			puller.Run(ctx)

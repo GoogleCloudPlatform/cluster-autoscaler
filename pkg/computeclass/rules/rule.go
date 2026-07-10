@@ -59,6 +59,7 @@ type Rule interface {
 	TaintsRule
 	PlacementPolicyRule
 	MinimumCapacityRule
+	AllocationStrategyRule
 }
 
 // rule is an implementations grouping all the supported rule features.
@@ -82,6 +83,7 @@ type rule struct {
 	taintsRule
 	placementPolicyRule
 	minimumCapacityRule
+	allocationStrategyRule
 }
 
 func (r *rule) Matches(group cloudprovider.NodeGroup) bool {
@@ -117,6 +119,7 @@ func (r *rule) Matches(group cloudprovider.NodeGroup) bool {
 		{"taintsRule", r.taintsRule.Matches(group)},
 		{"placementPolicyRule", r.placementPolicyRule.Matches(group)},
 		{"minimumCapacityRule", r.minimumCapacityRule.Matches(group)},
+		{"allocationStrategyRule", r.allocationStrategyRule.Matches(group)},
 	}
 
 	allMatched := true

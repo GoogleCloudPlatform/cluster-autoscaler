@@ -15,6 +15,7 @@
 package dispatch
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -29,10 +30,6 @@ import (
 
 func TestDispatcherMetrics(t *testing.T) {
 	mig1 := gce.GceRef{Name: "mig1"}
-
-	latencyDelta := func() *test.MetricDelta {
-		return test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String()})
-	}
 
 	tests := []struct {
 		name              string
@@ -50,7 +47,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			retryConfig:       retry.Config{},
 			expectedCallCount: 1,
 			expectedDeltas: []*test.MetricDelta{
-				latencyDelta(),
+				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
 				test.NewMetricDelta(test.ExpectedValue(3), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
 			},
 		},
@@ -65,7 +62,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			retryConfig:       retry.Config{MaxRetries: 1},
 			expectedCallCount: 2,
 			expectedDeltas: []*test.MetricDelta{
-				latencyDelta(),
+				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
 				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure}),
 				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
 			},
@@ -83,9 +80,21 @@ func TestDispatcherMetrics(t *testing.T) {
 			},
 			expectedCallCount: 1,
 			expectedDeltas: []*test.MetricDelta{
-				latencyDelta(),
+				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
 				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opFailure}),
 				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
+			},
+		},
+		{
+			name: "metric_with_no_nodes",
+			ops: []ops.Operation{
+				{MIG: mig1, Type: ops.SuspendOp, NodeNames: set.New[string]()},
+			},
+			retryConfig:       retry.Config{},
+			expectedCallCount: 0,
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(0), opLatencySeconds, []string{ops.SuspendOp.String(), "0"}),
+				test.NewMetricDelta(test.ExpectedValue(0), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
 			},
 		},
 	}
@@ -118,10 +127,10 @@ func TestDispatcherMetrics(t *testing.T) {
 				ed.Init(t)
 			}
 
-			stopCh := make(chan struct{})
+			ctx, cancel := context.WithCancel(context.Background())
 			dispatcherDone := make(chan bool)
 			go func() {
-				d.Run(stopCh)
+				d.Run(ctx)
 				dispatcherDone <- true
 			}()
 
@@ -130,7 +139,7 @@ func TestDispatcherMetrics(t *testing.T) {
 				<-handler.HandleChan
 			}
 
-			close(stopCh)
+			cancel()
 			<-dispatcherDone
 
 			// Verify after

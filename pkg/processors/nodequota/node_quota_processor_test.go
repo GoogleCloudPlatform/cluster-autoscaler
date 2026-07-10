@@ -15,13 +15,14 @@
 package nodequota
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	"k8s.io/autoscaler/cluster-autoscaler/config"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	autoscalingctx "k8s.io/autoscaler/cluster-autoscaler/context"
 )
 
 var testStartTime = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
@@ -51,7 +52,7 @@ func TestProcess(t *testing.T) {
 
 	for tn, tc := range testCases {
 		t.Run(tn, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &autoscalingctx.AutoscalingContext{
 				AutoscalingOptions: config.AutoscalingOptions{
 					MaxNodesTotal: tc.initialMaxNodesTotal,
 				},
@@ -72,4 +73,4 @@ type mockQuotaWatcher struct {
 func (qw *mockQuotaWatcher) GetNodeQuota() int {
 	return qw.quota
 }
-func (qw *mockQuotaWatcher) Run(stopCh <-chan struct{}) {}
+func (qw *mockQuotaWatcher) Run(ctx context.Context) {}

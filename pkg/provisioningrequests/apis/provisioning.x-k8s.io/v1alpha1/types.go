@@ -31,6 +31,7 @@ import (
 // +kubebuilder:deprecatedversion:warning="provisioning.x-k8s.io/v1alpha1 Provisioning Request is deprecated, please use the autoscaling.x-k8s.io/v1beta1 API"
 
 // Deprecated: ProvisioningRequest v1alpha1 version is no longer supported in GKE 1.29+.
+// TODO(b/324867774): The generated source files are still used by DeepMind in google3, so we can't delete them yet, because copybara service would sync the file deletion.
 // ProvisioningRequest is a way to express additional capacity
 // that we would like to provision in the cluster. Cluster Autoscaler
 // can use this information in its calculations and signal if the additional

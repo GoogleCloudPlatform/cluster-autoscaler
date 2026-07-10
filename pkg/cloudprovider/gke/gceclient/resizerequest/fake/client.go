@@ -33,19 +33,23 @@ var letterRunes = []rune("abcdefghijklmnopqrstuvwxyz0123456789")
 // ResizeRequestClient implements the ResizeRequestClient interface.
 type ResizeRequestClient struct {
 	sync.Mutex
-	requests     map[gce.GceRef]map[string]*resizerequestclient.ResizeRequestStatus
-	errors       map[string]error
-	createErrors map[gce.GceRef]error
-	gceClient    *fakegce.GceClient
+	requests        map[gce.GceRef]map[string]*resizerequestclient.ResizeRequestStatus
+	errors          map[string]error
+	createErrors    map[gce.GceRef]error
+	gceClient       *fakegce.GceClient
+	failedCreations map[gce.GceRef]map[error]int
+	reportStates    map[string]resizerequestclient.ResizeRequestReportState
 }
 
 // NewResizeRequestClient creates a new fake client.
 func NewResizeRequestClient(gceClient *fakegce.GceClient) *ResizeRequestClient {
 	return &ResizeRequestClient{
-		requests:     make(map[gce.GceRef]map[string]*resizerequestclient.ResizeRequestStatus),
-		errors:       make(map[string]error),
-		createErrors: make(map[gce.GceRef]error),
-		gceClient:    gceClient,
+		requests:        make(map[gce.GceRef]map[string]*resizerequestclient.ResizeRequestStatus),
+		errors:          make(map[string]error),
+		createErrors:    make(map[gce.GceRef]error),
+		gceClient:       gceClient,
+		failedCreations: make(map[gce.GceRef]map[error]int),
+		reportStates:    make(map[string]resizerequestclient.ResizeRequestReportState),
 	}
 }
 
@@ -57,6 +61,21 @@ func (r *ResizeRequestClient) CreateResizeRequest(ctx context.Context, migRef gc
 
 	if err, ok := r.createErrors[migRef]; ok && err != nil {
 		return err
+	}
+
+	if r.gceClient == nil {
+		return fmt.Errorf("ResizeRequestClient not fully initialized with GceClient")
+	}
+
+	tName, err := r.gceClient.FetchMigTemplateName(migRef)
+	if err != nil {
+		return fmt.Errorf("could not fetch template name for mig %s: %v", migRef.Name, err)
+	}
+	templateName := path.Base(tName.Name)
+
+	_, err = r.gceClient.FetchMigTemplate(migRef, templateName, tName.Regional)
+	if err != nil {
+		return fmt.Errorf("instance Template %s not found: %v", templateName, err)
 	}
 
 	if _, ok := r.requests[migRef]; !ok {
@@ -75,20 +94,6 @@ func (r *ResizeRequestClient) CreateResizeRequest(ctx context.Context, migRef gc
 		Errors:               nil,
 		LastAttemptErrors:    nil,
 	}
-	if r.gceClient == nil {
-		return fmt.Errorf("ResizeRequestClient not fully initialized with GceClient")
-	}
-
-	tName, err := r.gceClient.FetchMigTemplateName(migRef)
-	if err != nil {
-		return fmt.Errorf("could not fetch template name for mig %s: %v", migRef.Name, err)
-	}
-	templateName := path.Base(tName.Name)
-
-	_, err = r.gceClient.FetchMigTemplate(migRef, templateName, tName.Regional)
-	if err != nil {
-		return fmt.Errorf("instance Template %s not found: %v", templateName, err)
-	}
 
 	baseName := migRef.Name
 
@@ -100,7 +105,8 @@ func (r *ResizeRequestClient) CreateResizeRequest(ctx context.Context, migRef gc
 
 	err = r.gceClient.ResizeAtomically(migRef, templateName, names)
 	if err != nil {
-		return fmt.Errorf("failed creating instances in GceClient: %v", err)
+		delete(r.requests[migRef], createRequest.Name)
+		return err // Return the actual googleapi.Error if stockout occurs
 	}
 
 	return nil
@@ -135,19 +141,50 @@ func (r *ResizeRequestClient) ResizeRequests(ctx context.Context, migRef gce.Gce
 }
 
 func (r *ResizeRequestClient) RegisterFailedResizeRequestsCreation(migRef gce.GceRef, err error, count int) {
-	panic("unimplemented")
+	r.Lock()
+	defer r.Unlock()
+	if _, ok := r.failedCreations[migRef]; !ok {
+		r.failedCreations[migRef] = make(map[error]int)
+	}
+	r.failedCreations[migRef][err] += count
 }
 func (r *ResizeRequestClient) ResetFailedResizeRequestsCreation(migRef gce.GceRef) map[error]int {
-	panic("unimplemented")
+	r.Lock()
+	defer r.Unlock()
+	creations := r.failedCreations[migRef]
+	delete(r.failedCreations, migRef)
+	return creations
 }
 func (r *ResizeRequestClient) AdvanceResizeRequestCleanUp(ctx context.Context, rr resizerequestclient.ResizeRequestStatus) error {
-	panic("unimplemented")
+	r.Lock()
+	defer r.Unlock()
+	migRef := gce.GceRef{
+		Project: rr.ProjectID,
+		Zone:    rr.Zone,
+		Name:    rr.MigName,
+	}
+	if migRequests, ok := r.requests[migRef]; ok {
+		delete(migRequests, rr.Name)
+		if len(migRequests) == 0 {
+			delete(r.requests, migRef)
+		}
+	}
+
+	// Cleanup secondary metadata keyed by the request name
+	delete(r.reportStates, rr.Name)
+	delete(r.errors, rr.Name)
+
+	return nil
 }
 func (r *ResizeRequestClient) ReportState(rr resizerequestclient.ResizeRequestStatus) resizerequestclient.ResizeRequestReportState {
-	panic("unimplemented")
+	r.Lock()
+	defer r.Unlock()
+	return r.reportStates[rr.Name]
 }
 func (r *ResizeRequestClient) SetReportState(rr resizerequestclient.ResizeRequestStatus, state resizerequestclient.ResizeRequestReportState) {
-	panic("unimplemented")
+	r.Lock()
+	defer r.Unlock()
+	r.reportStates[rr.Name] = state
 }
 
 // SetResizeRequest allows setting or updating a Resize Request in the fake client.

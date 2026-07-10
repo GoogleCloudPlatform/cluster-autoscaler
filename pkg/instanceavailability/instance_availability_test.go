@@ -69,36 +69,42 @@ func TestGcePreferenceScore(t *testing.T) {
 	baseSnapshot := NewSnapshot(nil, "", "", "", nil, baseZonalScores)
 
 	tests := []struct {
-		name string
-		zone string
-		want float64
+		name      string
+		zone      string
+		wantFound bool
+		wantScore float64
 	}{
 		{
-			name: "Existing us-central1-a",
-			zone: "us-central1-a",
-			want: 0.9,
+			name:      "Existing us-central1-a",
+			zone:      "us-central1-a",
+			wantFound: true,
+			wantScore: 0.9,
 		},
 		{
-			name: "Existing us-central1-b",
-			zone: "us-central1-b",
-			want: 0.8,
+			name:      "Existing us-central1-b",
+			zone:      "us-central1-b",
+			wantFound: true,
+			wantScore: 0.8,
 		},
 		{
-			name: "Non-existing us-central1-c",
-			zone: "us-central1-c",
-			want: 0.0,
+			name:      "Non-existing us-central1-c",
+			zone:      "us-central1-c",
+			wantFound: false,
+			wantScore: 0.0,
 		},
 		{
-			name: "Empty zone string",
-			zone: "",
-			want: 0.0,
+			name:      "Empty zone string",
+			zone:      "",
+			wantFound: false,
+			wantScore: 0.0,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := baseSnapshot.GcePreferenceScore(tt.zone)
-			assert.Equal(t, tt.want, got, "GcePreferenceScore should return correct score for zone %s", tt.zone)
+			got, found := baseSnapshot.GcePreferenceScore(tt.zone)
+			assert.Equal(t, tt.wantFound, found)
+			assert.Equal(t, tt.wantScore, got, "GcePreferenceScore should return correct score for zone %s", tt.zone)
 		})
 	}
 }

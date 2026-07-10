@@ -313,9 +313,48 @@ func TestAsyncMgr_ScaleUpOfProcessedUpcomingNodePoolShouldScaleUpCreatedNodeGrou
 	assert.NoError(t, asyncGkeManager.SetMigSize(upcomingMig, 10))
 	// then the underlying created node groups should scaled up as well
 	assert.Equal(t, 10, ctx.gkeManager.GetMigInstances(createdMig.Id()))
-	// and the same should happen for instance creation
+	// and when instance creation happens, it should trigger re-initialization
 	assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 1))
-	assert.Equal(t, 11, ctx.gkeManager.GetMigInstances(createdMig.Id()))
+
+	// Await the second run of the initializer
+	_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+
+	// And verify the target size was updated to 11 (10 + 1)
+	assert.Equal(t, int64(11), initializer.GetTargetSize(upcomingMig.Id()))
+	ctx.assertNoOngoingNodePoolOps()
+}
+
+func TestAsyncMgr_ScaleUpDuringInitializationShouldTriggerReinitialization(t *testing.T) {
+	ctx := newAsyncGkeManagerTestContext(t)
+	mig, nodePool := ctx.sampleMigWithNodePool()
+	asyncGkeManager := ctx.asyncGkeManager
+
+	// Given a scheduled async node pool creation
+	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+	upcomingMig := result.MainCreatedMig
+
+	// Block the initializer so we can simulate concurrent activity
+	initializer.BlockInitialization()
+
+	// Trigger the async node pool creation to finish and start initialization
+	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+
+	// Wait for the initializer to start running and hit the block
+	_ = initializer.AwaitResultOrFail()
+
+	// When a scale-up happens during the initialization process
+	assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 5))
+
+	// Then unblock the first initialization run
+	initializer.UnblockInitialization()
+
+	// And await the automatically triggered second run
+	_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+
+	// Verify the target size was correctly updated
+	assert.Equal(t, int64(5), initializer.GetTargetSize(upcomingMig.Id()))
+
+	ctx.awaitAsyncTasks()
 	ctx.assertNoOngoingNodePoolOps()
 }
 
@@ -922,12 +961,12 @@ func (c *asyncGkeManagerTestContext) assertNoOngoingNodePoolOps() {
 	for name := range c.asyncGkeManager.terminatingNodePools {
 		terminating = append(terminating, name)
 	}
-	assert.Emptyf(c.t, upcoming, "Expected no terminating node pools, found: %v", terminating)
+	assert.Emptyf(c.t, terminating, "Expected no terminating node pools, found: %v", terminating)
 	var uninitialized []string
 	for name := range c.asyncGkeManager.uninitializedGkeMigs {
 		uninitialized = append(uninitialized, name)
 	}
-	assert.Emptyf(c.t, upcoming, "Expected no uninitialized migs, found: %v", uninitialized)
+	assert.Emptyf(c.t, uninitialized, "Expected no uninitialized migs, found: %v", uninitialized)
 	assert.Emptyf(c.t, c.asyncGkeManager.bufferedCleanUps, "Expected no bufferedCleanUps, found: %v", c.asyncGkeManager.bufferedCleanUps)
 	syncingNodePools := c.asyncGkeManager.nodePoolRegistrationObserver.syncingNodePoolNames()
 	assert.Emptyf(c.t, syncingNodePools, "Expected no syncing node pools, found: %v", syncingNodePools)
@@ -1016,15 +1055,15 @@ type asyncNodeGroupInitializerMock struct {
 	t                   *testing.T
 	executed            chan struct{}
 	blockInitialization chan struct{}
-	mutex               sync.Mutex // guards result and target sizes
-	result              *interfaces.AsyncCreateNodePoolResult
+	mutex               sync.Mutex // guards results and target sizes
+	results             []interfaces.AsyncCreateNodePoolResult
 	targetSizes         map[string]int64
 }
 
 func newAsyncNodeGroupInitializer(t *testing.T) *asyncNodeGroupInitializerMock {
 	return &asyncNodeGroupInitializerMock{
 		t:                   t,
-		executed:            make(chan struct{}, 1),
+		executed:            make(chan struct{}, 10),
 		blockInitialization: make(chan struct{}, 1),
 		targetSizes:         make(map[string]int64),
 	}
@@ -1060,12 +1099,7 @@ func (m *asyncNodeGroupInitializerMock) TargetSizes() map[string]int64 {
 
 func (m *asyncNodeGroupInitializerMock) InitializeNodeGroup(result interfaces.AsyncCreateNodePoolResult) {
 	m.mutex.Lock()
-	if m.result != nil {
-		m.mutex.Unlock()
-		m.t.Fatalf("initializer was already executed")
-		return
-	}
-	m.result = &result
+	m.results = append(m.results, result)
 	select {
 	case m.executed <- struct{}{}:
 	default:
@@ -1100,15 +1134,18 @@ func (m *asyncDWSNodeGroupInitializerMock) ScheduleProvReqResize(pr prpods.ProvR
 
 func (m *asyncNodeGroupInitializerMock) AwaitResultOrFail() *interfaces.AsyncCreateNodePoolResult {
 	select {
-	case x := <-m.executed:
-		m.executed <- x
+	case <-m.executed:
 	case <-time.After(testAsyncGkeMgrDefaultTimeout):
 		m.t.Fatalf("initializer was not executed within the timeout: %v", testAsyncGkeMgrDefaultTimeout)
 		return nil
 	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	return m.result
+	if len(m.results) == 0 {
+		m.t.Fatalf("no results available")
+		return nil
+	}
+	return &m.results[len(m.results)-1]
 }
 
 func (m *asyncNodeGroupInitializerMock) AwaitSuccessfulResultOrFail(mig *GkeMig, nodePool *gkeclient.NodePool) *interfaces.AsyncCreateNodePoolResult {
@@ -1448,7 +1485,7 @@ func (o *processedNodePoolsObserver) waitForNodePoolsToBeProcessed(duration time
 	defer o.processedNodePoolsCond.L.Unlock()
 	hasUnprocessedNodePools := func() bool {
 		for _, upcoming := range asyncGkeManager.upcomingNodePools {
-			if status, _ := upcoming.status(); status != nodePoolCreationStatusProcessed {
+			if !upcoming.canBeDropped() {
 				return true
 			}
 		}

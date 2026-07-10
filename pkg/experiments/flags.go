@@ -66,10 +66,15 @@ const EKOnManagedNodesMinCAVersionFlag = "EKOnManagedNodes::MinCaVersion"
 const ResizableClusterBackoffCustomThresholdsPerErrorTypeFlag = "EkClusterBackoff::CustomThresholdsPerErrorType"
 
 const PodTopologySpreadCCCMinCAVersionFlag = "PodTopologySpreadCCC::MinCAVersion"
+const PodTopologySpreadNodeBasedMinCAVersionFlag = "PodTopologySpreadNodeBased::MinCAVersion"
+
+const ComputeClassMinCapacityEnabledFlag = "ComputeClassMinCapacity::Enabled"
+const ComputeClassMinCapacityMinCAVersionFlag = "ComputeClassMinCapacity::MinCAVersion"
 
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"
+const MultitenancyKCPEnableServerAcceptNetworkApiFieldFlag = "Multitenancy::KCPEnableServerAcceptNetworkApiField"
 
 const NodePoolConsolidationDelayMinCAVersionFlag = "NodePoolConsolidationDelay::MinCAVersion"
 
@@ -106,14 +111,23 @@ const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion
 const EnablePartialDefragFlag = "ClusterAutoscalerDefrag::EnablePartialDefrag"
 const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 
+const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
+const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
+const E4OnManagedNodesEnabledFlag = "E4OnManagedNodes::Enabled"
+const E4OnManagedNodesMinCAVersionFlag = "E4OnManagedNodes::MinCaVersion"
+
 const AutopilotE4aNoResizeEnabledFlag = "AutopilotE4A::EnableAllowlistFeature"
 const AutopilotE4aNoResizeMinVersionFlag = "AutopilotE4A::MinCAVersion"
 const AutopilotE4aWithResizeEnabledFlag = "AutopilotE4A::CoarseGrainedResizeEnabled"
 const AutopilotE4aWithResizeMinVersionFlag = "AutopilotE4A::CoarseGrainedResizeMinCAVersion"
 const E4aMachineTypesFlag = "AutopilotE4A::MachineTypes"
 const E4aDownsizeConfigFlag = "AutopilotE4A::DownsizeConfig"
+const E4aUasUpsizabilityBufferFlag = "AutopilotE4A::UasUpsizabilityBuffer"
 const E4AOnManagedNodesMinCAVersionFlag = "E4AOnManagedNodes::MinCaVersion"
 const E4AOnManagedNodesEnabledFlag = "E4AOnManagedNodes::Enabled"
+
+const AutopilotArmMachineFallbacksMinCAVersionFlag = "AutopilotArmPodFamilyMachineFallbacks::MinCAVersion"
+const AutopilotArmMachineFallbacksEnabledFlag = "AutopilotArmPodFamilyMachineFallbacks::Enabled"
 
 const ZoneTypesEnabledFlag = "ZoneTypes::Enabled"
 const ZoneTypesMinCAVersionFlag = "ZoneTypes::MinCAVersion"
@@ -135,11 +149,30 @@ const FlexAdvisorZoneTypesMinCAVersionFlag = "FlexAdvisorZoneTypes::MinCAVersion
 const FlexAdvisorMinCpuPlatformEnabledFlag = "FlexAdvisorMinCpuPlatform::Enabled"
 const FlexAdvisorMinCpuPlatformMinCAVersionFlag = "FlexAdvisorMinCpuPlatform::MinCAVersion"
 
-// Additional diagnostic logs can be enabled on test/staging or customer clusters using FlexAdvisor::EnableDebugLogs
+const FlexAdvisorPCCSupportEnabledFlag = "FlexAdvisorPCCSupport::Enabled"
+const FlexAdvisorPCCSupportMinCAVersionFlag = "FlexAdvisorPCCSupport::MinCAVersion"
+
+const FlexAdvisorProcessingEnabledFlag = "FlexAdvisorProcessing::Enabled"
+const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersion"
+
 const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
 const FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag = "FlexAdvisor::AwaitInstanceAvailabilityTimeoutSeconds"
 
+const FlexAdvisorMaxActiveScopes = "FlexAdvisor::MaxActiveScopes"
+
+const FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag = "FlexAdvisorGeneratorMachineErrorsCache::Enabled"
+const FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag = "FlexAdvisorGeneratorMachineErrorsCache::MinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"
+
+const AnyThenFailReservationAffinityThresholdEnabledFlag = "AnyThenFailReservationAffinityThreshold::Enabled"
+
+const FleetEfficiencyStrategyEnabledFlag = "FleetEfficiencyStrategy::Enabled"
+const FleetEfficiencyStrategyMinCAVersionFlag = "FleetEfficiencyStrategy::MinCAVersion"
+
+const SimshipAutomationApplyCRDMinCAVersionFlag = "SimshipAutomation::ApplyCRDMinCAVersion"
+const SimshipAutomationApplyCRDEnabledFlag = "SimshipAutomation::ApplyCRDEnabled"
+const SimshipAutomationBigRedButtonFlag = "SimshipAutomation::BigRedButton"

@@ -149,4 +149,6 @@ var (
 	// value taking into account pods that can schedule on the node and current
 	// number of nodes in a cluster.
 	MaxPodsPerNodeExpanderName = "mppn-filter"
+	// FleetEfficiencyExpanderName selects a node group with the highest GCE fleet efficiency score
+	FleetEfficiencyExpanderName = "fleet-efficiency"
 )

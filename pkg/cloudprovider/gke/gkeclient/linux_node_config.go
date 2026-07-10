@@ -24,9 +24,11 @@ type LinuxNodeConfig struct {
 	AdditionalEtcSystemdResolvedConf []*ResolvedConfEntry     `json:"additionalEtcSystemdResolvedConf,omitempty"`
 	CgroupMode                       string                   `json:"cgroupMode,omitempty"`
 	CustomNodeInit                   *CustomNodeInit          `json:"customNodeInit,omitempty"`
+	DiskIoScheduler                  *DiskIoScheduler         `json:"diskIoScheduler,omitempty"`
 	Hugepages                        *HugepagesConfig         `json:"hugepages,omitempty"`
 	KernelOverrides                  *KernelOverrides         `json:"kernelOverrides,omitempty"`
 	NodeKernelModuleLoading          *NodeKernelModuleLoading `json:"nodeKernelModuleLoading,omitempty"`
+	NodeVfioConfig                   *NodeVfioConfig          `json:"nodeVfioConfig,omitempty"`
 	SwapConfig                       *SwapConfig              `json:"swapConfig,omitempty"`
 	Sysctls                          map[string]string        `json:"sysctls,omitempty"`
 	TimeZone                         string                   `json:"timeZone,omitempty"`
@@ -64,6 +66,12 @@ type InitScript struct {
 	GcsUri                    string   `json:"gcsUri,omitempty"`
 }
 
+// DiskIoScheduler - configuration for the disk IO scheduler.
+type DiskIoScheduler struct {
+	NodeAttachedDiskIoScheduler string `json:"nodeAttachedDiskIoScheduler,omitempty"`
+	NodeSystemIoScheduler       string `json:"nodeSystemIoScheduler,omitempty"`
+}
+
 // HugepagesConfig - Hugepages amount in both 2m and 1g size
 type HugepagesConfig struct {
 	HugepageSize1g int64 `json:"hugepageSize1g,omitempty"`
@@ -91,6 +99,11 @@ type LRUGen struct {
 // NodeKernelModuleLoading - configuration for kernel module loading on nodes.
 type NodeKernelModuleLoading struct {
 	Policy string `json:"policy,omitempty"`
+}
+
+// NodeVfioConfig - configuration settings for VFIO on a node.
+type NodeVfioConfig struct {
+	DmaEntryLimit int64 `json:"dmaEntryLimit,omitempty"`
 }
 
 // SwapConfig - configuration for swap memory on a node pool.

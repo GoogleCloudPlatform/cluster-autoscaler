@@ -166,7 +166,11 @@ func TestShortLivedUpgradeNodeInfoProvider(t *testing.T) {
 
 			wantNode.Name = ""
 			wantNode.UID = ""
+			if wantNode.Labels == nil {
+				wantNode.Labels = make(map[string]string)
+			}
 			delete(wantNode.Labels, v1.LabelHostname)
+			wantNode.Labels["cluster-autoscaler.kubernetes.io/template-node"] = "true"
 			gotNode.Name = ""
 			gotNode.UID = ""
 			delete(gotNode.Labels, v1.LabelHostname)

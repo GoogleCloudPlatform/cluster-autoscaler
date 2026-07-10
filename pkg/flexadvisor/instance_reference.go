@@ -32,20 +32,20 @@ import (
 	"k8s.io/utils/set"
 )
 
-// instanceReference keeps information from cloudprovider.nodegroup that needs to query FlexAdvisor
-type instanceReference struct {
-	flexibilityScopeKey string
-	instanceConfigKey   string
-	zone                string
+// InstanceReference keeps information from cloudprovider.nodegroup that needs to query FlexAdvisor
+type InstanceReference struct {
+	FlexibilityScopeKey string
+	InstanceConfigKey   string
+	Zone                string
 }
 
-func (i *instanceReference) String() string {
-	return fmt.Sprintf("instanceReference{flexibilityScopeKey: %v, instanceConfigKey: %v, zone: %v}", i.flexibilityScopeKey, i.instanceConfigKey, i.zone)
+func (i *InstanceReference) String() string {
+	return fmt.Sprintf("InstanceReference{FlexibilityScopeKey: %v, InstanceConfigKey: %v, Zone: %v}", i.FlexibilityScopeKey, i.InstanceConfigKey, i.Zone)
 }
 
-// constructInstanceReference returns instanceReference for the nodeGroup.
-// Returns an error if any field in instanceReference was not found from nodeGroup.
-func constructInstanceReference(nodeGroup cloudprovider.NodeGroup, cccLister lister.Lister, experimentsManager experiments.Manager) (*instanceReference, error) {
+// ConstructInstanceReference returns InstanceReference for the nodeGroup.
+// Returns an error if any field in InstanceReference was not found from nodeGroup.
+func ConstructInstanceReference(nodeGroup cloudprovider.NodeGroup, cccLister lister.Lister, experimentsManager experiments.Manager) (*InstanceReference, error) {
 	gkeNodeGroup, ok := nodeGroup.(gke.NodeGroup)
 	if !ok {
 		return nil, fmt.Errorf("unexpected cloudprovider.NodeGroup type, got: %s, want: gke.NodeGroup", reflect.TypeOf(nodeGroup))
@@ -74,10 +74,10 @@ func constructInstanceReference(nodeGroup cloudprovider.NodeGroup, cccLister lis
 	if err != nil {
 		return nil, fmt.Errorf("error when building instance config for nodeGroup: %s err: %v", gkeNodeGroup.Id(), err)
 	}
-	return &instanceReference{
-		zone:                zone,
-		flexibilityScopeKey: flexibilityScopeKey,
-		instanceConfigKey:   instanceConfig.Signature(),
+	return &InstanceReference{
+		Zone:                zone,
+		FlexibilityScopeKey: flexibilityScopeKey,
+		InstanceConfigKey:   instanceConfig.Signature(),
 	}, nil
 }
 

@@ -15,11 +15,13 @@
 package machinetypes
 
 import (
+	"fmt"
 	"math"
 	"sort"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
+	labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 )
 
 // GpuSpec defines machine specific gpu properties. This is an overridden
@@ -201,6 +203,20 @@ func (t MachineType) HasFixedGPU() bool {
 	return found
 }
 
+// TpuConfig returns TPU type and fixed TPU count if the machine type supports TPU.
+func (t MachineType) TpuConfig() (string, int64, error) {
+	if t.family == nil || len(t.family.supportedTpuTypes) == 0 {
+		return "", 0, nil
+	}
+	if len(t.family.supportedTpuTypes) > 1 {
+		return "", 0, fmt.Errorf("machine family %q supports multiple TPU types; TPU configuration may need refactoring", t.family.name)
+	}
+	for tpuType := range t.family.supportedTpuTypes {
+		return tpuType, fixedTpuCount[t.Name], nil
+	}
+	return "", 0, nil
+}
+
 // GpuType returns gpu type if the machine type has fixed GPU configuration.
 func (t MachineType) GpuType() string {
 	if gpuSpec := t.gpuOverridden; gpuSpec != nil {
@@ -303,10 +319,47 @@ func (t MachineType) GetThreadsPerCore() int64 {
 
 // IsConfidentialNodeTypeSupported returns true if the machine type supports the given confidential node type.
 func (t MachineType) IsConfidentialNodeTypeSupported(confidentialNodeType string) bool {
+	if confidentialNodeType == "" {
+		return t.IsConfidentialNodesSupported()
+	}
+
 	if t.confidentialNodeCfg != nil {
 		return t.confidentialNodeCfg.supportConfidentialNodeTypes[confidentialNodeType]
 	}
-	return t.family.supportConfidentialNodeTypes[confidentialNodeType]
+	if t.family == nil {
+		return false
+	}
+	// 1. Standard fallback: Check parent family-level CVM fields
+	if len(t.family.supportConfidentialNodeTypes) > 0 {
+		return t.family.supportConfidentialNodeTypes[confidentialNodeType]
+	}
+	if t.family.supportConfidentialNodes && confidentialNodeType == labels.SEVConfidentialNodeTypeValue {
+		return true // legacy boolean maps to SEV
+	}
+	// 2. Custom shape fallback: if custom shape, check if the family supports this specific CVM type via any other shape!
+	if gce.IsCustomMachine(t.Name) {
+		return t.family.IsConfidentialNodeTypeSupported(confidentialNodeType)
+	}
+	return false
+}
+
+// IsConfidentialNodesSupported returns true if the machine type supports confidential nodes generally.
+func (t MachineType) IsConfidentialNodesSupported() bool {
+	if t.confidentialNodeCfg != nil {
+		return len(t.confidentialNodeCfg.supportConfidentialNodeTypes) > 0
+	}
+	if t.family == nil {
+		return false
+	}
+	// 1. Standard fallback: Check parent family-level CVM fields
+	if t.family.supportConfidentialNodes || len(t.family.supportConfidentialNodeTypes) > 0 {
+		return true
+	}
+	// 2. Custom shape fallback: If it is a custom shape, and the family supports CVM via ANY shape, return true!
+	if gce.IsCustomMachine(t.Name) {
+		return t.family.IsConfidentialNodesSupported()
+	}
+	return false
 }
 
 // NewMachineTypeInfo returns information a MachineTypeInfo object based on a static

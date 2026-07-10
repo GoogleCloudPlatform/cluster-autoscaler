@@ -21,6 +21,7 @@ import (
 )
 
 // ResizeStatus contains supported resize states.
+// Source of truth: http://google3/cloud/cluster/manager/gce_compute_resources.proto;l=10003-10017;rcl=762458883
 type ResizeStatus string
 
 // ExtendedDurationLabelX is used to mark node as schedulable for EDP pods with different CPU requirements.

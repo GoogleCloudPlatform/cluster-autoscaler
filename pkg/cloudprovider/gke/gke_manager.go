@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -30,7 +31,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/klogx"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
@@ -327,6 +328,8 @@ type GkeManager interface {
 	SetInjectedMig(real, injected *GkeMig)
 	// IsEkEdpEnabled returns true if Edp on EKs with affinity X is enabled
 	IsEkEdpEnabled() bool
+	// IsArmMachineFallbacksEnabled returns true if machine fallbacks to N4A and C4A are enabled.
+	IsArmMachineFallbacksEnabled() bool
 	// CapacityCheckWaitTimeSeconds returns capacityCheckWaitTimeSeconds for the given mig based on default experiment values and custom capacityCheckWaitTimeSeconds override.
 	CapacityCheckWaitTimeSeconds(mig *GkeMig) (time.Duration, error)
 	// EvaluateCapacityCheckWaitTimeSeconds returns capacityCheckWaitTimeSeconds for the given mig based on default experiment values and custom capacityCheckWaitTimeSeconds override.
@@ -420,9 +423,9 @@ type gkeManagerImpl struct {
 	isClusterUsingPSCInfrastructure bool
 	defaultEnablePrivateNodes       bool
 	NewNodePoolDaemonSetConditions  *DaemonSetConditions
-	defaultMaxPodsPerNode           int64
+	defaultMaxPodsPerNode           atomic.Int64
 	dataplaneV2Enabled              bool
-	isDefaultCCCEnabled             bool
+	isDefaultCCCEnabled             atomic.Bool
 
 	gkeService                 gkeclient.AutoscalingGkeClient
 	gceService                 gceclient.AutoscalingInternalGceClient
@@ -653,7 +656,7 @@ func (m *gkeManagerImpl) SetScaleUpTimeProvider(provider ScaleUpTimeProvider) {
 
 func (m *gkeManagerImpl) validateNAPEnabled() error {
 	if !m.IsNodeAutoprovisioningEnabled() {
-		return errors.NewAutoscalerError(errors.InternalError, "This should be called only when Autoprovisioning is enabled")
+		return caerrors.NewAutoscalerError(caerrors.InternalError, "This should be called only when Autoprovisioning is enabled")
 	}
 	return nil
 }
@@ -1144,7 +1147,7 @@ func (m *gkeManagerImpl) CreateNodePool(mig *GkeMig) (MigCreateNodePoolResult, e
 	}
 	err = m.CreateNodePoolNoRefresh(mig.NodePoolName(), nodePoolSpec)
 	if err != nil {
-		if errors.ToAutoscalerError(errors.InternalError, err).Type() == gkeclient.GkePersistentOperationError {
+		if caerrors.ToAutoscalerError(caerrors.InternalError, err).Type() == gkeclient.GkePersistentOperationError {
 			klog.V(2).Infof("Node pool creation has failed with err: %v, delete broken node pool: %s", err, mig.NodePoolName())
 			m.CleanUpBrokenNodePool(mig.NodePoolName())
 		} else {
@@ -1503,9 +1506,17 @@ func (m *gkeManagerImpl) CreateQueuedInstances(pr prpods.ProvReqID, mig *GkeMig,
 	klog.V(0).Infof("Queueing for %d new instances in mig %v nodepool %q with accelerator type %q. Bulk provisioning: %v", delta, mig.Id(), spec.NodePoolName, spec.AcceleratorType, bulkProvisioning)
 
 	if bulkProvisioning {
-		return m.provisioningRequestManager.CreateQueuedBulkInstances(mig, spec)
+		err := m.provisioningRequestManager.CreateQueuedBulkInstances(mig, spec)
+		if err == nil {
+			m.cache.InvalidateMigTargetSize(mig.GceRef())
+		}
+		return err
 	}
-	return m.provisioningRequestManager.CreateResizeRequest(spec, shouldUpdateProvReqDetails)
+	err := m.provisioningRequestManager.CreateResizeRequest(spec, shouldUpdateProvReqDetails)
+	if err == nil {
+		m.cache.InvalidateMigTargetSize(mig.GceRef())
+	}
+	return err
 }
 
 // CreateResizeRequest creates a RR with the Resize Request API using client specified by mode.
@@ -1921,8 +1932,8 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 		HighThroughputLoggingEnabled: cluster.HighThroughputLoggingEnabled,
 		IpMasqAgentEnabled:           m.managerOptions.AutopilotEnabled && cluster.DataplaneV2Enabled,
 	}
-	m.defaultMaxPodsPerNode = maxPodsPerNode
-	m.isDefaultCCCEnabled = cluster.DefaultCCCEnabled
+	m.defaultMaxPodsPerNode.Store(maxPodsPerNode)
+	m.isDefaultCCCEnabled.Store(cluster.DefaultCCCEnabled)
 
 	m.refreshNodePools(cluster.NodePools, cluster.AllNodePoolNames)
 	m.refreshResourceLimiter(cluster.ResourceLimiter)
@@ -2111,7 +2122,7 @@ func (m *gkeManagerImpl) ResizeRequests(mig *GkeMig) ([]resizerequestclient.Resi
 }
 
 func (m *gkeManagerImpl) IsDefaultCCCEnabled() bool {
-	return m.isDefaultCCCEnabled
+	return m.isDefaultCCCEnabled.Load()
 }
 
 func cacheTTLForMig(mig *GkeMig) time.Duration {
@@ -2121,6 +2132,14 @@ func cacheTTLForMig(mig *GkeMig) time.Duration {
 		return nodetemplate.ShortTTL
 	}
 	return nodetemplate.LongTTL
+}
+
+func (m *gkeManagerImpl) prepareNodeBeforeAddingToCache(node *apiv1.Node) {
+	if node.Labels == nil {
+		node.Labels = make(map[string]string)
+	}
+
+	gkelabels.UpdateDeprecatedLabels(node.Labels)
 }
 
 func (m *gkeManagerImpl) fetchExistingMigTemplateNode(mig *GkeMig) (*apiv1.Node, error) {
@@ -2140,7 +2159,10 @@ func (m *gkeManagerImpl) fetchExistingMigTemplateNode(mig *GkeMig) (*apiv1.Node,
 		return nil, err
 	}
 
+	m.prepareNodeBeforeAddingToCache(node)
+
 	m.cache.nodeTemplateCache.Add(cacheKey, node, cacheTTLForMig(mig))
+
 	return node, nil
 }
 
@@ -2162,6 +2184,8 @@ func (m *gkeManagerImpl) fetchAutoprovisionedMigTemplateNode(mig *GkeMig) (*apiv
 		return nil, err
 	}
 
+	m.prepareNodeBeforeAddingToCache(node)
+
 	if cacheKey != "" {
 		m.cache.nodeTemplateCache.Add(cacheKey, node, cacheTTLForMig(mig))
 	}
@@ -2172,6 +2196,8 @@ func (m *gkeManagerImpl) fetchAutoprovisionedMigTemplateNode(mig *GkeMig) (*apiv
 // GetMigTemplateNodeInfo constructs a NodeInfo with static Pods (DS Pods are not included):
 // - from GCE instance template of the given MIG, if the MIG already exists,
 // - from MIG spec, if it doesn't exist, but may be autoprovisioned.
+// WARNING: Returned NodeInfo can be shared among multiple goroutines and shouldn't be modified.
+// Concurrent modification can lead to data races and panics.
 func (m *gkeManagerImpl) GetMigTemplateNodeInfo(mig *GkeMig) (*framework.NodeInfo, error) {
 	var node *apiv1.Node
 	var err error
@@ -2190,12 +2216,6 @@ func (m *gkeManagerImpl) GetMigTemplateNodeInfo(mig *GkeMig) (*framework.NodeInf
 	if err != nil {
 		return nil, err
 	}
-
-	// Add deprecated arch and os labels
-	if node.Labels == nil {
-		node.Labels = make(map[string]string)
-	}
-	gkelabels.UpdateDeprecatedLabels(node.Labels)
 
 	nodeInfo := framework.NewNodeInfo(node, resourceSlices)
 	if !m.IsDataplaneV2Enabled() {
@@ -2306,7 +2326,8 @@ func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig) (*apiv1.Node, erro
 	pods := getMaxPodsForNodeForTemplate(mig, m.managerOptions.AutopilotEnabled, m.managerOptions.AutopilotHigherMaxPodsPerNode, gceMachineType.CPU)
 	// TODO: Operating system will need to changed if we ever want NAP for windows.
 	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, m.GetOsDistributionForNap(mig), mig.GetSystemArchitecture()), mig.Version(), mig.IsConfidentialNode())
-	node, err := m.templates.BuildNodeFromMigSpec(mig, gkeMigOsInfo, cpu, gceMachineType.Memory, pods, m.GetNewNodePoolDaemonSetConditions(), m.isGCFSEnabled(), m.reserved, m.localSSDDiskSizeProvider, m.defaultMaxPodsPerNode)
+	defaultMaxPodsPerNode := m.defaultMaxPodsPerNode.Load()
+	node, err := m.templates.BuildNodeFromMigSpec(mig, gkeMigOsInfo, cpu, gceMachineType.Memory, pods, m.GetNewNodePoolDaemonSetConditions(), m.isGCFSEnabled(), m.reserved, m.localSSDDiskSizeProvider, defaultMaxPodsPerNode)
 	if err != nil {
 		return nil, err
 	}
@@ -2350,7 +2371,7 @@ func (m *gkeManagerImpl) addGpuPartitioningCapacity(node *apiv1.Node) (*apiv1.No
 	gpuAllocatable := node.Status.Allocatable[gpu.ResourceNvidiaGPU]
 	gpuType, ok := m.machineConfigProvider.ToGpuType(gpuName)
 	if !ok {
-		return nil, errors.NewAutoscalerErrorf(errors.InternalError, "provided GPU is not supported: %s", gpuName)
+		return nil, caerrors.NewAutoscalerErrorf(caerrors.InternalError, "provided GPU is not supported: %s", gpuName)
 	}
 	partitionCount, err := gpuType.GetPartitionCount(gpuPartitionSize)
 	if err != nil {
@@ -2453,18 +2474,34 @@ func (m *gkeManagerImpl) GetMachineType(machineName string, zone string) (gce.Ma
 	if gce.IsCustomMachine(machineName) {
 		return gce.NewCustomMachineType(machineName)
 	}
-	machine, found := m.cache.GetMachine(machineName, zone)
-	if !found {
-		rawMachine, err := m.gceService.FetchMachineType(zone, machineName)
-		if err != nil {
-			return gce.MachineType{}, err
-		}
-		machine, err = gce.NewMachineTypeFromAPI(machineName, rawMachine)
-		if err != nil {
-			return gce.MachineType{}, err
-		}
-		m.cache.AddMachine(machine, zone)
+
+	// Check the error cache first to avoid GCE API call spam if the machine type is known to be malformed, non-existent, or unavailable in the zone.
+	if err, found := m.cache.GetMachineTypeError(machineName, zone); found {
+		klog.V(5).Infof("GetMachineType: negative cache hit for machine type %q in zone %q; returning cached error: %v", machineName, zone, err)
+		return gce.MachineType{}, err
 	}
+
+	// Cache hit: return the machine type immediately.
+	if machine, found := m.cache.GetMachine(machineName, zone); found {
+		return machine, nil
+	}
+
+	// Cache miss: fetch from GCE API.
+	rawMachine, err := m.gceService.FetchMachineType(zone, machineName)
+	if err != nil {
+		// Cache the error (if cacheable) to prevent GCE API spam on subsequent calls.
+		if ttl, cached := m.cache.AddMachineTypeError(machineName, zone, err); cached {
+			klog.V(2).Infof("GetMachineType: GCE API returned error for machine type %q in zone %q: %v. Caching this error for %v to prevent API spam.", machineName, zone, err, ttl)
+		}
+		return gce.MachineType{}, err
+	}
+
+	machine, err := gce.NewMachineTypeFromAPI(machineName, rawMachine)
+	if err != nil {
+		return gce.MachineType{}, err
+	}
+
+	m.cache.AddMachine(machine, zone)
 	return machine, nil
 }
 
@@ -2544,7 +2581,7 @@ func getAutopilotHigherMaxPodsPerNodePerCpuCount(cpuCount int64) int64 {
 func filterOutSystemTaints(taints []apiv1.Taint) []apiv1.Taint {
 	var nodeTaints []apiv1.Taint
 	for _, taint := range taints {
-		if taint.Key == gpu.ResourceNvidiaGPU || taint.Key == sandbox.GVisorTaintKey || taint.Key == tpu.ResourceGoogleTPU {
+		if taint.Key == gpu.ResourceNvidiaGPU || taint.Key == sandbox.RuntimeTaintKey || taint.Key == tpu.ResourceGoogleTPU {
 			continue
 		}
 		nodeTaints = append(nodeTaints, taint)
@@ -2786,6 +2823,15 @@ func (m *gkeManagerImpl) IsResizableVmEnabledInAutopilot(machineFamily string) b
 // IsResizableVmWithinPodFamilyEnabled returns true if resizable VMs for the given family can be used within a pod family.
 func (m *gkeManagerImpl) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	return m.resizableVmAutoprovisioningProvider.IsResizableVmWithinPodFamilyEnabled(machineFamily)
+}
+
+// IsArmMachineFallbacksEnabled returns true if machine fallbacks to N4A and C4A are enabled.
+func (m *gkeManagerImpl) IsArmMachineFallbacksEnabled() bool {
+	if m == nil || m.optsTracker == nil || m.optsTracker.ExperimentsManager() == nil {
+		return false
+	}
+	return m.optsTracker.ExperimentsManager().EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotArmMachineFallbacksMinCAVersionFlag, false) &&
+		m.optsTracker.ExperimentsManager().EvaluateBoolFlagOrFailsafe(experiments.AutopilotArmMachineFallbacksEnabledFlag, true)
 }
 
 // IsEkEdpEnabled returns true if Edp on EKs with affinity X is enabled

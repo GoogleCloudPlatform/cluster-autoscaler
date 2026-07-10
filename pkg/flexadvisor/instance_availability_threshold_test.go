@@ -31,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -77,7 +78,8 @@ func TestNodeLimit(t *testing.T) {
 		WithFetchReservationsInProject(func(project string) ([]*compute.Reservation, error) {
 			return []*compute.Reservation{rsv1, rsv2, rsv3}, nil
 		})
-	puller := gceclient.NewReservationsPuller(mGceClient, nil, nil, "project-1", false, "us-central1")
+	puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "project-1", false, "us-central1")
+	assert.NoError(t, err)
 
 	stop := make(chan struct{})
 	puller.Run(context.Background())
@@ -90,11 +92,12 @@ func TestNodeLimit(t *testing.T) {
 	}, "", false, nil, nil)
 
 	testCases := []struct {
-		name              string
-		initialSetup      func(provider *instanceavailability.MockProvider)
-		nodeGroup         cloudprovider.NodeGroup
-		estimationContext estimator.EstimationContext
-		want              int
+		name               string
+		initialSetup       func(provider *instanceavailability.MockProvider)
+		nodeGroup          cloudprovider.NodeGroup
+		estimationContext  estimator.EstimationContext
+		experimentsManager experiments.Manager
+		want               int
 	}{
 		{
 			name: "single node group without similar node groups",
@@ -191,6 +194,30 @@ func TestNodeLimit(t *testing.T) {
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
 			want:              18,
 		},
+		{
+			name: "bin packer processing disabled globally - returns early",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Maybe().Panic("GetInstanceAvailability: should not be called")
+			},
+			nodeGroup: newTestMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
+				newTestMig("us-central1-b", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+				newTestMig("us-central1-c", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+			}, 0),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			}, nil),
+			want: 0,
+		},
+		{
+			name: "GetInstanceAvailability returns nil - doesn't apply limits",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(nil).Once()
+			},
+			nodeGroup:         newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+			estimationContext: estimator.NewEstimationContext(0, nil, 0),
+			want:              0,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -204,10 +231,15 @@ func TestNodeLimit(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 
-			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, experiments.NewMockManager())
+			manager := tc.experimentsManager
+			if manager == nil {
+				manager = experiments.NewMockManager()
+			}
+			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager)
 			got := threshold.NodeLimit(tc.nodeGroup, tc.estimationContext)
 
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, got.Limit)
+			mockProvider.AssertExpectations(t)
 		})
 	}
 }

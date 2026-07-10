@@ -151,7 +151,7 @@ func TestCreateQueuedBulkInstances(t *testing.T) {
 
 			err := m.CreateQueuedBulkInstances(mig, spec)
 			assert.NoError(t, err)
-			assertProvReqIsUpdated(t, ctx, tc.wantState, fakeClient, spec, provReq.PodTemplates, true)
+			assertProvReqIsUpdated(ctx, t, tc.wantState, fakeClient, spec, provReq.PodTemplates, true)
 			assert.Equal(t, tc.wantLabels, mig.labels)
 			assert.Equal(t, tc.wantSize, mig.size)
 		})
@@ -229,7 +229,7 @@ func TestCreateResizeRequest(t *testing.T) {
 			err := m.CreateResizeRequest(spec, tc.shouldUpdateProvReqDetails)
 			assert.NoError(t, err)
 			mock.AssertExpectationsForObjects(t, server)
-			assertProvReqIsUpdated(t, ctx, tc.expectedState, fakeClient, spec, tc.provReq.PodTemplates, false)
+			assertProvReqIsUpdated(ctx, t, tc.expectedState, fakeClient, spec, tc.provReq.PodTemplates, false)
 		})
 	}
 }
@@ -242,7 +242,7 @@ type fakeProvReqClient interface {
 	ProvisioningRequestNoCache(string, string) (*provreqwrapper.ProvisioningRequest, error)
 }
 
-func assertProvReqIsUpdated(t *testing.T, ctx context.Context, expectedState provreqstate.ProvisioningRequestState, client fakeProvReqClient, spec *ProvisioningRequestDetailsSpec, podTemplates []*apiv1.PodTemplate, bulkProvReq bool) {
+func assertProvReqIsUpdated(ctx context.Context, t *testing.T, expectedState provreqstate.ProvisioningRequestState, client fakeProvReqClient, spec *ProvisioningRequestDetailsSpec, podTemplates []*apiv1.PodTemplate, bulkProvReq bool) {
 	t.Helper()
 
 	var resizeRequestName string

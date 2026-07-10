@@ -468,26 +468,32 @@ var (
 			NewMachineTypeInfo("c3-highmem-176", 176, 1408),
 			// Local SSD bundled c3 machine types
 			NewMachineTypeInfo("c3-standard-4-lssd", 4, 16).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(1).
 				withInstancePriceOverride(0.25055).
 				withPreemptibleInstancePriceOverride(0.12),
 			NewMachineTypeInfo("c3-standard-8-lssd", 8, 32).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(2).
 				withInstancePriceOverride(0.50109).
 				withPreemptibleInstancePriceOverride(0.23),
 			NewMachineTypeInfo("c3-standard-22-lssd", 22, 88).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(4).
 				withInstancePriceOverride(1.31551).
 				withPreemptibleInstancePriceOverride(0.59),
 			NewMachineTypeInfo("c3-standard-44-lssd", 44, 176).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(8).
 				withInstancePriceOverride(2.63101).
 				withPreemptibleInstancePriceOverride(1.18),
 			NewMachineTypeInfo("c3-standard-88-lssd", 88, 352).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(16).
 				withInstancePriceOverride(5.26203).
 				withPreemptibleInstancePriceOverride(2.36),
 			NewMachineTypeInfo("c3-standard-176-lssd", 176, 704).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
 				withAutomaticEphemeralLocalSsdCount(32).
 				withInstancePriceOverride(10.52405).
 				withPreemptibleInstancePriceOverride(4.72),
@@ -877,6 +883,28 @@ var (
 				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
 				withInstancePriceOverride(20.704300).
 				withPreemptibleInstancePriceOverride(6.798319),
+			// C4 bare metal machine types
+			NewMachineTypeInfo("c4-highcpu-288-metal", 288, 576).
+				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4-standard-288-metal", 288, 1080).
+				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4-highmem-288-metal", 288, 2232).
+				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4-standard-288-lssd-metal", 288, 1080).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
+				withInstancePriceOverride(18.103208).
+				withPreemptibleInstancePriceOverride(9.046665).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4-highmem-288-lssd-metal", 288, 2232).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withCpuPlatformRequirements(NewCpuPlatformRequirements(IntelGraniteRapids, IntelGraniteRapids)).
+				withInstancePriceOverride(22.639784).
+				withPreemptibleInstancePriceOverride(11.313801).
+				withExplicitReqOnly(),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: IntelEmeraldRapids, upperBound: IntelGraniteRapids},
 		supportCompactPlacement:  true,
@@ -1625,7 +1653,8 @@ var (
 			DiskTypeHyperdiskBalancedHighAvailability: UnspecifiedMode,
 			DiskTypeHyperdiskThroughput:               UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:          DiskTypeStandard,
+		numaAlignmentUnsupported: true,
 	})
 	// E4A represents e4a machine family
 	E4A = RegisterMachineFamily(MachineFamily{
@@ -1680,7 +1709,30 @@ var (
 		},
 		defaultDiskType: DiskTypeHyperdiskBalanced, // Based on a requirement for instance creation.
 		resizableConfig: &ResizableMachineFamilyConfig{
-			DefaultMachineTypes: []string{"e4a-standard-8", "e4a-standard-16", "e4a-standard-32"},
+			DefaultMachineTypes:                []string{"e4a-standard-8", "e4a-standard-16", "e4a-standard-32"},
+			KubeProxyMemoryBytesOverheadPerCPU: *resource.NewQuantity(8192000, resource.BinarySI),
+			MinSizeLimit: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("250m"),
+				apiv1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+			MinIncrementLimit: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("50m"),
+				apiv1.ResourceMemory: resource.MustParse("1Mi"),
+			},
+			MinMemoryPerCPU: resource.MustParse("512Mi"),
+			MaxMemoryPerCPU: resource.MustParse("8Gi"),
+			MinVmSizeDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("2"),
+				apiv1.ResourceMemory: resource.MustParse("4Gi"),
+			},
+			IncrementStepDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("2"),
+				apiv1.ResourceMemory: resource.MustParse("1Mi"),
+			},
+			AllocationSafetyDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("0"),
+				apiv1.ResourceMemory: resource.MustParse("500Mi"),
+			},
 		},
 	})
 	// E4 represents e4 machine family
@@ -1807,6 +1859,7 @@ var (
 				apiv1.ResourceMemory: resource.MustParse("500Mi"),
 			},
 		},
+		numaAlignmentUnsupported: true,
 	})
 	// G2 represents g2 machine family
 	G2 = RegisterMachineFamily(MachineFamily{
@@ -2132,7 +2185,8 @@ var (
 		supportConfidentialNodes: false,
 		// M4 as a GCE machine family also supports hyperdisk-extreme
 		// as mentioned in the docs (https://cloud.google.com/compute/docs/memory-optimized-machines#m4_disks),
-		// however it is not supported as a boot disk.
+		// however it is not supported as a boot disk,
+		// according to SoT: http://google3/configs/cloud/cluster/vmfamilies/sot/textproto/common_metadata/vm_family_metadata/m4_vm.textproto;l=216
 		supportedBootDiskTypes: map[string]bool{
 			DiskTypeHyperdiskBalanced: true,
 		},
@@ -2253,7 +2307,8 @@ var (
 			DiskTypeHyperdiskThroughput: UnspecifiedMode,
 			DiskTypeHyperdiskBalanced:   UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:          DiskTypeStandard,
+		numaAlignmentUnsupported: true,
 	})
 	// N2 represents n2 machine family
 	N2 = RegisterMachineFamily(MachineFamily{
@@ -2364,7 +2419,8 @@ var (
 			DiskTypeSSD:                               UnspecifiedMode,
 			DiskTypeStandard:                          UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:          DiskTypeStandard,
+		numaAlignmentUnsupported: true,
 	})
 	// N2D represents n2d machine family
 	N2D = RegisterMachineFamily(MachineFamily{
@@ -2465,7 +2521,8 @@ var (
 			DiskTypeSSD:                 UnspecifiedMode,
 			DiskTypeStandard:            UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:          DiskTypeStandard,
+		numaAlignmentUnsupported: true,
 	})
 	// N4 represents n4 machine family
 	N4 = RegisterMachineFamily(MachineFamily{
@@ -2687,7 +2744,8 @@ var (
 			DiskTypeSSD:                 UnspecifiedMode,
 			DiskTypeStandard:            UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:          DiskTypeStandard,
+		numaAlignmentUnsupported: true,
 	})
 	// TPU7X represents tpu7x machine family
 	TPU7X = RegisterMachineFamily(MachineFamily{
@@ -2873,12 +2931,180 @@ var (
 		supportHugepageSize1g: true,
 		defaultDiskType:       DiskTypeBalanced,
 	})
+
+	// Z4D represents z4d machine family
+	Z4D = RegisterMachineFamily(MachineFamily{
+		name:               "z4d",
+		systemArchitecture: gce.Amd64,
+		// TODO(b/521945608): Remove these hardcoded placeholder prices once Z4D SKUs in Ohara are finalized.
+		pricingInfo: MachineFamilyPricingInfo{
+			CpuPricePerHour:         0.00875,
+			MemoryPricePerHourPerGb: 0.01,
+			PreemptibleDiscount:     0.0035 / 0.00875,
+		},
+		autoprovisionedMachineTypes: onboardMachineType(
+			NewMachineTypeInfo("z4d-highmem-8-standardlssd", 8, 63).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.086344).
+				withPreemptibleInstancePriceOverride(0.421366),
+			NewMachineTypeInfo("z4d-highmem-16-standardlssd", 16, 126).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.796344).
+				withPreemptibleInstancePriceOverride(0.705366),
+			NewMachineTypeInfo("z4d-highmem-32-standardlssd", 32, 252).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(3.592688).
+				withPreemptibleInstancePriceOverride(1.410731),
+			NewMachineTypeInfo("z4d-highmem-48-standardlssd", 48, 378).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(5.389032).
+				withPreemptibleInstancePriceOverride(2.116097),
+			NewMachineTypeInfo("z4d-highmem-64-standardlssd", 64, 504).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(7.185376).
+				withPreemptibleInstancePriceOverride(2.821462),
+			NewMachineTypeInfo("z4d-highmem-96-standardlssd", 96, 756).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(10.778065).
+				withPreemptibleInstancePriceOverride(4.232194),
+			NewMachineTypeInfo("z4d-highmem-192-standardlssd", 192, 1512).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(21.556129).
+				withPreemptibleInstancePriceOverride(8.464387),
+			NewMachineTypeInfo("z4d-highmem-384-standardlssd", 384, 3024).
+				withAutomaticEphemeralLocalSsdCount(24).
+				withInstancePriceOverride(43.112258).
+				withPreemptibleInstancePriceOverride(16.928774),
+			NewMachineTypeInfo("z4d-highmem-8-highlssd", 8, 63).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.086344).
+				withPreemptibleInstancePriceOverride(0.421366),
+			NewMachineTypeInfo("z4d-highmem-16-highlssd", 16, 126).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(2.172688).
+				withPreemptibleInstancePriceOverride(0.842731),
+			NewMachineTypeInfo("z4d-highmem-32-highlssd", 32, 252).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(4.345376).
+				withPreemptibleInstancePriceOverride(1.685462),
+			NewMachineTypeInfo("z4d-highmem-48-highlssd", 48, 378).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(6.518065).
+				withPreemptibleInstancePriceOverride(2.528194),
+			NewMachineTypeInfo("z4d-highmem-64-highlssd", 64, 504).
+				withAutomaticEphemeralLocalSsdCount(8).
+				withInstancePriceOverride(8.690753).
+				withPreemptibleInstancePriceOverride(3.370925),
+			NewMachineTypeInfo("z4d-highmem-96-highlssd", 96, 756).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(13.036129).
+				withPreemptibleInstancePriceOverride(5.056387),
+			NewMachineTypeInfo("z4d-highmem-192-highlssd", 192, 1512).
+				withAutomaticEphemeralLocalSsdCount(24).
+				withInstancePriceOverride(26.072258).
+				withPreemptibleInstancePriceOverride(10.112774),
+			NewMachineTypeInfo("z4d-8t-standard-16-standardlssd", 16, 62).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.156344).
+				withPreemptibleInstancePriceOverride(0.449366),
+			NewMachineTypeInfo("z4d-8t-standard-32-standardlssd", 32, 124).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(2.312688).
+				withPreemptibleInstancePriceOverride(0.898731),
+			NewMachineTypeInfo("z4d-8t-standard-48-standardlssd", 48, 186).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(3.469032).
+				withPreemptibleInstancePriceOverride(1.348097),
+			NewMachineTypeInfo("z4d-8t-standard-64-standardlssd", 64, 248).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(4.625376).
+				withPreemptibleInstancePriceOverride(1.797462),
+			NewMachineTypeInfo("z4d-8t-standard-96-standardlssd", 96, 372).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(6.938065).
+				withPreemptibleInstancePriceOverride(2.696194),
+			NewMachineTypeInfo("z4d-8t-standard-192-standardlssd", 192, 744).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(13.876129).
+				withPreemptibleInstancePriceOverride(5.392387),
+			NewMachineTypeInfo("z4d-4t-standard-16-standardlssd", 16, 62).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.156344).
+				withPreemptibleInstancePriceOverride(0.449366),
+			NewMachineTypeInfo("z4d-4t-standard-32-standardlssd", 32, 124).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(2.312688).
+				withPreemptibleInstancePriceOverride(0.898731),
+			NewMachineTypeInfo("z4d-4t-standard-48-standardlssd", 48, 186).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(3.469032).
+				withPreemptibleInstancePriceOverride(1.348097),
+			NewMachineTypeInfo("z4d-4t-standard-64-standardlssd", 64, 248).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(4.625376).
+				withPreemptibleInstancePriceOverride(1.797462),
+			NewMachineTypeInfo("z4d-4t-standard-96-standardlssd", 96, 372).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(6.938065).
+				withPreemptibleInstancePriceOverride(2.696194),
+			NewMachineTypeInfo("z4d-4t-standard-192-standardlssd", 192, 744).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(13.876129).
+				withPreemptibleInstancePriceOverride(5.392387),
+			NewMachineTypeInfo("z4d-standard-16-standardlssd", 16, 62).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(1.156344).
+				withPreemptibleInstancePriceOverride(0.449366),
+			NewMachineTypeInfo("z4d-standard-32-standardlssd", 32, 124).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(2.312688).
+				withPreemptibleInstancePriceOverride(0.898731),
+			NewMachineTypeInfo("z4d-standard-48-standardlssd", 48, 186).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(3.469032).
+				withPreemptibleInstancePriceOverride(1.348097),
+			NewMachineTypeInfo("z4d-standard-64-standardlssd", 64, 248).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(4.625376).
+				withPreemptibleInstancePriceOverride(1.797462),
+			NewMachineTypeInfo("z4d-standard-96-standardlssd", 96, 372).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(6.938065).
+				withPreemptibleInstancePriceOverride(2.696194),
+			NewMachineTypeInfo("z4d-standard-192-standardlssd", 192, 744).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(13.876129).
+				withPreemptibleInstancePriceOverride(5.392387),
+		),
+		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
+		supportCompactPlacement:  true,
+		maxCompactPlacementNodes: 150,
+		supportConfidentialNodes: false,
+		supportedBootDiskTypes: map[string]bool{
+			DiskTypeHyperdiskBalanced:                 true,
+			DiskTypeHyperdiskBalancedHighAvailability: true,
+			DiskTypeHyperdiskThroughput:               true,
+			DiskTypeHyperdiskMl:                       true,
+		},
+		supportedAttachDiskTypes: map[string]ConfidentialMode{
+			DiskTypeHyperdiskBalanced:                 UnspecifiedMode,
+			DiskTypeHyperdiskBalancedHighAvailability: UnspecifiedMode,
+			DiskTypeHyperdiskExtreme:                  UnspecifiedMode,
+			DiskTypeHyperdiskMl:                       NonConfidentialOnlyMode,
+			DiskTypeHyperdiskThroughput:               UnspecifiedMode,
+		},
+		supportHugepageSize1g: true,
+		defaultDiskType:       DiskTypeHyperdiskBalanced,
+	})
 )
 
 // LocalSSDDiskSizes are mappings between machine type/family to the local disk sizes in GiB
 var LocalSSDDiskSizes = map[string]uint64{
-	Z3.Name():  3000,
-	A4X.Name(): 3000,
+	Z3.Name():                    3000,
+	Z4D.Name():                   3500,
+	A4X.Name():                   3000,
+	"c4-standard-288-lssd-metal": 3000,
+	"c4-highmem-288-lssd-metal":  3000,
 }
 
 func pInt64(i int64) *int64 {

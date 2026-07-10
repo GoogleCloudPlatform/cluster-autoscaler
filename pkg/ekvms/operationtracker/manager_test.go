@@ -15,6 +15,7 @@
 package operationtracker
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"testing"
@@ -604,7 +605,7 @@ type mockOperationTracker struct {
 	mock.Mock
 }
 
-func (m *mockOperationTracker) Run(_ chan struct{}) {
+func (m *mockOperationTracker) Run(_ context.Context) {
 }
 
 func (m *mockOperationTracker) Resize(resizeOperation ResizeOperation) {

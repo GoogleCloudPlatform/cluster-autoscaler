@@ -89,6 +89,7 @@ const (
 	MigPaginated    = "PAGINATED"
 	MigPageless     = "PAGELESS"
 
+	// NodePoolErrorStatus comes from http://google3/google/container/v1beta1/cluster_service.proto;l=2793;rcl=216954548
 	NodePoolErrorStatus = "ERROR"
 )
 
@@ -898,6 +899,11 @@ func (p *gkeCloudProviderImpl) IsAutopilotEnabled() bool {
 	return p.autopilotEnabled
 }
 
+// IsArmMachineFallbacksEnabled returns true if machine fallbacks to N4A and C4A are enabled.
+func (p *gkeCloudProviderImpl) IsArmMachineFallbacksEnabled() bool {
+	return p.gkeManager.IsArmMachineFallbacksEnabled()
+}
+
 // IsDefaultCCCEnabled checks if the cluster has default CCC enabled.
 func (p *gkeCloudProviderImpl) IsDefaultCCCEnabled() bool {
 	return p.gkeManager.IsDefaultCCCEnabled()
@@ -1181,13 +1187,16 @@ func (mig *GkeMig) Version() string {
 }
 
 func (mig *GkeMig) IsConfidentialNode() bool {
-	if mig.gkeManager != nil && mig.gkeManager.AreConfidentialNodesEnabled() {
-		return true
+	if mig.nodeConfig != nil {
+		return mig.nodeConfig.IsConfidentialNode
 	}
-	if mig.nodeConfig == nil {
-		return false
+	if mig.spec != nil && mig.spec.MachineType != "" && mig.gkeManager != nil {
+		mt, err := mig.gkeManager.MachineConfigProvider().ToMachineType(mig.MachineType())
+		if err == nil {
+			return mt.IsConfidentialNodesSupported()
+		}
 	}
-	return mig.nodeConfig.IsConfidentialNode
+	return false
 }
 
 // GetSystemArchitecture returns node system architecture if specified or default one.

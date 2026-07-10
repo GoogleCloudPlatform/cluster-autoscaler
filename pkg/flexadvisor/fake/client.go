@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	flexadvisorapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 )
@@ -30,22 +31,31 @@ const (
 )
 
 type FakeFlexAdvisorClient struct {
-	mu                               sync.RWMutex
-	fetchCapacityCalls               int32
-	capacityGuidances                []FakeCapacityGuidance
-	capacityGuidanceResponseModifier func(results map[string]*flexadvisorapi.InstanceAvailability, err error) (map[string]*flexadvisorapi.InstanceAvailability, error)
+	mu                 sync.RWMutex
+	fetchCapacityCalls int32
+	capacityGuidances  []FakeCapacityGuidance
+	delay              time.Duration
 }
 
 func (c *FakeFlexAdvisorClient) FetchCapacityGuidance(ctx context.Context, flexibilityScopeKey string, instanceConfigs map[string]*flexadvisorapi.InstanceConfig) (map[string]*flexadvisorapi.InstanceAvailability, error) {
 	c.mu.RLock()
+	delay := c.delay
+	c.mu.RUnlock()
+
+	if delay > 0 {
+		select {
+		case <-time.After(delay):
+			return nil, context.DeadlineExceeded
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	c.mu.RLock()
 	defer c.mu.RUnlock()
 	atomic.AddInt32(&c.fetchCapacityCalls, 1)
 
-	results, err := c.fetchCapacityGuidance(flexibilityScopeKey, instanceConfigs)
-	if c.capacityGuidanceResponseModifier != nil {
-		return c.capacityGuidanceResponseModifier(results, err)
-	}
-	return results, err
+	return c.fetchCapacityGuidance(flexibilityScopeKey, instanceConfigs)
 }
 
 func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string, instanceConfigs map[string]*flexadvisorapi.InstanceConfig) (map[string]*flexadvisorapi.InstanceAvailability, error) {
@@ -76,6 +86,9 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 				if matched.Error != nil {
 					return nil, matched.Error
 				}
+				if matched.Omit {
+					continue
+				}
 				zonalCapacity[zone] = matched.InstanceCount
 				zonalScore[zone] = matched.GcePreferenceScore
 			} else {
@@ -84,6 +97,9 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 			}
 		}
 
+		if len(zonalCapacity) == 0 {
+			continue
+		}
 		availability := flexadvisorapi.NewTestInstanceAvailabilityBuilder(flexibilityScopeKey, key).
 			WithZonalInstanceCount(zonalCapacity).
 			WithZonalGcePreferenceScore(zonalScore).
@@ -116,17 +132,27 @@ func (c *FakeFlexAdvisorClient) ClearCapacityGuidances() {
 	c.capacityGuidances = nil
 }
 
-// SetCapacityGuidanceResponseModifier allows modifying capacity guidance response.
-func (c *FakeFlexAdvisorClient) SetCapacityGuidanceResponseModifier(modifier func(results map[string]*flexadvisorapi.InstanceAvailability, err error) (map[string]*flexadvisorapi.InstanceAvailability, error)) {
+// SetDelay sets a delay for FetchCapacityGuidance to simulate timeout.
+func (c *FakeFlexAdvisorClient) SetDelay(delay time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.capacityGuidanceResponseModifier = modifier
+	c.delay = delay
 }
 
 // NewFakeCapacityGuidanceForMachineType creates a FakeCapacityGuidance that matches the specified machineType and returns the given instanceCount and score.
 func NewFakeCapacityGuidanceForMachineType(machineType string, instanceCount int, gcePreferenceScore float64) FakeCapacityGuidance {
 	return FakeCapacityGuidance{
 		MachineType:        &machineType,
+		InstanceCount:      instanceCount,
+		GcePreferenceScore: gcePreferenceScore,
+	}
+}
+
+// NewFakeCapacityGuidanceForMachineTypeAndZone creates a FakeCapacityGuidance that matches the specified machineType and zone.
+func NewFakeCapacityGuidanceForMachineTypeAndZone(machineType string, zone string, instanceCount int, gcePreferenceScore float64) FakeCapacityGuidance {
+	return FakeCapacityGuidance{
+		MachineType:        &machineType,
+		Zone:               &zone,
 		InstanceCount:      instanceCount,
 		GcePreferenceScore: gcePreferenceScore,
 	}

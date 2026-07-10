@@ -417,3 +417,21 @@ func workloadSeparationMatch(toleration apiv1.Toleration, labelReq LabelRequirem
 	}
 	return "", false
 }
+
+// IsPodStateful returns true if the pod requires stateful storage like PVC or generic ephemeral volume.
+func IsPodStateful(pod *apiv1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, vol := range pod.Spec.Volumes {
+		// If a standard PVC is present, the pod is stateful
+		if vol.PersistentVolumeClaim != nil {
+			return true
+		}
+		// If a generic ephemeral volume (inline PVC) is present, it is also stateful
+		if vol.Ephemeral != nil {
+			return true
+		}
+	}
+	return false
+}

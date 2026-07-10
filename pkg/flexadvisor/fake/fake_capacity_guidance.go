@@ -37,6 +37,7 @@ type FakeCapacityGuidance struct {
 	InstanceCount      int
 	GcePreferenceScore float64
 	Error              error
+	Omit               bool
 }
 
 func (g FakeCapacityGuidance) matches(realConfig *flexadvisorapi.InstanceConfig, zone string) bool {

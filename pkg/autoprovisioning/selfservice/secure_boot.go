@@ -15,6 +15,8 @@
 package selfservice
 
 import (
+	"strconv"
+
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
@@ -40,15 +42,8 @@ func (w *secureBootFeature) FromNodepool(pool *gke_api_beta.NodePool) Metadata {
 		return nil
 	}
 	m := make(Metadata)
-	if pool.Config.ShieldedInstanceConfig.EnableSecureBoot {
-		m[secureBootMetadataKey] = "true"
-	}
-	if pool.Config.ShieldedInstanceConfig.EnableIntegrityMonitoring {
-		m[integrityMonitoringMetadataKey] = "true"
-	}
-	if len(m) == 0 {
-		return nil
-	}
+	m[secureBootMetadataKey] = strconv.FormatBool(pool.Config.ShieldedInstanceConfig.EnableSecureBoot)
+	m[integrityMonitoringMetadataKey] = strconv.FormatBool(pool.Config.ShieldedInstanceConfig.EnableIntegrityMonitoring)
 	return m
 }
 
@@ -58,11 +53,11 @@ func (w *secureBootFeature) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 	}
 	sic := spec.NodePoolAutoCreation.ShieldedInstanceConfig
 	m := make(Metadata)
-	if sic.EnableSecureBoot != nil && *sic.EnableSecureBoot {
-		m[secureBootMetadataKey] = "true"
+	if sic.EnableSecureBoot != nil {
+		m[secureBootMetadataKey] = strconv.FormatBool(*sic.EnableSecureBoot)
 	}
-	if sic.EnableIntegrityMonitoring != nil && *sic.EnableIntegrityMonitoring {
-		m[integrityMonitoringMetadataKey] = "true"
+	if sic.EnableIntegrityMonitoring != nil {
+		m[integrityMonitoringMetadataKey] = strconv.FormatBool(*sic.EnableIntegrityMonitoring)
 	}
 	if len(m) == 0 {
 		return nil
@@ -71,10 +66,10 @@ func (w *secureBootFeature) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 }
 
 func (w *secureBootFeature) ToNodepool(pool *gke_api_beta.NodePool, metadata Metadata) {
-	enableSB := metadata[secureBootMetadataKey] == "true"
-	enableIM := metadata[integrityMonitoringMetadataKey] == "true"
+	enableSBVal, hasSB := metadata[secureBootMetadataKey]
+	enableIMVal, hasIM := metadata[integrityMonitoringMetadataKey]
 
-	if !enableSB && !enableIM {
+	if !hasSB && !hasIM {
 		return
 	}
 
@@ -84,12 +79,17 @@ func (w *secureBootFeature) ToNodepool(pool *gke_api_beta.NodePool, metadata Met
 	if pool.Config.ShieldedInstanceConfig == nil {
 		pool.Config.ShieldedInstanceConfig = &gke_api_beta.ShieldedInstanceConfig{}
 	}
-	if enableSB {
-		pool.Config.ShieldedInstanceConfig.EnableSecureBoot = true
+
+	var forceSend []string
+	if hasSB {
+		pool.Config.ShieldedInstanceConfig.EnableSecureBoot = enableSBVal == "true"
+		forceSend = append(forceSend, "EnableSecureBoot")
 	}
-	if enableIM {
-		pool.Config.ShieldedInstanceConfig.EnableIntegrityMonitoring = true
+	if hasIM {
+		pool.Config.ShieldedInstanceConfig.EnableIntegrityMonitoring = enableIMVal == "true"
+		forceSend = append(forceSend, "EnableIntegrityMonitoring")
 	}
+	pool.Config.ShieldedInstanceConfig.ForceSendFields = forceSend
 }
 
 func (w *secureBootFeature) FromPriority(p v1.Priority) Metadata {

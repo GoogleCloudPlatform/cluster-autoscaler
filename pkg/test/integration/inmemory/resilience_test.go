@@ -49,11 +49,10 @@ func TestResilienceToNonGcpNodes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		infra := integration.SetupInfrastructure(ctx, t)
-		stopCh := make(chan struct{})
 
-		autoscaler, err := integration.SetupAutoscaler(t, ctx, testConfig, infra, stopCh)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel, stopCh)
+		defer integration_synctest.TearDown(cancel)
 
 		infra.Fakes.K8s.AddNode(newRogueNode("vk-node"))
 

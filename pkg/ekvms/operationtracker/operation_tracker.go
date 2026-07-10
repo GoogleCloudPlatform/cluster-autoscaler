@@ -94,8 +94,8 @@ const (
 
 // OperationTracker executes and tracks all resizable VM resize and fix operations.
 type OperationTracker interface {
-	// Run executes the main loop of OperationTracker. It blocks until stopCh is closed.
-	Run(chan struct{})
+	// Run executes the main loop of OperationTracker. It blocks until ctx.Done() is closed.
+	Run(context.Context)
 	// Resize triggers the resize operation of a given node. This is not a blocking call.
 	Resize(ResizeOperation)
 	// Fix triggers the fix operation of a given node. This is not a blocking call.
@@ -252,7 +252,7 @@ func newOperationTracker(clientSet clientset.Interface, informerFactory informer
 }
 
 // Run executes the main loop of operationTracker.
-func (o *operationTracker) Run(stopCh chan struct{}) {
+func (o *operationTracker) Run(ctx context.Context) {
 	defer o.opQueue.ShutDown()
 	defer klog.Info("Operation tracker is shutting down.")
 
@@ -274,15 +274,15 @@ func (o *operationTracker) Run(stopCh chan struct{}) {
 		klog.Fatalf("Can't create node informer: %v", err)
 	}
 
-	o.startWorkers(stopCh)
+	o.startWorkers(ctx)
 
 	if o.fixerEnabled {
-		go wait.Until(o.runFixerOnce, o.fixerInterval, stopCh)
+		go wait.Until(o.runFixerOnce, o.fixerInterval, ctx.Done())
 	}
 
 	klog.V(4).Infof("Initialized operation tracker")
 
-	<-stopCh
+	<-ctx.Done()
 }
 
 func (o *operationTracker) onUpdateNode(_, newObj interface{}) {
@@ -481,9 +481,9 @@ func (o *operationTracker) onDeleteNode(obj interface{}) {
 	}
 }
 
-func (o *operationTracker) startWorkers(stopCh chan struct{}) {
+func (o *operationTracker) startWorkers(ctx context.Context) {
 	for i := 0; i < o.numOfWorkers; i++ {
-		go wait.Until(o.worker, o.workerRestartDelay, stopCh)
+		go wait.Until(o.worker, o.workerRestartDelay, ctx.Done())
 	}
 }
 

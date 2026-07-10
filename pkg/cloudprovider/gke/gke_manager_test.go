@@ -680,6 +680,10 @@ func (m *migInfoProviderStub) GetMigMachineType(_ gce.GceRef) (gce.MachineType, 
 	return gce.MachineType{}, nil
 }
 
+func (m *migInfoProviderStub) RefreshMigInfo(_ gce.GceRef) error {
+	return nil
+}
+
 const listInstanceGroupManagerResponsePartTemplate = `
   {
    "kind": "compute#instanceGroupManager",
@@ -3278,6 +3282,73 @@ func TestGetMachineType(t *testing.T) {
 	mock.AssertExpectationsForObjects(t, server)
 }
 
+func TestGetMachineTypeErrorCache(t *testing.T) {
+	tests := []struct {
+		name        string
+		statusCode  int
+		response    string
+		shouldCache bool
+	}{
+		{
+			name:        "404 Not Found is cached",
+			statusCode:  http.StatusNotFound,
+			response:    "Not Found",
+			shouldCache: true,
+		},
+		{
+			name:        "400 Bad Request is cached",
+			statusCode:  http.StatusBadRequest,
+			response:    "Bad Request",
+			shouldCache: true,
+		},
+		{
+			name:        "429 Too Many Requests is cached",
+			statusCode:  http.StatusTooManyRequests,
+			response:    "Too Many Requests",
+			shouldCache: true,
+		},
+		{
+			name:        "503 Service Unavailable is not cached",
+			statusCode:  http.StatusServiceUnavailable,
+			response:    "Service Unavailable",
+			shouldCache: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewHttpServerMock(MockFieldStatusCode, MockFieldResponse)
+			defer server.Close()
+			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			addDefaultListMigsMocks(server, g.cache)
+
+			machineName := fmt.Sprintf("n1-%d", tc.statusCode)
+			path := fmt.Sprintf("/projects/project1/zones/us-central1-g/machineTypes/%s", machineName)
+
+			// First call: GCE API returns the configured status code.
+			server.On("handle", path).Return(tc.statusCode, tc.response).Once()
+			_, err1 := g.GetMachineType(machineName, "us-central1-g")
+			assert.Error(t, err1)
+			mock.AssertExpectationsForObjects(t, server)
+
+			if tc.shouldCache {
+				// Second call: Should hit the negative cache and return the EXACT SAME error immediately.
+				// Since the mock was configured to run "Once()" and we haven't added more expectations,
+				// any call to the GCE API will cause the mock server to fail the test.
+				_, err2 := g.GetMachineType(machineName, "us-central1-g")
+				assert.Error(t, err2)
+				assert.Equal(t, err1, err2)
+			} else {
+				// Second call: Should NOT hit the cache, so it must call GCE API again. We set up another expectation.
+				server.On("handle", path).Return(tc.statusCode, tc.response).Once()
+				_, err2 := g.GetMachineType(machineName, "us-central1-g")
+				assert.Error(t, err2)
+			}
+			mock.AssertExpectationsForObjects(t, server)
+		})
+	}
+}
+
 func TestApplyThreadsPerCore(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -3906,7 +3977,7 @@ func TestNodeLabelsFiltering(t *testing.T) {
 		},
 		{
 			desc:     "gvisor labels",
-			input:    map[string]string{"f": "1", "g": "2", sandbox.GVisorLabelKey: sandbox.GVisorLabelValue},
+			input:    map[string]string{"f": "1", "g": "2", sandbox.RuntimeLabelKey: sandbox.GVisorLabelValue},
 			expected: map[string]string{"f": "1", "g": "2"},
 		},
 		{
@@ -4063,7 +4134,7 @@ func TestNodeTaintsFiltering(t *testing.T) {
 					Effect: apiv1.TaintEffectNoExecute,
 				},
 				{
-					Key:    sandbox.GVisorTaintKey,
+					Key:    sandbox.RuntimeTaintKey,
 					Value:  sandbox.GVisorTaintValue,
 					Effect: apiv1.TaintEffectNoSchedule,
 				},
@@ -5785,7 +5856,8 @@ func TestGetDeploymentType(t *testing.T) {
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/unspecified-res",
 		},
 	}
-	reservationsPuller := gceclient.NewReservationsPuller(mGceClient, nil, experiments.NewMockManager(), projectId, true, zoneB)
+	reservationsPuller, err := gceclient.NewReservationsPuller(mGceClient, nil, experiments.NewMockManager(), projectId, true, zoneB)
+	assert.NoError(t, err)
 	reservationsPuller.SetReservations(reservations)
 
 	g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)

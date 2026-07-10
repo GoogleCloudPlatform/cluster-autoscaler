@@ -1404,9 +1404,9 @@ func TestFixerLoop(t *testing.T) {
 					op.balloonPodResizer = mockBalloonPodResizer
 
 					// When the fixer loop is started
-					stopCh := make(chan struct{})
-					defer close(stopCh)
-					go op.Run(stopCh)
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					go op.Run(ctx)
 
 					// Then
 					for i := 0; i < tc.wantBalloonResizesCalls; i++ {
@@ -1458,10 +1458,10 @@ func TestConcurrentWorkers(t *testing.T) {
 			for _, tc := range testCases {
 				t.Run(tc.desc, func(t *testing.T) {
 					synctest.Test(t, func(t *testing.T) {
-						stopCh := make(chan struct{})
+						ctx, cancel := context.WithCancel(context.Background())
 						workerBlockCh := make(chan struct{})
 
-						defer close(stopCh)
+						defer cancel()
 
 						startedOperations := sync.WaitGroup{}
 						completedOperationsCount := atomic.Int32{}
@@ -1511,7 +1511,7 @@ func TestConcurrentWorkers(t *testing.T) {
 							opQueue.Enqueue(operation{fix: &fixOperation{NodeName: fmt.Sprint(i), MachineFamily: family}}) //KS: test.BuildTestNode(fmt.Sprint(i), 0, 0)}})
 						}
 						// Start the operation tracker in the background.
-						go ot.Run(stopCh)
+						go ot.Run(ctx)
 
 						// Wait for all operations to be picked up by workers.
 						startedOperations.Wait()

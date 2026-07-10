@@ -374,8 +374,8 @@ func TestDeleteAllBalloonPods(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				stopCh := make(chan struct{})
-				defer close(stopCh)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
 				clientSet := fake.NewSimpleClientset()
 				informerFactory := informers.NewSharedInformerFactory(clientSet, 0)
 				podInformer := informerFactory.Core().V1().Pods()
@@ -394,7 +394,7 @@ func TestDeleteAllBalloonPods(t *testing.T) {
 					bPController.podDeletionTimeout = 0 * time.Millisecond
 					defaultOnDelete := bPController.onDelete
 					bPController.onDelete = func(obj interface{}) {
-						<-stopCh // Block until the test completes and stopCh is closed
+						<-ctx.Done() // Block until the test completes and ctx is canceled
 						defaultOnDelete(obj)
 					}
 				}
@@ -404,8 +404,8 @@ func TestDeleteAllBalloonPods(t *testing.T) {
 				}
 				err = bPController.Init()
 				assert.NoError(t, err)
-				informerFactory.Start(stopCh)
-				_ = informerFactory.WaitForCacheSync(stopCh)
+				informerFactory.Start(ctx.Done())
+				_ = informerFactory.WaitForCacheSync(ctx.Done())
 				synctest.Wait()
 				pods := bPController.List()
 				assert.Equal(t, len(tc.initPods), len(pods))

@@ -63,10 +63,14 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &cloudgooglecomv1.MachineTypeApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("MachineTypeWeights"):
 		return &cloudgooglecomv1.MachineTypeWeightsApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("PersistentDiskTypeConfig"):
+		return &cloudgooglecomv1.PersistentDiskTypeConfigApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("ResourceWeights"):
 		return &cloudgooglecomv1.ResourceWeightsApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("TpuConfig"):
 		return &cloudgooglecomv1.TpuConfigApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("UsagePolicy"):
+		return &cloudgooglecomv1.UsagePolicyApplyConfiguration{}
 
 	}
 	return nil

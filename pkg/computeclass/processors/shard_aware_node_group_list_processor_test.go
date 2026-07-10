@@ -202,6 +202,227 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					Build(),
 			},
 		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC but one pod tolerates it (Exists)",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpExists,
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC but one pod tolerates it (Equal)",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "ccc-object-1",
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Filter out CCC node group if whole pod shard is non-CCC and pod tolerates different CCC",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "ccc-object-2", // Different CCC
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC but one pod has wildcard toleration",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-wildcard-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Operator: apiv1.TolerationOpExists,
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
 	}
 
 	for _, tc := range testCases {

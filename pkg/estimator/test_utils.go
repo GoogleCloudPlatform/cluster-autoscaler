@@ -42,6 +42,7 @@ type staticStorageCalculator struct {
 
 func (sc *staticStorageCalculator) CalculatePhysicalEphemeralStorageGiB(mig *gke.GkeMig, allocatableBytes int64) int64 {
 	// physical ~= 60 * reserved , based on: {osDistribution: cos, architecture: amd64, nodeVersion: 1.28.2-gke.1157000}
+	// http://google3/cloud/kubernetes/distro/components/clusterautoscaler/1.28/clusterautoscaler_manifest.yaml
 	return int64(1.66 * float64(allocatableBytes/volume.GiB))
 }
 

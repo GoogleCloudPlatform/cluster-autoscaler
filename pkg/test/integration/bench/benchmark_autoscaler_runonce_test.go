@@ -26,20 +26,25 @@ const (
 	maxNGSize = 100
 )
 
+var runOnceScaleUpScenario = scenario{
+	given: func() *integration.TestConfig {
+		return defaultBenchmarkConfig().WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).WithOverrides(
+			integration.WithMaxNodesPerScaleUp(maxNGSize))
+	},
+	when: func(infra *integration.TestInfrastructure) {
+		for i := 0; i < 500; i++ {
+			podName := fmt.Sprintf("pod-%d", i)
+			pod := tu.BuildTestPod(podName, 600, 1000, tu.MarkUnschedulable())
+			infra.Fakes.K8s.AddPod(pod)
+		}
+	},
+	then: verifyTargetNumberOfNodes(10),
+}
+
 func BenchmarkRunOnceScaleUp(b *testing.B) {
-	s := scenario{
-		given: func() *integration.TestConfig {
-			return defaultBenchmarkConfig().WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).WithOverrides(
-				integration.WithMaxNodesPerScaleUp(maxNGSize))
-		},
-		when: func(infra *integration.TestInfrastructure) {
-			for i := 0; i < 500; i++ {
-				podName := fmt.Sprintf("pod-%d", i)
-				pod := tu.BuildTestPod(podName, 600, 1000, tu.MarkUnschedulable())
-				infra.Fakes.K8s.AddPod(pod)
-			}
-		},
-		then: verifyTargetNumberOfNodes(10),
-	}
-	s.run(b)
+	runOnceScaleUpScenario.run(b)
+}
+
+func TestRunOnceScaleUp(t *testing.T) {
+	runOnceScaleUpScenario.run(t)
 }

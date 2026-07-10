@@ -555,7 +555,7 @@ func TestNodeGroupParameters(t *testing.T) {
 				machineType: "n2-standard-4",
 				systemLabels: map[string]string{
 					apiv1.LabelZoneFailureDomain: "ss-moon-1",
-					sandbox.GVisorLabelKey:       sandbox.GVisorLabelValue,
+					sandbox.RuntimeLabelKey:      sandbox.GVisorLabelValue,
 					gkelabels.ProvisioningLabel:  gkelabels.StandardProvisioningValue,
 				},
 			},
@@ -860,7 +860,7 @@ func TestNodeGroupParameters(t *testing.T) {
 					gkelabels.ReservationSubBlocksLabel:      "res-subblock",
 					gkelabels.ReservationBlocksCountLabel:    "0",
 					gkelabels.ReservationSubBlocksCountLabel: "0",
-					sandbox.GVisorLabelKey:                   sandbox.GVisorLabelValue,
+					sandbox.RuntimeLabelKey:                  sandbox.GVisorLabelValue,
 					gkelabels.ProvisioningLabel:              gkelabels.SpotProvisioningValue,
 					computeClassLabel:                        computeClassName,
 					labelComputeClassRequired:                "true",
@@ -938,7 +938,7 @@ func TestNodeGroupParameters(t *testing.T) {
 					gkelabels.ReservationNameLabel:         "res-name",
 					gkelabels.ReservationProjectLabel:      "res-proj",
 					gkelabels.ReservationAffinityLabel:     "specific",
-					sandbox.GVisorLabelKey:                 sandbox.GVisorLabelValue,
+					sandbox.RuntimeLabelKey:                sandbox.GVisorLabelValue,
 					gkelabels.ProvisioningLabel:            gkelabels.SpotProvisioningValue,
 					gkelabels.ComputeClassLabel:            "cc",
 					gkelabels.MaxPodsPerNodeLabel:          "32",
@@ -2792,7 +2792,6 @@ func TestTpuRequestGenerator_UpdateNodePoolSpec(t *testing.T) {
 			machineType: "ct4l-hightpu-4t",
 			systemLabels: map[string]string{
 				gkelabels.TPULabel:              gkelabels.TpuV4LiteDeviceValue,
-				gkelabels.TPUTopologyLabel:      "2x2",
 				gkelabels.AcceleratorCountLabel: "4",
 			},
 			extraResources: map[string]resource.Quantity{
@@ -2800,11 +2799,9 @@ func TestTpuRequestGenerator_UpdateNodePoolSpec(t *testing.T) {
 			},
 			expectedSpecLabels: map[string]string{
 				gkelabels.TPULabel:              gkelabels.TpuV4LiteDeviceValue,
-				gkelabels.TPUTopologyLabel:      "2x2",
 				gkelabels.AcceleratorCountLabel: "4",
 			},
 			expectedTpuType:      gkelabels.TpuV4LiteDeviceValue,
-			expectedTpuTopology:  "2x2",
 			expectedTpuMultihost: false,
 		},
 		"TPU Podslice; with topology": {
@@ -3218,6 +3215,7 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 		autopilotEnabled         bool
 		isEkInAutopilotEnabled   bool
 		confidentialNodesEnabled bool
+		confidentialInstanceType string
 		machineType              string
 		computeClassName         string
 		gpuType                  string
@@ -3292,6 +3290,7 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 		"non-default family, autopilot enabled, Confidential Nodes": {
 			autopilotEnabled:         true,
 			confidentialNodesEnabled: true,
+			confidentialInstanceType: gkelabels.SEVConfidentialNodeTypeValue,
 			machineType:              "n2d-standard-2",
 			expectedCpuScaling:       "2",
 			expectedMemoryScaling:    "8",
@@ -3414,6 +3413,7 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			}
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithConfidentialNodesEnabled(tc.confidentialNodesEnabled).
+				WithConfidentialInstanceType(tc.confidentialInstanceType).
 				WithAutopilotEnabled(tc.autopilotEnabled).
 				WithResizableVmInAutopilotEnabled(machinetypes.EK.Name(), tc.isEkInAutopilotEnabled).
 				WithAutoprovisioningDefaultFamily(machinetypes.E2).
@@ -3914,12 +3914,8 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				{Zone: "zone-1"},
 			},
 			requirements: nodeGroupRequirements{
-				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2}, machinetypes.AnyPlatform, "", ""),
-				kubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					EvictionSoft: &gke_api_beta.EvictionSignals{
-						MemoryAvailable: "2Gi",
-					},
-				},
+				machineSpec:      machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2}, machinetypes.AnyPlatform, "", ""),
+				computeClassRule: rules.NewRule(rules.WithEvictionSoftMemoryAvailableRule("2Gi")),
 			},
 			machineTypesPerZone: map[string][]string{
 				"zone-1": {"e2-medium", "e2-standard-2", "e2-standard-4"},
@@ -3969,12 +3965,8 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				{Zone: "zone-1"},
 			},
 			requirements: nodeGroupRequirements{
-				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.A2, machinetypes.M1}, machinetypes.AnyPlatform, "", ""),
-				kubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					MemoryManager: &gke_api_beta.MemoryManager{
-						Policy: "Static",
-					},
-				},
+				machineSpec:      machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.A2, machinetypes.N1}, machinetypes.AnyPlatform, "", ""),
+				computeClassRule: rules.NewRule(rules.WithMemoryManagerPolicyRule("Static")),
 			},
 			machineTypesPerZone: allMachineTypesPerZone,
 			wantOptions: []NodeGroupOptions{
@@ -3994,12 +3986,8 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				{Zone: "zone-1"},
 			},
 			requirements: nodeGroupRequirements{
-				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.A2, machinetypes.M1}, machinetypes.AnyPlatform, "", ""),
-				kubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					TopologyManager: &gke_api_beta.TopologyManager{
-						Policy: "best-effort",
-					},
-				},
+				machineSpec:      machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.A2, machinetypes.E2}, machinetypes.AnyPlatform, "", ""),
+				computeClassRule: rules.NewRule(rules.WithTopologyManagerPolicyRule("best-effort")),
 			},
 			machineTypesPerZone: allMachineTypesPerZone,
 			wantOptions: []NodeGroupOptions{
@@ -4419,6 +4407,7 @@ func TestComputeClassGenerator_UpdateParameters(t *testing.T) {
 				ccLabel:                                ccName,
 				labelComputeClassRequired:              "true",
 				gkelabels.ComputeClassPriorityIdxLabel: "0",
+				gkelabels.GeneralPurposePodFamilyLabel: "true",
 			},
 		},
 		"GKE Standard, empty Autopilot-managed CRD without rule": {
@@ -4485,6 +4474,7 @@ func TestComputeClassGenerator_UpdateParameters(t *testing.T) {
 				labelComputeClassRequired:              "true",
 				gkelabels.ManagedNodeLabel:             "true",
 				gkelabels.ComputeClassPriorityIdxLabel: "0",
+				gkelabels.GeneralPurposePodFamilyLabel: "true",
 			},
 		},
 		"Service account is specified": {
@@ -4724,7 +4714,7 @@ func TestComputeClassGenerator_UpdateParameters(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("test-machine-type").WithAutopilotEnabled(tc.autopilotEnabled).Build()
 			lister := computeclass_lister.NewMockCrdLister(nil)
-			generator := NewComputeClassGenerator(provider, lister, !tc.disableComputeClassMinCapacity)
+			generator := NewComputeClassGenerator(provider, lister, !tc.disableComputeClassMinCapacity, nil)
 			params := &nodeGroupParameters{
 				systemLabels: make(map[string]string),
 				taints:       tc.existingTaints,
@@ -4983,7 +4973,7 @@ func TestComputeClassGenerator_UpdateNodePoolSpec(t *testing.T) {
 			if tc.defaultCCExists {
 				lister.SetDefaultCrdName(defaultCCName)
 			}
-			pgg := NewComputeClassGenerator(provider, lister, true)
+			pgg := NewComputeClassGenerator(provider, lister, true, nil)
 			spec := &gkeclient.NodePoolSpec{
 				Labels: map[string]string{},
 			}
@@ -5125,29 +5115,111 @@ func TestFlexStartGenerator_UpdateNodePoolSpec(t *testing.T) {
 	}
 }
 
+func TestSandboxTypeGenerator_UpdateRequirements(t *testing.T) {
+	for name, tc := range map[string]struct {
+		labelRequirements   podrequirements.LabelRequirements
+		expectedSandboxType sandbox.Type
+	}{
+		"pod requests gvisor": {
+			labelRequirements: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
+				sandbox.RuntimeLabelKey: podrequirements.NewValues(sandbox.GVisorLabelValue),
+			}),
+			expectedSandboxType: sandbox.GVisor,
+		},
+		"pod requests microvm": {
+			labelRequirements: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
+				sandbox.RuntimeLabelKey: podrequirements.NewValues(sandbox.MicroVMLabelValue),
+			}),
+			expectedSandboxType: sandbox.MicroVM,
+		},
+		"pod requests nothing": {
+			labelRequirements:   podrequirements.NewLabelRequirements(map[string]podrequirements.Values{}),
+			expectedSandboxType: sandbox.None,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stg := NewSandboxTypeGenerator()
+			ngReq := &nodeGroupRequirements{}
+			podReq := &podrequirements.Requirements{
+				LabelReq: tc.labelRequirements,
+			}
+			err := stg.UpdateRequirements(ngReq, podReq, machinetypes.GpuRequest{}, TpuRequest{})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedSandboxType, ngReq.sandboxType)
+		})
+	}
+}
+
+func TestSandboxTypeGenerator_UpdateParameters(t *testing.T) {
+	for name, tc := range map[string]struct {
+		sandboxType          sandbox.Type
+		expectedSystemLabels map[string]string
+	}{
+		"gvisor": {
+			sandboxType: sandbox.GVisor,
+			expectedSystemLabels: map[string]string{
+				sandbox.RuntimeLabelKey: sandbox.GVisorLabelValue,
+			},
+		},
+		"microvm": {
+			sandboxType: sandbox.MicroVM,
+			expectedSystemLabels: map[string]string{
+				sandbox.RuntimeLabelKey: sandbox.MicroVMLabelValue,
+			},
+		},
+		"none": {
+			sandboxType:          sandbox.None,
+			expectedSystemLabels: map[string]string{},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stg := NewSandboxTypeGenerator()
+			params := &nodeGroupParameters{
+				systemLabels: map[string]string{},
+			}
+			ngReq := nodeGroupRequirements{
+				sandboxType: tc.sandboxType,
+			}
+			err := stg.UpdateParameters(params, ngReq, NodeGroupOptions{})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedSystemLabels, params.systemLabels)
+		})
+	}
+}
+
 func TestSandboxTypeGenerator_UpdateNodePoolSpec(t *testing.T) {
 	for name, tc := range map[string]struct {
 		systemLabels         map[string]string
-		expectedSanboxType   sandbox.Type
+		expectedSandboxType  sandbox.Type
 		expectLabelAndTaints bool
+		expectedValue        string
 	}{
 		"valid gVisor label": {
 			systemLabels: map[string]string{
-				sandbox.GVisorLabelKey: sandbox.GVisorLabelValue,
+				sandbox.RuntimeLabelKey: sandbox.GVisorLabelValue,
 			},
-			expectedSanboxType:   sandbox.GVisor,
+			expectedSandboxType:  sandbox.GVisor,
 			expectLabelAndTaints: true,
+			expectedValue:        sandbox.GVisorLabelValue,
 		},
-		"invalid gVisor label": {
+		"valid microVM label": {
 			systemLabels: map[string]string{
-				sandbox.GVisorLabelKey: "not-a-proper-label",
+				sandbox.RuntimeLabelKey: sandbox.MicroVMLabelValue,
 			},
-			expectedSanboxType:   sandbox.None,
+			expectedSandboxType:  sandbox.MicroVM,
+			expectLabelAndTaints: true,
+			expectedValue:        sandbox.MicroVMLabelValue,
+		},
+		"invalid sandbox label": {
+			systemLabels: map[string]string{
+				sandbox.RuntimeLabelKey: "not-a-proper-label",
+			},
+			expectedSandboxType:  sandbox.None,
 			expectLabelAndTaints: false,
 		},
-		"no gVisor label": {
+		"no sandbox label": {
 			systemLabels:         map[string]string{},
-			expectedSanboxType:   sandbox.None,
+			expectedSandboxType:  sandbox.None,
 			expectLabelAndTaints: false,
 		},
 	} {
@@ -5159,13 +5231,14 @@ func TestSandboxTypeGenerator_UpdateNodePoolSpec(t *testing.T) {
 			err := stg.UpdateNodePoolSpec(spec, tc.systemLabels, nil)
 			assert.NoError(t, err)
 			if tc.expectLabelAndTaints {
-				assert.Contains(t, spec.Labels, sandbox.GVisorLabelKey)
-				assert.Contains(t, spec.Taints, apiv1.Taint{Key: sandbox.GVisorTaintKey, Value: sandbox.GVisorTaintValue, Effect: apiv1.TaintEffectNoSchedule})
+				assert.Contains(t, spec.Labels, sandbox.RuntimeLabelKey)
+				assert.Equal(t, tc.expectedValue, spec.Labels[sandbox.RuntimeLabelKey])
+				assert.Contains(t, spec.Taints, apiv1.Taint{Key: sandbox.RuntimeTaintKey, Value: tc.expectedValue, Effect: apiv1.TaintEffectNoSchedule})
 			} else {
-				assert.NotContains(t, spec.Labels, sandbox.GVisorLabelKey)
-				assert.NotContains(t, spec.Taints, apiv1.Taint{Key: sandbox.GVisorTaintKey, Value: sandbox.GVisorTaintValue, Effect: apiv1.TaintEffectNoSchedule})
+				assert.NotContains(t, spec.Labels, sandbox.RuntimeLabelKey)
+				assert.NotContains(t, spec.Taints, apiv1.Taint{Key: sandbox.RuntimeTaintKey, Value: tc.expectedValue, Effect: apiv1.TaintEffectNoSchedule})
 			}
-			assert.Equal(t, spec.SandboxType, tc.expectedSanboxType)
+			assert.Equal(t, tc.expectedSandboxType, spec.SandboxType)
 		})
 	}
 }
@@ -9747,7 +9820,6 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 		rules.WithCpuManagerPolicyRule(cpuManagerPolicy),
 		rules.WithPodPidsLimitRule(podPidsLimit),
 	)
-
 	defaultCC := computeclass.NewTestCrd(
 		computeclass.WithRules([]rules.Rule{n2Rule}),
 		computeclass.WithLabel(ccLabel),
@@ -10775,6 +10847,7 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 							CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 							CpuManagerPolicy:  cpuManagerPolicy,
 							PodPidsLimit:      podPidsLimit,
+							ForceSendFields:   []string{"CpuCfsQuota"},
 						}),
 					),
 				},
@@ -11117,7 +11190,7 @@ func TestBootDiskEncryptionKeyIntegration_UpdateNodePoolSpec(t *testing.T) {
 
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("e2-standard-2").Build()
 	bootDiskGenerator := NewBootDiskConfigGenerator(provider)
-	computeClassGenerator := NewComputeClassGenerator(provider, lister, true)
+	computeClassGenerator := NewComputeClassGenerator(provider, lister, true, nil)
 
 	selectorEncryptionKey := "nodeselector-key"
 	selectorValue := "annotationKey"
@@ -12687,6 +12760,127 @@ func TestNodeVersionGenerator_UpdateParameters(t *testing.T) {
 			err := generator.UpdateParameters(params, tc.req, NodeGroupOptions{})
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantSystemLabels, params.systemLabels)
+		})
+	}
+}
+
+func TestIsStatefulWorkload(t *testing.T) {
+	for tName, tc := range map[string]struct {
+		req  nodeGroupRequirements
+		want bool
+	}{
+		"stateless workload: no pods": {
+			req:  nodeGroupRequirements{},
+			want: false,
+		},
+		"stateless workload: simple pod without volumes": {
+			req: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{},
+					},
+				},
+			},
+			want: false,
+		},
+		"stateless workload: pod with non-stateful volume": {
+			req: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{
+							Volumes: []apiv1.Volume{
+								{
+									Name: "empty-dir",
+									VolumeSource: apiv1.VolumeSource{
+										EmptyDir: &apiv1.EmptyDirVolumeSource{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		"stateless workload: pod with configmap volume": {
+			req: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{
+							Volumes: []apiv1.Volume{
+								{
+									Name: "config-map",
+									VolumeSource: apiv1.VolumeSource{
+										ConfigMap: &apiv1.ConfigMapVolumeSource{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: false,
+		},
+		"stateful workload: pod with standard PVC": {
+			req: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{
+							Volumes: []apiv1.Volume{
+								{
+									Name: "pvc-vol",
+									VolumeSource: apiv1.VolumeSource{
+										PersistentVolumeClaim: &apiv1.PersistentVolumeClaimVolumeSource{
+											ClaimName: "my-claim",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"stateful workload: pod with generic ephemeral volume": {
+			req: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{
+							Volumes: []apiv1.Volume{
+								{
+									Name: "ephemeral-vol",
+									VolumeSource: apiv1.VolumeSource{
+										Ephemeral: &apiv1.EphemeralVolumeSource{},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			want: true,
+		},
+		"stateless workload: other settings (localssd, secondary disks, boot disk etc) are NOT stateful": {
+			req: nodeGroupRequirements{
+				explicitlyRequiresLocalSSD:    true,
+				totalLSSDCount:                4,
+				ephemeralStorageLocalSSDCount: 2,
+				secondaryBootDisks:            []*gke_api_beta.SecondaryBootDisk{{DiskImage: "my-image"}},
+				bootDiskType:                  "pd-ssd",
+				bootDiskSize:                  200,
+				pods: []*apiv1.Pod{
+					{
+						Spec: apiv1.PodSpec{},
+					},
+				},
+			},
+			want: false,
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			got := isStatefulWorkload(&tc.req)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

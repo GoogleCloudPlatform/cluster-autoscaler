@@ -26,6 +26,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/eligibility"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/pdb"
 	"k8s.io/autoscaler/cluster-autoscaler/processors/nodes"
+	"k8s.io/autoscaler/cluster-autoscaler/resourcequotas"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability/rules"
@@ -43,19 +44,21 @@ import (
 // It is created once and used for the entire lifetime of the defrag processor.
 // It should not contain any state that is specific to a single Process() call.
 type defragNodeFilterFactory struct {
-	scaleDownNodeProcessor nodes.ScaleDownNodeProcessor
-	deleteOptions          options.NodeDeleteOptions
-	drainabilityRules      rules.Rules
-	clock                  clock.PassiveClock
+	scaleDownNodeProcessor  nodes.ScaleDownNodeProcessor
+	deleteOptions           options.NodeDeleteOptions
+	drainabilityRules       rules.Rules
+	clock                   clock.PassiveClock
+	minQuotasTrackerFactory *resourcequotas.TrackerFactory
 }
 
 // newDefragNodeFilterFactory returns a new instance of defragNodeFilterFactory
-func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules) *defragNodeFilterFactory {
+func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, minQuotasTrackerFactory *resourcequotas.TrackerFactory) *defragNodeFilterFactory {
 	return &defragNodeFilterFactory{
-		scaleDownNodeProcessor: scaleDownNodeProcessor,
-		deleteOptions:          deleteOptions,
-		drainabilityRules:      drainabilityRules,
-		clock:                  clock.RealClock{},
+		scaleDownNodeProcessor:  scaleDownNodeProcessor,
+		deleteOptions:           deleteOptions,
+		drainabilityRules:       drainabilityRules,
+		clock:                   clock.RealClock{},
+		minQuotasTrackerFactory: minQuotasTrackerFactory,
 	}
 }
 
@@ -65,6 +68,18 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *context.AutoscalingCo
 	if err != nil {
 		return nil, err
 	}
+	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list node infos for tracker: %w", err)
+	}
+	var allNodes []*apiv1.Node
+	for _, nodeInfo := range nodeInfos {
+		allNodes = append(allNodes, nodeInfo.Node())
+	}
+	tracker, err := f.minQuotasTrackerFactory.NewMinQuotasTracker(ctx, allNodes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create min quotas tracker: %w", err)
+	}
 	return &defragNodeFilter{
 		scaleDownNodeProcessor:   f.scaleDownNodeProcessor,
 		deleteOptions:            f.deleteOptions,
@@ -72,6 +87,7 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *context.AutoscalingCo
 		clock:                    f.clock,
 		scaleDownCandidatesCache: cache,
 		nodeGroupSize:            utils.GetNodeGroupSizeMap(ctx.CloudProvider),
+		minQuotasTracker:         tracker,
 	}, nil
 }
 
@@ -107,6 +123,7 @@ type defragNodeFilter struct {
 	nodeGroupSize map[string]int
 
 	scaleDownCandidatesCache sets.Set[string]
+	minQuotasTracker         *resourcequotas.Tracker
 }
 
 // newValidCandidateNodes returns nodes that could be considered for defrag candidates.
@@ -209,6 +226,46 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *co
 		return true
 	}
 	return false
+}
+
+// filterNodesViolatingMinQuotas filters scale-down candidates that would violate
+// resource quotas (including node group min size and ComputeClass target node count).
+// It tracks the cumulative effect of removals using the shared minQuotasTracker.
+func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *context.AutoscalingContext, nodes []string) ([]string, error) {
+	var result []string
+	for _, nodeName := range nodes {
+		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+		if err != nil {
+			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
+				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
+			}
+			continue
+		}
+		node := nodeInfo.Node()
+
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+		if err != nil {
+			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
+			continue
+		}
+		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
+			klog.V(5).Infof("Node %s should not be processed by cluster autoscaler (no node group config)", node.Name)
+			continue
+		}
+
+		consumeResult, err := f.minQuotasTracker.ConsumeQuota(ctx, nodeGroup, node, 1)
+		if err != nil {
+			klog.Errorf("Defrag: failed to consume quota for node %s: %v", node.Name, err)
+			continue
+		}
+		if consumeResult.Exceeded() {
+			klog.V(1).Infof("Skipping %s - quota exceeded", node.Name)
+			continue
+		}
+
+		result = append(result, node.Name)
+	}
+	return result, nil
 }
 
 // filterNodesViolatingMinSize filters scale-down candidates that would violate

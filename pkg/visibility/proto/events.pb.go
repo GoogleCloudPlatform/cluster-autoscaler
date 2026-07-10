@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // This file shouldn't be modified directly. Its source of truth is located
-// in the GKE UI codebase.
+// in the GKE UI codebase:
+// cs//depot/google3/java/com/google/cloud/boq/clientapi/resource/container/proto/clusterautoscalervisibility.proto
 // If you want to change anything, first submit the changes there and get the
 // UI team approval, then sync this file.
 
@@ -26,11 +27,10 @@
 package proto
 
 import (
-	reflect "reflect"
-	sync "sync"
-
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	reflect "reflect"
+	sync "sync"
 )
 
 const (
@@ -41,7 +41,8 @@ const (
 )
 
 // A message to differentiate between the types of events. This will appear in
-// Stackdriver Logging log entries in the json_payload field.
+// Stackdriver Logging log entries in the json_payload field, defined here:
+// http://cs//depot/google3/google/logging/v2/log_entry.proto.
 type AutoscalerEvent struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

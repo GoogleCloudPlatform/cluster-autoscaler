@@ -31,22 +31,21 @@ func RegisterMachineFamily(family MachineFamily) MachineFamily {
 		machineFamiliesByName = map[string]MachineFamily{}
 	}
 	// This is an ugly hack to allow MachineType's methods to access default values used by the family.
-	family = backfillMachineFamilyInMachineTypes(family)
+	backfillMachineFamilyInMachineTypes(&family)
 	family.precomputeAllMachineTypes()
 	machineFamiliesByName[family.name] = family
 	return family
 }
 
-func backfillMachineFamilyInMachineTypes(family MachineFamily) MachineFamily {
+func backfillMachineFamilyInMachineTypes(family *MachineFamily) {
 	for name, mt := range family.autoprovisionedMachineTypes {
-		mt.family = &family
+		mt.family = family
 		family.autoprovisionedMachineTypes[name] = mt
 	}
 	for name, mt := range family.otherMachineTypes {
-		mt.family = &family
+		mt.family = family
 		family.otherMachineTypes[name] = mt
 	}
-	return family
 }
 
 // RegisterGpu registers a Gpu object

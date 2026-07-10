@@ -32,7 +32,6 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	testutils "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	gkepriceexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
 	testoptions "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/testutils"
@@ -45,7 +44,7 @@ func buildGKEStrategy(t *testing.T, cluster *impostor.Cluster) (expander.Strateg
 func buildGKEStrategyWithUpcomingChecker(t *testing.T, cluster *impostor.Cluster, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) (expander.Strategy, gkepriceexpander.ClusterAnalyzer) {
 	clusterAnalyzer := gkepriceexpander.NewGroupingClusterAnalyzer(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), nil)
 	groupPenaltyChecker := gkepriceexpander.NewStaticRelaxedGroupPenaltyChecker(cluster.Provider().IsAutopilotEnabled())
-	expanderStrategy, err := gkepriceexpander.NewStrategy(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), gceclient.NewReservationsPuller(nil, nil, nil, "", false, ""), groupPenaltyChecker, true, localssdsize.NewSimpleLocalSSDProvider(), upcomingChecker)
+	expanderStrategy, err := gkepriceexpander.NewStrategy(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), nil, groupPenaltyChecker, true, localssdsize.NewSimpleLocalSSDProvider(), upcomingChecker)
 	assert.NoError(t, err)
 
 	return expanderStrategy, clusterAnalyzer

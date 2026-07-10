@@ -205,7 +205,7 @@ func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider Pr
 	if t, ok := shard.NodeGroupDescriptor.SystemLabels[labels.TPULabel]; ok {
 		tpuLabel = t
 	}
-	expansionMachineTypeName := getExpansionMachineTypeName(machineSelector, podRequirements, gpuLabel, tpuLabel)
+	expansionMachineTypeName := getExpansionMachineTypeName(machineSelector, podRequirements, gpuLabel, tpuLabel, pod)
 
 	locations := p.getExtensionNodeLocations(cloudProvider)
 
@@ -240,13 +240,14 @@ func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider Pr
 	return nodeInfos
 }
 
-func getExpansionMachineTypeName(selector machineselection.Selector, requirements *podrequirements.Requirements, gpuLabel, tpuLabel string) string {
+func getExpansionMachineTypeName(selector machineselection.Selector, requirements *podrequirements.Requirements, gpuLabel, tpuLabel string, pod *apiv1.Pod) string {
 	// TODO(b/517098419): We don't include the npcRule, bootDiskType, wantsSpot and reservationMachineType
 	// in machine spec selection as it does not work well conceptually.
 	// The long term solution is to remove the sharding entirely and replace it with the pod requirements.
 	wantsSpot := false
 	bootDiskTypeLabel := ""
-	machineSpec, _, err := selector.Select(requirements.LabelReq, gpuLabel, tpuLabel, bootDiskTypeLabel, nil, wantsSpot, "", false, false)
+	isStateful := podrequirements.IsPodStateful(pod)
+	machineSpec, _, err := selector.Select(requirements.LabelReq, gpuLabel, tpuLabel, bootDiskTypeLabel, nil, wantsSpot, "", false, false, !isStateful)
 	if err != nil {
 		klog.Warningf("Could not get machine family for %v: %v", requirements.LabelReq, err)
 		return selector.CloudProvider.GetAutoprovisioningDefaultFamily().LargestAutoprovisionedMachineType(machinetypes.NoConstraints).Name

@@ -15,6 +15,7 @@
 package multitenancy
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -278,7 +279,7 @@ func safeStringLookup(m map[string]interface{}, key string) (string, error) {
 }
 
 // Run starts the tenant CR informer.
-func (t *providerConfigCRInformer) Run(stopCh <-chan struct{}) {
+func (t *providerConfigCRInformer) Run(ctx context.Context) {
 	klog.Infof("Starting ProviderConfig CR informer.")
-	go t.informer.Run(stopCh)
+	go t.informer.Run(ctx.Done())
 }
