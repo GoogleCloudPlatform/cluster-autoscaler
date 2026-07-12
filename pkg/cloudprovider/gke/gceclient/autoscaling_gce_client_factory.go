@@ -38,12 +38,23 @@ type GceConfig struct {
 	ExperimentsManager     experiments.Manager
 	Endpoint               string
 	ProviderConfigObserver multitenancy.ProviderConfigObserver
+	Region                 string
 }
 
 // CreateClient initializes http.Client and the GCE client.
 func CreateClient(cfg GceConfig) (AutoscalingInternalGceClient, error) {
+	httpClient := cfg.HttpClient
+	if cfg.Region != "" && httpClient != nil {
+		httpClientWithQuotaOverride := *httpClient
+		httpClientWithQuotaOverride.Transport = &globalGceApiHeaderRoundTripper{
+			delegate: httpClientWithQuotaOverride.Transport,
+			region:   cfg.Region,
+		}
+		httpClient = &httpClientWithQuotaOverride
+	}
+
 	if cfg.MultitenancyEnabled {
-		multitenantGCEClient, err := NewMultitenancyGCEClient(cfg.HttpClient, cfg.Cache, cfg.ProjectId, cfg.ProjectNumber, cfg.ClusterName, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
+		multitenantGCEClient, err := NewMultitenancyGCEClient(httpClient, cfg.Cache, cfg.ProjectId, cfg.ProjectNumber, cfg.ClusterName, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
 		if err != nil {
 			return nil, err
 		}
@@ -57,9 +68,9 @@ func CreateClient(cfg GceConfig) (AutoscalingInternalGceClient, error) {
 	var client *autoscalingInternalGceClient
 	var err error
 	if cfg.Endpoint != "" {
-		client, err = NewCustomAutoscalingInternalGceClient(cfg.HttpClient, cfg.Cache, cfg.ProjectId, cfg.ClusterName, cfg.Endpoint, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
+		client, err = NewCustomAutoscalingInternalGceClient(httpClient, cfg.Cache, cfg.ProjectId, cfg.ClusterName, cfg.Endpoint, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
 	} else {
-		client, err = NewAutoscalingInternalGceClient(cfg.HttpClient, cfg.Cache, cfg.ProjectId, cfg.ClusterName, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
+		client, err = NewAutoscalingInternalGceClient(httpClient, cfg.Cache, cfg.ProjectId, cfg.ClusterName, cfg.UserAgent, defaultOperationWaitTimeout, defaultOperationPollInterval, cfg.ExperimentsManager)
 	}
 
 	if err != nil {

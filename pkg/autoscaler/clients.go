@@ -46,6 +46,7 @@ import (
 	gkeapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
+	gkeutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	gcecfg "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/gce"
@@ -258,6 +259,10 @@ func MustCreateGceClient(
 	experimentsManager experiments.Manager,
 	observer multitenancy.ProviderConfigObserver,
 ) gceclient.AutoscalingInternalGceClient {
+	region, err := gkeutil.GetRegionFromLocation(opts.Location)
+	if err != nil {
+		klog.Warningf("Failed to get region from location %q: %v", opts.Location, err)
+	}
 	gceConfig := gceclient.GceConfig{
 		ProjectId:              projectID,
 		ProjectNumber:          int64(opts.ProjectNumber),
@@ -269,6 +274,7 @@ func MustCreateGceClient(
 		ExperimentsManager:     experimentsManager,
 		Endpoint:               opts.GceEndpoint,
 		ProviderConfigObserver: observer,
+		Region:                 region,
 	}
 	client, err := gceclient.CreateClient(gceConfig)
 	if err != nil {
