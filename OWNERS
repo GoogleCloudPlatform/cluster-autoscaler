@@ -1,0 +1,26 @@
+adamoldak@google.com
+aleksandram@google.com
+algacek@google.com
+bskiba@google.com
+bwroblewski@google.com
+danielmk@google.com
+gmaranzino@google.com
+feidias@google.com
+jbetkier@google.com
+jbinkowski@google.com
+jtuznik@google.com
+kawych@google.com
+ksiedlecki@google.com
+kushu@google.com
+martynagrotek@google.com
+mendelski@google.com
+mfuhol@google.com
+oparka@google.com
+pbetkier@google.com
+pkepka@google.com
+tetianakh@google.com
+walidghallab@google.com
+wiktork@google.com
+witkiewicz@google.com
+
+per-file go.mod,go.mod-extra.internal,go.sum,main.go,Makefile,oss.sync,push_image.sh,update_toc.py,version.go,vendor/**=*

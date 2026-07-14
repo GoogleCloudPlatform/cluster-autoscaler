@@ -1,0 +1,670 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    components.gke.io/layer: addon
+    controller-gen.kubebuilder.io/version: v0.19.0
+  labels:
+    addonmanager.kubernetes.io/mode: Reconcile
+  name: machineconfigs.cloud.google.com
+spec:
+  group: cloud.google.com
+  names:
+    kind: MachineConfig
+    listKind: MachineConfigList
+    plural: machineconfigs
+    shortNames:
+    - mc
+    - mcs
+    singular: machineconfig
+  scope: Cluster
+  versions:
+  - name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          MachineConfig defines a machine configuration available in the cluster.
+          It is consumed by Cluster Autoscaler and GKE Common Webhooks and impacts the decisions on
+          workload admission and cluster autoscaling.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              Specification of the MachineConfig object.
+              More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#spec-and-status.
+            properties:
+              machineFamily:
+                description: Machine family specified by this machine configuration.
+                properties:
+                  accelerators:
+                    description: Accelerators available for this machine family.
+                    items:
+                      description: Accelerator defines an accelerator type.
+                      properties:
+                        configurations:
+                          description: Accelerator configurations available for this
+                            accelerator type.
+                          items:
+                            description: AcceleratorConfig defines an available accelerator
+                              configuration.
+                            properties:
+                              count:
+                                description: Count specifies the number of accelerators
+                                  in this configuration.
+                                format: int64
+                                type: integer
+                              maxCPUs:
+                                description: Max CPUs for a machine with this configuration.
+                                format: int64
+                                type: integer
+                              maxMemory:
+                                description: Max memory for a machine with this configuration.
+                                format: int64
+                                type: integer
+                            required:
+                            - count
+                            - maxCPUs
+                            - maxMemory
+                            type: object
+                          type: array
+                        multiInstanceSharingSupported:
+                          description: MultiInstanceSharingSupported indicates if
+                            multi instance sharing is supported by the accelerator.
+                          type: boolean
+                        name:
+                          description: Name of the accelerator.
+                          type: string
+                        partitionSizes:
+                          additionalProperties:
+                            format: int64
+                            type: integer
+                          description: |-
+                            PartitionSizes contains the partition sizes supported for the accelerator.
+                            Some gpus offer partial amount of gpus to be used. This encapsulates the number of partitions
+                            based on the partition spec.
+                          type: object
+                        preemptibleWeight:
+                          description: PreemptibleWeight contains the weight for the
+                            preemptible accelerator.
+                          type: string
+                        providerType:
+                          description: ProviderType is the provider type of the accelerator.
+                          enum:
+                          - nvidia
+                          - tpu
+                          - unspecified
+                          type: string
+                        timeSharingSupported:
+                          description: TimeSharingSupported indicates if time sharing
+                            is supported by the accelerator.
+                          type: boolean
+                        topologies:
+                          description: Topologies contains the topologies supported
+                            by the accelerator.
+                          items:
+                            type: string
+                          type: array
+                        weight:
+                          description: Weight contains the weight for the accelerator.
+                          type: string
+                      required:
+                      - configurations
+                      - name
+                      - weight
+                      type: object
+                    type: array
+                  computeClasses:
+                    description: ComputeClasses supporting this machine family.
+                    items:
+                      type: string
+                    type: array
+                  defaultProperties:
+                    description: Default properties of this machine family.
+                    properties:
+                      bootDiskConfig:
+                        description: BootDiskConfig specifies the boot disk configuration.
+                        properties:
+                          defaultType:
+                            description: DefaultType specifies the default boot disk
+                              type for this machine configuration.
+                            type: string
+                          types:
+                            description: Types specifies the boot disk types available
+                              for this machine configuration.
+                            items:
+                              type: string
+                            type: array
+                        type: object
+                      compactPlacementConfig:
+                        description: Compact placement options available for this
+                          machine configuration.
+                        properties:
+                          maxCount:
+                            description: MaxCount indicates the maximum number of
+                              machines that can be compactly placed.
+                            format: int64
+                            type: integer
+                          supported:
+                            description: Supported indicates whether the compact placement
+                              config is supported.
+                            type: boolean
+                        required:
+                        - supported
+                        type: object
+                      confidentialNodeConfig:
+                        description: ConfidentialNodeConfig specifies the confidential
+                          node configuration supported by the machine configuration.
+                        properties:
+                          supported:
+                            description: Supported specifies if confidential nodes
+                              are supported.
+                            type: boolean
+                          types:
+                            description: Types specifies the confidential instance
+                              types supported.
+                            items:
+                              description: ConfidentialNodeType defines the confidential
+                                instance type.
+                              properties:
+                                type:
+                                  description: Type specifies the confidential instance
+                                    type (e.g. SEV, SEV_SNP, TDX).
+                                  type: string
+                              type: object
+                            type: array
+                        type: object
+                      cpuPlatforms:
+                        description: CPU platforms available for this machine configuration.
+                        items:
+                          description: CPUPlatform defines a CPU platform.
+                          properties:
+                            aliases:
+                              description: Aliases contains possible alternative names
+                                for this CPU platform.
+                              items:
+                                type: string
+                              type: array
+                            name:
+                              description: Name of the CPU platform.
+                              type: string
+                            vendor:
+                              description: Vendor contains the CPU vendor this platform
+                                belongs to.
+                              type: string
+                            vendorOrder:
+                              description: VendorOrder contains the relative order
+                                of the CPU platform for that vendor, from oldest to
+                                newest.
+                              format: int64
+                              type: integer
+                          required:
+                          - name
+                          type: object
+                        type: array
+                      napDisabled:
+                        description: NAPDisabled specifies if the machine configuration
+                          is excluded from autoprovisioning support.
+                        type: boolean
+                      numaAlignmentUnsupported:
+                        description: Whether the machine family is excluded from NUMA
+                          alignment support.
+                        type: boolean
+                      persistentDiskTypeConfigs:
+                        description: PersistentDiskTypeConfigs specifies the persistent
+                          disk types configurations supported by the machine family.
+                        items:
+                          description: PersistentDiskTypeConfig represents the configuration
+                            for disk types.
+                          properties:
+                            confidentialMode:
+                              description: The confidential mode of the disk type.
+                              type: string
+                            name:
+                              description: The disk type name.
+                              type: string
+                          required:
+                          - name
+                          type: object
+                        type: array
+                      supportsConfidentialNodes:
+                        description: |-
+                          SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
+                          configuration.
+                        type: boolean
+                      systemArchitecture:
+                        description: System architecture available for this machine
+                          configuration.
+                        type: string
+                      threadsPerCore:
+                        description: ThreadsPerCore for the machine configuration.
+                        format: int64
+                        type: integer
+                    type: object
+                  machineTypes:
+                    description: Machine types available for this machine family.
+                    items:
+                      description: MachineType defines a machine type.
+                      properties:
+                        name:
+                          description: Name of the machine type.
+                          type: string
+                        properties:
+                          description: |-
+                            Properties specific to this machine type.
+                            If set, these properties override the default properties defined in the MachineFamily.
+                            Any property not explicitly set here inherits the value from MachineFamily.DefaultProperties.
+                          properties:
+                            bootDiskConfig:
+                              description: BootDiskConfig specifies the boot disk
+                                configuration.
+                              properties:
+                                defaultType:
+                                  description: DefaultType specifies the default boot
+                                    disk type for this machine configuration.
+                                  type: string
+                                types:
+                                  description: Types specifies the boot disk types
+                                    available for this machine configuration.
+                                  items:
+                                    type: string
+                                  type: array
+                              type: object
+                            compactPlacementConfig:
+                              description: Compact placement options available for
+                                this machine configuration.
+                              properties:
+                                maxCount:
+                                  description: MaxCount indicates the maximum number
+                                    of machines that can be compactly placed.
+                                  format: int64
+                                  type: integer
+                                supported:
+                                  description: Supported indicates whether the compact
+                                    placement config is supported.
+                                  type: boolean
+                              required:
+                              - supported
+                              type: object
+                            confidentialNodeConfig:
+                              description: ConfidentialNodeConfig specifies the confidential
+                                node configuration supported by the machine configuration.
+                              properties:
+                                supported:
+                                  description: Supported specifies if confidential
+                                    nodes are supported.
+                                  type: boolean
+                                types:
+                                  description: Types specifies the confidential instance
+                                    types supported.
+                                  items:
+                                    description: ConfidentialNodeType defines the
+                                      confidential instance type.
+                                    properties:
+                                      type:
+                                        description: Type specifies the confidential
+                                          instance type (e.g. SEV, SEV_SNP, TDX).
+                                        type: string
+                                    type: object
+                                  type: array
+                              type: object
+                            cpuPlatforms:
+                              description: CPU platforms available for this machine
+                                configuration.
+                              items:
+                                description: CPUPlatform defines a CPU platform.
+                                properties:
+                                  aliases:
+                                    description: Aliases contains possible alternative
+                                      names for this CPU platform.
+                                    items:
+                                      type: string
+                                    type: array
+                                  name:
+                                    description: Name of the CPU platform.
+                                    type: string
+                                  vendor:
+                                    description: Vendor contains the CPU vendor this
+                                      platform belongs to.
+                                    type: string
+                                  vendorOrder:
+                                    description: VendorOrder contains the relative
+                                      order of the CPU platform for that vendor, from
+                                      oldest to newest.
+                                    format: int64
+                                    type: integer
+                                required:
+                                - name
+                                type: object
+                              type: array
+                            napDisabled:
+                              description: NAPDisabled specifies if the machine configuration
+                                is excluded from autoprovisioning support.
+                              type: boolean
+                            numaAlignmentUnsupported:
+                              description: Whether the machine family is excluded
+                                from NUMA alignment support.
+                              type: boolean
+                            persistentDiskTypeConfigs:
+                              description: PersistentDiskTypeConfigs specifies the
+                                persistent disk types configurations supported by
+                                the machine family.
+                              items:
+                                description: PersistentDiskTypeConfig represents the
+                                  configuration for disk types.
+                                properties:
+                                  confidentialMode:
+                                    description: The confidential mode of the disk
+                                      type.
+                                    type: string
+                                  name:
+                                    description: The disk type name.
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              type: array
+                            supportsConfidentialNodes:
+                              description: |-
+                                SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
+                                configuration.
+                              type: boolean
+                            systemArchitecture:
+                              description: System architecture available for this
+                                machine configuration.
+                              type: string
+                            threadsPerCore:
+                              description: ThreadsPerCore for the machine configuration.
+                              format: int64
+                              type: integer
+                          type: object
+                        resources:
+                          description: Resources specifies the fixed resources of
+                            this machine type.
+                          properties:
+                            LocalSSDConfig:
+                              description: |-
+                                LocalSSDConfig contains information about the local SSD configurations
+                                available for the machine type.
+                              properties:
+                                availableCounts:
+                                  description: AvailableCounts contains the possible
+                                    numbers of local SSDs.
+                                  items:
+                                    format: int64
+                                    type: integer
+                                  type: array
+                                diskSize:
+                                  description: DiskSize contains the size of a single
+                                    local SSD in GB.
+                                  format: int64
+                                  type: integer
+                                localSsdCount:
+                                  description: DefaultCount contains the default number
+                                    of local SSDs.
+                                  format: int64
+                                  type: integer
+                                maxTotalStorage:
+                                  description: MaxTotalStorage contains the maximum
+                                    total storage of local SSDs.
+                                  format: int64
+                                  type: integer
+                              required:
+                              - diskSize
+                              - localSsdCount
+                              - maxTotalStorage
+                              type: object
+                            accelerator:
+                              description: Accelerator provisioned with this machine
+                                type.
+                              properties:
+                                fixedCount:
+                                  description: FixedCount indicates the number of
+                                    accelerators of this type always attached to the
+                                    machine.
+                                  format: int64
+                                  type: integer
+                                name:
+                                  description: Name of the accelerator.
+                                  type: string
+                                tpuConfig:
+                                  description: TpuConfig supported by the machine
+                                    type.
+                                  properties:
+                                    singleHostTopology:
+                                      description: SingleHostTopology supported by
+                                        the machine type.
+                                      type: string
+                                  type: object
+                              required:
+                              - fixedCount
+                              - name
+                              type: object
+                            cpus:
+                              description: CPU count of the machine type.
+                              format: int64
+                              type: integer
+                            memory:
+                              description: Memory in MiB of the machine type.
+                              format: int64
+                              type: integer
+                          required:
+                          - cpus
+                          - memory
+                          type: object
+                        weights:
+                          description: Weights contains information about specific
+                            Machine Type weight overrides.
+                          properties:
+                            instanceWeight:
+                              description: InstanceWeight provides an override for
+                                the weight of a single non-preemptible instance of
+                                this machine type.
+                              type: string
+                            preemptibleInstanceWeight:
+                              description: PreemptibleInstanceWeight provides an override
+                                for the weight of a single preemptible instance of
+                                this machine type.
+                              type: string
+                          type: object
+                      required:
+                      - name
+                      - resources
+                      type: object
+                    type: array
+                  name:
+                    description: Name of this machine family.
+                    type: string
+                  pageType:
+                    description: PageType specifies the page type supported by the
+                      machine family.
+                    type: string
+                  usagePolicy:
+                    description: UsagePolicy controls how this configuration entry
+                      is applied by the system.
+                    properties:
+                      mode:
+                        description: |-
+                          Mode specifies the active usage mode for this configuration entry.
+                          Supported values:
+                          - "WeightsOnly": The configuration entry is used strictly for preference weight calculations, bypassing it for other purposes.
+                          - "PropertiesOnly": The configuration entry is used strictly for machine properties, bypassing it for preference weight calculations.
+                          - "Legacy": The configuration entry is inactive, falling back to static machine type definitions.
+                          If unset, defaults to standard behavior where the configuration entry is the single source of truth for the machine family.
+                        type: string
+                    type: object
+                  weights:
+                    description: |-
+                      Weights contains information about the preference for choosing this machine configuration.
+                      Lower weights are preferred for scaling up the cluster.
+                    properties:
+                      custom:
+                        description: Custom contains weights for the custom types.
+                        properties:
+                          cpu:
+                            description: CPU contains weight for the CPU resource.
+                            type: string
+                          localSSD:
+                            description: LocalSSD contains weight for the local SSD
+                              resource.
+                            type: string
+                          memory:
+                            description: Memory contains weight for the memory resource.
+                            type: string
+                        required:
+                        - cpu
+                        - localSSD
+                        - memory
+                        type: object
+                      predefined:
+                        description: Predefined contains weights for the predefined
+                          types.
+                        properties:
+                          cpu:
+                            description: CPU contains weight for the CPU resource.
+                            type: string
+                          localSSD:
+                            description: LocalSSD contains weight for the local SSD
+                              resource.
+                            type: string
+                          memory:
+                            description: Memory contains weight for the memory resource.
+                            type: string
+                        required:
+                        - cpu
+                        - localSSD
+                        - memory
+                        type: object
+                      preemptible:
+                        description: Preemptible contains weights for the preemptible
+                          types.
+                        properties:
+                          cpu:
+                            description: CPU contains weight for the CPU resource.
+                            type: string
+                          localSSD:
+                            description: LocalSSD contains weight for the local SSD
+                              resource.
+                            type: string
+                          memory:
+                            description: Memory contains weight for the memory resource.
+                            type: string
+                        required:
+                        - cpu
+                        - localSSD
+                        - memory
+                        type: object
+                    required:
+                    - predefined
+                    type: object
+                required:
+                - defaultProperties
+                - machineTypes
+                - name
+                type: object
+              version:
+                description: Version of the configuration stored in this object.
+                type: string
+            required:
+            - machineFamily
+            - version
+            type: object
+          status:
+            description: Status of the MachineConfig object.
+            properties:
+              conditions:
+                description: Conditions represent the observations of a MachineConfig's
+                  current state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

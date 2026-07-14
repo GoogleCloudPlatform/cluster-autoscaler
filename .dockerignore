@@ -1,0 +1,27 @@
+# Ignore everything by default
+*
+
+# Allow the locally built binary (for standard Dockerfile)
+!cluster-autoscaler
+
+# Allow source code and build assets (for multi-stage Dockerfile.multiarch)
+!pkg/**
+!config/**
+!deploy/**
+!apis/**
+!hack/**
+!modreplaces/**
+!vendor/**
+
+# Allow root-level build configuration and source
+!*.go
+!go.mod
+!go.sum
+!Makefile
+!Dockerfile*
+!.dockerignore
+
+# Specifically ignore massive or irrelevant directories/files
+**/.git/**
+**/go-build/**
+cluster-autoscaler-*

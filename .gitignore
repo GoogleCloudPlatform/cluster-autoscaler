@@ -1,0 +1,24 @@
+# Intellij project files
+*.iml
+.idea/
+# VS code settings files
+.vscode/
+.gemini/
+.testbin/
+.envrc
+
+/cluster-autoscaler
+/cluster_autoscaler
+/go-build
+.cover
+
+# Vim-related files
+[._]*.s[a-w][a-z]
+[._]s[a-w][a-z]
+*.un~
+Session.vim
+.netrwhist
+
+# Ignore untracked OWNERS files in vendor directories
+**/vendor/**/OWNERS
+**/vendor/**/OWNERS_ALIASES

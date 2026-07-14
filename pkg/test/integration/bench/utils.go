@@ -1,0 +1,170 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package bench
+
+import (
+	"context"
+	"flag"
+	"os"
+	"runtime"
+	"runtime/debug"
+	"runtime/pprof"
+	"testing"
+	"time"
+
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
+)
+
+var (
+	profileCPU = flag.String("profile-cpu", "", "If set, the benchmark writes a CPU profile to this file, covering the RunOnce execution during the first iteration.")
+	disableGC  = flag.Bool("disable-gc", false, "Disable garbage collection to stabilize the runtime.")
+)
+
+type scenario struct {
+	given func() *integration.TestConfig
+	when  func(infra *integration.TestInfrastructure)
+	then  func(tb testing.TB, infra *integration.TestInfrastructure)
+}
+
+func defaultBenchmarkConfig() *integration.TestConfig {
+	maxNGSize := 1000
+	mcp := machinetypes.NewMachineConfigProvider(nil)
+	e2, err := mcp.ToMachineType("e2-standard-32")
+	if err != nil {
+		panic(err)
+	}
+	maxCores := e2.CPU * int64(maxNGSize)
+	maxMemory := e2.Memory * int64(maxNGSize)
+
+	return integration.NewTestConfig().
+		WithNodePools(integration.DefaultNodePool(
+			integration.WithNodePoolMachineType("e2-standard-32"),
+			integration.WithNodePoolSize(1),
+		)).
+		WithClusterWideLimits(maxNGSize, maxCores, maxMemory)
+}
+
+func (s scenario) run(tb testing.TB) {
+	b, isBench := tb.(*testing.B)
+
+	if isBench {
+		// Pause the benchmark timer to prevent heavy setup and initialization overhead
+		// from inflating the final benchmarking time.
+		b.StopTimer()
+	}
+
+	if *disableGC {
+		oldGC := debug.SetGCPercent(-1)
+		defer debug.SetGCPercent(oldGC)
+	}
+
+	var f *os.File
+	if *profileCPU != "" {
+		var err error
+		f, err = os.Create(*profileCPU)
+		if err != nil {
+			tb.Fatalf("Failed to create cpu profile file: %v", err)
+		}
+		defer f.Close()
+	}
+
+	iterations := 1
+	if isBench {
+		iterations = b.N
+	}
+
+	for i := 0; i < iterations; i++ {
+		// Create a cancellable context.
+		// Down the call stack in the new newFakeClientForTB helper,
+		// we start informers using prFactory.Start(ctx.Done()).
+		// The Kubernetes Scheduler Framework started by NewHandle also stores this ctx.
+		// The context must be cancellable so that those don't continue running forever,
+		// otherwise they stack up in each iteration and distort benchmarking metrics.
+		ctx, cancel := context.WithCancel(context.Background())
+		infra := integration.SetupInfrastructure(ctx, tb)
+
+		var testConfig *integration.TestConfig
+		if s.given != nil {
+			testConfig = s.given()
+		} else {
+			tb.Fatalf("Test cluster config is not defined. Add WithCluster func to your scenario")
+		}
+
+		if s.when != nil {
+			s.when(infra)
+		}
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, tb, testConfig, infra)
+		if err != nil {
+			tb.Fatalf("SetupAutoscaler failed: %v", err)
+		}
+
+		infra.Fakes.InformerFactory.Start(ctx.Done())
+		infra.Fakes.InformerFactory.WaitForCacheSync(ctx.Done())
+
+		runtime.GC()
+
+		if f != nil && i == 0 {
+			if err := pprof.StartCPUProfile(f); err != nil {
+				tb.Fatalf("Failed to start cpu profile: %v", err)
+			}
+		}
+
+		if isBench {
+			b.StartTimer()
+		}
+		err = autoscaler.RunOnce(ctx, time.Now().Add(10*time.Second))
+		if isBench {
+			b.StopTimer()
+		}
+
+		if f != nil && i == 0 {
+			pprof.StopCPUProfile()
+		}
+
+		// We need to call cancel() to prevent the
+		// informers and the scheduler framework from running in the background.
+		cancel()
+
+		if err != nil {
+			tb.Fatalf("RunOnce failed: %v", err)
+		}
+
+		if s.then != nil {
+			s.then(tb, infra)
+		}
+	}
+}
+
+func verifyTargetNumberOfNodes(expectedTargetSize int) func(tb testing.TB, infra *integration.TestInfrastructure) {
+	return func(tb testing.TB, infra *integration.TestInfrastructure) {
+		tb.Helper()
+		zones := integration.DefaultNodePool().Locations
+		totalTargetSize := 0
+		for _, zone := range zones {
+			migs, err := infra.Fakes.GceService.FetchAllMigs(zone)
+			if err != nil {
+				tb.Fatalf("Failed to fetch MIGs for zone %s: %v", zone, err)
+			}
+			for _, mig := range migs {
+				totalTargetSize += int(mig.TargetSize)
+			}
+		}
+		if totalTargetSize != expectedTargetSize {
+			tb.Fatalf("expected total target size %d, got %d", expectedTargetSize, totalTargetSize)
+		}
+	}
+}

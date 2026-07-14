@@ -1,0 +1,300 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// This file shouldn't be modified directly. Its source of truth is located
+// in the GKE UI codebase:
+// cs//depot/google3/java/com/google/cloud/boq/clientapi/resource/container/proto/clusterautoscalervisibility.proto
+// If you want to change anything, first submit the changes there and get the
+// UI team approval, then sync this file.
+
+syntax = "proto3";
+
+package com.google.cloud.boq.clientapi.resource.container.proto.clusterautoscalervisibility;
+
+option go_package = "./pkg/visibility/proto";
+option java_multiple_files = true;
+option java_outer_classname = "ClusterAutoscalerVisibilityProto";
+option java_package = "com.google.cloud.boq.clientapi.resource.container.proto.clusterautoscalervisibility";
+
+// This proto contains the format of Cluster Autoscaler Visibility log entries,
+// which are logged to Stackdriver Logging and provide insights into Cluster
+// Autoscaler's decisions. For a more detailed description visit go/gke-ca-viz.
+
+// A message to differentiate between the types of events. This will appear in
+// Stackdriver Logging log entries in the json_payload field, defined here:
+// http://cs//depot/google3/google/logging/v2/log_entry.proto.
+message AutoscalerEvent {
+  oneof event_oneof {
+    ClusterStatus status = 1;
+    DecisionEvent decision = 2;
+    ResultInfo result_info = 3;
+    NoDecisionStatus no_decision_status = 4;
+  }
+}
+
+// A high-level description of Cluster status
+// generated periodically regardless of any Cluster Autoscaler decisions.
+message ClusterStatus {
+  // Required.
+  int64 measure_time = 1;
+  // Required. The sum of the number of nodes in all autoscaled node pools.
+  int32 autoscaled_nodes_count = 2;
+  // Required. The target amount of nodes in all autoscaled node pools.
+  int32 autoscaled_nodes_target = 3;
+
+  reserved 4;
+}
+
+// A message containing the results of finished events.
+message ResultInfo {
+  // Required.
+  int64 measure_time = 1;
+  repeated EventResult results = 2;
+}
+
+// A structure describing a finished event, indicating if the event finished
+// successfully: if it did not, there is an error message present.
+message EventResult {
+  // Required.
+  string event_id = 1;
+  // Optional.
+  ParametrizedMessage error_msg = 2;
+}
+
+// An event for a single decision.
+message DecisionEvent {
+  // Required. Unix timestamp.
+  int64 decide_time = 1;
+  // Required. Unique inside a single cluster.
+  string event_id = 2;
+
+  oneof decision_oneof {
+    ScaleUpData scale_up = 10;
+    ScaleDownData scale_down = 11;
+    NodePoolCreatedData node_pool_created = 12;
+    NodePoolDeletedData node_pool_deleted = 13;
+  }
+}
+
+message NoDecisionStatus {
+  // Required.
+  int64 measure_time = 1;
+
+  oneof kind_oneof {
+    NoScaleUpData no_scale_up = 10;
+    NoScaleDownData no_scale_down = 11;
+  }
+}
+
+// Data specific to a scale-up event.
+message ScaleUpData {
+  // The decision / requested increase.
+  repeated ScaleUpMig increased_migs = 1;
+
+  // List of pods triggering scale-up. This list can be truncated.
+  repeated Pod triggering_pods = 10;
+  // Total number of triggering pods, regardless of truncation.
+  // Required.
+  int32 triggering_pods_total_count = 11;
+}
+
+// Data specific to a scale-down event.
+message ScaleDownData {
+  // The decision / requested decrease.
+  repeated ScaleDownNode nodes_to_be_removed = 1;
+}
+
+// Data specific to a no-scale-up decision.
+message NoScaleUpData {
+  // Top-level reason for no scale-up (e.g. no.pending.pods,
+  // state.unhealthy or nodes.too.fresh.to.act).
+  // Optional.
+  ParametrizedMessage reason = 1;
+  // Top-level reason why no node pools were autoprovisioned.
+  // Optional.
+  ParametrizedMessage nap_failure_reason = 2;
+
+  // A list of pod groups that didn’t trigger a scale-up, with explanations why.
+  // This list can be truncated.
+  repeated PodGroupExplanation unhandled_pod_groups = 3;
+  // Total number of unhandled pod groups, regardless of truncation.
+  // Required.
+  int32 unhandled_pod_groups_total_count = 4;
+
+  // List of skipped MIGs, with reasons why.
+  repeated MigExplanation skipped_migs = 5;
+}
+
+// Data specific to a no-scale-down decision.
+message NoScaleDownData {
+  // Top-level reason for no scale-down (e.g. no.candidates
+  // or scaleup.early.exit).
+  // Optional.
+  ParametrizedMessage reason = 1;
+
+  // List of underutilized nodes which were not scaled down,
+  // with per-node explanations. This list can be truncated.
+  repeated NodeExplanation nodes = 2;
+  // Total number of underutilized nodes, regardless of truncation.
+  // Required.
+  int32 nodes_total_count = 4;
+}
+
+message NodePoolCreatedData {
+  repeated NodePool node_pools = 1;
+  // If the node pool(s) were created because of a scale-up, the scale-up event
+  // id should be put here.
+  // Optional.
+  string triggering_scale_up_id = 2;
+}
+
+message NodePoolDeletedData {
+  repeated string node_pool_names = 1;
+}
+
+// Event-related data, affected entities and CA decisions.
+
+// Scale-up data for a single MIG.
+message ScaleUpMig {
+  // Required.
+  Mig mig = 1;
+  // Required. Number of new nodes requested.
+  int32 requested_nodes = 2;
+}
+
+// Data about the status of a MIG.
+message MigStatus {
+  // Required.
+  Mig mig = 1;
+  // Required. The actual number of nodes in the MIG.
+  int32 actual_size = 2;
+  // Required. The target number of nodes in the MIG.
+  int32 target_size = 3;
+  // Required. The min number of nodes in the MIG.
+  int32 min_size = 4;
+  // Required. The max number of nodes in the MIG.
+  int32 max_size = 5;
+}
+
+// Scaled-down Node with a list of Pods that needed to be evicted.
+message ScaleDownNode {
+  // Required.
+  Node node = 1;
+  // Evicted pods which are expected to move somewhere else (or rather
+  // their replicas are). This list can be truncated.
+  repeated Pod evicted_pods = 2;
+  // Total number of evicted pods, regardless of truncation.
+  // Required.
+  int32 evicted_pods_total_count = 4;
+}
+
+message PodGroup {
+  // Required. A sample pod from this group.
+  Pod sample_pod = 1;
+  // Required. The total number of pods in this group.
+  int32 total_pod_count = 2;
+}
+
+// Group of pods with a reason explaining a decision made for it.
+message PodGroupExplanation {
+  // Required.
+  PodGroup pod_group = 1;
+  // List of MIGs rejected because of failing predicates, with reasons why.
+  repeated MigExplanation rejected_migs = 2;
+  // Reasons why the pod didn't trigger new node pool creation.
+  repeated ParametrizedMessage nap_failure_reasons = 3;
+  // List of MIGs skipped for this pod group, with reasons why.
+  repeated MigExplanation skipped_migs = 4;
+}
+
+// Node with a reason explaining a decision made for it.
+message NodeExplanation {
+  // Required.
+  Node node = 1;
+  // Required.
+  ParametrizedMessage reason = 2;
+}
+
+// MIG with a reason explaining a decision made for it.
+message MigExplanation {
+  // Required.
+  Mig mig = 1;
+  // Required.
+  ParametrizedMessage reason = 2;
+}
+
+// Data required to render a message for the end-user, allowing for i18n.
+// Assuming a very naive i18n for a text like "Added 10 nodes" this proto
+// would contain:
+// message_id = nodes.added
+// parameters[0] = 10
+// and the English text would be configured as nodes.added=Added {0} nodes.
+// The messages are defined here: go/ca-viz-api-msgs.
+message ParametrizedMessage {
+  // Required. Property key describing the message.
+  string message_id = 1;
+  // Additional data to fill in the placeholders, if any.
+  repeated string parameters = 2;
+}
+
+// Represents a Managed Instance Group.
+message Mig {
+  // Required. Name of the MIG.
+  string name = 1;
+  // Required. Name of the nodepool the MIG belongs to.
+  string nodepool = 2;
+  // Required. Name of the zone the MIG is in.
+  string zone = 3;
+}
+
+// Represents a GKE node pool.
+message NodePool {
+  // Required.
+  string name = 1;
+  repeated Mig migs = 2;
+}
+
+// Objects corresponding to entities from Kubernetes API.
+
+// Node, from Kubernetes API.
+message Node {
+  // Required.
+  string name = 1;
+  // Required.
+  Mig mig = 2;
+  // Optional. Ratio requested/allocatable CPU, in %.
+  int32 cpu_ratio = 3;
+  // Optional. Ratio requested/allocatable memory, in %.
+  int32 mem_ratio = 4;
+}
+
+// Pod, from Kubernetes API.
+message Pod {
+  // Required.
+  string name = 1;
+  // Optional.
+  PodController controller = 2;
+  // Required.
+  string namespace = 3;
+}
+
+// Pod Controller, from Kubernetes API.
+message PodController {
+  // Required.
+  string api_version = 1;
+  // Required.
+  string kind = 2;
+  // Required.
+  string name = 3;
+}
