@@ -185,6 +185,7 @@ const SimshipAutomationBigRedButtonFlag = "SimshipAutomation::BigRedButton"
 const DemandFungibilityImpactTrackingEnabledFlag = "DemandFungibilityImpactTracking::Enabled"
 const DemandFungibilityImpactTrackingMinCAVersionFlag = "DemandFungibilityImpactTracking::MinCAVersion"
 
+const ClusterPendingPodsPerCccFlag = "Metrics::ClusterPendingPodsPerCcc"
 const ScaleUpSimulationForSkippedNodeGroupsMinCAVersionFlag = "ScaleUpSimulationForSkippedNodeGroups::MinCAVersion"
 const ScaleUpSimulationForSkippedNodeGroupsEnabledFlag = "ScaleUpSimulationForSkippedNodeGroups::Enabled"
 

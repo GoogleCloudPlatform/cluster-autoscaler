@@ -601,7 +601,7 @@ func setUpProcessors(
 	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
 	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(laPodProvider, lookaheadBufferStrategyProvider, lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion), systemPodsClassifier, npcCrdLister, resizeCalculator, internalmetrics.Metrics)
 
-	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, npcCrdLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled, options.ExpendablePodsPriorityCutoff)
+	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, npcCrdLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {
 		autoscalingProcessors.ScaleStateNotifier.Register(metricsccc.NewNodeGroupChangePerCCCMetricsProducer(npcCrdLister))
 	}
