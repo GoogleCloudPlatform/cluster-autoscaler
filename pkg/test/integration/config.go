@@ -919,6 +919,14 @@ func (b NodePoolBuilder) WithMax(max int64) NodePoolBuilder {
 	return b
 }
 
+// WithMin sets the minimum size of the node pool.
+func (b NodePoolBuilder) WithMin(min int64) NodePoolBuilder {
+	if b.NodePool.Autoscaling != nil {
+		b.NodePool.Autoscaling.MinNodeCount = min
+	}
+	return b
+}
+
 // WithMachineType sets the machine type of the node pool.
 func (b NodePoolBuilder) WithMachineType(machineType string) NodePoolBuilder {
 	if b.NodePool.Config == nil {
