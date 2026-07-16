@@ -32,6 +32,7 @@ type MockGKEProvider struct {
 	autoprovisioningLocations         []string
 	resizableVmInAutopilotEnabled     map[string]bool
 	resizableVmWithinPodFamilyEnabled map[string]bool
+	extendedFallbacksEnabled          bool
 	autopilotEnabled                  bool
 	validMachineTypes                 map[gce.MachineTypeKey]bool
 }
@@ -115,6 +116,14 @@ func (m *MockGKEProvider) SetResizableVmWithinPodFamilyEnabled(machineFamily str
 
 func (m *MockGKEProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	return m.resizableVmWithinPodFamilyEnabled[machineFamily]
+}
+
+func (m *MockGKEProvider) SetExtendedFallbacksEnabled(enabled bool) {
+	m.extendedFallbacksEnabled = enabled
+}
+
+func (m *MockGKEProvider) IsExtendedFallbacksEnabled() bool {
+	return m.extendedFallbacksEnabled
 }
 
 func (m *MockGKEProvider) GetGkeMigs() []*gke.GkeMig {

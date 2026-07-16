@@ -682,9 +682,10 @@ func TestSelectMachineSpec(t *testing.T) {
 			isExtendedFallbacksEnabled:        true,
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E2, machinetypes.EK, machinetypes.E4,
-				machinetypes.N4, machinetypes.N4D, machinetypes.C4, machinetypes.C4D,
-				machinetypes.N1, machinetypes.C3, machinetypes.C3D,
+				machinetypes.N4, machinetypes.N4D,
 				machinetypes.N2, machinetypes.N2D,
+				machinetypes.N1,
+				machinetypes.C4, machinetypes.C4D,
 			},
 		},
 		"extended fallbacks enabled but isStateless=false -> returns E2, EK (E4 filtered)": {

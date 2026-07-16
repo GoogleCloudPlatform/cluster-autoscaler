@@ -35,6 +35,7 @@ const (
 type organizerCloudProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
+	IsExtendedFallbacksEnabled() bool
 	IsAutopilotEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
@@ -93,7 +94,6 @@ func (o *organizer) OrganizeByCrds(nodeGroups []cloudprovider.NodeGroup, crds []
 			organizedByCrd = append(organizedByCrd, [][]cloudprovider.NodeGroup{nodeGroups})
 		}
 	}
-
 	return organizedByCrd
 }
 
@@ -150,13 +150,15 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 	}
 	switch rule.PodFamilyName() {
 	case rules.GeneralPurposePodFamily:
-		// TODO(b/527570025): This is only to ensure EK and E2 are prioritized for Public Preview (since E4 is not resizable yet).
-		// This fallback order will change during GA, where E4 will become the #1 priority.
 		var families []machinetypes.MachineFamily
 		if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
 			families = append(families, machinetypes.EK)
 		}
 		families = append(families, machinetypes.E2)
+		if o.provider.IsExtendedFallbacksEnabled() {
+			families = append(families, rules.ExtendedFallbacks...)
+		}
+
 		return families
 	case rules.GeneralPurposeArmPodFamily:
 		if families, err := rule.PodFamilyMachineFamilies(); err == nil {

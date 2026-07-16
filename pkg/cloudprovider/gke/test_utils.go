@@ -132,6 +132,14 @@ func (b *TestGkeMigBuilder) SetGkeManager(gkeManager GkeManager) *TestGkeMigBuil
 	return b
 }
 
+// SetExtendedFallbacksEnabled sets the extendedFallbacksEnabled field on FakeGkeManager.
+func (b *TestGkeMigBuilder) SetExtendedFallbacksEnabled(enabled bool) *TestGkeMigBuilder {
+	if fake, ok := b.gkeManager.(*FakeGkeManager); ok {
+		fake.extendedFallbacksEnabled = enabled
+	}
+	return b
+}
+
 // SetMinSize sets the minSize field.
 func (b *TestGkeMigBuilder) SetMinSize(minSize int) *TestGkeMigBuilder {
 	b.minSize = minSize
@@ -1927,6 +1935,11 @@ func (fake *FakeGkeManager) IsResizableVmWithinPodFamilyEnabled(machineFamily st
 
 func (fake *FakeGkeManager) IsExtendedFallbacksEnabled() bool {
 	return fake.extendedFallbacksEnabled
+}
+
+// SetExtendedFallbacksEnabled sets the extendedFallbacksEnabled field.
+func (fake *FakeGkeManager) SetExtendedFallbacksEnabled(enabled bool) {
+	fake.extendedFallbacksEnabled = enabled
 }
 
 func (fake *FakeGkeManager) IsEkSpotEnabled() bool {

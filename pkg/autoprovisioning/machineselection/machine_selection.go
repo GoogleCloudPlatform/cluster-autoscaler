@@ -121,7 +121,6 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 	isE4Enabled := s.isE4Enabled(autopilotEnabled, autopilotManaged, isStateless)
 	isE4aEnabled := (autopilotEnabled && s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.E4A.Name())) || (autopilotManaged && s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4A.Name()))
 	isExtendedFallbacksEnabled := s.isExtendedFallbacksEnabled(autopilotEnabled, autopilotManaged, isStateless)
-
 	// If crd rule specifies families, always try to use it.
 	if podCrdFamiliesSpecified {
 		if !s.CloudProvider.IsEkSpotEnabled() {

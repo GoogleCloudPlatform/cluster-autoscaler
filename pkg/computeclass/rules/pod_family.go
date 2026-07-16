@@ -35,10 +35,14 @@ var podFamilyMachineFamilies = map[string][]machinetypes.MachineFamily{
 }
 
 // ExtendedFallbacks is a list of machine families used as fallbacks when extended fallbacks are enabled.
+// The order of families in this list matters as it defines the priority tiers for fallback.
+// Cluster Autoscaler evaluates these sequentially; if valid candidates are found in a higher-priority
+// family (earlier in the list), lower-priority families will not be evaluated.
 var ExtendedFallbacks = []machinetypes.MachineFamily{
-	machinetypes.N4, machinetypes.N4D, machinetypes.C4, machinetypes.C4D,
-	machinetypes.N1, machinetypes.C3, machinetypes.C3D,
+	machinetypes.N4, machinetypes.N4D,
 	machinetypes.N2, machinetypes.N2D,
+	machinetypes.N1,
+	machinetypes.C4, machinetypes.C4D,
 }
 
 // PodFamilyRule is an interface for rules with podFamily defined.

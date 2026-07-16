@@ -36,6 +36,7 @@ type nodeGroupListMetrics interface {
 type processorCloudProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
+	IsExtendedFallbacksEnabled() bool
 	IsAutopilotEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
