@@ -199,6 +199,8 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		return rules.NewRule(rules.WithNodePoolsRule(p.Nodepools), rules.WithAllocationStrategyRule(p.AllocationStrategy))
 	}
 
+	generalPurposeFamilies := ccc.getGeneralPurposeFamilies(p.PodFamily)
+
 	ruleOpts := []rules.RuleOption{
 		rules.WithMachineFamilyRule(p.MachineFamily),
 		rules.WithSpotRule(p.Spot),
@@ -206,7 +208,7 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		rules.WithMinMemoryGbRule(p.MinMemoryGb),
 		rules.WithMachineTypeRule(p.MachineType),
 		rules.WithMaxPodsPerNodeRule(p.MaxPodsPerNode),
-		rules.WithPodFamilyRule(p.PodFamily),
+		rules.WithPodFamilyRule(p.PodFamily, generalPurposeFamilies...),
 		rules.WithMinCpuPlatformRule(p.MinCpuPlatform),
 		rules.WithLabelsRule(p.NodeLabels),
 		rules.WithAllocationStrategyRule(p.AllocationStrategy),
@@ -329,6 +331,31 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 	}
 
 	return rules.NewRule(ruleOpts...)
+}
+
+func (ccc *cccCrd) getGeneralPurposeFamilies(podFamily *string) []machinetypes.MachineFamily {
+	if podFamily == nil || *podFamily != rules.GeneralPurposePodFamily {
+		return nil
+	}
+
+	familyNames := ccc.optionsTracker.Options().GeneralPurposeMachineFamilies
+	if len(familyNames) == 0 {
+		return nil
+	}
+
+	var generalPurposeFamilies []machinetypes.MachineFamily
+	for _, name := range familyNames {
+		family, err := ccc.provider.MachineConfigProvider().ToMachineFamily(name)
+		if err != nil {
+			klog.Errorf("Unexpected invalid machine family %q (should have been validated at startup): %v", name, err)
+			continue
+		}
+		generalPurposeFamilies = append(generalPurposeFamilies, family)
+	}
+
+	// TODO: Temporary debugging log, delete after RCA
+	klog.Infof("getGeneralPurposeFamilies: generalPurposeMachineFamilies flag values: %v resolved to families: %v", familyNames, generalPurposeFamilies)
+	return generalPurposeFamilies
 }
 
 // priorities returns list of priorities.

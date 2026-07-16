@@ -50,11 +50,13 @@ type PodFamilyRule interface {
 	BaseRule
 	PodFamilyName() string
 	PodFamilyMachineFamilies() ([]machinetypes.MachineFamily, error)
+	IsCustomFamiliesConfigured() bool
 }
 
 type podFamilyRule struct {
-	podFamily     *string
-	autopilotMode bool
+	podFamily                     *string
+	autopilotMode                 bool
+	generalPurposeMachineFamilies []machinetypes.MachineFamily
 }
 
 // Matches returns true if the nodegroup is matching machine spec.
@@ -88,6 +90,11 @@ func (r *podFamilyRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		return false
 	}
 
+	// Custom GP families override (Custom Mode).
+	if *r.podFamily == GeneralPurposePodFamily && len(r.generalPurposeMachineFamilies) > 0 {
+		return migMachineFamily.In(r.generalPurposeMachineFamilies...)
+	}
+
 	if migMachineFamily.In(podFamilyMachineFamilies[*r.podFamily]...) {
 		return true
 	}
@@ -111,7 +118,17 @@ func (r *podFamilyRule) PodFamilyMachineFamilies() ([]machinetypes.MachineFamily
 		return nil, fmt.Errorf("unknown pod family")
 	}
 
+	// If custom GP families are configured, return them.
+	if *r.podFamily == GeneralPurposePodFamily && len(r.generalPurposeMachineFamilies) > 0 {
+		return r.generalPurposeMachineFamilies, nil
+	}
+
 	return podFamilyMachineFamilies[*r.podFamily], nil
+}
+
+// IsCustomFamiliesConfigured returns true if custom GP families are configured.
+func (r *podFamilyRule) IsCustomFamiliesConfigured() bool {
+	return r.podFamily != nil && *r.podFamily == GeneralPurposePodFamily && len(r.generalPurposeMachineFamilies) > 0
 }
 
 // WithAutopilotModeRule return RuleOption setting this rule to be using
@@ -124,8 +141,9 @@ func WithAutopilotModeRule() RuleOption {
 }
 
 // WithPodFamilyRule returns RuleOption setting PodFamilyRule.
-func WithPodFamilyRule(podFamily *string) RuleOption {
+func WithPodFamilyRule(podFamily *string, generalPurposeMachineFamilies ...machinetypes.MachineFamily) RuleOption {
 	return func(r *rule) {
 		r.podFamilyRule.podFamily = podFamily
+		r.podFamilyRule.generalPurposeMachineFamilies = generalPurposeMachineFamilies
 	}
 }

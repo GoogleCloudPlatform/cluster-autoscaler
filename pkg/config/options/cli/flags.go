@@ -20,6 +20,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	kube_flag "k8s.io/component-base/cli/flag"
@@ -71,6 +72,7 @@ var (
 	autopilotEnabled                             = flag.Bool("enable-autopilot", false, "Is Autoscaling running in GKE Autopilot mode")
 	nodePoolUpdatesEnabled                       = flag.Bool("enable-node-pool-updates", false, "Are node-pool updates enabled")
 	napDefaultMachineTypeFamily                  = flag.String("nap-default-machine-type-family", "n1", "The machine type family that is used by autoprovisioning by default")
+	generalPurposeMachineFamilies                = flag.String("general-purpose-machine-families", "", "A comma-separated list of machine families enabled for general purpose workloads. The order of families determines their sequential scale-up priority tier. Empty (default value) means to use the default families.")
 	ekMachineTypes                               = flag.String("ek-machine-types", "", "A comma-separated list of EK machine types to override EK machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	e4aMachineTypes                              = flag.String("e4a-machine-types", "", "A comma-separated list of E4A machine types to override E4A machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	ekDownsizeConfig                             = flag.String("ek-downsize-config", "{}", "An override for DownsizeConfig in json format for EK.")
@@ -245,6 +247,17 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		klog.Fatalf("Failed to parse compact placement flag: %v", err)
 	}
 
+	gpMachineFamilies := *generalPurposeMachineFamilies
+	var parsedGpMachineFamilies []string
+	if gpMachineFamilies != "" {
+		for _, f := range strings.Split(gpMachineFamilies, ",") {
+			trimmed := strings.TrimSpace(f)
+			if trimmed != "" {
+				parsedGpMachineFamilies = append(parsedGpMachineFamilies, trimmed)
+			}
+		}
+	}
+
 	return internalopts.InternalOptions{
 		ProjectNumber:                                *projectNumber,
 		Location:                                     *location,
@@ -261,6 +274,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		AutopilotEnabled:                             *autopilotEnabled,
 		NodePoolUpdatesEnabled:                       *nodePoolUpdatesEnabled,
 		NapDefaultMachineTypeFamily:                  *napDefaultMachineTypeFamily,
+		GeneralPurposeMachineFamilies:                parsedGpMachineFamilies,
 		EkMachineTypes:                               *ekMachineTypes,
 		E4aMachineTypes:                              *e4aMachineTypes,
 		EkDownsizeConfig:                             *ekDownsizeConfig,

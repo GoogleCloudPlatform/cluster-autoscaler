@@ -150,6 +150,13 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 	}
 	switch rule.PodFamilyName() {
 	case rules.GeneralPurposePodFamily:
+		if rule.IsCustomFamiliesConfigured() {
+			if families, err := rule.PodFamilyMachineFamilies(); err == nil {
+				// TODO: Temporary debugging log, delete after RCA
+				klog.Infof("prioritizedFamiliesForRule: GeneralPurposePodFamily prioritized families list (custom): %v", families)
+				return families
+			}
+		}
 		var families []machinetypes.MachineFamily
 		if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
 			families = append(families, machinetypes.EK)
@@ -162,13 +169,18 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 		if o.provider.IsExtendedFallbacksEnabled() {
 			families = append(families, rules.ExtendedFallbacks...)
 		}
-
+		// TODO: Temporary debugging log, delete after RCA
+		klog.Infof("prioritizedFamiliesForRule: GeneralPurposePodFamily prioritized families list: %v", families)
 		return families
 	case rules.GeneralPurposeArmPodFamily:
 		if families, err := rule.PodFamilyMachineFamilies(); err == nil {
+			// TODO: Temporary debugging log, delete after RCA
+			klog.Infof("prioritizedFamiliesForRule: GeneralPurposeArmPodFamily prioritized families list: %v", families)
 			return families
 		}
 	}
+	// TODO: Temporary debugging log, delete after RCA
+	klog.Infof("prioritizedFamiliesForRule: no prioritization matching for rule %v", rule.PodFamilyName())
 	return nil
 }
 

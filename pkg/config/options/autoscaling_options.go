@@ -43,6 +43,7 @@ type InternalOptions struct {
 	AutopilotEnabled                             bool
 	NodePoolUpdatesEnabled                       bool
 	NapDefaultMachineTypeFamily                  string
+	GeneralPurposeMachineFamilies                []string
 	EkMachineTypes                               string
 	E4aMachineTypes                              string
 	EkDownsizeConfig                             string

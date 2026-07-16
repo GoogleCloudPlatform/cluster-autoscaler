@@ -116,6 +116,13 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 	if err != nil {
 		return nil, "", machinetypes.SelectionTypeNone, err
 	}
+	// TODO: Temporary debugging log, delete after RCA
+	if rule != nil {
+		klog.Infof("selectMachineGroup START: rule podFamily=%v, crdFamilies=%v, crdFamiliesSpecified=%v",
+			rule.PodFamilyName(), podCrdFamilies, podCrdFamiliesSpecified)
+	} else {
+		klog.Infof("selectMachineGroup START: rule is nil, crdFamilies=%v, crdFamiliesSpecified=%v", podCrdFamilies, podCrdFamiliesSpecified)
+	}
 
 	// Evaluate E4 and E4A eligibility
 	isE4Enabled := s.isE4Enabled(autopilotEnabled, autopilotManaged, isStateless)
@@ -129,7 +136,7 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 		podCrdFamilies = filterE4aMachineFamilyIfNotEnabled(podCrdFamilies, isE4aEnabled)
 		if rule.PodFamilyName() == rules.GeneralPurposePodFamily {
 			podCrdFamilies = s.filterE4MachineFamilyIfNotEnabled(podCrdFamilies, isE4Enabled)
-			if isExtendedFallbacksEnabled {
+			if isExtendedFallbacksEnabled && !rule.IsCustomFamiliesConfigured() {
 				podCrdFamilies = slices.Clone(podCrdFamilies)
 				podCrdFamilies = append(podCrdFamilies, rules.ExtendedFallbacks...)
 			}
@@ -144,6 +151,8 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 		if len(podCrdFamilies) == 0 {
 			return nil, "", machinetypes.SelectionTypeNone, NewPodFamilyUnknownError(rule.PodFamilyName() + " after filtering out disabled machine families")
 		}
+		// TODO: Temporary debugging log, delete after RCA
+		klog.Infof("selectMachineGroup END (crd specified): returning families=%v", podCrdFamilies)
 		return podCrdFamilies, "", machinetypes.SelectionTypeSpecified, nil
 	}
 

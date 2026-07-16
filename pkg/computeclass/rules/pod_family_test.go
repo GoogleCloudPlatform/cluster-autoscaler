@@ -101,6 +101,86 @@ func TestPodFamilyRuleMatchesNodeGroup(t *testing.T) {
 			rule:     NewRule(WithPodFamilyRule(&unknownPodFamily), WithAutopilotModeRule()),
 			expected: false,
 		},
+		{
+			name: "custom general-purpose families, matches configured family",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n2-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, does not match standard defaults if not in list",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "e2-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2), WithAutopilotModeRule()),
+			expected: false,
+		},
+		{
+			name: "custom general-purpose families, ignores extended fallbacks (even if MIG enabled) if not in list",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n4-standard-4",
+			}).SetExtendedFallbacksEnabled(true).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2), WithAutopilotModeRule()),
+			expected: false,
+		},
+		{
+			name: "custom general-purpose families, matches fallback if explicitly in list",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n4-standard-4",
+			}).SetExtendedFallbacksEnabled(true).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2, machinetypes.N4), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, matches N2D machine family",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n2d-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2D), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, matches C2 machine family",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "c2-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.C2), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, matches N1 machine family",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n1-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N1), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, multiple configured, matches first family (C2)",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "c2-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.C2, machinetypes.C2D), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, multiple configured, matches second family (C2D)",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "c2d-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.C2, machinetypes.C2D), WithAutopilotModeRule()),
+			expected: true,
+		},
+		{
+			name: "custom general-purpose families, multiple configured, mismatch (N2D)",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "n2d-standard-4",
+			}).Build(),
+			rule:     NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.C2, machinetypes.C2D), WithAutopilotModeRule()),
+			expected: false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -138,6 +218,16 @@ func TestPodFamilyMachineFamilies(t *testing.T) {
 			name:                    "general purpose podFamily, expect E2 and EK",
 			rule:                    NewRule(WithPodFamilyRule(&generalPurposePodFamily)),
 			expectedMachineFamilies: podFamilyMachineFamilies[generalPurposePodFamily],
+		},
+		{
+			name:                    "general purpose podFamily with custom list, expect custom list",
+			rule:                    NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2, machinetypes.N4)),
+			expectedMachineFamilies: []machinetypes.MachineFamily{machinetypes.N2, machinetypes.N4},
+		},
+		{
+			name:                    "general purpose podFamily with longer custom list, expect custom list",
+			rule:                    NewRule(WithPodFamilyRule(&generalPurposePodFamily, machinetypes.N2, machinetypes.N4, machinetypes.C2, machinetypes.N2D)),
+			expectedMachineFamilies: []machinetypes.MachineFamily{machinetypes.N2, machinetypes.N4, machinetypes.C2, machinetypes.N2D},
 		},
 	}
 

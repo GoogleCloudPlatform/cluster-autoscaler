@@ -1060,6 +1060,63 @@ func TestOrganizeByRules(t *testing.T) {
 			},
 		},
 		{
+			name: "node groups are organized by rules - custom general-purpose families flag, prioritize custom families order",
+			nodeGroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-e4").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "e4-standard-4",
+					}).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-e2").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "e2-standard-4",
+					}).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("nodepool-n2").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+						MachineType: "n2-standard-4",
+					}).
+					Build(),
+			},
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithAutopilotModeRule(),
+						rules.WithPodFamilyRule(&podFamily, machinetypes.N2, machinetypes.E4),
+					),
+				}),
+				crd.WithAutopilotManaged(),
+			),
+			wantGroups: [][]cloudprovider.NodeGroup{
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-n2").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "n2-standard-4",
+						}).
+						Build(),
+				},
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-e4").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "e4-standard-4",
+						}).
+						Build(),
+				},
+			},
+		},
+		{
 			name: "crd with priorityScore",
 			nodeGroups: []cloudprovider.NodeGroup{
 				gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-1").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build(),
