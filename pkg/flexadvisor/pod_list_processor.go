@@ -21,7 +21,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/klog/v2"
 )
 
 type podListProcessorMetrics interface {
@@ -76,7 +75,6 @@ func (p *PodListProcessor) Process(context *context.AutoscalingContext, unschedu
 		}
 		registeredKeys[key] = true
 	}
-	klog.Infof("FlexAdvisor: Processed %d pods; Failures: %d", len(unschedulablePods), failures)
 	p.metrics.UpdateFlexAdvisorRejectedScopes(failures)
 	return unschedulablePods, nil
 }
