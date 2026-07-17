@@ -155,6 +155,10 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 			families = append(families, machinetypes.EK)
 		}
 		families = append(families, machinetypes.E2)
+		if o.provider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name()) ||
+			o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name()) {
+			families = append(families, machinetypes.E4)
+		}
 		if o.provider.IsExtendedFallbacksEnabled() {
 			families = append(families, rules.ExtendedFallbacks...)
 		}
