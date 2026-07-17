@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -41,18 +40,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
-	clockutils "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
 )
 
-// withClock is an Option to set a custom clock, typically for testing.
-func withClock(clock clock.Clock) option {
-	return func(f *flexAdvisor) {
-		f.clock = clock
-	}
-}
+var (
+	testStartTime = time.Date(2026, 1, 1, 1, 1, 1, 1, time.UTC)
+)
 
 // withInstanceConfigGenerator is an Option to set a custom instance config generator, typically for testing.
 func withInstanceConfigGenerator(instanceConfigGenerator *instanceConfigGenerator) option {
@@ -153,7 +146,7 @@ func addScopeDataRaceBackgroundJob(f *flexAdvisor, flexibilityScopeKey string) {
 			select {
 			case <-f.context.Done():
 				return
-			default:
+			case <-time.After(10 * time.Millisecond):
 				scope, _, _ := f.getScope(flexibilityScopeKey)
 				if scope == nil {
 					continue
@@ -169,7 +162,7 @@ func addScopeDataRaceBackgroundJob(f *flexAdvisor, flexibilityScopeKey string) {
 			select {
 			case <-f.context.Done():
 				return
-			default:
+			case <-time.After(10 * time.Millisecond):
 				scope, _, _ := f.getScope(flexibilityScopeKey)
 				if scope == nil {
 					continue
@@ -292,12 +285,11 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, []*gke.GkeMig{}, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
@@ -375,12 +367,11 @@ func TestFlexAdvisor_RegisterFlexibilityScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 				fa.RegisterFlexibilityScope(tc.scopeKey)
@@ -447,7 +438,6 @@ func TestFlexAdvisor_RegisterFlexibilityScopeLimits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
@@ -458,7 +448,7 @@ func TestFlexAdvisor_RegisterFlexibilityScopeLimits(t *testing.T) {
 					optionsManager = experiments.NewMockManager()
 				}
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, optionsManager)
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
 				mockProvider.On("FetchCapacityGuidance").Return(nil, nil)
@@ -687,13 +677,12 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := clock.RealClock{}
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				mockManager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.enabledFeatures)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, mockManager)
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
@@ -730,26 +719,26 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 		},
 	}, "", false, crd.TestDefaultDataProvider(), nil)
 	testCases := []struct {
-		name              string
-		advanceDuration   time.Duration
-		wantGuidanceCalls int
-		addDataRaceJob    bool
+		name             string
+		advanceDuration  time.Duration
+		addDataRaceJob   bool
+		wantScopePresent bool
 	}{
 		{
-			name:              "Scope does not expire before timeout",
-			advanceDuration:   4 * time.Minute,
-			wantGuidanceCalls: 2, // The cache is used, so only the initial and one cache refresh.
+			name:             "Scope does not expire before timeout",
+			advanceDuration:  4 * time.Minute,
+			wantScopePresent: true,
 		},
 		{
-			name:              "Scope expires after timeout",
-			advanceDuration:   11 * time.Minute, // More than the 10-minute lifetime
-			wantGuidanceCalls: 3,                // The scope expires, forcing a second call. (initial call + one cache refresh + second call)
+			name:             "Scope expires after timeout",
+			advanceDuration:  11 * time.Minute, // More than the 10-minute lifetime
+			wantScopePresent: false,
 		},
 		{
-			name:              "data race test",
-			advanceDuration:   11 * time.Minute, // More than the 10-minute lifetime
-			wantGuidanceCalls: 3,                // The scope expires, forcing a second call. (initial call + one cache refresh + second call)
-			addDataRaceJob:    true,
+			name:             "data race test",
+			advanceDuration:  11 * time.Minute, // More than the 10-minute lifetime
+			addDataRaceJob:   true,
+			wantScopePresent: false,
 		},
 	}
 
@@ -757,13 +746,12 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
 				if tc.addDataRaceJob {
@@ -772,33 +760,26 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 
 				mockProvider.On("FetchCapacityGuidance").Return(func() map[string]*api.InstanceAvailability {
 					return map[string]*api.InstanceAvailability{"instance-1": api.NewTestInstanceAvailabilityBuilder("", "instance-1").Build()}
-				}, nil).Times(tc.wantGuidanceCalls)
+				}, nil)
 
 				// 1. Make the initial call to populate the cache and trigger the first API call.
 				_, err = fa.AwaitInstanceAvailability("my-scope", "instance-1")
 				assert.NoError(t, err)
 
 				// 2. Wait for step 1 to finish before incrementing the clock.
-				// 1 waiter for flexibility scope refresh, 1 waiter for removing expired flexibility scopes
-				err = clock.waitForClockWaiters(2)
-				assert.NoError(t, err)
+				synctest.Wait()
 
 				// 3. Instantly advance the mock clock by the duration specified in the test case.
-				clock.Step(tc.advanceDuration)
+				time.Sleep(tc.advanceDuration)
 
 				// 4. We have to wait until FlexAdvisor reacts to step 3.
-				err = clock.waitForClockWaiters(2)
-				assert.NoError(t, err)
+				synctest.Wait()
 
-				// 5. Attempt to get the same scope again.
-				// This will either use the cache or trigger a new API call depending on the clock.
-				_, err = fa.AwaitInstanceAvailability("my-scope", "instance-1")
-				assert.NoError(t, err)
+				// 5. Check if scope is present.
+				_, scopePresent, _ := fa.getScope("my-scope")
+				assert.Equal(t, tc.wantScopePresent, scopePresent)
 
-				// 6. Wait until FA to finish reacting to step 5.
-				err = clock.waitForClockWaiters(2)
-				assert.NoError(t, err)
-
+				mockProvider.AssertCalled(t, "FetchCapacityGuidance")
 				mockProvider.AssertExpectations(t)
 			})
 		})
@@ -891,13 +872,12 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				provider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, provider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, provider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 
 				assert.NoError(t, err)
 				tc.initialSetup(fa, provider)
@@ -1049,119 +1029,6 @@ func TestFlexAdvisor_IncrementFlexAdvisorCacheQueryCount(t *testing.T) {
 			assert.Equal(t, []flexAdvisorCacheMetricLabels{tc.wantLabels}, mockMetrics.calledWith)
 		})
 	}
-}
-
-type customFakeClock struct {
-	clockutils.FakeClock
-	waiterUpdateNotifyChan chan struct{}
-}
-
-func (f *customFakeClock) After(d time.Duration) <-chan time.Time {
-	ch := f.FakeClock.After(d)
-	f.notifyWaitersUpdate()
-	return ch
-}
-
-func (f *customFakeClock) Step(d time.Duration) {
-	f.FakeClock.Step(d)
-	f.notifyWaitersUpdate()
-}
-
-func (f *customFakeClock) AfterFunc(d time.Duration, cb func()) clock.Timer {
-	timer := f.FakeClock.AfterFunc(d, cb)
-	f.notifyWaitersUpdate()
-	return timer
-}
-
-func (f *customFakeClock) Tick(d time.Duration) <-chan time.Time {
-	ch := f.FakeClock.Tick(d)
-	f.notifyWaitersUpdate()
-	return ch
-}
-
-func (f *customFakeClock) notifyWaitersUpdate() {
-	select {
-	case f.waiterUpdateNotifyChan <- struct{}{}:
-	default:
-	}
-}
-
-func (f *customFakeClock) NewTicker(d time.Duration) clock.Ticker {
-	ticker := f.FakeClock.NewTicker(d)
-	f.notifyWaitersUpdate()
-	return ticker
-}
-
-func (f *customFakeClock) waitForClockWaiters(waiterCount int) error {
-	if f.Waiters() >= waiterCount {
-		return nil
-	}
-
-	timer := time.NewTimer(5 * time.Second)
-
-	for {
-		select {
-		case <-f.waiterUpdateNotifyChan:
-			klog.Errorf("Interrupt: Waiting for waiters now: %d", f.Waiters())
-			if f.Waiters() >= waiterCount {
-				return nil
-			}
-		case <-timer.C:
-			return fmt.Errorf("timeout waiting for clock waiters")
-		}
-	}
-}
-
-func (f *customFakeClock) SetTime(t time.Time) {
-	f.FakeClock.SetTime(t)
-	f.notifyWaitersUpdate()
-}
-
-func newCustomFakeClock() *customFakeClock {
-	return &customFakeClock{
-		FakeClock:              *clockutils.NewFakeClock(time.Date(2025, 7, 23, 14, 30, 0, 0, time.UTC)),
-		waiterUpdateNotifyChan: make(chan struct{}, 5),
-	}
-}
-
-type customFakeTimer struct {
-	mutex     sync.Mutex
-	timer     clock.Timer
-	fakeClock *customFakeClock
-}
-
-func (f *customFakeTimer) C() <-chan time.Time {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	return f.timer.C()
-}
-
-func (f *customFakeTimer) Stop() bool {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	return f.timer.Stop()
-}
-
-func (f *customFakeTimer) Reset(d time.Duration) bool {
-	f.mutex.Lock()
-	defer f.mutex.Unlock()
-	active := f.timer.Reset(d)
-	if !active {
-		f.fakeClock.notifyWaitersUpdate()
-		return false
-	}
-	f.timer = f.fakeClock.NewTimer(d)
-	return active
-}
-
-func (f *customFakeClock) NewTimer(d time.Duration) clock.Timer {
-	timer := f.FakeClock.NewTimer(d)
-	fakeTimer := &customFakeTimer{
-		timer:     timer,
-		fakeClock: f,
-	}
-	f.notifyWaitersUpdate()
-	return fakeTimer
 }
 
 func TestIsFlexAdvisorTPUEnabled(t *testing.T) {
@@ -1587,25 +1454,24 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
 				var scope *flexibilityScope
 				if !tc.nilScope {
 					scope = newFlexibilityScope(nil, "scope-1", func() {})
 					if tc.refreshTime != nil {
-						scope.lastSuccessfulRefreshAt = tc.refreshTime(clock.Now())
+						scope.lastSuccessfulRefreshAt = tc.refreshTime(time.Now())
 					}
 				}
 
 				if tc.clockStep > 0 {
-					clock.Step(tc.clockStep)
+					time.Sleep(tc.clockStep)
 				}
 
 				got := fa.isStale(scope)

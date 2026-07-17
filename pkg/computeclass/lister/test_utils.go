@@ -16,6 +16,7 @@ package lister
 
 import (
 	"fmt"
+	"sync"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
@@ -27,6 +28,7 @@ import (
 )
 
 type MockCrdLister struct {
+	mu             sync.RWMutex
 	crds           []crd.CRD
 	crdLabel       string
 	defaultCRDName string
@@ -57,15 +59,21 @@ func NewMockCrdListerWithCCCDefaulting(crds []crd.CRD, cccDefaulting bool) *Mock
 }
 
 func (l *MockCrdLister) SetCrds(crds []crd.CRD) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.crds = crds
 }
 
 func (l *MockCrdLister) ListCrds() ([]crd.CRD, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return l.crds, nil
 }
 
 // Crd returns the CRD associated with the given label and name.
 func (l *MockCrdLister) Crd(CRDLabel string, CRDName string) (crd.CRD, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	if CRDLabel != l.crdLabel {
 		return nil, fmt.Errorf("unknown CRD label %s", CRDLabel)
 	}
@@ -74,6 +82,8 @@ func (l *MockCrdLister) Crd(CRDLabel string, CRDName string) (crd.CRD, error) {
 }
 
 func (l *MockCrdLister) NodeGroupCrd(nodeGroup cloudprovider.NodeGroup) (crd.CRD, string, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	name, found, err := crd.NodeGroupCrdLabel(nodeGroup, l.crdLabel)
 	if err != nil {
 		return nil, "", err
@@ -82,6 +92,8 @@ func (l *MockCrdLister) NodeGroupCrd(nodeGroup cloudprovider.NodeGroup) (crd.CRD
 }
 
 func (l *MockCrdLister) NodeCrd(node *apiv1.Node) (crd.CRD, string, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	name, found, err := crd.NodeCrdLabel(node, l.crdLabel)
 	if err != nil {
 		return nil, "", err
@@ -90,11 +102,15 @@ func (l *MockCrdLister) NodeCrd(node *apiv1.Node) (crd.CRD, string, error) {
 }
 
 func (l *MockCrdLister) PodReqCrd(req *podrequirements.Requirements) (crd.CRD, string, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	name, found := req.LabelReq.GetSingleValue(l.crdLabel)
 	return l.getCrd(name, found)
 }
 
 func (l *MockCrdLister) PodReqCrdType(req *podrequirements.Requirements) (string, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	if l.crdLabel == gkelabels.ComputeClassLabel {
 		return ccc.CrdType, nil
 	}
@@ -157,10 +173,14 @@ func (l *MockCrdLister) getCrd(name string, found bool) (crd.CRD, string, error)
 }
 
 func (l *MockCrdLister) Labels() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return []string{l.crdLabel}
 }
 
 func (l *MockCrdLister) Default() (string, string, bool) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	if l.defaultCRDSet {
 		return l.defaultCRDName, l.crdLabel, true
 	}
@@ -168,11 +188,15 @@ func (l *MockCrdLister) Default() (string, string, bool) {
 }
 
 func (l *MockCrdLister) SetDefaultCrdName(defaultCRDName string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.defaultCRDName = defaultCRDName
 	l.defaultCRDSet = true
 }
 
 func (l *MockCrdLister) SetCrdLabel(label string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.crdLabel = label
 }
 
@@ -194,6 +218,8 @@ func (l *MockCrdLister) SetCloudProvider(provider listerCloudProvider) {}
 
 // GetCrd returns CRD for given name.
 func (l *MockCrdLister) GetCrd(name string) (crd.CRD, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	if machinetypes.IsPredefinedComputeClass(name) {
 		return nil, nil
 	}
@@ -207,5 +233,7 @@ func (l *MockCrdLister) GetCrd(name string) (crd.CRD, error) {
 
 // UpdateCrds updates the list of CRDs in the mock lister.
 func (l *MockCrdLister) UpdateCrds(crds []crd.CRD) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.crds = crds
 }

@@ -85,12 +85,28 @@ func newScopeWorker(scope *flexibilityScope, f *flexAdvisor) *scopeWorker {
 func (w *scopeWorker) run(ctx context.Context) {
 	w.refreshScope(ctx)
 	w.scope.firstFetchWG.Done()
+
+	timer := w.clock.NewTimer(refreshInterval)
+	defer timer.Stop()
 	for {
+		// 1. Non-blocking check for the timer first (Priority)
 		select {
+		case <-timer.C():
+			w.refreshScope(ctx)
+			timer.Reset(refreshInterval)
+			continue // Skip the rest, start the loop over
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// 2. Normal processing
+		select {
+		case <-timer.C():
+			w.refreshScope(ctx)
+			timer.Reset(refreshInterval)
 		case decision := <-w.provisioningDecisionChan:
 			w.sendProvisioningDecision(ctx, decision)
-		case <-w.clock.After(refreshInterval):
-			w.refreshScope(ctx)
 		case <-ctx.Done():
 			return
 		}

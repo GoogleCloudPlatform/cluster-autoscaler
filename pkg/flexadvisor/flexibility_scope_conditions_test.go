@@ -227,7 +227,6 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 
 				// Setup tested objects and structures
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
@@ -270,7 +269,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
 				updatesCh := make(chan status.UpdateMessage, 10)
 
-				fa, err := NewFlexAdvisor(ctx, mockProvider, mockLister, instanceConfigCloudProvider, optionsTracker, updatesCh, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, mockLister, instanceConfigCloudProvider, optionsTracker, updatesCh)
 				assert.NoError(t, err)
 
 				setupScopeAvailability(t, fa, mockProvider, "ccc-1", crd1, tc.availability)

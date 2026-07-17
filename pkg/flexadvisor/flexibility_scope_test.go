@@ -24,6 +24,7 @@ import (
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -129,25 +130,22 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
 				tc.initialSetup(fa, mockProvider)
 				// 1 waiter for flexibility scope refresh, 1 waiter for removing expired flexibility scopes
-				err = clock.waitForClockWaiters(2)
-				assert.NoError(t, err)
+				synctest.Wait()
 
 				// trigger the api call to refresh cache
-				clock.Step(11 * time.Second)
+				time.Sleep(11 * time.Second)
 
 				// wait for refresh to finish
-				err = clock.waitForClockWaiters(2)
-				assert.NoError(t, err)
+				synctest.Wait()
 
 				for instanceConfigKey, wantSnapshot := range tc.want {
 					got := fa.GetInstanceAvailability("scope-1", instanceConfigKey)
@@ -166,9 +164,78 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 	}
 }
 
+// TestScopeWorker_PeriodicRefreshWithConstantTraffic tests against bug found at b/533463854
+// Previously, sending provisioning decisions would cause `refreshScope` timer to reset,
+// leading to scopes not being refreshed on time. This test guards against that, verifying
+// that even with full queue, scopes are being refreshed at the required 10 sec interval.
+func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mockProvider := &mockAdviceProvider{}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "scope-1"},
+			Spec: v1.ComputeClassSpec{
+				Priorities: []v1.Priority{{MachineType: ptr.To("e2-standard-2")}},
+			},
+		}, "", false, crd.TestDefaultDataProvider(), nil)
+
+		instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+		optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+
+		configKey := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature()
+		availability := api.NewTestInstanceAvailabilityBuilder("scope-1", configKey).WithZonalInstanceCount(map[string]int{"us-west1-a": 10}).Build()
+
+		fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+		assert.NoError(t, err)
+
+		mockProvider.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{configKey: availability}, nil).Once()
+		_, err = fa.AwaitInstanceAvailability("scope-1", configKey)
+		assert.NoError(t, err)
+
+		countFetchCalls := 0
+		expectedCountFetchCalls := 10
+		mockProvider.On("FetchCapacityGuidance").Return(func() map[string]*api.InstanceAvailability {
+			countFetchCalls += 1
+			return map[string]*api.InstanceAvailability{configKey: api.NewTestInstanceAvailabilityBuilder("scope-1", configKey).WithZonalInstanceCount(map[string]int{"us-west1-a": 10}).Build()}
+		}, nil).Times(expectedCountFetchCalls)
+		mockProvider.On("SendCapacityDecision", mock.Anything).Return(nil)
+
+		// Wait for background goroutines to settle
+		synctest.Wait()
+
+		// Start flooder
+		flooderCtx, flooderCancel := context.WithCancel(ctx)
+		defer flooderCancel()
+		go func() {
+			for {
+				select {
+				case <-flooderCtx.Done():
+					return
+				case <-time.After(1 * time.Second):
+					_ = fa.MarkUsed("scope-1", configKey, "guidance-id", "decision-id", map[string]int{"us-west1-a": 1})
+				}
+			}
+		}()
+
+		// Wait for flooder to block on time.After
+		synctest.Wait()
+
+		// Step 1s at a time for 15 seconds
+		for i := 0; i < expectedCountFetchCalls*10+1; i++ {
+			time.Sleep(1 * time.Second)
+			synctest.Wait()
+		}
+
+		assert.Equal(t, expectedCountFetchCalls, countFetchCalls, fmt.Sprintf("FetchCapacityGuidance should be called exactly %d times", expectedCountFetchCalls))
+		mockProvider.AssertExpectations(t)
+	})
+}
+
 func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 	maxInstanceConfigs := 3
-	initializeTest := func(ctx context.Context, clock *customFakeClock) (*lister.MockCrdLister, *flexAdvisor) {
+	initializeTest := func(ctx context.Context) (*lister.MockCrdLister, *flexAdvisor) {
 		mockProvider := &mockAdviceProvider{}
 		mockLister := lister.NewMockCrdLister([]crd.CRD{ccc.NewCccCrd(&v1.ComputeClass{
 			ObjectMeta: metav1.ObjectMeta{
@@ -196,7 +263,6 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 			instanceConfigCloudProvider,
 			optionsTracker,
 			nil,
-			withClock(clock),
 			withInstanceConfigGenerator(instanceConfigGenerator),
 		)
 		assert.NoError(t, err)
@@ -207,22 +273,24 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 		return mockLister, fa
 	}
 
-	// waitForWorkers pauses test until given amount of go routines are waiting for the clock to proceed
-	waitForWorkers := func(clock *customFakeClock) {
-		// we expect 2 workers: one for flexibility scope refresh, one for removing expired flexibility scopes
-		err := clock.waitForClockWaiters(2)
-		assert.NoError(t, err)
+	getCappedKeysMapCopy := func(scope *flexibilityScope) map[string]bool {
+		scope.mutex.Lock()
+		defer scope.mutex.Unlock()
+		cappedKeysMapCopy := make(map[string]bool, len(scope.cappedKeysMap))
+		for k, v := range scope.cappedKeysMap {
+			cappedKeysMapCopy[k] = v
+		}
+		return cappedKeysMapCopy
 	}
 
 	t.Run("CCC changes - cappedKeysMap is updated", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			clock := newCustomFakeClock()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			mockLister, fa := initializeTest(ctx, clock)
+			mockLister, fa := initializeTest(ctx)
 
-			waitForWorkers(clock)
+			synctest.Wait()
 
 			scope, ok, _ := fa.getScope("scope-1")
 			assert.True(t, ok)
@@ -233,7 +301,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():  false,
 				api.NewInstanceConfig("e2-standard-16", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature(): true,
 				api.NewInstanceConfig("e2-standard-32", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature(): true,
-			}, scope.cappedKeysMap)
+			}, getCappedKeysMapCopy(scope))
 
 			// update crd to one with less machine types - should update the capped keys map
 			mockLister.SetCrds([]crd.CRD{ccc.NewCccCrd(&v1.ComputeClass{
@@ -251,8 +319,8 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 			}, "", false, crd.TestDefaultDataProvider(), nil),
 			})
 
-			clock.Step(11 * time.Second)
-			waitForWorkers(clock)
+			time.Sleep(11 * time.Second)
+			synctest.Wait()
 
 			scope, ok, _ = fa.getScope("scope-1")
 			assert.True(t, ok)
@@ -264,7 +332,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():     false,
 				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature(): true,
 				api.NewInstanceConfig("e2-standard-16", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():    true,
-			}, scope.cappedKeysMap)
+			}, getCappedKeysMapCopy(scope))
 		})
 	})
 }
@@ -348,14 +416,13 @@ func TestResponseValidation_Metrics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				mockProvider := &mockAdviceProvider{}
-				clock := newCustomFakeClock()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, withClock(clock))
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
 				mockProvider.On("FetchCapacityGuidance").Return(tc.mockCapacityGuidance, nil)
