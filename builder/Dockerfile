@@ -20,9 +20,32 @@ ENV GO111MODULE=auto
 # Install tools for build verification
 RUN \
     apt-get update && \
-    apt-get --yes --no-install-recommends install libseccomp-dev autoconf automake libtool curl make g++ unzip qemu-user-static rsync jq && \
+    apt-get --yes --no-install-recommends install \
+    libseccomp-dev \
+    autoconf \
+    automake \
+    libtool \
+    curl \
+    make \
+    g++ \
+    unzip \
+    qemu-user-static \
+    rsync \
+    jq \
+    apt-transport-https \
+    gpg \
+    gnupg \
+    && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
+
+ARG GCLOUD_VERSION="575.0.0-0"
+RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends google-cloud-cli=${GCLOUD_VERSION} \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install protoc v3.21.12
 ARG PROTOC_VERSION=21.12

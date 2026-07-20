@@ -28,6 +28,7 @@ excluded_paths=(
   "hack/internal"
   "proto"
   "test/frankenstein"
+  "kokoro"
 )
 
 grep_args=(
