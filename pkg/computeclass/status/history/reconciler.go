@@ -40,12 +40,12 @@ func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh cha
 			if isInInitialList {
 				klog.V(4).Infof("Observing ComputeClass %s during informer sync for priority history reset", cc.Name)
 				crdId := npc_status.CRDId{CRDName: cc.Name, CRDLabel: gkelabels.ComputeClassLabel}
-				updatesCh <- npc_status.UpdateMessage{
+				npc_status.TrySendUpdate(updatesCh, npc_status.UpdateMessage{
 					Id: crdId,
 					Mutate: func(s crd.CRDStatus) {
 						s.ResetAllScalingHistories()
 					},
-				}
+				})
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
@@ -70,12 +70,12 @@ func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh cha
 			if oldHash != newHash {
 				klog.V(4).Infof("Observing ComputeClass %s for priority history reset", newCC.Name)
 				crdId := npc_status.CRDId{CRDName: newCC.Name, CRDLabel: gkelabels.ComputeClassLabel}
-				updatesCh <- npc_status.UpdateMessage{
+				npc_status.TrySendUpdate(updatesCh, npc_status.UpdateMessage{
 					Id: crdId,
 					Mutate: func(s crd.CRDStatus) {
 						s.ResetAllScalingHistories()
 					},
-				}
+				})
 			}
 		},
 	})

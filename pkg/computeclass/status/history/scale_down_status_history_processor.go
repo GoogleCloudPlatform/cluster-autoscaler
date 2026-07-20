@@ -120,7 +120,7 @@ func (p *ScaleDownStatusHistoryProcessor) Process(context *context.AutoscalingCo
 			deltaVal := delta
 			crdIdVal := crdId
 
-			p.updatesCh <- status.UpdateMessage{
+			status.TrySendRuleUpdate(p.updatesCh, status.UpdateMessage{
 				Id: crdIdVal,
 				Mutate: func(s crd.CRDStatus) {
 					current := s.GetRuleScalingHistory(rIdxVal)
@@ -132,7 +132,7 @@ func (p *ScaleDownStatusHistoryProcessor) Process(context *context.AutoscalingCo
 					updated.MeasuredAt = metav1.NewTime(p.now())
 					s.UpdateRuleScalingHistory(rIdxVal, updated)
 				},
-			}
+			}, rIdxVal)
 		}
 	}
 }

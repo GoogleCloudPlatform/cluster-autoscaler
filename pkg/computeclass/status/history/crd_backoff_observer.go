@@ -103,7 +103,7 @@ func (i *CrdBackoffObserver) OnNpcBackoff(npcCrd crd.CRD, ruleIdx int, errorInfo
 		isFullCooldown: true,
 	}
 
-	i.updatesCh <- npc_status.UpdateMessage{
+	npc_status.TrySendRuleUpdate(i.updatesCh, npc_status.UpdateMessage{
 		Id: crdId,
 		Mutate: func(s crd.CRDStatus) {
 			existingConditions := s.GetRuleConditions(strIdx)
@@ -124,7 +124,7 @@ func (i *CrdBackoffObserver) OnNpcBackoff(npcCrd crd.CRD, ruleIdx int, errorInfo
 
 			s.UpdateRuleConditions(strIdx, deduplicated)
 		},
-	}
+	}, strIdx)
 }
 
 // ensure we implement the interfaces
@@ -165,10 +165,11 @@ func (i *CrdBackoffObserver) OnBackoff(nodeGroup cloudprovider.NodeGroup, errorI
 		isFullCooldown: false,
 	}
 
-	i.updatesCh <- npc_status.UpdateMessage{
+	ruleIdxStr := fmt.Sprintf("%d", ruleIdx)
+	npc_status.TrySendRuleUpdate(i.updatesCh, npc_status.UpdateMessage{
 		Id: crdId,
 		Mutate: func(s crd.CRDStatus) {
-			existingConditions := s.GetRuleConditions(fmt.Sprintf("%d", ruleIdx))
+			existingConditions := s.GetRuleConditions(ruleIdxStr)
 			hasFullCooldown := false
 			var deduplicated []metav1.Condition
 			for _, existing := range existingConditions {
@@ -190,9 +191,9 @@ func (i *CrdBackoffObserver) OnBackoff(nodeGroup cloudprovider.NodeGroup, errorI
 				})
 			}
 
-			s.UpdateRuleConditions(fmt.Sprintf("%d", ruleIdx), deduplicated)
+			s.UpdateRuleConditions(ruleIdxStr, deduplicated)
 		},
-	}
+	}, ruleIdxStr)
 }
 
 // RemoveExpiredBackoffs checks all tracked backoffs and removes those that have expired.
@@ -206,10 +207,11 @@ func (i *CrdBackoffObserver) RemoveExpiredBackoffs(currentTime time.Time) {
 		if !currentTime.Before(data.expirationTime) {
 			delete(i.backedOffRules, ruleKey)
 
-			i.updatesCh <- npc_status.UpdateMessage{
+			ruleIdxStr := fmt.Sprintf("%d", data.ruleIdx)
+			npc_status.TrySendRuleUpdate(i.updatesCh, npc_status.UpdateMessage{
 				Id: data.crdId,
 				Mutate: func(s crd.CRDStatus) {
-					existingConditions := s.GetRuleConditions(fmt.Sprintf("%d", data.ruleIdx))
+					existingConditions := s.GetRuleConditions(ruleIdxStr)
 					var deduplicated []metav1.Condition
 					for _, existing := range existingConditions {
 						if data.isFullCooldown {
@@ -222,9 +224,9 @@ func (i *CrdBackoffObserver) RemoveExpiredBackoffs(currentTime time.Time) {
 							}
 						}
 					}
-					s.UpdateRuleConditions(fmt.Sprintf("%d", data.ruleIdx), deduplicated)
+					s.UpdateRuleConditions(ruleIdxStr, deduplicated)
 				},
-			}
+			}, ruleIdxStr)
 		}
 	}
 }

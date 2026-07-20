@@ -155,7 +155,7 @@ func (v *validator) loop() {
 
 		if v.anyConditionsChanged(c, allConditions) {
 			if v.updatesCh != nil {
-				v.updatesCh <- status.UpdateMessage{
+				status.TrySendUpdate(v.updatesCh, status.UpdateMessage{
 					Id: status.CRDId{
 						CRDName:  c.Name(),
 						CRDLabel: c.Label(),
@@ -166,7 +166,7 @@ func (v *validator) loop() {
 						newConditions = append(newConditions, healthCondition)
 						s.UpdateConditions(newConditions)
 					},
-				}
+				})
 			} else {
 				if err := c.UpdateConditions(v.client, allConditions); err != nil {
 					klog.Errorf("Cannot update status of Crd: %v:%v, err: %v", c.Label(), c.Name(), err)
@@ -190,7 +190,7 @@ func (v *validator) validateRules(c crd.CRD) {
 		conditions := v.evaluator.GetRuleConditions(rule)
 		ruleIdx := fmt.Sprintf("%d", idx)
 		if v.updatesCh != nil && crd.AnyConditionsChanged(c.GetRuleCondition(ruleIdx), conditions, nil) {
-			v.updatesCh <- status.UpdateMessage{
+			status.TrySendRuleUpdate(v.updatesCh, status.UpdateMessage{
 				Id: status.CRDId{
 					CRDName:  c.Name(),
 					CRDLabel: c.Label(),
@@ -200,7 +200,7 @@ func (v *validator) validateRules(c crd.CRD) {
 					newRuleConditions := append(otherRuleConditions, conditions...)
 					s.UpdateRuleConditions(ruleIdx, newRuleConditions)
 				},
-			}
+			}, ruleIdx)
 		}
 	}
 }

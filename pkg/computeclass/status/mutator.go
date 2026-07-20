@@ -16,6 +16,7 @@ package status
 
 import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/klog/v2"
 )
 
 // Mutator is a function that applies a partial change to the status.
@@ -36,4 +37,36 @@ type CRDId struct {
 	CRDLabel string
 	// CRDName is the name of the CRD.
 	CRDName string
+}
+
+// TrySendUpdate attempts to send an UpdateMessage on ch without blocking.
+// If ch is nil, it does nothing and returns false.
+// If ch is full, it drops the message, logs a warning, and returns false.
+func TrySendUpdate(ch chan<- UpdateMessage, msg UpdateMessage) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- msg:
+		return true
+	default:
+		klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s", msg.Id.CRDName)
+		return false
+	}
+}
+
+// TrySendRuleUpdate attempts to send an UpdateMessage on ch without blocking, including the rule index in the log warning if full.
+// If ch is nil, it does nothing and returns false.
+// If ch is full, it drops the message, logs a warning with rule index, and returns false.
+func TrySendRuleUpdate(ch chan<- UpdateMessage, msg UpdateMessage, ruleIdx string) bool {
+	if ch == nil {
+		return false
+	}
+	select {
+	case ch <- msg:
+		return true
+	default:
+		klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s, rule %s", msg.Id.CRDName, ruleIdx)
+		return false
+	}
 }

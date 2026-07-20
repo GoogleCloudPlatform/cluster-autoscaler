@@ -144,7 +144,7 @@ func (p *AutoscalingStatusHistoryProcessor) process(context *context.Autoscaling
 			d := delta
 			crdId := crdId
 
-			p.updatesCh <- npc_status.UpdateMessage{
+			npc_status.TrySendRuleUpdate(p.updatesCh, npc_status.UpdateMessage{
 				Id: crdId,
 				Mutate: func(s crd.CRDStatus) {
 					current := s.GetRuleScalingHistory(rIdx)
@@ -171,7 +171,7 @@ func (p *AutoscalingStatusHistoryProcessor) process(context *context.Autoscaling
 					}
 					s.UpdateRuleConditions(rIdx, overwritten)
 				},
-			}
+			}, rIdx)
 		}
 	}
 

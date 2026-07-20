@@ -207,7 +207,7 @@ func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext,
 	}
 
 	for crdId, crdRuleUpdates := range crdUpdates {
-		m.updatesCh <- UpdateMessage{
+		TrySendUpdate(m.updatesCh, UpdateMessage{
 			Id: crdId,
 			Mutate: func(status crd.CRDStatus) {
 				status.ResetAllResourceInfo()
@@ -217,17 +217,17 @@ func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext,
 						"Reporting for CRD %s, rule %s, resource %s: current %d, target %d, requested by pods %d", crdId.CRDName, ruleUpdate.ruleIdx, ruleUpdate.resourceInfo.Name, ruleUpdate.resourceInfo.CurrentCount, ruleUpdate.resourceInfo.TargetCount, ruleUpdate.resourceInfo.CurrentUtilizationPercentage)
 				}
 			},
-		}
+		})
 		delete(allCrdIds, crdId)
 	}
 
 	for crdId := range allCrdIds {
-		m.updatesCh <- UpdateMessage{
+		TrySendUpdate(m.updatesCh, UpdateMessage{
 			Id: crdId,
 			Mutate: func(status crd.CRDStatus) {
 				status.ResetAllResourceInfo()
 			},
-		}
+		})
 	}
 
 	return nil

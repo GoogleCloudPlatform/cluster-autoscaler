@@ -181,7 +181,7 @@ func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_stat
 
 			rIdx := ruleIdx
 
-			p.updatesCh <- npc_status.UpdateMessage{
+			npc_status.TrySendRuleUpdate(p.updatesCh, npc_status.UpdateMessage{
 				Id: crdId,
 				Mutate: func(s crd.CRDStatus) {
 					existingConditions := s.GetRuleConditions(rIdx)
@@ -194,7 +194,7 @@ func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_stat
 					deduplicated = append(deduplicated, cond)
 					s.UpdateRuleConditions(rIdx, deduplicated)
 				},
-			}
+			}, rIdx)
 		}
 	}
 }

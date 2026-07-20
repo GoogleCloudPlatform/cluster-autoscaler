@@ -605,8 +605,7 @@ func (o *minCapacityObserver) sendConditionUpdate(ccName string, ruleIdx int, co
 
 	if ruleIdx != -1 {
 		ruleIdxStr := fmt.Sprintf("%d", ruleIdx)
-		select {
-		case o.updatesCh <- status.UpdateMessage{
+		status.TrySendRuleUpdate(o.updatesCh, status.UpdateMessage{
 			Id: id,
 			Mutate: func(s crd.CRDStatus) {
 				existing := s.GetRuleConditions(ruleIdxStr)
@@ -618,13 +617,9 @@ func (o *minCapacityObserver) sendConditionUpdate(ccName string, ruleIdx int, co
 				}
 				s.UpdateRuleConditions(ruleIdxStr, existing)
 			},
-		}:
-		default:
-			klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s, rule %s", ccName, ruleIdxStr)
-		}
+		}, ruleIdxStr)
 	} else {
-		select {
-		case o.updatesCh <- status.UpdateMessage{
+		status.TrySendUpdate(o.updatesCh, status.UpdateMessage{
 			Id: id,
 			Mutate: func(s crd.CRDStatus) {
 				existing := s.GetConditions()
@@ -636,9 +631,6 @@ func (o *minCapacityObserver) sendConditionUpdate(ccName string, ruleIdx int, co
 				}
 				s.UpdateConditions(existing)
 			},
-		}:
-		default:
-			klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s", ccName)
-		}
+		})
 	}
 }

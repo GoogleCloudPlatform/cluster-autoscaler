@@ -22,7 +22,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
-	"k8s.io/klog/v2"
 )
 
 const (
@@ -106,13 +105,7 @@ func (w *scopeWorker) updateRuleFilteringConditions(results map[string]*api.Inst
 				s.UpdateRuleConditions(ruleIdxStr, deduplicated)
 			},
 		}
-		if w.statusUpdatesCh != nil {
-			select {
-			case w.statusUpdatesCh <- msg:
-			default:
-				klog.Warningf("FlexAdvisor: status channel is full, dropping status update for ComputeClass %s, rule %d", cc.Name(), idx)
-			}
-		}
+		status.TrySendRuleUpdate(w.statusUpdatesCh, msg, ruleIdxStr)
 	}
 }
 
