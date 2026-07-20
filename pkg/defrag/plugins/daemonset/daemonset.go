@@ -15,26 +15,21 @@
 package daemonset
 
 import (
-	gocontext "context"
 	"fmt"
 	"time"
 
-	v1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	apilabels "k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/controller/daemon"
-	"k8s.io/kubernetes/pkg/util/taints"
+	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/utils/clock"
 )
 
@@ -73,11 +68,7 @@ func (p *plugin) String() string {
 }
 
 func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
-	daemonSets, err := ctx.ListerRegistry.DaemonSetLister().List(apilabels.Everything())
-	if err != nil {
-		klog.Errorf("Failed to list daemon sets: %v", err)
-		return nil
-	}
+	targetNodes := unschedulableDSPodsTargetNodes(ctx)
 
 	now := p.clock.Now()
 	newPending := make(map[string]time.Time)
@@ -90,7 +81,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 			continue
 		}
 
-		status := p.checkNodeStatus(ctx, nodeInfo, daemonSets)
+		status := p.checkNodeStatus(ctx, nodeInfo, targetNodes.Has(nodeName))
 		switch status {
 		case NodeUnfit:
 			unfitNodes = append(unfitNodes, nodeName)
@@ -120,32 +111,11 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
-	daemonSets, err := ctx.ListerRegistry.DaemonSetLister().List(apilabels.Everything())
-	if err != nil {
-		klog.Errorf("Failed to list daemon sets: %v", err)
-		return nil
-	}
+	targetNodes := unschedulableDSPodsTargetNodes(ctx)
 
 	var candidateNodes []string
 	for _, nodeName := range nodeNames {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			klog.Errorf("Failed to get node info for node %v: %v", nodeName, err)
-			continue
-		}
-
-		// Remove HardTaint from the candidate node. We are using the scheduling
-		// logic to determine if the DS pod should be running on the node. After
-		// the candidate nodes are created they are tainted with the defrag taint,
-		// for which the missing DS likely doesn't have a toleration. Because of
-		// that here we just ignore this taint for previously picked nodes.
-		node := nodeInfo.Node().DeepCopy()
-		node.Spec.Taints, _ = taints.DeleteTaint(node.Spec.Taints, &apiv1.Taint{
-			Key:    defrag.HardTaint,
-			Effect: apiv1.TaintEffectNoSchedule,
-		})
-
-		if !allDaemonSetsSchedulable(ctx.ClusterSnapshot, node, nodeInfo.Pods(), daemonSets) {
+		if targetNodes.Has(nodeName) {
 			candidateNodes = append(candidateNodes, nodeName)
 		}
 	}
@@ -170,7 +140,7 @@ func (p *plugin) Type() defrag.PluginType {
 func (p *plugin) checkNodeStatus(
 	ctx *context.AutoscalingContext,
 	nodeInfo *framework.NodeInfo,
-	daemonSets []*v1.DaemonSet,
+	hasUnschedulableDSPod bool,
 ) nodeStatus {
 	node := nodeInfo.Node()
 	if !p.config.Autopilot {
@@ -183,7 +153,7 @@ func (p *plugin) checkNodeStatus(
 		}
 	}
 
-	if allDaemonSetsSchedulable(ctx.ClusterSnapshot, node, nodeInfo.Pods(), daemonSets) {
+	if !hasUnschedulableDSPod {
 		return NodeHealthy
 	}
 	machineFamily, hasLabel := node.Labels[gkelabels.MachineFamilyLabel]
@@ -200,36 +170,58 @@ func (p *plugin) checkNodeStatus(
 	return NodeUnfit
 }
 
-func allDaemonSetsSchedulable(snapshot clustersnapshot.ClusterSnapshot, node *apiv1.Node, podInfos []*framework.PodInfo, daemonSets []*v1.DaemonSet) bool {
-	logger := klog.FromContext(gocontext.Background())
-	snapshot.Fork()
-	defer snapshot.Revert()
-
-	runningDS := make(map[types.UID]bool)
-	for _, podInfo := range podInfos {
-		controllerRef := metav1.GetControllerOf(podInfo.Pod)
-		if controllerRef != nil && controllerRef.Kind == "DaemonSet" {
-			runningDS[controllerRef.UID] = true
-		}
+func unschedulableDSPodsTargetNodes(autoscalingCtx *context.AutoscalingContext) sets.Set[string] {
+	targetNodes := make(sets.Set[string])
+	if autoscalingCtx.ListerRegistry == nil || autoscalingCtx.ListerRegistry.AllPodLister() == nil {
+		klog.Errorf("AllPodLister is not set in AutoscalingContext")
+		return targetNodes
 	}
 
-	for _, ds := range daemonSets {
-		if shouldRun, _ := daemon.NodeShouldRunDaemonPod(logger, node, ds); shouldRun && !runningDS[ds.UID] {
-			dsPod := daemon.NewPod(ds, node.Name)
-			if err := snapshot.SchedulePod(dsPod, node.Name); err != nil && err.Type() == clustersnapshot.SchedulingInternalError {
-				// Unexpected error.
-				klog.Errorf("Error while scheduling pod in snapshot: %v", err)
-				return false
-			} else if err != nil {
-				// dsPod can't be scheduled on node because of scheduling predicates.
-				klog.V(4).Infof("Node %v cannot schedule expected DS pod %v: %q", node.Name, ds.Name, err)
-				return false
+	allPods, err := autoscalingCtx.ListerRegistry.AllPodLister().List()
+	if err != nil {
+		klog.Errorf("Failed to list pods: %v", err)
+		return targetNodes
+	}
+
+	for _, pod := range allPods {
+		if !isPodUnschedulable(pod) {
+			continue
+		}
+		controllerRef := metav1.GetControllerOf(pod)
+		if controllerRef == nil || controllerRef.Kind != "DaemonSet" {
+			continue
+		}
+		targetNode := getNodeTargetedByDaemonSetPod(pod)
+		if targetNode != "" {
+			targetNodes.Insert(targetNode)
+		}
+	}
+	return targetNodes
+}
+
+func isPodUnschedulable(pod *apiv1.Pod) bool {
+	if pod.Spec.NodeName != "" {
+		return false
+	}
+	_, cond := podutil.GetPodCondition(&pod.Status, apiv1.PodScheduled)
+	if cond != nil && cond.Status == apiv1.ConditionFalse && cond.Reason == apiv1.PodReasonUnschedulable {
+		return true
+	}
+	return false
+}
+
+func getNodeTargetedByDaemonSetPod(pod *apiv1.Pod) string {
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil || pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return ""
+	}
+	for _, term := range pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		for _, matchField := range term.MatchFields {
+			if matchField.Key == metav1.ObjectNameField && matchField.Operator == apiv1.NodeSelectorOpIn && len(matchField.Values) == 1 {
+				return matchField.Values[0]
 			}
-			// dsPod was scheduled on node.
 		}
 	}
-
-	return true
+	return ""
 }
 
 func (p *plugin) enabledViaCCC(ctx *context.AutoscalingContext, node *apiv1.Node) (bool, error) {
