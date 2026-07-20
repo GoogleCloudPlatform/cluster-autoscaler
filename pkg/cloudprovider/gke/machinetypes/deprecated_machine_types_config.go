@@ -2577,7 +2577,7 @@ var (
 		systemArchitecture: gce.Arm64,
 		pricingInfo: MachineFamilyPricingInfo{
 			CpuPricePerHour:         0.032578,
-			MemoryPricePerHourPerGb: 0.3,
+			MemoryPricePerHourPerGb: 0.0038871,
 			PreemptibleDiscount:     0.0130312 / 0.032578,
 		},
 		customPricingInfo: &MachineFamilyPricingInfo{
@@ -2633,7 +2633,7 @@ var (
 		systemArchitecture: gce.Amd64,
 		pricingInfo: MachineFamilyPricingInfo{
 			CpuPricePerHour:         0.032578,
-			MemoryPricePerHourPerGb: 0.3,
+			MemoryPricePerHourPerGb: 0.0038871,
 			PreemptibleDiscount:     0.0130312 / 0.032578,
 		},
 		customPricingInfo: &MachineFamilyPricingInfo{
@@ -2978,19 +2978,23 @@ var (
 			NewMachineTypeInfo("z4d-highmem-8-highlssd", 8, 63).
 				withAutomaticEphemeralLocalSsdCount(1).
 				withInstancePriceOverride(1.086344).
-				withPreemptibleInstancePriceOverride(0.421366),
+				withPreemptibleInstancePriceOverride(0.434538),
 			NewMachineTypeInfo("z4d-highmem-16-highlssd", 16, 126).
 				withAutomaticEphemeralLocalSsdCount(2).
 				withInstancePriceOverride(2.172688).
-				withPreemptibleInstancePriceOverride(0.842731),
+				withPreemptibleInstancePriceOverride(0.869075),
+			NewMachineTypeInfo("z4d-highmem-24-highlssd", 24, 189).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(3.259032).
+				withPreemptibleInstancePriceOverride(1.303613),
 			NewMachineTypeInfo("z4d-highmem-32-highlssd", 32, 252).
 				withAutomaticEphemeralLocalSsdCount(4).
 				withInstancePriceOverride(4.345376).
-				withPreemptibleInstancePriceOverride(1.685462),
+				withPreemptibleInstancePriceOverride(1.738151),
 			NewMachineTypeInfo("z4d-highmem-48-highlssd", 48, 378).
 				withAutomaticEphemeralLocalSsdCount(6).
 				withInstancePriceOverride(6.518065).
-				withPreemptibleInstancePriceOverride(2.528194),
+				withPreemptibleInstancePriceOverride(2.607226),
 			NewMachineTypeInfo("z4d-highmem-64-highlssd", 64, 504).
 				withAutomaticEphemeralLocalSsdCount(8).
 				withInstancePriceOverride(8.690753).
@@ -2998,7 +3002,7 @@ var (
 			NewMachineTypeInfo("z4d-highmem-96-highlssd", 96, 756).
 				withAutomaticEphemeralLocalSsdCount(12).
 				withInstancePriceOverride(13.036129).
-				withPreemptibleInstancePriceOverride(5.056387),
+				withPreemptibleInstancePriceOverride(5.214452),
 			NewMachineTypeInfo("z4d-highmem-192-highlssd", 192, 1512).
 				withAutomaticEphemeralLocalSsdCount(24).
 				withInstancePriceOverride(26.072258).
@@ -3054,23 +3058,23 @@ var (
 			NewMachineTypeInfo("z4d-standard-16-standardlssd", 16, 62).
 				withAutomaticEphemeralLocalSsdCount(1).
 				withInstancePriceOverride(1.156344).
-				withPreemptibleInstancePriceOverride(0.449366),
+				withPreemptibleInstancePriceOverride(0.462538),
 			NewMachineTypeInfo("z4d-standard-32-standardlssd", 32, 124).
 				withAutomaticEphemeralLocalSsdCount(2).
 				withInstancePriceOverride(2.312688).
-				withPreemptibleInstancePriceOverride(0.898731),
+				withPreemptibleInstancePriceOverride(0.925075),
 			NewMachineTypeInfo("z4d-standard-48-standardlssd", 48, 186).
 				withAutomaticEphemeralLocalSsdCount(3).
 				withInstancePriceOverride(3.469032).
-				withPreemptibleInstancePriceOverride(1.348097),
+				withPreemptibleInstancePriceOverride(1.387613),
 			NewMachineTypeInfo("z4d-standard-64-standardlssd", 64, 248).
 				withAutomaticEphemeralLocalSsdCount(4).
 				withInstancePriceOverride(4.625376).
-				withPreemptibleInstancePriceOverride(1.797462),
+				withPreemptibleInstancePriceOverride(1.850151),
 			NewMachineTypeInfo("z4d-standard-96-standardlssd", 96, 372).
 				withAutomaticEphemeralLocalSsdCount(6).
 				withInstancePriceOverride(6.938065).
-				withPreemptibleInstancePriceOverride(2.696194),
+				withPreemptibleInstancePriceOverride(2.775226),
 			NewMachineTypeInfo("z4d-standard-192-standardlssd", 192, 744).
 				withAutomaticEphemeralLocalSsdCount(12).
 				withInstancePriceOverride(13.876129).

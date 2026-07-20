@@ -106,10 +106,6 @@ func TestPriceMappingsCompatabilityWithGCE(t *testing.T) {
 				if strings.HasPrefix(name, "z3") {
 					continue
 				}
-				// TODO(b/530563236): fix GCE & GKE price divergence
-				if strings.HasPrefix(name, "n4a") || strings.HasPrefix(name, "n4d") || strings.HasPrefix(name, "z4") {
-					continue
-				}
 
 				assert.Containsf(t, gkePrices, name, "Price not defined for %q", name)
 				if price != gkePrices[name] {
