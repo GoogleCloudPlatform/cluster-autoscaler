@@ -129,6 +129,13 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{ScaleUpSimulationForSkippedNodeGroupsEnabled: true}},
 			wantRestart:                 true,
 		},
+		{
+			testName:                    "ClusterDefaultAllocationStrategyFlag_field_is_tracked",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ClusterDefaultAllocationStrategy: ""}},
+			stringExperimentValues:      map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "fleet-efficiency"},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ClusterDefaultAllocationStrategy: internalopts.ClusterDefaultAllocationStrategyFleetEfficiency}},
+			wantRestart:                 true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()

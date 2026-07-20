@@ -40,6 +40,7 @@ import (
 	crdutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	listerutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	crdRules "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
@@ -47,6 +48,7 @@ import (
 
 type testFixture struct {
 	pod          *v1.Pod
+	crdNoRules   crd.CRD
 	crdRuleFleet crd.CRD
 	crdRuleCost  crd.CRD
 
@@ -71,6 +73,11 @@ func newTestFixture() *testFixture {
 
 	fleetEfficiencyStrategy := cccv1.AllocationStrategyFleetEfficiency
 	defaultStrategy := cccv1.AllocationStrategyLowestCost
+
+	crdNoRules := crdutils.NewTestCrd(
+		crdutils.WithName("test-ccc"),
+		crdutils.WithLabel(gkelabels.ComputeClassLabel),
+	)
 
 	crdRuleFleet := crdutils.NewTestCrd(
 		crdutils.WithName("test-ccc"),
@@ -123,6 +130,7 @@ func newTestFixture() *testFixture {
 
 	return &testFixture{
 		pod:               pod,
+		crdNoRules:        crdNoRules,
 		crdRuleFleet:      crdRuleFleet,
 		crdRuleCost:       crdRuleCost,
 		optFleet1:         optFleet1,
@@ -142,6 +150,7 @@ type fleetEfficiencyTestCase struct {
 	expectedBestOptions []expander.Option
 	expectedErrorLog    string
 	reservations        []*gce_api.Reservation
+	defaultStrategy     options.ClusterDefaultAllocationStrategy
 }
 
 func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
@@ -170,7 +179,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 			puller.SetReservations(tc.reservations)
 		}
 
-		filter := NewFilter(flexAdvisor, lister, puller, cloudProvider, localSSDDiskSizeProvider, gceFlexAdvisorEnabled, experiments.NewMockManager())
+		filter := NewFilter(flexAdvisor, lister, puller, cloudProvider, localSSDDiskSizeProvider, tc.defaultStrategy, gceFlexAdvisorEnabled, experiments.NewMockManager())
 
 		nodeInfos := tc.nodeInfos
 		if nodeInfos == nil {
@@ -214,11 +223,27 @@ func TestFleetEfficiencyFilter_SelectingStrategy(t *testing.T) {
 
 	tests := []fleetEfficiencyTestCase{
 		{
-			name:                "CCC without strategies - doesnt use FA, returns original options",
-			crds:                []crd.CRD{crdutils.NewTestCrd(crdutils.WithName("test-ccc"), crdutils.WithLabel(gkelabels.ComputeClassLabel))},
+			name:                "CCC without strategies, default not specified - doesnt use FA, returns original options",
+			crds:                []crd.CRD{f.crdNoRules},
 			options:             []expander.Option{f.optFleet1, f.optFleet2},
 			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
 			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name:                "CCC without strategies, default is lowest cost - doesnt use FA, returns original options",
+			crds:                []crd.CRD{f.crdNoRules},
+			defaultStrategy:     options.ClusterDefaultAllocationStrategyLowestCost,
+			options:             []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name:                "CCC without strategies, default is fleet efficiency - calls FA, scores the options",
+			crds:                []crd.CRD{f.crdNoRules},
+			defaultStrategy:     options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:             []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:    defaultFlexAdvisorSetup,
+			expectedBestOptions: []expander.Option{f.optFleet2},
 		},
 		{
 			name:                "CCC with strategy=lowest-cost - doesnt use FA, returns original options",

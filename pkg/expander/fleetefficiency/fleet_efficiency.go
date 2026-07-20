@@ -27,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
@@ -36,13 +37,14 @@ import (
 )
 
 type fleetEfficiencyFilter struct {
-	flexAdvisor              instanceavailability.Provider
-	cccLister                lister.Lister
-	reservationsPuller       *gceclient.ReservationsPuller
-	cloudProvider            provider.GkeExpanderCloudProvider
-	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider
-	gceFlexAdvisorEnabled    bool
-	experimentsManager       experiments.Manager
+	flexAdvisor                      instanceavailability.Provider
+	cccLister                        lister.Lister
+	reservationsPuller               *gceclient.ReservationsPuller
+	cloudProvider                    provider.GkeExpanderCloudProvider
+	localSSDDiskSizeProvider         localssdsize.LocalSSDSizeProvider
+	clusterDefaultAllocationStrategy options.ClusterDefaultAllocationStrategy
+	gceFlexAdvisorEnabled            bool
+	experimentsManager               experiments.Manager
 }
 
 // NewFilter creates a new instance of the fleet efficiency Filter.
@@ -52,17 +54,19 @@ func NewFilter(
 	reservationsPuller *gceclient.ReservationsPuller,
 	cloudProvider provider.GkeExpanderCloudProvider,
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider,
+	clusterDefaultAllocationStrategy options.ClusterDefaultAllocationStrategy,
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
 ) *fleetEfficiencyFilter {
 	return &fleetEfficiencyFilter{
-		flexAdvisor:              flexAdvisor,
-		cccLister:                cccLister,
-		reservationsPuller:       reservationsPuller,
-		cloudProvider:            cloudProvider,
-		localSSDDiskSizeProvider: localSSDDiskSizeProvider,
-		gceFlexAdvisorEnabled:    gceFlexAdvisorEnabled,
-		experimentsManager:       experimentsManager,
+		flexAdvisor:                      flexAdvisor,
+		cccLister:                        cccLister,
+		reservationsPuller:               reservationsPuller,
+		cloudProvider:                    cloudProvider,
+		localSSDDiskSizeProvider:         localSSDDiskSizeProvider,
+		clusterDefaultAllocationStrategy: clusterDefaultAllocationStrategy,
+		gceFlexAdvisorEnabled:            gceFlexAdvisorEnabled,
+		experimentsManager:               experimentsManager,
 	}
 }
 
@@ -189,7 +193,7 @@ func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategy(ccc crd.CRD, opt expan
 			return *strategy == cccv1.AllocationStrategyFleetEfficiency
 		}
 	}
-	return false
+	return f.clusterDefaultAllocationStrategy == options.ClusterDefaultAllocationStrategyFleetEfficiency
 }
 
 func (f *fleetEfficiencyFilter) hasUsableReservations(expansionOptions []expander.Option) bool {

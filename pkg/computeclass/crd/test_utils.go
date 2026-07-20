@@ -178,10 +178,6 @@ func (t *testCrd) ResourceManagerTags() []Tag {
 	return t.resourceManagerTags
 }
 
-func (t *testCrd) AllocationStrategyDefaults() *cccv1.AllocationStrategyDefaults {
-	return t.allocationStrategyDefaults
-}
-
 func (t *testCrd) TpuDriverMode() TpuDriverMode {
 	return t.tpuDriverMode
 }

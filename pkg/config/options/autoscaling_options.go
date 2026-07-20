@@ -119,6 +119,7 @@ type InternalOptions struct {
 	PodWatchLabelSelector                        string
 	PodWatchFieldSelector                        string
 	DaemonSetMutationEnabled                     bool
+	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.
@@ -131,6 +132,14 @@ const (
 	CSNDisabled CSNStatus = "DISABLED"
 	// Default: Uses experiment values.
 	CSNUnspecified CSNStatus = "UNSPECIFIED"
+)
+
+// ClusterDefaultAllocationStrategy represents the default allocation strategy to use when scaling up.
+type ClusterDefaultAllocationStrategy string
+
+const (
+	ClusterDefaultAllocationStrategyLowestCost      ClusterDefaultAllocationStrategy = "lowest-cost"
+	ClusterDefaultAllocationStrategyFleetEfficiency ClusterDefaultAllocationStrategy = "fleet-efficiency"
 )
 
 // Valid names for AutoscalingOptions.ExpanderNames:

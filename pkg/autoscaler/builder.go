@@ -970,6 +970,7 @@ func (b *Builder) Build(
 		autoscalingProcessors.AsyncNodeGroupStateChecker,
 		flexAdvisor,
 		b.npcCrdLister,
+		autoscalingOptions.ClusterDefaultAllocationStrategy,
 		autoscalingOptions.GCEFlexAdvisorEnabled,
 		experimentsManager)
 	if err != nil {

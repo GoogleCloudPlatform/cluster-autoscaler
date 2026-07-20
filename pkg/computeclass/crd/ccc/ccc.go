@@ -688,14 +688,6 @@ func (ccc *cccCrd) TpuDriverMode() crd.TpuDriverMode {
 	}
 }
 
-// AllocationStrategyDefaults returns the global AllocationStrategyDefaults for the CCC.
-func (ccc *cccCrd) AllocationStrategyDefaults() *v1.AllocationStrategyDefaults {
-	if ccc.ComputeClass == nil {
-		return nil
-	}
-	return ccc.Spec.AllocationStrategyDefaults
-}
-
 func (ccc *cccCrd) getGPURequest(machineType *string, gpu *v1.GPU) (gpuRequest *machinetypes.GpuRequest) {
 	if gpu != nil {
 		gpuRequest = &machinetypes.GpuRequest{

@@ -56,6 +56,7 @@ func ExpanderStrategyFromString(
 	upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker,
 	flexAdvisor instanceavailability.Provider,
 	cccLister cccLister.Lister,
+	clusterDefaultAllocationStrategy internalopts.ClusterDefaultAllocationStrategy,
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
 ) (expander.Strategy, errors.AutoscalerError) {
@@ -85,7 +86,7 @@ func ExpanderStrategyFromString(
 		return mppn.NewFilter(r, autopilotEnabled)
 	})
 	expanderFactory.RegisterFilter(internalopts.FleetEfficiencyExpanderName, func() expander.Filter {
-		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, cloudProvider, localSSDDiskSizeProvider, gceFlexAdvisorEnabled, experimentsManager)
+		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager)
 	})
 
 	return expanderFactory.Build(expanderNames)

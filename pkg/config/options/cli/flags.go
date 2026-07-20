@@ -155,6 +155,8 @@ var (
 
 	parentProduct = flag.String("parent-product", "", "Parent product as a division property for experiments.")
 	clusterHash   = flag.String("cluster-hash", "", "The cluster's hash")
+
+	clusterDefaultAllocationStrategy = flag.String("allocation-strategy-default", "", "Default allocation strategy to use when scaling up. Supports: lowest-cost, fleet-efficiency.")
 )
 
 // ComponentVersion returns cluster autoscaler component version.
@@ -258,6 +260,13 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		}
 	}
 
+	switch options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy) {
+	case options.ClusterDefaultAllocationStrategyLowestCost, options.ClusterDefaultAllocationStrategyFleetEfficiency, "":
+	default:
+		klog.Warningf("Invalid value for --allocation-strategy-default: %s, fallbacking to lowest-cost", *clusterDefaultAllocationStrategy)
+		*clusterDefaultAllocationStrategy = string(options.ClusterDefaultAllocationStrategyLowestCost)
+	}
+
 	return internalopts.InternalOptions{
 		ProjectNumber:                                *projectNumber,
 		Location:                                     *location,
@@ -349,5 +358,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		PodWatchLabelSelector:                        *podWatchLabelSelector,
 		PodWatchFieldSelector:                        *podWatchFieldSelector,
 		DaemonSetMutationEnabled:                     *daemonSetMutationEnabled,
+		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
 	}
 }

@@ -174,6 +174,8 @@ const AnyThenFailReservationAffinityThresholdEnabledFlag = "AnyThenFailReservati
 const FleetEfficiencyStrategyEnabledFlag = "FleetEfficiencyStrategy::Enabled"
 const FleetEfficiencyStrategyMinCAVersionFlag = "FleetEfficiencyStrategy::MinCAVersion"
 
+const ClusterDefaultAllocationStrategyFlag = "AllocationStrategy::DefaultStrategy"
+
 const SimshipAutomationApplyCRDMinCAVersionFlag = "SimshipAutomation::ApplyCRDMinCAVersion"
 const SimshipAutomationApplyCRDEnabledFlag = "SimshipAutomation::ApplyCRDEnabled"
 const SimshipAutomationBigRedButtonFlag = "SimshipAutomation::BigRedButton"
