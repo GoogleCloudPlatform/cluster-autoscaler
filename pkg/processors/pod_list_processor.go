@@ -147,6 +147,8 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
+	registerFlexAdvisorLate := flexadvisor.IsFlexAdvisorLateRegistrationEnabled(p.experimentsManager)
+
 	if p.cbFakePodStateObserver != nil {
 		p.cbFakePodStateObserver.Reset()
 	}
@@ -172,7 +174,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 		}
 	}
 
-	if p.flexAdvisorPodListProcessor != nil {
+	if p.flexAdvisorPodListProcessor != nil && !registerFlexAdvisorLate {
 		_, err = p.flexAdvisorPodListProcessor.Process(context, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
@@ -243,6 +245,13 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 		return []*apiv1.Pod{}, err
 	}
 	klog.Infof("Unschedulable pods count after filtering out schedulable: %v", len(unschedulablePods))
+
+	if p.flexAdvisorPodListProcessor != nil && registerFlexAdvisorLate {
+		_, err = p.flexAdvisorPodListProcessor.Process(context, unschedulablePods)
+		if err != nil {
+			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
+		}
+	}
 
 	if p.ccMinCapacityProcessor != nil {
 		unschedulablePods, err = p.ccMinCapacityProcessor.Process(context, unschedulablePods)

@@ -457,6 +457,15 @@ func IsFlexAdvisorProcessingEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorProcessingMinCAVersionFlag, true)
 }
 
+// IsFlexAdvisorLateRegistrationEnabled returns whether FA late registration is enabled.
+func IsFlexAdvisorLateRegistrationEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorLateRegistrationEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorLateRegistrationMinCAVersionFlag, true)
+}
+
 func isFlexAdvisorGeneratorMachineErrorsCacheEnabled(manager experiments.Manager) bool {
 	if manager == nil {
 		return true

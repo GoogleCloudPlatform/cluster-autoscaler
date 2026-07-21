@@ -155,6 +155,8 @@ const FlexAdvisorPCCSupportMinCAVersionFlag = "FlexAdvisorPCCSupport::MinCAVersi
 
 const FlexAdvisorProcessingEnabledFlag = "FlexAdvisorProcessing::Enabled"
 const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersion"
+const FlexAdvisorLateRegistrationEnabledFlag = "FlexAdvisorLateRegistration::Enabled"
+const FlexAdvisorLateRegistrationMinCAVersionFlag = "FlexAdvisorLateRegistration::MinCAVersion"
 
 const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
