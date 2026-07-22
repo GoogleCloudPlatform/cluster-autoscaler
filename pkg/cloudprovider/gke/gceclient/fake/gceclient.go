@@ -1108,6 +1108,12 @@ func (g *GceClient) SetCreateInstanceForZoneError(zoneName string, errInfo cloud
 	g.createInstanceForZoneError[zoneName] = errInfo
 }
 
+func (g *GceClient) ClearCreateInstanceForZoneError(zone string) {
+	g.Lock()
+	defer g.Unlock()
+	delete(g.createInstanceForZoneError, zone)
+}
+
 // SetFetchMachineTypeHandler configures the fake GCE client to execute the given handler
 // when FetchMachineType is called for the given zone and machine type.
 // Pass nil handler to clear.

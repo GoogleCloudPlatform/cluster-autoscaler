@@ -173,3 +173,10 @@ func (b *synchronizedCompositeBackoff) GetBackoffs() []base_backoff.Backoff {
 	defer b.mutex.Unlock()
 	return b.backoff.GetBackoffs()
 }
+
+func getZone(nodeGroup cloudprovider.NodeGroup) string {
+	if gkeMig, ok := nodeGroup.(*gke.GkeMig); ok && gkeMig != nil {
+		return gkeMig.GceRef().Zone
+	}
+	return ""
+}

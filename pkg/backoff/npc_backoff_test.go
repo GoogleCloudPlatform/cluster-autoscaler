@@ -24,6 +24,7 @@ import (
 	container "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
 
@@ -103,6 +104,26 @@ func TestBackoffDecisions(t *testing.T) {
 				labels.ReservationNameLabel:     "some-name",
 			},
 			MachineType: fmt.Sprintf("%s-standard-2", machineFamily)}).
+		Build()
+
+	refA := gce.GceRef{Project: "p", Zone: "us-central1-a", Name: "pool-zone-a"}
+	poolZoneA := gke.NewTestGkeMigBuilder().
+		SetGceRef(refA).
+		SetNodePoolName("pool-zone-a").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+			MachineType: fmt.Sprintf("%s-standard-2", machineFamily)}).
+		SetDeploymentType(gke.DeploymentTypeNone).
+		Build()
+
+	refB := gce.GceRef{Project: "p", Zone: "us-central1-b", Name: "pool-zone-b"}
+	poolZoneB := gke.NewTestGkeMigBuilder().
+		SetGceRef(refB).
+		SetNodePoolName("pool-zone-b").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+			MachineType: fmt.Sprintf("%s-standard-2", machineFamily)}).
+		SetDeploymentType(gke.DeploymentTypeNone).
 		Build()
 
 	testCases := []struct {
@@ -336,6 +357,31 @@ func TestBackoffDecisions(t *testing.T) {
 			wantBackoff:   []cloudprovider.NodeGroup{},
 			wantNoBackoff: []cloudprovider.NodeGroup{defaultPool, nonMatchingPool, multipleReservationsCrd},
 		},
+		{
+			name:                "Stockout in zone A - backs off zone A but NOT zone B",
+			groupFailingScaleUp: poolZoneA,
+			crd: npc_crd.NewTestCrd(npc_crd.WithLabel(testCrdLabel),
+				npc_crd.WithName("crd-object-1"),
+				npc_crd.WithRules([]npc_rules.Rule{
+					npc_rules.NewMachineSpecRule(&machineFamily, nil, nil, nil),
+					npc_rules.NewMachineSpecRule(&otherFamily, nil, nil, nil),
+				}), npc_crd.WithScaleUpAnyway()),
+			errorInfo:     stockoutError,
+			wantBackoff:   []cloudprovider.NodeGroup{poolZoneA},
+			wantNoBackoff: []cloudprovider.NodeGroup{poolZoneB},
+		},
+		{
+			name:                "Quota error in zone A - triggers regional backoff for both zone A and zone B",
+			groupFailingScaleUp: poolZoneA,
+			crd: npc_crd.NewTestCrd(npc_crd.WithLabel(testCrdLabel),
+				npc_crd.WithName("crd-object-1"),
+				npc_crd.WithRules([]npc_rules.Rule{
+					npc_rules.NewMachineSpecRule(&machineFamily, nil, nil, nil),
+					npc_rules.NewMachineSpecRule(&otherFamily, nil, nil, nil),
+				}), npc_crd.WithScaleUpAnyway()),
+			errorInfo:   quotaError,
+			wantBackoff: []cloudprovider.NodeGroup{poolZoneA, poolZoneB},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,6 +428,16 @@ func TestRuleBackoffStatus(t *testing.T) {
 			MachineType: fmt.Sprintf("%s-standard-2", machineFamily1)}).
 		Build()
 
+	refA := gce.GceRef{Project: "p", Zone: "us-central1-a", Name: "pool-zone-a"}
+	poolZoneA := gke.NewTestGkeMigBuilder().
+		SetGceRef(refA).
+		SetNodePoolName("pool-zone-a").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+			MachineType: fmt.Sprintf("%s-standard-2", machineFamily1)}).
+		SetDeploymentType(gke.DeploymentTypeNone).
+		Build()
+
 	crd1 := npc_crd.NewTestCrd(
 		npc_crd.WithLabel(testCrdLabel),
 		npc_crd.WithName("crd-object-1"),
@@ -404,6 +460,8 @@ func TestRuleBackoffStatus(t *testing.T) {
 		npcCrds               []npc_crd.CRD
 		npcCrdToCheck         npc_crd.CRD
 		ruleIdx               int
+		nodeGroup             cloudprovider.NodeGroup
+		errorInfo             cloudprovider.InstanceErrorInfo
 		wantRuleBackoffStatus base_backoff.Status
 	}{
 		{
@@ -414,6 +472,18 @@ func TestRuleBackoffStatus(t *testing.T) {
 			wantRuleBackoffStatus: base_backoff.Status{
 				IsBackedOff: true,
 				ErrorInfo:   quotaError,
+			},
+		},
+		{
+			name:          "Zonal stockout backs off specific rule for that CRD",
+			npcCrds:       []npc_crd.CRD{crd1},
+			npcCrdToCheck: crd1,
+			ruleIdx:       0,
+			nodeGroup:     poolZoneA,
+			errorInfo:     stockoutError,
+			wantRuleBackoffStatus: base_backoff.Status{
+				IsBackedOff: true,
+				ErrorInfo:   stockoutError,
 			},
 		},
 		{
@@ -461,7 +531,15 @@ func TestRuleBackoffStatus(t *testing.T) {
 			provider := &mockProvider{}
 			provider.On("IsAutopilotEnabled").Return(false)
 			backoff := NewNpcCrdBackoff(5*time.Minute, lister, provider)
-			backoff.Backoff(np, nil, quotaError, now)
+			nodeGroup := cloudprovider.NodeGroup(np)
+			if tc.nodeGroup != nil {
+				nodeGroup = tc.nodeGroup
+			}
+			errInfo := tc.errorInfo
+			if errInfo.ErrorCode == "" {
+				errInfo = quotaError
+			}
+			backoff.Backoff(nodeGroup, nil, errInfo, now)
 			ruleBackoffStatus := backoff.RuleBackoffStatus(tc.npcCrdToCheck, tc.ruleIdx, now)
 			assert.Equal(t, tc.wantRuleBackoffStatus, ruleBackoffStatus)
 		})
@@ -479,6 +557,7 @@ type backoffOp struct {
 	op          opType
 	tplus       time.Duration
 	nodegroup   cloudprovider.NodeGroup
+	errorInfo   cloudprovider.InstanceErrorInfo
 	wantBackoff bool
 }
 
@@ -505,6 +584,26 @@ func TestBackoffDurations(t *testing.T) {
 		SetSpec(&gkeclient.NodePoolSpec{
 			Labels:      map[string]string{testCrdLabel: "crd-object-2"},
 			MachineType: fmt.Sprintf("%s-standard-2", machineFamily)}).
+		Build()
+
+	refA := gce.GceRef{Project: "p", Zone: "us-central1-a", Name: "pool-zone-a"}
+	poolZoneA := gke.NewTestGkeMigBuilder().
+		SetGceRef(refA).
+		SetNodePoolName("pool-zone-a").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+			MachineType: fmt.Sprintf("%s-standard-4", machineFamily)}).
+		SetDeploymentType(gke.DeploymentTypeNone).
+		Build()
+
+	refB := gce.GceRef{Project: "p", Zone: "us-central1-b", Name: "pool-zone-b"}
+	poolZoneB := gke.NewTestGkeMigBuilder().
+		SetGceRef(refB).
+		SetNodePoolName("pool-zone-b").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+			MachineType: fmt.Sprintf("%s-standard-4", machineFamily)}).
+		SetDeploymentType(gke.DeploymentTypeNone).
 		Build()
 
 	testCases := []struct {
@@ -719,6 +818,111 @@ func TestBackoffDurations(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Zonal backoff extends the whole CRD backoff",
+			operations: []backoffOp{
+				{
+					op:          opTypeBackoff,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeBackoff,
+					tplus:       time.Minute,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       2 * time.Minute,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       2 * time.Minute,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       5*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       5*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       6*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneB,
+					wantBackoff: false,
+				},
+			},
+		},
+		{
+			name: "Zonal backoff maintans full priorities iteration",
+			operations: []backoffOp{
+				{
+					op:          opTypeBackoff,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeBackoff,
+					tplus:       time.Minute,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       2 * time.Minute,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       2 * time.Minute,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       5*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneA,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       5*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: true,
+				},
+				{
+					op:          opTypeIsBackedOff,
+					tplus:       6*time.Minute + 1*time.Second,
+					nodegroup:   poolZoneB,
+					errorInfo:   stockoutError,
+					wantBackoff: false,
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -742,12 +946,16 @@ func TestBackoffDurations(t *testing.T) {
 			provider.On("IsAutopilotEnabled").Return(false)
 			backoff := NewNpcCrdBackoff(duration, lister, provider)
 
-			for _, op := range tc.operations {
+			for opIndx, op := range tc.operations {
 				// Validate that intermediate RemoveStaleBackoffData calls have no impact on tests
 				backoff.RemoveStaleBackoffData(now.Add(op.tplus))
+				errInfo := op.errorInfo
+				if errInfo.ErrorCode == "" {
+					errInfo = quotaError
+				}
 				switch op.op {
 				case opTypeBackoff:
-					until := backoff.Backoff(op.nodegroup, nil, quotaError, now.Add(op.tplus))
+					until := backoff.Backoff(op.nodegroup, nil, errInfo, now.Add(op.tplus))
 					want := now.Add(op.tplus)
 					if op.wantBackoff {
 						want = want.Add(duration)
@@ -758,9 +966,9 @@ func TestBackoffDurations(t *testing.T) {
 				case opTypeIsBackedOff:
 					want := base_backoff.Status{IsBackedOff: op.wantBackoff}
 					if op.wantBackoff {
-						want.ErrorInfo = quotaError
+						want.ErrorInfo = errInfo
 					}
-					assert.Equal(t, want, backoff.BackoffStatus(op.nodegroup, nil, now.Add(op.tplus)))
+					assert.Equal(t, want, backoff.BackoffStatus(op.nodegroup, nil, now.Add(op.tplus)), fmt.Sprintf("Unexpected backoff status after operation %v", opIndx))
 				}
 			}
 			// Verify stale data is eventually cleaned-up

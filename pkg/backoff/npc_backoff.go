@@ -15,12 +15,14 @@
 package backoff
 
 import (
+	"strings"
 	"sync"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	klog "k8s.io/klog/v2"
 
@@ -30,7 +32,7 @@ import (
 
 type backoffInfo struct {
 	until     time.Time
-	rules     map[int]bool
+	rules     map[int]map[string]bool
 	errorInfo cloudprovider.InstanceErrorInfo
 }
 
@@ -103,20 +105,40 @@ func (b *npcCrdBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *fra
 		return currentTime
 	}
 
+	zone := getZone(nodeGroup)
+	// Quota errors are regional, not zonal
+	if strings.Contains(errorInfo.ErrorCode, "QUOTA") {
+		zone = "" // Regional backoff for quota
+	}
+
 	bi, found := b.backoffs[npcCrd.Name()]
 	if !found {
-		bi.rules = make(map[int]bool)
+		bi.rules = map[int]map[string]bool{}
 	}
-	bi.rules[ruleIdx] = true
+	if _, found := bi.rules[ruleIdx]; !found {
+		bi.rules[ruleIdx] = map[string]bool{}
+	}
+	bi.rules[ruleIdx][zone] = true
 	until := currentTime.Add(b.duration)
 	bi.until = until
 	bi.errorInfo = errorInfo
-	klog.V(4).Infof("Backing off rule %d of npc crd %s:%s until %v. All backed off rules: %v", ruleIdx, npcCrd.Label(), npcCrd.Name(), until, bi.rules)
+	if zone == "" {
+		region, err := util.GetRegionFromLocation(zone)
+		if err != nil {
+			klog.V(4).Infof("Received an error, when parsing region from zone %v: %v", zone, err)
+		}
+		klog.V(4).Infof("Backing off rule %d of npc crd %s:%s in region %q until %v. All backed off rules: %v", ruleIdx, npcCrd.Label(), npcCrd.Name(), region, until, bi.rules)
+	} else {
+		klog.V(4).Infof("Backing off rule %d of npc crd %s:%s in zone %q until %v. All backed off rules: %v", ruleIdx, npcCrd.Label(), npcCrd.Name(), zone, until, bi.rules)
+	}
 	b.backoffs[npcCrd.Name()] = bi
 
-	for k := range bi.rules {
-		for _, obs := range b.observers {
-			obs.OnNpcBackoff(npcCrd, k, errorInfo, until)
+	// OnNpcBackoff should be called only for full rule/priority backoff
+	if zone == "" {
+		for k := range bi.rules {
+			for _, obs := range b.observers {
+				obs.OnNpcBackoff(npcCrd, k, errorInfo, until)
+			}
 		}
 	}
 
@@ -148,10 +170,12 @@ func (b *npcCrdBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, _ *fram
 	}
 
 	ruleFound, ruleIdx, rule := b.matcher.FirstMatchedRule(nodeGroup, npcCrd)
-	if !ruleFound || len(rule.NodePoolNames()) > 0 || !bi.rules[ruleIdx] {
+	if !ruleFound || len(rule.NodePoolNames()) > 0 {
 		return base_backoff.Status{IsBackedOff: false}
 	}
-
+	if zone := getZone(nodeGroup); !bi.rules[ruleIdx][zone] && !bi.rules[ruleIdx][""] {
+		return base_backoff.Status{IsBackedOff: false}
+	}
 	return base_backoff.Status{IsBackedOff: true, ErrorInfo: bi.errorInfo}
 }
 
@@ -174,11 +198,16 @@ func (b *npcCrdBackoff) RuleBackoffStatus(npcCrd crd.CRD, ruleIdx int, currentTi
 	}
 
 	rule := npcCrd.Rules()[ruleIdx]
-	if len(rule.NodePoolNames()) > 0 || !bi.rules[ruleIdx] {
+	if len(rule.NodePoolNames()) > 0 {
 		return base_backoff.Status{IsBackedOff: false}
 	}
-
-	return base_backoff.Status{IsBackedOff: true, ErrorInfo: bi.errorInfo}
+	// checking whether rule was backed off in any zone
+	for _, ruleBackedOff := range bi.rules[ruleIdx] {
+		if ruleBackedOff {
+			return base_backoff.Status{IsBackedOff: true, ErrorInfo: bi.errorInfo}
+		}
+	}
+	return base_backoff.Status{IsBackedOff: false}
 }
 
 // RemoveBackoff is not implemented for npcCrdBackoff.
