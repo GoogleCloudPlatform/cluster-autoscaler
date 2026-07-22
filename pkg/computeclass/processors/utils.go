@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"k8s.io/autoscaler/cluster-autoscaler/utils/drain"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
@@ -32,6 +33,8 @@ const (
 	maxRuleIndex = 1000
 	// MinCapacityFakePodAnnotation is the annotation used to identify fake pods used for min capacity.
 	MinCapacityFakePodAnnotation = "autoscaling.gke.io/min-nodes-fake-pod"
+	MinCapacityOwnerVersion      = "autoscaling.gke.io/v1"
+	MinCapacityOwnerKind         = "ComputeClass"
 )
 
 // processNodeGroup processes a nodegroup considered for scaleup.
@@ -92,6 +95,16 @@ func buildFakePod(cccName string, priorityIdx *int, index int) *apiv1.Pod {
 			UID:       types.UID(name),
 			Annotations: map[string]string{
 				MinCapacityFakePodAnnotation: "true",
+				drain.PodSafeToEvictKey:      "true",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: MinCapacityOwnerVersion,
+					Kind:       MinCapacityOwnerKind,
+					Name:       cccName,
+					UID:        types.UID(cccName),
+					Controller: new(true),
+				},
 			},
 		},
 		Spec: apiv1.PodSpec{
