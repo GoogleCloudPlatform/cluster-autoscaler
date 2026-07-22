@@ -250,10 +250,10 @@ func podRangeInfoFromProviderConfig(pc *unstructured.Unstructured) (string, erro
 		return "", fmt.Errorf("field path %s is not a slice: %w", "spec.networkConfig.subnetInfo.podRanges", err)
 	}
 	if !found {
-		return "", fmt.Errorf("field path %s not found in CR", "spec.networkConfig.subnetInfo.podRanges")
+		return "", nil
 	}
 	if len(podRanges) == 0 {
-		return "", fmt.Errorf("field path %s is empty", "spec.networkConfig.subnetInfo.podRanges")
+		return "", nil
 	}
 	secondaryRange, ok := podRanges[0].(map[string]interface{})
 	if !ok {

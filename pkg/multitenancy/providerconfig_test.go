@@ -190,12 +190,10 @@ func TestProviderConfigFromUnstructuredErrors(t *testing.T) {
 			fieldToRemove: []string{
 				"spec", "networkConfig", "subnetInfo", "podRanges",
 			},
-			wantError: true,
 		},
 		{
-			name:      "empty_podranges",
-			jsonData:  providerConfigJSONEmptyPodRanges,
-			wantError: true,
+			name:     "empty_podranges",
+			jsonData: providerConfigJSONEmptyPodRanges,
 		},
 		{
 			name:      "empty_podranges_name",
