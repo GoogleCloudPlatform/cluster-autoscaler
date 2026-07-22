@@ -1896,6 +1896,70 @@ func TestCreateNodePoolRequest(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "CCC self service nested virtualization specified as true",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"AdvancedMachineFeaturesEnableNestedVirtualization": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
+							EnableNestedVirtualization: true,
+							ForceSendFields:            []string{"EnableNestedVirtualization"},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service nested virtualization specified as false",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"AdvancedMachineFeaturesEnableNestedVirtualization": "false",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
+							EnableNestedVirtualization: false,
+							ForceSendFields:            []string{"EnableNestedVirtualization"},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4855,6 +4919,62 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 			wantSelfServiceMetadata: map[string]string{
 				labels.GpuDirectLabel: "rdma",
 				labels.GvnicLabelKey:  "true",
+			},
+		},
+		{
+			name: "CCC self service nested virtualization is enabled on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "tpu-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "advancedMachineFeatures": {
+						"enableNestedVirtualization": true
+					  }
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"AdvancedMachineFeaturesEnableNestedVirtualization": "true",
+				labels.GvnicLabelKey: "true",
+			},
+		},
+		{
+			name: "CCC self service nested virtualization is disabled on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "tpu-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "advancedMachineFeatures": {
+						"enableNestedVirtualization": false
+					  }
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"AdvancedMachineFeaturesEnableNestedVirtualization": "false",
+				labels.GvnicLabelKey: "true",
 			},
 		},
 	}

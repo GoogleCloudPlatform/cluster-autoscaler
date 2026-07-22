@@ -25,24 +25,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
 
-type mockCloudProvider struct {
-	isPSC              bool
-	defaultPrivateNode bool
-	isAutopilot        bool
-}
-
-func (m *mockCloudProvider) IsClusterUsingPSCInfrastructure() bool {
-	return m.isPSC
-}
-
-func (m *mockCloudProvider) GetDefaultEnablePrivateNodes() bool {
-	return m.defaultPrivateNode
-}
-
-func (m *mockCloudProvider) IsAutopilotEnabled() bool {
-	return m.isAutopilot
-}
-
 func TestPrivateNodeFromNodepool(t *testing.T) {
 	testCases := []struct {
 		name         string

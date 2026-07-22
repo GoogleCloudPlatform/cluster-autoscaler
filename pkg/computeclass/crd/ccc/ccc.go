@@ -383,6 +383,10 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		if priority.Location == nil {
 			priority.Location = defaults.Location
 		}
+
+		if priority.EnableNestedVirtualization == nil {
+			priority.EnableNestedVirtualization = defaults.EnableNestedVirtualization
+		}
 	}
 
 	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil {

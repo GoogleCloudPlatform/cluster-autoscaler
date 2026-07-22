@@ -23,12 +23,14 @@ import (
 	container "google.golang.org/api/container/v1beta1"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	gkesandbox "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/utils/ptr"
 )
 
 func TestMain(m *testing.M) {
-	InitSelfService(nil)
+	InitSelfService(defaultMockCloudProvider())
 	os.Exit(m.Run())
 }
 
@@ -448,6 +450,19 @@ func TestNodepoolMetadata(t *testing.T) {
 			wantMetadata: Metadata{
 				secureBootMetadataKey:          "true",
 				integrityMonitoringMetadataKey: "true",
+			},
+		},
+		{
+			name: "Nodepool with enableNestedVirtualization is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						EnableNestedVirtualization: true,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				nestedVirtualizationMetadataKey: "true",
 			},
 		},
 		{
@@ -928,6 +943,15 @@ func TestPriorityMetadata(t *testing.T) {
 			},
 		},
 		{
+			name: "Priority for EnableNestedVirtualization",
+			priority: v1.Priority{
+				EnableNestedVirtualization: ptr.To(true),
+			},
+			wantMetadata: Metadata{
+				nestedVirtualizationMetadataKey: "true",
+			},
+		},
+		{
 			name: "Priority for LocationPolicy invalid",
 			priority: v1.Priority{
 				Location: &v1.Location{LocationPolicy: ptr.To("invalid")},
@@ -1073,6 +1097,7 @@ func TestUpdateNodePoolLabels(t *testing.T) {
 func TestUpdateNodepool(t *testing.T) {
 	testCases := []struct {
 		name         string
+		nodepool     *container.NodePool
 		metadata     Metadata
 		wantNodepool *container.NodePool
 	}{
@@ -1385,12 +1410,164 @@ func TestUpdateNodepool(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "EnableNestedVirtualization is processed correctly",
+			metadata: Metadata{
+				nestedVirtualizationMetadataKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						EnableNestedVirtualization: true,
+						ForceSendFields:            []string{"EnableNestedVirtualization"},
+					},
+				},
+			},
+		},
+		{
+			name: "EnableNestedVirtualization does not duplicate ForceSendFields",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						EnableNestedVirtualization: true,
+						ForceSendFields:            []string{"EnableNestedVirtualization"},
+					},
+				},
+			},
+			metadata: Metadata{
+				nestedVirtualizationMetadataKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						EnableNestedVirtualization: true,
+						ForceSendFields:            []string{"EnableNestedVirtualization"},
+					},
+				},
+			},
+		},
+		{
+			name: "EnableNestedVirtualization adds to ForceSendFields",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						ForceSendFields: []string{"OtherField"},
+					},
+				},
+			},
+			metadata: Metadata{
+				nestedVirtualizationMetadataKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						EnableNestedVirtualization: true,
+						ForceSendFields:            []string{"OtherField", "EnableNestedVirtualization"},
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			nodepool := &container.NodePool{}
+			nodepool := tc.nodepool
+			if nodepool == nil {
+				nodepool = &container.NodePool{}
+			}
 			UpdateNodepool(nodepool, tc.metadata)
 			assert.Equal(t, tc.wantNodepool, nodepool)
+		})
+	}
+}
+
+// TODO(b/539947856): Remove once Giraffe experiment is concluded
+func TestNestedVirtualizationDisabled(t *testing.T) {
+	t.Cleanup(func() {
+		// Reset InitSelfService for other tests
+		InitSelfService(defaultMockCloudProvider())
+	})
+
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+	}{
+		{
+			name: "Giraffe Direct Launch flag disabled",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 30, 0, 0},
+				map[string]bool{
+					experiments.EnableNestedVirtualizationEnabledFlag: false,
+				},
+				map[string]string{},
+			),
+		},
+		{
+			name: "MinCAVersion flag condition not met",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 28, 0, 0},
+				map[string]bool{
+					experiments.EnableNestedVirtualizationEnabledFlag: true,
+				},
+				map[string]string{
+					experiments.EnableNestedVirtualizationMinCAVersionFlag: "1.30.0-gke.0",
+				},
+			),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := &mockCloudProvider{
+				experimentsManager: tc.experimentsManager,
+			}
+			InitSelfService(cp)
+
+			t.Run("FromNodepool", func(t *testing.T) {
+				np := &container.NodePool{
+					Name: "np-with-nv",
+					Config: &container.NodeConfig{
+						AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+							EnableNestedVirtualization: true,
+						},
+					},
+				}
+				meta := NodepoolMetadata(np)
+				_, ok := meta[nestedVirtualizationMetadataKey]
+				assert.False(t, ok, "FromNodepool should not extract nestedVirtualizationMetadataKey when feature is disabled")
+			})
+
+			t.Run("FromPriority", func(t *testing.T) {
+				p := v1.Priority{
+					EnableNestedVirtualization: ptr.To(true),
+				}
+				meta := PriorityMetadata(p)
+				_, ok := meta[nestedVirtualizationMetadataKey]
+				assert.False(t, ok, "FromPriority should not extract nestedVirtualizationMetadataKey when feature is disabled")
+			})
+
+			t.Run("ToNodepool", func(t *testing.T) {
+				nodepool := &container.NodePool{
+					Name: "test-pool",
+					Config: &container.NodeConfig{
+						MachineType: "n2-standard-4",
+					},
+				}
+				expectedNodepool := &container.NodePool{
+					Name: "test-pool",
+					Config: &container.NodeConfig{
+						MachineType: "n2-standard-4",
+					},
+				}
+
+				UpdateNodepool(nodepool, Metadata{})
+				assert.Equal(t, expectedNodepool, nodepool, "UpdateNodepool should not modify nodepool when feature is disabled")
+
+				fakeMetadata := Metadata{
+					nestedVirtualizationMetadataKey: "true",
+				}
+				UpdateNodepool(nodepool, fakeMetadata)
+				assert.Equal(t, expectedNodepool, nodepool, "UpdateNodepool should not modify nodepool even if metadata contains key when feature is disabled")
+			})
 		})
 	}
 }

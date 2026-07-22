@@ -2218,6 +2218,111 @@ func TestPriorities(t *testing.T) {
 				},
 			},
 		},
+		"enable nested virtualization - fall back to default when true": {
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("c2"),
+						},
+						{
+							MachineFamily:              proto.String("n2"),
+							EnableNestedVirtualization: proto.Bool(false),
+						},
+						{
+							MachineFamily:              proto.String("n2d"),
+							EnableNestedVirtualization: proto.Bool(true),
+						},
+					},
+					PriorityDefaults: &v1.PriorityDefaults{
+						EnableNestedVirtualization: proto.Bool(true),
+					},
+				},
+			},
+			exopectedPriorities: []v1.Priority{
+				{
+					MachineFamily:              proto.String("c2"),
+					EnableNestedVirtualization: proto.Bool(true),
+				},
+				{
+					MachineFamily:              proto.String("n2"),
+					EnableNestedVirtualization: proto.Bool(false),
+				},
+				{
+					MachineFamily:              proto.String("n2d"),
+					EnableNestedVirtualization: proto.Bool(true),
+				},
+			},
+		},
+		"enable nested virtualization - fall back to default when false": {
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("c2"),
+						},
+						{
+							MachineFamily:              proto.String("n2"),
+							EnableNestedVirtualization: proto.Bool(true),
+						},
+						{
+							MachineFamily:              proto.String("n2d"),
+							EnableNestedVirtualization: proto.Bool(false),
+						},
+					},
+					PriorityDefaults: &v1.PriorityDefaults{
+						EnableNestedVirtualization: proto.Bool(false),
+					},
+				},
+			},
+			exopectedPriorities: []v1.Priority{
+				{
+					MachineFamily:              proto.String("c2"),
+					EnableNestedVirtualization: proto.Bool(false),
+				},
+				{
+					MachineFamily:              proto.String("n2"),
+					EnableNestedVirtualization: proto.Bool(true),
+				},
+				{
+					MachineFamily:              proto.String("n2d"),
+					EnableNestedVirtualization: proto.Bool(false),
+				},
+			},
+		},
+		"enable nested virtualization - do not fall back to default when unspecified": {
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("c2"),
+						},
+						{
+							MachineFamily:              proto.String("n2"),
+							EnableNestedVirtualization: proto.Bool(false),
+						},
+						{
+							MachineFamily:              proto.String("n2d"),
+							EnableNestedVirtualization: proto.Bool(true),
+						},
+					},
+					PriorityDefaults: &v1.PriorityDefaults{},
+				},
+			},
+			exopectedPriorities: []v1.Priority{
+				{
+					MachineFamily: proto.String("c2"),
+				},
+				{
+					MachineFamily:              proto.String("n2"),
+					EnableNestedVirtualization: proto.Bool(false),
+				},
+				{
+					MachineFamily:              proto.String("n2d"),
+					EnableNestedVirtualization: proto.Bool(true),
+				},
+			},
+		},
 		"allocation strategy defaults": {
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{

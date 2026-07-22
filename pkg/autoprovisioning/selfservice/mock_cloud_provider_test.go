@@ -12,32 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gkeclient
+package selfservice
 
 import (
-	"os"
-	"testing"
-
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	experimentsfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments/fake"
 )
-
-func TestMain(m *testing.M) {
-	selfservice.InitSelfService(&mockCloudProvider{
-		isPSC:              true,
-		defaultPrivateNode: false,
-		isAutopilot:        false,
-		experimentsManager: experiments.NewMockManagerWithOptions(
-			version.Version{1, 30, 0, 0},
-			map[string]bool{
-				experiments.EnableNestedVirtualizationEnabledFlag: true,
-			},
-			map[string]string{},
-		),
-	})
-	os.Exit(m.Run())
-}
 
 type mockCloudProvider struct {
 	isPSC              bool
@@ -60,4 +41,15 @@ func (m *mockCloudProvider) IsAutopilotEnabled() bool {
 
 func (m *mockCloudProvider) GetExperimentsManager() experiments.Manager {
 	return m.experimentsManager
+}
+
+func defaultMockCloudProvider() *mockCloudProvider {
+	evaluator := experimentsfake.NewEvaluator(
+		map[string]bool{experiments.EnableNestedVirtualizationEnabledFlag: true},
+		map[string]string{},
+	)
+	manager := experiments.NewManager(version.Version{}, evaluator)
+	return &mockCloudProvider{
+		experimentsManager: manager,
+	}
 }

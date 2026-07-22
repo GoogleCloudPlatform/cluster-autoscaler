@@ -18,6 +18,7 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	container "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
 
@@ -25,6 +26,11 @@ import (
 // This function MUST be called before anything else
 // to ensure that features are set and operate correctly.
 func InitSelfService(cp CloudProvider) {
+	var experimentsManager experiments.Manager
+	if cp != nil {
+		experimentsManager = cp.GetExperimentsManager()
+	}
+
 	supportedFeatures = []feature{
 		newNodePoolGroupName(),
 		newWorkloadType(),
@@ -46,6 +52,7 @@ func InitSelfService(cp CloudProvider) {
 		newWorkloadMetadata(),
 		newInstanceMetadata(),
 		newMaintenanceExclusion(),
+		newNestedVirtualization(experimentsManager),
 	}
 }
 
@@ -55,6 +62,7 @@ type CloudProvider interface {
 	IsClusterUsingPSCInfrastructure() bool
 	GetDefaultEnablePrivateNodes() bool
 	IsAutopilotEnabled() bool
+	GetExperimentsManager() experiments.Manager
 }
 
 type GkeMigSetter interface {
