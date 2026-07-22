@@ -1261,6 +1261,19 @@ type GkeCloudProviderMock struct {
 	mock.Mock
 }
 
+func (m *GkeCloudProviderMock) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	m.Called(migId, rec)
+}
+
+func (m *GkeCloudProviderMock) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	args := m.Called(migId)
+	return args.Get(0).(ScaleUpRecommendation), args.Bool(1)
+}
+
+func (m *GkeCloudProviderMock) ClearRecommendations() {
+	m.Called()
+}
+
 // Name returns name of the cloud provider.
 func (m *GkeCloudProviderMock) Name() string {
 	args := m.Called()
@@ -3122,4 +3135,21 @@ func (m *MockAutoprovisioningEligibility) UseAutoprovisioningFeaturesForPodRequi
 func (m *MockAutoprovisioningEligibility) UseAutoprovisioningFeaturesForNodeGroup(nodeGroup cloudprovider.NodeGroup) bool {
 	args := m.Called(nodeGroup)
 	return args.Get(0).(bool)
+}
+
+func (fake *FakeGkeManager) SetRecommendation(migId string, rec ScaleUpRecommendation) {}
+func (fake *FakeGkeManager) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	return ScaleUpRecommendation{}, false
+}
+func (fake *FakeGkeManager) ClearRecommendations() {}
+
+func (m *GkeManagerMock) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	m.Called(migId, rec)
+}
+func (m *GkeManagerMock) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	args := m.Called(migId)
+	return args.Get(0).(ScaleUpRecommendation), args.Bool(1)
+}
+func (m *GkeManagerMock) ClearRecommendations() {
+	m.Called()
 }

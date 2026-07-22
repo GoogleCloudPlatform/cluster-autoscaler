@@ -6978,3 +6978,29 @@ func TestAddSupportedDiskTypeLabelsToNode(t *testing.T) {
 		})
 	}
 }
+
+func TestRecommendationSetAndPop(t *testing.T) {
+	manager := &gkeManagerImpl{}
+	manager.SetRecommendation("mig1", ScaleUpRecommendation{RecommendationId: "rectest-1", SpecKey: "spec1"})
+
+	rec, ok := manager.PopRecommendation("mig1")
+	assert.True(t, ok)
+	assert.Equal(t, "rectest-1", rec.RecommendationId)
+	assert.Equal(t, "spec1", rec.SpecKey)
+}
+
+func TestRecommendationPopEmpty(t *testing.T) {
+	manager := &gkeManagerImpl{}
+
+	_, ok := manager.PopRecommendation("mig1")
+	assert.False(t, ok)
+}
+
+func TestRecommendationClear(t *testing.T) {
+	manager := &gkeManagerImpl{}
+	manager.SetRecommendation("mig2", ScaleUpRecommendation{RecommendationId: "rectest-2", SpecKey: "spec2"})
+
+	manager.ClearRecommendations()
+	_, ok := manager.PopRecommendation("mig2")
+	assert.False(t, ok)
+}

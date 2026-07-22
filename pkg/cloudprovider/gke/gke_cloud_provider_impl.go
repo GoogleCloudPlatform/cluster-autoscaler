@@ -1043,6 +1043,21 @@ func (p *gkeCloudProviderImpl) MachineConfigProvider() *machinetypes.MachineConf
 	return p.machineConfigProvider
 }
 
+// SetRecommendation assigns a scaling recommendation to an instance group.
+func (p *gkeCloudProviderImpl) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	p.gkeManager.SetRecommendation(migId, rec)
+}
+
+// PopRecommendation returns and removes the scaling recommendation for an instance group.
+func (p *gkeCloudProviderImpl) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	return p.gkeManager.PopRecommendation(migId)
+}
+
+// ClearRecommendations clears all pending scaling recommendations.
+func (p *gkeCloudProviderImpl) ClearRecommendations() {
+	p.gkeManager.ClearRecommendations()
+}
+
 // NodeConfig contantain information about configs of the GKE node pool this Mig belongs to.
 type NodeConfig struct {
 	ThreadsPerCore     int64

@@ -1081,6 +1081,21 @@ func (m *asyncGkeManager) translateCreatedToUpcomingMigs(upcoming *upcomingNodeP
 	return translated
 }
 
+// SetRecommendation assigns a scaling recommendation to an instance group.
+func (m *asyncGkeManager) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	m.GkeManager.SetRecommendation(migId, rec)
+}
+
+// PopRecommendation returns and removes the scaling recommendation for an instance group.
+func (m *asyncGkeManager) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	return m.GkeManager.PopRecommendation(migId)
+}
+
+// ClearRecommendations clears all pending scaling recommendations.
+func (m *asyncGkeManager) ClearRecommendations() {
+	m.GkeManager.ClearRecommendations()
+}
+
 // upcomingNodePool represents a node pool that will be created in the near future.
 // Access to fields with "Synced" suffix using methods - they require synchronization.
 type upcomingNodePool struct {

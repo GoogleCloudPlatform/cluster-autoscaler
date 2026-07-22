@@ -354,6 +354,12 @@ type GkeManager interface {
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 	// ExperimentsManager returns the experiments.Manager.
 	ExperimentsManager() experiments.Manager
+	// SetRecommendation tracks a recommendation.
+	SetRecommendation(migId string, rec ScaleUpRecommendation)
+	// PopRecommendation returns and removes a recommendation.
+	PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool)
+	// ClearRecommendations removes all tracked recommendations.
+	ClearRecommendations()
 }
 
 type ScaleUpTimeProvider interface {
@@ -389,6 +395,12 @@ type DaemonSetConditions struct {
 	HighThroughputLoggingEnabled bool
 	NetdEnabled                  bool
 	IpMasqAgentEnabled           bool
+}
+
+type ScaleUpRecommendation struct {
+	RecommendationId string
+	// Either raw Flex Advisor integer string or 128-bit BLAKE3 hex hash of an RLA string specification.
+	SpecKey string
 }
 
 // InitializationFunc type of function to be run ran once after the first successful refresh of cluster state.
@@ -501,6 +513,7 @@ type gkeManagerImpl struct {
 
 	ekEdpEnabledCache                   bool
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
+	recommendations                     sync.Map
 }
 
 // GceConnectionConfig is a config for GCE connection.
@@ -640,6 +653,22 @@ func CreateGkeManager(
 func (m *gkeManagerImpl) Cleanup() error {
 	close(m.interrupt)
 	return nil
+}
+
+func (m *gkeManagerImpl) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	m.recommendations.Store(migId, rec)
+}
+
+func (m *gkeManagerImpl) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
+	if val, loaded := m.recommendations.LoadAndDelete(migId); loaded {
+		data := val.(ScaleUpRecommendation)
+		return data, true
+	}
+	return ScaleUpRecommendation{}, false
+}
+
+func (m *gkeManagerImpl) ClearRecommendations() {
+	m.recommendations.Clear()
 }
 
 // Client returns the authenticated GKE http client.

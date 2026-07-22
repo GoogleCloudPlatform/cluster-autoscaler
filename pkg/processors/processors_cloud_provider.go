@@ -41,4 +41,7 @@ type ProcessorsCloudProvider interface {
 	GetMigInstanceTemplateTaints(*gke.GkeMig) ([]apiv1.Taint, error)
 	GetMigInstanceTemplateSelfLink(*gke.GkeMig) (string, error)
 	GetExperimentsManager() experiments.Manager
+	SetRecommendation(migId string, rec gke.ScaleUpRecommendation)
+	PopRecommendation(migId string) (rec gke.ScaleUpRecommendation, ok bool)
+	ClearRecommendations()
 }
