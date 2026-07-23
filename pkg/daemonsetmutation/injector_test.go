@@ -32,6 +32,7 @@ func TestInjectDaemonSetMutations_NilOrEmptyInputs(t *testing.T) {
 	ds, nodeInfos := setUpTestPodAndDS()
 	cache := NewMutationCache()
 	ctrl := NewController(context.Background(), cache, nil, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 	injector := NewInjector(cache, ctrl)
 
 	// Empty nodeInfos
@@ -60,6 +61,7 @@ func TestInjectDaemonSetMutations_NoMatchingDaemonSet(t *testing.T) {
 	cache.Set(ds.UID, ds.Generation, mutatedPod)
 
 	ctrl := NewController(context.Background(), cache, nil, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 	injector := NewInjector(cache, ctrl)
 
 	got := injector.InjectDaemonSetMutations(nodeInfos, []*appsv1.DaemonSet{ds})
@@ -80,6 +82,7 @@ func TestInjectDaemonSetMutations_SuccessfulInjection(t *testing.T) {
 	cache.Set(ds.UID, ds.Generation, mutatedPodTemplate)
 
 	ctrl := NewController(context.Background(), cache, nil, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 	injector := NewInjector(cache, ctrl)
 
 	got := injector.InjectDaemonSetMutations(nodeInfos, []*appsv1.DaemonSet{ds})

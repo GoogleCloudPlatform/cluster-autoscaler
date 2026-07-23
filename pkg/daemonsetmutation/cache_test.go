@@ -27,58 +27,58 @@ import (
 
 func TestMutationCache_Get(t *testing.T) {
 	testCases := []struct {
-		name      string
-		ds        *appsv1.DaemonSet
-		setCache  bool
-		cacheUID  types.UID
-		cachedPod *apiv1.Pod
-		cachedGen int64
-		expired   bool
-		wantPod   *apiv1.Pod
-		wantStale bool
+		name             string
+		ds               *appsv1.DaemonSet
+		setCache         bool
+		cacheUID         types.UID
+		cachedPod        *apiv1.Pod
+		cachedGen        int64
+		expired          bool
+		wantPod          *apiv1.Pod
+		wantNeedsRefresh bool
 	}{
 		{
-			name:      "empty UID returns stale",
-			ds:        &appsv1.DaemonSet{},
-			wantPod:   nil,
-			wantStale: true,
+			name:             "empty UID returns needsRefresh",
+			ds:               &appsv1.DaemonSet{},
+			wantPod:          nil,
+			wantNeedsRefresh: true,
 		},
 		{
-			name:      "cache miss returns stale",
-			ds:        &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
-			wantPod:   nil,
-			wantStale: true,
+			name:             "cache miss returns needsRefresh",
+			ds:               &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
+			wantPod:          nil,
+			wantNeedsRefresh: true,
 		},
 		{
-			name:      "cache hit returns valid pod",
-			ds:        &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
-			setCache:  true,
-			cacheUID:  "ds-1",
-			cachedPod: &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
-			cachedGen: 1,
-			wantPod:   &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
-			wantStale: false,
+			name:             "cache hit returns valid pod",
+			ds:               &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
+			setCache:         true,
+			cacheUID:         "ds-1",
+			cachedPod:        &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
+			cachedGen:        1,
+			wantPod:          &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
+			wantNeedsRefresh: false,
 		},
 		{
-			name:      "generation change returns stale",
-			ds:        &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 2}},
-			setCache:  true,
-			cacheUID:  "ds-1",
-			cachedPod: &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
-			cachedGen: 1,
-			wantPod:   nil,
-			wantStale: true,
+			name:             "generation change returns needsRefresh",
+			ds:               &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 2}},
+			setCache:         true,
+			cacheUID:         "ds-1",
+			cachedPod:        &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
+			cachedGen:        1,
+			wantPod:          nil,
+			wantNeedsRefresh: true,
 		},
 		{
-			name:      "ttl expired returns pod and stale",
-			ds:        &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
-			setCache:  true,
-			cacheUID:  "ds-1",
-			cachedPod: &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
-			cachedGen: 1,
-			expired:   true,
-			wantPod:   &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
-			wantStale: true,
+			name:             "ttl expired returns pod and needsRefresh",
+			ds:               &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: "ds-1", Generation: 1}},
+			setCache:         true,
+			cacheUID:         "ds-1",
+			cachedPod:        &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
+			cachedGen:        1,
+			expired:          true,
+			wantPod:          &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "cached-pod"}},
+			wantNeedsRefresh: true,
 		},
 	}
 
@@ -86,8 +86,7 @@ func TestMutationCache_Get(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := NewMutationCache()
 			if tc.setCache {
-				err := c.Set(tc.cacheUID, tc.cachedGen, tc.cachedPod)
-				assert.NoError(t, err)
+				c.Set(tc.cacheUID, tc.cachedGen, tc.cachedPod)
 				if tc.expired {
 					entry := c.items[tc.cacheUID]
 					entry.expiresAt = time.Now().Add(-1 * time.Minute)
@@ -101,9 +100,9 @@ func TestMutationCache_Get(t *testing.T) {
 				uid = tc.ds.UID
 				gen = tc.ds.Generation
 			}
-			gotPod, gotStale := c.Get(uid, gen)
+			gotPod, gotNeedsRefresh := c.Get(uid, gen)
 			assert.Equal(t, tc.wantPod, gotPod)
-			assert.Equal(t, tc.wantStale, gotStale)
+			assert.Equal(t, tc.wantNeedsRefresh, gotNeedsRefresh)
 		})
 	}
 }
@@ -113,14 +112,13 @@ func TestMutationCache_Remove(t *testing.T) {
 	uid := types.UID("ds-1")
 	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: uid, Generation: 1}}
 
-	err := c.Set(uid, 1, &apiv1.Pod{})
-	assert.NoError(t, err)
-	_, stale := c.Get(ds.UID, ds.Generation)
-	assert.False(t, stale)
+	c.Set(uid, 1, &apiv1.Pod{})
+	_, needsRefresh := c.Get(ds.UID, ds.Generation)
+	assert.False(t, needsRefresh)
 
 	c.Remove(uid)
-	_, stale = c.Get(ds.UID, ds.Generation)
-	assert.True(t, stale)
+	_, needsRefresh = c.Get(ds.UID, ds.Generation)
+	assert.True(t, needsRefresh)
 }
 
 func TestRandomJitter(t *testing.T) {
@@ -142,8 +140,7 @@ func TestMutationCache_Jitter(t *testing.T) {
 	pod := &apiv1.Pod{}
 
 	before := time.Now()
-	err := c.Set(uid, 1, pod)
-	assert.NoError(t, err)
+	c.Set(uid, 1, pod)
 
 	entry, ok := c.items[uid]
 	assert.True(t, ok)
@@ -163,13 +160,12 @@ func TestMutationCache_DeepCopy(t *testing.T) {
 	}
 
 	// Verify Set copies the input pod.
-	err := c.Set(uid, 1, pod)
-	assert.NoError(t, err)
+	c.Set(uid, 1, pod)
 	pod.Labels["key"] = "mutated-after-set"
 
 	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: uid, Generation: 1}}
-	gotPod1, stale := c.Get(ds.UID, ds.Generation)
-	assert.False(t, stale)
+	gotPod1, needsRefresh := c.Get(ds.UID, ds.Generation)
+	assert.False(t, needsRefresh)
 	assert.Equal(t, "value", gotPod1.Labels["key"], "mutating the original pod after Set should not affect the cache")
 	assert.NotSame(t, pod, gotPod1)
 
@@ -182,7 +178,12 @@ func TestMutationCache_DeepCopy(t *testing.T) {
 
 func TestMutationCache_Set_NilPod(t *testing.T) {
 	c := NewMutationCache()
-	err := c.Set("ds-1", 1, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "pod cannot be nil")
+	uid := types.UID("ds-1")
+	ds := &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{UID: uid, Generation: 1}}
+
+	c.Set(uid, 1, nil)
+
+	gotPod, needsRefresh := c.Get(ds.UID, ds.Generation)
+	assert.False(t, needsRefresh)
+	assert.Nil(t, gotPod)
 }

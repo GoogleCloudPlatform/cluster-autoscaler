@@ -36,22 +36,19 @@ const (
 	podMutationAPITimeout = 30 * time.Second
 	// defaultWorkerCount is the default number of concurrent mutation resolution workers.
 	defaultWorkerCount = 10
-	// errorRetryBaseDelay is the initial backoff delay for retrying failed mutation resolutions.
-	errorRetryBaseDelay = 1 * time.Minute
-	// errorRetryMaxDelay is the maximum backoff delay for retrying failed mutation resolutions.
-	errorRetryMaxDelay = 5 * time.Minute
 )
 
 // Controller handles background dry-run API requests for DaemonSets.
 type Controller struct {
 	mutationCache *MutationCache
 	dsInformer    cache.SharedIndexInformer
-	queue         workqueue.TypedRateLimitingInterface[string]
+	queue         workqueue.TypedInterface[string]
 	resolver      fakepods.Resolver
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	cleanupOnce sync.Once
 }
 
 // NewController returns a new Controller instance.
@@ -60,9 +57,8 @@ func NewController(ctx context.Context, mutationCache *MutationCache, resolver f
 	c := &Controller{
 		mutationCache: mutationCache,
 		dsInformer:    informerFactory.Apps().V1().DaemonSets().Informer(),
-		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
-			workqueue.NewTypedItemExponentialFailureRateLimiter[string](errorRetryBaseDelay, errorRetryMaxDelay),
-			workqueue.TypedRateLimitingQueueConfig[string]{
+		queue: workqueue.NewTypedWithConfig(
+			workqueue.TypedQueueConfig[string]{
 				Name: "daemonset_mutation",
 			},
 		),
@@ -92,9 +88,11 @@ func (c *Controller) Start() {
 
 // CleanUp synchronously shuts down the workqueue and waits for workers to exit.
 func (c *Controller) CleanUp() {
-	c.cancel()
-	c.queue.ShutDown() // Synchronous shutdown guarantees workers unblock immediately before wg.Wait()
-	c.wg.Wait()
+	c.cleanupOnce.Do(func() {
+		c.cancel()
+		c.queue.ShutDown() // Synchronous shutdown guarantees workers unblock immediately before wg.Wait()
+		c.wg.Wait()
+	})
 }
 
 // Enqueue queues a DaemonSet for background mutation resolution.
@@ -162,11 +160,9 @@ func (c *Controller) processNextWorkItem() bool {
 	defer c.queue.Done(key)
 
 	if err := c.resolveMutation(key); err != nil {
-		klog.Errorf("[ds mutation] Failed to process mutation for key %q (will retry): %v", key, err)
-		c.queue.AddRateLimited(key)
+		klog.Errorf("[ds mutation] Failed to process mutation for key %q: %v", key, err)
 		return true
 	}
-	c.queue.Forget(key)
 	return true
 }
 
@@ -186,7 +182,7 @@ func (c *Controller) resolveMutation(key string) error {
 
 	// Check if the cache already contains a non-stale entry for this generation.
 	// This helps avoid unneeded dry-run API calls if we already resolved it recently.
-	if _, stale := c.mutationCache.Get(ds.UID, ds.Generation); !stale {
+	if _, needsRefresh := c.mutationCache.Get(ds.UID, ds.Generation); !needsRefresh {
 		return nil
 	}
 
@@ -199,15 +195,17 @@ func (c *Controller) resolveMutation(key string) error {
 	observeDryRunResolution(err, time.Since(start))
 
 	if err != nil {
-		return fmt.Errorf("resolving dryrun mutation for %s/%s (gen: %d): %w", ds.Namespace, ds.Name, ds.Generation, err)
+		klog.Warningf("[ds mutation] Failed to resolve dry-run mutation for DaemonSet %s/%s (gen: %d): %v. Falling back to original pod template.", ds.Namespace, ds.Name, ds.Generation, err)
+		// Cache nil to represent a resolution failure, which prevents retries
+		// and enforces fallback to original pod template for 5 minutes.
+		c.mutationCache.Set(ds.UID, ds.Generation, nil)
+		return nil
 	}
 
 	if changed, oldReq, newReq := resourcesChanged(templateCopy, updatedPod); changed {
 		klog.V(4).Infof("[ds mutation] Successfully resolved dry-run mutation for DaemonSet %s/%s (gen: %d): resources changed. Old: %v, New: %v", ds.Namespace, ds.Name, ds.Generation, oldReq, newReq)
 	}
-	if err := c.mutationCache.Set(ds.UID, ds.Generation, updatedPod); err != nil {
-		klog.Errorf("[ds mutation] Failed to cache mutation for DaemonSet %s/%s (gen: %d): %v", ds.Namespace, ds.Name, ds.Generation, err)
-	}
+	c.mutationCache.Set(ds.UID, ds.Generation, updatedPod)
 	return nil
 }
 

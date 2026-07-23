@@ -87,10 +87,12 @@ func (inj *Injector) injectMutationsToNodeInfo(nodeInfo *framework.NodeInfo, dsM
 			continue
 		}
 
-		cachedPod, stale := inj.cache.Get(ds.UID, ds.Generation)
-		if stale {
+		cachedPod, needsRefresh := inj.cache.Get(ds.UID, ds.Generation)
+		if needsRefresh {
 			inj.controller.Enqueue(ds)
 		}
+		// cachedPod is nil if the cache is cold, or if the dry-run previously
+		// failed (fallback). In both cases, we use the original simulated pod.
 		if cachedPod == nil {
 			newPods = append(newPods, podInfo)
 			continue

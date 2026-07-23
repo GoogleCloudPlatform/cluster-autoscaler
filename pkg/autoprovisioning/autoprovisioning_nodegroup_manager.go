@@ -49,6 +49,7 @@ import (
 	computeclass_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
@@ -97,6 +98,7 @@ type AutoprovisioningNodeGroupManager struct {
 	specGenerators                  []NodePoolSpecGenerator
 	nodeGroupRequirementsGenerators []NodeGroupRequirementsGenerator
 	nodeGroupOptionsGenerators      []NodeGroupOptionsGenerator
+	mutationInjector                *daemonsetmutation.Injector
 
 	randInt func(max int) int
 }
@@ -119,6 +121,7 @@ type AutoprovisioningNodeGroupManagerOptions struct {
 	MaxAutoprovisionedNodeGroupCount int
 	Flags                            AutoprovisioningNodeGroupManagerFlags
 	OptionsTracker                   *optstracking.OptionsTracker
+	MutationInjector                 *daemonsetmutation.Injector
 }
 
 // AutoprovisioningNodeGroupManagerFlags defines flags responsible for enablement of autoprovisioning features.
@@ -256,6 +259,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 		nodeGroupOptionsGenerators:       nodeGroupOptionsGenerators,
 		computeClassLister:               opts.Lister,
 		maxAutoprovisionedNodeGroupCount: opts.MaxAutoprovisionedNodeGroupCount,
+		mutationInjector:                 opts.MutationInjector,
 		randInt:                          rand.Intn,
 	}
 }
@@ -323,6 +327,20 @@ func (m *AutoprovisioningNodeGroupManager) Process(ctx *context.AutoscalingConte
 				klog.Infof("NAP: injected node groups for requirements count=%d requirements=<%s>", injected, tpuRequirements.String())
 			}
 			totalInjected += injected
+		}
+	}
+
+	// Inject DaemonSet mutations for new node templates to account for webhook mutations.
+	if m.mutationInjector != nil && len(injectionCtx.injectedNodeGroups) > 0 {
+		injectedNodeInfos := make(map[string]*framework.NodeInfo, len(injectionCtx.injectedNodeGroups))
+		for _, ng := range injectionCtx.injectedNodeGroups {
+			if ni, found := injectionCtx.nodeInfos[ng.Id()]; found {
+				injectedNodeInfos[ng.Id()] = ni
+			}
+		}
+		mutated := m.mutationInjector.InjectDaemonSetMutations(injectedNodeInfos, injectionCtx.daemonSets)
+		for id, ni := range mutated {
+			injectionCtx.nodeInfos[id] = ni
 		}
 	}
 
@@ -634,7 +652,11 @@ func toAutoprovisionedNodeGroups(nodeGroups []cloudprovider.NodeGroup) ([]interf
 }
 
 // CleanUp cleans up the processor's internal structures.
-func (m *AutoprovisioningNodeGroupManager) CleanUp() {}
+func (m *AutoprovisioningNodeGroupManager) CleanUp() {
+	if m.mutationInjector != nil {
+		m.mutationInjector.CleanUp()
+	}
+}
 
 func nodeGroupIds(nodeGroups []interfaces.AutoprovisionedNodeGroup) set.Set[string] {
 	result := set.New[string]()

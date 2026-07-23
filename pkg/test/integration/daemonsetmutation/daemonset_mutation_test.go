@@ -109,3 +109,93 @@ func TestDaemonSetMutationOverhead(t *testing.T) {
 		})
 	}
 }
+
+// TestNAPWithDaemonSetMutationOverhead verifies that NAP accounts for DaemonSet
+// pod overhead injected via mutation during scale-up scheduling simulation when the feature
+// is enabled, and ignores it when the feature is disabled.
+func TestNAPWithDaemonSetMutationOverhead(t *testing.T) {
+	testCases := []struct {
+		name                string
+		mutationEnabled     bool
+		expectedMachineType string
+		assertionMessage    string
+	}{
+		{
+			name:                "mutation enabled - accounts for overhead and autoprovisions pool with n1-standard-4",
+			mutationEnabled:     true,
+			expectedMachineType: "n1-standard-4",
+			assertionMessage:    "Expected NAP to provision n1-standard-4 due to DaemonSet overhead",
+		},
+		{
+			name:                "mutation disabled - ignores overhead and scales up default-pool (n1-standard-2)",
+			mutationEnabled:     false,
+			expectedMachineType: "n1-standard-2",
+			assertionMessage:    "Expected NAP/Autoscaler to use n1-standard-2 because mutation feature is disabled",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			nodePools := []*gke_api_beta.NodePool{
+				integration.DefaultNodePool(
+					integration.WithNodePoolMachineType("n1-standard-2"),
+					integration.WithNodePoolSize(0),
+					integration.WithNodePoolLocations("us-central1-a"),
+				),
+			}
+
+			testConfig := integration.NewTestConfig().
+				WithNodePools(nodePools...).
+				WithOverrides(
+					integration.WithMaxMemoryTotal(140*1024*1024*1024),
+					integration.WithDaemonSetMutationEnabled(tc.mutationEnabled),
+					integration.WithAutoProvisioningEnabled(),
+				).
+				WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations("us-central1-a"),
+				)
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+				defer integration_synctest.TearDown(cancel)
+
+				// Prepend Reactor to mock dry-run API server mutation.
+				reactors.PrependMockDaemonSetMutationReactor(&infra.Fakes.KubeClient.Fake, "ds-overhead", "300m")
+
+				ds := daemonset.BuildTestDaemonSet("ds-overhead", "kube-system", daemonset.WithResource(apiv1.ResourceCPU, "300m", "300m"))
+				_, err := infra.Fakes.KubeClient.AppsV1().DaemonSets("kube-system").Create(ctx, ds, metav1.CreateOptions{})
+				assert.NoError(t, err)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+
+				// Wait for background controller to sync informer and populate cache.
+				synctest.Wait()
+
+				userPod := tu.BuildTestPod("user-pod", 1500, 4*1024*1024*1024, tu.MarkUnschedulable())
+				infra.Fakes.K8s.AddPod(userPod)
+
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				infra.Fakes.RunScheduler(ctx, t)
+
+				// Assertions:
+				// If Mutation Enabled:
+				//   Mutated DS (600m) + User Pod (1500m) = 2100m > 1930m (allocatable of n1-standard-2)
+				//   Should autoprovision a new node pool with n1-standard-4.
+				// If Mutation Disabled:
+				//   DS (300m) + User Pod (1500m) = 1800m <= 1930m (allocatable of n1-standard-2)
+				//   Should scale up default-pool (n1-standard-2).
+				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "user-pod", metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.NotEmpty(t, updatedPod.Spec.NodeName)
+
+				// Get the node details to verify machine type.
+				node, err := infra.Fakes.KubeClient.CoreV1().Nodes().Get(ctx, updatedPod.Spec.NodeName, metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.Equal(t, tc.expectedMachineType, node.Labels[apiv1.LabelInstanceTypeStable], tc.assertionMessage)
+			})
+		})
+	}
+}

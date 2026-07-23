@@ -211,7 +211,8 @@ func initAutoprovisioningProcessors(
 	listerRegistry kube_util.ListerRegistry,
 	resizableMachineTypesProvider internalcfg.Provider[sets.Set[string]],
 	reservationBlocksPuller *reservations.BlocksPuller,
-	resourcePolicyPuller placement.ResourcePolicyPuller) (nodegroups.NodeGroupListProcessor, nodegroups.NodeGroupManager) {
+	resourcePolicyPuller placement.ResourcePolicyPuller,
+	mutationInjector *daemonsetmutation.Injector) (nodegroups.NodeGroupListProcessor, nodegroups.NodeGroupManager) {
 
 	opts := autoprovisioning.AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    gkeCloudProvider,
@@ -227,6 +228,7 @@ func initAutoprovisioningProcessors(
 		PodLister:                        listerRegistry.AllPodLister(),
 		ResizableMachineTypesProvider:    resizableMachineTypesProvider,
 		MaxAutoprovisionedNodeGroupCount: options.MaxAutoprovisionedNodeGroupCount,
+		MutationInjector:                 mutationInjector,
 		Flags: autoprovisioning.AutoprovisioningNodeGroupManagerFlags{
 			ProvisioningLabelEnabled:   options.ProvisioningLabelEnabled,
 			TpuAutoprovisioningEnabled: options.TpuAutoprovisioningEnabled,
@@ -665,9 +667,18 @@ func setUpProcessors(
 		scaleDownProcessorChain.AddProcessor(crdScaleDownHistoryProcessor)
 	}
 
+	var mutationInjector *daemonsetmutation.Injector
+	if options.DaemonSetMutationEnabled {
+		dryRunResolver := fakepods.NewDryRunResolver(kubeClient)
+		mutationCache := daemonsetmutation.NewMutationCache()
+		mutationController := daemonsetmutation.NewController(context, mutationCache, dryRunResolver, informerFactory)
+		mutationInjector = daemonsetmutation.NewInjector(mutationCache, mutationController)
+		mutationController.Start()
+	}
+
 	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, metricsFilterProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
 
-	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, npcCrdLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller)
+	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, npcCrdLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor
 
 	// autoprovisioning.NewSortedNodeGroupListProcessor sorts node groups descending by allocatable CPU.
@@ -743,15 +754,6 @@ func setUpProcessors(
 	}
 	nodeGroupSetProcessor = reservations.NewReservationBalancingProcessor(nodeGroupSetProcessor, reservationsPuller, options.GCEOptions.LocalSSDDiskSizeProvider, provider)
 	autoscalingProcessors.NodeGroupSetProcessor = internal_processors.NewTotalMaxSizeProcessor(nodeGroupSetProcessor)
-
-	var mutationInjector *daemonsetmutation.Injector
-	if options.DaemonSetMutationEnabled {
-		dryRunResolver := fakepods.NewDryRunResolver(kubeClient)
-		mutationCache := daemonsetmutation.NewMutationCache()
-		mutationController := daemonsetmutation.NewController(context, mutationCache, dryRunResolver, informerFactory)
-		mutationInjector = daemonsetmutation.NewInjector(mutationCache, mutationController)
-		mutationController.Start()
-	}
 
 	autoscalingProcessors.TemplateNodeInfoProvider = nodeinfosprovider.NewAugmentingNodeInfoProvider(
 		autoscalingProcessors.TemplateNodeInfoProvider, options.NodePoolUpdatesEnabled, mutationInjector,

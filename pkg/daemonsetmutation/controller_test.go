@@ -36,6 +36,7 @@ func TestController_Enqueue_NilResolver(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, nil, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	ctrl.Enqueue(ds)
 	assert.Equal(t, 0, ctrl.queue.Len())
@@ -44,6 +45,7 @@ func TestController_Enqueue_NilResolver(t *testing.T) {
 func TestController_Enqueue_NilDS(t *testing.T) {
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	ctrl.Enqueue(nil)
 	assert.Equal(t, 0, ctrl.queue.Len())
@@ -53,6 +55,7 @@ func TestController_Enqueue_Deduplication(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	ctrl.Enqueue(ds)
 	assert.Equal(t, 1, ctrl.queue.Len())
@@ -72,6 +75,7 @@ func TestController_ResolveMutation_Success(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithOverhead("1500m"), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
@@ -91,6 +95,7 @@ func TestController_ResolveMutation_Success_NoChange(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
@@ -118,6 +123,7 @@ func TestController_ResolveMutation_CachedNotStale(t *testing.T) {
 		},
 	}
 	ctrl := NewController(context.Background(), mutationCache, resolver, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
@@ -138,6 +144,7 @@ func TestController_ResolveMutation_Error(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithError(assert.AnError), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
@@ -146,9 +153,9 @@ func TestController_ResolveMutation_Error(t *testing.T) {
 	key, _ := cache.MetaNamespaceKeyFunc(ds)
 	err = ctrl.resolveMutation(key)
 
-	assert.Error(t, err)
+	assert.NoError(t, err)
 	pod, stale := mutationCache.Get(ds.UID, ds.Generation)
-	assert.True(t, stale)
+	assert.False(t, stale)
 	assert.Nil(t, pod)
 }
 
@@ -156,6 +163,7 @@ func TestController_ResolveMutation_NilResolver(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, nil, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
@@ -172,6 +180,7 @@ func TestController_ResolveMutation_NilResolver(t *testing.T) {
 func TestController_ResolveMutation_JobNotExists(t *testing.T) {
 	mutationCache := NewMutationCache()
 	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
 
 	err := ctrl.resolveMutation("default/non-existent")
 	assert.NoError(t, err)

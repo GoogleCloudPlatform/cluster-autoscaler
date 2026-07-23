@@ -15,7 +15,6 @@
 package daemonsetmutation
 
 import (
-	"fmt"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -30,6 +29,8 @@ const (
 )
 
 type cacheEntry struct {
+	// updatedPod stores the mutated pod. A nil value represents a cached
+	// dry-run mutation failure (enforcing fallback to the original template).
 	updatedPod *apiv1.Pod
 	generation int64
 	expiresAt  time.Time
@@ -48,9 +49,13 @@ func NewMutationCache() *MutationCache {
 	}
 }
 
-// Get returns the cached mutated pod and a boolean (stale) indicating whether the cache entry
-// is missing, modified, or TTL-expired.
-func (c *MutationCache) Get(uid types.UID, gen int64) (*apiv1.Pod, bool) {
+// Get returns the cached mutated pod and a boolean (needsRefresh) indicating
+// whether the cache entry is missing, modified, or TTL-expired.
+//
+// If a dry-run mutation previously failed, Get returns (nil, false), indicating
+// that the failure is cached and the caller should fall back to the original
+// pod template without triggering a new dry-run resolution.
+func (c *MutationCache) Get(uid types.UID, gen int64) (pod *apiv1.Pod, needsRefresh bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -60,26 +65,33 @@ func (c *MutationCache) Get(uid types.UID, gen int64) (*apiv1.Pod, bool) {
 		return nil, true
 	}
 
-	return entry.updatedPod.DeepCopy(), time.Now().After(entry.expiresAt)
+	var podCopy *apiv1.Pod
+	if entry.updatedPod != nil {
+		podCopy = entry.updatedPod.DeepCopy()
+	}
+	return podCopy, time.Now().After(entry.expiresAt)
 }
 
 // Set stores a mutated pod and generation in the cache for the given UID.
-func (c *MutationCache) Set(uid types.UID, gen int64, pod *apiv1.Pod) error {
-	if pod == nil {
-		return fmt.Errorf("pod cannot be nil")
-	}
+// Storing a nil pod represents a dry-run mutation failure, indicating that
+// the original simulated pod template should be used as a fallback.
+func (c *MutationCache) Set(uid types.UID, gen int64, pod *apiv1.Pod) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if entry, ok := c.items[uid]; ok && entry.generation > gen {
-		return nil
+		return
+	}
+
+	var podCopy *apiv1.Pod
+	if pod != nil {
+		podCopy = pod.DeepCopy()
 	}
 
 	c.items[uid] = cacheEntry{
-		updatedPod: pod.DeepCopy(),
+		updatedPod: podCopy,
 		generation: gen,
 		expiresAt:  time.Now().Add(podMutationCacheTTL + randomJitter(podMutationCacheJitter)),
 	}
-	return nil
 }
 
 // Remove purges the cache entry for the given UID.

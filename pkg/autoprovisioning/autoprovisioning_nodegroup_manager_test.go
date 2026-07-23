@@ -30,6 +30,7 @@ import (
 	gce "google.golang.org/api/compute/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	gce_cloudprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -44,9 +45,9 @@ import (
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	. "k8s.io/autoscaler/cluster-autoscaler/utils/test"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	kube_record "k8s.io/client-go/tools/record"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/klog/v2"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
@@ -54,7 +55,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
-	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
@@ -64,6 +65,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	internal_customresources "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/customresources"
@@ -188,6 +190,114 @@ func TestProcessNodeGroupListTooMany(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nodeGroups))
 	assert.Equal(t, 1, len(nodeInfos))
+}
+
+func TestProcessNodeGroupListWithDaemonSetMutation(t *testing.T) {
+	p1 := BuildTestPod("p1", 100, 100)
+	n1 := BuildTestNode("ng1-xxx", 4000, 1000000)
+	ni1 := framework.NewTestNodeInfo(n1)
+
+	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
+
+	machineType := "n1-standard-4"
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineTypes(machineType).
+		WithAutoprovisioningLocations("us-central1-c").
+		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
+		WithMachineTypesPerZone(map[string][]string{
+			"us-central1-c": {machineType},
+		}).
+		WithAutoprovisioningEnabled(true).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+
+	provider.AddNodeGroup("ng1", 1, 5, 3)
+
+	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
+	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
+	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
+	em := experiments.NewMockManager()
+
+	// Set up the DaemonSet Mutation Cache and Injector
+	cache := daemonsetmutation.NewMutationCache()
+
+	// Create a mutated pod that we will cache.
+	mutatedPodTemplate := &apiv1.Pod{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "mutated-pod",
+		},
+		Spec: apiv1.PodSpec{
+			Overhead: apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("1500m")},
+		},
+	}
+	cache.Set("ds-uid", 1, mutatedPodTemplate)
+
+	informerFactory := informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0)
+	ctrl := daemonsetmutation.NewController(ctx.Background(), cache, nil, informerFactory)
+	injector := daemonsetmutation.NewInjector(cache, ctrl)
+
+	opts := AutoprovisioningNodeGroupManagerOptions{
+		CloudProvider:                    provider,
+		Backoff:                          gke_backoff.NewGkeBackoff(gke_backoff.Config{CustomResourceProcessor: processor, NpcLister: computeClassLister}),
+		MaxAutoprovisionedNodeGroupCount: 1,
+		Lister:                           computeClassLister,
+		ExperimentsManager:               em,
+		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
+		MutationInjector:                 injector,
+	}
+	manager := NewAutoprovisioningNodeGroupManager(opts)
+	t.Cleanup(manager.CleanUp)
+
+	ds := &appsv1.DaemonSet{
+		ObjectMeta: v1.ObjectMeta{
+			Name:       "test-ds",
+			UID:        "ds-uid",
+			Generation: 1,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Template: apiv1.PodTemplateSpec{
+				ObjectMeta: v1.ObjectMeta{
+					Labels: map[string]string{"app": "test-ds"},
+				},
+				Spec: apiv1.PodSpec{
+					Containers: []apiv1.Container{
+						{Name: "c1", Image: "img"},
+					},
+				},
+			},
+		},
+	}
+
+	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{ds})
+	assert.NoError(t, err)
+
+	asCtx := &context.AutoscalingContext{
+		CloudProvider:      provider,
+		ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
+		ClusterSnapshot:    testsnapshot.NewTestSnapshotOrDie(t),
+		AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
+		},
+		DebuggingSnapshotter: debuggingSnapshotter,
+	}
+	nodeGroups := provider.NodeGroups()
+	nodeInfos := map[string]*framework.NodeInfo{
+		"ng1": ni1,
+	}
+	nodeGroups, nodeInfos, err = manager.Process(asCtx, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
+
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(nodeGroups))
+	assert.Equal(t, 2, len(nodeInfos))
+
+	nodeInfo := nodeInfos["autoprovisioned-"+machineType]
+	assert.Equal(t, 1, len(nodeInfo.Pods()))
+	podInfo := nodeInfo.Pods()[0]
+	assert.Contains(t, podInfo.Pod.Name, "test-ds")
+
+	// Check that the mutation (Overhead) was indeed injected!
+	assert.Equal(t, resource.MustParse("1500m"), podInfo.Pod.Spec.Overhead[apiv1.ResourceCPU])
 }
 
 func TestCreateNodeGroup(t *testing.T) {
@@ -1443,7 +1553,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 
-	slMatcher, err := gkelabels.NewMatcher([]string{"test"})
+	slMatcher, err := labels.NewMatcher([]string{"test"})
 	assert.NoError(t, err)
 
 	expectedSpecGenerators := []NodePoolSpecGenerator{
@@ -1510,30 +1620,30 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 
 func TestIsDraTpuPod(t *testing.T) {
 	draTpuCC := computeclass.NewTestCrd(
-		computeclass.WithLabel(gkelabels.ComputeClassLabel),
+		computeclass.WithLabel(labels.ComputeClassLabel),
 		computeclass.WithName("dra-tpu-cc"),
 		computeclass.WithTpuDriverMode(computeclass.TpuDriverModeDynamicResourceAllocation),
 	)
 
 	devicePluginTpuCC := computeclass.NewTestCrd(
-		computeclass.WithLabel(gkelabels.ComputeClassLabel),
+		computeclass.WithLabel(labels.ComputeClassLabel),
 		computeclass.WithName("device-plugin-tpu-cc"),
 		computeclass.WithTpuDriverMode(computeclass.TpuDriverModeDevicePlugin),
 	)
 
 	draPod := buildTpuPod("dra-tpu", "", 0, "")
 	draPod.Spec.ResourceClaims = []apiv1.PodResourceClaim{{Name: "tpu"}}
-	draPod = addSeparation(draPod, gkelabels.ComputeClassLabel, draTpuCC.Name(), true)
+	draPod = addSeparation(draPod, labels.ComputeClassLabel, draTpuCC.Name(), true)
 
 	draPodNoResourceClaims := buildTpuPod("dra-tpu-no-resource-claims", "", 0, "")
-	draPodNoResourceClaims = addSeparation(draPodNoResourceClaims, gkelabels.ComputeClassLabel, draTpuCC.Name(), false)
+	draPodNoResourceClaims = addSeparation(draPodNoResourceClaims, labels.ComputeClassLabel, draTpuCC.Name(), false)
 
 	devicePluginPod := buildTpuPod("dp-tpu", "", 4, "")
-	devicePluginPod = addSeparation(devicePluginPod, gkelabels.ComputeClassLabel, devicePluginTpuCC.Name(), true)
+	devicePluginPod = addSeparation(devicePluginPod, labels.ComputeClassLabel, devicePluginTpuCC.Name(), true)
 
 	noCCPod := buildTpuPod("no-cc-tpu", "", 4, "")
 
-	lister := computeclass_lister.NewMockCrdListerWithLabel([]computeclass.CRD{draTpuCC, devicePluginTpuCC}, gkelabels.ComputeClassLabel)
+	lister := computeclass_lister.NewMockCrdListerWithLabel([]computeclass.CRD{draTpuCC, devicePluginTpuCC}, labels.ComputeClassLabel)
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithAutoprovisioningEnabled(true).Build()
 	em := experiments.NewMockManager()
 	manager := NewAutoprovisioningNodeGroupManager(AutoprovisioningNodeGroupManagerOptions{
