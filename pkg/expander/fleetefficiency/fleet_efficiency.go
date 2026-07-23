@@ -193,7 +193,16 @@ func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategy(ccc crd.CRD, opt expan
 			return *strategy == cccv1.AllocationStrategyFleetEfficiency
 		}
 	}
-	return f.clusterDefaultAllocationStrategy == options.ClusterDefaultAllocationStrategyFleetEfficiency
+	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
+}
+
+func (f *fleetEfficiencyFilter) getClusterDefaultAllocationStrategy() options.ClusterDefaultAllocationStrategy {
+	clusterStrategy := f.clusterDefaultAllocationStrategy
+	if clusterStrategy == "" {
+		expValue := f.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ClusterDefaultAllocationStrategyFlag, "")
+		clusterStrategy = options.ClusterDefaultAllocationStrategy(expValue)
+	}
+	return clusterStrategy
 }
 
 func (f *fleetEfficiencyFilter) hasUsableReservations(expansionOptions []expander.Option) bool {

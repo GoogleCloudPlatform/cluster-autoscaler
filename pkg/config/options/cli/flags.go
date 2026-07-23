@@ -261,6 +261,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 	}
 
 	switch options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy) {
+	// Empty string allowed because the flag is optional (in which case defaults are derived from experiment flag ClusterDefaultAllocationStrategyFlag).
 	case options.ClusterDefaultAllocationStrategyLowestCost, options.ClusterDefaultAllocationStrategyFleetEfficiency, "":
 	default:
 		klog.Warningf("Invalid value for --allocation-strategy-default: %s, fallbacking to lowest-cost", *clusterDefaultAllocationStrategy)

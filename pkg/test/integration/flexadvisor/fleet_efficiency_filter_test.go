@@ -35,6 +35,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 	"k8s.io/utils/ptr"
+
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 )
 
 func TestFleetEfficiency(t *testing.T) {
@@ -42,14 +44,16 @@ func TestFleetEfficiency(t *testing.T) {
 	fleetEfficiency := v1.AllocationStrategyFleetEfficiency
 
 	testCases := map[string]struct {
-		priorityStrategy *v1.AllocationStrategy
-		strategyDefaults *v1.AllocationStrategyDefaults
-		nodePools        []*gke_api_beta.NodePool
-		fakeGuidances    []fake.CapacityGuidance
-		reservations     []*compute.Reservation
-		experimentFlags  map[string]bool
-		provisioningMode instanceavailability.ProvisioningMode
-		expectedNodePool string
+		priorityStrategy       *v1.AllocationStrategy
+		strategyDefaults       *v1.AllocationStrategyDefaults
+		nodePools              []*gke_api_beta.NodePool
+		fakeGuidances          []fake.CapacityGuidance
+		reservations           []*compute.Reservation
+		experimentFlags        map[string]bool
+		stringExperimentFlags  map[string]string
+		clusterDefaultStrategy internalopts.ClusterDefaultAllocationStrategy
+		provisioningMode       instanceavailability.ProvisioningMode
+		expectedNodePool       string
 	}{
 		"no strategy - assuming lowest cost": {
 			nodePools: []*gke_api_beta.NodePool{
@@ -61,6 +65,56 @@ func TestFleetEfficiency(t *testing.T) {
 				fake.NewGuidance("e2-standard-8").WithScore(0.9),
 			},
 			expectedNodePool: "pool-low-preference",
+		},
+		"cluster default via flag is fleet efficiency - use fleet efficiency": {
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			clusterDefaultStrategy: internalopts.ClusterDefaultAllocationStrategyFleetEfficiency,
+			expectedNodePool:       "pool-high-preference",
+		},
+		"cluster default via experiment is fleet efficiency - use fleet efficiency": {
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			stringExperimentFlags: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "fleet-efficiency"},
+			expectedNodePool:      "pool-high-preference",
+		},
+		"cluster default via flag is fleet efficiency, CCC overrides with lowest cost - use lowest cost": {
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			clusterDefaultStrategy: internalopts.ClusterDefaultAllocationStrategyFleetEfficiency,
+			priorityStrategy:       &lowestCost,
+			expectedNodePool:       "pool-low-preference",
+		},
+		"cluster default via experiment is fleet efficiency, CCC overrides with lowest cost - use lowest cost": {
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			stringExperimentFlags: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "fleet-efficiency"},
+			priorityStrategy:      &lowestCost,
+			expectedNodePool:      "pool-low-preference",
 		},
 		"fleet efficiency strategy in defaults - use fleet efficiency": {
 			nodePools: []*gke_api_beta.NodePool{
@@ -249,15 +303,23 @@ func TestFleetEfficiency(t *testing.T) {
 				).
 				Build()
 
+			overrides := []integration.Option[*internalopts.AutoscalingOptions]{
+				integration.WithMaxMemoryTotal(140 * 1024 * 1024 * 1024),
+				integration.WithFlexAdvisorEnabled(),
+			}
+			if tc.clusterDefaultStrategy != "" {
+				overrides = append(overrides, func(o *internalopts.AutoscalingOptions) *internalopts.AutoscalingOptions {
+					o.ClusterDefaultAllocationStrategy = tc.clusterDefaultStrategy
+					return o
+				})
+			}
+
 			testConfig := integration.NewTestConfig().
 				WithNodePools(tc.nodePools...).
 				WithCccCrds(cccCrd).
-				WithExperimentOverrides(tc.experimentFlags, map[string]string{}).
+				WithExperimentOverrides(tc.experimentFlags, tc.stringExperimentFlags).
 				WithReservationsForDefaultProject(tc.reservations).
-				WithOverrides(
-					integration.WithMaxMemoryTotal(140*1024*1024*1024),
-					integration.WithFlexAdvisorEnabled(),
-				)
+				WithOverrides(overrides...)
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())

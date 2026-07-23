@@ -36,6 +36,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	crdutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	listerutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -71,9 +72,6 @@ func newTestFixture() *testFixture {
 		},
 	}
 
-	fleetEfficiencyStrategy := cccv1.AllocationStrategyFleetEfficiency
-	defaultStrategy := cccv1.AllocationStrategyLowestCost
-
 	crdNoRules := crdutils.NewTestCrd(
 		crdutils.WithName("test-ccc"),
 		crdutils.WithLabel(gkelabels.ComputeClassLabel),
@@ -83,7 +81,7 @@ func newTestFixture() *testFixture {
 		crdutils.WithName("test-ccc"),
 		crdutils.WithLabel(gkelabels.ComputeClassLabel),
 		crdutils.WithRules([]crdRules.Rule{
-			crdRules.NewRule(crdRules.WithAllocationStrategyRule(&fleetEfficiencyStrategy)),
+			crdRules.NewRule(crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency))),
 		}),
 	)
 
@@ -91,7 +89,7 @@ func newTestFixture() *testFixture {
 		crdutils.WithName("test-ccc"),
 		crdutils.WithLabel(gkelabels.ComputeClassLabel),
 		crdutils.WithRules([]crdRules.Rule{
-			crdRules.NewRule(crdRules.WithAllocationStrategyRule(&defaultStrategy)),
+			crdRules.NewRule(crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyLowestCost))),
 		}),
 	)
 
@@ -142,15 +140,16 @@ func newTestFixture() *testFixture {
 }
 
 type fleetEfficiencyTestCase struct {
-	name                string
-	crds                []crd.CRD
-	options             []expander.Option
-	nodeInfos           map[string]*framework.NodeInfo
-	flexAdvisorSetup    func(*instanceavailability.MockProvider)
-	expectedBestOptions []expander.Option
-	expectedErrorLog    string
-	reservations        []*gce_api.Reservation
-	defaultStrategy     options.ClusterDefaultAllocationStrategy
+	name                   string
+	crds                   []crd.CRD
+	options                []expander.Option
+	nodeInfos              map[string]*framework.NodeInfo
+	flexAdvisorSetup       func(*instanceavailability.MockProvider)
+	expectedBestOptions    []expander.Option
+	expectedErrorLog       string
+	reservations           []*gce_api.Reservation
+	clusterDefaultStrategy options.ClusterDefaultAllocationStrategy
+	stringExperimentValues map[string]string
 }
 
 func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
@@ -179,7 +178,14 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 			puller.SetReservations(tc.reservations)
 		}
 
-		filter := NewFilter(flexAdvisor, lister, puller, cloudProvider, localSSDDiskSizeProvider, tc.defaultStrategy, gceFlexAdvisorEnabled, experiments.NewMockManager())
+		var em experiments.Manager
+		if tc.stringExperimentValues != nil {
+			em = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringExperimentValues)
+		} else {
+			em = experiments.NewMockManager()
+		}
+
+		filter := NewFilter(flexAdvisor, lister, puller, cloudProvider, localSSDDiskSizeProvider, tc.clusterDefaultStrategy, gceFlexAdvisorEnabled, em)
 
 		nodeInfos := tc.nodeInfos
 		if nodeInfos == nil {
@@ -223,41 +229,61 @@ func TestFleetEfficiencyFilter_SelectingStrategy(t *testing.T) {
 
 	tests := []fleetEfficiencyTestCase{
 		{
-			name:                "CCC without strategies, default not specified - doesnt use FA, returns original options",
+			name:                "CCC without strategies, cluster default not specified - doesnt use FA, returns original options",
 			crds:                []crd.CRD{f.crdNoRules},
 			options:             []expander.Option{f.optFleet1, f.optFleet2},
 			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
 			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
 		},
 		{
-			name:                "CCC without strategies, default is lowest cost - doesnt use FA, returns original options",
-			crds:                []crd.CRD{f.crdNoRules},
-			defaultStrategy:     options.ClusterDefaultAllocationStrategyLowestCost,
-			options:             []expander.Option{f.optFleet1, f.optFleet2},
-			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
-			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
+			name:                   "CCC without strategies, cluster default is lowest cost - doesnt use FA, returns original options",
+			crds:                   []crd.CRD{f.crdNoRules},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
 		},
 		{
-			name:                "CCC without strategies, default is fleet efficiency - calls FA, scores the options",
-			crds:                []crd.CRD{f.crdNoRules},
-			defaultStrategy:     options.ClusterDefaultAllocationStrategyFleetEfficiency,
-			options:             []expander.Option{f.optFleet1, f.optFleet2},
-			flexAdvisorSetup:    defaultFlexAdvisorSetup,
-			expectedBestOptions: []expander.Option{f.optFleet2},
+			name:                   "CCC without strategies, cluster default is fleet efficiency - calls FA, scores the options",
+			crds:                   []crd.CRD{f.crdNoRules},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
 		},
 		{
-			name:                "CCC with strategy=lowest-cost - doesnt use FA, returns original options",
-			crds:                []crd.CRD{f.crdRuleCost},
-			options:             []expander.Option{f.optFleet1, f.optFleet2},
-			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
-			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
+			name:                   "CCC without strategies, cluster default not specified, experiment is lowest cost - doesnt use FA, returns original options",
+			crds:                   []crd.CRD{f.crdNoRules},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			stringExperimentValues: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "lowest-cost"},
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
 		},
 		{
-			name:                "CCC with strategy=fleet-efficiency - calls FA, scores the options",
-			crds:                []crd.CRD{f.crdRuleFleet},
-			options:             []expander.Option{f.optFleet1, f.optFleet2},
-			flexAdvisorSetup:    defaultFlexAdvisorSetup,
-			expectedBestOptions: []expander.Option{f.optFleet2},
+			name:                   "CCC without strategies, cluster default not specified, experiment is fleet efficiency - calls FA, scores the options",
+			crds:                   []crd.CRD{f.crdNoRules},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			stringExperimentValues: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "fleet-efficiency"},
+			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+		{
+			name:                   "CCC with strategy=lowest-cost - doesnt use FA, returns original options",
+			crds:                   []crd.CRD{f.crdRuleCost},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			stringExperimentValues: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "fleet-efficiency"},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name:                   "CCC with strategy=fleet-efficiency - calls FA, scores the options",
+			crds:                   []crd.CRD{f.crdRuleFleet},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			stringExperimentValues: map[string]string{experiments.ClusterDefaultAllocationStrategyFlag: "lowest-cost"},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
 		},
 	}
 

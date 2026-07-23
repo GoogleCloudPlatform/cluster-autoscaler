@@ -39,7 +39,7 @@ type trackedField struct {
 	valueEqual func(optsA, optsB internalopts.AutoscalingOptions) bool
 }
 
-var allTrackedFields = []trackedField{asyncNodeGroupsEnabledField, dynamicResourceAllocationEnabledField, capacityBuffersControllerEnabledField, capacityBuffersPodInjectionEnabledField, zoneTypesEnabledField, fastpathBinpackingEnabledField, maxNodePerScaleUpField, csnEnabledField, napMaxNodesField, salvoScaleUpField, salvoScaleUpBudgetField, scaleUpSimulationForSkippedNodeGroupsEnabledField, daemonSetMutationEnabledField, clusterDefaultAllocationStrategyField}
+var allTrackedFields = []trackedField{asyncNodeGroupsEnabledField, dynamicResourceAllocationEnabledField, capacityBuffersControllerEnabledField, capacityBuffersPodInjectionEnabledField, zoneTypesEnabledField, fastpathBinpackingEnabledField, maxNodePerScaleUpField, csnEnabledField, napMaxNodesField, salvoScaleUpField, salvoScaleUpBudgetField, scaleUpSimulationForSkippedNodeGroupsEnabledField, daemonSetMutationEnabledField}
 
 // OptionsTracker computes AutoscalingOptions based on <CLI flags, experiments, Cluster proto> and tracks changes to them during Cluster Autoscaler runtime.
 //
