@@ -353,8 +353,6 @@ func (ccc *cccCrd) getGeneralPurposeFamilies(podFamily *string) []machinetypes.M
 		generalPurposeFamilies = append(generalPurposeFamilies, family)
 	}
 
-	// TODO: Temporary debugging log, delete after RCA
-	klog.Infof("getGeneralPurposeFamilies: generalPurposeMachineFamilies flag values: %v resolved to families: %v", familyNames, generalPurposeFamilies)
 	return generalPurposeFamilies
 }
 
