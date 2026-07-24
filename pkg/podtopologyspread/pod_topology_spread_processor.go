@@ -16,6 +16,7 @@ package podtopologyspread
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"slices"
 	"time"
@@ -24,7 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
@@ -87,7 +88,7 @@ func (p *Processor) Preprocess(unschedulablePods []*apiv1.Pod) {
 	p.updateBackoffs(unschedulablePods)
 }
 
-func (p *Processor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	defer metrics.UpdateDurationFromStart(metricLabel, time.Now())
 
 	var configs []PTSConfig
@@ -202,7 +203,7 @@ func (p *Processor) Process(ctx *context.AutoscalingContext, unschedulablePods [
 	// We need to schedule pods after replacing PTS with nodeSelector.
 	// Otherwise, pods that can be scheduled after PTS processor but not scheduled in the existing FilterOutSchedulable processor will result in an unwanted scale up.
 	// We also need this code to happen after FilterOutSchedulable bec in case we have maxSkew=2, we will scale-up a node while Scheduler will pick existing domain if there is space there, making the scale-up useless and unwanted.
-	statuses, _, err := p.simulator.TrySchedulePods(ctx.ClusterSnapshot, ptsPods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), ctx.ClusterSnapshot, ptsPods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: func(nodeInfo *framework.NodeInfo) bool {
 			return nodeNotBeingRemoved(nodeInfo.Node())
 		},
@@ -210,7 +211,7 @@ func (p *Processor) Process(ctx *context.AutoscalingContext, unschedulablePods [
 	if err != nil {
 		return nil, fmt.Errorf("failed to schedule pods in PodTopologySpreadProcessor: %v", err)
 	}
-	unschedulablePods = removeScheduledPods(unschedulablePods, statuses)
+	unschedulablePods = removeScheduledPods(unschedulablePods, res.Statuses)
 
 	return unschedulablePods, nil
 }
@@ -448,7 +449,7 @@ func filterPodsByNamespace(pods []*apiv1.Pod, namespace string) []*apiv1.Pod {
 	return result
 }
 
-func allScheduledPods(ctx *context.AutoscalingContext) ([]*apiv1.Pod, map[*apiv1.Pod]*apiv1.Node, error) {
+func allScheduledPods(ctx *ca_context.AutoscalingContext) ([]*apiv1.Pod, map[*apiv1.Pod]*apiv1.Node, error) {
 	nodeInfos, err := ctx.ClusterSnapshot.NodeInfos().List()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get node infos: %v", err)

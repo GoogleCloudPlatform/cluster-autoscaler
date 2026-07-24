@@ -15,12 +15,13 @@
 package ekconsolidation
 
 import (
+	"context"
 	"reflect"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/expander"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
@@ -66,7 +67,7 @@ func (p *plugin) String() string {
 	return PluginName
 }
 
-func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	// Checks if resizing is enabled
 	if !p.isResizingEnabled() {
 		return nil
@@ -132,7 +133,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 	return defrag.NewCandidateWithLimit(candidates, defrag.Partial, p.maxCandidateNodeCount)
 }
 
-func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
+func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
 	if !p.isResizingEnabled() {
 		klog.V(4).Infof("Defrag %s: EK resizing is disabled", PluginName)
 		return nil
@@ -170,11 +171,11 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 	return candidateNodes
 }
 
-func (p *plugin) IsExpansionOptionValid(ctx *context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
+func (p *plugin) IsExpansionOptionValid(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
 	return false
 }
 
-func (p *plugin) BackoffDuration(*context.AutoscalingContext, *defrag.Candidate) time.Duration {
+func (p *plugin) BackoffDuration(*ca_context.AutoscalingContext, *defrag.Candidate) time.Duration {
 	return backoff
 }
 
@@ -250,7 +251,7 @@ func (p *plugin) selectWorkloadPods(nodeInfo *framework.NodeInfo) []*v1.Pod {
 }
 
 func (p *plugin) trySchedulePods(clusterSnapshot clustersnapshot.ClusterSnapshot, pods []*v1.Pod, isNodeAcceptable func(*framework.NodeInfo) bool) ([]*v1.Pod, error) {
-	statuses, _, err := p.simulator.TrySchedulePods(clusterSnapshot, pods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), clusterSnapshot, pods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: isNodeAcceptable,
 	})
 	if err != nil {
@@ -259,7 +260,7 @@ func (p *plugin) trySchedulePods(clusterSnapshot clustersnapshot.ClusterSnapshot
 	}
 
 	podsWithStatus := make(map[types.UID]bool)
-	for _, status := range statuses {
+	for _, status := range res.Statuses {
 		podsWithStatus[status.Pod.UID] = true
 	}
 

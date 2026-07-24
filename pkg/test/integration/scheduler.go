@@ -107,8 +107,8 @@ func (f *FakeSet) simulateScheduling(snapshot clustersnapshot.ClusterSnapshot, u
 			return cakubernetes.IsNodeReadyAndSchedulable(node.Node())
 		},
 	}
-	statuses, _, err := simulator.TrySchedulePods(snapshot, unscheduledPods, false, opts)
-	return statuses, err
+	res, err := simulator.TrySchedulePods(context.Background(), snapshot, unscheduledPods, false, opts)
+	return res.Statuses, err
 }
 
 func (f *FakeSet) updatePodsInAPI(ctx context.Context, statuses []scheduling.Status) error {

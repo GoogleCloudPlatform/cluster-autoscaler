@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -184,7 +185,7 @@ func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCt
 		return nil
 	}
 
-	statuses, _, err := p.simulator.TrySchedulePods(autoscalingCtx.ClusterSnapshot, fakePods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), autoscalingCtx.ClusterSnapshot, fakePods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: func(nodeInfo *framework.NodeInfo) bool {
 			return true // Accept any node currently in snapshot
 		},
@@ -195,7 +196,7 @@ func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCt
 	}
 
 	scheduledMap := make(map[types.UID]bool)
-	for _, status := range statuses {
+	for _, status := range res.Statuses {
 		scheduledMap[status.Pod.UID] = true
 	}
 

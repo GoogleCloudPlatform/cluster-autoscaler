@@ -15,7 +15,7 @@
 package processor
 
 import (
-	gocontext "context"
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,7 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/metrics"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/fake"
@@ -122,12 +122,12 @@ func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager ope
 
 // Process filters out pods that can be scheduled by performing resizable VM resizes.
 // It readjusts the balloon pod size for simulation purposes and requests upsizes in Manager.
-func (p *ScaleUpNodeProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (p *ScaleUpNodeProcessor) Process(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
 	return p.process(ctx, unschedulablePods, true, resizableFamilies)
 }
 
-func (p *ScaleUpNodeProcessor) process(ctx *context.AutoscalingContext, unschedulablePods []*v1.Pod, emitMetrics bool, resizableFamilies []machinetypes.MachineFamily) ([]*v1.Pod, error) {
+func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod, emitMetrics bool, resizableFamilies []machinetypes.MachineFamily) ([]*v1.Pod, error) {
 	if !isAnyResizingEnabled(p.resizableVmManager, resizableFamilies) {
 		return unschedulablePods, nil
 	}
@@ -310,7 +310,7 @@ func (p *ScaleUpNodeProcessor) process(ctx *context.AutoscalingContext, unschedu
 }
 
 // ScheduleLookaheadPods schedules lookahead pods considering UAS signal, without doing any upsizing for them.
-func (p *ScaleUpNodeProcessor) ScheduleLookaheadPods(ctx *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (p *ScaleUpNodeProcessor) ScheduleLookaheadPods(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	defer metrics.UpdateDurationFromStart(scheduleLookaheadPods, time.Now())
 
 	var laPods []*v1.Pod
@@ -361,7 +361,7 @@ func (p *ScaleUpNodeProcessor) updateUnschedulableLAPodsMetrics(unscheduledLAPod
 }
 
 // Preprocess updates clustersnapshot. It sets the balloon pod size based on the resizable VM Nodes allocatable and desired sizes.
-func (p *ScaleUpNodeProcessor) Preprocess(ctx *context.AutoscalingContext) error {
+func (p *ScaleUpNodeProcessor) Preprocess(ctx *ca_context.AutoscalingContext) error {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
 	if !isAnyResizingEnabled(p.resizableVmManager, resizableFamilies) {
 		return nil
@@ -406,7 +406,7 @@ func (p *ScaleUpNodeProcessor) Preprocess(ctx *context.AutoscalingContext) error
 	return ctx.ClusterSnapshot.Commit()
 }
 
-func (p *ScaleUpNodeProcessor) injectDefaultBalloonPods(ctx *context.AutoscalingContext, sizeMap map[string]size.Allocatable) error {
+func (p *ScaleUpNodeProcessor) injectDefaultBalloonPods(ctx *ca_context.AutoscalingContext, sizeMap map[string]size.Allocatable) error {
 	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return fmt.Errorf("failed to inject default balloon pods: %v", err)
@@ -763,7 +763,7 @@ func (p *ScaleUpNodeProcessor) trySchedulePodsOnSpecifiedNodes(snapshot clusters
 		simulatorPods = append(simulatorPods, status.Pod)
 	}
 
-	schedulable, _, err := p.simulator.TrySchedulePods(snapshot, simulatorPods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), snapshot, simulatorPods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: isNodeAcceptable,
 	})
 	if err != nil {
@@ -771,7 +771,7 @@ func (p *ScaleUpNodeProcessor) trySchedulePodsOnSpecifiedNodes(snapshot clusters
 	}
 
 	podsWithStatus := make(map[types.UID]bool)
-	for _, status := range schedulable {
+	for _, status := range res.Statuses {
 		podsWithStatus[status.Pod.UID] = true
 	}
 
@@ -782,7 +782,7 @@ func (p *ScaleUpNodeProcessor) trySchedulePodsOnSpecifiedNodes(snapshot clusters
 			unschedulable = append(unschedulable, status)
 		}
 	}
-	return schedulable, unschedulable, nil
+	return res.Statuses, unschedulable, nil
 }
 
 // isForceScaleUpFeatureEnabled returns true if force scale up feature is enabled.
@@ -813,8 +813,8 @@ func (p *ScaleUpNodeProcessor) TrackUnschedulablePods(unschedulablePodsBeforeFil
 func (p *ScaleUpNodeProcessor) CleanUp() {
 }
 
-func generateMissingDaemonSetPods(ctx *context.AutoscalingContext, resizableSnapshot operationtracker.ResizableNodesSnapshot) ([]*v1.Pod, error) {
-	logger := klog.FromContext(gocontext.Background())
+func generateMissingDaemonSetPods(ctx *ca_context.AutoscalingContext, resizableSnapshot operationtracker.ResizableNodesSnapshot) ([]*v1.Pod, error) {
+	logger := klog.FromContext(context.Background())
 	daemonSets, err := ctx.ListerRegistry.DaemonSetLister().List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("listing DaemonSets error: %v", err)

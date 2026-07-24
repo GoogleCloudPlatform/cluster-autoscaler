@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -168,7 +169,7 @@ func comparator(priorityFilters ...priorityFilter) clustersnapshot.NodeOrderMapp
 func schedulePods(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, priorities ...priorityFilter) (map[*apiv1.Pod]string, error) {
 	scheduledPods := map[*apiv1.Pod]string{}
 
-	scheduled, _, err := simulator.TrySchedulePods(sn, pods, false, clustersnapshot.SchedulingOptions{
+	res, err := simulator.TrySchedulePods(context.Background(), sn, pods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: anyOfPriorityFilters(priorities...),
 		NodeOrdering:     comparator(priorities...),
 	})
@@ -176,7 +177,7 @@ func schedulePods(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.Hint
 		return nil, fmt.Errorf("failed to schedule pods: %v", err)
 	}
 
-	for _, s := range scheduled {
+	for _, s := range res.Statuses {
 		scheduledPods[s.Pod] = s.NodeName
 	}
 

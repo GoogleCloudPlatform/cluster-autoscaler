@@ -15,11 +15,12 @@
 package processor
 
 import (
+	"context"
 	"slices"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
+	ca_context "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/pdb"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot"
@@ -73,7 +74,7 @@ func newSimulator(opts simulatorOptions) *defragSimulator {
 // Returns a list of nodes ready for removal and a list of nodes that can't
 // be removed yet.
 func (s *defragSimulator) simulateNodeRemovals(
-	ctx *context.AutoscalingContext,
+	ctx *ca_context.AutoscalingContext,
 	candidateNodes []string,
 	allCandidatesNodes map[string]bool,
 ) (nodesToScaleDown []string, unreadyNodes []string, err error) {
@@ -151,7 +152,7 @@ func (s *defragSimulator) schedulePods(snapshot clustersnapshot.ClusterSnapshot,
 		_, isUpcoming := nodeInfo.Node().Annotations[annotations.NodeUpcomingAnnotation]
 		return isUpcoming == upcomingNodes && !allCandidatesNodes[nodeInfo.Node().Name]
 	}
-	statuses, _, err := s.simulator.TrySchedulePods(snapshot, pods, false, clustersnapshot.SchedulingOptions{
+	res, err := s.simulator.TrySchedulePods(context.Background(), snapshot, pods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: isNodeAcceptable,
 	})
 	if err != nil {
@@ -159,7 +160,7 @@ func (s *defragSimulator) schedulePods(snapshot clustersnapshot.ClusterSnapshot,
 	}
 
 	podsWithStatus := make(map[types.UID]bool)
-	for _, status := range statuses {
+	for _, status := range res.Statuses {
 		podsWithStatus[status.Pod.UID] = true
 	}
 
