@@ -21,7 +21,6 @@ import (
 
 	"golang.org/x/exp/slices"
 	gceapiv1 "google.golang.org/api/compute/v1"
-	k8sapimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -190,7 +189,7 @@ func (v *validator) validateRules(c crd.CRD) {
 	for idx, rule := range c.Rules() {
 		conditions := v.evaluator.GetRuleConditions(rule)
 		ruleIdx := fmt.Sprintf("%d", idx)
-		if v.updatesCh != nil && v.anyRuleConditionsChanged(ruleIdx, conditions, c) {
+		if v.updatesCh != nil && crd.AnyConditionsChanged(c.GetRuleCondition(ruleIdx), conditions, nil) {
 			v.updatesCh <- status.UpdateMessage{
 				Id: status.CRDId{
 					CRDName:  c.Name(),
@@ -224,27 +223,11 @@ func (v *validator) healthCondition(newConditions []metav1.Condition) metav1.Con
 
 // anyConditionsChanged checks if there were any changes to the existing Crd conditions.
 func (v *validator) anyConditionsChanged(c crd.CRD, newConditions []metav1.Condition) bool {
-	// Note: newConditions include all the conditions from Crd even if they were not updated in this iteration.
-	conditionChanges := 0
-	for _, condition := range newConditions {
-		existingCondition := k8sapimeta.FindStatusCondition(c.Conditions(), condition.Type)
-		if found := existingCondition != nil && existingCondition.Reason == condition.Reason; !found {
-			klog.V(5).Infof("CRD %q with label %q has new condition %q with status %q", c.Name(), c.Label(), condition.Type, condition.Status)
-			conditionChanges += 1
-			continue
-		}
-		if condition.Status != existingCondition.Status {
-			klog.V(5).Infof("CRD %q with label %q has new condition %q status: %v -> %v", c.Name(), c.Label(), condition.Type, existingCondition.Status, condition.Status)
-			conditionChanges += 1
-		}
-		// Message can be different even if status and reason is different.
-		if condition.Status == existingCondition.Status && condition.Message != existingCondition.Message {
-			klog.V(5).Infof("CRD %q with label %q has new condition %q message: %q -> %q", c.Name(), c.Label(), condition.Type, existingCondition.Message, condition.Message)
-			conditionChanges += 1
-		}
+	changed := crd.AnyConditionsChanged(c.Conditions(), newConditions, nil)
+	if changed {
+		klog.V(5).Infof("CRD %q with label %q has condition changes", c.Name(), c.Label())
 	}
-
-	return conditionChanges > 0
+	return changed
 }
 
 // getCRDConditionsAddedByOtherComponent gets CRD conditions previously added by other components.
@@ -265,23 +248,4 @@ func getConditionsAddedByOtherComponent(currentConditions []metav1.Condition, va
 		}
 	}
 	return otherConditions
-}
-
-func (v *validator) anyRuleConditionsChanged(ruleIdx string, newConditions []metav1.Condition, crd crd.CRD) bool {
-	existingConditions := crd.GetRuleCondition(ruleIdx)
-	for _, condition := range newConditions {
-		existingCondition := k8sapimeta.FindStatusCondition(existingConditions, condition.Type)
-		if existingCondition == nil {
-			return true
-		}
-		if condition.Status != existingCondition.Status {
-			return true
-		}
-		if condition.Message != existingCondition.Message {
-			return true
-		}
-	}
-	// We need to also check whether in the existing conditions there are some conditions that are added by validator, but are
-	// not present in the new conditions.
-	return len(existingConditions)-len(v.getRuleConditionsAddedByOtherComponent(existingConditions)) != len(newConditions)
 }

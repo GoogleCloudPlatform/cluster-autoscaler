@@ -515,6 +515,36 @@ func TestAnyConditionsChanged(t *testing.T) {
 			},
 			wantChange: true,
 		},
+		{
+			name: "condition removed",
+			crd: crd.NewTestCrd(crd.WithConditions([]metav1.Condition{
+				*conditions.CrdNotHealthyCondition(),
+			})),
+			newConditions: []metav1.Condition{},
+			wantChange:    true,
+		},
+		{
+			name: "condition removed when one remains",
+			crd: crd.NewTestCrd(crd.WithConditions([]metav1.Condition{
+				*conditions.CrdNotHealthyCondition(),
+				*conditions.NapCannotBeEnabledCondition(),
+			})),
+			newConditions: []metav1.Condition{
+				*conditions.CrdNotHealthyCondition(),
+			},
+			wantChange: true,
+		},
+		{
+			name: "additional condition added when one exists",
+			crd: crd.NewTestCrd(crd.WithConditions([]metav1.Condition{
+				*conditions.CrdNotHealthyCondition(),
+			})),
+			newConditions: []metav1.Condition{
+				*conditions.CrdNotHealthyCondition(),
+				*conditions.NapCannotBeEnabledCondition(),
+			},
+			wantChange: true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -524,101 +554,6 @@ func TestAnyConditionsChanged(t *testing.T) {
 				Build()
 			validator, _ := NewValidator(nil, nil, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false)
 			assert.Equal(t, tc.wantChange, validator.anyConditionsChanged(tc.crd, tc.newConditions))
-		})
-	}
-}
-
-func TestAnyRuleConditionsChanged(t *testing.T) {
-	ruleIdx := "1"
-	stableCondition := *conditions.NodePoolNotExistCondition("np1")
-	testCases := []struct {
-		name          string
-		crd           crd.CRD
-		newConditions []metav1.Condition
-		wantChange    bool
-	}{
-		{
-			name:          "empty new conditions, empty existing",
-			crd:           crd.NewTestCrd(),
-			newConditions: []metav1.Condition{},
-			wantChange:    false,
-		},
-		{
-			name: "new condition added",
-			crd:  crd.NewTestCrd(),
-			newConditions: []metav1.Condition{
-				*conditions.NodePoolNotExistCondition("np1"),
-			},
-			wantChange: true,
-		},
-		{
-			name: "condition changed status",
-			crd: crd.NewTestCrd(crd.WithRuleConditions(ruleIdx, []metav1.Condition{
-				{
-					Type:   conditions.NodepoolMisconfiguredCondition,
-					Status: metav1.ConditionFalse,
-					Reason: conditions.NodePoolNotExistReason,
-				},
-			})),
-			newConditions: []metav1.Condition{
-				{
-					Type:   conditions.NodepoolMisconfiguredCondition,
-					Status: metav1.ConditionTrue,
-					Reason: conditions.NodePoolNotExistReason,
-				},
-			},
-			wantChange: true,
-		},
-		{
-			name: "condition not changed",
-			crd: crd.NewTestCrd(crd.WithRuleConditions(ruleIdx, []metav1.Condition{
-				stableCondition,
-			})),
-			newConditions: []metav1.Condition{
-				stableCondition,
-			},
-			wantChange: false,
-		},
-		{
-			name: "conditions with same type but different reason",
-			crd: crd.NewTestCrd(crd.WithRuleConditions(ruleIdx, []metav1.Condition{
-				{
-					Type:   conditions.NodepoolMisconfiguredCondition,
-					Status: metav1.ConditionTrue,
-					Reason: "OldReason",
-				},
-			})),
-			newConditions: []metav1.Condition{
-				{
-					Type:   conditions.NodepoolMisconfiguredCondition,
-					Status: metav1.ConditionTrue,
-					Reason: conditions.NodePoolNotExistReason,
-				},
-			},
-			wantChange: true,
-		},
-		{
-			name: "only other component conditions",
-			crd: crd.NewTestCrd(crd.WithRuleConditions(ruleIdx, []metav1.Condition{
-				{
-					Type:   conditions.NodepoolMisconfiguredCondition,
-					Status: metav1.ConditionTrue,
-					Reason: "OldReason",
-				},
-			})),
-			newConditions: []metav1.Condition{},
-			wantChange:    false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
-				WithAutoprovisioningEnabled(true).
-				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
-				Build()
-			validator, _ := NewValidator(nil, nil, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false)
-			assert.Equal(t, tc.wantChange, validator.anyRuleConditionsChanged(ruleIdx, tc.newConditions, tc.crd))
 		})
 	}
 }

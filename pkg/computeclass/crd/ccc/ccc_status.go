@@ -17,12 +17,15 @@ package ccc
 import (
 	"sort"
 	"strconv"
+	"time"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
+
+var maxConditionAge = 5 * time.Minute
 
 // cccCRDStatus is an implementation of the crd.CRDStatus interface for CCC.
 type cccCRDStatus struct {
@@ -47,7 +50,9 @@ func (s *cccCRDStatus) UpdateConditions(conditions []metav1.Condition) {
 	if conditions == nil {
 		conditions = []metav1.Condition{}
 	}
-	s.apiStatus.Conditions = conditions
+	if crd.AnyConditionsChanged(s.apiStatus.Conditions, conditions, &maxConditionAge) {
+		s.apiStatus.Conditions = conditions
+	}
 }
 
 // UpdateResourceInfo implements crd.CRDStatus.
@@ -68,7 +73,9 @@ func (s *cccCRDStatus) UpdateRuleConditions(ruleIdx string, conditions []metav1.
 	if conditions == nil {
 		conditions = []metav1.Condition{}
 	}
-	s.apiStatus.PriorityStatuses[idx].Conditions = conditions
+	if crd.AnyConditionsChanged(s.apiStatus.PriorityStatuses[idx].Conditions, conditions, &maxConditionAge) {
+		s.apiStatus.PriorityStatuses[idx].Conditions = conditions
+	}
 }
 
 // UpdateRuleResourceInfo implements crd.CRDStatus.

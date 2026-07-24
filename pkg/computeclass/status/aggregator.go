@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
@@ -64,20 +65,7 @@ func (a *Aggregator) Start(ctx context.Context) {
 	for {
 		select {
 		case msg := <-a.inputCh:
-			// 1. Fetch or Init State
-			crd, err := a.lister.Crd(msg.Id.CRDLabel, msg.Id.CRDName)
-			if err != nil {
-				klog.Errorf("Failed to fetch CRD %s/%s: %v", msg.Id.CRDLabel, msg.Id.CRDName, err)
-				continue
-			}
-
-			// 2. Apply the Functional Mutator
-			// This merges the partial update into the master state safely.
-			status := a.getOrCreateStatus(crd)
-			msg.Mutate(status)
-
-			// 3. Mark as Dirty
-			a.dirtySet[msg.Id] = true
+			a.processMessage(msg)
 
 		case <-ticker.C:
 			// 4. Batch Flush
@@ -89,6 +77,31 @@ func (a *Aggregator) Start(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (a *Aggregator) processMessage(msg UpdateMessage) {
+	// 1. Fetch or Init State
+	crd, err := a.lister.Crd(msg.Id.CRDLabel, msg.Id.CRDName)
+	if err != nil {
+		klog.Errorf("Failed to fetch CRD %s/%s: %v", msg.Id.CRDLabel, msg.Id.CRDName, err)
+		return
+	}
+	if crd == nil {
+		klog.Warningf("CRD %s/%s not found, skipping status update", msg.Id.CRDLabel, msg.Id.CRDName)
+		return
+	}
+
+	// 2. Apply the Functional Mutator
+	// This merges the partial update into the master state safely.
+	status := a.getOrCreateStatus(crd)
+	before := status.GetCRDStatusPatch().DeepCopyObject()
+	msg.Mutate(status)
+	after := status.GetCRDStatusPatch()
+
+	// 3. Mark as Dirty only if status actually changed
+	if !apiequality.Semantic.DeepEqual(before, after) {
+		a.dirtySet[msg.Id] = true
 	}
 }
 

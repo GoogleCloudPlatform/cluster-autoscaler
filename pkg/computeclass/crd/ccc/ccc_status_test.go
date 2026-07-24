@@ -16,9 +16,9 @@ package ccc
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -234,12 +234,7 @@ func TestCccCRDStatus(t *testing.T) {
 			s := NewCccCRDStatus("test-ccc").(*cccCRDStatus)
 			tc.operations(s)
 
-			// Ignore LastTransitionTime as it's set by metav1.Now() internally or default initialization
-			opts := []cmp.Option{
-				cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
-			}
-
-			if diff := cmp.Diff(tc.expectedStatus, s.apiStatus, opts...); diff != "" {
+			if diff := cmp.Diff(tc.expectedStatus, s.apiStatus); diff != "" {
 				t.Errorf("internal status mismatch (-want +got):\n%s", diff)
 			}
 
@@ -251,7 +246,7 @@ func TestCccCRDStatus(t *testing.T) {
 			if diff := cmp.Diff("test-ccc", patch.Name); diff != "" {
 				t.Errorf("patch name mismatch (-want +got):\n%s", diff)
 			}
-			if diff := cmp.Diff(tc.expectedStatus, patch.Status, opts...); diff != "" {
+			if diff := cmp.Diff(tc.expectedStatus, patch.Status); diff != "" {
 				t.Errorf("patch status mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -308,6 +303,11 @@ func expectedScalingHistory(provisioned int) *ccc_api.ScalingEventsHistory {
 }
 
 func TestCccCRDStatus_GetConditions(t *testing.T) {
+	now := time.Now()
+	tRecent := metav1.NewTime(now)
+	tOld := metav1.NewTime(now.Add(-10 * time.Minute))
+	tNew := metav1.NewTime(now.Add(1 * time.Minute))
+
 	testCases := []struct {
 		name               string
 		operations         func(s crd.CRDStatus)
@@ -326,6 +326,84 @@ func TestCccCRDStatus_GetConditions(t *testing.T) {
 			},
 			expectedConditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}},
 		},
+		{
+			name: "identical condition within maxConditionAge preserves original LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tRecent,
+				}})
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tNew,
+				}})
+			},
+			expectedConditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionTrue,
+				Reason:             "ReasonA",
+				Message:            "MessageA",
+				LastTransitionTime: tRecent,
+			}},
+		},
+		{
+			name: "status change within maxConditionAge updates condition and LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tRecent,
+				}})
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionFalse,
+					Reason:             "ReasonB",
+					Message:            "MessageB",
+					LastTransitionTime: tNew,
+				}})
+			},
+			expectedConditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             "ReasonB",
+				Message:            "MessageB",
+				LastTransitionTime: tNew,
+			}},
+		},
+		{
+			name: "identical condition older than maxConditionAge updates LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tOld,
+				}})
+				s.UpdateConditions([]metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tNew,
+				}})
+			},
+			expectedConditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionTrue,
+				Reason:             "ReasonA",
+				Message:            "MessageA",
+				LastTransitionTime: tNew,
+			}},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -334,7 +412,7 @@ func TestCccCRDStatus_GetConditions(t *testing.T) {
 			tc.operations(s)
 
 			got := s.GetConditions()
-			if diff := cmp.Diff(tc.expectedConditions, got, cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")); diff != "" {
+			if diff := cmp.Diff(tc.expectedConditions, got); diff != "" {
 				t.Errorf("GetConditions mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -342,6 +420,11 @@ func TestCccCRDStatus_GetConditions(t *testing.T) {
 }
 
 func TestCccCRDStatus_GetRuleConditions(t *testing.T) {
+	now := time.Now()
+	tRecent := metav1.NewTime(now)
+	tOld := metav1.NewTime(now.Add(-10 * time.Minute))
+	tNew := metav1.NewTime(now.Add(1 * time.Minute))
+
 	testCases := []struct {
 		name               string
 		operations         func(s crd.CRDStatus)
@@ -373,6 +456,87 @@ func TestCccCRDStatus_GetRuleConditions(t *testing.T) {
 			ruleIdx:            "0",
 			expectedConditions: []metav1.Condition{{Type: "Valid", Status: metav1.ConditionTrue}},
 		},
+		{
+			name: "identical condition within maxConditionAge preserves original LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tRecent,
+				}})
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tNew,
+				}})
+			},
+			ruleIdx: "0",
+			expectedConditions: []metav1.Condition{{
+				Type:               "Valid",
+				Status:             metav1.ConditionTrue,
+				Reason:             "ReasonA",
+				Message:            "MessageA",
+				LastTransitionTime: tRecent,
+			}},
+		},
+		{
+			name: "status change within maxConditionAge updates condition and LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tRecent,
+				}})
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionFalse,
+					Reason:             "ReasonB",
+					Message:            "MessageB",
+					LastTransitionTime: tNew,
+				}})
+			},
+			ruleIdx: "0",
+			expectedConditions: []metav1.Condition{{
+				Type:               "Valid",
+				Status:             metav1.ConditionFalse,
+				Reason:             "ReasonB",
+				Message:            "MessageB",
+				LastTransitionTime: tNew,
+			}},
+		},
+		{
+			name: "identical condition older than maxConditionAge updates LastTransitionTime",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tOld,
+				}})
+				s.UpdateRuleConditions("0", []metav1.Condition{{
+					Type:               "Valid",
+					Status:             metav1.ConditionTrue,
+					Reason:             "ReasonA",
+					Message:            "MessageA",
+					LastTransitionTime: tNew,
+				}})
+			},
+			ruleIdx: "0",
+			expectedConditions: []metav1.Condition{{
+				Type:               "Valid",
+				Status:             metav1.ConditionTrue,
+				Reason:             "ReasonA",
+				Message:            "MessageA",
+				LastTransitionTime: tNew,
+			}},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -381,7 +545,7 @@ func TestCccCRDStatus_GetRuleConditions(t *testing.T) {
 			tc.operations(s)
 
 			got := s.GetRuleConditions(tc.ruleIdx)
-			if diff := cmp.Diff(tc.expectedConditions, got, cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime")); diff != "" {
+			if diff := cmp.Diff(tc.expectedConditions, got); diff != "" {
 				t.Errorf("GetRuleConditions mismatch (-want +got):\n%s", diff)
 			}
 		})
