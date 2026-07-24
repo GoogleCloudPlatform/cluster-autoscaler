@@ -348,21 +348,26 @@ func setUpProcessors(
 
 	var capacitybufferClient *cbclient.CapacityBufferClient
 	var cbFakePodStateObserver *cbmetrics.FakePodStateObserver
-	var capacitybufferClientError error
-	if options.CapacitybufferControllerEnabled {
+
+	cbEnabled := options.CapacitybufferControllerEnabled || options.CapacitybufferPodInjectionEnabled
+	cbReady := false
+	if cbEnabled {
+		var err error
+		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, kubeConfig)
+		cbReady = err == nil && capacitybufferClient != nil
+	}
+
+	if options.CapacitybufferControllerEnabled && cbReady {
 		var fakePodsResolver fakepods.Resolver
 		if options.CapacityBufferPodDryRunEnabled {
 			fakePodsResolver = fakepods.NewDryRunResolver(kubeClient)
 		} else {
 			fakePodsResolver = fakepods.NewDefaultingResolver()
 		}
-		capacitybufferClient, capacitybufferClientError = cbclient.NewCapacityBufferClientFromConfig(kubeConfig)
-		if capacitybufferClientError == nil {
-			capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, npcCrdLister, options.AutopilotEnabled, options.CSNEnabled)
-		}
+		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, npcCrdLister, options.AutopilotEnabled, options.CSNEnabled)
 	}
 
-	if options.CapacitybufferPodInjectionEnabled {
+	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		// Add CapacityBuffer types to the default scheme for event recording.
 		if err := cbv1beta1.AddToScheme(scheme.Scheme); err != nil {
 			klog.Warningf("Failed to add CapacityBuffer (v1beta1) to scheme: %v", err)
@@ -585,13 +590,8 @@ func setUpProcessors(
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
-	if options.CapacitybufferPodInjectionEnabled {
-		if capacitybufferClient == nil {
-			capacitybufferClient, capacitybufferClientError = cbclient.NewCapacityBufferClientFromConfig(kubeConfig)
-		}
-		if capacitybufferClientError == nil && capacitybufferClient != nil {
-			cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
-		}
+	if options.CapacitybufferPodInjectionEnabled && cbReady {
+		cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
 	}
 
 	var podInjectionProcessor *podinjection.PodInjectionPodListProcessor
@@ -624,7 +624,7 @@ func setUpProcessors(
 	var csnNodeReconcilationProcessor *csn_processors.NodeReconcilationProcessor
 	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
 	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
-	if capacitybufferClient != nil && options.CSNEnabled {
+	if options.CSNEnabled && cbReady {
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager)
 		go csnNodeController.Run(context)
@@ -633,7 +633,7 @@ func setUpProcessors(
 		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency)
 	}
 
-	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled)
+	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled && cbReady)
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
 	if options.GCEFlexAdvisorEnabled {

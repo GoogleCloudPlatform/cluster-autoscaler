@@ -16,6 +16,9 @@ package capacitybuffers
 
 import (
 	"context"
+	"fmt"
+
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	capacitybuffer "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer"
 	cbclient "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/client"
 	controller "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/controller"
@@ -24,11 +27,46 @@ import (
 	cbmetrics "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/metrics"
 	translators "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/translators"
 	updater "k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/updater"
+	kube_client "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/accelerators"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/billing"
+	klog "k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 )
+
+// NewCapacityBufferClientIfCRDPresent creates a CapacityBufferClient if the CapacityBuffer CRD is present in the cluster.
+// If the CRD is not present, it logs a warning and returns an error without initializing the client informers.
+func NewCapacityBufferClientIfCRDPresent(kubeClient kube_client.Interface, kubeConfig *rest.Config) (*cbclient.CapacityBufferClient, error) {
+	crdPresent, err := IsCapacityBufferCRDPresent(kubeClient)
+	if err != nil {
+		klog.Warningf("Failed to check if CapacityBuffer CRD is present: %v. Capacity Buffers will be disabled.", err)
+		return nil, err
+	}
+	if !crdPresent {
+		klog.Warning("CapacityBuffer CRD is not present in the cluster. Capacity Buffers will be disabled.")
+		return nil, fmt.Errorf("CapacityBuffer CRD is missing")
+	}
+	return cbclient.NewCapacityBufferClientFromConfig(kubeConfig)
+}
+
+// IsCapacityBufferCRDPresent checks if the CapacityBuffer CRD is registered in the Kubernetes cluster.
+func IsCapacityBufferCRDPresent(kubeClient kube_client.Interface) (bool, error) {
+	resourceList, err := kubeClient.Discovery().ServerResourcesForGroupVersion("autoscaling.x-k8s.io/v1beta1")
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, resource := range resourceList.APIResources {
+		if resource.Name == "capacitybuffers" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 const (
 	ColdProvisioningStrategy = "buffer.gke.io/standby-capacity"
