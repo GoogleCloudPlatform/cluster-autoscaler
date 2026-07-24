@@ -64,6 +64,7 @@ var DefaultInternalOptions = config.InternalOptions{
 	DefragMaxDelay:              5 * time.Minute,
 	DefragScaleUpTimeout:        10 * time.Minute,
 	DefragScaleDownTimeout:      5 * time.Minute,
+	MaxLoopsBeforeAdmission:     5,
 }
 
 // DefaultAutoscalingOptions provides the baseline configuration for all tests.

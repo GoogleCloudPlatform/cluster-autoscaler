@@ -22,6 +22,7 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	realccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
@@ -80,7 +81,9 @@ func NewComputeClassBuilder(name string) *ComputeClassBuilder {
 				APIVersion: "cloud.google.com/v1",
 			},
 			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
+				Name:            name,
+				UID:             types.UID(name + "-uid"),
+				ResourceVersion: "1",
 			},
 			Spec: v1.ComputeClassSpec{},
 		},
