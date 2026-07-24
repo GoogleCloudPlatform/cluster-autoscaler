@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -75,4 +77,68 @@ func TestToResizeError(t *testing.T) {
 	err4 := fmt.Errorf("Wrapped resize error: %v", err2)
 	_, ok = ToResizeError(err4)
 	assert.False(t, ok)
+}
+
+func TestNewTimeoutError(t *testing.T) {
+	origErr := errors.New("request timed out")
+	waitOrigErr := errors.New("operation wait timed out")
+
+	testCases := []struct {
+		name    string
+		source  GceClientResizeErrorSource
+		err     error
+		wantErr *ResizeError
+	}{
+		{
+			name:   "timeout during GetInstance",
+			source: GetInstance,
+			err:    origErr,
+			wantErr: &ResizeError{
+				MachineFamily: "ek",
+				ErrType:       TimeoutError,
+				Backoff:       NodeLevel,
+				VmState:       StartingState,
+				ErrSource:     GetInstance,
+				OriginalError: origErr,
+			},
+		},
+		{
+			name:   "timeout during SetScheduling",
+			source: SetScheduling,
+			err:    origErr,
+			wantErr: &ResizeError{
+				MachineFamily: "ek",
+				ErrType:       TimeoutError,
+				Backoff:       NodeLevel,
+				VmState:       UnknownState,
+				ErrSource:     SetScheduling,
+				OriginalError: origErr,
+			},
+		},
+		{
+			name:   "timeout during WaitForBetaOp",
+			source: WaitForBetaOp,
+			err:    waitOrigErr,
+			wantErr: &ResizeError{
+				MachineFamily: "ek",
+				ErrType:       TimeoutError,
+				Backoff:       NodeLevel,
+				VmState:       UnknownState,
+				ErrSource:     WaitForBetaOp,
+				OriginalError: waitOrigErr,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotErr := NewTimeoutError("ek", tc.source, tc.err)
+			gotResizeErr, ok := ToResizeError(gotErr)
+			assert.True(t, ok)
+			if diff := cmp.Diff(*tc.wantErr, *gotResizeErr, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("NewTimeoutError() mismatch (-want +got):\n%s", diff)
+			}
+			assert.Equal(t, "timeoutError", string(tc.wantErr.ErrType))
+		})
+	}
 }

@@ -79,7 +79,7 @@ const (
 	RateLimitExceededError ResizeErrorType = "rateLimitExceededError"
 
 	// TimeoutError - timeout during GceClient ResizeVm method call.
-	TimeoutError ResizeErrorType = "getInstancesTimeoutError"
+	TimeoutError ResizeErrorType = "timeoutError"
 
 	// QuotaExceededError - quota exceeded during GCE resize operation.
 	QuotaExceededError ResizeErrorType = "quotaExceededError"
