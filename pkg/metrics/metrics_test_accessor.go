@@ -36,6 +36,12 @@ func GetMachineConfigSourceInfoValueForTest(machineFamily, configSource string) 
 	return testutil.GetGaugeMetricValue(gauge)
 }
 
+// GetNodesWithAllocationStrategyCountForTest returns the current count for given labels (only for tests).
+func GetNodesWithAllocationStrategyCountForTest(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string) (float64, error) {
+	counter := nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType)
+	return testutil.GetCounterMetricValue(counter)
+}
+
 // ResetAllForTest resets all metrics that support it, preventing cross-test
 // state contamination. It iterates the same allMetrics slice used by RegisterAll,
 // so any newly added metric is automatically handled.

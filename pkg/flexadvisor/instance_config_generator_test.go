@@ -1095,7 +1095,7 @@ func TestInstanceConfigsForNodePools(t *testing.T) {
 			rule:                rules.NewRule(rules.WithNodePoolsRule([]string{"dws-pool"})),
 			wantInstanceConfigs: nil,
 			wantErrors: []error{
-				fmt.Errorf("flex start node pools are not supported by Flex Advisor"),
+				fmt.Errorf("flex start node pools are %w", ErrNotSupported),
 			},
 		},
 		"DWS pool - FlexAdvisorDWS enabled, pool doesnt have MRD set - generates configs with default MRD": {

@@ -89,6 +89,24 @@ const (
 // OperationStatus says whether an operation succeeded or failed.
 type OperationStatus string
 
+// AllocationStrategyFallbackReason describes the reason why the requested strategy was not applied.
+type AllocationStrategyFallbackReason string
+
+const (
+	// AllocationStrategyFallbackNone represents no fallback (requested strategy applied).
+	AllocationStrategyFallbackNone AllocationStrategyFallbackReason = ""
+	// AllocationStrategyFallbackFlexAdvisorNotSupported represents Flex Advisor not supported.
+	AllocationStrategyFallbackFlexAdvisorNotSupported AllocationStrategyFallbackReason = "flex_advisor_not_supported"
+	// AllocationStrategyFallbackMissingScore represents missing Flex Advisor score.
+	AllocationStrategyFallbackMissingScore AllocationStrategyFallbackReason = "missing_score"
+	// AllocationStrategyFallbackError represents a processing error occurred.
+	AllocationStrategyFallbackError AllocationStrategyFallbackReason = "error"
+	// AllocationStrategyFallbackTieBreak represents tie-break fallback.
+	AllocationStrategyFallbackTieBreak AllocationStrategyFallbackReason = "tie_break"
+	// AllocationStrategyFallbackReservationPresent represents reservation present fallback.
+	AllocationStrategyFallbackReservationPresent AllocationStrategyFallbackReason = "reservation_present"
+)
+
 // ReactionType defines the type of reaction CA has for a pod.
 type ReactionType uint8
 
@@ -1002,6 +1020,15 @@ var (
 		[]string{"reason"},
 	)
 
+	nodesWithAllocationStrategy = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "nodes_with_allocation_strategy",
+			Help:      "How many nodes were requested for scale up",
+		},
+		[]string{"requested_allocation_strategy", "fallback_reason", "machine_type"},
+	)
+
 	machineConfigSourceInfo = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1044,6 +1071,7 @@ var (
 // handled by both registration and test reset.
 var allMetrics = []k8smetrics.Registerable{
 	profile,
+	nodesWithAllocationStrategy,
 	clusterType,
 	podShardCount,
 	unschedulablePodDuration,
@@ -1843,4 +1871,9 @@ func (*prometheusMetrics) RegisterFlexAdvisorGenerationError(reason FAGeneration
 // RegisterFlexAdvisorResponseError records a Flex Advisor response error.
 func (*prometheusMetrics) RegisterFlexAdvisorResponseError(reason FAResponseErrorReason) {
 	flexAdvisorResponseErrors.WithLabelValues(string(reason)).Inc()
+}
+
+// RegisterNodesWithAllocationStrategy records the nodes_with_allocation_strategy metric.
+func RegisterNodesWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string, count int) {
+	nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType).Add(float64(count))
 }

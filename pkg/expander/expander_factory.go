@@ -61,10 +61,18 @@ func ExpanderStrategyFromString(
 	experimentsManager experiments.Manager,
 ) (expander.Strategy, errors.AutoscalerError) {
 
+	var gkePriceExpander filterStrategy
+	getGkePriceExpander := func() filterStrategy {
+		if gkePriceExpander == nil {
+			gkePriceExpander = createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, nodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
+		}
+		return gkePriceExpander
+	}
+
 	expanderFactory := factory.NewFactory()
 	expanderFactory.RegisterDefaultExpanders(cloudProvider, autoscalingKubeClients, kubeClient, configNamespace, "", "")
 	expanderFactory.RegisterFilter(internalopts.PriceBasedImprovedExpanderName, func() expander.Filter {
-		return createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, nodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
+		return getGkePriceExpander()
 	})
 	expanderFactory.RegisterFilter(internalopts.ScalabilityTestExpanderName, func() expander.Filter {
 		return createScalabilityTestExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, nodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
@@ -86,7 +94,7 @@ func ExpanderStrategyFromString(
 		return mppn.NewFilter(r, autopilotEnabled)
 	})
 	expanderFactory.RegisterFilter(internalopts.FleetEfficiencyExpanderName, func() expander.Filter {
-		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager)
+		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, getGkePriceExpander(), cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager)
 	})
 
 	return expanderFactory.Build(expanderNames)

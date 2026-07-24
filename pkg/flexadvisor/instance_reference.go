@@ -32,6 +32,9 @@ import (
 	"k8s.io/utils/set"
 )
 
+// ErrNotSupported is returned when a node pool type is not supported by Flex Advisor.
+var ErrNotSupported = errors.New("not supported by Flex Advisor")
+
 // InstanceReference keeps information from cloudprovider.nodegroup that needs to query FlexAdvisor
 type InstanceReference struct {
 	FlexibilityScopeKey string
@@ -72,7 +75,7 @@ func ConstructInstanceReference(nodeGroup cloudprovider.NodeGroup, cccLister lis
 	rank := -1
 	instanceConfig, err := buildInstanceConfigFromNodePoolSpec(gkeNodeGroup.MachineType(), gkeNodeGroup.Spec(), rank, []string{zone}, experimentsManager)
 	if err != nil {
-		return nil, fmt.Errorf("error when building instance config for nodeGroup: %s err: %v", gkeNodeGroup.Id(), err)
+		return nil, fmt.Errorf("error when building instance config for nodeGroup: %s err: %w", gkeNodeGroup.Id(), err)
 	}
 	return &InstanceReference{
 		Zone:                zone,
@@ -90,12 +93,12 @@ func buildInstanceConfigFromNodePoolSpec(machineType string, spec *gkeclient.Nod
 
 	isTPU := spec.TpuType != "" || spec.TpuTopology != ""
 	if isTPU && !isFlexAdvisorTPUEnabled(experimentsManager) {
-		return nil, errors.New("tpu node pools are not supported by Flex Advisor")
+		return nil, fmt.Errorf("tpu node pools are %w", ErrNotSupported)
 	}
 
 	if spec.FlexStart {
 		if !isFlexAdvisorDWSEnabled(experimentsManager) {
-			return nil, errors.New("flex start node pools are not supported by Flex Advisor")
+			return nil, fmt.Errorf("flex start node pools are %w", ErrNotSupported)
 		}
 		instanceConfig.SetProvisioningMode(instanceavailability.FlexStart)
 	} else if spec.Spot {

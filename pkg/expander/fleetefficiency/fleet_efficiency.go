@@ -15,6 +15,7 @@
 package fleetefficiency
 
 import (
+	"errors"
 	"fmt"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
@@ -32,13 +33,20 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
+)
+
+var (
+	ErrSnapshotNotFound          = errors.New("flex advisor snapshot not found")
+	ErrPreferenceScoreNotPresent = errors.New("GCE Preference Score not present")
 )
 
 type fleetEfficiencyFilter struct {
 	flexAdvisor                      instanceavailability.Provider
 	cccLister                        lister.Lister
+	fallback                         expander.Strategy
 	reservationsPuller               *gceclient.ReservationsPuller
 	cloudProvider                    provider.GkeExpanderCloudProvider
 	localSSDDiskSizeProvider         localssdsize.LocalSSDSizeProvider
@@ -52,6 +60,7 @@ func NewFilter(
 	flexAdvisor instanceavailability.Provider,
 	cccLister lister.Lister,
 	reservationsPuller *gceclient.ReservationsPuller,
+	fallback expander.Strategy,
 	cloudProvider provider.GkeExpanderCloudProvider,
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	clusterDefaultAllocationStrategy options.ClusterDefaultAllocationStrategy,
@@ -61,6 +70,7 @@ func NewFilter(
 	return &fleetEfficiencyFilter{
 		flexAdvisor:                      flexAdvisor,
 		cccLister:                        cccLister,
+		fallback:                         fallback,
 		reservationsPuller:               reservationsPuller,
 		cloudProvider:                    cloudProvider,
 		localSSDDiskSizeProvider:         localSSDDiskSizeProvider,
@@ -85,19 +95,21 @@ func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, 
 	crd, _, err := f.cccLister.PodCrd(samplePod)
 	if err != nil {
 		klog.Errorf("FleetEfficiencyFilter: failed to get the CRD for pod: %v", err)
+		// We don't know the allocation strategy, do not record any metrics at this point.
 		return expansionOptions
 	}
 	if crd == nil {
+		// Allocation strategy is only supported for CCC, do not record metrics.
 		return expansionOptions
 	}
 	if !f.isFleetEfficiencyStrategy(crd, expansionOptions[0]) {
 		klog.V(4).Infof("FleetEfficiencyFilter: skipping, allocation strategy is not fleet-efficiency")
-		return expansionOptions
+		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
 	}
 
 	if f.hasUsableReservations(expansionOptions) {
 		klog.V(4).Infof("FleetEfficiencyFilter: some options have usable reservations, skipping")
-		return expansionOptions
+		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
 	}
 
 	// Calculate the scores to find the best options.
@@ -107,7 +119,7 @@ func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, 
 		score, err := f.scoreOption(option)
 		if err != nil {
 			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s, ignoring strategy: %v", option.NodeGroup.Id(), err)
-			return expansionOptions
+			return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, determineFallbackReason(err))
 		}
 		scores[i] = score
 		if score > maxScore {
@@ -123,7 +135,52 @@ func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, 
 		}
 	}
 
-	return bestOptions
+	if len(bestOptions) == 1 {
+		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, &bestOptions[0])
+		return bestOptions
+	}
+
+	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options, fallback to lowest-cost", len(bestOptions))
+	return f.fallbackAndRecordMetric(bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
+}
+
+func determineFallbackReason(err error) metrics.AllocationStrategyFallbackReason {
+	if err == nil {
+		return metrics.AllocationStrategyFallbackNone
+	}
+	if errors.Is(err, flexadvisor.ErrNotSupported) {
+		return metrics.AllocationStrategyFallbackFlexAdvisorNotSupported
+	} else if errors.Is(err, ErrSnapshotNotFound) || errors.Is(err, ErrPreferenceScoreNotPresent) {
+		return metrics.AllocationStrategyFallbackMissingScore
+	}
+	return metrics.AllocationStrategyFallbackError
+}
+
+func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, option *expander.Option) {
+	if option == nil {
+		klog.Fatal("FleetEfficiencyFilter: recordMetric called with nil option")
+		return
+	}
+	machineType := ""
+	if gkeNodeGroup, ok := option.NodeGroup.(gke.NodeGroup); ok {
+		machineType = gkeNodeGroup.MachineType()
+	}
+	metrics.RegisterNodesWithAllocationStrategy(string(requestedStrategy), fallbackReason, machineType, option.NodeCount)
+}
+
+func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason) []expander.Option {
+	if f.fallback == nil {
+		return expansionOptions
+	}
+	selected := f.fallback.BestOption(expansionOptions, nodeInfo)
+	if selected != nil {
+		f.recordMetric(requestedStrategy, fallbackReason, selected)
+		return []expander.Option{*selected}
+	}
+	// This should never happen, since fallback should be gke_price which always returns one option.
+	// If it does happen, it's safest to return all options, which will most likely result in fallback being called again (as the next expander).
+	klog.Error("FleetEfficiencyFilter: fallback failed to choose the best option.")
+	return expansionOptions
 }
 
 func (f *fleetEfficiencyFilter) scoreOption(option expander.Option) (float64, error) {
@@ -133,7 +190,7 @@ func (f *fleetEfficiencyFilter) scoreOption(option expander.Option) (float64, er
 	}
 	snapshot := f.flexAdvisor.GetInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 	if snapshot == nil {
-		return 0, fmt.Errorf("flex advisor snapshot not found for keys: scope=%q, config=%s", instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 	}
 
 	totalScore := 0.0
@@ -147,7 +204,7 @@ func (f *fleetEfficiencyFilter) scoreOption(option expander.Option) (float64, er
 		zone := gkeNg.GceRef().Zone
 		score, found := snapshot.GcePreferenceScore(zone)
 		if !found {
-			return fmt.Errorf("GCE Preference Score not present for scope %s and zone %s", instanceRef.FlexibilityScopeKey, zone)
+			return fmt.Errorf("%w for scope %s and zone %s", ErrPreferenceScoreNotPresent, instanceRef.FlexibilityScopeKey, zone)
 		}
 		if score < 0 || score > 1 {
 			// TODO(b/527312993): Move the filtering to flex advisor (reject invalid scores).

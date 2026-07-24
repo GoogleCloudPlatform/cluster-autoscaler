@@ -16,6 +16,7 @@ package fleetefficiency
 
 import (
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,8 +45,11 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 )
+
+var registerMetricsOnce sync.Once
 
 type testFixture struct {
 	pod          *v1.Pod
@@ -185,7 +189,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 			em = experiments.NewMockManager()
 		}
 
-		filter := NewFilter(flexAdvisor, lister, puller, cloudProvider, localSSDDiskSizeProvider, tc.clusterDefaultStrategy, gceFlexAdvisorEnabled, em)
+		filter := NewFilter(flexAdvisor, lister, puller, nil, cloudProvider, localSSDDiskSizeProvider, tc.clusterDefaultStrategy, gceFlexAdvisorEnabled, em)
 
 		nodeInfos := tc.nodeInfos
 		if nodeInfos == nil {
@@ -398,6 +402,180 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 
 	for _, tc := range tests {
 		runFleetEfficiencyTest(t, tc)
+	}
+}
+
+type firstOptionFallback struct{}
+
+func (f *firstOptionFallback) BestOption(options []expander.Option, nodeInfo map[string]*framework.NodeInfo) *expander.Option {
+	if len(options) == 0 {
+		return nil
+	}
+	return &options[0]
+}
+
+func TestFleetEfficiencyMetrics(t *testing.T) {
+	registerMetricsOnce.Do(metrics.RegisterAll)
+
+	f := newTestFixture()
+
+	// Custom fallback that returns the first option, so metrics are recorded.
+	fallback := &firstOptionFallback{}
+
+	ngTpu := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-tpu").SetGceRefZone("us-central1-a").SetSpec(&gkeclient.NodePoolSpec{MachineType: "ct3-hightpu-4t", TpuType: "v3"}).Build()
+	optTpu := expander.Option{
+		NodeGroup: ngTpu,
+		Pods:      []*v1.Pod{f.pod},
+		NodeCount: 1,
+	}
+
+	// Clone standard options and set NodeCount to 1 for metric testing
+	optFleet1 := f.optFleet1
+	optFleet1.NodeCount = 1
+
+	optFleet2 := f.optFleet2
+	optFleet2.NodeCount = 1
+
+	tests := []struct {
+		name                      string
+		crd                       crd.CRD
+		options                   []expander.Option
+		setupMock                 func(*instanceavailability.MockProvider)
+		reservations              []*gce_api.Reservation
+		expectedRequestedStrategy cccv1.AllocationStrategy
+		expectedReason            metrics.AllocationStrategyFallbackReason
+		expectedMachineType       string
+	}{
+		{
+			name:                      "Fallback - FlexAdvisorNotSupported (TPU)",
+			options:                   []expander.Option{optTpu},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackFlexAdvisorNotSupported,
+			expectedMachineType:       "ct3-hightpu-4t",
+		},
+		{
+			name:    "Fallback - MissingScore (Snapshot not found)",
+			options: []expander.Option{optFleet1},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Return((*instanceavailability.Snapshot)(nil)).Once()
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackMissingScore,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Fallback - MissingScore (Preference score not present)",
+			options: []expander.Option{optFleet1},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackMissingScore,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Fallback - Error (Invalid score < 0)",
+			options: []expander.Option{optFleet1},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": -0.5})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackError,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Fallback - Error (Invalid score > 1)",
+			options: []expander.Option{optFleet1},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 1.5})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackError,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:                      "Lowest Cost Strategy",
+			crd:                       f.crdRuleCost,
+			options:                   []expander.Option{optFleet1},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Usable Reservations",
+			options: []expander.Option{optFleet1},
+			reservations: []*gce_api.Reservation{
+				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n1-standard-1", "us-central1-a"),
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackReservationPresent,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Tie Break",
+			options: []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.5})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.5})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackTieBreak,
+			expectedMachineType:       "n1-standard-1",
+		},
+		{
+			name:    "Normal Code Path (Success)",
+			options: []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics.ResetAllForTest()
+
+			flexAdvisor := &instanceavailability.MockProvider{}
+			if tc.setupMock != nil {
+				tc.setupMock(flexAdvisor)
+			}
+
+			crdToUse := f.crdRuleFleet
+			if tc.crd != nil {
+				crdToUse = tc.crd
+			}
+			lister := listerutils.NewMockCrdListerWithLabel([]crd.CRD{crdToUse}, gkelabels.ComputeClassLabel)
+			lister.SetDefaultCrdName(crdToUse.Name())
+
+			var puller *gceclient.ReservationsPuller
+			if len(tc.reservations) > 0 {
+				mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
+					WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
+				puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+				puller.SetReservations(tc.reservations)
+			}
+
+			cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				Build()
+			localSSDDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+
+			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, options.ClusterDefaultAllocationStrategyLowestCost, true, experiments.NewMockManager())
+
+			// We don't care about the returned options here, just that the fallback logic was triggered and recorded metrics.
+			_ = filter.BestOptions(tc.options, map[string]*framework.NodeInfo{})
+
+			// Verify metrics
+			count, err := metrics.GetNodesWithAllocationStrategyCountForTest(string(tc.expectedRequestedStrategy), tc.expectedReason, tc.expectedMachineType)
+			assert.NoError(t, err)
+			assert.Equal(t, float64(1), count)
+
+			flexAdvisor.AssertExpectations(t)
+		})
 	}
 }
 
