@@ -180,16 +180,16 @@ func (g *instanceConfigGenerator) validateGeneratedConfigsForRule(flexibilitySco
 		return
 	}
 
-	onlyZoneAvailabilityErrors := len(errorsForRule) > 0
+	onlyIgnoredErrors := len(errorsForRule) > 0
 	for _, err := range errorsForRule {
-		var zoneErr *ErrMachineUnavailableInZones
-		if !errors.As(err, &zoneErr) {
-			onlyZoneAvailabilityErrors = false
+		var ignorableErr IgnorableGenerationError
+		if !errors.As(err, &ignorableErr) || !ignorableErr.IsIgnoredGenerationError() {
+			onlyIgnoredErrors = false
 			break
 		}
 	}
 
-	if !onlyZoneAvailabilityErrors {
+	if !onlyIgnoredErrors {
 		klog.Warningf("FlexAdvisor[async-worker]: 0 instance configurations generated for rule under ccc %q", flexibilityScopeKey)
 		metrics.Metrics.RegisterFlexAdvisorGenerationError(metrics.ZeroConfigsGeneratedForRule)
 	}
@@ -436,7 +436,7 @@ func (g *instanceConfigGenerator) instanceConfigsForNodePools(rule rules.Rule, r
 	for _, nodePoolName := range rule.NodePoolNames() {
 		mig := g.findGkeMig(nodePoolName)
 		if mig == nil {
-			errors = append(errors, fmt.Errorf("mig not found for node pool: %s", nodePoolName))
+			errors = append(errors, &ErrUnknownNodePoolName{NodePoolName: nodePoolName})
 			continue
 		}
 		if mig.Spec() == nil {
@@ -565,6 +565,12 @@ func filterByCoresAndMemoryRequirements(machineTypes map[string]machinetypes.Mac
 	return filtered
 }
 
+// IgnorableGenerationError represents an error during instance config generation that should be ignored when reporting metrics.
+type IgnorableGenerationError interface {
+	error
+	IsIgnoredGenerationError() bool
+}
+
 // ErrMachineUnavailableInZones represents an error when a machine type is not available in any of the targeted zones.
 type ErrMachineUnavailableInZones struct {
 	MachineType string
@@ -572,6 +578,23 @@ type ErrMachineUnavailableInZones struct {
 
 func (e *ErrMachineUnavailableInZones) Error() string {
 	return fmt.Sprintf("machineType=%s was removed due to not being available in any of the zones", e.MachineType)
+}
+
+func (e *ErrMachineUnavailableInZones) IsIgnoredGenerationError() bool {
+	return true
+}
+
+// ErrUnknownNodePoolName represents an error when node pool name provided in CCC rule is unknown.
+type ErrUnknownNodePoolName struct {
+	NodePoolName string
+}
+
+func (e *ErrUnknownNodePoolName) Error() string {
+	return fmt.Sprintf("Invalid nodepool name: %s", e.NodePoolName)
+}
+
+func (e *ErrUnknownNodePoolName) IsIgnoredGenerationError() bool {
+	return true
 }
 
 // cccCrdFromPCC builds CustomComputeClass CRD from PredefinedComputeClass object

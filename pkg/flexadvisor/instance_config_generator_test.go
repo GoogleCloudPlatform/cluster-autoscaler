@@ -1114,7 +1114,7 @@ func TestInstanceConfigsForNodePools(t *testing.T) {
 			rule:                rules.NewRule(rules.WithNodePoolsRule([]string{"node-pool1", "node-pool-unknown", "node-pool3"})),
 			wantInstanceConfigs: []*api.InstanceConfig{api.NewInstanceConfigWithZones("n2-standard-2", "", 0, rank, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-central1-a", "us-central1-b", "us-central1-c"))},
 			wantErrors: []error{
-				fmt.Errorf("mig not found for node pool: node-pool-unknown"),
+				&ErrUnknownNodePoolName{NodePoolName: "node-pool-unknown"},
 				fmt.Errorf("mig spec is undefined for node pool: node-pool3"),
 			},
 		},
@@ -1692,7 +1692,20 @@ func TestGenerationValidation_Metrics(t *testing.T) {
 		},
 	}, "", false, crd.TestDefaultDataProvider(), nil)
 
-	availableCrds := []crd.CRD{crdUnknownMachine, crdUnavailableZones}
+	crdUnknownNodePool := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "unknown-nodepool-crd",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					Nodepools: []string{"non-existent-nodepool"},
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	availableCrds := []crd.CRD{crdUnknownMachine, crdUnavailableZones, crdUnknownNodePool}
 
 	// provider with no zones for e2-standard-2, so it won't be available in any zones
 	provider := newMockInstanceConfigCloudProvider(
@@ -1723,6 +1736,14 @@ func TestGenerationValidation_Metrics(t *testing.T) {
 	newVal, err = metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.ZeroConfigsGeneratedForRule)
 	assert.NoError(t, err)
 	assert.Equal(t, initialVal, newVal, "Metric ZeroConfigsGeneratedForRule should NOT be incremented for zone unavailability errors")
+
+	// 3. Test unknown nodepool name error
+	initialVal = newVal
+	_, _ = g.generateInstanceConfigs("unknown-nodepool-crd")
+
+	newVal, err = metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.ZeroConfigsGeneratedForRule)
+	assert.NoError(t, err)
+	assert.Equal(t, initialVal, newVal, "Metric ZeroConfigsGeneratedForRule should NOT be incremented for unknown nodepool errors")
 }
 
 func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
