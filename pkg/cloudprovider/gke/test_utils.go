@@ -405,7 +405,7 @@ type TestAutoprovisioningCloudProvider struct {
 	autoprovisioningEligibility       AutoprovisioningEligibility
 	validMachineTypes                 map[gce.MachineTypeKey]bool
 	isEkSpotEnabled                   bool
-	isEkEdpEnabled                    bool
+	isResizableVmEdpEnabled           bool
 	extendedFallbacksEnabled          bool
 	isArmMachineFallbacksEnabled      bool
 	machineTypesPerZone               map[string][]string
@@ -550,10 +550,10 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithAutopilotEnabled(enabled 
 	return b
 }
 
-// WithEkEdpEnabled enables new ek edp logic in provider
-func (b *TestAutoprovisioningCloudProviderBuilder) WithEkEdpEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
+// WithResizableVmEdpEnabled enables new resizable vm edp logic in provider
+func (b *TestAutoprovisioningCloudProviderBuilder) WithResizableVmEdpEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
-		p.isEkEdpEnabled = enabled
+		p.isResizableVmEdpEnabled = enabled
 	})
 	return b
 }
@@ -793,8 +793,8 @@ func (cp *TestAutoprovisioningCloudProvider) IsResizableVmEnabledInAutopilot(mac
 	return cp.resizableVmInAutopilotEnabled[machineFamily]
 }
 
-func (cp *TestAutoprovisioningCloudProvider) IsEkEdpEnabled() bool {
-	return cp.isEkEdpEnabled
+func (cp *TestAutoprovisioningCloudProvider) IsResizableVmEdpEnabled() bool {
+	return cp.isResizableVmEdpEnabled
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
@@ -1938,7 +1938,7 @@ func (fake *FakeGkeManager) IsResizableVmEnabledInAutopilot(machineFamily string
 	return fake.resizableVmInAutopilotEnabled[machineFamily]
 }
 
-func (fake *FakeGkeManager) IsEkEdpEnabled() bool {
+func (fake *FakeGkeManager) IsResizableVmEdpEnabled() bool {
 	panic("not implemented")
 }
 
@@ -2848,7 +2848,7 @@ func (m *GkeManagerMock) ResizingEnabled(machineFamily string) bool {
 	return args.Get(0).(bool)
 }
 
-func (m *GkeManagerMock) IsEkEdpEnabled() bool {
+func (m *GkeManagerMock) IsResizableVmEdpEnabled() bool {
 	args := m.Called()
 	return args.Get(0).(bool)
 }

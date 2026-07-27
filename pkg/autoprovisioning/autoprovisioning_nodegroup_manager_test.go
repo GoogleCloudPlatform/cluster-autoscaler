@@ -857,7 +857,7 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutopilotEnabled(true).
 		WithAutoprovisioningEnabled(true).
-		WithEkEdpEnabled(true).
+		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
@@ -997,7 +997,7 @@ func TestCSNPod(t *testing.T) {
 		}).
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutoprovisioningEnabled(true).
-		WithEkEdpEnabled(true).
+		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())

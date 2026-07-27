@@ -22,6 +22,7 @@ import (
 	"k8s.io/klog/v2"
 
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	ekvms_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 )
 
 // GetExtendedDurationValueFromReq extracts the extended duration value from pod requirements.
@@ -57,13 +58,16 @@ func EdpSelector(pod *apiv1.Pod) string {
 	return GetExtendedDurationValueFromReq(req)
 }
 
-func EdpOnePodPerNode(node *apiv1.Node) bool {
+func EdpOnePodPerNode(node *apiv1.Node, provider *machinetypes.MachineConfigProvider) bool {
 	edpValue, found := node.Labels[labels.ExtendedDurationPodsLabel]
-	if !found {
+	if !found || edpValue == "" || edpValue == labels.ExtendedDurationPackedPodsValue {
 		return false
 	}
 
-	machineFamily := node.Labels[labels.MachineFamilyLabel]
-
-	return machineFamily != machinetypes.EK.Name() && edpValue != "" && edpValue != labels.ExtendedDurationPackedPodsValue
+	isResizable, err := ekvms_utils.IsResizableNode(node, provider)
+	if err != nil {
+		klog.Errorf("Failed to check if node is resizable: %v", err)
+		return true
+	}
+	return !isResizable
 }

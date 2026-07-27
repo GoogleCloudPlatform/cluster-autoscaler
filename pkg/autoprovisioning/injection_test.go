@@ -5716,7 +5716,7 @@ func TestReservationGenerator_UpdateNodePoolSpec(t *testing.T) {
 func TestExtendedDurationPodGenerator(t *testing.T) {
 	for name, tc := range map[string]struct {
 		autopilotEnabled         bool
-		ekEdpEnabled             bool
+		resizableVmEdpEnabled    bool
 		machineType              string
 		cpuReq                   []string
 		expectNoNodeGroupOptions bool
@@ -5742,11 +5742,11 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			cpuReq:      []string{"100m"},
 			expectedErr: NewExtendedDurationPodNonAutopilotError(),
 		},
-		"ek edp enabled with ek machine type": {
-			autopilotEnabled: true,
-			ekEdpEnabled:     true,
-			machineType:      "ek-standard-2",
-			cpuReq:           []string{"100m"},
+		"resizable vm edp enabled with ek machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "ek-standard-2",
+			cpuReq:                []string{"100m"},
 			expectedSpec: &gkeclient.NodePoolSpec{
 				Labels: map[string]string{
 					gkelabels.ExtendedDurationPodsLabel: "X",
@@ -5755,11 +5755,24 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 				MachineType:          "ek-standard-2",
 			},
 		},
-		"ek edp enabled with non-ek machine type": {
-			autopilotEnabled: true,
-			ekEdpEnabled:     true,
-			machineType:      "c2-standard-4",
-			cpuReq:           []string{"100m"},
+		"resizable vm edp enabled with e4a machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "e4a-standard-2",
+			cpuReq:                []string{"100m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ExtendedDurationPodsLabel: "X",
+				},
+				ExtendedDurationPods: "X",
+				MachineType:          "e4a-standard-2",
+			},
+		},
+		"resizable vm edp enabled with non-resizable machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "c2-standard-4",
+			cpuReq:                []string{"100m"},
 			expectedSpec: &gkeclient.NodePoolSpec{
 				Labels: map[string]string{
 					gkelabels.ExtendedDurationPodsLabel: "100m",
@@ -5769,10 +5782,10 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			},
 		},
 		"numeric and X pod requirements - X is used for EK machine type": {
-			autopilotEnabled: true,
-			ekEdpEnabled:     true,
-			machineType:      "ek-standard-4",
-			cpuReq:           []string{"X", "200m"},
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "ek-standard-4",
+			cpuReq:                []string{"X", "200m"},
 			expectedSpec: &gkeclient.NodePoolSpec{
 				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "X"},
 				ExtendedDurationPods: "X",
@@ -5780,10 +5793,10 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			},
 		},
 		"numeric and X pod requirement pod requirements - numeric is used for non-EK machine type": {
-			autopilotEnabled: true,
-			ekEdpEnabled:     true,
-			machineType:      "cs-standard-4",
-			cpuReq:           []string{"X", "200m"},
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "cs-standard-4",
+			cpuReq:                []string{"X", "200m"},
 			expectedSpec: &gkeclient.NodePoolSpec{
 				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "200m"},
 				ExtendedDurationPods: "200m",
@@ -5791,10 +5804,10 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			},
 		},
 		"only X pod requirement - X is used for EK machine type": {
-			autopilotEnabled: true,
-			ekEdpEnabled:     true,
-			machineType:      "ek-standard-4",
-			cpuReq:           []string{"X"},
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "ek-standard-4",
+			cpuReq:                []string{"X"},
 			expectedSpec: &gkeclient.NodePoolSpec{
 				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "X"},
 				ExtendedDurationPods: "X",
@@ -5803,7 +5816,7 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 		},
 		"only X pod requirement - no options for non-EK machine type": {
 			autopilotEnabled:         true,
-			ekEdpEnabled:             true,
+			resizableVmEdpEnabled:    true,
 			machineType:              "c2-standard-2",
 			cpuReq:                   []string{"X"},
 			expectNoNodeGroupOptions: true,
@@ -5812,7 +5825,7 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithAutopilotEnabled(tc.autopilotEnabled).
-				WithEkEdpEnabled(tc.ekEdpEnabled).
+				WithResizableVmEdpEnabled(tc.resizableVmEdpEnabled).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			edpg := NewExtendedDurationPodGenerator(provider)
@@ -6145,7 +6158,7 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 		autoprovisioningLocations   []string
 		extendedDuration            bool
 		spotToleration              bool
-		ekEdpEnabled                bool
+		resizableVmEdpEnabled       bool
 		expectedCount               int
 		expectedSpecificZone        string
 		expectedSkippedZones        []string
@@ -6362,21 +6375,21 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.EK}, machinetypes.AnyPlatform, "", ""),
 				extendedDurationPodCPUReq: "X",
 			},
-			zones:            []string{"us-central1-a", "us-central1-c"},
-			extendedDuration: true,
-			spotToleration:   true,
-			ekEdpEnabled:     true,
-			expectedCount:    8 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			spotToleration:        true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         8 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
 		},
 		"generate options with extended duration pods on EKs": {
 			req: nodeGroupRequirements{
 				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.EK}, machinetypes.AnyPlatform, "", ""),
 				extendedDurationPodCPUReq: "100m",
 			},
-			zones:            []string{"us-central1-a", "us-central1-c"},
-			extendedDuration: true,
-			ekEdpEnabled:     true,
-			expectedCount:    4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
 		},
 		"generate options with all requirements on EKs": { // This should not be happening in practice, since edps are not compatible with spot/preemptible.
 			req: nodeGroupRequirements{
@@ -6394,30 +6407,30 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.EK}, machinetypes.AnyPlatform, "", ""),
 				extendedDurationPodCPUReq: "X",
 			},
-			zones:            []string{"us-central1-a", "us-central1-c"},
-			extendedDuration: true,
-			ekEdpEnabled:     true,
-			expectedCount:    4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
 		},
 		"generate options with extended duration pods on E2s with X extendedDurationPodCPUReq": {
 			req: nodeGroupRequirements{
 				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2}, machinetypes.AnyPlatform, "", ""),
 				extendedDurationPodCPUReq: "X",
 			},
-			zones:            []string{"us-central1-a", "us-central1-c"},
-			extendedDuration: true,
-			ekEdpEnabled:     true,
-			expectedCount:    0,
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         0,
 		},
 		"generate options with extended duration pods on E2s and EKs with X extendedDurationPodCPUReq": {
 			req: nodeGroupRequirements{
 				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK}, machinetypes.AnyPlatform, "", ""),
 				extendedDurationPodCPUReq: "X",
 			},
-			zones:            []string{"us-central1-a", "us-central1-c"},
-			extendedDuration: true,
-			ekEdpEnabled:     true,
-			expectedCount:    4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -6437,7 +6450,7 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 			}
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithAutopilotEnabled(true).
-				WithEkEdpEnabled(tc.ekEdpEnabled).
+				WithResizableVmEdpEnabled(tc.resizableVmEdpEnabled).
 				WithAllZones(tc.zones...).
 				WithAutoprovisioningLocations(tc.autoprovisioningLocations...).
 				WithMachineTypesPerZone(machineTypesPerZone).

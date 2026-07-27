@@ -72,7 +72,7 @@ func (nrt *NapResourceTrimmer) diskSizeAnalysisFunc(clusterSnapshot clustersnaps
 
 		// estimate storage required for future pods
 		debugFuturePodsCalculation := ""
-		if shouldFuturePodsBeCalculated(&nodeInfo) {
+		if shouldFuturePodsBeCalculated(&nodeInfo, mig.MachineConfigProvider()) {
 			futurePodsCount := int64(getFuturePodsWithDefaultResources(nodeInfo, resourceApprox))
 			estimatedFuturePodsSize := futurePodsCount * resourceApprox.EphemeralStorage
 			debugFuturePodsCalculation = fmt.Sprintf("futurePodsCount=%d, resourceApprox.EphemeralStorage=%v", futurePodsCount, resourceApprox.EphemeralStorage)

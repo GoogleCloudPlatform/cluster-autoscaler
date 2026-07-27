@@ -3768,7 +3768,7 @@ func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutop
 	return args.Get(0).(bool)
 }
 
-func (mekp *mockResizableVmAutoprovisioningProvider) IsEkEdpEnabled() bool {
+func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEdpEnabled() bool {
 	args := mekp.Called()
 	return args.Get(0).(bool)
 }
@@ -5575,7 +5575,7 @@ func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 	}
 }
 
-func TestIsEkEdpEnabled(t *testing.T) {
+func TestIsResizableVmEdpEnabled(t *testing.T) {
 	testCases := []struct {
 		name           string
 		clusterVersion string
@@ -5640,11 +5640,11 @@ func TestIsEkEdpEnabled(t *testing.T) {
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{},
 				map[string]bool{},
 				map[string]string{
-					experiments.EnableEkEdpMinGKEVersionFlag: tc.minVersion,
+					experiments.EnableResizableVmEdpMinGKEVersionFlag: tc.minVersion,
 				})
 			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
-			g.refreshEkEdpEnabled()
-			got := g.IsEkEdpEnabled()
+			g.refreshResizableVmEdpEnabled()
+			got := g.IsResizableVmEdpEnabled()
 
 			assert.Equal(t, tc.want, got)
 		})

@@ -228,7 +228,7 @@ func TestPostBinpackingAnalyzer_MppnAnalysisFuncAutopilotCluster(t *testing.T) {
 							Name: "ek",
 							Labels: map[string]string{
 								labels.ExtendedDurationPodsLabel:                     "100m",
-								labels.MachineFamilyLabel:                            "ek",
+								apiv1.LabelInstanceTypeStable:                        "ek-standard-16",
 								labels.NodeGroupDynamicMaxPodsPerNodeEnabledLabelKey: "true",
 							},
 						},

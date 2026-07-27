@@ -52,7 +52,7 @@ func (nrt *NapResourceTrimmer) mppnAnalysisFunc(clusterSnapshot clustersnapshot.
 	for _, nodeInfo := range newNodeInfos {
 		podsPerNode := len(nodeInfo.Pods())
 		approximateMaxFuturePodsPerNode := 0
-		if shouldFuturePodsBeCalculated(&nodeInfo) {
+		if shouldFuturePodsBeCalculated(&nodeInfo, mig.MachineConfigProvider()) {
 			approximateMaxFuturePodsPerNode = getFuturePodsWithDefaultResources(nodeInfo, resourceApprox)
 		}
 

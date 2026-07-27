@@ -21,6 +21,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 )
 
@@ -134,7 +135,14 @@ func TestEdpOnePodPerNode(t *testing.T) {
 		"Non-packed EDP label, EK machine family - return false": {
 			node: buildNodeWithLabels("node", 100, 500, map[string]string{
 				gkelabels.ExtendedDurationPodsLabel: "100m",
-				gkelabels.MachineFamilyLabel:        "ek",
+				apiv1.LabelInstanceTypeStable:       "ek-standard-2",
+			}),
+			expectedEdpOnePodPerNode: false,
+		},
+		"Non-packed EDP label, E4A machine family - return false": {
+			node: buildNodeWithLabels("node", 100, 500, map[string]string{
+				gkelabels.ExtendedDurationPodsLabel: "100m",
+				apiv1.LabelInstanceTypeStable:       "e4a-standard-2",
 			}),
 			expectedEdpOnePodPerNode: false,
 		},
@@ -146,7 +154,7 @@ func TestEdpOnePodPerNode(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			assert.Equal(t, tc.expectedEdpOnePodPerNode, EdpOnePodPerNode(tc.node))
+			assert.Equal(t, tc.expectedEdpOnePodPerNode, EdpOnePodPerNode(tc.node, machinetypes.NewMachineConfigProvider(nil)))
 		})
 	}
 }

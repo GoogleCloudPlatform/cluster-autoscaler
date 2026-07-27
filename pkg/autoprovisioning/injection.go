@@ -2361,11 +2361,10 @@ func (ExtendedDurationGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec
 // resolveExtendedDurationValue determines the correct value for the extended duration pods label.
 // It returns the resolved value and a boolean indicating if the combination was valid.
 func (edpg ExtendedDurationGenerator) resolveExtendedDurationValue(machineType, value string) (string, bool) {
-	machineFamily, err := edpg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machineType)
-	isEK := err == nil && machineFamily.Name() == machinetypes.EK.Name()
+	isResizable, err := ekvms_utils.IsResizableMachineType(edpg.cloudProvider.MachineConfigProvider(), machineType)
 
-	if isEK && edpg.cloudProvider.IsEkEdpEnabled() {
-		// The machine is EK and the feature is on. Always use "X".
+	if err == nil && isResizable && edpg.cloudProvider.IsResizableVmEdpEnabled() {
+		// The machine is a resizable VM and the feature is on. Always use "X".
 		return ekvmtypes.ExtendedDurationLabelX, true
 	}
 

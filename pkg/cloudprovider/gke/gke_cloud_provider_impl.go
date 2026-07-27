@@ -520,9 +520,9 @@ func (p *gkeCloudProviderImpl) ValidateLocationForDiskType(location string, requ
 	return p.gkeManager.ValidateLocationForDiskType(location, requestedDiskType)
 }
 
-// IsEkEdpEnabled returns true if Edp on EKs with affinity X is enabled
-func (p *gkeCloudProviderImpl) IsEkEdpEnabled() bool {
-	return p.gkeManager.IsEkEdpEnabled()
+// IsResizableVmEdpEnabled returns true if Edp on resizable VMs with affinity X is enabled
+func (p *gkeCloudProviderImpl) IsResizableVmEdpEnabled() bool {
+	return p.gkeManager.IsResizableVmEdpEnabled()
 }
 
 // GenerateRandomId create random [0-9a-z]{length} identifier

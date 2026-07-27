@@ -20,6 +20,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/utils/gpu"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
@@ -40,20 +41,20 @@ var (
 
 // we don't want to calculate future pods for certain classes of nodes, as we
 // want them to have 1 user pod per node. This so far includes nodes with GPU and TPU.
-func shouldFuturePodsBeCalculated(info *framework.NodeInfo) bool {
-	return !isOnePodPerNode(info.Node())
+func shouldFuturePodsBeCalculated(info *framework.NodeInfo, provider *machinetypes.MachineConfigProvider) bool {
+	return !isOnePodPerNode(info.Node(), provider)
 }
 
 // TODO: move to global, autopilot specific util
 // context: http://gkecl/905326/comment/8343ec4c_22146288/
-func isOnePodPerNode(node *apiv1.Node) bool {
+func isOnePodPerNode(node *apiv1.Node, provider *machinetypes.MachineConfigProvider) bool {
 	// Performance ComputeClass uses slice of hardware model, which as of today is limited to ~one pod per node
 	computeClass, found := node.Labels[labels.ComputeClassLabel]
 	if found && computeClass == "Performance" {
 		return true
 	}
 
-	return tpu.NodeHasTpu(node) || extendeddurationpods.EdpOnePodPerNode(node)
+	return tpu.NodeHasTpu(node) || extendeddurationpods.EdpOnePodPerNode(node, provider)
 }
 
 // getFuturePods calculated how many more pods could fit based on the approximate resources.
