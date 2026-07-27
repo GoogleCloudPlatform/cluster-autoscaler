@@ -1102,6 +1102,12 @@ func (g *GceClient) SetCreateInstanceForMigError(migName string, errInfo cloudpr
 	g.createInstanceForMIGError[migName] = errInfo
 }
 
+func (g *GceClient) ClearCreateInstanceForMigError(migName string) {
+	g.Lock()
+	defer g.Unlock()
+	delete(g.createInstanceForMIGError, migName)
+}
+
 func (g *GceClient) SetCreateInstanceForZoneError(zoneName string, errInfo cloudprovider.InstanceErrorInfo) {
 	g.Lock()
 	defer g.Unlock()
