@@ -37,6 +37,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 )
 
@@ -737,6 +738,9 @@ func TestNodeNameForBuildNodeFromMigSpec(t *testing.T) {
 }
 
 func TestConditionalLabels(t *testing.T) {
+	v, _ := version.FromString("1.37.0")
+	ver137 := &v
+
 	type testCase struct {
 		scenario                     string
 		daemonSetConditions          *DaemonSetConditions
@@ -749,6 +753,7 @@ func TestConditionalLabels(t *testing.T) {
 		migMaxPodsPerNode            int64
 		isConfidentialNode           bool
 		machineSerenityLabelsEnabled bool
+		nodeVersion                  string
 	}
 	testCases := []testCase{
 		{
@@ -874,6 +879,50 @@ func TestConditionalLabels(t *testing.T) {
 			localSSDCount: 4,
 		},
 		{
+			scenario: "1.37 node, WorkloadIdentityProviderSet true, regardless of MetadataServerEnabled",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:       false,
+				WorkloadIdentityProviderSet: true,
+				WIImagePullMinVersion:       ver137,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			containLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WorkloadIdentityProviderSet false",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:       true,
+				WorkloadIdentityProviderSet: false,
+				WIImagePullMinVersion:       ver137,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "< 1.37 node, MetadataServerEnabled true",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled: true,
+				WIImagePullMinVersion: ver137,
+			},
+			nodeVersion: "1.35.0-gke.0",
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
 			scenario: "all daemon set enabled, mig mppn set",
 			daemonSetConditions: &DaemonSetConditions{
 				NodeLocalDNSEnabled:          true,
@@ -920,6 +969,7 @@ func TestConditionalLabels(t *testing.T) {
 				spec: &gkeclient.NodePoolSpec{
 					SystemArchitecture: &arch,
 					DiskSize:           300,
+					NodeVersion:        tc.nodeVersion,
 					LocalSSDConfig:     &gkeclient.LocalSSDConfig{EphemeralStorageConfig: &gke_api_beta.EphemeralStorageConfig{LocalSsdCount: tc.localSSDCount}},
 					MaxPodsPerNode:     testcase.migMaxPodsPerNode,
 				},

@@ -392,6 +392,8 @@ type gkeConfigurationCache struct {
 type DaemonSetConditions struct {
 	NodeLocalDNSEnabled          bool
 	MetadataServerEnabled        bool
+	WorkloadIdentityProviderSet  bool
+	WIImagePullMinVersion        *version.Version
 	HighThroughputLoggingEnabled bool
 	NetdEnabled                  bool
 	IpMasqAgentEnabled           bool
@@ -532,6 +534,7 @@ type GkeManagerOptions struct {
 	ResizeRequestErrorHandlingEnabled bool
 	MultiNetworkSupportEnabled        bool
 	MultitenancyEnabled               bool
+	WIImagePullMinVersion             *version.Version
 	bootDiskConfigEnabled             bool
 	napDefaultMachineTypeFamily       string
 	bulkGceMigInstancesListingEnabled bool
@@ -1963,6 +1966,8 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 		NetdEnabled:                  cluster.NetdEnabled(),
 		NodeLocalDNSEnabled:          cluster.NodeLocalDNSEnabled,
 		MetadataServerEnabled:        cluster.MetadataServerEnabled(),
+		WorkloadIdentityProviderSet:  cluster.WorkloadIdentityProviderSet,
+		WIImagePullMinVersion:        m.managerOptions.WIImagePullMinVersion,
 		HighThroughputLoggingEnabled: cluster.HighThroughputLoggingEnabled,
 		IpMasqAgentEnabled:           m.managerOptions.AutopilotEnabled && cluster.DataplaneV2Enabled,
 	}

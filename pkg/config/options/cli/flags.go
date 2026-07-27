@@ -126,6 +126,7 @@ var (
 		"Enable backoff to future reservation start time when a specific named reservation used for node-pool refers to an existing future reservation")
 	enableConsumablePuller               = flag.Bool("enable-consumable-reservations-puller", false, "Whether to pull reservations from the Beta ListConsumableReservations API.")
 	machineSerenityLabelsEnabled         = flag.Bool("machine-serenity-labels-enabled", false, "Enables the inclusion of disk support labels on simulated nodes based on machine source-of-truth information.")
+	workloadIdentityImagePullMinVersion  = flag.String("workload-identity-image-pull-min-version", "", "The minimum node version required to inject iam.gke.io/workload-identity-image-pull-enabled node label.")
 	pendingPodsMetricEnabled             = flag.Bool("enable-pending-pods-metric", false, "Enables registration of pendingPodsCollector and pending_pod metric in an effect")
 	resolveInstanceRefUsingNodePoolLabel = flag.Bool("resolve-instanceref-using-nodepool-label", true, "If true, will attempt to find nodegroup for node by matching node's cloud.google.com/gke-nodepool label if ProviderID is empty. See go/gke-ca-nil-providerid-logs for details.")
 	zoneTypesEnabled                     = flag.Bool("enable-zone-types", false, "Enables automatic AI zones selection via CCC zoneTypes field, see go/gke-auto-ai-zones for details.")
@@ -237,6 +238,15 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		klog.Fatalf("--ekvms-allocation-safety-buffer value failed to parse: %v", err)
 	}
 
+	var wiImagePullMinVersion *version.Version
+	if *workloadIdentityImagePullMinVersion != "" {
+		v, err := version.FromString(*workloadIdentityImagePullMinVersion)
+		if err != nil {
+			klog.Fatalf("--workload-identity-image-pull-min-version value failed to parse: %v", err)
+		}
+		wiImagePullMinVersion = &v
+	}
+
 	switch options.CSNStatus(*csnStatus) {
 	case options.CSNUnspecified, options.CSNEnabled, options.CSNDisabled:
 	default:
@@ -333,6 +343,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		AllowlistedSystemLabels:                      *allowlistedSystemLabels,
 		AllowlistedSystemLabelPatterns:               *allowlistedSystemLabelPatterns,
 		BootDiskSelectorEnabled:                      *bootDiskSelectorEnabled,
+		WIImagePullMinVersion:                        wiImagePullMinVersion,
 		CpMaxParallelOps:                             *cpMaxParallelOps,
 		CpMaxQueuedOps:                               *cpMaxQueuedOps,
 		MultitenancyEnabled:                          *multitenancyEnabled,

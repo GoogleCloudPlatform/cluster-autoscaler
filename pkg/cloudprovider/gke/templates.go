@@ -31,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 )
 
@@ -84,7 +85,7 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 	if err != nil {
 		return nil, err
 	}
-	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os())
+	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os(), mig.Version())
 	for k, v := range gkeDaemonSetLabels {
 		labels[k] = v
 	}
@@ -212,10 +213,19 @@ func buildLabelsForAutoprovisionedMig(mig *GkeMig, nodeName string, os gce.Opera
 	return labels, nil
 }
 
-func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem) map[string]string {
+func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem, nodeVersion string) map[string]string {
 	labels := make(map[string]string)
 	if conditions.MetadataServerEnabled {
 		labels["iam.gke.io/gke-metadata-server-enabled"] = "true"
+	}
+
+	if conditions.WIImagePullMinVersion != nil {
+		nv, err := version.FromString(nodeVersion)
+		if err == nil {
+			if !nv.LessThan(*conditions.WIImagePullMinVersion) && conditions.WorkloadIdentityProviderSet {
+				labels["iam.gke.io/workload-identity-image-pull-enabled"] = "true"
+			}
+		}
 	}
 	if conditions.NodeLocalDNSEnabled && os != gce.OperatingSystemWindows {
 		labels["addon.gke.io/node-local-dns-ds-ready"] = "true"

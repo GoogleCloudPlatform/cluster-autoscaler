@@ -2305,6 +2305,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		AutopilotHigherMaxPodsPerNode:     opts.AutopilotHigherMaxPodsPerNode,
 		MultiNetworkSupportEnabled:        opts.MultiNetworkSupportEnabled,
 		bootDiskConfigEnabled:             opts.BootDiskSelectorEnabled,
+		WIImagePullMinVersion:             opts.WIImagePullMinVersion,
 		bulkGceMigInstancesListingEnabled: opts.GCEOptions.BulkMigInstancesListingEnabled,
 		allowlistedSystemLabelsMatcher:    allowlistedSystemLabelsMatcher,
 		cpMaxParallelOps:                  opts.CpMaxParallelOps,
