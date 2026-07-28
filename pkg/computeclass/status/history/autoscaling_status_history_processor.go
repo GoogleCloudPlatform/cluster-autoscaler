@@ -24,9 +24,11 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/klog/v2"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 // historyClusterStateRegistry is an interface mapping to clusterstate.ClusterStateRegistry methods
@@ -41,22 +43,27 @@ type historyClusterStateRegistry interface {
 // It verifies whether previously initiated scaleups reported by the ScaleUpStatusHistoryProcessor
 // have successfully completed according to ClusterStateRegistry.
 type AutoscalingStatusHistoryProcessor struct {
-	sharedData *scaleUpData
-	updatesCh  chan<- npc_status.UpdateMessage
-	observer   npc_processors.MinCapacityObserver
+	sharedData         *scaleUpData
+	updatesCh          chan<- npc_status.UpdateMessage
+	observer           npc_processors.MinCapacityObserver
+	experimentsManager experiments.Manager
 }
 
 // NewAutoscalingStatusHistoryProcessor creates a new processor.
-func NewAutoscalingStatusHistoryProcessor(sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer npc_processors.MinCapacityObserver) *AutoscalingStatusHistoryProcessor {
+func NewAutoscalingStatusHistoryProcessor(sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer npc_processors.MinCapacityObserver, experimentsManager experiments.Manager) *AutoscalingStatusHistoryProcessor {
 	return &AutoscalingStatusHistoryProcessor{
-		sharedData: sharedData,
-		updatesCh:  updatesCh,
-		observer:   observer,
+		sharedData:         sharedData,
+		updatesCh:          updatesCh,
+		observer:           observer,
+		experimentsManager: experimentsManager,
 	}
 }
 
 // Process evaluates unfinished scaleups and updates provisioned nodes counts if target size is reached.
 func (p *AutoscalingStatusHistoryProcessor) Process(context *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(p.experimentsManager) {
+		return nil
+	}
 	return p.process(context, csr, now)
 }
 

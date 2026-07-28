@@ -28,12 +28,14 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/validator/conditions"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 const emptyConfig = ""
@@ -186,7 +188,7 @@ func TestValidateDefaultCrd(t *testing.T) {
 				WithAutoprovisioningDefaultFamily(machinetypes.E2).
 				WithAutoprovisioningEnabled(true).
 				Build()
-			validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false, nil)
 			migsMap := make(map[string]*gke.GkeMig)
 			for _, mig := range tc.migs {
 				migsMap[mig.NodePoolName()] = mig
@@ -439,7 +441,7 @@ func TestLoopUpdatesConditions(t *testing.T) {
 			mockCrdLister.SetCrdLabel(testCrdLabel)
 			mockCrdLister.SetDefaultCrdName(defaultCrdName)
 			client := &fakeClient{}
-			validator, _ := NewValidator(client, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(client, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false, nil)
 			time := metav1.Now()
 			validator.loop()
 			for i := range tc.crds {
@@ -552,7 +554,7 @@ func TestAnyConditionsChanged(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithAutoprovisioningEnabled(true).
 				Build()
-			validator, _ := NewValidator(nil, nil, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(nil, nil, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, nil, false, nil)
 			assert.Equal(t, tc.wantChange, validator.anyConditionsChanged(tc.crd, tc.newConditions))
 		})
 	}
@@ -651,7 +653,12 @@ func TestRuleConditionsEmittedCorrectly(t *testing.T) {
 				Build()
 
 			updatesCh := make(chan status.UpdateMessage, 10)
-			validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true)
+			mockManager := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+				map[string]string{},
+			)
+			validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true, mockManager)
 
 			go validator.loop()
 

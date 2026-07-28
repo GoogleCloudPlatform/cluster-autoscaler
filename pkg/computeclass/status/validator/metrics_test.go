@@ -380,7 +380,7 @@ func TestLoopObservesCrdMetrics(t *testing.T) {
 
 			client := &fakeClient{}
 			mockMetricsObserver := computeclass.NewMockMetrics()
-			validator, _ := NewValidator(client, mockCrdLister, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(client, mockCrdLister, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false, nil)
 
 			validator.loop()
 
@@ -610,7 +610,7 @@ func TestObserveUnhealthinessConditionsMetrics(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockMetricsObserver := computeclass.NewMockMetrics()
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().Build()
-			validator, _ := NewValidator(nil, nil, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(nil, nil, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false, nil)
 			validator.observeUnhealthinessConditionsMetrics(tc.unhealthinessConditions)
 
 			mockMetricsObserver.AssertNumberOfCalls(t, "ObserveCrdUnhealthinessConditions", 1)
@@ -818,7 +818,7 @@ func TestLoopObservesNpcRuleMetrics(t *testing.T) {
 
 			client := &fakeClient{}
 			mockMetricsObserver := computeclass.NewMockMetrics()
-			validator, _ := NewValidator(client, mockCrdLister, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(client, mockCrdLister, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false, nil)
 
 			validator.observeRuleCountMetrics(tc.crds)
 
@@ -946,7 +946,7 @@ func TestObserveCrdHealthHandlesCorruptInput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockMetricsObserver := computeclass.NewMockMetrics()
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().Build()
-			validator, _ := NewValidator(nil, nil, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false)
+			validator, _ := NewValidator(nil, nil, provider, mockMetricsObserver, nil, nil, nil, emptyConfig, nil, false, nil)
 
 			healthConditionMap := make(map[crd.CRD]metav1.Condition)
 			for i, c := range tc.crds {

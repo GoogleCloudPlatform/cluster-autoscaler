@@ -23,8 +23,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 type mockInformer struct {
@@ -80,8 +82,13 @@ func TestSetupHistoryResetObserver_AddFunc(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			updatesCh := make(chan npc_status.UpdateMessage, 1)
 			mInformer := &mockInformer{}
+			mockManager := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+				map[string]string{},
+			)
 
-			SetupHistoryResetObserver(mInformer, updatesCh)
+			SetupHistoryResetObserver(mInformer, updatesCh, mockManager)
 			assert.NotNil(t, mInformer.handler.AddFunc, "AddFunc should be registered")
 
 			mInformer.handler.OnAdd(tc.obj, tc.isInInitialList)
@@ -165,8 +172,13 @@ func TestSetupHistoryResetObserver_UpdateFunc(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			updatesCh := make(chan npc_status.UpdateMessage, 1)
 			mInformer := &mockInformer{}
+			mockManager := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+				map[string]string{},
+			)
 
-			SetupHistoryResetObserver(mInformer, updatesCh)
+			SetupHistoryResetObserver(mInformer, updatesCh, mockManager)
 			assert.NotNil(t, mInformer.handler.UpdateFunc, "UpdateFunc should be registered")
 
 			mInformer.handler.OnUpdate(tc.oldObj, tc.newObj)

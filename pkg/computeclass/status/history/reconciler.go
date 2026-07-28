@@ -22,16 +22,21 @@ import (
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"k8s.io/client-go/tools/cache"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 )
 
 // SetupHistoryResetObserver watches for ComputeClass updates and resets scaling
 // history if the priorities list changes or CA was restarted.
-func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh chan<- npc_status.UpdateMessage) {
+func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh chan<- npc_status.UpdateMessage, manager experiments.Manager) {
 	informer.AddEventHandler(cache.ResourceEventHandlerDetailedFuncs{
 		AddFunc: func(obj interface{}, isInInitialList bool) {
+			if !computeclass.IsComputeClassEnhancedObservabilityEnabled(manager) {
+				return
+			}
 			cc, ok := obj.(*cccv1.ComputeClass)
 			if !ok {
 				return
@@ -49,6 +54,9 @@ func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh cha
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
+			if !computeclass.IsComputeClassEnhancedObservabilityEnabled(manager) {
+				return
+			}
 			oldCC, okOld := oldObj.(*cccv1.ComputeClass)
 			newCC, okNew := newObj.(*cccv1.ComputeClass)
 			if !okOld || !okNew {

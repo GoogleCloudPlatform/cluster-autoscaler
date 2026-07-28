@@ -25,11 +25,13 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/validator/conditions"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 
@@ -68,6 +70,7 @@ type validator struct {
 	updatesCh                  chan status.UpdateMessage
 	evaluator                  *conditions.Evaluator
 	enhancedCrdStatusReporting bool
+	experimentsManager         experiments.Manager
 }
 
 // NewValidator returns validator.
@@ -82,6 +85,7 @@ func NewValidator(
 	cloudConfigFile string,
 	updatesCh chan status.UpdateMessage,
 	enhancedCrdStatusReporting bool,
+	experimentsManager experiments.Manager,
 ) (*validator, error) {
 
 	evaluator := conditions.NewEvaluator(provider, reservationsPuller, localSsdSizeProvider, cloudConfigFile, lister, reservationBlocksPuller)
@@ -94,6 +98,7 @@ func NewValidator(
 		updatesCh:                  updatesCh,
 		evaluator:                  evaluator,
 		enhancedCrdStatusReporting: enhancedCrdStatusReporting,
+		experimentsManager:         experimentsManager,
 	}, nil
 }
 
@@ -182,8 +187,8 @@ func (v *validator) loop() {
 }
 
 func (v *validator) validateRules(c crd.CRD) {
-	if !v.enhancedCrdStatusReporting {
-		// Rule specific conditions are not reported when enhanced reporting is disabled.
+	if !v.enhancedCrdStatusReporting || !computeclass.IsComputeClassEnhancedObservabilityEnabled(v.experimentsManager) {
+		// Rule specific conditions are not reported when enhanced reporting or experiment is disabled.
 		return
 	}
 	for idx, rule := range c.Rules() {

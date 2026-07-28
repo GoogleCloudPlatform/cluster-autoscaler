@@ -53,7 +53,7 @@ func TestValidatorWithUpdatesChannel(t *testing.T) {
 			Build()
 
 		updatesCh := make(chan status.UpdateMessage, 10)
-		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true)
+		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true, nil)
 
 		// Execute loop
 		go validator.loop()
@@ -92,7 +92,7 @@ func TestLoopClearsStaleConditions(t *testing.T) {
 			Build()
 
 		updatesCh := make(chan status.UpdateMessage, 10)
-		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true)
+		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true, nil)
 
 		// Execute loop
 		go validator.loop()
@@ -206,7 +206,7 @@ func TestLoopHealthWithOtherComponentConditions(t *testing.T) {
 			Build()
 
 		updatesCh := make(chan status.UpdateMessage, 10)
-		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true)
+		validator, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, nil, nil, emptyConfig, updatesCh, true, nil)
 
 		// Execute loop
 		go validator.loop()

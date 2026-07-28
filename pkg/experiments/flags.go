@@ -71,6 +71,9 @@ const PodTopologySpreadNodeBasedMinCAVersionFlag = "PodTopologySpreadNodeBased::
 const ComputeClassMinCapacityEnabledFlag = "ComputeClassMinCapacity::Enabled"
 const ComputeClassMinCapacityMinCAVersionFlag = "ComputeClassMinCapacity::MinCAVersion"
 
+const ComputeClassEnhancedObservabilityEnabledFlag = "ComputeClassEnhancedObservability::Enabled"
+const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedObservability::MinCAVersion"
+
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"

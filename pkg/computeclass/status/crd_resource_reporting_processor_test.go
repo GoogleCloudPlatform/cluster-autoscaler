@@ -36,10 +36,12 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	computeclass "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	npc_rules "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 var GB int64 = 1024 * 1024 * 1024
@@ -384,6 +386,11 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 				npcCrdLister: mockCrdLister,
 				updatesCh:    resourceReportingChannel,
 				matcher:      computeclass.NewMatcher(mockCrdLister, provider),
+				experimentsManager: experiments.NewMockManagerWithOptions(
+					version.Version{},
+					map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+					map[string]string{},
+				),
 			}
 
 			// Use synctest.Test so that timestamps returned by `time.Now()` would be deterministic.

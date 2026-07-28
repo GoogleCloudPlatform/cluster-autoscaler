@@ -30,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 )
 
@@ -45,9 +46,10 @@ type machineConfigProvider interface {
 // ScaleUpStatusHistoryProcessor is responsible for recording scale-up events to the shared scaleUpData,
 // which is later used to report autoscaling status in the Node Provisioning Config.
 type ScaleUpStatusHistoryProcessor struct {
-	lister   lister.Lister
-	matcher  computeclass.Matcher
-	provider machineConfigProvider
+	lister             lister.Lister
+	matcher            computeclass.Matcher
+	provider           machineConfigProvider
+	experimentsManager experiments.Manager
 	// sharedData is the buffer where scale-up events are recorded.
 	sharedData *scaleUpData
 	updatesCh  chan<- npc_status.UpdateMessage
@@ -56,20 +58,24 @@ type ScaleUpStatusHistoryProcessor struct {
 }
 
 // NewScaleUpStatusHistoryProcessor creates a new ScaleUpStatusHistoryProcessor.
-func NewScaleUpStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer npc_processors.MinCapacityObserver) *ScaleUpStatusHistoryProcessor {
+func NewScaleUpStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer npc_processors.MinCapacityObserver, experimentsManager experiments.Manager) *ScaleUpStatusHistoryProcessor {
 	return &ScaleUpStatusHistoryProcessor{
-		lister:     lister,
-		matcher:    computeclass.NewMatcher(lister, provider),
-		provider:   provider,
-		sharedData: sharedData,
-		updatesCh:  updatesCh,
-		now:        time.Now,
-		observer:   observer,
+		lister:             lister,
+		matcher:            computeclass.NewMatcher(lister, provider),
+		provider:           provider,
+		sharedData:         sharedData,
+		updatesCh:          updatesCh,
+		now:                time.Now,
+		observer:           observer,
+		experimentsManager: experimentsManager,
 	}
 }
 
 func (p *ScaleUpStatusHistoryProcessor) Process(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	if p.sharedData == nil || scaleUpStatus == nil {
+		return
+	}
+	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(p.experimentsManager) {
 		return
 	}
 

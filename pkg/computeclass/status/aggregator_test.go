@@ -17,12 +17,15 @@ package status
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	ctrl_client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -134,7 +137,12 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 			mockLister := lister.NewMockCrdLister(tc.crds)
 			mockLister.SetCrdLabel(testCrdLabel)
 
-			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), newFakeStatusClient())
+			mgr := experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+				map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
+			)
+			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), newFakeStatusClient(), mgr)
 			if tc.setup != nil {
 				crdObj, _ := mockLister.Crd(tc.msgId.CRDLabel, tc.msgId.CRDName)
 				if crdObj != nil {
@@ -156,4 +164,80 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAggregator_ExperimentEnabledVsDisabled(t *testing.T) {
+	testCrd := crd.NewTestCrd(
+		crd.WithLabel("test-label"),
+		crd.WithName("test-crd"),
+	)
+	mockLister := lister.NewMockCrdLister([]crd.CRD{testCrd})
+	mockLister.SetCrdLabel("test-label")
+
+	t.Run("experiment disabled - ignores updates", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			inputCh := make(chan UpdateMessage, 10)
+			mgr := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: false},
+				map[string]string{},
+			)
+			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr)
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			go aggregator.Start(ctx)
+
+			crdId := CRDId{CRDName: "test-crd", CRDLabel: "test-label"}
+			inputCh <- UpdateMessage{
+				Id: crdId,
+				Mutate: func(s crd.CRDStatus) {
+					// mutating status
+				},
+			}
+
+			// Wait for inputCh processing, then stop aggregator loop completely
+			synctest.Wait()
+			cancel()
+			synctest.Wait()
+
+			assert.Empty(t, aggregator.dirtySet)
+			assert.Empty(t, aggregator.statusMap)
+		})
+	})
+
+	t.Run("experiment enabled - processes updates", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			inputCh := make(chan UpdateMessage, 10)
+			mgr := experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+				map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
+			)
+			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr)
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			go aggregator.Start(ctx)
+
+			crdId := CRDId{CRDName: "test-crd", CRDLabel: "test-label"}
+			inputCh <- UpdateMessage{
+				Id: crdId,
+				Mutate: func(s crd.CRDStatus) {
+					// mutating status
+					s.UpdateConditions([]metav1.Condition{{
+						Type: "Ready", Status: metav1.ConditionTrue,
+					}})
+				},
+			}
+
+			// Wait for inputCh processing, then stop aggregator loop completely
+			synctest.Wait()
+			cancel()
+			synctest.Wait()
+
+			assert.True(t, aggregator.dirtySet[crdId])
+			assert.NotNil(t, aggregator.statusMap[crdId])
+		})
+	})
 }

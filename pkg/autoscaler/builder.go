@@ -728,7 +728,7 @@ func (b *Builder) Build(
 			}
 		}
 
-		aggregator := status.NewAggregator(b.npcCrdClient, b.npcCrdLister, cccStatusUpdatesCh, ctrClient)
+		aggregator := status.NewAggregator(b.npcCrdClient, b.npcCrdLister, cccStatusUpdatesCh, ctrClient, experimentsManager)
 		go aggregator.Start(bgContext)
 	}
 
@@ -740,7 +740,7 @@ func (b *Builder) Build(
 	}
 
 	if autoscalingOptions.EnhancedCrdStatusReporting {
-		cc_history.SetupHistoryResetObserver(cccInformer, cccStatusUpdatesCh)
+		cc_history.SetupHistoryResetObserver(cccInformer, cccStatusUpdatesCh, experimentsManager)
 	}
 
 	var minCapacityObserver cc_processors.MinCapacityObserver
@@ -776,6 +776,7 @@ func (b *Builder) Build(
 		autoscalingOptions.CloudConfig,
 		cccStatusUpdatesCh,
 		autoscalingOptions.EnhancedCrdStatusReporting,
+		experimentsManager,
 	)
 	if err != nil {
 		klog.Errorf("Cannot create NPC/CCC Crd Validator. Error: %v", err)

@@ -32,24 +32,27 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 // CrdResourceReportingProcessor is responsible for updating CRD status with the amounts of resources allocated to each CRD rule.
 type CrdResourceReportingProcessor struct {
-	npcCrdLister npc_lister.Lister
-	updatesCh    chan UpdateMessage
-	matcher      computeclass.Matcher
+	npcCrdLister       npc_lister.Lister
+	updatesCh          chan UpdateMessage
+	matcher            computeclass.Matcher
+	experimentsManager experiments.Manager
 }
 
 // NewNodeGroupResourceReportingProcessor returns a new instance of NodeGroupResourceReportingProcessor.
 // npcCrdLister is used to list CRDs and find a CRD matching a given node group.
 // updatesCh is a channel where resources (requested, available, used by pods) will be reported by this processor.
 // matcher is used to find a rule matching a given node group and CRD.
-func NewCrdResourceReportingProcessor(npcCrdLister npc_lister.Lister, updatesCh chan UpdateMessage, matcher computeclass.Matcher) *CrdResourceReportingProcessor {
+func NewCrdResourceReportingProcessor(npcCrdLister npc_lister.Lister, updatesCh chan UpdateMessage, matcher computeclass.Matcher, experimentsManager experiments.Manager) *CrdResourceReportingProcessor {
 	return &CrdResourceReportingProcessor{
-		npcCrdLister: npcCrdLister,
-		updatesCh:    updatesCh,
-		matcher:      matcher,
+		npcCrdLister:       npcCrdLister,
+		updatesCh:          updatesCh,
+		matcher:            matcher,
+		experimentsManager: experimentsManager,
 	}
 }
 
@@ -83,6 +86,10 @@ func ReportingUnitsForResource(resourceName apiv1.ResourceName) crd.ResourceUnit
 
 // Process calculates resources pertinent to each CRD rule and sends these data through the updatesCh channel.
 func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, _ time.Time) error {
+	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(m.experimentsManager) {
+		return nil
+	}
+
 	crds, err := m.npcCrdLister.ListCrds()
 	if err != nil {
 		return fmt.Errorf("failed to list CRDs: %w", err)

@@ -656,14 +656,14 @@ func setUpProcessors(
 	var crdResourcesReportingProcessor *npc_status.CrdResourceReportingProcessor
 	if options.EnhancedCrdStatusReporting && updatesCh != nil {
 		sharedScaleUpData := history.NewScaleUpData()
-		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(npcCrdLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver)
-		crdResourcesReportingProcessor = npc_status.NewCrdResourceReportingProcessor(npcCrdLister, updatesCh, computeclass.NewMatcher(npcCrdLister, provider))
+		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(npcCrdLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
+		crdResourcesReportingProcessor = npc_status.NewCrdResourceReportingProcessor(npcCrdLister, updatesCh, computeclass.NewMatcher(npcCrdLister, provider), experimentsManager)
 		if err := scaleUpProcessorChain.AddProcessor(crdHistoryProcessor); err != nil {
 			return nil, err
 		}
-		crdStatusHistoryProcessor = history.NewAutoscalingStatusHistoryProcessor(sharedScaleUpData, updatesCh, minCapacityObserver)
+		crdStatusHistoryProcessor = history.NewAutoscalingStatusHistoryProcessor(sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
 
-		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(npcCrdLister, provider, updatesCh)
+		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(npcCrdLister, provider, updatesCh, experimentsManager)
 		scaleDownProcessorChain.AddProcessor(crdScaleDownHistoryProcessor)
 	}
 

@@ -300,7 +300,7 @@ func TestAutoscalingStatusHistoryProcessor(t *testing.T) {
 
 			updatesCh := make(chan npc_status.UpdateMessage, 10)
 
-			processor := NewAutoscalingStatusHistoryProcessor(sharedData, updatesCh, nil)
+			processor := NewAutoscalingStatusHistoryProcessor(sharedData, updatesCh, nil, nil)
 
 			var nodeGroups []cloudprovider.NodeGroup
 			for nodeGroupId, deltas := range tc.unfinishedScaleUps {
@@ -488,7 +488,7 @@ func TestAutoscalingStatusHistoryProcessor_Conditions(t *testing.T) {
 			})
 
 			updatesCh := make(chan npc_status.UpdateMessage, 10)
-			processor := NewAutoscalingStatusHistoryProcessor(sharedData, updatesCh, nil)
+			processor := NewAutoscalingStatusHistoryProcessor(sharedData, updatesCh, nil, nil)
 
 			mockCsr := &MockClusterStateRegistry{
 				nodeGroupsAtTarget: map[string]bool{"nodepool-1": true}, // Trigger finish

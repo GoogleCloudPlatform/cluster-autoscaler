@@ -24,10 +24,12 @@ import (
 	scaledownstatus "k8s.io/autoscaler/cluster-autoscaler/core/scaledown/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	ctrl_client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -220,7 +222,8 @@ func TestScaleDownStatusHistoryProcessor(t *testing.T) {
 			mockProvider.On("IsAutopilotEnabled").Return(false)
 
 			updatesCh := make(chan status.UpdateMessage, 100)
-			processor := NewScaleDownStatusHistoryProcessor(mockLister, mockProvider, updatesCh)
+			mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+			processor := NewScaleDownStatusHistoryProcessor(mockLister, mockProvider, updatesCh, mockManager)
 			processor.now = func() time.Time { return time.Unix(0, 0) }
 
 			// Initialize the persistent fake statuses
@@ -305,7 +308,8 @@ func TestScaleDownStatusHistoryProcessor_CleanupStalePendingDeletes(t *testing.T
 	mockProvider.On("IsAutopilotEnabled").Return(false)
 
 	updatesCh := make(chan status.UpdateMessage, 10)
-	processor := NewScaleDownStatusHistoryProcessor(mockLister, mockProvider, updatesCh)
+	mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+	processor := NewScaleDownStatusHistoryProcessor(mockLister, mockProvider, updatesCh, mockManager)
 
 	nowTime := time.Unix(0, 0)
 	processor.now = func() time.Time { return nowTime }

@@ -30,11 +30,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
 func TestScaleUpStatusHistoryProcessor(t *testing.T) {
@@ -43,14 +45,49 @@ func TestScaleUpStatusHistoryProcessor(t *testing.T) {
 	testCrdType := "TEST"
 
 	testCases := []struct {
-		name            string
-		crds            []crd.CRD
-		scaleUpStatus   *status.ScaleUpStatus
-		initialScaleUps map[string][]ScaleUpDelta
-		expectDeltas    map[string]map[string]int // Map of nodegroup -> CrdName -> AddedNodes
+		name               string
+		crds               []crd.CRD
+		scaleUpStatus      *status.ScaleUpStatus
+		initialScaleUps    map[string][]ScaleUpDelta
+		expectDeltas       map[string]map[string]int // Map of nodegroup -> CrdName -> AddedNodes
+		experimentsManager experiments.Manager
 	}{
 		{
 			name:         "no scaleup info",
+			expectDeltas: nil,
+		},
+		{
+			name: "experiment disabled - does not register to shared data",
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithName(defaultTestCrd),
+					crd.WithCrdType(testCrdType),
+					crd.WithRules([]rules.Rule{
+						rules.NewRule(rules.WithNodePoolsRule([]string{"nodepool-1"})),
+					}),
+					crd.WithScaleUpAnyway()),
+			},
+			scaleUpStatus: &status.ScaleUpStatus{
+				Result: status.ScaleUpSuccessful,
+				ScaleUpInfos: []nodegroupset.ScaleUpInfo{
+					{
+						Group: gke.NewTestGkeMigBuilder().
+							SetNodePoolName("nodepool-1").
+							SetGceRefName("nodepool-1-mig").
+							SetSpec(&gkeclient.NodePoolSpec{
+								Labels: map[string]string{testCrdLabel: defaultCrdName()},
+							}).Build(),
+						CurrentSize: 3,
+						NewSize:     7,
+						MaxSize:     10,
+					},
+				},
+			},
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: false},
+				map[string]string{},
+			),
 			expectDeltas: nil,
 		},
 		{
@@ -319,7 +356,11 @@ func TestScaleUpStatusHistoryProcessor(t *testing.T) {
 					}
 				}
 			}
-			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, nil, nil)
+			manager := tc.experimentsManager
+			if manager == nil {
+				manager = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+			}
+			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, nil, nil, manager)
 
 			processor.Process(nil, tc.scaleUpStatus)
 
@@ -560,7 +601,8 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 
 			updatesCh := make(chan npc_status.UpdateMessage, 10)
 			sharedData := NewScaleUpData()
-			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, updatesCh, nil)
+			mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, updatesCh, nil, mockManager)
 			processor.now = func() time.Time { return now }
 
 			processor.Process(nil, scaleUpStatus)
@@ -805,7 +847,8 @@ func TestScaleUpStatusHistoryProcessor_ProcessMinCapacity(t *testing.T) {
 			mockProvider := NewMockCloudProvider()
 			mockProvider.On("IsAutopilotEnabled").Return(false)
 
-			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, nil, mockObserver)
+			mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, nil, mockObserver, mockManager)
 
 			for _, want := range tc.wantDecisions {
 				mockObserver.On("OnScaleUpDecision", want.ccName, want.ruleIdx, mock.AnythingOfType("time.Time")).Return()

@@ -19,10 +19,12 @@ import (
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	ctrClient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -34,23 +36,25 @@ const (
 
 // Aggregator is responsible for aggregating status updates for CRDs and periodically applying them.
 type Aggregator struct {
-	client    client.Client
-	lister    lister.Lister
-	dirtySet  map[CRDId]bool
-	statusMap map[CRDId]crd.CRDStatus
-	inputCh   chan UpdateMessage
-	ctrClient ctrClient.Client
+	client             client.Client
+	lister             lister.Lister
+	dirtySet           map[CRDId]bool
+	statusMap          map[CRDId]crd.CRDStatus
+	inputCh            chan UpdateMessage
+	ctrClient          ctrClient.Client
+	experimentsManager experiments.Manager
 }
 
 // NewAggregator creates a new Aggregator.
-func NewAggregator(client client.Client, lister lister.Lister, inputCh chan UpdateMessage, ctrClient ctrClient.Client) *Aggregator {
+func NewAggregator(client client.Client, lister lister.Lister, inputCh chan UpdateMessage, ctrClient ctrClient.Client, experimentsManager experiments.Manager) *Aggregator {
 	return &Aggregator{
-		client:    client,
-		lister:    lister,
-		dirtySet:  make(map[CRDId]bool),
-		statusMap: make(map[CRDId]crd.CRDStatus),
-		inputCh:   inputCh,
-		ctrClient: ctrClient,
+		client:             client,
+		lister:             lister,
+		dirtySet:           make(map[CRDId]bool),
+		statusMap:          make(map[CRDId]crd.CRDStatus),
+		inputCh:            inputCh,
+		ctrClient:          ctrClient,
+		experimentsManager: experimentsManager,
 	}
 }
 
@@ -65,6 +69,9 @@ func (a *Aggregator) Start(ctx context.Context) {
 	for {
 		select {
 		case msg := <-a.inputCh:
+			if !computeclass.IsComputeClassEnhancedObservabilityEnabled(a.experimentsManager) {
+				continue
+			}
 			a.processMessage(msg)
 
 		case <-ticker.C:
@@ -118,6 +125,9 @@ func (a *Aggregator) cleanup() {
 }
 
 func (a *Aggregator) makeUpdates(ctx context.Context) {
+	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(a.experimentsManager) {
+		return
+	}
 	klog.V(4).Infof("Aggregator flushing updates for %d CRDs.", len(a.dirtySet))
 	for crdId := range a.dirtySet {
 		crd, err := a.lister.Crd(crdId.CRDLabel, crdId.CRDName)

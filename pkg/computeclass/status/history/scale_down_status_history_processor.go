@@ -25,6 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 )
 
@@ -40,27 +41,32 @@ type pendingDeleteInfo struct {
 
 // ScaleDownStatusHistoryProcessor collects information related to ScalingEventsHistory - ConsolidatedNodesCount.
 type ScaleDownStatusHistoryProcessor struct {
-	lister         lister.Lister
-	matcher        computeclass.Matcher
-	updatesCh      chan<- status.UpdateMessage
-	pendingDeletes map[string]pendingDeleteInfo
-	now            func() time.Time
+	lister             lister.Lister
+	matcher            computeclass.Matcher
+	updatesCh          chan<- status.UpdateMessage
+	experimentsManager experiments.Manager
+	pendingDeletes     map[string]pendingDeleteInfo
+	now                func() time.Time
 }
 
 // NewScaleDownStatusHistoryProcessor creates a new ScaleDownStatusHistoryProcessor.
-func NewScaleDownStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, updatesCh chan<- status.UpdateMessage) *ScaleDownStatusHistoryProcessor {
+func NewScaleDownStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, updatesCh chan<- status.UpdateMessage, experimentsManager experiments.Manager) *ScaleDownStatusHistoryProcessor {
 	return &ScaleDownStatusHistoryProcessor{
-		lister:         lister,
-		matcher:        computeclass.NewMatcher(lister, provider),
-		updatesCh:      updatesCh,
-		pendingDeletes: make(map[string]pendingDeleteInfo),
-		now:            time.Now,
+		lister:             lister,
+		matcher:            computeclass.NewMatcher(lister, provider),
+		updatesCh:          updatesCh,
+		experimentsManager: experimentsManager,
+		pendingDeletes:     make(map[string]pendingDeleteInfo),
+		now:                time.Now,
 	}
 }
 
 // Process analyses the scale down status and updates ConsolidatedNodesCount.
 func (p *ScaleDownStatusHistoryProcessor) Process(context *context.AutoscalingContext, scaleDownStatus *scaledownstatus.ScaleDownStatus) {
 	if scaleDownStatus == nil || p.updatesCh == nil {
+		return
+	}
+	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(p.experimentsManager) {
 		return
 	}
 

@@ -24,3 +24,12 @@ func IsComputeClassMinCapacityEnabled(manager experiments.Manager) bool {
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassMinCapacityEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassMinCapacityMinCAVersionFlag, true)
 }
+
+// IsComputeClassEnhancedObservabilityEnabled returns true if the ComputeClass enhanced observability feature is enabled.
+func IsComputeClassEnhancedObservabilityEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassEnhancedObservabilityEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag, true)
+}
