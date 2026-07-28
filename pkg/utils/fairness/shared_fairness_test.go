@@ -44,8 +44,8 @@ func TestSharedAdmit(t *testing.T) {
 				test.BuildTestPod("p1", 1, 1000),
 			},
 			maxLoops: 5,
-			want1:    []bool{true, false, false, false, false, false, false, false, false, false, true},
-			want2:    []bool{false, false, false, false, false, true, false, false, false, false, false},
+			want1:    []bool{false, false, false, false, true, false, false, false, false, false, false},
+			want2:    []bool{false, false, false, false, false, false, false, false, false, true, false},
 		},
 	}
 	for _, tc := range testCases {
@@ -85,7 +85,7 @@ func TestSharedAdmitSingleProcessor(t *testing.T) {
 				test.BuildTestPod("p1", 1, 1000),
 			},
 			maxLoops: 5,
-			want:     []bool{true, false, false, false, false, true},
+			want:     []bool{false, false, false, false, true, false},
 		},
 		{
 			name: "pending pod unhelpable",
@@ -93,7 +93,7 @@ func TestSharedAdmitSingleProcessor(t *testing.T) {
 				unhelpablePod("p1"),
 			},
 			maxLoops: 10, // admit every 10/2==5 loops
-			want:     []bool{true, false, false, false, false, true, false, false, false, false, true},
+			want:     []bool{false, false, false, false, true, false, false, false, false, true, false},
 		},
 	}
 	for _, tc := range testCases {
