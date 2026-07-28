@@ -129,6 +129,13 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{ScaleUpSimulationForSkippedNodeGroupsEnabled: true}},
 			wantRestart:                 true,
 		},
+		{
+			testName:                    "GracefulDegradationEnabled_field_is_tracked",
+			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{GracefulDegradationEnabled: true}},
+			experimentValues:            map[string]bool{experiments.GracefulDegradationEnabledFlag: false},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{GracefulDegradationEnabled: false}}, // Assert that the field value is modified.
+			wantRestart:                 true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()

@@ -1136,6 +1136,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.FastpathBinpackingFeatureName, "Fastpath Binpacking", options.FastpathBinpackingEnabled)
 	logAndRecordFeatureMetric(internalmetrics.IncreasedMaxNodesPerScaleUpFeatureName, "IncreasedMaxNodesPerScaleUp", options.MaxNodesPerScaleUp > optstracking.DecreasedMaxNodesPerScaleUp)
 	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
+	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

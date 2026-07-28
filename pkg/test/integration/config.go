@@ -97,7 +97,8 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 	GCEOptions: ossconfig.GCEOptions{
 		LocalSSDDiskSizeProvider: localssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 	},
-	ScaleDownEnabled: true,
+	ScaleDownEnabled:           true,
+	PendingPodsBatchingTimeout: 4 * time.Minute,
 }
 
 // DefaultCluster provides a standard skeleton GKE regional cluster.

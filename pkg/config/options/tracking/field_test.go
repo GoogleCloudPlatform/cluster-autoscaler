@@ -50,6 +50,12 @@ func TestTrackedFieldSetValue(t *testing.T) {
 		fastpathBinpackingStringExperimentFlags = map[string]string{
 			minCAVersion: experiments.FastpathBinpackingMinCAVersionFlag,
 		}
+		gracefulDegradationBoolExperimentFlags = map[string]string{
+			enabled: experiments.GracefulDegradationEnabledFlag,
+		}
+		gracefulDegradationStringExperimentFlags = map[string]string{
+			minCAVersion: experiments.GracefulDegradationMinCAVersionFlag,
+		}
 	)
 
 	for _, trackedFieldTc := range []struct {
@@ -94,6 +100,18 @@ func TestTrackedFieldSetValue(t *testing.T) {
 			},
 			getFlag: func(opts internalopts.AutoscalingOptions) bool {
 				return opts.FastpathBinpackingEnabled
+			},
+		},
+		{
+			name:                  "GracefulDegradationEnabled",
+			field:                 gracefulDegradationEnabledField,
+			boolExperimentFlags:   gracefulDegradationBoolExperimentFlags,
+			stringExperimentFlags: gracefulDegradationStringExperimentFlags,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.GracefulDegradationEnabled = value
+			},
+			getFlag: func(opts internalopts.AutoscalingOptions) bool {
+				return opts.GracefulDegradationEnabled
 			},
 		},
 	} {
@@ -282,6 +300,13 @@ func TestTrackedFieldValueEqual(t *testing.T) {
 			field: fastpathBinpackingEnabledField,
 			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
 				opts.FastpathBinpackingEnabled = value
+			},
+		},
+		{
+			name:  "GracefulDegradationEnabled",
+			field: gracefulDegradationEnabledField,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.GracefulDegradationEnabled = value
 			},
 		},
 	} {

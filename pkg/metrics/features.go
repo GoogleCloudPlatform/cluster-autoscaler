@@ -34,6 +34,8 @@ const (
 	IncreasedMaxNodesPerScaleUpFeatureName = "increased_max_nodes_per_scale_up"
 	// IncreasedNapMaxNodesFeatureName is the name of the IncreasedNapMaxNodes feature.
 	IncreasedNapMaxNodesFeatureName = "increased_nap_max_nodes"
+	// GracefulDegradationFeatureName is the name of the graceful degradation feature.
+	GracefulDegradationFeatureName = "graceful_degradation_enabled"
 )
 
 var featureEnabled = k8smetrics.NewGaugeVec(

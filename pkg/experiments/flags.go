@@ -194,3 +194,6 @@ const ScaleUpSimulationForSkippedNodeGroupsEnabledFlag = "ScaleUpSimulationForSk
 
 const DaemonSetMutationEnabledFlag = "DaemonSetMutation::Enabled"
 const DaemonSetMutationMinCAVersionFlag = "DaemonSetMutation::MinCAVersion"
+
+const GracefulDegradationEnabledFlag = "GracefulDegradation::Enabled"
+const GracefulDegradationMinCAVersionFlag = "GracefulDegradation::MinCAVersion"
