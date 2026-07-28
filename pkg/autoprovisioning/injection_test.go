@@ -47,6 +47,7 @@ import (
 	kube_util "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	"k8s.io/autoscaler/cluster-autoscaler/utils/units"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/utils/ptr"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
@@ -69,6 +70,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 )
@@ -7155,6 +7157,9 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			project:     "12345",
 			machineType: "n2-standard-2",
 			zone:        "us-central1-a",
+			placementGroup: placement.Spec{
+				Policy: "test-policy",
+			},
 		},
 		systemLabels: map[string]string{},
 	}
@@ -7178,10 +7183,15 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 	resReqSpecificAffinity.machineSpec.ExplicitMachineTypes = []string{"n2-standard-2"}
 
 	resReqSpecificAffinityPlacementGroup := resReqSpecificAffinity
-	resReqSpecificAffinityPlacementGroup.placementGroup = placement.Spec{
+	placementGroup := placement.Spec{
 		Policy:  "test-policy",
 		GroupId: "placement-group-id",
 	}
+	resReqSpecificAffinityPlacementGroup.placementGroup = placementGroup
+	resReqSpecificAffinityPlacementGroup.reservation.placementGroup = placementGroup
+
+	resReqSpecificAffinityPlacementGroupNoReservationPolicy := resReqSpecificAffinityPlacementGroup
+	resReqSpecificAffinityPlacementGroupNoReservationPolicy.reservation.placementGroup = placement.Spec{}
 
 	resReqAny := resReqWithoutMatch
 	resReqAny.pods = []*apiv1.Pod{resAnyPod}
@@ -7580,7 +7590,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			reservations:           []*gce_api.Reservation{res1},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
-					copyReqsFrom(resReqSpecificAffinityPlacementGroup),
+					copyReqsFrom(resReqSpecificAffinityPlacementGroupNoReservationPolicy),
 					withPods([]*apiv1.Pod{resPodPlacementPolicyFromLabels})),
 			},
 		},
@@ -8524,13 +8534,12 @@ func TestLinuxNodeConfigGenerator_UpdateParameters(t *testing.T) {
 	}
 }
 
-func TestReservationGenerator_UpdateRequirements(t *testing.T) {
+func TestReservationGenerator_updateRequirements(t *testing.T) {
 	projectId := "gke-staging-reserved-tpu-1"
 	sharedProject := "gke-staging-reserved-tpu-2"
-	rsv1 := reservations.BuildAggregateReservationWithSpecificRequired(projectId, "cloudtpu-a", "us-central2-a", "")
-	rsv2 := reservations.BuildAggregateReservationWithSpecificRequired(projectId, "cloudtpu-b", "us-central2-b", "")
-	rsv2.Id = 1
-	rsv3 := reservations.BuildAggregateReservationWithSpecificRequired(sharedProject, "cloudtpu-c", "us-central2-b", "")
+	rsv1 := reservations.New("cloudtpu-a", "us-central2-a", reservations.WithProject(projectId), reservations.WithAggregate("us-central2-a", ""))
+	rsv2 := reservations.New("cloudtpu-b", "us-central2-b", reservations.WithProject(projectId), reservations.WithAggregate("us-central2-b", ""))
+	rsv3 := reservations.New("cloudtpu-c", "us-central2-b", reservations.WithProject(sharedProject), reservations.WithAggregate("us-central2-b", ""))
 
 	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
 	rsv2Key := gceclient.GetReservationRefFromReservation(*rsv2)
@@ -8651,12 +8660,111 @@ func TestReservationGenerator_UpdateRequirements(t *testing.T) {
 				projectId,
 				experiments.NewMockManager(),
 				blocksPuller)
-			err := generator.UpdateRequirements(tc.ngReq, tc.podReq, machinetypes.GpuRequest{}, TpuRequest{})
+			_, err := generator.generateRequirements(*tc.ngReq, tc.podReq)
 			if tc.expectedErr != nil {
 				assert.Error(t, err)
 				assert.Equal(t, err, tc.expectedErr)
 			} else {
 				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
+	const (
+		projectId       = "gke-test-project"
+		reservationName = "res-group"
+	)
+
+	for desc, tc := range map[string]struct {
+		ngReq           nodeGroupRequirements
+		reservations    []*gce_api.Reservation
+		wantErr         error
+		wantNgReqsCount int
+		wantZones       []string
+	}{
+		"compatible_reservations_in_multiple_zones": {
+			ngReq: nodeGroupRequirements{
+				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
+			},
+			reservations: []*gce_api.Reservation{
+				reservations.New(reservationName, "us-central1-a"),
+				reservations.New(reservationName, "us-central1-b")},
+			wantNgReqsCount: 1,
+			wantZones:       []string{"us-central1-a", "us-central1-b"},
+		},
+		"incompatible_reservations_across_specified_zones": {
+			ngReq: nodeGroupRequirements{
+				machineSpec:    machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
+				specifiedZones: []string{"us-central1-a", "us-central1-b"},
+			},
+			reservations: []*gce_api.Reservation{
+				reservations.New(reservationName, "us-central1-a"),
+				reservations.New(reservationName, "us-central1-b", reservations.WithMachine("n2-standard-4"))},
+			wantErr: reservations.NewErrUnusableReservation(
+				gceclient.ReservationRef{Name: "res-group", Project: projectId},
+				"Reservations in specified zones are incompatible and must fit into a single node pool",
+			),
+		},
+		"incompatible_reservations_without_specified_zones_return_multiple_shards": {
+			ngReq: nodeGroupRequirements{
+				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
+			},
+			reservations: []*gce_api.Reservation{
+				reservations.New(reservationName, "us-central1-a"),
+				reservations.New(reservationName, "us-central1-b", reservations.WithMachine("n2-standard-4"))},
+			wantNgReqsCount: 2,
+		},
+		"missing_reservation_in_specified_zone": {
+			ngReq: nodeGroupRequirements{
+				machineSpec:    machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
+				specifiedZones: []string{"us-central1-a", "us-central1-b"},
+			},
+			reservations: []*gce_api.Reservation{reservations.New(reservationName, "us-central1-a")},
+			wantErr: reservations.NewErrUnusableReservation(
+				gceclient.ReservationRef{Name: "res-group", Project: projectId},
+				"Reservation is missing in specified zone us-central1-b",
+			),
+		},
+		"multiple_invalid_reservations_return_aggregated_error": {
+			ngReq: nodeGroupRequirements{
+				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
+			},
+			reservations: []*gce_api.Reservation{
+				reservations.NewAny(reservationName, "us-central1-a"),
+				reservations.New(reservationName, "us-central1-b", reservations.WithAggregate("us-central1-b", "")),
+			},
+			wantErr: reservations.NewErrUnusableReservation(
+				gceclient.ReservationRef{Name: "res-group", Project: projectId},
+				"in zone us-central1-a: SpecificReservationRequired is not enabled so reservation cannot be specifically targeted for consumption; in zone us-central1-b: Unable to consume aggregate reservation for non-TPU workloads",
+			),
+		},
+	} {
+		t.Run(desc, func(t *testing.T) {
+			version, err := version.FromString("1.36.0")
+			assert.NoError(t, err)
+			reservationsPuller := reservations.NewTestingReservationsPuller(projectId, []string{}, tc.reservations)
+			generator := NewReservationGenerator(
+				reservationsPuller,
+				ReservationFlags{
+					SpecificTypeReservationMatchEnabled: true,
+					SpecificTypeReservationsEnabled:     true,
+				},
+				projectId,
+				experiments.NewManager(version, fake.NewEvaluator(map[string]bool{}, map[string]string{})),
+				nil)
+
+			results, err := generator.GenerateNodeGroupRequirements([]nodeGroupRequirements{tc.ngReq}, &podrequirements.Requirements{
+				LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
+					gkelabels.ReservationNameLabel:    podrequirements.NewValues(reservationName),
+					gkelabels.ReservationProjectLabel: podrequirements.NewValues(projectId),
+				}),
+			})
+			assert.Equal(t, tc.wantErr, err)
+			assert.Len(t, results, tc.wantNgReqsCount)
+			if tc.wantNgReqsCount > 0 {
+				assert.ElementsMatch(t, tc.wantZones, results[0].specifiedZones)
 			}
 		})
 	}

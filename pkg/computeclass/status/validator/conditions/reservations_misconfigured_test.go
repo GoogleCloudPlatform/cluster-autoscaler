@@ -99,7 +99,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -132,7 +132,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -165,7 +165,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -198,7 +198,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ false,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -210,7 +210,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "any affinity reservation cannot be consumed"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: any affinity reservation cannot be consumed"),
 		},
 		{
 			name: "Reservation found, reservation has different SSD type, unusable",
@@ -232,7 +232,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -244,7 +244,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "local SSD mismatch, requested 750 GB NVME SSD, but it's missing from reservation"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: local SSD mismatch, requested 750 GB NVME SSD, but it's missing from reservation"),
 		},
 		{
 			name: "Reservation found, reservation has different SSD size, unusable",
@@ -266,7 +266,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -278,7 +278,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "local SSD mismatch, requested 750 GB NVME SSD, reservation has 9999999 GB NVME SSD"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: local SSD mismatch, requested 750 GB NVME SSD, reservation has 9999999 GB NVME SSD"),
 		},
 		{
 			name: "Reservation found, reservation has different accelerator type, unusable",
@@ -300,7 +300,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators("foobar", existingGpuCount),
@@ -312,7 +312,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "accelerator mismatch, requested 2 chips of nvidia-a100-80gb, but it's missing from reservation"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: accelerator mismatch, requested 2 chips of nvidia-a100-80gb, but it's missing from reservation"),
 		},
 		{
 			name: "Reservation found, reservation has different accelerator count, unusable",
@@ -334,7 +334,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, 9999999),
@@ -346,7 +346,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "accelerator mismatch, requested 2 chips of nvidia-a100-80gb, reservation has 9999999 chips of nvidia-a100-80gb"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: accelerator mismatch, requested 2 chips of nvidia-a100-80gb, reservation has 9999999 chips of nvidia-a100-80gb"),
 		},
 		{
 			name: "Reservation found, different machine type, unusable condition",
@@ -364,7 +364,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					nil,
@@ -376,7 +376,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("machine type mismatch, requested %v, reservation has %v", existingMachineType, machineTypeWithGpu)),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("in zone zone-a: machine type mismatch, requested %v, reservation has %v", existingMachineType, machineTypeWithGpu)),
 		},
 		{
 			name: "Reservation found, different custom machine type, unusable condition",
@@ -394,7 +394,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					customMachineType1,
 					"minCpuPlatform",
 					nil,
@@ -406,7 +406,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("machine type mismatch, requested %v, reservation has %v", customMachineType2, customMachineType1)),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("in zone zone-a: machine type mismatch, requested %v, reservation has %v", customMachineType2, customMachineType1)),
 		},
 		{
 			name: "Reservation found, different machine family, unusable condition",
@@ -424,7 +424,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					nil,
@@ -436,7 +436,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "machine family mismatch: requested N2, reservation has a2"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: machine family mismatch: requested N2, reservation has a2"),
 		},
 		{
 			name: "Reservation with custom machine type found, different machine family, unusable condition",
@@ -454,7 +454,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					customMachineType2,
 					"minCpuPlatform",
 					nil,
@@ -466,7 +466,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "machine family mismatch: requested N2, reservation has n2d"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: machine family mismatch: requested N2, reservation has n2d"),
 		},
 		{
 			name: "Multiple reservations, one is missing",
@@ -492,7 +492,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -540,7 +540,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -570,7 +570,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					customMachineType1,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(machinetypes.NvidiaTeslaP100.Name(), existingGpuCount),
@@ -601,7 +601,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -632,7 +632,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -660,7 +660,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					nil,
@@ -690,7 +690,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -717,7 +717,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -744,7 +744,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -771,7 +771,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -781,7 +781,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 				),
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
-				{Project: localReservationProject, Zone: "zone", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
+				{Project: localReservationProject, Zone: "zone-a", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
 			},
 			wantCondition: false,
 		},
@@ -801,7 +801,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -811,7 +811,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 				),
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
-				{Project: localReservationProject, Zone: "zone", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
+				{Project: localReservationProject, Zone: "zone-a", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
 			},
 			wantCondition: false,
 		},
@@ -835,7 +835,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					reservations.BuildReservationAccelerators(existingGpuType1, existingGpuCount),
@@ -865,7 +865,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -878,8 +878,8 @@ func TestValidateReservationsConfig(t *testing.T) {
 				{Project: localReservationProject, Zone: "zone", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
 			},
 			wantCondition: true,
-			wantReason:    ReservationBlockUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationBlockUnusableMessage, "rb0", formatReservationName("reservation1", localReservationProject)),
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: "+fmt.Sprintf(ReservationBlockUnusableMessage, "rb0", formatReservationName("reservation1", localReservationProject))),
 		},
 		{
 			name: "Reservation block not found in shared project, unusable condition",
@@ -897,7 +897,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -910,8 +910,8 @@ func TestValidateReservationsConfig(t *testing.T) {
 				{Project: localReservationProject, Zone: "zone", Name: "reservation1"}: {reservations.BuildSingleReservationBlock("rb1", 1, 0, "zone")},
 			},
 			wantCondition: true,
-			wantReason:    ReservationBlockUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationBlockUnusableMessage, "rb0", formatReservationName("reservation1", sharedReservationProject)),
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "shared-project/reservation1", "in zone zone-a: "+fmt.Sprintf(ReservationBlockUnusableMessage, "rb0", formatReservationName("reservation1", sharedReservationProject))),
 		},
 		{
 			name: "Multiple reservations, no condition",
@@ -942,7 +942,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					machineTypeWithGpu,
 					"minCpuPlatform",
 					nil,
@@ -954,7 +954,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					1,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -966,7 +966,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					2,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -1009,6 +1009,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 			reservations: []*gceapiv1.Reservation{
 				{
 					Name:                        "aggregate",
+					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
 					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
@@ -1042,6 +1043,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 			reservations: []*gceapiv1.Reservation{
 				{
 					Name:                        "aggregate",
+					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
 					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
@@ -1059,7 +1061,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "requested TPU accelerator {tpu-v4-podslice, 2x2x4, 4}, but it's missing from reservation"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "in zone zone-a: requested TPU accelerator {tpu-v4-podslice, 2x2x4, 4}, but it's missing from reservation"),
 		},
 		{
 			name: "Aggregate reservation, count mismatch, unusable condition",
@@ -1076,6 +1078,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 			reservations: []*gceapiv1.Reservation{
 				{
 					Name:                        "aggregate",
+					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
 					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
@@ -1093,7 +1096,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "requested TPU accelerator {tpu-v4-podslice, 2x2x4, 4}, but it's missing from reservation"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "in zone zone-a: requested TPU accelerator {tpu-v4-podslice, 2x2x4, 4}, but it's missing from reservation"),
 		},
 		{
 			name: "Aggregate reservation required, specific is available, unusable condition",
@@ -1113,7 +1116,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					0,
 					"READY",
 					/*specificReservationRequired=*/ true,
-					"zone",
+					"zone-a",
 					existingMachineType,
 					"minCpuPlatform",
 					nil,
@@ -1125,7 +1128,97 @@ func TestValidateReservationsConfig(t *testing.T) {
 
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
-			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "tpu requested for non aggregate reservation"),
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, formatReservationName("aggregate", ""), "in zone zone-a: tpu requested for non aggregate reservation"),
+		},
+		{
+			name: "Reservation with multiple zones specified, all compatible",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity).WithReservationZones([]string{"zone1", "zone2"})),
+						rules.WithMachineTypeRule(&existingMachineType),
+					),
+				}),
+			),
+			reservations: []*gceapiv1.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: false,
+		},
+		{
+			name: "Reservation with multiple zones specified, one missing, unusable",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity).WithReservationZones([]string{"zone1", "zone2"})),
+						rules.WithMachineTypeRule(&existingMachineType),
+					),
+				}),
+			),
+			reservations: []*gceapiv1.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: true,
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone2: reservation is missing"),
+		},
+		{
+			name: "Reservation with multiple zones specified, incompatible, unusable",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity).WithReservationZones([]string{"zone1", "zone2"})),
+						rules.WithMachineFamilyRule(&existingMachineFamily),
+					),
+				}),
+			),
+			reservations: []*gceapiv1.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
+				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: true,
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone2: incompatible with reservation in zone zone1"),
+		},
+		{
+			name: "Reservation with no zones specified, incompatible shards, usable",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity)),
+						rules.WithMachineFamilyRule(&existingMachineFamily),
+					),
+				}),
+			),
+			reservations: []*gceapiv1.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
+				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: false,
+		},
+		{
+			name: "Reservation with no zones specified, incompatible shards, one reservation unusable, want condition",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity)),
+						rules.WithMachineTypeRule(&existingMachineType),
+					),
+				}),
+			),
+			reservations: []*gceapiv1.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
+				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: true,
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("in zone zone2: machine type mismatch, requested %v, reservation has %v", existingMachineType, "n2-standard-2")),
 		},
 	}
 

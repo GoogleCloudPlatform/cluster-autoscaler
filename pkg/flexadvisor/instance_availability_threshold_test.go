@@ -54,22 +54,19 @@ func newTestMigWithAffinity(zone, machineType string, labels map[string]string, 
 
 func TestNodeLimit(t *testing.T) {
 	mig1 := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
-	rsv1 := reservations.BuildMultipleMachineReservationWithId(1, 0, 100, "n2-standard-4", "us-central1-a")
-	rsv2 := reservations.BuildMultipleMachineReservationWithId(2, 100, 300, "n2-standard-4", "us-central1-b")
-	rsv3 := reservations.NewTestReservationBuilder().
-		WithId(3).
-		WithName("a4x-rsv").
-		WithZone("us-central1-c").
-		WithMachineType("a4x-highgpu-4g").
-		WithCounts(0, 18).
-		WithSpecificReservationRequired(true).
-		WithGuestAccelerators([]*compute.AcceleratorConfig{
+	rsv1 := reservations.NewAny("", "us-central1-a", reservations.WithId(1), reservations.WithCounts(0, 100), reservations.WithMachine("n2-standard-4"))
+	rsv2 := reservations.NewAny("", "us-central1-b", reservations.WithId(2), reservations.WithCounts(100, 300), reservations.WithMachine("n2-standard-4"))
+	rsv3 := reservations.New("a4x-rsv", "us-central1-c",
+		reservations.WithId(3),
+		reservations.WithMachine("a4x-highgpu-4g"),
+		reservations.WithCounts(0, 18),
+		reservations.WithGuestAccelerators([]*compute.AcceleratorConfig{
 			{
 				AcceleratorType:  "nvidia-gb200",
 				AcceleratorCount: 4,
 			},
-		}).
-		Build()
+		}),
+	)
 
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) {

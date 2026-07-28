@@ -82,6 +82,7 @@ func BuildReservationWithSpecificReservationRequired(name string, machineType st
 				MachineType: machineType,
 			},
 		},
+		SelfLink: fmt.Sprintf("%s/%s", zone, name),
 	}
 }
 
@@ -150,31 +151,6 @@ func BuildAggregateReservation(zone string) *gce_api.Reservation {
 			VmFamily:     "VM_FAMILY_CLOUD_TPU_POD_SLICE_CT4P",
 			WorkloadType: "BATCH",
 		},
-	}
-}
-
-func BuildAggregateReservationWithSpecificRequired(project, name, zone, workloadType string) *gce_api.Reservation {
-	if workloadType == "" {
-		workloadType = tpu.WorkloadTypeUnspecified
-	}
-	return &gce_api.Reservation{
-		Name:                        name,
-		Status:                      "READY",
-		SpecificReservationRequired: true,
-		Zone:                        fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s", project, zone),
-		AggregateReservation: &gce_api.AllocationAggregateReservation{
-			VmFamily:     "VM_FAMILY_CLOUD_TPU_LITE_POD_SLICE_CT6E",
-			WorkloadType: workloadType,
-			ReservedResources: []*gce_api.AllocationAggregateReservationReservedResourceInfo{
-				{
-					Accelerator: &gce_api.AllocationAggregateReservationReservedResourceInfoAccelerator{
-						AcceleratorType:  fmt.Sprintf("projects/whatever/zones/%s/acceleratorTypes/ct6e", zone),
-						AcceleratorCount: 8,
-					},
-				},
-			},
-		},
-		SelfLink: fmt.Sprintf("projects/%s/reservations/%s", project, name),
 	}
 }
 
@@ -306,57 +282,113 @@ func (f *fakeSubBlockProvider) GetReservationSubBlocksInReservationBlock(ref gce
 	return nil, nil
 }
 
-type TestReservationBuilder struct {
-	r *gce_api.Reservation
+const (
+	DefaultProject         = "gke-test-project"
+	DefaultReservationName = "res-group"
+	DefaultMachineType     = "n2-standard-2"
+)
+
+var autoIncrementId uint64 = 1
+
+func nextId() uint64 {
+	id := autoIncrementId
+	autoIncrementId++
+	return id
 }
 
-func NewTestReservationBuilder() *TestReservationBuilder {
-	return &TestReservationBuilder{
-		r: &gce_api.Reservation{
-			Status: "READY",
-			SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-				InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{},
-			},
-		},
+type ReservationOption func(*gce_api.Reservation)
+
+func WithMachine(machineType string) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		if r.SpecificReservation != nil && r.SpecificReservation.InstanceProperties != nil {
+			r.SpecificReservation.InstanceProperties.MachineType = machineType
+		}
 	}
 }
 
-func (b *TestReservationBuilder) WithId(id uint64) *TestReservationBuilder {
-	b.r.Id = id
-	return b
+func WithId(id uint64) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		r.Id = id
+	}
 }
 
-func (b *TestReservationBuilder) WithName(name string) *TestReservationBuilder {
-	b.r.Name = name
-	return b
+func WithSpecificReservationRequired(required bool) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		r.SpecificReservationRequired = required
+	}
 }
 
-func (b *TestReservationBuilder) WithZone(zone string) *TestReservationBuilder {
-	b.r.Zone = zone
-	return b
+func WithGuestAccelerators(accelerators []*gce_api.AcceleratorConfig) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		if r.SpecificReservation != nil && r.SpecificReservation.InstanceProperties != nil {
+			r.SpecificReservation.InstanceProperties.GuestAccelerators = accelerators
+		}
+	}
 }
 
-func (b *TestReservationBuilder) WithMachineType(machineType string) *TestReservationBuilder {
-	b.r.SpecificReservation.InstanceProperties.MachineType = machineType
-	return b
+func WithAggregate(zone, workloadType string) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		if workloadType == "" {
+			workloadType = tpu.WorkloadTypeUnspecified
+		}
+		r.SpecificReservation = nil
+		r.AggregateReservation = &gce_api.AllocationAggregateReservation{
+			VmFamily:     "VM_FAMILY_CLOUD_TPU_LITE_POD_SLICE_CT6E",
+			WorkloadType: workloadType,
+			ReservedResources: []*gce_api.AllocationAggregateReservationReservedResourceInfo{
+				{
+					Accelerator: &gce_api.AllocationAggregateReservationReservedResourceInfoAccelerator{
+						AcceleratorType:  fmt.Sprintf("projects/whatever/zones/%s/acceleratorTypes/ct6e", zone),
+						AcceleratorCount: 8,
+					},
+				},
+			},
+		}
+	}
 }
 
-func (b *TestReservationBuilder) WithSpecificReservationRequired(required bool) *TestReservationBuilder {
-	b.r.SpecificReservationRequired = required
-	return b
+func WithProject(project string) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		parts := strings.Split(r.SelfLink, "/")
+		name := parts[len(parts)-1]
+
+		zoneParts := strings.Split(r.Zone, "/")
+		zone := zoneParts[len(zoneParts)-1]
+
+		r.Zone = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s", project, zone)
+		r.SelfLink = fmt.Sprintf("projects/%s/reservations/%s", project, name)
+	}
 }
 
-func (b *TestReservationBuilder) WithCounts(inUseCount, count int64) *TestReservationBuilder {
-	b.r.SpecificReservation.InUseCount = inUseCount
-	b.r.SpecificReservation.Count = count
-	return b
+func WithCounts(inUseCount, count int64) ReservationOption {
+	return func(r *gce_api.Reservation) {
+		r.SpecificReservation.InUseCount = inUseCount
+		r.SpecificReservation.Count = count
+	}
 }
 
-func (b *TestReservationBuilder) WithGuestAccelerators(accelerators []*gce_api.AcceleratorConfig) *TestReservationBuilder {
-	b.r.SpecificReservation.InstanceProperties.GuestAccelerators = accelerators
-	return b
+func New(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+	zoneURL := fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s", DefaultProject, zone)
+	r := &gce_api.Reservation{
+		Name:                        name,
+		Status:                      "READY",
+		SpecificReservationRequired: true,
+		Zone:                        zoneURL,
+		SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
+			InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
+				MachineType: DefaultMachineType,
+			},
+		},
+		Id:       nextId(),
+		SelfLink: fmt.Sprintf("projects/%s/reservations/%s", DefaultProject, name),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
 }
 
-func (b *TestReservationBuilder) Build() *gce_api.Reservation {
-	return b.r
+func NewAny(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+	opts = append([]ReservationOption{WithSpecificReservationRequired(false)}, opts...)
+	return New(name, zone, opts...)
 }

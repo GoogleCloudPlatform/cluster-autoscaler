@@ -199,7 +199,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 	specGenerators = append(specGenerators, generator)
 	nodeGroupOptionsGenerators = append(nodeGroupOptionsGenerators, generator)
 	specGenerators = append(specGenerators, computeClassGenerator)
-	nodeGroupRequirementsGenerators = append(nodeGroupRequirementsGenerators, computeClassGenerator)
+	nodeGroupRequirementsGenerators = append(nodeGroupRequirementsGenerators, computeClassGenerator, rg)
 	selfServiceGenerator := NewSelfServiceGenerator()
 	specGenerators = append(specGenerators, selfServiceGenerator)
 	podIsolationCPULabelGenerator := NewPodIsolationLabelGenerator(opts.CloudProvider)

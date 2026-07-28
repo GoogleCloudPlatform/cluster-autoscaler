@@ -39,20 +39,21 @@ type ValidatorReservationsPuller interface {
 // in the form better suitable for validator usage patterns and without sync locks.
 type ReservationsCache struct {
 	puller ValidatorReservationsPuller
-	cache  map[string]map[string]*gceapiv1.Reservation
+	// cache maps Project -> Reservation Name -> Zone -> Reservation
+	cache map[string]map[string]map[string]*gceapiv1.Reservation
 }
 
 func NewReservationsCache(puller ValidatorReservationsPuller) *ReservationsCache {
 	return &ReservationsCache{
 		puller: puller,
-		cache:  map[string]map[string]*gceapiv1.Reservation{},
+		cache:  map[string]map[string]map[string]*gceapiv1.Reservation{},
 	}
 }
 
 // PopulateForCrds fetches reservations affected by node config
 // rules in the CRDs provided and populates a cache from it.
 func (c *ReservationsCache) PopulateForCrds(crds []crd.CRD) {
-	c.cache = map[string]map[string]*gceapiv1.Reservation{}
+	c.cache = map[string]map[string]map[string]*gceapiv1.Reservation{}
 	for _, crd := range crds {
 		for _, rule := range crd.Rules() {
 			for _, reservation := range rule.Reservations() {
@@ -74,28 +75,36 @@ func (c *ReservationsCache) AddCacheForProject(project string) {
 	}
 
 	if _, exists := c.cache[project]; !exists {
-		c.cache[project] = map[string]*gceapiv1.Reservation{}
+		c.cache[project] = map[string]map[string]*gceapiv1.Reservation{}
 	}
 
 	for _, reservation := range reservationsInProject {
-		c.cache[project][reservation.Name] = reservation
+		if _, exists := c.cache[project][reservation.Name]; !exists {
+			c.cache[project][reservation.Name] = map[string]*gceapiv1.Reservation{}
+		}
+		zone := gceclient.GetReservationZone(reservation)
+		c.cache[project][reservation.Name][zone] = reservation
 	}
 }
 
-// GetReservation tries to acquire reservation with a given name in a specified project
-// in case not found in cache - returns nil.
-func (c *ReservationsCache) GetReservation(name, project string) *gceapiv1.Reservation {
+// GetReservations tries to acquire reservations with a given name in a specified project.
+// Returns a slice of all matching reservations across zones. Returns empty slice if none found.
+func (c *ReservationsCache) GetReservations(name, project string) []*gceapiv1.Reservation {
 	reservationsInProject, exists := c.cache[project]
 	if !exists {
 		return nil
 	}
 
-	reservation, exists := reservationsInProject[name]
+	reservations, exists := reservationsInProject[name]
 	if !exists {
 		return nil
 	}
 
-	return reservation
+	var results []*gceapiv1.Reservation
+	for _, res := range reservations {
+		results = append(results, res)
+	}
+	return results
 }
 
 // matchSpecificReservationOrError matches specific non-aggregate reservation against

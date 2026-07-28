@@ -274,11 +274,12 @@ type reservationRequirements struct {
 	totalLSSDCount int
 	blockCount     int64
 	subBlockCount  int64
+	placementGroup placement.Spec
 }
 
 func (r reservationRequirements) Signature() string {
-	return fmt.Sprintf("name: %q, project: %q, affinity: %q, exists: %v, zone: %q, machineType: %q, block: %q, subBlock: %q, localSSDCount: %v, blockCount: %v",
-		r.name, r.project, r.affinity, r.exists, r.zone, r.machineType, r.block, r.subBlock, r.totalLSSDCount, r.blockCount)
+	return fmt.Sprintf("name: %q, project: %q, affinity: %q, exists: %v, zone: %q, machineType: %q, block: %q, subBlock: %q, localSSDCount: %v, blockCount: %v, subBlockCount: %v, placementGroup: %+v",
+		r.name, r.project, r.affinity, r.exists, r.zone, r.machineType, r.block, r.subBlock, r.totalLSSDCount, r.blockCount, r.subBlockCount, r.placementGroup)
 }
 
 // FlexStartRequirements contains information about Flex Start requirements.
@@ -2424,7 +2425,33 @@ func (rg ReservationGenerator) GenerateNodeGroupOptionsForRequirements(options [
 	return result
 }
 
-func (rg ReservationGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, pReq *podrequirements.Requirements, _ machinetypes.GpuRequest, _ TpuRequest) caerrors.AutoscalerError {
+func (rg ReservationGenerator) GenerateNodeGroupRequirements(ngReqs []nodeGroupRequirements, pReq *podrequirements.Requirements) ([]nodeGroupRequirements, caerrors.AutoscalerError) {
+	var result []nodeGroupRequirements
+	var errs []caerrors.AutoscalerError
+	for _, ngReq := range ngReqs {
+		reqs, err := rg.generateRequirements(ngReq, pReq)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		result = append(result, reqs...)
+	}
+	if len(result) == 0 && len(errs) > 0 {
+		return nil, caerrors.Combine(errs)
+	}
+	return result, nil
+}
+
+// UpdateRequirements is a no-op for ReservationGenerator.
+// The logic for fetching, validating, and applying reservations has been moved to
+// GenerateNodeGroupRequirements. This change was necessary to allow
+// evaluating all matching reservations across multiple zones and grouping them,
+// rather than modifying a single requirement in-place and returning on the first match.
+func (rg ReservationGenerator) UpdateRequirements(_ *nodeGroupRequirements, _ *podrequirements.Requirements, _ machinetypes.GpuRequest, _ TpuRequest) caerrors.AutoscalerError {
+	return nil
+}
+
+func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements, pReq *podrequirements.Requirements) ([]nodeGroupRequirements, caerrors.AutoscalerError) {
 	if v, ok := pReq.LabelReq.GetSingleValue(gkelabels.ReservationNameLabel); ok {
 		ngReq.reservation.name = v
 	}
@@ -2446,17 +2473,17 @@ func (rg ReservationGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, 
 	nonSpecificAffinity := ok && ra != gkeclient.ReservationAffinitySpecific
 	if nonSpecificAffinity {
 		ngReq.reservation.exists = true
-		return nil
+		return []nodeGroupRequirements{ngReq}, nil
 	}
 	// For match disabled, specific affinity and shared reservation, assume a reservation exists & matches.
 	// For local reservation we try to steer all the relevant information.
 	if !rg.specificTypeReservationMatchEnabled && ngReq.reservation.project != "" && ngReq.reservation.project != rg.projectId {
 		ngReq.reservation.exists = true
-		return nil
+		return []nodeGroupRequirements{ngReq}, nil
 	}
 
 	if ngReq.reservation.name == "" {
-		return nil
+		return []nodeGroupRequirements{ngReq}, nil
 	}
 
 	// defaulting to local project if reservation specified
@@ -2470,7 +2497,7 @@ func (rg ReservationGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, 
 		// If a failure occurred while fetching from shared project, and it is an aggregate reservation, assume an aggregate reservation exists and matches
 		if err := rg.reservationsPuller.LastLoopErrorInProject(ngReq.reservation.project); err != nil && canUseAggregateReservation(pReq, ngReq.tpuRequest) {
 			ngReq.reservation.exists = true
-			return nil
+			return []nodeGroupRequirements{ngReq}, nil
 		}
 	}
 
@@ -2481,51 +2508,62 @@ func (rg ReservationGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, 
 		SubBlockName: ngReq.reservation.subBlock,
 	}
 
+	var groupedReqs reqGroups
+	groupedReqs = make(map[string]*groupedReq)
+	var errs []reservationError
+
 	for _, r := range rg.reservationsPuller.GetReservationsInProject(ngReq.reservation.project) {
 		// Skip any reservations that do not match the configured reservation
 		if r.Name != ngReq.reservation.name {
 			continue
 		}
 
-		if r.Zone != "" {
-			ngReq.reservation.zone = gceclient.GetReservationZone(r)
+		req := ngReq
+
+		if r.Zone == "" {
+			return nil, caerrors.NewAutoscalerErrorf(caerrors.InternalError, "Reservation %+v is missing zonal information", ref)
 		}
+		req.reservation.zone = gceclient.GetReservationZone(r)
 
 		// Skip any reservations that do not match zone constraints.
-		if len(ngReq.specifiedZones) != 0 {
-			if !slices.Contains(ngReq.specifiedZones, ngReq.reservation.zone) {
-				klog.Infof("Ignoring reservation '%s' outside of preferred zones (%v).", r.Name, ngReq.specifiedZones)
+		if len(req.specifiedZones) != 0 {
+			if !slices.Contains(req.specifiedZones, req.reservation.zone) {
+				klog.Infof("Ignoring reservation '%s' outside of preferred zones (%v).", r.Name, req.specifiedZones)
 				continue
 			}
 		}
 
-		ngReq.reservation.exists = true
+		req.reservation.exists = true
 		// Validate reservation
 		if !r.SpecificReservationRequired {
-			return reservations.NewErrUnusableReservation(ref, "SpecificReservationRequired is not enabled so reservation cannot be specifically targeted for consumption")
+			errs = append(errs, reservationError{zone: req.reservation.zone, err: reservations.NewErrUnusableReservation(ref, "SpecificReservationRequired is not enabled so reservation cannot be specifically targeted for consumption")})
+			continue
 		}
 
 		// Match reservation block only if specified
-		if ngReq.reservation.block != "" {
-			if err := rg.matchReservationBlock(&ngReq.reservation); err != nil {
-				return err
+		if req.reservation.block != "" {
+			if err := rg.matchReservationBlock(&req.reservation); err != nil {
+				errs = append(errs, reservationError{zone: req.reservation.zone, err: err})
+				continue
 			}
 		}
 		// For TPU reservations we return earlier
 		if reservations.IsAggregateReservation(r) {
 			// Aggregate reservations are not usable without TPU request specified
 			// or accelerator count and type present in pod labels (e.g. for balloon pods).
-			if !canUseAggregateReservation(pReq, ngReq.tpuRequest) {
-				return reservations.NewErrUnusableReservation(ref, "Unable to consume aggregate reservation for non-TPU workloads")
+			if !canUseAggregateReservation(pReq, req.tpuRequest) {
+				errs = append(errs, reservationError{zone: req.reservation.zone, err: reservations.NewErrUnusableReservation(ref, "Unable to consume aggregate reservation for non-TPU workloads")})
+				continue
 			}
-			return nil
+			groupedReqs.add(req)
+			continue
 		}
 
 		// Match reservation settings only if specified
 		if r.SpecificReservation != nil &&
 			r.SpecificReservation.InstanceProperties != nil &&
 			r.SpecificReservation.InstanceProperties.MachineType != "" {
-			ngReq.reservation.machineType = r.SpecificReservation.InstanceProperties.MachineType
+			req.reservation.machineType = r.SpecificReservation.InstanceProperties.MachineType
 		}
 
 		// Steer for Local SSD Count
@@ -2542,34 +2580,154 @@ func (rg ReservationGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, 
 					nvmeCount += 1
 				}
 			}
-			ngReq.reservation.totalLSSDCount = nvmeCount
+			req.reservation.totalLSSDCount = nvmeCount
 		}
 		// Infer placement policy
-		pgSpec, err := rg.inferPlacementPolicyFromReservation(r, ngReq)
+		pgSpec, err := rg.inferPlacementPolicyFromReservation(r, &req)
 		if err != nil {
-			return err
+			errs = append(errs, reservationError{zone: req.reservation.zone, err: err})
+			continue
 		}
 		if pgSpec != nil {
-			pgSpecFromLabels := placementGroupSpec(ngReq, pReq.LabelReq)
+			pgSpecFromLabels := placementGroupSpec(&req, pReq.LabelReq)
 			if pgSpecFromLabels.Policy != "" && pgSpecFromLabels.Policy != pgSpec.Policy {
-				return reservations.NewErrUnusableReservation(ref,
-					fmt.Sprintf("Unable to consume specific reservation with placement policy when conflicting placement policy (%v) is provided via node selectors.", pgSpecFromLabels.Policy))
+				errs = append(errs, reservationError{zone: req.reservation.zone, err: reservations.NewErrUnusableReservation(ref,
+					fmt.Sprintf("Unable to consume specific reservation with placement policy when conflicting placement policy (%v) is provided via node selectors.", pgSpecFromLabels.Policy))})
+				continue
 			}
 			if pgSpecFromLabels.GroupId != "" {
 				klog.V(5).Infof("Adding groupId '%s' from label requirements to placement policy inferred from reservation '%v'", pgSpecFromLabels.GroupId, r.Name)
 				pgSpec.GroupId = pgSpecFromLabels.GroupId
 			}
-			ngReq.placementGroup = *pgSpec
+			req.placementGroup = *pgSpec
+			req.reservation.placementGroup = *pgSpec
 		}
-		return nil
+		groupedReqs.add(req)
 	}
+
+	if len(groupedReqs) > 0 {
+		err := validateSpecifiedZones(groupedReqs, ngReq.specifiedZones, ref)
+		if err != nil {
+			return nil, err
+		}
+		return groupedReqs.flatten()
+	}
+
 	// For match disabled, if no reservation was found, assume a reservation exists & matches.
 	// TODO(b/405036075): check if this condition is needed, if no local reservation then no reservation should be available
 	if !rg.specificTypeReservationMatchEnabled {
 		ngReq.reservation.exists = true
+		return []nodeGroupRequirements{ngReq}, nil
+	}
+
+	if len(errs) > 0 {
+		return nil, aggregateReservationErrors(errs, ref)
+	}
+	return nil, reservations.NewErrUnusableReservation(ref, "Specified reservation either does not exist or has no ready capacity to consume")
+}
+
+// validateSpecifiedZones validates that if user specified any zones explictly for their
+// reservations, that the:
+//  1. All matched reservations across the specified zones must have identical requirements
+//     so they can fit into a single multi-zonal node pool (groupedReqs == 1).
+//  2. A valid, matching reservation must exist in every single zone the user specified.
+func validateSpecifiedZones(groupedReqs map[string]*groupedReq, specifiedZones []string, ref gceclient.ReservationRef) caerrors.AutoscalerError {
+	if len(specifiedZones) == 0 {
 		return nil
 	}
-	return reservations.NewErrUnusableReservation(ref, "Specified reservation either does not exist or has no ready capacity to consume")
+	if len(groupedReqs) > 1 {
+		return reservations.NewErrUnusableReservation(ref, "Reservations in specified zones are incompatible and must fit into a single node pool")
+	}
+	for _, gr := range groupedReqs {
+		for _, sz := range specifiedZones {
+			if !slices.Contains(gr.zones, sz) {
+				return reservations.NewErrUnusableReservation(ref, fmt.Sprintf("Reservation is missing in specified zone %s", sz))
+			}
+		}
+	}
+	return nil
+}
+
+type groupedReq struct {
+	req   nodeGroupRequirements
+	zones []string
+}
+
+type reqGroups map[string]*groupedReq
+
+type reservationError struct {
+	zone string
+	err  error
+}
+
+// flatten function handles the aggregated multi-zonal reservations,
+// after the validation it repopulates zone in the node group requirements, if
+// reservation was found in only one zone it repopulates `reservationRequirements`
+// zone, if reservation was found in more than one zones it populates `specifiedZones`
+// leaving `reservationRequirements.zone` field empty
+func (rg reqGroups) flatten() ([]nodeGroupRequirements, caerrors.AutoscalerError) {
+	var results []nodeGroupRequirements
+	for _, gr := range rg {
+		req := gr.req
+		if len(gr.zones) == 1 {
+			req.reservation.zone = gr.zones[0]
+		} else if len(gr.zones) > 1 {
+			req.specifiedZones = slices.Clone(req.specifiedZones)
+			for _, z := range gr.zones {
+				if !slices.Contains(req.specifiedZones, z) {
+					req.specifiedZones = append(req.specifiedZones, z)
+				}
+			}
+		}
+		results = append(results, req)
+	}
+	return results, nil
+}
+
+// aggregateReservationErrors consolidates validation errors from individual zones into a single
+// AutoscalerError. If there is only one error, it returns it directly. If multiple errors exist,
+// it formats them with their respective zone names and joins them with a semicolon.
+func aggregateReservationErrors(errs []reservationError, ref gceclient.ReservationRef) caerrors.AutoscalerError {
+	if len(errs) == 1 {
+		if caErr, ok := errs[0].err.(caerrors.AutoscalerError); ok {
+			return caErr
+		}
+	}
+	var errMsgs []string
+	for _, e := range errs {
+		msg := e.err.Error()
+		if errUnusable, ok := e.err.(*reservations.ErrUnusableReservation); ok {
+			msg = errUnusable.Msg
+		}
+		errMsgs = append(errMsgs, fmt.Sprintf("in zone %s: %s", e.zone, msg))
+	}
+	slices.Sort(errMsgs)
+	return reservations.NewErrUnusableReservation(ref, strings.Join(errMsgs, "; "))
+}
+
+// add function aggregates compatible node group requirements across different zones.
+// It strips the zone from the requirement to calculate a stable signature. If a matching
+// requirement already exists in the map, it appends the new zone to the existing group.
+// Otherwise, it creates a new group for that requirement signature. Zone is repopulated
+// to the requirements in the `processGroupedRequirements` function.
+func (rg reqGroups) add(req nodeGroupRequirements) {
+	zone := req.reservation.zone
+	req.reservation.zone = ""
+	sig := req.signature()
+
+	if existing, found := rg[sig]; found {
+		existing.addZone(zone)
+		return
+	}
+	gr := &groupedReq{req: req}
+	gr.addZone(zone)
+	rg[sig] = gr
+}
+
+func (gr *groupedReq) addZone(zone string) {
+	if !slices.Contains(gr.zones, zone) {
+		gr.zones = append(gr.zones, zone)
+	}
 }
 
 func (rg ReservationGenerator) inferPlacementPolicyFromReservation(r *gce_api.Reservation, ngReq *nodeGroupRequirements) (*placement.Spec, caerrors.AutoscalerError) {

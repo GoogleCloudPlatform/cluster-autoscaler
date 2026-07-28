@@ -64,7 +64,7 @@ type CloudProvider interface {
 }
 
 type ReservationProvider interface {
-	GetReservation(name, project string) *gceapiv1.Reservation
+	GetReservations(name, project string) []*gceapiv1.Reservation
 	PopulateForCrds(crds []crd.CRD)
 }
 

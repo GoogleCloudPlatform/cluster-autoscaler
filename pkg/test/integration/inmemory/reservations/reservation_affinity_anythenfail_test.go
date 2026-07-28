@@ -17,7 +17,6 @@ package reservations
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -249,16 +248,7 @@ func createCCCCRD() *v1.ComputeClass {
 }
 
 func createReservation(machineType, name, zone string) *gceapi.Reservation {
-	rsv := reservations.NewTestReservationBuilder().
-		WithId(rand.Uint64()).
-		WithName(name).
-		WithZone(zone).
-		WithMachineType(machineType).
-		WithCounts(0, 2).
-		WithSpecificReservationRequired(false).
-		Build()
-	rsv.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/test-project/zones/%s/reservations/%s", zone, name)
-	return rsv
+	return reservations.New(name, zone, reservations.WithMachine(machineType), reservations.WithProject("test-project"), reservations.WithCounts(0, 2))
 }
 
 func assertScheduledPods(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure, podCount int) {

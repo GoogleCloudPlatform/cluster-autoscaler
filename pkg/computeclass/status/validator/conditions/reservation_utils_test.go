@@ -43,55 +43,67 @@ func TestReservationsCacheAddProject(t *testing.T) {
 	tests := map[string]struct {
 		reservations  []*gceapiv1.Reservation
 		projectsToAdd []string
-		wantCache     map[string]map[string]*gceapiv1.Reservation
+		wantCache     map[string]map[string]map[string]*gceapiv1.Reservation
 	}{
 		"NoReservations": {
 			reservations:  []*gceapiv1.Reservation{},
 			projectsToAdd: []string{"project-1"},
-			wantCache: map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				"project-1": {},
 			},
 		},
 		"LocalReservations": {
 			reservations:  []*gceapiv1.Reservation{rsv1},
 			projectsToAdd: []string{localProject},
-			wantCache: map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				localProject: {
-					rsv1.Name: rsv1,
+					rsv1.Name: {
+						"": rsv1,
+					},
 				},
 			},
 		},
 		"ReservationsPerProject": {
 			reservations:  []*gceapiv1.Reservation{rsv2, rsv3},
 			projectsToAdd: []string{sharedProject1, sharedProject2},
-			wantCache: map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				sharedProject1: {
-					rsv2.Name: rsv2,
+					rsv2.Name: {
+						"": rsv2,
+					},
 				},
 				sharedProject2: {
-					rsv3.Name: rsv3,
+					rsv3.Name: {
+						"": rsv3,
+					},
 				},
 			},
 		},
 		"CombinedReservations": {
 			reservations:  []*gceapiv1.Reservation{rsv1, rsv2, rsv3},
 			projectsToAdd: []string{localProject, sharedProject1, sharedProject2},
-			wantCache: map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				localProject: {
-					rsv1.Name: rsv1,
+					rsv1.Name: {
+						"": rsv1,
+					},
 				},
 				sharedProject1: {
-					rsv2.Name: rsv2,
+					rsv2.Name: {
+						"": rsv2,
+					},
 				},
 				sharedProject2: {
-					rsv3.Name: rsv3,
+					rsv3.Name: {
+						"": rsv3,
+					},
 				},
 			},
 		},
 		"WithNotAddedProjects": {
 			reservations:  []*gceapiv1.Reservation{rsv1, rsv2, rsv3},
 			projectsToAdd: []string{},
-			wantCache:     map[string]map[string]*gceapiv1.Reservation{},
+			wantCache:     map[string]map[string]map[string]*gceapiv1.Reservation{},
 		},
 	}
 
@@ -122,43 +134,67 @@ func TestReservationsCacheAddProject(t *testing.T) {
 func TestReservationsCacheGetReservation(t *testing.T) {
 	rsv := &gceapiv1.Reservation{
 		Name: "reservation-1",
+		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-1",
+	}
+	rsv2 := &gceapiv1.Reservation{
+		Name: "reservation-1",
+		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-2",
 	}
 
 	tests := map[string]struct {
-		cache           map[string]map[string]*gceapiv1.Reservation
-		name            string
-		project         string
-		wantReservation *gceapiv1.Reservation
+		cache            map[string]map[string]map[string]*gceapiv1.Reservation
+		name             string
+		project          string
+		wantReservations []*gceapiv1.Reservation
 	}{
 		"ReservationInCache": {
-			cache: map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				"project-1": {
-					"reservation-1": rsv,
+					"reservation-1": {
+						"zone-1": rsv,
+					},
 				},
 			},
-			name:            "reservation-1",
-			project:         "project-1",
-			wantReservation: rsv,
+			name:             "reservation-1",
+			project:          "project-1",
+			wantReservations: []*gceapiv1.Reservation{rsv},
+		},
+		"MultipleZonesInCache": {
+			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
+				"project-1": {
+					"reservation-1": {
+						"zone-1": rsv,
+						"zone-2": rsv2,
+					},
+				},
+			},
+			name:             "reservation-1",
+			project:          "project-1",
+			wantReservations: []*gceapiv1.Reservation{rsv, rsv2},
 		},
 		"ReservationNotInCache": {
-			cache: map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				"project-1": {
-					"reservation-1": rsv,
+					"reservation-1": {
+						"zone-1": rsv,
+					},
 				},
 			},
-			name:            "reservation-2",
-			project:         "project-1",
-			wantReservation: nil,
+			name:             "reservation-2",
+			project:          "project-1",
+			wantReservations: nil,
 		},
 		"ProjectNotInCache": {
-			cache: map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
 				"project-1": {
-					"reservation-1": rsv,
+					"reservation-1": {
+						"zone-1": rsv,
+					},
 				},
 			},
-			name:            "reservation-1",
-			project:         "project-2",
-			wantReservation: nil,
+			name:             "reservation-1",
+			project:          "project-2",
+			wantReservations: nil,
 		},
 	}
 
@@ -168,8 +204,8 @@ func TestReservationsCacheGetReservation(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			t.Parallel()
 			rsvCache := ReservationsCache{cache: test.cache}
-			reservation := rsvCache.GetReservation(test.name, test.project)
-			assert.Equal(t, test.wantReservation, reservation)
+			reservations := rsvCache.GetReservations(test.name, test.project)
+			assert.ElementsMatch(t, test.wantReservations, reservations)
 		})
 	}
 }
