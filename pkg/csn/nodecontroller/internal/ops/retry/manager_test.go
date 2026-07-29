@@ -136,6 +136,52 @@ func TestBackoffManager_RetryCount(t *testing.T) {
 	assert.Equal(t, set.New("node3"), result.FailedNodes)
 }
 
+func TestBackoffManager_RetryCountsForNodes(t *testing.T) {
+	config := Config{MaxRetries: 2, InitialDelay: time.Second, MaxDelay: time.Second}
+	fakeClock := testingclock.NewFakeClock(time.Now())
+	m := NewBackoffManager(fakeClock, config, func(ops.Operation) error { return nil })
+
+	opSuspend := ops.Operation{Type: ops.SuspendOp}
+	opConsume := ops.Operation{Type: ops.ConsumeOp}
+
+	// 1. Untracked nodes return 0
+	assert.Equal(t, map[string]int{
+		"node1": 0,
+		"node2": 0,
+	}, m.RetryCountsForNodes(ops.SuspendOp, set.New("node1", "node2")))
+
+	// 2. Track retry counts across different operation types and retry attempts
+	m.AddFailedNodes(opSuspend, set.New("node1", "node2"))
+	m.AddFailedNodes(opSuspend, set.New("node1"))
+	m.AddFailedNodes(opConsume, set.New("node2"))
+
+	assert.Equal(t, map[string]int{
+		"node1": 2,
+		"node2": 1,
+		"node3": 0,
+	}, m.RetryCountsForNodes(ops.SuspendOp, set.New("node1", "node2", "node3")))
+
+	assert.Equal(t, map[string]int{
+		"node1": 0,
+		"node2": 1,
+	}, m.RetryCountsForNodes(ops.ConsumeOp, set.New("node1", "node2")))
+
+	// 3. Clear retry counts for specific nodes
+	m.ClearRetryCount(ops.SuspendOp, set.New("node1"))
+	assert.Equal(t, map[string]int{
+		"node1": 0,
+		"node2": 1,
+	}, m.RetryCountsForNodes(ops.SuspendOp, set.New("node1", "node2")))
+
+	// 4. Exceeding MaxRetries removes node from retryCounts
+	m.AddFailedNodes(opSuspend, set.New("node2"))
+	m.AddFailedNodes(opSuspend, set.New("node2"))
+
+	assert.Equal(t, map[string]int{
+		"node2": 0,
+	}, m.RetryCountsForNodes(ops.SuspendOp, set.New("node2")))
+}
+
 func TestBackoffManager_Run(t *testing.T) {
 	config := Config{
 		MaxRetries:   5,

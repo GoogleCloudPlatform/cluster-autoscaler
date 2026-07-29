@@ -32,12 +32,13 @@ func TestDispatcherMetrics(t *testing.T) {
 	mig1 := gce.GceRef{Name: "mig1"}
 
 	tests := []struct {
-		name              string
-		ops               []ops.Operation
-		nodeErrs          map[string]error
-		retryConfig       retry.Config
-		expectedCallCount int
-		expectedDeltas    []*test.MetricDelta
+		name                  string
+		ops                   []ops.Operation
+		nodeErrs              map[string]error
+		handlerErrsHappenOnce bool
+		retryConfig           retry.Config
+		expectedCallCount     int
+		expectedDeltas        []*test.MetricDelta
 	}{
 		{
 			name: "success_metrics",
@@ -48,7 +49,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			expectedCallCount: 1,
 			expectedDeltas: []*test.MetricDelta{
 				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
-				test.NewMetricDelta(test.ExpectedValue(3), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
+				test.NewMetricDelta(test.ExpectedValue(3), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "0"}),
 			},
 		},
 		{
@@ -63,8 +64,62 @@ func TestDispatcherMetrics(t *testing.T) {
 			expectedCallCount: 2,
 			expectedDeltas: []*test.MetricDelta{
 				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
-				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure}),
-				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "0"}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "0"}),
+			},
+		},
+		{
+			name: "retryable_failure_and_success_on_retry",
+			ops: []ops.Operation{
+				{MIG: mig1, Type: ops.SuspendOp, NodeNames: set.New("n1", "n2")},
+			},
+			nodeErrs: map[string]error{
+				"n1": errors.New("some-error"),
+			},
+			handlerErrsHappenOnce: true,
+			retryConfig:           retry.Config{MaxRetries: 2},
+			expectedCallCount:     2,
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "0"}),
+				// attempt number is 0 for node n2
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "0"}),
+				// attempt number is 1 for node n1 as it has failed once
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "1"}),
+			},
+		},
+		{
+			name: "multiple_retries_metrics",
+			ops: []ops.Operation{
+				{MIG: mig1, Type: ops.SuspendOp, NodeNames: set.New("n1")},
+			},
+			nodeErrs: map[string]error{
+				"n1": errors.New("some-error"),
+			},
+			retryConfig:       retry.Config{MaxRetries: 2},
+			expectedCallCount: 3,
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "0"}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "1"}),
+				// node n1 didn't succeed for 2 attempts as handlerErrsHappenOnce is set to false
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opFailure, "2"}),
+			},
+		},
+		{
+			name: "multiple_nodes_multiple_retries",
+			ops: []ops.Operation{
+				{MIG: mig1, Type: ops.SuspendOp, NodeNames: set.New("n1", "n2")},
+			},
+			nodeErrs: map[string]error{
+				"n1": errors.New("some-error"),
+				"n2": errors.New("some-error"),
+			},
+			retryConfig:       retry.Config{MaxRetries: 2},
+			expectedCallCount: 5,
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(2), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "0"}),
+				test.NewMetricDelta(test.ExpectedValue(2), opResultsTotal, []string{ops.SuspendOp.String(), opRetryFailure, "1"}),
+				test.NewMetricDelta(test.ExpectedValue(2), opResultsTotal, []string{ops.SuspendOp.String(), opFailure, "2"}),
 			},
 		},
 		{
@@ -81,8 +136,8 @@ func TestDispatcherMetrics(t *testing.T) {
 			expectedCallCount: 1,
 			expectedDeltas: []*test.MetricDelta{
 				test.NewMetricDelta(test.Positive(), opLatencySeconds, []string{ops.SuspendOp.String(), "1"}),
-				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opFailure}),
-				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opFailure, "0"}),
+				test.NewMetricDelta(test.ExpectedValue(1), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "0"}),
 			},
 		},
 		{
@@ -94,7 +149,7 @@ func TestDispatcherMetrics(t *testing.T) {
 			expectedCallCount: 0,
 			expectedDeltas: []*test.MetricDelta{
 				test.NewMetricDelta(test.ExpectedValue(0), opLatencySeconds, []string{ops.SuspendOp.String(), "0"}),
-				test.NewMetricDelta(test.ExpectedValue(0), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess}),
+				test.NewMetricDelta(test.ExpectedValue(0), opResultsTotal, []string{ops.SuspendOp.String(), opSuccess, "0"}),
 			},
 		},
 	}
@@ -118,8 +173,9 @@ func TestDispatcherMetrics(t *testing.T) {
 			)
 
 			handler := &fakeHandler{
-				HandleChan: make(chan ops.OperationType, len(tc.ops)*5),
-				NodeErrs:   tc.nodeErrs,
+				HandleChan:     make(chan ops.OperationType, len(tc.ops)*5),
+				NodeErrs:       tc.nodeErrs,
+				ErrsHappenOnce: tc.handlerErrsHappenOnce,
 			}
 			d.RegisterHandler(ops.SuspendOp, handler.Handle)
 

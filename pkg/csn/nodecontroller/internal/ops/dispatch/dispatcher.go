@@ -109,8 +109,8 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 		}
 		if len(res.Success) > 0 {
 			klog.V(4).Infof("%s op %q returned successfully for nodes: %v", logPrefix, op.Type.String(), res.Success)
+			d.countAndTrackByRetryCount(op.Type, opSuccess, res.Success, d.backoffManager.RetryCountsForNodes(op.Type, res.Success))
 			d.clearPendingOperation(op.Type, res.Success)
-			opResultsTotal.WithLabelValues(op.Type.String(), opSuccess).Add(float64(len(res.Success)))
 		}
 		d.handleBackoff(op, res)
 	}
@@ -130,12 +130,14 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 		return
 	}
 	klog.V(4).Infof("%s nodes to enter backoff for op %q: %v", logPrefix, op.Type.String(), res.Errs)
+
+	attempts := d.backoffManager.RetryCountsForNodes(op.Type, set.KeySet(res.Errs))
+
 	backoffResult := d.backoffManager.AddFailedNodes(op, set.KeySet(res.Errs))
 
 	// Track retryable failures (nodes processed for backoff)
-	retryableCount := len(res.Errs) - len(backoffResult.FailedNodes)
-	if retryableCount > 0 {
-		opResultsTotal.WithLabelValues(op.Type.String(), opRetryFailure).Add(float64(retryableCount))
+	if len(backoffResult.BackedOffNodes) > 0 {
+		d.countAndTrackByRetryCount(op.Type, opRetryFailure, backoffResult.BackedOffNodes, attempts)
 	}
 
 	if len(backoffResult.FailedNodes) == 0 {
@@ -143,9 +145,19 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 	}
 
 	// Track permanent failures
-	opResultsTotal.WithLabelValues(op.Type.String(), opFailure).Add(float64(len(backoffResult.FailedNodes)))
+	d.countAndTrackByRetryCount(op.Type, opFailure, backoffResult.FailedNodes, attempts)
 
 	// If the operation is considered a permanent failure,
 	// then pending operation should be cleared.
 	d.clearPendingOperation(op.Type, backoffResult.FailedNodes)
+}
+
+func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status string, nodeNames set.Set[string], attempts map[string]int) {
+	counts := make(map[int]int)
+	for nodeName := range nodeNames {
+		counts[attempts[nodeName]]++
+	}
+	for attempt, count := range counts {
+		opResultsTotal.WithLabelValues(opType.String(), status, strconv.Itoa(attempt)).Add(float64(count))
+	}
 }

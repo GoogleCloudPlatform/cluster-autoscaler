@@ -149,6 +149,17 @@ func (m *BackoffManager) RetryCounts() map[Key]int {
 	return maps.Clone(m.retryCounts)
 }
 
+// RetryCountsForNodes returns a map of node names to retry attempt counts for a specific operation type and set of nodes.
+func (m *BackoffManager) RetryCountsForNodes(opType ops.OperationType, nodeNames set.Set[string]) map[string]int {
+	counts := make(map[string]int, len(nodeNames))
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for nodeName := range nodeNames {
+		counts[nodeName] = m.retryCounts[Key{NodeName: nodeName, OpType: opType}]
+	}
+	return counts
+}
+
 // make sure retryNum is  >= 1
 func (m *BackoffManager) calculateDelay(retryNum int) time.Duration {
 	// Simple exponential backoff: initial * 2^(retryNum-1)
