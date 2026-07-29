@@ -17,6 +17,8 @@ package daemonsetmutation
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,7 +205,7 @@ func (c *Controller) resolveMutation(key string) error {
 	}
 
 	if changed, oldReq, newReq := resourcesChanged(templateCopy, updatedPod); changed {
-		klog.V(4).Infof("[ds mutation] Successfully resolved dry-run mutation for DaemonSet %s/%s (gen: %d): resources changed. Old: %v, New: %v", ds.Namespace, ds.Name, ds.Generation, oldReq, newReq)
+		klog.V(4).Infof("[ds mutation] Successfully resolved dry-run mutation for DaemonSet %s/%s (gen: %d): resources changed. Old: %s, New: %s", ds.Namespace, ds.Name, ds.Generation, formatResourceList(oldReq), formatResourceList(newReq))
 	}
 	c.mutationCache.Set(ds.UID, ds.Generation, updatedPod)
 	return nil
@@ -237,4 +239,13 @@ func resourcesChanged(template *apiv1.PodTemplateSpec, updatedPod *apiv1.Pod) (b
 // remove purges cache entries for a deleted DaemonSet UID.
 func (c *Controller) remove(dsUID types.UID) {
 	c.mutationCache.Remove(dsUID)
+}
+
+func formatResourceList(rl apiv1.ResourceList) string {
+	var parts []string
+	for k, v := range rl {
+		parts = append(parts, fmt.Sprintf("%s: %s", k, v.String()))
+	}
+	sort.Strings(parts)
+	return "{" + strings.Join(parts, ", ") + "}"
 }

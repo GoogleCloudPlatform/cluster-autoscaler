@@ -347,3 +347,43 @@ func TestDryRunPodResolver_Resolve(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []string{metav1.DryRunAll}, createOptions.DryRun)
 }
+
+func TestFormatResourceList(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    apiv1.ResourceList
+		expected string
+	}{
+		{
+			name:     "nil input",
+			input:    nil,
+			expected: "{}",
+		},
+		{
+			name:     "empty input",
+			input:    apiv1.ResourceList{},
+			expected: "{}",
+		},
+		{
+			name: "single resource",
+			input: apiv1.ResourceList{
+				apiv1.ResourceCPU: resource.MustParse("100m"),
+			},
+			expected: "{cpu: 100m}",
+		},
+		{
+			name: "multiple resources",
+			input: apiv1.ResourceList{
+				apiv1.ResourceMemory: resource.MustParse("100Mi"),
+				apiv1.ResourceCPU:    resource.MustParse("200m"),
+			},
+			expected: "{cpu: 200m, memory: 100Mi}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := formatResourceList(tt.input)
+			assert.Equal(t, tt.expected, actual)
+		})
+	}
+}
