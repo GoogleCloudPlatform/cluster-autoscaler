@@ -15,12 +15,17 @@
 package status
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
+var registerOnce sync.Once
+
 func TestTrySendUpdate(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
 	msg := UpdateMessage{
 		Id: CRDId{CRDName: "test-cc", CRDLabel: "test-label"},
 	}
@@ -30,21 +35,32 @@ func TestTrySendUpdate(t *testing.T) {
 	})
 
 	t.Run("send succeeds on buffered channel with space", func(t *testing.T) {
+		metrics.ResetAllForTest()
 		ch := make(chan UpdateMessage, 1)
 		assert.True(t, TrySendUpdate(ch, msg))
 		assert.Len(t, ch, 1)
+
+		sent, err := metrics.GetCCStatusUpdatesCountForTest("sent")
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), sent)
 	})
 
 	t.Run("send drops and returns false when channel is full", func(t *testing.T) {
+		metrics.ResetAllForTest()
 		ch := make(chan UpdateMessage, 1)
 		ch <- msg // fill channel
 
 		assert.False(t, TrySendUpdate(ch, msg))
 		assert.Len(t, ch, 1)
+
+		dropped, err := metrics.GetCCStatusUpdatesCountForTest("dropped")
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), dropped)
 	})
 }
 
 func TestTrySendRuleUpdate(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
 	msg := UpdateMessage{
 		Id: CRDId{CRDName: "test-cc", CRDLabel: "test-label"},
 	}
@@ -54,16 +70,26 @@ func TestTrySendRuleUpdate(t *testing.T) {
 	})
 
 	t.Run("send succeeds on buffered channel with space", func(t *testing.T) {
+		metrics.ResetAllForTest()
 		ch := make(chan UpdateMessage, 1)
 		assert.True(t, TrySendRuleUpdate(ch, msg, "0"))
 		assert.Len(t, ch, 1)
+
+		sent, err := metrics.GetCCStatusUpdatesCountForTest("sent")
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), sent)
 	})
 
 	t.Run("send drops and returns false when channel is full", func(t *testing.T) {
+		metrics.ResetAllForTest()
 		ch := make(chan UpdateMessage, 1)
 		ch <- msg // fill channel
 
 		assert.False(t, TrySendRuleUpdate(ch, msg, "0"))
 		assert.Len(t, ch, 1)
+
+		dropped, err := metrics.GetCCStatusUpdatesCountForTest("dropped")
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), dropped)
 	})
 }

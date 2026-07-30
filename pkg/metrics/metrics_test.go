@@ -17,6 +17,7 @@ package metrics
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	k8smetrics "k8s.io/component-base/metrics"
@@ -407,4 +408,39 @@ func TestUpdateFlexAdvisorRejectedScopes(t *testing.T) {
 	val, err = testutil.GetGaugeMetricValue(flexAdvisorRejectedScopes)
 	assert.NoError(t, err)
 	assert.Equal(t, float64(2), val)
+}
+
+func TestCCStatusMetrics(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	ResetAllForTest()
+	pm := &prometheusMetrics{}
+
+	// Test status update sent vs dropped
+	pm.RegisterCCStatusUpdate(false) // sent
+	pm.RegisterCCStatusUpdate(false) // sent
+	pm.RegisterCCStatusUpdate(true)  // dropped
+
+	sentVal, err := GetCCStatusUpdatesCountForTest("sent")
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2), sentVal)
+
+	droppedVal, err := GetCCStatusUpdatesCountForTest("dropped")
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), droppedVal)
+
+	// Test API patch observation
+	pm.ObserveCCApiPatch(100*time.Millisecond, "200")
+	pm.ObserveCCApiPatch(150*time.Millisecond, "409")
+
+	req200Val, err := GetCCStatusApiPatchRequestsCountForTest("200")
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), req200Val)
+
+	req409Val, err := GetCCStatusApiPatchRequestsCountForTest("409")
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), req409Val)
+
+	dur200Count, err := GetCCStatusApiPatchDurationCountForTest("200")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), dur200Count)
 }

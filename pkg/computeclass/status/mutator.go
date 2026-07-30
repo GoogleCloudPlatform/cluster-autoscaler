@@ -16,6 +16,7 @@ package status
 
 import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 )
 
@@ -48,8 +49,10 @@ func TrySendUpdate(ch chan<- UpdateMessage, msg UpdateMessage) bool {
 	}
 	select {
 	case ch <- msg:
+		metrics.Metrics.RegisterCCStatusUpdate(false)
 		return true
 	default:
+		metrics.Metrics.RegisterCCStatusUpdate(true)
 		klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s", msg.Id.CRDName)
 		return false
 	}
@@ -64,8 +67,10 @@ func TrySendRuleUpdate(ch chan<- UpdateMessage, msg UpdateMessage, ruleIdx strin
 	}
 	select {
 	case ch <- msg:
+		metrics.Metrics.RegisterCCStatusUpdate(false)
 		return true
 	default:
+		metrics.Metrics.RegisterCCStatusUpdate(true)
 		klog.Warningf("updatesCh is full, dropping status update for ComputeClass %s, rule %s", msg.Id.CRDName, ruleIdx)
 		return false
 	}

@@ -1063,6 +1063,34 @@ var (
 		},
 		[]string{"source", "reason"},
 	)
+
+	ccStatusUpdatesTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "compute_class_status_updates_total",
+			Help:      "Total number of ComputeClass CRD status updates, partitioned by whether they were sent or dropped.",
+		},
+		[]string{"status"},
+	)
+
+	ccStatusApiPatchRequestsTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "compute_class_status_api_patch_requests_total",
+			Help:      "Total number of API patch requests sent to update ComputeClass CRD status, partitioned by response status code.",
+		},
+		[]string{"code"},
+	)
+
+	ccStatusApiPatchDuration = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "compute_class_status_api_patch_duration_seconds",
+			Help:      "How long it takes to patch the ComputeClass CRD status, partitioned by response status code.",
+			Buckets:   []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10},
+		},
+		[]string{"code"},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1165,6 +1193,9 @@ var allMetrics = []k8smetrics.Registerable{
 	demandFungibilityExtractedTotal,
 	demandFungibilityInjectedTotal,
 	demandFungibilityMissingIdTotal,
+	ccStatusUpdatesTotal,
+	ccStatusApiPatchRequestsTotal,
+	ccStatusApiPatchDuration,
 }
 
 // RegisterAll registers all metrics.
@@ -1876,4 +1907,19 @@ func (*prometheusMetrics) RegisterFlexAdvisorResponseError(reason FAResponseErro
 // RegisterNodesWithAllocationStrategy records the nodes_with_allocation_strategy metric.
 func RegisterNodesWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string, count int) {
 	nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType).Add(float64(count))
+}
+
+// RegisterCCStatusUpdate records a ComputeClass CRD status update attempt.
+func (*prometheusMetrics) RegisterCCStatusUpdate(dropped bool) {
+	if dropped {
+		ccStatusUpdatesTotal.WithLabelValues("dropped").Inc()
+	} else {
+		ccStatusUpdatesTotal.WithLabelValues("sent").Inc()
+	}
+}
+
+// ObserveCCApiPatch records metrics for ComputeClass CRD status API patch requests.
+func (*prometheusMetrics) ObserveCCApiPatch(duration time.Duration, code string) {
+	ccStatusApiPatchRequestsTotal.WithLabelValues(code).Inc()
+	ccStatusApiPatchDuration.WithLabelValues(code).Observe(duration.Seconds())
 }

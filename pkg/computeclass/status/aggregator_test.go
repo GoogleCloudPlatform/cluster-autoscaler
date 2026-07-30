@@ -16,16 +16,19 @@ package status
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	ctrl_client "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -240,4 +243,100 @@ func TestAggregator_ExperimentEnabledVsDisabled(t *testing.T) {
 			assert.NotNil(t, aggregator.statusMap[crdId])
 		})
 	})
+}
+
+func TestErrorCode(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "nil error returns 200",
+			err:      nil,
+			expected: "200",
+		},
+		{
+			name:     "direct StatusError returns code",
+			err:      &apierrors.StatusError{ErrStatus: metav1.Status{Code: 409}},
+			expected: "409",
+		},
+		{
+			name:     "wrapped StatusError returns code with errors.As",
+			err:      fmt.Errorf("failed to patch: %w", &apierrors.StatusError{ErrStatus: metav1.Status{Code: 404}}),
+			expected: "404",
+		},
+		{
+			name:     "non-status error returns error",
+			err:      fmt.Errorf("some generic error"),
+			expected: "error",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, errorCode(tc.err))
+		})
+	}
+}
+
+func TestAggregator_MakeUpdates_Metrics(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+	testCrdLabel := "ComputeClass"
+	crd1 := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("test-ccc-1"),
+	)
+	mockLister := lister.NewMockCrdLister([]crd.CRD{crd1})
+	mockLister.SetCrdLabel(testCrdLabel)
+
+	mgr := experiments.NewMockManagerWithOptions(
+		version.Version{2, 0, 0, 0},
+		map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+		map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
+	)
+
+	testCases := []struct {
+		name         string
+		patchErr     error
+		expectedCode string
+	}{
+		{
+			name:         "successful patch increments 200 metric",
+			patchErr:     nil,
+			expectedCode: "200",
+		},
+		{
+			name:         "failed patch with StatusError increments error code metric",
+			patchErr:     fmt.Errorf("failed to patch: %w", &apierrors.StatusError{ErrStatus: metav1.Status{Code: 409}}),
+			expectedCode: "409",
+		},
+		{
+			name:         "failed patch with generic error increments error metric",
+			patchErr:     fmt.Errorf("generic error"),
+			expectedCode: "error",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics.ResetAllForTest()
+			client := newFakeStatusClient()
+			client.writer.err = tc.patchErr
+			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), client, mgr)
+			crdId := CRDId{CRDName: "test-ccc-1", CRDLabel: testCrdLabel}
+			aggregator.dirtySet[crdId] = true
+
+			aggregator.makeUpdates(context.Background())
+
+			reqCount, err := metrics.GetCCStatusApiPatchRequestsCountForTest(tc.expectedCode)
+			assert.NoError(t, err)
+			assert.Equal(t, float64(1), reqCount)
+
+			durCount, err := metrics.GetCCStatusApiPatchDurationCountForTest(tc.expectedCode)
+			assert.NoError(t, err)
+			assert.Equal(t, uint64(1), durCount)
+			assert.Empty(t, aggregator.dirtySet)
+		})
+	}
 }

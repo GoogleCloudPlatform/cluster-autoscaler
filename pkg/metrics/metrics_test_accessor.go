@@ -42,6 +42,24 @@ func GetNodesWithAllocationStrategyCountForTest(requestedStrategy string, fallba
 	return testutil.GetCounterMetricValue(counter)
 }
 
+// GetCCStatusUpdatesCountForTest returns the current count for a given status (only for tests).
+func GetCCStatusUpdatesCountForTest(status string) (float64, error) {
+	counter := ccStatusUpdatesTotal.WithLabelValues(status)
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetCCStatusApiPatchRequestsCountForTest returns the current count for a given code (only for tests).
+func GetCCStatusApiPatchRequestsCountForTest(code string) (float64, error) {
+	counter := ccStatusApiPatchRequestsTotal.WithLabelValues(code)
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetCCStatusApiPatchDurationCountForTest returns the current sample count for a given code (only for tests).
+func GetCCStatusApiPatchDurationCountForTest(code string) (uint64, error) {
+	histogram := ccStatusApiPatchDuration.WithLabelValues(code)
+	return testutil.GetHistogramMetricCount(histogram)
+}
+
 // ResetAllForTest resets all metrics that support it, preventing cross-test
 // state contamination. It iterates the same allMetrics slice used by RegisterAll,
 // so any newly added metric is automatically handled.

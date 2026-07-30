@@ -16,15 +16,19 @@ package status
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	ctrClient "sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -136,7 +140,11 @@ func (a *Aggregator) makeUpdates(ctx context.Context) {
 			continue
 		}
 		status := a.getOrCreateStatus(crd)
+
+		start := time.Now()
 		err = a.ctrClient.Status().Patch(ctx, status.GetCRDStatusPatch(), ctrClient.Apply, ctrClient.FieldOwner("cluster-autoscaler"), ctrClient.ForceOwnership)
+		metrics.Metrics.ObserveCCApiPatch(time.Since(start), errorCode(err))
+
 		if err != nil {
 			klog.Errorf("Failed to patch status for CRD %s/%s: %v", crdId.CRDLabel, crdId.CRDName, err)
 		}
@@ -159,4 +167,15 @@ func (a *Aggregator) getOrCreateStatus(crdObj crd.CRD) crd.CRDStatus {
 
 	a.statusMap[id] = status
 	return status
+}
+
+func errorCode(err error) string {
+	if err == nil {
+		return "200"
+	}
+	var statusErr apierrors.APIStatus
+	if errors.As(err, &statusErr) {
+		return strconv.Itoa(int(statusErr.Status().Code))
+	}
+	return "error"
 }
