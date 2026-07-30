@@ -117,7 +117,7 @@ func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovi
 			NewSize:     currentSize,
 			MaxSize:     group.MaxSize(context.TODO()),
 		}
-		matchingReservations := MatchingUnusedReservations(p.provider, group, reservations, p.localSSDDiskSizeProvider)
+		matchingReservations := MatchingUnusedReservations(p.provider, group, reservations, p.localSSDDiskSizeProvider, false)
 		balancingInfos = append(balancingInfos, &balancingInfo{
 			scaleUpInfo,
 			matchingReservations,
@@ -241,7 +241,7 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 			continue
 		}
 		for _, rsv := range reservations {
-			if ok, _, _ := reservationMatch(p.provider, ng, rsv, p.localSSDDiskSizeProvider); ok {
+			if ok, _, _ := reservationMatch(p.provider, ng, rsv, p.localSSDDiskSizeProvider, false); ok {
 				unused := int(rsv.SpecificReservation.AvailableCount) - consumedReservations[rsv.ID]
 				if size > unused {
 					consumedReservations[rsv.ID] += unused
@@ -282,12 +282,12 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 	}
 
 	for _, scaleUpInfo := range scaleUpInfos {
-		reservedNodes := MatchingUnusedReservations(p.provider, scaleUpInfo.Group, reservations, p.localSSDDiskSizeProvider)
+		reservedNodes := MatchingUnusedReservations(p.provider, scaleUpInfo.Group, reservations, p.localSSDDiskSizeProvider, false)
 		newNodes := scaleUpInfo.NewSize - scaleUpInfo.CurrentSize
 		newReservedNodes := min(newNodes, reservedNodes)
 
 		for _, rsv := range reservations {
-			if ok, _, _ := reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider); ok {
+			if ok, _, _ := reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider, false); ok {
 				unusedNodes := int(rsv.SpecificReservation.AvailableCount)
 
 				if unusedNodes > 0 {

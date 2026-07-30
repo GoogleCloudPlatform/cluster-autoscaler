@@ -178,5 +178,5 @@ func (t *instanceAvailabilityThreshold) allUnusedReservations(ng cloudprovider.N
 	}
 
 	allReservations := t.reservationPuller.GetReservations()
-	return reservations.MatchingUnusedReservations(t.cloudProvider, ng, allReservations, t.localSSDDiskSizeProvider)
+	return reservations.MatchingUnusedReservations(t.cloudProvider, ng, allReservations, t.localSSDDiskSizeProvider, true)
 }

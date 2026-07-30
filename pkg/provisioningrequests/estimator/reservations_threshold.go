@@ -89,7 +89,7 @@ func (t *reservationsThreshold) NodeLimit(ctx context.Context, nodeGroup cloudpr
 
 // Returns minimum of available reservations and max node limit for the node group
 func (t *reservationsThreshold) unusedReservationsCount(nodeGroup cloudprovider.NodeGroup, allReservations []*reservation.Reservation) int {
-	availableReservations := reservations.MatchingUnusedReservations(t.cloudProvider, nodeGroup, allReservations, t.localSSDDiskSizeProvider)
+	availableReservations := reservations.MatchingUnusedReservations(t.cloudProvider, nodeGroup, allReservations, t.localSSDDiskSizeProvider, false)
 	if availableReservations <= 0 {
 		return 0
 	}

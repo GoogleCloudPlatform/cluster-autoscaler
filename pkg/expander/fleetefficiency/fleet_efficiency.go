@@ -563,7 +563,7 @@ func (f *fleetEfficiencyFilter) usableReservationNodeGroup(nodeGroupSets []flexa
 	}
 	for _, ngs := range nodeGroupSets {
 		for _, nodeGroup := range ngs.NodeGroups() {
-			if reservations.MatchingUnusedReservations(f.cloudProvider, nodeGroup, gceReservations, f.localSSDDiskSizeProvider) > 0 {
+			if reservations.MatchingUnusedReservations(f.cloudProvider, nodeGroup, gceReservations, f.localSSDDiskSizeProvider, false) > 0 {
 				return nodeGroup.Id(), true
 			}
 		}

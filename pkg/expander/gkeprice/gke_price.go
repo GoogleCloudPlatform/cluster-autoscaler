@@ -396,7 +396,7 @@ func (p *gkePriceBased) totalNodePrice(option expander.Option, node *apiv1.Node,
 	nodeGroups := append(option.SimilarNodeGroups, option.NodeGroup)
 	totalReservations := int64(0)
 	for _, nodeGroup := range nodeGroups {
-		totalReservations += int64(reservations.MatchingUnusedReservations(p.cloudProvider, nodeGroup, gceReservations, p.localSSDDiskSizeProvider))
+		totalReservations += int64(reservations.MatchingUnusedReservations(p.cloudProvider, nodeGroup, gceReservations, p.localSSDDiskSizeProvider, false))
 	}
 
 	nodeCount := int64(option.NodeCount)
