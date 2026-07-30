@@ -103,24 +103,29 @@ func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, 
 		return expansionOptions
 	}
 	if !f.isFleetEfficiencyStrategy(crd, expansionOptions[0]) {
-		klog.V(4).Infof("FleetEfficiencyFilter: skipping, allocation strategy is not fleet-efficiency")
+		klog.V(4).Infof("FleetEfficiencyFilter: allocation strategy is not fleet-efficiency (CCC %s), skipping", crd.Name())
 		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
 	}
 
 	if f.hasUsableReservations(expansionOptions) {
-		klog.V(4).Infof("FleetEfficiencyFilter: some options have usable reservations, skipping")
+		klog.V(4).Infof("FleetEfficiencyFilter: some options have usable reservations (CCC %s), skipping", crd.Name())
 		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
 	}
+
+	klog.V(4).Infof("FleetEfficiencyFilter: evaluating %d expansion options (CCC %s)", len(expansionOptions), crd.Name())
 
 	// Calculate the scores to find the best options.
 	scores := make([]float64, len(expansionOptions))
 	maxScore := -1.0
 	for i, option := range expansionOptions {
-		score, err := f.scoreOption(option)
+		score, err := f.scoreOption(option, crd)
 		if err != nil {
-			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s, ignoring strategy: %v", option.NodeGroup.Id(), err)
+			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s (CCC %s), ignoring strategy: %v", option.NodeGroup.Id(), crd.Name(), err)
 			return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, determineFallbackReason(err))
 		}
+
+		klog.V(5).Infof("FleetEfficiencyFilter: fleet efficiency score for option %s (CCC %s) is %f", option.NodeGroup.Id(), crd.Name(), score)
+
 		scores[i] = score
 		if score > maxScore {
 			maxScore = score
@@ -135,12 +140,21 @@ func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, 
 		}
 	}
 
+	if klog.V(5).Enabled() {
+		bestOptionIds := make([]string, len(bestOptions))
+		for i := range bestOptions {
+			bestOptionIds[i] = bestOptions[i].NodeGroup.Id()
+		}
+		klog.V(5).Infof("FleetEfficiencyFilter: best options (CCC %s, best score %f): %v", crd.Name(), maxScore, bestOptionIds)
+	}
+
 	if len(bestOptions) == 1 {
+		klog.V(4).Infof("FleetEfficiencyFilter: selected best option %s (CCC %s)", bestOptions[0].NodeGroup.Id(), crd.Name())
 		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, &bestOptions[0])
 		return bestOptions
 	}
 
-	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options, fallback to lowest-cost", len(bestOptions))
+	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options (CCC %s), fallback to lowest-cost", len(bestOptions), crd.Name())
 	return f.fallbackAndRecordMetric(bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
 }
 
@@ -183,7 +197,7 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(expansionOptions []expan
 	return expansionOptions
 }
 
-func (f *fleetEfficiencyFilter) scoreOption(option expander.Option) (float64, error) {
+func (f *fleetEfficiencyFilter) scoreOption(option expander.Option, crd crd.CRD) (float64, error) {
 	instanceRef, err := flexadvisor.ConstructInstanceReference(option.NodeGroup, f.cccLister, f.experimentsManager)
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
@@ -210,6 +224,7 @@ func (f *fleetEfficiencyFilter) scoreOption(option expander.Option) (float64, er
 			// TODO(b/527312993): Move the filtering to flex advisor (reject invalid scores).
 			return fmt.Errorf("invalid GCE Preference Score (%f) for scope %s and zone %s", score, instanceRef.FlexibilityScopeKey, zone)
 		}
+		klog.V(5).Infof("FleetEfficiencyFilter: gce preference score for node group %s is %f (CCC %s)", ng.Id(), score, crd.Name())
 		totalScore += score
 		count++
 		return nil
