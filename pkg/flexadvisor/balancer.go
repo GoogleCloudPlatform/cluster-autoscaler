@@ -30,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -95,9 +96,15 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(ctx context.Context, autos
 
 	locationPolicy := sampleGkeNodeGroup.LocationPolicy()
 
-	if sampleGkeNodeGroup.IsTpuMig() && !isFlexAdvisorTPUEnabled(b.experimentsManager) {
-		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, TPU scale ups are not supported by Flex Advisor")
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
+	if sampleGkeNodeGroup.IsTpuMig() {
+		if !isFlexAdvisorTPUEnabled(b.experimentsManager) {
+			klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, TPU scale ups are not supported by Flex Advisor")
+			return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
+		}
+		if reservations.IsReservationAffinitySpecified(sampleGkeNodeGroup) {
+			klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, TPU scale ups with reservations are not balanced by Flex Advisor")
+			return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
+		}
 	}
 	if sampleGkeNodeGroup.FlexStart() && !isFlexAdvisorDWSEnabled(b.experimentsManager) {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, Flex start scale ups are not supported by Flex Advisor")

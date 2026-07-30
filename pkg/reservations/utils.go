@@ -15,7 +15,9 @@
 package reservations
 
 import (
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 )
 
 func IsSpecificReservation(rsv *reservation.Reservation) bool {
@@ -24,6 +26,18 @@ func IsSpecificReservation(rsv *reservation.Reservation) bool {
 
 func IsAggregateReservation(rsv *reservation.Reservation) bool {
 	return rsv.AggregateReservation != nil
+}
+
+// IsReservationAffinitySpecified reports whether nodeGroup specifies a reservation affinity
+// other than ReservationAffinityNone.
+func IsReservationAffinitySpecified(nodeGroup gke.NodeGroup) bool {
+	if nodeGroup == nil {
+		return false
+	}
+	spec := nodeGroup.Spec()
+	return spec != nil &&
+		spec.ReservationAffinity != nil &&
+		spec.ReservationAffinity.ConsumeReservationType != gkeclient.ReservationAffinityNone
 }
 
 func getTotalLocalSSDSize(ip *reservation.InstanceProperties, targetInterface string) int64 {

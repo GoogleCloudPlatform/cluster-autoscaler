@@ -237,7 +237,7 @@ func TestMatchReservationShapeMigNotExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider(), false)
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -376,7 +376,7 @@ func TestMatchReservationShapeMigExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).SetExist(true).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider(), false)
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -467,7 +467,7 @@ func TestMatchReservationShapeWithReservationAffinity(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider(), false)
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -478,17 +478,38 @@ func TestMatchingUnusedReservations(t *testing.T) {
 	defaultMachineType := "machine-type-1"
 	defaultZone := "zone-A"
 	defaultNodeGroup := gke.NewTestGkeMigBuilder().SetGceRefZone("zone-A").SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).Build()
+	tpuNodeGroup := gke.NewTestGkeMigBuilder().SetGceRefZone("zone-A").SetSpec(&gkeclient.NodePoolSpec{
+		MachineType: "ct6e-standard-4t",
+		TpuType:     labels.TpuV6ESliceValue,
+		TpuTopology: "2x2",
+	}).Build()
+	// 4x4 ct6e is a multi-host slice of 16 chips spread over 4 VMs with 4 chips each.
+	multiHostTpuNodeGroup := gke.NewTestGkeMigBuilder().SetGceRefZone("zone-A").SetSpec(&gkeclient.NodePoolSpec{
+		MachineType: "ct6e-standard-4t",
+		TpuType:     labels.TpuV6ESliceValue,
+		TpuTopology: "4x4",
+	}).Build()
+
+	aggReservation := NewAny("aggregate-tpu", defaultZone, WithAggregate(defaultZone, tpu.WorkloadTypeServing))
+	aggReservation.AggregateReservation.AvailableResources[0].AcceleratorCount = 4
+	aggReservationWithChips := func(workloadType string, chips int64) *reservation.Reservation {
+		rsv := NewAny("aggregate-tpu", defaultZone, WithAggregate(defaultZone, workloadType))
+		rsv.AggregateReservation.AvailableResources[0].AcceleratorCount = chips
+		return rsv
+	}
 
 	testCases := []struct {
 		name              string
 		reservations      []*reservation.Reservation
 		nodeGroup         cloudprovider.NodeGroup
+		allowAggregate    bool
 		wantMatchingCount int
 	}{
 		{
 			name:              "No reservations - No matching",
 			reservations:      nil,
 			nodeGroup:         defaultNodeGroup,
+			allowAggregate:    false,
 			wantMatchingCount: 0,
 		},
 		{
@@ -499,6 +520,7 @@ func TestMatchingUnusedReservations(t *testing.T) {
 					/*availableCount=*/ 0),
 			},
 			nodeGroup:         defaultNodeGroup,
+			allowAggregate:    false,
 			wantMatchingCount: 0,
 		},
 		{
@@ -509,6 +531,7 @@ func TestMatchingUnusedReservations(t *testing.T) {
 					/*availableCount=*/ 3),
 			},
 			nodeGroup:         defaultNodeGroup,
+			allowAggregate:    false,
 			wantMatchingCount: 3,
 		},
 		{
@@ -518,7 +541,57 @@ func TestMatchingUnusedReservations(t *testing.T) {
 				BuildSingleMachineReservation( /*machineType=*/ "different", defaultZone),
 			},
 			nodeGroup:         defaultNodeGroup,
+			allowAggregate:    false,
 			wantMatchingCount: 1,
+		},
+		{
+			name:              "Aggregate TPU reservation with 4 available chips when allowAggregate=true - 1 match",
+			reservations:      []*reservation.Reservation{aggReservation},
+			nodeGroup:         tpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 1,
+		},
+		{
+			name:              "Aggregate TPU reservation with 4 available chips when allowAggregate=false - 0 matches",
+			reservations:      []*reservation.Reservation{aggReservation},
+			nodeGroup:         tpuNodeGroup,
+			allowAggregate:    false,
+			wantMatchingCount: 0,
+		},
+		{
+			name:              "Single-host aggregate TPU reservation with 10 available chips - 2 whole VMs",
+			reservations:      []*reservation.Reservation{aggReservationWithChips(tpu.WorkloadTypeServing, 10)},
+			nodeGroup:         tpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 2,
+		},
+		{
+			name:              "Multi-host aggregate TPU reservation with 20 available chips - 1 whole slice of 4 VMs",
+			reservations:      []*reservation.Reservation{aggReservationWithChips(tpu.WorkloadTypeBatch, 20)},
+			nodeGroup:         multiHostTpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 4,
+		},
+		{
+			name:              "Multi-host aggregate TPU reservation with 32 available chips - 2 whole slices of 4 VMs",
+			reservations:      []*reservation.Reservation{aggReservationWithChips(tpu.WorkloadTypeBatch, 32)},
+			nodeGroup:         multiHostTpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 8,
+		},
+		{
+			name:              "Multi-host aggregate TPU reservation with 12 available chips - no whole slice fits",
+			reservations:      []*reservation.Reservation{aggReservationWithChips(tpu.WorkloadTypeBatch, 12)},
+			nodeGroup:         multiHostTpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 0,
+		},
+		{
+			name:              "Aggregate TPU reservation in another zone - 0 matches",
+			reservations:      []*reservation.Reservation{NewAny("aggregate-tpu", "zone-B", WithAggregate("zone-B", tpu.WorkloadTypeServing))},
+			nodeGroup:         tpuNodeGroup,
+			allowAggregate:    true,
+			wantMatchingCount: 0,
 		},
 	}
 
@@ -527,7 +600,7 @@ func TestMatchingUnusedReservations(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotMatchingCount := MatchingUnusedReservations(provider, tc.nodeGroup, tc.reservations, localssdsize.NewSimpleLocalSSDProvider())
+			gotMatchingCount := MatchingUnusedReservations(provider, tc.nodeGroup, tc.reservations, localssdsize.NewSimpleLocalSSDProvider(), tc.allowAggregate)
 
 			if tc.wantMatchingCount != gotMatchingCount {
 				t.Errorf("Test: \"%v\" failed, matching reservations count, want: %v got: %v", tc.name, tc.wantMatchingCount, gotMatchingCount)

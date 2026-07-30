@@ -103,6 +103,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 	dwsMig := createMockMigs(gkeMockManager, "e2-standard-4", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithDWS(), WithMaxRunDuration("3600"))
 	tpuMig := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x1"))
 	tpuMultiHostMig := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x5"), WithTpuMultiHost())
+	tpuMigWithReservation := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x1"), WithReservationAffinity(gkeclient.ReservationAffinityAny))
 
 	dwsTpuMig := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithDWS(), WithMaxRunDuration("3600"), WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x5"))
 
@@ -293,6 +294,33 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
 				{
 					Group:       tpuMig,
+					CurrentSize: 0,
+					NewSize:     5,
+					MaxSize:     10,
+				},
+			},
+		},
+		{
+			name:            "TPU - FlexAdvisorTPU enabled with reservation affinity - falls back to balancing logic",
+			groups:          []cloudprovider.NodeGroup{tpuMigWithReservation},
+			newNodes:        5,
+			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
+			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := &testutil.MockBalancer{}
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{tpuMigWithReservation}, 5).Return([]nodegroupset.ScaleUpInfo{
+					{
+						Group:       tpuMigWithReservation,
+						CurrentSize: 0,
+						NewSize:     5,
+						MaxSize:     10,
+					},
+				}, nil)
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       tpuMigWithReservation,
 					CurrentSize: 0,
 					NewSize:     5,
 					MaxSize:     10,

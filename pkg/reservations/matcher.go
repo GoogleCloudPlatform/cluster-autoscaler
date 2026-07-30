@@ -54,20 +54,29 @@ const (
 	SingleHostTPURequestedMultihostAvailable = "requested singlehost TPU, reservation has multihost"
 	TpuAcceleratorMissing                    = "requested TPU accelerator %s, but it's missing from reservation"
 	NodeGroupNotConvertibleToMig             = "Nodegroup - %v cannot be converted to MIG"
+	TPUShapeMissing                          = "node group has no TPU type (%q) or topology (%q), required to match an aggregate reservation"
+	TPUCountInvalid                          = "invalid TPU count %d for machine type %s: %v"
 )
 
 // MatchingUnusedReservations sums up all the unused reservations that match the given node group
-func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) int {
+func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, allowAggregate bool) int {
 	availableCount := 0
 	notMatchingLogQuota := klogx.NewLoggingQuota(notMatchingLogLimit)
 	for _, rsv := range reservations {
-		if ok, reasons, nodeShape := reservationMatch(provider, nodegroup, rsv, localSSDDiskSizeProvider); ok {
-			reservationCount := int(rsv.SpecificReservation.AvailableCount)
-			availableCount += reservationCount
-			klog.V(4).Infof("Matching reservation found: nodegroup=%s, reservation=%s, availableCount=%d", nodegroup.Id(), rsv.Name, reservationCount)
-		} else {
+		ok, reasons, nodeShape := reservationMatch(provider, nodegroup, rsv, localSSDDiskSizeProvider, allowAggregate)
+		if !ok {
 			klogx.V(4).UpTo(notMatchingLogQuota).Infof("Not matching node shape %+v against %v reservation: %q", nodeShape, rsv.Name, reasons)
+			continue
 		}
+		var reservationCount int
+		if IsAggregateReservation(rsv) {
+			// reservationMatch guarantees nodegroup is a *gke.GkeMig.
+			reservationCount = aggregateAvailableNodes(provider, nodegroup.(*gke.GkeMig), rsv)
+		} else {
+			reservationCount = int(rsv.SpecificReservation.AvailableCount)
+		}
+		availableCount += reservationCount
+		klog.V(4).Infof("Matching reservation found: nodegroup=%s, reservation=%s, availableCount=%d", nodegroup.Id(), rsv.Name, reservationCount)
 	}
 	klogx.V(4).Over(notMatchingLogQuota).Infof("Not matching nodegroup %s against %d other reservations", nodegroup.Id(), -notMatchingLogQuota.Left())
 
@@ -78,9 +87,31 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 	return availableCount
 }
 
+// aggregateAvailableNodes returns the number of VMs of the MIG's TPU shape that fit in the
+// available chips of a matching aggregate reservation. A TPU slice is provisioned atomically, so
+// only whole slices are counted: for multi-host shapes, chips that don't form a full slice don't
+// contribute any VMs.
+func aggregateAvailableNodes(provider machineConfigProvider, mig *gke.GkeMig, rsv *reservation.Reservation) int {
+	mcp := provider.MachineConfigProvider()
+	chipsPerVM, err := mcp.GetTpuCountForMachineType(mig.Spec().MachineType)
+	if err != nil || chipsPerVM <= 0 {
+		return 0
+	}
+	chipsPerSlice, err := mcp.NumChipsFromTopology(mig.Spec().TpuTopology)
+	if err != nil || chipsPerSlice < chipsPerVM {
+		return 0
+	}
+	var availableChips int64
+	for _, res := range rsv.AggregateReservation.AvailableResources {
+		availableChips += res.AcceleratorCount
+	}
+	vmsPerSlice := chipsPerSlice / chipsPerVM
+	return int(availableChips / chipsPerSlice * vmsPerSlice)
+}
+
 // reservationMatch checks if the nodegroup matches reservation.
 // https://cloud.google.com/compute/docs/instances/reservations-overview#vm-properties
-func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) (bool, []string, NodeShape) {
+func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, allowAggregate bool) (bool, []string, NodeShape) {
 	mig, ok := nodegroup.(*gke.GkeMig)
 
 	if !ok {
@@ -97,12 +128,17 @@ func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.No
 		Zone:           mig.GceRef().Zone,
 	}
 
-	if ok, reason := gceclient.IsReservationUsable(rsv, false); !ok {
+	if ok, reason := gceclient.IsReservationUsable(rsv, allowAggregate); !ok {
 		return false, []string{string(reason)}, nodeShape
 	}
 
 	if ok, reason := mig.IsReservationCompatible(rsv); !ok {
 		return false, []string{reason}, nodeShape
+	}
+
+	if IsAggregateReservation(rsv) {
+		reasons := aggregateReservationNoMatchReasons(provider, mig, rsv, nodeShape.Zone)
+		return len(reasons) == 0, reasons, nodeShape
 	}
 
 	for _, a := range mig.Spec().Accelerators {
@@ -206,6 +242,23 @@ func MatchSpecificReservationShapeWithReasons(provider machineConfigProvider, rs
 
 type machineConfigProvider interface {
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
+}
+
+// aggregateReservationNoMatchReasons returns the reasons an aggregate reservation doesn't match
+// the TPU shape of the MIG in migZone. Returns nil if it matches.
+func aggregateReservationNoMatchReasons(provider machineConfigProvider, mig *gke.GkeMig, rsv *reservation.Reservation, migZone string) []string {
+	if rsvZone := gceclient.GetReservationZone(rsv); migZone != rsvZone {
+		return []string{fmt.Sprintf(ZoneNotMatching, migZone, rsvZone)}
+	}
+	tpuType, tpuTopology := mig.Spec().TpuType, mig.Spec().TpuTopology
+	if tpuType == "" || tpuTopology == "" {
+		return []string{fmt.Sprintf(TPUShapeMissing, tpuType, tpuTopology)}
+	}
+	tpuCount, err := provider.MachineConfigProvider().GetTpuCountForMachineType(mig.Spec().MachineType)
+	if err != nil || tpuCount <= 0 {
+		return []string{fmt.Sprintf(TPUCountInvalid, tpuCount, mig.Spec().MachineType, err)}
+	}
+	return MatchAggregateReservationShapeWithReasons(provider, rsv, tpuType, tpuTopology, tpuCount)
 }
 
 // MatchAggregateReservationShapeWithReasons determines whether aggregate reservation is matching
