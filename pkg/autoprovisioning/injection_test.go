@@ -8659,6 +8659,22 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 			},
 			enableReservationMatch: true,
 		},
+		"rsv generator requesting tpu via compute class rule with shared reservation": {
+			ngReq: &nodeGroupRequirements{
+				tpuRequest: TpuRequest{},
+				reservation: reservationRequirements{
+					name:    "cloudtpu-c",
+					project: sharedProject,
+				},
+				computeClassRule: rules.NewRule(
+					rules.WithTpuRule("tpu-v6e-slice", 4, "2x2"),
+				),
+			},
+			podReq: &podrequirements.Requirements{},
+			reservations: []*gce_api.Reservation{
+				rsv1, rsv2, rsv3,
+			},
+		},
 	} {
 		t.Run(desc, func(t *testing.T) {
 			reservationsPuller := reservations.NewTestingReservationsPuller(projectId, []string{sharedProject}, tc.reservations)

@@ -2494,7 +2494,7 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 	if ngReq.reservation.project != rg.projectId {
 		rg.reservationsPuller.AddProject(ngReq.reservation.project)
 		// If a failure occurred while fetching from shared project, and it is an aggregate reservation, assume an aggregate reservation exists and matches
-		if err := rg.reservationsPuller.LastLoopErrorInProject(ngReq.reservation.project); err != nil && canUseAggregateReservation(pReq, ngReq.tpuRequest) {
+		if err := rg.reservationsPuller.LastLoopErrorInProject(ngReq.reservation.project); err != nil && canUseAggregateReservation(pReq, ngReq.tpuRequest, ngReq.computeClassRule) {
 			ngReq.reservation.exists = true
 			return []nodeGroupRequirements{ngReq}, nil
 		}
@@ -2550,7 +2550,7 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 		if reservations.IsAggregateReservation(r) {
 			// Aggregate reservations are not usable without TPU request specified
 			// or accelerator count and type present in pod labels (e.g. for balloon pods).
-			if !canUseAggregateReservation(pReq, req.tpuRequest) {
+			if !canUseAggregateReservation(pReq, req.tpuRequest, req.computeClassRule) {
 				errs = append(errs, reservationError{zone: req.reservation.zone, err: reservations.NewErrUnusableReservation(ref, "Unable to consume aggregate reservation for non-TPU workloads")})
 				continue
 			}
@@ -2978,10 +2978,13 @@ func requiresAggregateReservation(tpuReq TpuRequest) bool {
 	return !tpuReq.Empty()
 }
 
-// canUseAggregateReservation returns true if the pod requirements or TPU request
+// canUseAggregateReservation returns true if the pod requirements, TPU request, or Compute Class rule
 // implies that an aggregate reservation is usable.
-func canUseAggregateReservation(pReq *podrequirements.Requirements, tpuReq TpuRequest) bool {
+func canUseAggregateReservation(pReq *podrequirements.Requirements, tpuReq TpuRequest, ccRule rules.Rule) bool {
 	if requiresAggregateReservation(tpuReq) {
+		return true
+	}
+	if ccRule != nil && ccRule.TpuType() != "" {
 		return true
 	}
 	accCount, hasAccCount := pReq.LabelReq.GetSingleValue(gkelabels.AcceleratorCountLabel)
