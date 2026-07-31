@@ -16,7 +16,9 @@ package gke
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	"google.golang.org/api/googleapi"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	ca_errors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 )
@@ -423,6 +426,86 @@ func TestMachineTypeErrorCachePolicy(t *testing.T) {
 			gotTTL, gotShouldCache := machineTypeErrorCachePolicy(tc.err)
 			assert.Equal(t, tc.wantTTL, gotTTL)
 			assert.Equal(t, tc.wantShouldCache, gotShouldCache)
+		})
+	}
+}
+
+func TestGkeMigListerHandleMigIssue(t *testing.T) {
+	gceRef := gce.GceRef{
+		Project: "project1",
+		Zone:    "zone",
+		Name:    "mig1",
+	}
+
+	tests := []struct {
+		name        string
+		err         error
+		wantBlocked bool
+		wantReason  IrretrievableMigBlockReason
+	}{
+		{
+			name: "GKE Auth 404 error (wrapped googleapi.Error 404)",
+			err: &url.Error{
+				Op:  "Post",
+				URL: "https://compute.googleapis.com/...",
+				Err: fmt.Errorf("token request failed: %w", &googleapi.Error{
+					Code:    http.StatusNotFound,
+					Message: "Not Found",
+				}),
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonNotFound,
+		},
+		{
+			name: "GKE Auth 500 error (wrapped googleapi.Error 500)",
+			err: &url.Error{
+				Op:  "Post",
+				URL: "https://compute.googleapis.com/...",
+				Err: fmt.Errorf("token request failed: %w", &googleapi.Error{
+					Code:    http.StatusInternalServerError,
+					Message: "Internal Server Error",
+				}),
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		{
+			name: "Wrapped AutoscalerError (NodeGroupDoesNotExistError)",
+			err: fmt.Errorf("helper failed: %w", ca_errors.NewAutoscalerError(
+				ca_errors.NodeGroupDoesNotExistError,
+				"Node group does not exist",
+			)),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonNotFound,
+		},
+		{
+			name:        "Generic error (should not block)",
+			err:         errors.New("some generic error"),
+			wantBlocked: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := NewGkeCache(&MockGceCache{}, nodetemplate.NewCache())
+			// maxIrretrievableErrsBeforeBlocked = 2
+			migLister := NewGkeMigLister(cache, 15*time.Minute, 24*time.Hour, 2)
+
+			// First failure - should mark but not block
+			migLister.HandleMigIssue(gceRef, tc.err)
+			assert.False(t, cache.IsMigBlocked(gceRef))
+
+			// Second failure
+			migLister.HandleMigIssue(gceRef, tc.err)
+
+			if tc.wantBlocked {
+				assert.True(t, cache.IsMigBlocked(gceRef))
+				blocked, reason := cache.BlockReason(gceRef)
+				assert.True(t, blocked)
+				assert.Equal(t, tc.wantReason, reason)
+			} else {
+				assert.False(t, cache.IsMigBlocked(gceRef))
+			}
 		})
 	}
 }

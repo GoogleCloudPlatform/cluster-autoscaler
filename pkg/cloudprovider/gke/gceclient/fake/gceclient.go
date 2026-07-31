@@ -232,6 +232,8 @@ func (g *GceClient) WithZones(standardZones map[string][]string, aiZones map[str
 
 // WithAvailableCpuPlatforms sets the available CPU platforms for zones.
 func (g *GceClient) WithAvailableCpuPlatforms(platforms map[string][]string) *GceClient {
+	g.Lock()
+	defer g.Unlock()
 	g.availableCpuPlatforms = platforms
 	return g
 }
@@ -732,10 +734,14 @@ func (g *GceClient) FetchStandardZones(region string) ([]string, error) {
 }
 
 func (g *GceClient) FetchAvailableCpuPlatforms() (map[string][]string, error) {
+	g.Lock()
+	defer g.Unlock()
 	return g.availableCpuPlatforms, nil
 }
 
 func (g *GceClient) FetchAvailableDiskTypes(zone string) ([]string, error) {
+	g.Lock()
+	defer g.Unlock()
 	return g.zoneToDiskTypes[zone], nil
 }
 
@@ -1059,6 +1065,8 @@ func (g *GceClient) WaitForOperation(operationName, operationType, project, zone
 }
 
 func (g *GceClient) FetchAcceleratorTypes(zone string) (*gcev1.AcceleratorTypeList, error) {
+	g.Lock()
+	defer g.Unlock()
 	return g.accelerators, nil
 }
 

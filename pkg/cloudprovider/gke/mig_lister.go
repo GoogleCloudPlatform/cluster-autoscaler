@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -22,7 +23,7 @@ import (
 	"google.golang.org/api/googleapi"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
 )
 
 const (
@@ -136,19 +137,30 @@ func (l *gkeMigLister) HandleMigIssue(migRef gce.GceRef, err error) {
 }
 
 func isServerError(err error) bool {
-	gErr, gOk := err.(*googleapi.Error)
-	return gOk && IsStatusCodeServerErrorResponse(gErr.Code)
+	var gErr *googleapi.Error
+	if errors.As(err, &gErr) {
+		return IsStatusCodeServerErrorResponse(gErr.Code)
+	}
+	return false
 }
 
 func isNotFoundError(err error) bool {
-	gErr, gOk := err.(*googleapi.Error)
-	caErr, caOk := err.(errors.AutoscalerError)
-	return (gOk && gErr.Code == http.StatusNotFound) || (caOk && caErr.Type() == errors.NodeGroupDoesNotExistError)
+	var gErr *googleapi.Error
+	if errors.As(err, &gErr) {
+		if gErr.Code == http.StatusNotFound {
+			return true
+		}
+	}
+	var caErr caerrors.AutoscalerError
+	if errors.As(err, &caErr) {
+		return caErr.Type() == caerrors.NodeGroupDoesNotExistError
+	}
+	return false
 }
 
 func isCloudProviderError(err error) bool {
-	caErr, caOk := err.(errors.AutoscalerError)
-	return caOk && caErr.Type() == errors.CloudProviderError
+	var caErr caerrors.AutoscalerError
+	return errors.As(err, &caErr) && caErr.Type() == caerrors.CloudProviderError
 }
 
 // InvalidateIrretrievableMigsCacheIfExpired invalidates irretrievable Migs cache if it has expired

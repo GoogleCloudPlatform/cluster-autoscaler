@@ -89,7 +89,7 @@ func (ts *tenantTokenSource) Token() (*oauth2.Token, error) {
 	tokenURL := ts.tokenURL
 	u, err := url.Parse(tokenURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse token URL %q: %v", tokenURL, err)
+		return nil, fmt.Errorf("failed to parse token URL %q: %w", tokenURL, err)
 	}
 	host := u.Hostname()
 	if host != "googleapis.com" && !strings.HasSuffix(host, ".googleapis.com") {
@@ -100,25 +100,25 @@ func (ts *tenantTokenSource) Token() (*oauth2.Token, error) {
 
 	req, err := http.NewRequest("POST", tokenURL, bytes.NewBufferString(ts.authConfig.TokenBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create token request: %v", err)
+		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := ts.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch tenant token: %v", err)
+		return nil, fmt.Errorf("failed to fetch tenant token: %w", err)
 	}
 	defer resp.Body.Close()
 
 	klog.Infof("Token request to %s returned status: %s", tokenURL, resp.Status)
 
 	if err := googleapi.CheckResponse(resp); err != nil {
-		return nil, fmt.Errorf("token request failed: %v", err)
+		return nil, fmt.Errorf("token request failed: %w", err)
 	}
 
 	var tr tokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
-		return nil, fmt.Errorf("failed to decode token response: %v", err)
+		return nil, fmt.Errorf("failed to decode token response: %w", err)
 	}
 
 	accessToken := tr.AccessToken
@@ -183,7 +183,7 @@ func (ts *tenantTokenSource) generateTenantProjectTokenURL() (string, error) {
 		ClusterID string `json:"clusterId"`
 	}
 	if err := json.Unmarshal([]byte(ts.authConfig.TokenBody), &body); err != nil {
-		return "", fmt.Errorf("failed to parse token body for per-tenant-project URL: %v", err)
+		return "", fmt.Errorf("failed to parse token body for per-tenant-project URL: %w", err)
 	}
 
 	if body.ClusterID == "" {

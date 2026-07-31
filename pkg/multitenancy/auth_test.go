@@ -15,10 +15,17 @@
 package multitenancy
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/api/googleapi"
+	"k8s.io/client-go/util/flowcontrol"
 )
 
 func TestGenerateTenantProjectTokenURL(t *testing.T) {
@@ -172,6 +179,79 @@ func TestTenantTokenSource_Validation(t *testing.T) {
 					assert.NotContains(t, err.Error(), "is not a trusted Google API domain")
 				}
 			}
+		})
+	}
+}
+
+type mockRoundTripper struct {
+	roundTrip func(req *http.Request) (*http.Response, error)
+}
+
+func (m *mockRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return m.roundTrip(req)
+}
+
+func TestTenantTokenSource_TokenErrorWrapping(t *testing.T) {
+	tests := []struct {
+		name          string
+		roundTripFunc func(req *http.Request) (*http.Response, error)
+		verifyError   func(t *testing.T, err error)
+	}{
+		{
+			name: "Network error wrapping",
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return nil, errors.New("network fail")
+			},
+			verifyError: func(t *testing.T, err error) {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to fetch tenant token")
+				assert.Contains(t, err.Error(), "network fail")
+				var urlErr *url.Error
+				if assert.True(t, errors.As(err, &urlErr)) {
+					assert.Equal(t, "network fail", urlErr.Err.Error())
+				}
+			},
+		},
+		{
+			name: "HTTP 404 error wrapping",
+			roundTripFunc: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Body:       io.NopCloser(bytes.NewBufferString(`{"error":{"code":404,"message":"Not Found"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			},
+			verifyError: func(t *testing.T, err error) {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "token request failed")
+
+				var gErr *googleapi.Error
+				if assert.True(t, errors.As(err, &gErr)) {
+					assert.Equal(t, http.StatusNotFound, gErr.Code)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			authConfig := &AuthConfig{
+				TokenURL:  "https://container.googleapis.com/v1/projects/123/locations/us-central1/tenants/t1:generateTenantToken",
+				TokenBody: `{"clusterId":"test-cluster"}`,
+			}
+			ts := &tenantTokenSource{
+				authConfig:           authConfig,
+				clusterProjectNumber: 87654321,
+				tenantProjectNumber:  12345678,
+				tokenURL:             authConfig.TokenURL,
+				httpClient: &http.Client{
+					Transport: &mockRoundTripper{roundTrip: tt.roundTripFunc},
+				},
+				throttle: flowcontrol.NewTokenBucketRateLimiter(tokenURLQPS, tokenURLBurst),
+			}
+
+			_, err := ts.Token()
+			tt.verifyError(t, err)
 		})
 	}
 }
