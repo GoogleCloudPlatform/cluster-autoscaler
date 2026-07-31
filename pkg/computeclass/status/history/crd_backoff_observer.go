@@ -26,11 +26,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 )
 
 const (
-	ConditionTypeNodeProvisioningInCooldown        = "NodeProvisioningInCooldown"
-	ConditionTypeNodeProvisioningInPartialCooldown = "NodeProvisioningInPartialCooldown"
+	ConditionTypeNodeProvisioningInCooldown        = "ProvisioningSuspended"
+	ConditionTypeNodeProvisioningInPartialCooldown = "ProvisioningConstrained"
 )
 
 type ruleBackoffKey struct {
@@ -213,13 +214,16 @@ func (i *CrdBackoffObserver) RemoveExpiredBackoffs(currentTime time.Time) {
 				Mutate: func(s crd.CRDStatus) {
 					existingConditions := s.GetRuleConditions(ruleIdxStr)
 					var deduplicated []metav1.Condition
+					// CrdBackoffObserver only manages cooldown conditions it emitted (such as QuotaExceeded
+					// or InternalError). Preserve any conditions with reason ConditionReasonFilteredOut, as those
+					// are managed independently by Flex Advisor.
 					for _, existing := range existingConditions {
 						if data.isFullCooldown {
-							if existing.Type != ConditionTypeNodeProvisioningInCooldown {
+							if existing.Type != ConditionTypeNodeProvisioningInCooldown || existing.Reason == flexadvisor.ConditionReasonFilteredOut {
 								deduplicated = append(deduplicated, existing)
 							}
 						} else {
-							if existing.Type != ConditionTypeNodeProvisioningInPartialCooldown {
+							if existing.Type != ConditionTypeNodeProvisioningInPartialCooldown || existing.Reason == flexadvisor.ConditionReasonFilteredOut {
 								deduplicated = append(deduplicated, existing)
 							}
 						}

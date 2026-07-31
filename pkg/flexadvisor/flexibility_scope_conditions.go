@@ -79,28 +79,38 @@ func (w *scopeWorker) updateRuleFilteringConditions(results map[string]*api.Inst
 			Mutate: func(s crd.CRDStatus) {
 				existingConditions := s.GetRuleConditions(ruleIdxStr)
 				var deduplicated []metav1.Condition
+				hasFullCooldown := false
 				for _, existing := range existingConditions {
-					if existing.Type != ConditionTypeRuleFilteredOut && existing.Type != ConditionTypeRulePartiallyFiltered {
+					isFlexAdvisorCondition := (existing.Type == ConditionTypeRuleFilteredOut || existing.Type == ConditionTypeRulePartiallyFiltered) &&
+						existing.Reason == ConditionReasonFilteredOut
+					if !isFlexAdvisorCondition {
 						deduplicated = append(deduplicated, existing)
 					}
+					// If an authoritative full cooldown condition (such as QuotaExceeded or InternalError)
+					// is already active on the rule, suppress emitting partial filtering conditions from Flex Advisor.
+					if existing.Type == ConditionTypeRuleFilteredOut && existing.Reason != ConditionReasonFilteredOut {
+						hasFullCooldown = true
+					}
 				}
-				switch res.state {
-				case FilteringStateFull:
-					deduplicated = append(deduplicated, metav1.Condition{
-						Type:               ConditionTypeRuleFilteredOut,
-						Status:             metav1.ConditionTrue,
-						Reason:             ConditionReasonFilteredOut,
-						Message:            fmt.Sprintf(ConditionMessageFilteredOutFormat, res.totalCount),
-						LastTransitionTime: metav1.Now(),
-					})
-				case FilteringStatePartial:
-					deduplicated = append(deduplicated, metav1.Condition{
-						Type:               ConditionTypeRulePartiallyFiltered,
-						Status:             metav1.ConditionTrue,
-						Reason:             ConditionReasonFilteredOut,
-						Message:            fmt.Sprintf(ConditionMessagePartiallyFilteredFormat, res.filteredCount, res.totalCount),
-						LastTransitionTime: metav1.Now(),
-					})
+				if !hasFullCooldown {
+					var conditionType, message string
+					switch res.state {
+					case FilteringStateFull:
+						conditionType = ConditionTypeRuleFilteredOut
+						message = fmt.Sprintf(ConditionMessageFilteredOutFormat, res.totalCount)
+					case FilteringStatePartial:
+						conditionType = ConditionTypeRulePartiallyFiltered
+						message = fmt.Sprintf(ConditionMessagePartiallyFilteredFormat, res.filteredCount, res.totalCount)
+					}
+					if conditionType != "" {
+						deduplicated = append(deduplicated, metav1.Condition{
+							Type:               conditionType,
+							Status:             metav1.ConditionTrue,
+							Reason:             ConditionReasonFilteredOut,
+							Message:            message,
+							LastTransitionTime: metav1.Now(),
+						})
+					}
 				}
 				s.UpdateRuleConditions(ruleIdxStr, deduplicated)
 			},

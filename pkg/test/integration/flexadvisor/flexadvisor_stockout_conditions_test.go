@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	tu "k8s.io/autoscaler/cluster-autoscaler/utils/test"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
@@ -328,5 +329,97 @@ func TestStockOutConditionsClearedWhenHealthy(t *testing.T) {
 			Build()
 
 		ccc.AssertComputeClassConditions(t, expectedStatusPhase2, got.Status, "ComputeClassStatus mismatch in Phase 2 (Recovery)")
+	})
+}
+
+// TestStockOutConditionsPreservesQuotaBackoff verifies that when a QuotaExceeded error occurs
+// (triggering a "ProvisioningSuspended" condition from CrdBackoffObserver), Flex Advisor does not
+// overwrite or delete that condition even when it evaluates partial availability for the rule.
+func TestStockOutConditionsPreservesQuotaBackoff(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("test-ccc-quota").
+		WithLabel(gkelabels.ComputeClassLabel, "test-ccc-quota").
+		WithPriorities(
+			ccc_api.Priority{
+				MachineType: ptr.To("n2-standard-4"),
+			},
+			ccc_api.Priority{
+				MachineType: ptr.To("e2-standard-4"),
+			},
+		).
+		Build()
+
+	np1 := integration.EmptyNodePool("pool-1").
+		WithMachineType("n2-standard-4").
+		WithCCCLabel("test-ccc-quota").
+		WithCCCTaint("test-ccc-quota").
+		Build()
+	np1.Locations = []string{"us-central1-a", "us-central1-b"}
+
+	np2 := integration.EmptyNodePool("pool-2").
+		WithMachineType("e2-standard-4").
+		WithCCCLabel("test-ccc-quota").
+		WithCCCTaint("test-ccc-quota").
+		Build()
+	np2.Locations = []string{"us-central1-a", "us-central1-b"}
+
+	testConfig := integration.NewTestConfig().
+		WithNodePools(np1, np2).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithClusterZones("us-central1-a", "us-central1-b"),
+		).
+		WithRegionToZones(map[string][]string{"us-central1": {"us-central1-a", "us-central1-b"}}).
+		WithOverrides(
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithEnhancedCrdStatusReportingEnabled(),
+			integration.WithAutoProvisioningEnabled(),
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		_, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Create(ctx, cccObj, metav1.CreateOptions{})
+		assert.NoError(t, err)
+
+		// Set a quota error on zone us-central1-a
+		infra.Fakes.GceService.SetCreateInstanceForZoneError("us-central1-a", cloudprovider.InstanceErrorInfo{
+			ErrorClass:   cloudprovider.OutOfResourcesErrorClass,
+			ErrorCode:    "QUOTA_EXCEEDED",
+			ErrorMessage: "Simulated quota error in zone a",
+		})
+
+		// Configure Flex Advisor guidance simulating partial availability (1 available instance out of 2)
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("n2-standard-4").WithCapacity(1),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		pod := tu.BuildTestPod("quota-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc-quota"), pod.WithNodeSelectorEntry("topology.kubernetes.io/zone", "us-central1-a"))
+		infra.Fakes.K8s.AddPod(pod)
+
+		// Loop 1: Scale-up attempt encounters quota error and emits QuotaExceeded condition.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+
+		// Loop 2: Run autoscaler again after cache is populated.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+
+		// Flush status aggregator.
+		time.Sleep(conditionsFlushInterval)
+
+		got, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, "test-ccc-quota", metav1.GetOptions{})
+		assert.NoError(t, err)
+
+		if assert.NotEmpty(t, got.Status.PriorityStatuses, "PriorityStatuses should not be empty") {
+			conds := got.Status.PriorityStatuses[0].Conditions
+			if assert.Len(t, conds, 1, "should preserve QuotaExceeded condition without adding partial filtering condition") {
+				assert.Equal(t, "ProvisioningSuspended", conds[0].Type)
+				assert.Equal(t, "QuotaExceeded", conds[0].Reason)
+				assert.Contains(t, conds[0].Message, "QuotaExceeded")
+			}
+		}
 	})
 }
