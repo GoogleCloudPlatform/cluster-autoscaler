@@ -18,10 +18,15 @@ import (
 	"context"
 	"fmt"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
+	"k8s.io/klog/v2"
 	"k8s.io/utils/set"
 )
 
@@ -29,6 +34,12 @@ import (
 // Source: https://docs.cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers/resumeInstances
 // Date of access: 2026.03.27
 const maxBatchSize = 1000
+
+// CSNCompositeBackoff handles backoff logic specifically for CSN resumption errors.
+type CSNCompositeBackoff interface {
+	base_backoff.Backoff
+	ReportResumptionError(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorCode, errorMessage, instanceStatus string)
+}
 
 type instance struct {
 	Ref    gce.GceRef
@@ -39,13 +50,15 @@ type ConsumeHandler struct {
 	stateManager  StateManager
 	cloudProvider CloudProvider
 	k8sClient     K8sClient
+	backoff       CSNCompositeBackoff
 }
 
-func NewConsumeHandler(sm StateManager, cp CloudProvider, c K8sClient) *ConsumeHandler {
+func NewConsumeHandler(sm StateManager, cp CloudProvider, c K8sClient, b CSNCompositeBackoff) *ConsumeHandler {
 	return &ConsumeHandler{
 		stateManager:  sm,
 		cloudProvider: cp,
 		k8sClient:     c,
+		backoff:       b,
 	}
 }
 
@@ -70,6 +83,7 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		refs = append(refs, inst.Ref)
 	}
 
+	nonBlockingErrorsHandler := h.getNonBlockingErrorsHandler()
 	for i := 0; i < len(refs); i += maxBatchSize {
 		end := i + maxBatchSize
 		if end > len(refs) {
@@ -77,13 +91,34 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		}
 		batch := refs[i:end]
 
-		err := h.cloudProvider.ResumeInstances(op.MIG, batch)
+		err := h.cloudProvider.ResumeInstances(op.MIG, batch, nonBlockingErrorsHandler)
 		status := gceSuccess
 		if err != nil {
 			status = gceFailure
 			result.AddErrForRefSlice(fmt.Errorf("failed to resume instances: %w, instances in batch: %v", err, instancesToResume[i:end]), batch)
 		}
 		opGceBatchSize.WithLabelValues(resumeCall, status).Observe(float64(len(batch)))
+	}
+}
+
+// getNonBlockingErrorsHandler returns a non blocking errors handler (needed by ResumeInstances method) that reports node-level GCE errors to the global backoff.
+func (h *ConsumeHandler) getNonBlockingErrorsHandler() gceclient.NonBlockingErrorsHandler {
+	if h.backoff == nil || !h.stateManager.IsBackoffEnabled() {
+		return nil
+	}
+	return func(ref gce.GceRef, code, msg, instanceStatus string) {
+		tn, ok := h.stateManager.Get(ref.Name)
+		if !ok || tn.Node == nil {
+			return
+		}
+		nodeGroup, _ := h.cloudProvider.GkeMigForNode(tn.Node)
+		if nodeGroup == nil {
+			return
+		}
+		nodeInfo := framework.NewNodeInfo(tn.Node, nil)
+		h.backoff.ReportResumptionError(nodeGroup, nodeInfo, code, msg, instanceStatus)
+		klog.Errorf("Resuming node %q encountered an error (will continue polling for resumption but will trigger global backoffs): code %q, message: %q, instance status: %q", tn.Node.Name, code, msg, instanceStatus)
+		// Note that GCE will continue resuming the instance forever until the resumption succeed or the node is deleted. That's why we don't stop polling until timeout.
 	}
 }
 

@@ -62,6 +62,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 		csnNodes                   []nodecontroller.CSNNode
 		nonConsumableNodes         []string
 		nodesWithPendingOperations []string
+		backedOffNodes             []string
 		unschedulablePods          []*apiv1.Pod
 		experimentsManager         experiments.Manager
 		listErr                    error
@@ -223,6 +224,40 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectErr:                 false,
 			expectedUnschedulablePods: []string{},
 			expectedAllConsumedNodes:  []string{"node-1", "node-4"},
+		},
+		{
+			name: "Backed-off suspended nodes are filtered out by WithoutBackedOffSuspendedFilter and not consumed",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+				create8CPUTestNode(t, "node-2", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+				{Name: "node-2", DesiredState: csn.NodeStateChilling},
+			},
+			backedOffNodes: []string{"node-1"},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p1", 1000, 1*GiB),
+			},
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-2"},
+		},
+		{
+			name: "Backed-off chilling nodes are NOT filtered out by WithoutBackedOffSuspendedFilter",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+			},
+			backedOffNodes: []string{"node-1"},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p1", 1000, 1*GiB),
+			},
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1"},
 		},
 		{
 			name: "Successful prioritizing chilling nodes",
@@ -468,6 +503,10 @@ func TestBufferConsumptionProcess(t *testing.T) {
 
 			mockController := nodecontrollertesting.NewMockCSNNodeController(tc.csnNodes)
 			mockController.MarkAsHasPendingOperations(tc.nodesWithPendingOperations)
+			mockController.MarkAsBackedOff(tc.backedOffNodes)
+			for _, n := range tc.initialNodes {
+				mockController.SetCurrentState(n.Name, csn.ClassifyNode(n))
+			}
 			mockController.SetNonConsumableNodes(tc.nonConsumableNodes)
 			mockController.SetListError(tc.listErr)
 

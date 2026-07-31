@@ -35,11 +35,24 @@ type mockStateManager struct {
 }
 
 func (m *mockStateManager) List(filters ...state.NodeFilter) []state.TrackedNode {
-	// let's make sure filter is used.
-	if !slices.Equal(filters, []state.NodeFilter{state.WithoutPendingOperationsFilter}) {
+	// Let's make sure at least one filter was provided by the caller.
+	if len(filters) == 0 {
 		return nil
 	}
-	return m.trackedNodes
+	var result []state.TrackedNode
+	for _, tn := range m.trackedNodes {
+		pass := true
+		for _, filter := range filters {
+			if filter != nil && !filter(&tn) {
+				pass = false
+				break
+			}
+		}
+		if pass {
+			result = append(result, tn)
+		}
+	}
+	return result
 }
 
 func (m *mockStateManager) Get(nodeName string) (state.TrackedNode, bool) {

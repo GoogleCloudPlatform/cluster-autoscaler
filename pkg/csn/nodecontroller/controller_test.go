@@ -41,6 +41,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/cfg"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops/handler"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
@@ -184,10 +185,10 @@ func TestReconciliation(t *testing.T) {
 		// Verify after init
 		gotNodes, err := c.List()
 		assert.NoError(t, err)
-		assert.ElementsMatch(t, []CSNNode{
+		assert.True(t, nodesMatch(gotNodes, []CSNNode{
 			{Name: suspendedNode.Name, DesiredState: csn.NodeStateSuspended},
 			{Name: chillingNode.Name, DesiredState: csn.NodeStateChilling},
-		}, gotNodes)
+		}))
 
 		patchChan := mustGetPatchWaitChannel(t, suite.ClientSet, 1)
 		resumeNode.Store(true)
@@ -202,10 +203,10 @@ func TestReconciliation(t *testing.T) {
 		// The state for the previously suspended node should be consumed.
 		gotNodes, err = c.List()
 		assert.NoError(t, err)
-		assert.ElementsMatch(t, []CSNNode{
+		assert.True(t, nodesMatch(gotNodes, []CSNNode{
 			{Name: suspendedNode.Name, DesiredState: csn.NodeStateConsumed},
 			{Name: chillingNode.Name, DesiredState: csn.NodeStateChilling},
-		}, gotNodes)
+		}))
 
 		// Node should not be recognizable as a CSN node.
 		n, err := suite.ClientSet.CoreV1().Nodes().Get(t.Context(), suspendedNode.Name, metav1.GetOptions{})
@@ -280,7 +281,7 @@ func nodesMatch(actual, expected []CSNNode) bool {
 		return expected[i].Name < expected[j].Name
 	})
 	for i := range actual {
-		if actual[i] != expected[i] {
+		if actual[i].Name != expected[i].Name || actual[i].DesiredState != expected[i].DesiredState || actual[i].Buffer.Id() != expected[i].Buffer.Id() {
 			return false
 		}
 	}
@@ -662,9 +663,11 @@ func TestProcessBufferAssignment(t *testing.T) {
 }
 
 type controllerTestSuite struct {
-	ClientSet     kubernetes.Interface
-	CloudProvider *test.MockCloudProvider
-	skipCacheSync bool
+	ClientSet            kubernetes.Interface
+	CloudProvider        *test.MockCloudProvider
+	Backoff              handler.CSNCompositeBackoff
+	skipCacheSync        bool
+	csnBackoffExperiment bool
 }
 
 type suiteOpt func(*controllerTestSuite)
@@ -682,6 +685,18 @@ func withInitialNodes(nodes ...*v1.Node) suiteOpt {
 func withCloudProvider(m *test.MockCloudProvider) suiteOpt {
 	return func(suite *controllerTestSuite) {
 		suite.CloudProvider = m
+	}
+}
+
+func withBackoff(b handler.CSNCompositeBackoff) suiteOpt {
+	return func(suite *controllerTestSuite) {
+		suite.Backoff = b
+	}
+}
+
+func withCSNBackoffExperiment(enabled bool) suiteOpt {
+	return func(suite *controllerTestSuite) {
+		suite.csnBackoffExperiment = enabled
 	}
 }
 
@@ -704,13 +719,15 @@ func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controller
 
 	experimentsManager := experiments.NewMockManagerWithOptions(
 		version.Version{},
-		nil,
+		map[string]bool{
+			experiments.ColdStandbyNodesBackoffMinCAVersionFlag: suite.csnBackoffExperiment,
+		},
 		map[string]string{
 			experiments.ColdStandbyNodesControllerConfigV1Flag: cfg.ExampleControllerJSON,
 		},
 	)
 	factory := informers.NewSharedInformerFactory(suite.ClientSet, 0)
-	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager)
+	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager, suite.Backoff)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
@@ -798,4 +815,116 @@ func TestBufferInfo_Id(t *testing.T) {
 			assert.Equal(t, tc.expected, tc.bi.Id())
 		})
 	}
+}
+
+func TestWithoutBackedOffSuspendedFilter(t *testing.T) {
+	mig1 := gke.NewTestGkeMigBuilder().
+		SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-1"}).
+		Build()
+	mig2 := gke.NewTestGkeMigBuilder().
+		SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-2"}).
+		Build()
+
+	n1 := test.CreateNode("n1", test.StateOpt(csn.NodeStateSuspended))
+	n2 := test.CreateNode("n2", test.StateOpt(csn.NodeStateChilling))
+	n3 := test.CreateNode("n3", test.StateOpt(csn.NodeStateSuspended))
+
+	testCases := []struct {
+		name              string
+		experimentEnabled bool
+		expectedNodeNames []string
+	}{
+		{
+			name:              "experiment enabled filters out backed-off suspended nodes",
+			experimentEnabled: true,
+			expectedNodeNames: []string{"n2", "n3"},
+		},
+		{
+			name:              "experiment disabled does not filter out backed-off suspended nodes",
+			experimentEnabled: false,
+			expectedNodeNames: []string{"n1", "n2", "n3"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mb := &test.MockBackoff{
+					BackedOffMigs: map[string]bool{
+						mig1.Id(): true,
+					},
+				}
+
+				c, _ := createSuite(t,
+					withInitialNodes(n1.DeepCopy(), n2.DeepCopy(), n3.DeepCopy()),
+					withCloudProvider(&test.MockCloudProvider{
+						NodeNameToMIG: map[string]*gke.GkeMig{
+							n1.Name: mig1,
+							n2.Name: mig1,
+							n3.Name: mig2,
+						},
+					}),
+					withBackoff(mb),
+					withCSNBackoffExperiment(tc.experimentEnabled),
+				)
+				synctest.Wait()
+
+				nodes, err := c.List()
+				assert.NoError(t, err)
+				assert.Len(t, nodes, 3)
+
+				nodesFiltered, err := c.List(WithoutBackedOffSuspendedFilter)
+				assert.NoError(t, err)
+				names := []string{}
+				for _, node := range nodesFiltered {
+					names = append(names, node.Name)
+				}
+				assert.ElementsMatch(t, tc.expectedNodeNames, names)
+			})
+		})
+	}
+}
+
+func TestCustomCallerFilters(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mig1 := gke.NewTestGkeMigBuilder().
+			SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-1"}).
+			Build()
+
+		n1 := test.CreateNode("n1", test.StateOpt(csn.NodeStateSuspended))
+		n2 := test.CreateNode("n2", test.StateOpt(csn.NodeStateChilling))
+		n3 := test.CreateNode("n3", test.StateOpt(csn.NodeStateChilling))
+
+		mb := &test.MockBackoff{
+			BackedOffMigs: map[string]bool{
+				mig1.Id(): true,
+			},
+		}
+
+		c, _ := createSuite(t,
+			withInitialNodes(n1.DeepCopy(), n2.DeepCopy(), n3.DeepCopy()),
+			withCloudProvider(&test.MockCloudProvider{
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					n1.Name: mig1,
+					n2.Name: mig1,
+					n3.Name: mig1,
+				},
+			}),
+			withBackoff(mb),
+			withCSNBackoffExperiment(true),
+		)
+		synctest.Wait()
+
+		customFilter := func(n CSNNode) bool {
+			return (n.State == csn.NodeStateSuspended && n.IsBackedOff()) || (n.State == csn.NodeStateChilling && n.Name == "n3")
+		}
+
+		filtered, err := c.List(customFilter)
+		assert.NoError(t, err)
+		names := []string{}
+		for _, node := range filtered {
+			names = append(names, node.Name)
+		}
+		assert.ElementsMatch(t, []string{"n1", "n3"}, names)
+	})
 }

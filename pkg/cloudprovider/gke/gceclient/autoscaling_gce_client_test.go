@@ -1726,7 +1726,7 @@ func TestResumeInstances(t *testing.T) {
 				makeServerReturnInstancesWithStatus(t, server, "RUNNING", tt.migRef, tt.instances)
 			}
 
-			err := gceInternalService.ResumeInstances(tt.migRef, tt.instances)
+			err := gceInternalService.ResumeInstances(tt.migRef, tt.instances, nil)
 
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
@@ -1841,6 +1841,182 @@ func makeServerReturnInstancesWithStatus(t *testing.T, server *test_util.HttpSer
 	assert.NoError(t, err)
 	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
 	server.On("handle", listPath).Return(string(b)).Once()
+}
+
+func TestActionFinishedForAllInstances(t *testing.T) {
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+	tests := []struct {
+		name         string
+		action       string
+		instances    []*gce_api.ManagedInstance
+		expectResult bool
+		expectErr    string
+	}{
+		{
+			name:   "all instances finished",
+			action: "RESUMING",
+			instances: []*gce_api.ManagedInstance{
+				{Name: "inst1", Instance: "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1", CurrentAction: "NONE"},
+			},
+			expectResult: true,
+		},
+		{
+			name:   "some instances still running action",
+			action: "RESUMING",
+			instances: []*gce_api.ManagedInstance{
+				{Name: "inst1", Instance: "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1", CurrentAction: "RESUMING"},
+			},
+			expectResult: false,
+		},
+		{
+			name:   "transient error handler invoked",
+			action: "RESUMING",
+			instances: []*gce_api.ManagedInstance{
+				{
+					Name:          "inst1",
+					Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
+					CurrentAction: "NONE",
+					LastAttempt: &gce_api.ManagedInstanceLastAttempt{
+						Errors: &gce_api.ManagedInstanceLastAttemptErrors{
+							Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
+								{Code: "RESOURCE_NOT_FOUND", Message: "Instance not found"},
+							},
+						},
+					},
+				},
+			},
+			expectResult: true,
+			expectErr:    "RESOURCE_NOT_FOUND",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+
+			lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
+				ManagedInstances: tt.instances,
+			}
+			b, err := json.Marshal(lmiResponse)
+			assert.NoError(t, err)
+			listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+			server.On("handle", listPath).Return(string(b)).Once()
+
+			gceInternalService := newTestAutoscalingInternalGceClient(
+				t,
+				migRef.Project,
+				server.URL,
+				false,
+				false,
+			)
+
+			var handledErrCode string
+			nonBlockingErrorsHandler := func(ref gce.GceRef, code, msg, instanceStatus string) {
+				assert.Equal(t, inst1Ref, ref)
+				handledErrCode = code
+			}
+
+			result := gceInternalService.actionFinishedForAllInstances(tt.action, migRef, []gce.GceRef{inst1Ref}, nonBlockingErrorsHandler)
+			assert.Equal(t, tt.expectResult, result)
+			assert.Equal(t, tt.expectErr, handledErrCode)
+		})
+	}
+}
+
+func TestWaitForActionToStopRunning_Deduplication(t *testing.T) {
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+	action := "RESUMING"
+
+	server := test_util.NewHttpServerMock()
+	defer server.Close()
+
+	// Return a response with the same error multiple times (3 times).
+	lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
+		ManagedInstances: []*gce_api.ManagedInstance{
+			{
+				Name:          "inst1",
+				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
+				CurrentAction: action,
+				LastAttempt: &gce_api.ManagedInstanceLastAttempt{
+					Errors: &gce_api.ManagedInstanceLastAttemptErrors{
+						Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
+							{Code: "RESOURCE_NOT_FOUND", Message: "Instance not found"},
+						},
+					},
+				},
+			},
+		},
+	}
+	b, err := json.Marshal(lmiResponse)
+	assert.NoError(t, err)
+
+	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+	server.On("handle", listPath).Return(string(b)).Times(3)
+
+	// Then return a new error
+	lmiResponseNewError := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
+		ManagedInstances: []*gce_api.ManagedInstance{
+			{
+				Name:          "inst1",
+				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
+				CurrentAction: action,
+				LastAttempt: &gce_api.ManagedInstanceLastAttempt{
+					Errors: &gce_api.ManagedInstanceLastAttemptErrors{
+						Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
+							{Code: "INTERNAL_ERROR", Message: "Something else"},
+						},
+					},
+				},
+			},
+		},
+	}
+	bNewError, err := json.Marshal(lmiResponseNewError)
+	assert.NoError(t, err)
+	server.On("handle", listPath).Return(string(bNewError)).Once()
+
+	// Then return a success response (CurrentAction="NONE") to exit loop
+	successResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
+		ManagedInstances: []*gce_api.ManagedInstance{
+			{
+				Name:          "inst1",
+				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
+				CurrentAction: "NONE",
+			},
+		},
+	}
+	bSuccess, err := json.Marshal(successResponse)
+	assert.NoError(t, err)
+	server.On("handle", listPath).Return(string(bSuccess)).Once()
+
+	gceInternalService := newTestAutoscalingInternalGceClient(
+		t,
+		migRef.Project,
+		server.URL,
+		false,
+		false,
+		WithInstanceActionPollingFrequency(time.Millisecond),
+	)
+
+	// Make sure the wait flag evaluates to true so it doesn't return immediately
+	// Note: experiments.NewMockManager() usually returns true by default for boolean flags depending on its implementation.
+	// We will rely on that or the test would timeout or pass instantly.
+
+	callCount := make(map[string]int)
+	nonBlockingErrorsHandler := func(ref gce.GceRef, code, msg, instanceStatus string) {
+		callCount[code]++
+	}
+
+	err = gceInternalService.waitForActionToStopRunning(action, migRef, []gce.GceRef{inst1Ref}, nonBlockingErrorsHandler)
+	assert.NoError(t, err)
+
+	// Due to 5-minute deduplication, the first error "RESOURCE_NOT_FOUND" should only trigger the handler once, despite polling it 3 times.
+	assert.Equal(t, 1, callCount["RESOURCE_NOT_FOUND"])
+	// The second error "INTERNAL_ERROR" should also be reported exactly once.
+	assert.Equal(t, 1, callCount["INTERNAL_ERROR"])
 }
 
 func TestGetGkeErrorCode(t *testing.T) {

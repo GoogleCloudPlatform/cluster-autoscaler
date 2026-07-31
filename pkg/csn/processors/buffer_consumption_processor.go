@@ -125,7 +125,7 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingC
 		return nil, fmt.Errorf("error getting already consumed nodes: %v", err)
 	}
 
-	csnNodes, err := p.nodeController.List(nodecontroller.WithoutPendingOperationsFilter)
+	csnNodes, err := p.nodeController.List(nodecontroller.WithoutPendingOperationsFilter, nodecontroller.WithoutBackedOffSuspendedFilter)
 	if err != nil {
 		return nil, fmt.Errorf("error listing CSN nodes: %v", err)
 	}

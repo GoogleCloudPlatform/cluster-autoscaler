@@ -23,7 +23,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state"
@@ -31,6 +34,31 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/test"
 	"k8s.io/utils/set"
 )
+
+type reportResumptionErrorCall struct {
+	nodeName       string
+	errorCode      string
+	errorMessage   string
+	instanceStatus string
+}
+
+type mockCSNCompositeBackoff struct {
+	CSNCompositeBackoff
+	reportResumptionErrorCalls []reportResumptionErrorCall
+}
+
+func (m *mockCSNCompositeBackoff) ReportResumptionError(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorCode, errorMessage, instanceStatus string) {
+	var nodeName string
+	if nodeInfo != nil && nodeInfo.Node() != nil {
+		nodeName = nodeInfo.Node().Name
+	}
+	m.reportResumptionErrorCalls = append(m.reportResumptionErrorCalls, reportResumptionErrorCall{
+		nodeName:       nodeName,
+		errorCode:      errorCode,
+		errorMessage:   errorMessage,
+		instanceStatus: instanceStatus,
+	})
+}
 
 func TestConsumeHandler_Handle(t *testing.T) {
 	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
@@ -43,9 +71,8 @@ func TestConsumeHandler_Handle(t *testing.T) {
 	invalidNode := test.CreateNode("invalid-node", func(n *v1.Node) {
 		n.Spec.ProviderID = ""
 	})
-	if _, err := gce.GceRefFromProviderId(invalidNode.Spec.ProviderID); err == nil {
-		t.Fatalf("Expected err when calculating GceRef from invalid node")
-	}
+	_, err := gce.GceRefFromProviderId(invalidNode.Spec.ProviderID)
+	assert.Error(t, err, "Expected err when calculating GceRef from invalid node")
 
 	defaultStatusMapping := map[gce.GceRef]*gce.GceInstance{
 		suspendedNodeRef: {GCEStatus: "SUSPENDED"},
@@ -54,17 +81,18 @@ func TestConsumeHandler_Handle(t *testing.T) {
 	}
 
 	tests := []struct {
-		name                    string
-		op                      ops.Operation
-		stateManager            *statetest.MockStateManager
-		cloudProvider           *test.MockCloudProvider
-		k8sClientErr            error
-		expectError             bool
-		expectedSuccessfulNodes set.Set[string]
-		expectedFailedNodes     set.Set[string]
-		expectedResumed         []test.ResumeCall
-		expectedPatched         []test.PatchCall
-		expectedDeltas          []*test.MetricDelta
+		name                               string
+		op                                 ops.Operation
+		stateManager                       *statetest.MockStateManager
+		cloudProvider                      *test.MockCloudProvider
+		k8sClientErr                       error
+		expectError                        bool
+		expectedSuccessfulNodes            set.Set[string]
+		expectedFailedNodes                set.Set[string]
+		expectedResumed                    []test.ResumeCall
+		expectedPatched                    []test.PatchCall
+		expectedReportResumptionErrorCalls []reportResumptionErrorCall
+		expectedDeltas                     []*test.MetricDelta
 	}{
 		{
 			name: "success_single_suspended_node",
@@ -253,6 +281,194 @@ func TestConsumeHandler_Handle(t *testing.T) {
 				test.NewMetricDelta(test.ExpectedValue(0), opGceBatchSize, []string{resumeCall, gceFailure}),
 			},
 		},
+		{
+			name: "non_blocking_error_handler_invoked",
+			op: ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(suspendedNode.Name),
+			},
+			stateManager: &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name: {Node: suspendedNode, State: csn.NodeStateSuspended},
+				},
+			},
+			cloudProvider: &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedNode.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           "RESOURCE_NOT_FOUND",
+				NonBlockingErrorMsg:            "instance not found",
+				ResumeErr:                      errors.New("resume error"),
+			},
+			expectError:         false,
+			expectedFailedNodes: set.New(suspendedNode.Name),
+			expectedResumed:     []test.ResumeCall{{MIG: mig, Instances: []gce.GceRef{suspendedNodeRef}}},
+			expectedReportResumptionErrorCalls: []reportResumptionErrorCall{
+				{
+					nodeName:       suspendedNode.Name,
+					errorCode:      "RESOURCE_NOT_FOUND",
+					errorMessage:   "instance not found",
+					instanceStatus: "SUSPENDED",
+				},
+			},
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{resumeCall, gceFailure}),
+			},
+		},
+		{
+			name: "non_blocking_error_handler_not_invoked_when_backoff_disabled",
+			op: ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(suspendedNode.Name),
+			},
+			stateManager: &statetest.MockStateManager{
+				BackoffEnabled: false,
+				Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name: {Node: suspendedNode, State: csn.NodeStateSuspended},
+				},
+			},
+			cloudProvider: &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedNode.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           "RESOURCE_NOT_FOUND",
+				NonBlockingErrorMsg:            "instance not found",
+				ResumeErr:                      errors.New("resume error"),
+			},
+			expectError:         false,
+			expectedFailedNodes: set.New(suspendedNode.Name),
+			expectedResumed:     []test.ResumeCall{{MIG: mig, Instances: []gce.GceRef{suspendedNodeRef}}},
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{resumeCall, gceFailure}),
+			},
+		},
+		{
+			name: "non_blocking_error_handler_no_mig_for_node",
+			op: ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(suspendedNode.Name),
+			},
+			stateManager: &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name: {Node: suspendedNode, State: csn.NodeStateSuspended},
+				},
+			},
+			cloudProvider: &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedNode.Name: nil,
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           "RESOURCE_NOT_FOUND",
+				NonBlockingErrorMsg:            "instance not found",
+				ResumeErr:                      errors.New("resume error"),
+			},
+			expectError:         false,
+			expectedFailedNodes: set.New(suspendedNode.Name),
+			expectedResumed:     []test.ResumeCall{{MIG: mig, Instances: []gce.GceRef{suspendedNodeRef}}},
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{resumeCall, gceFailure}),
+			},
+		},
+		{
+			name: "non_blocking_error_handler_node_not_in_state_manager",
+			op: ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(suspendedNode.Name),
+			},
+			stateManager: &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name: {Node: suspendedNode, State: csn.NodeStateSuspended},
+				},
+				GetFunc: func() func(nodeName string) (state.TrackedNode, bool) {
+					calls := 0
+					return func(nodeName string) (state.TrackedNode, bool) {
+						calls++
+						if calls > 1 {
+							return state.TrackedNode{}, false
+						}
+						return state.TrackedNode{Node: suspendedNode, State: csn.NodeStateSuspended}, true
+					}
+				}(),
+			},
+			cloudProvider: &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedNode.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           "RESOURCE_NOT_FOUND",
+				NonBlockingErrorMsg:            "instance not found",
+				ResumeErr:                      errors.New("resume error"),
+			},
+			expectError:         false,
+			expectedFailedNodes: set.New(suspendedNode.Name),
+			expectedResumed:     []test.ResumeCall{{MIG: mig, Instances: []gce.GceRef{suspendedNodeRef}}},
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{resumeCall, gceFailure}),
+			},
+		},
+		{
+			name: "non_blocking_error_handler_node_is_nil",
+			op: ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(suspendedNode.Name),
+			},
+			stateManager: &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name: {Node: suspendedNode, State: csn.NodeStateSuspended},
+				},
+				GetFunc: func() func(nodeName string) (state.TrackedNode, bool) {
+					calls := 0
+					return func(nodeName string) (state.TrackedNode, bool) {
+						calls++
+						if calls > 1 {
+							return state.TrackedNode{Node: nil, State: csn.NodeStateSuspended}, true
+						}
+						return state.TrackedNode{Node: suspendedNode, State: csn.NodeStateSuspended}, true
+					}
+				}(),
+			},
+			cloudProvider: &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedNode.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           "RESOURCE_NOT_FOUND",
+				NonBlockingErrorMsg:            "instance not found",
+				ResumeErr:                      errors.New("resume error"),
+			},
+			expectError:         false,
+			expectedFailedNodes: set.New(suspendedNode.Name),
+			expectedResumed:     []test.ResumeCall{{MIG: mig, Instances: []gce.GceRef{suspendedNodeRef}}},
+			expectedDeltas: []*test.MetricDelta{
+				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{resumeCall, gceFailure}),
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -268,7 +484,9 @@ func TestConsumeHandler_Handle(t *testing.T) {
 			if tc.stateManager != nil {
 				stateManager = tc.stateManager
 			}
-			h := NewConsumeHandler(stateManager, cloudProvider, k8sClient)
+
+			mockBackoff := &mockCSNCompositeBackoff{}
+			h := NewConsumeHandler(stateManager, cloudProvider, k8sClient, mockBackoff)
 
 			for _, ed := range tc.expectedDeltas {
 				ed.Init(t)
@@ -285,6 +503,7 @@ func TestConsumeHandler_Handle(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+			assert.Equal(t, tc.expectedReportResumptionErrorCalls, mockBackoff.reportResumptionErrorCalls)
 			assert.ElementsMatch(t, tc.expectedSuccessfulNodes.UnsortedList(), res.Success.UnsortedList())
 			assert.ElementsMatch(t, tc.expectedFailedNodes.UnsortedList(), slices.Collect(maps.Keys(res.Errs)))
 			assert.ElementsMatch(t, tc.expectedResumed, cloudProvider.GetResumeCalls())
@@ -296,9 +515,7 @@ func TestConsumeHandler_Handle(t *testing.T) {
 func mustGetRef(t *testing.T, n *v1.Node) gce.GceRef {
 	t.Helper()
 	ref, err := gce.GceRefFromProviderId(n.Spec.ProviderID)
-	if err != nil {
-		t.Fatalf("Failed to extract GceRef from node %q", n.Name)
-	}
+	assert.NoError(t, err, "Failed to extract GceRef from node %q", n.Name)
 	return ref
 }
 
@@ -323,7 +540,7 @@ func TestConsumeHandler_HandleBatching(t *testing.T) {
 		},
 	}
 	k8sClient := &test.MockK8sClient{}
-	h := NewConsumeHandler(stateManager, cloudProvider, k8sClient)
+	h := NewConsumeHandler(stateManager, cloudProvider, k8sClient, nil)
 
 	op := ops.Operation{
 		MIG:       mig,

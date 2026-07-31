@@ -604,6 +604,9 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				csnNodes = append(csnNodes, nodecontroller.CSNNode{Name: node.Name, DesiredState: csn.ClassifyNode(node)})
 			}
 			mockNodeController := nodecontrollertesting.NewMockCSNNodeController(csnNodes)
+			for _, n := range tc.initialNodes {
+				mockNodeController.SetCurrentState(n.Name, csn.ClassifyNode(n))
+			}
 			mockNodeController.SetNonSuspendableNodes(tc.nonSuspendableNodes)
 
 			csnPodInjectionProcessor := &mockCapacityBufferPodListProcessor{
@@ -864,6 +867,9 @@ func TestCSNPodsLifecycleProcess_PackingOnUnassignedNodes(t *testing.T) {
 		csnNodes = append(csnNodes, nodecontroller.CSNNode{Name: node.Name, DesiredState: csn.ClassifyNode(node)})
 	}
 	mockNodeController := nodecontrollertesting.NewMockCSNNodeController(csnNodes)
+	for _, n := range initialNodes {
+		mockNodeController.SetCurrentState(n.Name, csn.ClassifyNode(n))
+	}
 
 	csnPodInjectionProcessor := &mockCapacityBufferPodListProcessor{
 		podsToCreate: csnPods,
@@ -1048,6 +1054,7 @@ func TestCSNPodsLifecycleProcess_ScheduleAndMarkSuspendableNodesError(t *testing
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	node := create8CPUTestNode(t, "node-1", csn.NodeStateChilling)
 	assert.NoError(t, clusterSnapshot.AddNodeInfo(framework.NewNodeInfo(node, nil)))
+	mockNodeController.SetCurrentState(node.Name, csn.ClassifyNode(node))
 
 	pod := test.BuildTestPod("csn-p1", 1000, 1000)
 	pod.UID = "uid-csn-p1"

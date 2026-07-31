@@ -292,7 +292,7 @@ type GkeManager interface {
 	// GetListManagedInstancesResults returns the pagination behavior of the listManagedInstances API method for a given MIG ref
 	GetListManagedInstancesResults(migRef gce.GceRef) (string, error)
 	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	// IsDefaultCCCEnabled returns if default CCC is enabled in cluster.
@@ -2794,8 +2794,8 @@ func (m *gkeManagerImpl) GetListManagedInstancesResults(migRef gce.GceRef) (stri
 	return m.migInfoProvider.GetListManagedInstancesResults(migRef)
 }
 
-func (m *gkeManagerImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
-	return m.gceService.ResumeInstances(migRef, instances)
+func (m *gkeManagerImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
+	return m.gceService.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
 }
 
 func (m *gkeManagerImpl) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {

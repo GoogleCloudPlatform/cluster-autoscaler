@@ -24,9 +24,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/test"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	clock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/set"
 )
@@ -722,4 +726,79 @@ func mustRunManager(t *testing.T, m *NodeStateManager) {
 	t.Cleanup(func() {
 		cancel()
 	})
+}
+
+type mockCloudProvider struct {
+	nodeNameToMIG map[string]*gke.GkeMig
+}
+
+func (m *mockCloudProvider) GkeMigForNode(node *v1.Node) (*gke.GkeMig, error) {
+	return m.nodeNameToMIG[node.Name], nil
+}
+
+func TestNodeStateManager_WithoutBackedOffSuspendedFilter(t *testing.T) {
+	mig1 := gke.NewTestGkeMigBuilder().
+		SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-1"}).
+		Build()
+	mig2 := gke.NewTestGkeMigBuilder().
+		SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-2"}).
+		Build()
+
+	mb := &test.MockBackoff{
+		BackedOffMigs: map[string]bool{
+			mig1.Id(): true,
+		},
+	}
+
+	testCases := []struct {
+		name              string
+		experimentEnabled bool
+		expectedNodeNames []string
+	}{
+		{
+			name:              "experiment disabled should not filter out backed-off suspended node",
+			experimentEnabled: false,
+			expectedNodeNames: []string{"n1", "n2", "n3"},
+		},
+		{
+			name:              "experiment enabled should filter out backed-off suspended node",
+			experimentEnabled: true,
+			expectedNodeNames: []string{"n2", "n3"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			suspendedBackedOffNode := test.CreateNode("n1", test.StateOpt(csn.NodeStateSuspended))
+			chillingBackedOffNode := test.CreateNode("n2", test.StateOpt(csn.NodeStateChilling))
+			suspendedNotBackedOffNode := test.CreateNode("n3", test.StateOpt(csn.NodeStateSuspended))
+
+			nodeSource := NewFakeNodeSource()
+			cp := &mockCloudProvider{
+				nodeNameToMIG: map[string]*gke.GkeMig{
+					suspendedBackedOffNode.Name:    mig1,
+					chillingBackedOffNode.Name:     mig1,
+					suspendedNotBackedOffNode.Name: mig2,
+				},
+			}
+			em := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ColdStandbyNodesBackoffMinCAVersionFlag: tc.experimentEnabled},
+				nil,
+			)
+			m := NewNodeStateManager(nodeSource.RegisterNodeHandler, WithBackoff(mb), WithCloudProvider(cp), WithExperimentsManager(em))
+			mustRunManager(t, m)
+			nodeSource.AddNodes(suspendedBackedOffNode, chillingBackedOffNode, suspendedNotBackedOffNode)
+
+			allNodes := m.List()
+			assert.Len(t, allNodes, 3)
+
+			filteredNodes := m.List(m.WithoutBackedOffSuspendedFilter)
+			names := []string{}
+			for _, tn := range filteredNodes {
+				names = append(names, tn.Node.Name)
+			}
+			assert.ElementsMatch(t, tc.expectedNodeNames, names)
+		})
+	}
 }

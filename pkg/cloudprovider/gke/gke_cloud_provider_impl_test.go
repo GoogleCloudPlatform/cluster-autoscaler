@@ -2948,7 +2948,7 @@ func TestCloudProviderResumeInstances(t *testing.T) {
 		assert.Equal(t, SuspensionStatus{Suspended: true, ForceUsed: true}, fakeGkeManager.GetSuspensionStatus(migRef, instRef))
 	}
 
-	err = gke.ResumeInstances(migRef, instances)
+	err = gke.ResumeInstances(migRef, instances, nil)
 	assert.NoError(t, err)
 	for _, instRef := range instances {
 		assert.Equal(t, SuspensionStatus{}, fakeGkeManager.GetSuspensionStatus(migRef, instRef))

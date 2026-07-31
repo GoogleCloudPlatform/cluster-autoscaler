@@ -98,7 +98,7 @@ func (p *NodeReconcilationProcessor) preprocess(snapshot clustersnapshot.Cluster
 	go func() {
 		p.nodeController.Reconcile()
 	}()
-	csnNodes, err := p.nodeController.List()
+	csnNodes, err := p.nodeController.List(nodecontroller.WithoutBackedOffSuspendedFilter)
 	if err != nil {
 		return fmt.Errorf("error listing CSN nodes: %v", err)
 	}

@@ -20,6 +20,8 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state"
@@ -35,7 +37,8 @@ type K8sClient interface {
 
 // CloudProvider defines the cloud provider operations needed by the handlers.
 type CloudProvider interface {
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
 }
@@ -44,6 +47,7 @@ type CloudProvider interface {
 type StateManager interface {
 	Get(nodeName string) (state.TrackedNode, bool)
 	GetAssignedBuffers(nodeNames ...string) map[string]*v1beta1.CapacityBuffer
+	IsBackoffEnabled() bool
 }
 
 // Enqueue is an abstraction for adding operations.

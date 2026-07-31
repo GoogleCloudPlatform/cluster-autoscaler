@@ -33,13 +33,16 @@ type TrackedNode struct {
 	PendingOperations ops.OperationType
 }
 
-// NodeFilter is an enum which allows for excluding certain nodes
-// from the output of `List`.
-type NodeFilter string
+// NodeFilter allows for excluding certain nodes from the output of `List`.
+type NodeFilter func(*TrackedNode) bool
 
-const (
-	WithoutPendingOperationsFilter NodeFilter = "WITHOUT_PENDING_OPERATIONS"
-)
+// WithoutPendingOperationsFilter excludes nodes that have pending suspend or consume operations.
+func WithoutPendingOperationsFilter(tn *TrackedNode) bool {
+	if tn == nil {
+		return true
+	}
+	return !tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp)
+}
 
 // PendingOperationOpt can be added to modify SetPendingOperation calls.
 type PendingOperationOpt string

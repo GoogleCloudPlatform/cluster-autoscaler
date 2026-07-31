@@ -18,10 +18,16 @@ import (
 	"context"
 	"sync"
 
+	"time"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 )
 
@@ -40,11 +46,14 @@ type MockCloudProvider struct {
 	BlockResume  chan<- struct{}
 	BlockSuspend chan<- struct{}
 
-	mutex         sync.Mutex
-	NodeNameToMIG map[string]*gke.GkeMig
-	ResumeErr     error
-	SuspendErr    error
-	Instances     func(gce.GceRef) *gce.GceInstance
+	mutex                          sync.Mutex
+	NodeNameToMIG                  map[string]*gke.GkeMig
+	ResumeErr                      error
+	SuspendErr                     error
+	Instances                      func(gce.GceRef) *gce.GceInstance
+	InvokeNonBlockingErrorsHandler bool
+	NonBlockingErrorCode           string
+	NonBlockingErrorMsg            string
 
 	resumeCalls  []ResumeCall
 	suspendCalls []SuspendCall
@@ -56,14 +65,25 @@ func (m *MockCloudProvider) GkeMigForNode(node *v1.Node) (*gke.GkeMig, error) {
 	return m.NodeNameToMIG[node.Name], nil
 }
 
-func (m *MockCloudProvider) ResumeInstances(mig gce.GceRef, instances []gce.GceRef) error {
+func (m *MockCloudProvider) ResumeInstances(mig gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
 	if m.BlockResume != nil {
 		m.BlockResume <- struct{}{}
 	}
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
+	invoke := m.InvokeNonBlockingErrorsHandler
+	errCode := m.NonBlockingErrorCode
+	errMsg := m.NonBlockingErrorMsg
+	instancesFunc := m.Instances
 	m.resumeCalls = append(m.resumeCalls, ResumeCall{MIG: mig, Instances: instances})
-	return m.ResumeErr
+	resErr := m.ResumeErr
+	m.mutex.Unlock()
+
+	if invoke && nonBlockingErrorsHandler != nil {
+		for _, ref := range instances {
+			nonBlockingErrorsHandler(ref, errCode, errMsg, instancesFunc(ref).GCEStatus)
+		}
+	}
+	return resErr
 }
 
 func (m *MockCloudProvider) GetResumeCalls() []ResumeCall {
@@ -172,4 +192,26 @@ func (m *MockK8sClient) GetSoftTaintPatchCalls() []SoftTaintPatchCall {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	return m.softTaintPatchCalls
+}
+
+type MockBackoff struct {
+	BackedOffMigs map[string]bool
+}
+
+func (m *MockBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) time.Time {
+	return time.Time{}
+}
+
+func (m *MockBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, currentTime time.Time) base_backoff.Status {
+	if nodeGroup == nil {
+		return base_backoff.Status{}
+	}
+	return base_backoff.Status{IsBackedOff: m.BackedOffMigs[nodeGroup.Id()]}
+}
+
+func (m *MockBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo) {
+}
+func (m *MockBackoff) RemoveStaleBackoffData(currentTime time.Time) {}
+
+func (m *MockBackoff) ReportResumptionError(nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, errorCode, errorMessage, instanceStatus string) {
 }

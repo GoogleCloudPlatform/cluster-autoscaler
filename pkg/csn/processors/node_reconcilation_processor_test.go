@@ -58,6 +58,7 @@ func TestNodeReconciliationProcess(t *testing.T) {
 		mig                          *gke.GkeMig
 		migErr                       error
 		listErr                      error
+		backedOffNodes               []string
 		templateNodeInfoFlagDisabled bool
 		expectErr                    bool
 		expectedNodeStates           map[string]csn.NodeState
@@ -87,6 +88,40 @@ func TestNodeReconciliationProcess(t *testing.T) {
 				{Name: "test-node", DesiredState: csn.NodeStateSuspended, Buffer: &nodecontroller.BufferInfo{Namespace: "ns", Name: "buffer"}},
 			},
 			expectErr: false,
+			expectedNodeStates: map[string]csn.NodeState{
+				"test-node": csn.NodeStateSuspended,
+			},
+			expectedNodeBuffers: map[string]string{
+				"test-node": "ns/buffer",
+			},
+		},
+		{
+			name: "Backed-off suspended node is filtered out and state is not reconciled",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "test-node", csn.NodeStateSuspended),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "test-node", DesiredState: csn.NodeStateChilling, Buffer: &nodecontroller.BufferInfo{Namespace: "ns", Name: "buffer"}},
+			},
+			backedOffNodes: []string{"test-node"},
+			expectErr:      false,
+			expectedNodeStates: map[string]csn.NodeState{
+				"test-node": csn.NodeStateSuspended,
+			},
+			expectedNodeBuffers: map[string]string{
+				"test-node": "",
+			},
+		},
+		{
+			name: "Backed-off chilling node is NOT filtered out and state is reconciled",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "test-node", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "test-node", DesiredState: csn.NodeStateSuspended, Buffer: &nodecontroller.BufferInfo{Namespace: "ns", Name: "buffer"}},
+			},
+			backedOffNodes: []string{"test-node"},
+			expectErr:      false,
 			expectedNodeStates: map[string]csn.NodeState{
 				"test-node": csn.NodeStateSuspended,
 			},
@@ -461,6 +496,10 @@ func TestNodeReconciliationProcess(t *testing.T) {
 			}
 			mockController := nodecontrollertesting.NewMockCSNNodeController(tc.csnNodes)
 			mockController.SetListError(tc.listErr)
+			mockController.MarkAsBackedOff(tc.backedOffNodes)
+			for _, n := range tc.initialNodes {
+				mockController.SetCurrentState(n.Name, csn.ClassifyNode(n))
+			}
 
 			mockCloudProvider := &gke.GkeCloudProviderMock{}
 			mockCloudProvider.On("GkeMigForNode", mock.Anything).Return(tc.mig, tc.migErr)

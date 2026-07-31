@@ -23,8 +23,12 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/set"
@@ -33,6 +37,11 @@ import (
 const (
 	logPrefix = "CSN Node State Manager:"
 )
+
+// CloudProvider allows retrieval of the GKE MIG for a node.
+type CloudProvider interface {
+	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
+}
 
 // NodeStateManager is responsible for tracking the state of CSN nodes.
 // It exports methods which allow to read this state and perform certain updates
@@ -44,12 +53,18 @@ type NodeStateManager struct {
 	// nodeName -> TrackedNode
 	trackedNodes            map[string]*TrackedNode
 	nodeNamesToStopTracking map[string]time.Time
-	filterPredicates        map[NodeFilter]func(*TrackedNode) bool
 
 	eventHandlers []EventHandler
 
-	stopTrackingDelay   time.Duration
-	metricsSyncInterval time.Duration
+	stopTrackingDelay       time.Duration
+	metricsSyncInterval     time.Duration
+	experimentsSyncInterval time.Duration
+	backoffCleanupInterval  time.Duration
+
+	backoffEnabled     bool
+	backoff            base_backoff.Backoff
+	cloudProvider      CloudProvider
+	experimentsManager experiments.Manager
 }
 
 // Option configures the NodeStateManager.
@@ -75,6 +90,22 @@ func WithMetricsSyncInterval(interval time.Duration) Option {
 	}
 }
 
+func WithExperimentsSyncInterval(interval time.Duration) Option {
+	return func(m *NodeStateManager) {
+		if interval > 0 {
+			m.experimentsSyncInterval = interval
+		}
+	}
+}
+
+func WithBackoffCleanupInterval(interval time.Duration) Option {
+	return func(m *NodeStateManager) {
+		if interval > 0 {
+			m.backoffCleanupInterval = interval
+		}
+	}
+}
+
 func WithStopTrackingDelay(delay time.Duration) Option {
 	return func(m *NodeStateManager) {
 		if delay > 0 {
@@ -83,35 +114,68 @@ func WithStopTrackingDelay(delay time.Duration) Option {
 	}
 }
 
+func WithBackoff(backoff base_backoff.Backoff) Option {
+	return func(m *NodeStateManager) {
+		m.backoff = backoff
+	}
+}
+
+func WithCloudProvider(cp CloudProvider) Option {
+	return func(m *NodeStateManager) {
+		m.cloudProvider = cp
+	}
+}
+
+func WithExperimentsManager(em experiments.Manager) Option {
+	return func(m *NodeStateManager) {
+		m.experimentsManager = em
+	}
+}
+
 // NewNodeStateManager returns a new instance of a node state manager.
 func NewNodeStateManager(nodeSource RegisterNodeHandler, opts ...Option) *NodeStateManager {
-	filterPredicates := map[NodeFilter]func(*TrackedNode) bool{
-		WithoutPendingOperationsFilter: func(tn *TrackedNode) bool {
-			if tn == nil {
-				return true
-			}
-			// Only operations that have the potential to interfere with the state
-			// of a GCE VM cause the node to not be returned when this filter is used.
-			return !tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp)
-		},
-	}
-
 	m := &NodeStateManager{
 		clock:                   clock.RealClock{},
 		trackedNodes:            make(map[string]*TrackedNode),
 		nodeNamesToStopTracking: make(map[string]time.Time),
 		registerNodeHandler:     nodeSource,
-		filterPredicates:        filterPredicates,
 		eventHandlers:           []EventHandler{newMetricsEventHandler()},
 		// Default values, can be overridden with options.
-		stopTrackingDelay:   10 * time.Minute,
-		metricsSyncInterval: 5 * time.Second,
+		stopTrackingDelay:       10 * time.Minute,
+		metricsSyncInterval:     5 * time.Second,
+		experimentsSyncInterval: 10 * time.Minute, // Giraffe values are refreshed inside experiments package every 15 minutes anyway.
+		backoffCleanupInterval:  10 * time.Minute,
 	}
 
 	for _, opt := range opts {
 		opt(m)
 	}
+
+	m.updateBackoffEnabled()
 	return m
+}
+
+func (m *NodeStateManager) IsBackoffEnabled() bool {
+	return m.backoffEnabled
+}
+
+func (m *NodeStateManager) IsNodeBackedOff(node *v1.Node) bool {
+	if m.backoff == nil || m.cloudProvider == nil || !m.backoffEnabled {
+		return false
+	}
+	mig, err := m.cloudProvider.GkeMigForNode(node)
+	if err != nil || mig == nil {
+		return false
+	}
+	return m.backoff.BackoffStatus(mig, framework.NewNodeInfo(node, nil), m.clock.Now()).IsBackedOff
+}
+
+// WithoutBackedOffSuspendedFilter excludes nodes that are suspended and backed-off.
+func (m *NodeStateManager) WithoutBackedOffSuspendedFilter(tn *TrackedNode) bool {
+	if tn == nil {
+		return true
+	}
+	return tn.State != csn.NodeStateSuspended || !m.IsNodeBackedOff(tn.Node)
 }
 
 func (m *NodeStateManager) Run(ctx context.Context) error {
@@ -125,7 +189,23 @@ func (m *NodeStateManager) Run(ctx context.Context) error {
 
 	m.runPeriodically(ctx, m.stopTrackingDelay, m.stopTrackingExpiredNodes)
 	m.runPeriodically(ctx, m.metricsSyncInterval, m.emitNodeCounts)
+	m.runPeriodically(ctx, m.experimentsSyncInterval, m.updateBackoffEnabled)
+	m.runPeriodically(ctx, m.backoffCleanupInterval, func() {
+		if m.backoff != nil {
+			m.backoff.RemoveStaleBackoffData(time.Now())
+		}
+	})
 	return nil
+}
+
+func (m *NodeStateManager) updateBackoffEnabled() {
+	m.nodeMutex.Lock()
+	defer m.nodeMutex.Unlock()
+	if m.experimentsManager == nil {
+		m.backoffEnabled = false
+		return
+	}
+	m.backoffEnabled = m.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ColdStandbyNodesBackoffMinCAVersionFlag, false)
 }
 
 func (m *NodeStateManager) runPeriodically(ctx context.Context, interval time.Duration, f func()) {
@@ -188,12 +268,7 @@ func (m *NodeStateManager) List(filters ...NodeFilter) []TrackedNode {
 
 func (m *NodeStateManager) allFiltersPass(n *TrackedNode, filters ...NodeFilter) bool {
 	for _, filter := range filters {
-		predicate, ok := m.filterPredicates[filter]
-		if !ok {
-			klog.Errorf("%s filter does not have a filter handler for %s", logPrefix, filter)
-			continue
-		}
-		if !predicate(n) {
+		if filter != nil && !filter(n) {
 			return false
 		}
 	}

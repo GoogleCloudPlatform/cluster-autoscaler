@@ -372,12 +372,12 @@ func (m *multitenancyGCEClient) CreateInstances(ref gce.GceRef, basename string,
 	return gceService.CreateInstances(ref, basename, delta, instanceNames)
 }
 
-func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {
 	gceClient, err := m.gceService(migRef.Project)
 	if err != nil {
 		return err
 	}
-	return gceClient.ResumeInstances(migRef, instances)
+	return gceClient.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
 }
 
 func (m *multitenancyGCEClient) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {

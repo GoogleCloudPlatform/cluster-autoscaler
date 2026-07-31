@@ -105,6 +105,10 @@ var (
 	gceFlexAdvisorEnabled                        = flag.Bool("enable-gce-flexadvisor", false, "Whether GCE Flex Advisor should be enabled.")
 	csnStatus                                    = flag.String("csn-status", string(options.CSNUnspecified), "Whether CSN is force enabled, force disabled or use experiment values (go/gke-csn-launch).")
 	csnDefaultRefreshFrequency                   = flag.Duration("csn-default-refresh-frequency", 24*time.Hour, `The default frequency for refreshing CSN nodes if not specified in the buffer annotation or an error occured during parsing.`)
+	csnInitialNodeBackoffDuration                = flag.Duration("csn-initial-node-backoff-duration", 5*time.Minute, "Initial duration of backoff for CSN nodes after a failed resume.")
+	csnMaxNodeBackoffDuration                    = flag.Duration("csn-max-node-backoff-duration", 30*time.Minute, "Maximum backoff duration for CSN nodes after a failed resume.")
+	csnNodeBackoffResetTimeout                   = flag.Duration("csn-node-backoff-reset-timeout", 3*time.Hour, "Timeout after which CSN backoff for nodes is reset.")
+	csnNodeBackoffUseJitter                      = flag.Bool("csn-node-backoff-use-jitter", true, "Whether to add jitter to CSN node backoff duration.")
 	ekvmsFixerEnabled                            = flag.Bool("enable-ekvms-fixer", false, "Whether EK VM fixer is enabled (go/gke-ek-vm-balloon-pod-error-handling).")
 	ekvmsFixerInterval                           = flag.Duration("ekvms-fixer-interval", 10*time.Second, "How often EK VM fixer loop is running (go/gke-ek-vm-balloon-pod-error-handling).")
 	ekvmsConcurrentResizeWorkers                 = flag.Int("ekvms-concurrent-resize-workers", 10, "Number of concurrent workers that will execute EK VMs resize operations.")
@@ -327,6 +331,10 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		GCEFlexAdvisorEnabled:                        *gceFlexAdvisorEnabled,
 		CSNCAFlag:                                    options.CSNStatus(*csnStatus),
 		CSNDefaultRefreshFrequency:                   *csnDefaultRefreshFrequency,
+		CSNInitialNodeBackoffDuration:                *csnInitialNodeBackoffDuration,
+		CSNMaxNodeBackoffDuration:                    *csnMaxNodeBackoffDuration,
+		CSNNodeBackoffResetTimeout:                   *csnNodeBackoffResetTimeout,
+		CSNNodeBackoffUseJitter:                      *csnNodeBackoffUseJitter,
 		EkvmsFixerEnabled:                            *ekvmsFixerEnabled,
 		EkvmsFixerInterval:                           *ekvmsFixerInterval,
 		EkvmsConcurrentResizeWorkers:                 *ekvmsConcurrentResizeWorkers,

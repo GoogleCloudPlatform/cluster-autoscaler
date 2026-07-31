@@ -98,6 +98,7 @@ const ColdStandbyNodesCheckPodsOnSuspendedNodes = "ColdStandbyNodes::CheckPodsOn
 const ColdStandbyNodesProcessTemplateNodeInfosFlag = "ColdStandbyNodes::ProcessTemplateNodeInfos"             // Direct launch.
 const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersionGuardForCAFlag"             // Direct launch style flag.
 const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                       // Direct launch.
+const ColdStandbyNodesBackoffMinCAVersionFlag = "ColdStandbyNodes::BackoffMinCAVersion"
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"

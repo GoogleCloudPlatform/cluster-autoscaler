@@ -6614,7 +6614,7 @@ func TestResumeInstances(t *testing.T) {
 		{Project: projectId, Zone: zone, Name: "inst-1"},
 	}
 
-	err := g.ResumeInstances(mig.gceRef, instances)
+	err := g.ResumeInstances(mig.gceRef, instances, nil)
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, server)
 }

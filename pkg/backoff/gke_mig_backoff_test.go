@@ -348,3 +348,32 @@ func (m *mockProvider) IsAutopilotEnabled() bool {
 func (m *mockProvider) MachineConfigProvider() *machinetypes.MachineConfigProvider {
 	return machinetypes.NewMachineConfigProvider(nil)
 }
+
+func TestNewGkeBackoffThreadSafety(t *testing.T) {
+	testCases := []struct {
+		name                string
+		synchronizedBackoff bool
+		wantSynchronized    bool
+	}{
+		{
+			name:                "SynchronizedBackoff disabled",
+			synchronizedBackoff: false,
+			wantSynchronized:    false,
+		},
+		{
+			name:                "SynchronizedBackoff enabled",
+			synchronizedBackoff: true,
+			wantSynchronized:    true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			b := NewGkeBackoff(Config{
+				SynchronizedBackoff: tc.synchronizedBackoff,
+			})
+			_, isSynchronized := b.(*synchronizedCompositeBackoff)
+			assert.Equal(t, tc.wantSynchronized, isSynchronized)
+		})
+	}
+}

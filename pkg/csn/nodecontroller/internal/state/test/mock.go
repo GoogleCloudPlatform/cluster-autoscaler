@@ -38,11 +38,16 @@ type MockStateManager struct {
 	pendingOps       []SetPendingOperationCall
 	SetPendingErr    map[string]error
 	NodeNameToBuffer map[string]*v1beta1.CapacityBuffer
+	BackoffEnabled   bool
+	GetFunc          func(nodeName string) (state.TrackedNode, bool)
 }
 
 func (m *MockStateManager) Get(nodeName string) (state.TrackedNode, bool) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
+	if m.GetFunc != nil {
+		return m.GetFunc(nodeName)
+	}
 	n, ok := m.Nodes[nodeName]
 	return n, ok
 }
@@ -60,4 +65,10 @@ func (m *MockStateManager) GetPendingOperationUpdateCalls() []SetPendingOperatio
 
 func (m *MockStateManager) GetAssignedBuffers(_ ...string) map[string]*v1beta1.CapacityBuffer {
 	return m.NodeNameToBuffer
+}
+
+func (m *MockStateManager) IsBackoffEnabled() bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return m.BackoffEnabled
 }

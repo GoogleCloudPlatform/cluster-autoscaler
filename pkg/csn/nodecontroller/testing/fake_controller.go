@@ -15,8 +15,6 @@
 package testing
 
 import (
-	"slices"
-
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
@@ -28,6 +26,8 @@ import (
 type MockCSNNodeController struct {
 	nodes               []nodecontroller.CSNNode
 	hasOperationsNodes  map[string]bool
+	backedOffNodes      map[string]bool
+	currentStates       map[string]csn.NodeState
 	nonSuspendableNodes map[string]bool
 	nonConsumableNodes  map[string]bool
 	bufferAssignments   map[string]*v1beta1.CapacityBuffer
@@ -41,6 +41,8 @@ func NewMockCSNNodeController(nodes []nodecontroller.CSNNode) *MockCSNNodeContro
 	return &MockCSNNodeController{
 		nodes:               nodes,
 		hasOperationsNodes:  map[string]bool{},
+		backedOffNodes:      map[string]bool{},
+		currentStates:       map[string]csn.NodeState{},
 		nonSuspendableNodes: map[string]bool{},
 		nonConsumableNodes:  map[string]bool{},
 		reconcileChan:       make(chan struct{}, 5),
@@ -53,10 +55,27 @@ func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nod
 	}
 	var nodes []nodecontroller.CSNNode
 	for _, node := range m.nodes {
-		if slices.Contains(filters, nodecontroller.WithoutPendingOperationsFilter) && m.hasOperationsNodes[node.Name] {
-			continue
+		currentState, ok := m.currentStates[node.Name]
+		if !ok {
+			currentState = node.DesiredState
 		}
-		nodes = append(nodes, node)
+		hasPendingOps := m.hasOperationsNodes[node.Name]
+		n := node
+		n.State = currentState
+		n.HasPendingOperations = hasPendingOps
+		isBackedOff := m.backedOffNodes[node.Name]
+		n.SetIsBackedOffFunc(func() bool { return isBackedOff })
+
+		pass := true
+		for _, filter := range filters {
+			if filter != nil && !filter(n) {
+				pass = false
+				break
+			}
+		}
+		if pass {
+			nodes = append(nodes, n)
+		}
 	}
 	return nodes, m.listErr
 }
@@ -106,6 +125,16 @@ func (m *MockCSNNodeController) MarkAsHasPendingOperations(nodes []string) {
 	for _, node := range nodes {
 		m.hasOperationsNodes[node] = true
 	}
+}
+
+func (m *MockCSNNodeController) MarkAsBackedOff(nodes []string) {
+	for _, node := range nodes {
+		m.backedOffNodes[node] = true
+	}
+}
+
+func (m *MockCSNNodeController) SetCurrentState(nodeName string, state csn.NodeState) {
+	m.currentStates[nodeName] = state
 }
 
 func (m *MockCSNNodeController) ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer) {

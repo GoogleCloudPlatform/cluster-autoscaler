@@ -162,7 +162,7 @@ type GkeCloudProvider interface {
 	GetCurrentResizableVmState(*apiv1.Node) (ekvmtypes.ResizableVmState, error)
 	BulkFetchCurrentResizableVmStates() (map[gce.GceRef]ekvmtypes.ResizableVmState, error)
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	CalculatePhysicalEphemeralStorageGiB(mig *gke.GkeMig, allocatableBytes int64) int64
 	ResizingEnabled(machineFamily string) bool
@@ -625,8 +625,10 @@ func setUpProcessors(
 	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
 	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
 	if options.CSNEnabled && cbReady {
+		nodeBasedBackoff := gke_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
+		csnBackoff := gke_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
-		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager)
+		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff)
 		go csnNodeController.Run(context)
 		csnNodeReconcilationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)

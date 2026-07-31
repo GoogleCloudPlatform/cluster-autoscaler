@@ -367,8 +367,8 @@ func (p *gkeCloudProviderImpl) GetMigInstanceTemplateSelfLink(mig *GkeMig) (stri
 }
 
 // ResumeInstances resumes instances
-func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
-	return p.gkeManager.ResumeInstances(migRef, instances)
+func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
+	return p.gkeManager.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
 }
 
 // SuspendInstances suspends instances

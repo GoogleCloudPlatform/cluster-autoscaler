@@ -110,3 +110,48 @@ func TestBuilder_Overrides(t *testing.T) {
 
 	assert.NotNil(t, b.snowflakeWatcher, "SnowflakeWatcher should be strictly injected")
 }
+
+func TestIsSynchronizedBackoffEnabled(t *testing.T) {
+	testCases := []struct {
+		name                   string
+		csnEnabled             bool
+		asyncNodeGroupsEnabled bool
+		expected               bool
+	}{
+		{
+			name:                   "both disabled",
+			csnEnabled:             false,
+			asyncNodeGroupsEnabled: false,
+			expected:               false,
+		},
+		{
+			name:                   "CSN enabled",
+			csnEnabled:             true,
+			asyncNodeGroupsEnabled: false,
+			expected:               true,
+		},
+		{
+			name:                   "AsyncNodeGroups enabled",
+			csnEnabled:             false,
+			asyncNodeGroupsEnabled: true,
+			expected:               true,
+		},
+		{
+			name:                   "both enabled",
+			csnEnabled:             true,
+			asyncNodeGroupsEnabled: true,
+			expected:               true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := internalopts.AutoscalingOptions{}
+			opts.CSNEnabled = tc.csnEnabled
+			opts.AsyncNodeGroupsEnabled = tc.asyncNodeGroupsEnabled
+
+			got := isSynchronizedBackoffEnabled(opts)
+			assert.Equal(t, tc.expected, got)
+		})
+	}
+}

@@ -2040,7 +2040,7 @@ func (fake *FakeGkeManager) NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.No
 	panic("not implemented")
 }
 
-func (fake *FakeGkeManager) ResumeInstances(mig gce.GceRef, instances []gce.GceRef) error {
+func (fake *FakeGkeManager) ResumeInstances(mig gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
 	if fake.suspensionStatuses == nil {
 		return nil
 	}
@@ -2916,8 +2916,8 @@ func (m *GkeManagerMock) ExistingMigsInNodePool(nodePoolName string) []*GkeMig {
 }
 
 // ResumeInstances is a mocked method.
-func (m *GkeManagerMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
-	args := m.Called(migRef, instances)
+func (m *GkeManagerMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
+	args := m.Called(migRef, instances, nonBlockingErrorsHandler)
 	return args.Error(0)
 }
 

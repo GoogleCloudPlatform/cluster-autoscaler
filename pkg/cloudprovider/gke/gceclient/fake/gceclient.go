@@ -1086,7 +1086,7 @@ func (g *GceClient) FetchNetwork(projectId, name string) (*gcev1.Network, error)
 	return nil, nil
 }
 
-func (g *GceClient) ResumeInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
+func (g *GceClient) ResumeInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef, errHandler gceclient.NonBlockingErrorsHandler) error {
 	return nil
 }
 

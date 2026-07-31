@@ -44,7 +44,7 @@ type Config struct {
 	CustomResourceProcessor customresources.CustomResourcesProcessor
 	NpcLister               npc_lister.Lister
 	CloudProvider           backoffCloudProvider
-	AsyncNodeGroupsEnabled  bool
+	SynchronizedBackoff     bool
 	FrbConfig               *FutureReservationsBackoffConfig
 	Observers               []BackoffObserver
 }
@@ -79,7 +79,7 @@ func NewGkeBackoff(config Config) CompositeBackoff {
 		backoffs = append([]base_backoff.Backoff{futureReservationsBackoff}, backoffs...)
 	}
 
-	if config.AsyncNodeGroupsEnabled {
+	if config.SynchronizedBackoff {
 		return NewSynchronizedCompositeBackoff(backoffs, config.Observers)
 	}
 	return NewCompositeBackoff(backoffs, config.Observers)

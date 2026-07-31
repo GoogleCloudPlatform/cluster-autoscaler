@@ -78,6 +78,10 @@ type InternalOptions struct {
 	CSNEnabled                                   bool
 	CSNCAFlag                                    CSNStatus
 	CSNDefaultRefreshFrequency                   time.Duration
+	CSNInitialNodeBackoffDuration                time.Duration
+	CSNMaxNodeBackoffDuration                    time.Duration
+	CSNNodeBackoffResetTimeout                   time.Duration
+	CSNNodeBackoffUseJitter                      bool
 	EkvmsFixerEnabled                            bool
 	EkvmsFixerInterval                           time.Duration
 	EkvmsConcurrentResizeWorkers                 int

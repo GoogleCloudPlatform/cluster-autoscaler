@@ -128,7 +128,7 @@ func (a *autoscalingInternalGceClientMock) FetchNetwork(projectId string, name s
 	return a.fetchNetwork(projectId, name)
 }
 
-func (a *autoscalingInternalGceClientMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+func (a *autoscalingInternalGceClientMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {
 	return a.resumeInstances(migRef, instances)
 }
 

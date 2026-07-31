@@ -26,6 +26,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/bluegreen"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/cfg"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/k8s"
@@ -46,9 +47,27 @@ const logPrefix = "CSN Node Controller:"
 
 // CSNNode contains information about a CSN node.
 type CSNNode struct {
-	Name         string
-	DesiredState csn.NodeState
-	Buffer       *BufferInfo
+	Name                 string
+	State                csn.NodeState
+	DesiredState         csn.NodeState
+	HasPendingOperations bool
+	Buffer               *BufferInfo
+
+	isBackedOffFunc func() bool
+}
+
+// IsBackedOff returns whether the node is currently backed off.
+// This is lazily evaluated when called to avoid unnecessary computations when unneeded.
+func (n CSNNode) IsBackedOff() bool {
+	if n.isBackedOffFunc == nil {
+		return false
+	}
+	return n.isBackedOffFunc()
+}
+
+// SetIsBackedOffFunc sets the function used to lazily evaluate backoff status.
+func (n *CSNNode) SetIsBackedOffFunc(f func() bool) {
+	n.isBackedOffFunc = f
 }
 
 // BufferInfo contains information about the buffer to which a
@@ -66,10 +85,15 @@ func (b *BufferInfo) Id() string {
 }
 
 // CSNFilter represents a filter used for listing CSN nodes.
-type CSNFilter string
+type CSNFilter func(CSNNode) bool
 
-const (
-	WithoutPendingOperationsFilter CSNFilter = "WITHOUT_PENDING_OPERATIONS"
+var (
+	WithoutPendingOperationsFilter CSNFilter = func(n CSNNode) bool {
+		return !n.HasPendingOperations
+	}
+	WithoutBackedOffSuspendedFilter CSNFilter = func(n CSNNode) bool {
+		return !(n.State == csn.NodeStateSuspended && n.IsBackedOff())
+	}
 )
 
 // CloudProvider allows for the retrieval of additional node information.
@@ -77,7 +101,7 @@ const (
 type CloudProvider interface {
 	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
 	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	// InstanceByRef allows for retrieval of GCE instances to get their status
@@ -101,6 +125,7 @@ func NewCSNNodeController(
 	clientSet clientset.Interface,
 	cp CloudProvider,
 	experimentsManager experiments.Manager,
+	backoff handler.CSNCompositeBackoff,
 ) *csnNodeController {
 	config := cfg.NewProvider(experimentsManager).GetConfig()
 	var nodeEventHandlers []state.EventHandler
@@ -112,6 +137,9 @@ func NewCSNNodeController(
 		}),
 		state.WithStopTrackingDelay(config.StateManager.StopTrackingDelay.Duration),
 		state.WithMetricsSyncInterval(config.StateManager.MetricsSyncInterval.Duration),
+		state.WithBackoff(backoff),
+		state.WithCloudProvider(cp),
+		state.WithExperimentsManager(experimentsManager),
 	)
 	wq := queue.NewWorkQueue(config.WorkQueue.MaxSize, nsm)
 	d := dispatch.NewDispatcher(config.Dispatcher.WorkerCount, retry.Config{
@@ -141,7 +169,7 @@ func NewCSNNodeController(
 	}
 
 	d.RegisterHandler(ops.SuspendOp, handler.NewSuspendHandler(nsm, cp, k8sAdapter, wq.Enqueue, config.Suspend.PreSuspendDelay.Duration).Handle)
-	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter).Handle)
+	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter, backoff).Handle)
 	d.RegisterHandler(ops.AssignBufferOp, handler.NewAssignBufferHandler(nsm, k8sAdapter).Handle)
 	d.RegisterHandler(ops.AssignSoftTaintOp, handler.NewAssignSoftTaintHandler(nsm, k8sAdapter, tracker).Handle)
 
@@ -251,37 +279,46 @@ func (c *csnNodeController) Reconcile() {
 	c.reconciler.Reconcile()
 }
 
-func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, error) {
-	var stateFilters []state.NodeFilter
-	for _, f := range filters {
-		switch f {
-		case WithoutPendingOperationsFilter:
-			stateFilters = append(stateFilters, state.WithoutPendingOperationsFilter)
+func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
+	desiredState := tn.DesiredState
+	if desiredState == "" {
+		desiredState = tn.State
+	}
+	var buffer *BufferInfo
+	if tn.Buffer != nil {
+		buffer = &BufferInfo{
+			Namespace: tn.Buffer.Namespace,
+			Name:      tn.Buffer.Name,
 		}
+	}
+	node := tn.Node
+	return CSNNode{
+		Name:                 node.Name,
+		State:                tn.State,
+		DesiredState:         desiredState,
+		HasPendingOperations: tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp),
+		Buffer:               buffer,
+		isBackedOffFunc: func() bool {
+			return c.nodeStateManager.IsNodeBackedOff(node)
+		},
+	}
+}
+
+func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, error) {
+	stateFilters := make([]state.NodeFilter, 0, len(filters))
+	for _, filter := range filters {
+		if filter == nil {
+			continue
+		}
+		stateFilters = append(stateFilters, func(tn *state.TrackedNode) bool {
+			return filter(c.toCSNNode(tn))
+		})
 	}
 
 	trackedNodes := c.nodeStateManager.List(stateFilters...)
 	result := make([]CSNNode, 0, len(trackedNodes))
-	nodeNames := make([]string, 0, len(trackedNodes))
 	for _, tn := range trackedNodes {
-		desiredState := tn.DesiredState
-		if desiredState == "" {
-			desiredState = tn.State
-		}
-		result = append(result, CSNNode{
-			DesiredState: desiredState,
-			Name:         tn.Node.Name,
-		})
-		nodeNames = append(nodeNames, tn.Node.Name)
-	}
-	buffers := c.nodeStateManager.GetAssignedBuffers(nodeNames...)
-	for idx, n := range result {
-		if b, ok := buffers[n.Name]; ok && b != nil {
-			result[idx].Buffer = &BufferInfo{
-				Namespace: b.Namespace,
-				Name:      b.Name,
-			}
-		}
+		result = append(result, c.toCSNNode(&tn))
 	}
 	return result, nil
 }

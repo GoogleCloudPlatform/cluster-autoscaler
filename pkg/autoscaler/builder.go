@@ -795,7 +795,7 @@ func (b *Builder) Build(
 		CustomResourceProcessor: customResourcesProcessor,
 		NpcLister:               b.npcCrdLister,
 		CloudProvider:           cloudProvider,
-		AsyncNodeGroupsEnabled:  autoscalingOptions.AsyncNodeGroupsEnabled,
+		SynchronizedBackoff:     isSynchronizedBackoffEnabled(autoscalingOptions),
 		FrbConfig: &gke_backoff.FutureReservationsBackoffConfig{
 			Enabled:   autoscalingOptions.FutureReservationsBackoffEnabled,
 			Provider:  futureReservationsPuller,
@@ -1125,6 +1125,10 @@ func (b *Builder) validateOptions() error {
 		return fmt.Errorf("node quota watcher is missing: ensure WithNodeQuotaWatcher() is called")
 	}
 	return nil
+}
+
+func isSynchronizedBackoffEnabled(options internalopts.AutoscalingOptions) bool {
+	return options.AsyncNodeGroupsEnabled || options.CSNEnabled
 }
 
 func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {

@@ -336,12 +336,12 @@ func TestMTResumeInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	err := mtGCEClient.ResumeInstances(gce.GceRef{Project: "bad-project"}, nil)
+	err := mtGCEClient.ResumeInstances(gce.GceRef{Project: "bad-project"}, nil, nil)
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	err = mtGCEClient.ResumeInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil)
+	err = mtGCEClient.ResumeInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil, nil)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
