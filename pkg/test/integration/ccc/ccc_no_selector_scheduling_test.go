@@ -34,9 +34,8 @@ import (
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
-func newCCCNodePool(poolName, cccName string) *gke_api_beta.NodePool {
-	return integration.DefaultNodePool(
-		integration.WithNodePoolName(poolName),
+func newCCCNodePool(poolName, cccName string, options ...integration.Option[*gke_api_beta.NodePool]) *gke_api_beta.NodePool {
+	opt := []integration.Option[*gke_api_beta.NodePool]{integration.WithNodePoolName(poolName),
 		integration.WithNodePoolMachineType("n1-standard-2"),
 		integration.WithNodePoolSize(0),
 		integration.WithNodePoolMaxNodeCount(10),
@@ -48,34 +47,86 @@ func newCCCNodePool(poolName, cccName string) *gke_api_beta.NodePool {
 			Value:  cccName,
 			Effect: "NO_SCHEDULE",
 		}),
-	)
+	}
+	opt = append(opt, options...)
+	return integration.DefaultNodePool(opt...)
 }
 
 // TestCCCSchedulingWithoutNodeSelector verifies workload scheduling behaviors for Custom ComputeClasses
 // corresponding to the scenarios in b/528305042#comment21.
 func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
-	const cccName = "my-ccc"
+	const cccName = "my-ccc-1"
+	const missingCCC = "non-existing-ccc"
 
 	computeClass := ccc.NewComputeClassBuilder(cccName).
 		WithNapEnabled().
 		WithWhenUnsatisfiable("ScaleUpAnyway").
-		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool"}}).
+		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
 		Build()
 
-	cccNodePool := newCCCNodePool("ccc-pool", cccName)
+	cccNodePool := newCCCNodePool("ccc-pool-1", cccName,
+		integration.WithNodePoolLabels(map[string]string{
+			"role": "role-1",
+		}))
+	cccNodePool2 := newCCCNodePool("ccc-pool-2", missingCCC)
 	nonCCCNodePool := integration.EmptyNodePool("non-ccc-pool").
 		WithMachineType("n1-standard-2").
 		WithMax(10).
 		Build()
 
 	testCases := []struct {
-		name                        string
-		pod                         *apiv1.Pod
-		extraPools                  []*gke_api_beta.NodePool
-		expectPodScheduledOnCCCNode bool
+		name                         string
+		pod                          *apiv1.Pod
+		extraPools                   []*gke_api_beta.NodePool
+		expectPodScheduledOnNodePool string
 	}{
 		{
-			name: "Scenario 1a: Workload with broad CCC key toleration and no nodeSelector",
+			// we expect CA to NOT schedule
+			name: "Workload without node-selector and toleration",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+			),
+			expectPodScheduledOnNodePool: "",
+		},
+		{
+			// we expect CA to NOT schedule
+			name: "Workload without CCC node-selector and toleration, but with non-CCC node-selector",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithNodeSelector(map[string]string{
+					"role": "role-1",
+				}),
+			),
+			expectPodScheduledOnNodePool: "",
+		},
+		{
+			// we expect CA to schedule
+			name: "Workload with CCC node-selector, but missing toleration",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithNodeSelector(map[string]string{
+					labels.ComputeClassLabel: cccName,
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			// we expect CA to NOT schedule
+			name: "Workload without CCC node-selector and toleration, but with non-CCC node-selector",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithNodeSelector(map[string]string{
+					"role": "role-1",
+				}),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:      labels.ComputeClassLabel,
+					Operator: apiv1.TolerationOpExists,
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			name: "Workload with broad CCC key toleration and no nodeSelector",
 			pod: tu.BuildTestPod("pod-broad-ccc-toleration", 1000, 1000,
 				tu.MarkUnschedulable(),
 				pod.WithTolerations(apiv1.Toleration{
@@ -84,10 +135,10 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 					Effect:   apiv1.TaintEffectNoSchedule,
 				}),
 			),
-			expectPodScheduledOnCCCNode: true,
+			expectPodScheduledOnNodePool: cccNodePool.Name,
 		},
 		{
-			name: "Scenario 1b: Workload with specific CCC toleration and no nodeSelector",
+			name: "Workload with specific CCC toleration and no nodeSelector",
 			pod: tu.BuildTestPod("pod-specific-ccc-toleration", 1000, 1000,
 				tu.MarkUnschedulable(),
 				pod.WithTolerations(apiv1.Toleration{
@@ -97,35 +148,104 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 					Effect:   apiv1.TaintEffectNoSchedule,
 				}),
 			),
-			expectPodScheduledOnCCCNode: true,
+			expectPodScheduledOnNodePool: cccNodePool.Name,
 		},
 		{
-			name: "Scenario 1c: Workload with wildcard toleration and no nodeSelector",
+			name: "Workload with wildcard toleration and no nodeSelector",
 			pod: tu.BuildTestPod("pod-wildcard-toleration", 1000, 1000,
 				tu.MarkUnschedulable(),
 				pod.WithTolerations(apiv1.Toleration{
 					Operator: apiv1.TolerationOpExists,
 				}),
 			),
-			expectPodScheduledOnCCCNode: true,
+			expectPodScheduledOnNodePool: cccNodePool.Name,
 		},
 		{
-			name: "Scenario 2: Workload with CCC toleration and nodeSelector",
+			// we expect CA to schedule
+			name: "Workload with specific CCC toleration, but CCC does not exists",
+			pod: tu.BuildTestPod("pod-specific-ccc-toleration", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:      labels.ComputeClassLabel,
+					Value:    missingCCC,
+					Operator: apiv1.TolerationOpEqual,
+					Effect:   apiv1.TaintEffectNoSchedule,
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool2.Name,
+			extraPools:                   []*gke_api_beta.NodePool{cccNodePool2},
+		},
+		{
+			// we expect CA to schedule
+			name: "Workload without node-selector, but with missing operator in toleration",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:    labels.ComputeClassLabel,
+					Value:  cccName,
+					Effect: apiv1.TaintEffectNoSchedule,
+					// missing Operator should default to apiv1.TolerationOpEqual
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			// we expect CA to schedule
+			name: "Workload without node-selector, but with missing effect in toleration",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:      labels.ComputeClassLabel,
+					Value:    cccName,
+					Operator: apiv1.TolerationOpEqual,
+					// missing effect matches all effects
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			// we expect CA to schedule
+			name: "Workload without node-selector, but with unsupported operator in toleration",
+			pod: tu.BuildTestPod("pod", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:      labels.ComputeClassLabel,
+					Value:    cccName,
+					Operator: apiv1.TolerationOpGt,
+					// missing effect matches all effects
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			name: "Workload with broad CCC key toleration and no nodeSelector",
+			pod: tu.BuildTestPod("pod-broad-ccc-toleration", 1000, 1000,
+				tu.MarkUnschedulable(),
+				pod.WithTolerations(apiv1.Toleration{
+					Key:      labels.ComputeClassLabel,
+					Operator: apiv1.TolerationOpExists,
+					// no effect should match all effects
+				}),
+			),
+			expectPodScheduledOnNodePool: cccNodePool.Name,
+		},
+		{
+			name: "Workload with CCC toleration and nodeSelector",
 			pod: tu.BuildTestPod("pod-ccc-selector-and-toleration", 1000, 1000,
 				tu.MarkUnschedulable(),
 				pod.WithCCC(cccName),
 			),
-			expectPodScheduledOnCCCNode: true,
+			expectPodScheduledOnNodePool: cccNodePool.Name,
 		},
 		{
-			name: "Scenario 3: System pod without CCC toleration on cluster with non-CCC nodepool",
+			name: "System pod without CCC toleration on cluster with non-CCC nodepool",
 			pod: func() *apiv1.Pod {
 				p := tu.BuildTestPod("system-pod-no-ccc", 1000, 1000, tu.MarkUnschedulable())
 				p.Namespace = "kube-system"
 				return p
 			}(),
-			extraPools:                  []*gke_api_beta.NodePool{nonCCCNodePool},
-			expectPodScheduledOnCCCNode: false,
+			extraPools:                   []*gke_api_beta.NodePool{nonCCCNodePool},
+			expectPodScheduledOnNodePool: nonCCCNodePool.Name,
 		},
 	}
 
@@ -152,19 +272,113 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 
 				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods(tc.pod.Namespace).Get(ctx, tc.pod.Name, metav1.GetOptions{})
 				assert.NoError(t, err)
-				assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", tc.pod.Name)
-
-				node, err := infra.Fakes.KubeClient.CoreV1().Nodes().Get(ctx, updatedPod.Spec.NodeName, metav1.GetOptions{})
-				assert.NoError(t, err)
-
-				if tc.expectPodScheduledOnCCCNode {
-					assert.Equal(t, cccName, node.Labels[labels.ComputeClassLabel],
-						"Expected pod %s to be scheduled on a node with compute class %q", tc.pod.Name, cccName)
+				if tc.expectPodScheduledOnNodePool != "" {
+					assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", tc.pod.Name)
+					node, err := infra.Fakes.KubeClient.CoreV1().Nodes().Get(ctx, updatedPod.Spec.NodeName, metav1.GetOptions{})
+					assert.NoError(t, err)
+					assert.Contains(t, node.Name, tc.expectPodScheduledOnNodePool)
 				} else {
-					assert.NotEqual(t, cccName, node.Labels[labels.ComputeClassLabel],
-						"Expected pod %s to be scheduled on a non-CCC node pool, got compute class %q", tc.pod.Name, node.Labels[labels.ComputeClassLabel])
+					assert.Empty(t, updatedPod.Spec.NodeName)
 				}
 			})
 		})
 	}
+}
+
+// TestCCCNodePoolPreferNoSchedule verifies that workloads can schedule on
+// CCC NodePools even without a corresponding toleration, provided the CCC taint
+// has a PREFER_NO_SCHEDULE effect.
+func TestCCCNodePoolPreferNoSchedule(t *testing.T) {
+	pod := tu.BuildTestPod("pod", 1000, 1000,
+		tu.MarkUnschedulable(),
+		pod.WithNodeSelector(map[string]string{
+			"role": "role-1",
+		}),
+	)
+	const cccName = "my-ccc-1"
+
+	computeClass := ccc.NewComputeClassBuilder(cccName).
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
+		Build()
+
+	cccNodePool := integration.DefaultNodePool(
+		integration.WithNodePoolName("ccc-pool-1"),
+		integration.WithNodePoolMachineType("n1-standard-2"),
+		integration.WithNodePoolSize(0),
+		integration.WithNodePoolMaxNodeCount(10),
+		integration.WithNodePoolLabels(map[string]string{
+			labels.ComputeClassLabel: cccName,
+			"role":                   "role-1",
+		}),
+		integration.WithNodePoolTaints(&gke_api_beta.NodeTaint{
+			Key:    labels.ComputeClassLabel,
+			Value:  cccName,
+			Effect: "PREFER_NO_SCHEDULE",
+		}),
+	)
+	testConfig := integration.NewTestConfig().
+		WithNodePools(cccNodePool).
+		WithCccCrds(computeClass)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		infra.Fakes.K8s.AddPod(pod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", pod.Name)
+	})
+}
+
+// TestCCCNodePoolNoTaint verifies that a non-CCC workload without node-selector and toleration
+// schedules on a CCC NodePool if the NodePool has no taint and there is nothing else.
+func TestCCCNodePoolNoTaint(t *testing.T) {
+	pod := tu.BuildTestPod("pod", 1000, 1000,
+		tu.MarkUnschedulable(),
+	)
+	const cccName = "my-ccc-1"
+
+	computeClass := ccc.NewComputeClassBuilder(cccName).
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
+		Build()
+
+	cccNodePool := integration.DefaultNodePool(
+		integration.WithNodePoolName("ccc-pool-1"),
+		integration.WithNodePoolMachineType("n1-standard-2"),
+		integration.WithNodePoolSize(0),
+		integration.WithNodePoolMaxNodeCount(10),
+		integration.WithNodePoolLabels(map[string]string{
+			labels.ComputeClassLabel: cccName,
+		}),
+	)
+	testConfig := integration.NewTestConfig().
+		WithNodePools(cccNodePool).
+		WithCccCrds(computeClass)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		infra.Fakes.K8s.AddPod(pod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", pod.Name)
+	})
 }

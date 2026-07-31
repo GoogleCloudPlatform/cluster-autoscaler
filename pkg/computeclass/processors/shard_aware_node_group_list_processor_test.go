@@ -59,6 +59,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -67,6 +68,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool-2").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-2"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-2", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -99,6 +101,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -118,6 +121,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -159,6 +163,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -197,6 +202,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -216,6 +222,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -254,6 +261,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -273,6 +281,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -312,6 +321,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -331,6 +341,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -381,6 +392,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -418,6 +430,385 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints:      []apiv1.Taint{{Key: testCrdLabel, Value: "ccc-object-1", Effect: apiv1.TaintEffectNoSchedule}},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC and CCC node group has PreferNoSchedule taint",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectPreferNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard",
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectPreferNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Filter out CCC node group if whole pod shard is non-CCC and CCC node group has NoSchedule taint",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard",
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC and pod has matching toleration effect (NoSchedule)",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "ccc-object-1",
+								Effect:   apiv1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC and pod has toleration with empty effect matching any taint effect",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "ccc-object-1",
+								Effect:   "",
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC and pod has toleration with unset operator (defaults to Equal)",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard-with-toleration",
+					},
+					Spec: apiv1.PodSpec{
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{testCrdLabel: "ccc-object-1"},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "ccc-object-1",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep CCC node group if whole pod shard is non-CCC and CCC node group has no taints",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("ccc-object-1"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"ccc-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard",
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("ccc-pool").
+					SetGceRefName("ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),
@@ -440,9 +831,10 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 
 			gotNodegroups, _, err := processor.Process(nil, tc.nodegroups, nil, tc.unschedulablePods)
 			assert.NoError(t, err)
-			assert.Equal(t, len(tc.wantNodegroups), len(gotNodegroups))
-			for i := range gotNodegroups {
-				assert.Equal(t, tc.wantNodegroups[i].Id(), gotNodegroups[i].Id())
+			if assert.Equal(t, len(tc.wantNodegroups), len(gotNodegroups)) {
+				for i := range gotNodegroups {
+					assert.Equal(t, tc.wantNodegroups[i].Id(), gotNodegroups[i].Id())
+				}
 			}
 		})
 	}
