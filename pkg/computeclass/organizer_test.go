@@ -54,6 +54,7 @@ func TestOrganizeByRules(t *testing.T) {
 		crd                        crd.CRD
 		isEkWithinPodFamilyEnabled bool
 		isE4Enabled                bool
+		isE4PrioritizationEnabled  bool
 		isExtendedFallbacksEnabled bool
 		wantGroups                 [][]cloudprovider.NodeGroup
 	}{
@@ -954,23 +955,24 @@ func TestOrganizeByRules(t *testing.T) {
 				}),
 				crd.WithAutopilotManaged(),
 			),
-			isE4Enabled: true,
+			isE4Enabled:               true,
+			isE4PrioritizationEnabled: true,
 			wantGroups: [][]cloudprovider.NodeGroup{
-				{
-					gke.NewTestGkeMigBuilder().
-						SetNodePoolName("nodepool-e2").
-						SetSpec(&gkeclient.NodePoolSpec{
-							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
-							MachineType: "e2-standard-4",
-						}).
-						Build(),
-				},
 				{
 					gke.NewTestGkeMigBuilder().
 						SetNodePoolName("nodepool-e4").
 						SetSpec(&gkeclient.NodePoolSpec{
 							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
 							MachineType: "e4-standard-4",
+						}).
+						Build(),
+				},
+				{
+					gke.NewTestGkeMigBuilder().
+						SetNodePoolName("nodepool-e2").
+						SetSpec(&gkeclient.NodePoolSpec{
+							Labels:      map[string]string{testCrdLabel: "crd-object-1"},
+							MachineType: "e2-standard-4",
 						}).
 						Build(),
 				},
@@ -1005,7 +1007,8 @@ func TestOrganizeByRules(t *testing.T) {
 				}),
 				crd.WithAutopilotManaged(),
 			),
-			isE4Enabled: true,
+			isE4Enabled:               true,
+			isE4PrioritizationEnabled: true,
 			wantGroups: [][]cloudprovider.NodeGroup{
 				{
 					gke.NewTestGkeMigBuilder().
@@ -1045,11 +1048,12 @@ func TestOrganizeByRules(t *testing.T) {
 			),
 			isEkWithinPodFamilyEnabled: true,
 			isE4Enabled:                true,
+			isE4PrioritizationEnabled:  true,
 			isExtendedFallbacksEnabled: true,
 			wantGroups: [][]cloudprovider.NodeGroup{
+				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-e4").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "e4-standard-4"}).Build()},
 				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-ek").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "ek-standard-8"}).Build()},
 				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-e2").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "e2-standard-2"}).Build()},
-				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-e4").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "e4-standard-4"}).Build()},
 				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-n4").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "n4-standard-2"}).Build()},
 				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-n4d").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "n4d-standard-2"}).Build()},
 				{gke.NewTestGkeMigBuilder().SetNodePoolName("nodepool-n2").SetExtendedFallbacksEnabled(true).SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{testCrdLabel: "crd-object-1"}, MachineType: "n2-standard-2"}).Build()},
@@ -1189,6 +1193,9 @@ func TestOrganizeByRules(t *testing.T) {
 			}
 			if tc.isE4Enabled {
 				mockProvider.SetResizableVmInAutopilotEnabled(machinetypes.E4.Name(), true)
+			}
+			if tc.isE4PrioritizationEnabled {
+				mockProvider.SetE4PrioritizationEnabledInAutopilot(true)
 			}
 			if tc.isExtendedFallbacksEnabled {
 				mockProvider.SetExtendedFallbacksEnabled(true)

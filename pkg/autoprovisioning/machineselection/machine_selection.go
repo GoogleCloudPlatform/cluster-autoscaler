@@ -346,15 +346,19 @@ func (s Selector) isE4Enabled(autopilotEnabled, autopilotManaged, isStateless bo
 		return true // E4 is mandatory in E2-less regions
 	}
 
-	// In all other regions, only enable E4 for stateless workloads
-	return isStateless
+	if isStateless {
+		return true
+	}
+	return s.CloudProvider.IsE4StatefulEnabledInAutopilot()
 }
 
 func (s Selector) isExtendedFallbacksEnabled(autopilotEnabled, autopilotManaged, isStateless bool) bool {
 	if !(autopilotEnabled || autopilotManaged) {
 		return false
 	}
-	return s.CloudProvider.IsExtendedFallbacksEnabled() && isStateless
+	// Before GA, we only want to enable fallbacks for stateless workloads. Once E4 is enabled for stateful workloads,
+	// we can remove the isStateless check.
+	return s.CloudProvider.IsExtendedFallbacksEnabled() && (isStateless || s.CloudProvider.IsE4StatefulEnabledInAutopilot())
 }
 
 func (s Selector) filterE4MachineFamilyIfNotEnabled(families []machinetypes.MachineFamily, isE4Enabled bool) []machinetypes.MachineFamily {

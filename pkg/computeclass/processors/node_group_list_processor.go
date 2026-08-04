@@ -37,6 +37,7 @@ type processorCloudProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	IsExtendedFallbacksEnabled() bool
+	IsE4PrioritizationEnabledInAutopilot() bool
 	IsAutopilotEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }

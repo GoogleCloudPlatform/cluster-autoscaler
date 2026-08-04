@@ -30,7 +30,7 @@ const (
 
 // TODO(b/534602062): Make the machine family list configurable (e.g., via configmap or flags) instead of hardcoding in code.
 var podFamilyMachineFamilies = map[string][]machinetypes.MachineFamily{
-	GeneralPurposePodFamily:    {machinetypes.E2, machinetypes.EK, machinetypes.E4},
+	GeneralPurposePodFamily:    {machinetypes.E4, machinetypes.EK, machinetypes.E2},
 	GeneralPurposeArmPodFamily: {machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
 }
 

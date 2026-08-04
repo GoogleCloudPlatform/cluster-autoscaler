@@ -51,7 +51,7 @@ func TestCrdMachineFamilies(t *testing.T) {
 		},
 		"pod family specified": {
 			rule:         rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			wantFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 			wantFound:    true,
 		},
 		"unknown pod family specified": {

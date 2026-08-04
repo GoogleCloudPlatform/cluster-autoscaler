@@ -36,6 +36,7 @@ type organizerCloudProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	IsExtendedFallbacksEnabled() bool
+	IsE4PrioritizationEnabledInAutopilot() bool
 	IsAutopilotEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
@@ -156,12 +157,16 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 			}
 		}
 		var families []machinetypes.MachineFamily
+		e4Enabled := o.provider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name()) ||
+			o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name())
+		if o.provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
+			families = append(families, machinetypes.E4)
+		}
 		if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
 			families = append(families, machinetypes.EK)
 		}
 		families = append(families, machinetypes.E2)
-		if o.provider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name()) ||
-			o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name()) {
+		if !o.provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
 			families = append(families, machinetypes.E4)
 		}
 		if o.provider.IsExtendedFallbacksEnabled() {

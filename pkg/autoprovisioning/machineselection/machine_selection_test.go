@@ -55,35 +55,36 @@ func TestSelectMachineSpec(t *testing.T) {
 	customMachineTypeG2 := "g2-custom-4-32768"
 
 	for tn, tc := range map[string]struct {
-		machineFamily                     string
-		podClass                          string
-		specifiedGpu                      string
-		specifiedTpu                      string
-		specifiedBootDiskType             string
-		specifiedReservationMachineType   string
-		resizableVmInAutopilotEnabled     map[string]bool
-		resizableVmWithinPodFamilyEnabled map[string]bool
-		isEkSpotEnabled                   bool
-		isArmMachineFallbacksEnabled      bool
-		confidentialNodes                 bool
-		confidentialInstanceType          string
-		autopilotEnabled                  bool
-		autopilotManaged                  bool
-		wantsSpot                         bool
-		isE2lessRegion                    bool
-		isE4Enabled                       bool
-		boolFlags                         map[string]bool
-		stringFlags                       map[string]string
-		componentVersion                  string
-		architectures                     map[gce.SystemArchitecture]bool
-		rule                              rules.Rule
-		isStateless                       bool
-		isExtendedFallbacksEnabled        bool
-		expectedMinCpuPlatform            *machinetypes.CpuPlatform
-		expectedFamilies                  []machinetypes.MachineFamily
-		expectedComputeClassName          string
-		expectedMachineType               []string
-		expectedErr                       error
+		machineFamily                         string
+		podClass                              string
+		specifiedGpu                          string
+		specifiedTpu                          string
+		specifiedBootDiskType                 string
+		specifiedReservationMachineType       string
+		resizableVmInAutopilotEnabled         map[string]bool
+		resizableVmStatefulInAutopilotEnabled map[string]bool
+		resizableVmWithinPodFamilyEnabled     map[string]bool
+		isEkSpotEnabled                       bool
+		isArmMachineFallbacksEnabled          bool
+		confidentialNodes                     bool
+		confidentialInstanceType              string
+		autopilotEnabled                      bool
+		autopilotManaged                      bool
+		wantsSpot                             bool
+		isE2lessRegion                        bool
+		isE4Enabled                           bool
+		boolFlags                             map[string]bool
+		stringFlags                           map[string]string
+		componentVersion                      string
+		architectures                         map[gce.SystemArchitecture]bool
+		rule                                  rules.Rule
+		isStateless                           bool
+		isExtendedFallbacksEnabled            bool
+		expectedMinCpuPlatform                *machinetypes.CpuPlatform
+		expectedFamilies                      []machinetypes.MachineFamily
+		expectedComputeClassName              string
+		expectedMachineType                   []string
+		expectedErr                           error
 	}{
 		"default CloudProvider family used by default": {
 			expectedFamilies: []machinetypes.MachineFamily{defaultCloudProviderFamily},
@@ -433,7 +434,7 @@ func TestSelectMachineSpec(t *testing.T) {
 		"MN: pod family specified in CCC rule": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"MN: EK spots disabled, fallback to E2": {
 			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -444,7 +445,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			wantsSpot:        true,
 			isEkSpotEnabled:  true,
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"MN: EK within pod family disabled, fallback to E2": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -577,7 +578,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			isE2lessRegion:                    false,
 			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"Default Autopilot pods use E4 in E2-less region": {
 			autopilotEnabled: true,
@@ -598,7 +599,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			isStateless:                       true,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
 		"E2/EK used in mixed region if pod is stateful with PVC and experiment enabled": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -607,7 +608,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			isStateless:                       false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"E2/EK used in mixed region if pod is stateful with Ephemeral and experiment enabled": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -616,7 +617,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			autopilotManaged:                  true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			isStateless:                       false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"E4 still used in E2-less region even if pod is stateful and experiment enabled": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -670,7 +671,7 @@ func TestSelectMachineSpec(t *testing.T) {
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			isStateless:                       true,
 			isExtendedFallbacksEnabled:        false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
 		"extended fallbacks enabled -> returns E2, EK, E4 and fallback families": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -681,14 +682,14 @@ func TestSelectMachineSpec(t *testing.T) {
 			isStateless:                       true,
 			isExtendedFallbacksEnabled:        true,
 			expectedFamilies: []machinetypes.MachineFamily{
-				machinetypes.E2, machinetypes.EK, machinetypes.E4,
+				machinetypes.E4, machinetypes.EK, machinetypes.E2,
 				machinetypes.N4, machinetypes.N4D,
 				machinetypes.N2, machinetypes.N2D,
 				machinetypes.N1,
 				machinetypes.C4, machinetypes.C4D,
 			},
 		},
-		"extended fallbacks enabled but isStateless=false -> returns E2, EK (E4 filtered)": {
+		"extended fallbacks enabled but isStateless=false -> returns EK, E2 (E4 filtered)": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:                    false,
 			isE4Enabled:                       true,
@@ -697,7 +698,27 @@ func TestSelectMachineSpec(t *testing.T) {
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			isStateless:                       false,
 			isExtendedFallbacksEnabled:        true,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+		},
+		"isStateless=false with resizableVmStatefulInAutopilotEnabled -> returns E4, EK, E2": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			isE4Enabled:      true,
+			autopilotEnabled: true,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			resizableVmStatefulInAutopilotEnabled: map[string]bool{
+				machinetypes.E4.Name(): true,
+			},
+			isStateless: false,
+			expectedFamilies: []machinetypes.MachineFamily{
+				machinetypes.E4,
+				machinetypes.EK,
+				machinetypes.E2,
+			},
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
@@ -724,6 +745,9 @@ func TestSelectMachineSpec(t *testing.T) {
 			}
 			for family, enabled := range tc.resizableVmWithinPodFamilyEnabled {
 				builder = builder.WithResizableVmWithinPodFamilyEnabled(family, enabled)
+			}
+			for family, enabled := range tc.resizableVmStatefulInAutopilotEnabled {
+				builder = builder.WithResizableVmStatefulInAutopilotEnabled(family, enabled)
 			}
 			if tc.isE4Enabled {
 				builder = builder.WithResizableVmInAutopilotEnabled(machinetypes.E4.Name(), true)

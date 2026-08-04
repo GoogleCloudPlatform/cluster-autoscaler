@@ -34,6 +34,7 @@ type MockGKEProvider struct {
 	resizableVmWithinPodFamilyEnabled map[string]bool
 	extendedFallbacksEnabled          bool
 	autopilotEnabled                  bool
+	e4PrioritizationEnabled           bool
 	validMachineTypes                 map[gce.MachineTypeKey]bool
 }
 
@@ -124,6 +125,14 @@ func (m *MockGKEProvider) SetExtendedFallbacksEnabled(enabled bool) {
 
 func (m *MockGKEProvider) IsExtendedFallbacksEnabled() bool {
 	return m.extendedFallbacksEnabled
+}
+
+func (m *MockGKEProvider) SetE4PrioritizationEnabledInAutopilot(enabled bool) {
+	m.e4PrioritizationEnabled = enabled
+}
+
+func (m *MockGKEProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	return m.e4PrioritizationEnabled
 }
 
 func (m *MockGKEProvider) GetGkeMigs() []*gke.GkeMig {
