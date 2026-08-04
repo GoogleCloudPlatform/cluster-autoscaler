@@ -4004,11 +4004,39 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				{Zone: "zone-1", MachineType: "a2-ultragpu-8g"},
 			},
 		},
+		"machine family skipped if it does not support required disk type": {
+			options: []NodeGroupOptions{
+				{Zone: "zone-1"},
+			},
+			requirements: nodeGroupRequirements{
+				pods: []*apiv1.Pod{
+					{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      "test-pod",
+							Namespace: "default",
+						},
+						Spec: apiv1.PodSpec{
+							NodeSelector: map[string]string{
+								"disk-type.gke.io/hyperdisk-balanced": "true",
+							},
+						},
+					},
+				},
+				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
+			},
+			machineTypesPerZone: map[string][]string{
+				"zone-1": {"e2-standard-2", "e4-standard-2"},
+			},
+			wantOptions: []NodeGroupOptions{
+				{Zone: "zone-1", MachineType: "e4-standard-2"},
+			},
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineTypesPerZone(tc.machineTypesPerZone).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				WithResizableVmStatefulInAutopilotEnabled(machinetypes.E4.Name(), true).
 				Build()
 			msg := NewMachineSelectionGenerator(provider, machineselection.Selector{CloudProvider: provider}, tc.resizableMachineTypesProvider)
 			assert.ElementsMatch(t, tc.wantOptions, msg.GenerateNodeGroupOptionsForRequirements(tc.options, tc.requirements))

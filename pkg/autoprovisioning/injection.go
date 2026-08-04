@@ -1112,12 +1112,41 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 	if msg.resizableMachineTypesProvider != nil {
 		supportedResizableMachineTypes = msg.resizableMachineTypesProvider.Provide()
 	}
+	requiredDiskTypes := make(map[string]bool)
+	for _, pod := range requirements.pods {
+		for labelKey := range pod.Spec.NodeSelector {
+			if strings.HasPrefix(labelKey, gkelabels.SupportedDiskTypeLabelPrefix) {
+				diskType := strings.TrimPrefix(labelKey, gkelabels.SupportedDiskTypeLabelPrefix)
+				requiredDiskTypes[diskType] = true
+			}
+		}
+	}
+
 	var result []NodeGroupOptions
 	for _, option := range options {
 		for _, machine := range requirements.machineSpec.AutoprovisionedMachineTypes() {
 			// check if machine spec supports min required CPU and memory.
 			if machine.CPU < minCores || machine.Memory < minMemoryGb*units.GiB {
 				continue
+			}
+
+			if msg.cloudProvider.IsMachineSerenityLabelsEnabled() && msg.cloudProvider.IsE4StatefulEnabledInAutopilot() && len(requiredDiskTypes) > 0 {
+				mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
+				if err != nil {
+					klog.V(5).Infof("Skipping machine type %s: unable to determine family for disk compatibility check", machine.Name)
+					continue
+				}
+				supportedDisks := sets.New(mf.ListSupportedDisks(requirements.confidentialNodeType != "")...)
+				diskMismatch := false
+				for diskType := range requiredDiskTypes {
+					if !supportedDisks.Has(diskType) {
+						diskMismatch = true
+						break
+					}
+				}
+				if diskMismatch {
+					continue
+				}
 			}
 
 			// check if hugepages are supported by this machine type.
