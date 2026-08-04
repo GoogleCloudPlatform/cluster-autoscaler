@@ -136,6 +136,12 @@ func (b *ComputeClassBuilder) WithAllocationStrategyDefaults(defaults *v1.Alloca
 	return b
 }
 
+// WithPriorityDefaults sets the priority defaults.
+func (b *ComputeClassBuilder) WithPriorityDefaults(defaults *v1.PriorityDefaults) *ComputeClassBuilder {
+	b.cc.Spec.PriorityDefaults = defaults
+	return b
+}
+
 // AddPriority appends a priority to the list.
 func (b *ComputeClassBuilder) AddPriority(priority v1.Priority) *ComputeClassBuilder {
 	b.cc.Spec.Priorities = append(b.cc.Spec.Priorities, priority)

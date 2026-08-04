@@ -26,6 +26,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	tu "k8s.io/autoscaler/cluster-autoscaler/utils/test"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -111,12 +112,16 @@ func TestCCCWorkloadValidation(t *testing.T) {
 	)
 }
 
-func runCCCConfigurationTest(t *testing.T, name string, cc *v1.ComputeClass, verify func(t *testing.T, cluster *google_api_container.Cluster)) {
+func runCCCConfigurationTest(t *testing.T, name string, cc *v1.ComputeClass, verify func(t *testing.T, cluster *google_api_container.Cluster), testConfigOpts ...func(*integration.TestConfig)) {
 	t.Run(name, func(t *testing.T) {
 		testConfig := integration.NewTestConfig().
 			WithOverrides(integration.WithAutoProvisioningEnabled()).
 			WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled()).
-			WithCccCrds(cc)
+			WithCccCrds(cc).
+			WithExperiments(experiments.EnableNestedVirtualizationEnabledFlag)
+		for _, opt := range testConfigOpts {
+			opt(testConfig)
+		}
 
 		synctest.Test(t, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
@@ -137,8 +142,8 @@ func runCCCConfigurationTest(t *testing.T, name string, cc *v1.ComputeClass, ver
 }
 
 // TestCCCConfigurations verifies that various accepted storage profiles
-// (such as Local SSDs and Boot Disk Sizes) are correctly provisioned
-// onto dynamic node pools within optimized sub-test evaluations.
+// (such as Local SSDs and Boot Disk Sizes) and feature flags (such as EnableNestedVirtualization)
+// are correctly provisioned onto dynamic node pools within optimized sub-test evaluations.
 func TestCCCConfigurations(t *testing.T) {
 	cccSsd := ccc.NewComputeClassBuilder("ccc-ssd").
 		WithNapEnabled().
@@ -162,6 +167,55 @@ func TestCCCConfigurations(t *testing.T) {
 		}).
 		Build()
 
+	cccNestedVirtualizationEnabled := ccc.NewComputeClassBuilder("ccc-nv-enabled").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType:                ptr.To("n2-standard-4"),
+			EnableNestedVirtualization: ptr.To(true),
+		}).
+		Build()
+
+	cccNestedVirtualizationDisabled := ccc.NewComputeClassBuilder("ccc-nv-disabled").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType:                ptr.To("n2-standard-4"),
+			EnableNestedVirtualization: ptr.To(false),
+		}).
+		Build()
+
+	cccNestedVirtualizationUnspecified := ccc.NewComputeClassBuilder("ccc-nv-unspecified").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType: ptr.To("n2-standard-4"),
+		}).
+		Build()
+
+	cccNestedVirtualizationDefaults := ccc.NewComputeClassBuilder("ccc-nv-defaults").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType: ptr.To("n2-standard-4"),
+		}).
+		WithPriorityDefaults(&v1.PriorityDefaults{
+			EnableNestedVirtualization: ptr.To(true),
+		}).
+		Build()
+
+	cccNestedVirtualizationPriorityOverride := ccc.NewComputeClassBuilder("ccc-nv-priority-override").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType:                ptr.To("n2-standard-4"),
+			EnableNestedVirtualization: ptr.To(false),
+		}).
+		WithPriorityDefaults(&v1.PriorityDefaults{
+			EnableNestedVirtualization: ptr.To(true),
+		}).
+		Build()
+
 	runCCCConfigurationTest(t, "Local SSD with machine type", cccSsd, func(t *testing.T, cluster *google_api_container.Cluster) {
 		if assert.Equal(t, 1, len(cluster.NodePools)) {
 			np := cluster.NodePools[0]
@@ -176,6 +230,67 @@ func TestCCCConfigurations(t *testing.T) {
 			np := cluster.NodePools[0]
 			assert.Equal(t, int64(50), np.Config.DiskSizeGb)
 		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization true in priority", cccNestedVirtualizationEnabled, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.True(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization false in priority", cccNestedVirtualizationDisabled, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.False(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization unspecified in priority", cccNestedVirtualizationUnspecified, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if np.Config.AdvancedMachineFeatures != nil {
+				assert.NotContains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization in priorityDefaults overrides unspecified", cccNestedVirtualizationDefaults, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.True(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization in priorityDefaults does not override priority", cccNestedVirtualizationPriorityOverride, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.False(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization true in priority when experiment is disabled", cccNestedVirtualizationEnabled, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			if np.Config.AdvancedMachineFeatures != nil {
+				assert.False(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.NotContains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	}, func(c *integration.TestConfig) {
+		c.WithExperimentOverrides(map[string]bool{experiments.EnableNestedVirtualizationEnabledFlag: false}, nil)
 	})
 }
 
