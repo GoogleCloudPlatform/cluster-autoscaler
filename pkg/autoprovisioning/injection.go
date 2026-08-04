@@ -236,6 +236,7 @@ type nodeGroupRequirements struct {
 	maxRunDurationInSeconds     string
 	flexStartReq                flexStartRequirements
 	secondaryBootDisks          []*gke_api_beta.SecondaryBootDisk
+	bootDiskStoragePools        []string
 	linuxNodeConfig             *gkeclient.LinuxNodeConfig
 	kubeletConfig               *gkeclient.NodeKubeletConfig
 	maxPodsPerNode              int
@@ -350,6 +351,7 @@ func (r nodeGroupRequirements) String() string {
 	buffer.WriteString(fmt.Sprintf("boot disk encryption annotation: <%v>, ", r.bootDiskEncryptionAnnotation))
 	buffer.WriteString(fmt.Sprintf("reservation request: <%s>, ", r.reservation.Signature()))
 	buffer.WriteString(fmt.Sprintf("secondary boot disks: <%s>, ", r.secondaryBootDisksSignature()))
+	buffer.WriteString(fmt.Sprintf("boot disk storage pools: <%v>, ", r.bootDiskStoragePools))
 	buffer.WriteString(fmt.Sprintf("node system config: <%s>, ", linuxNodeConfigSignature(r.linuxNodeConfig)))
 	buffer.WriteString(fmt.Sprintf("kubelet config: <%s>, ", kubeletConfigSignature(r.kubeletConfig)))
 	buffer.WriteString(fmt.Sprintf("max pods per node: <%v>, ", r.maxPodsPerNode))
@@ -405,6 +407,7 @@ func (r nodeGroupRequirements) signature() string {
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskEncryptionKey))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskEncryptionAnnotation))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.secondaryBootDisksSignature()))
+	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskStoragePools))
 	buffer.WriteString(fmt.Sprintf("%v\n", linuxNodeConfigSignature(r.linuxNodeConfig)))
 	buffer.WriteString(fmt.Sprintf("%v\n", kubeletConfigSignature(r.kubeletConfig)))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.maxPodsPerNode))
@@ -1730,6 +1733,10 @@ func (bcg *BootDiskConfigGenerator) UpdateRequirements(ngReq *nodeGroupRequireme
 		ngReq.bootDiskEncryptionAnnotation = podReq.DiskEncryptionKeyAnnotation
 	}
 
+	if len(ngReq.bootDiskStoragePools) > 0 && ngReq.bootDiskType == "" {
+		ngReq.bootDiskType = machinetypes.DiskTypeHyperdiskBalanced
+	}
+
 	return nil
 }
 
@@ -1762,6 +1769,13 @@ func (bcg *BootDiskConfigGenerator) UpdateParameters(params *nodeGroupParameters
 		}
 		secondaryBootDisksJsonString := string(secondaryBootDisksJsonBytes)
 		params.systemLabels[gkelabels.SecondaryBootDisksLabelKey] = secondaryBootDisksJsonString
+	}
+	if len(ngReq.bootDiskStoragePools) != 0 {
+		bootDiskStoragePoolsJsonBytes, err := json.Marshal(ngReq.bootDiskStoragePools)
+		if err != nil {
+			return err
+		}
+		params.systemLabels[gkelabels.BootDiskStoragePoolsLabelKey] = string(bootDiskStoragePoolsJsonBytes)
 	}
 	return nil
 }
@@ -1829,6 +1843,14 @@ func (bcg *BootDiskConfigGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolS
 		spec.SecondaryBootDisks = deserializedSecondaryBootDisks
 	}
 
+	if storagePoolsJsonString, exist := systemLabels[gkelabels.BootDiskStoragePoolsLabelKey]; exist {
+		var deserializedStoragePools []string
+		if err := json.Unmarshal([]byte(storagePoolsJsonString), &deserializedStoragePools); err != nil {
+			return err
+		}
+		spec.StoragePools = deserializedStoragePools
+	}
+
 	return nil
 }
 
@@ -1850,6 +1872,25 @@ func NewComputeClassGenerator(cloudProvider napcloudprovider.AutoprovisioningClo
 	}
 }
 
+func extractStoragePoolZones(storagePools []string) []string {
+	var zones []string
+	seen := make(map[string]bool)
+	for _, pool := range storagePools {
+		parts := strings.Split(pool, "/")
+		for i := 0; i < len(parts)-1; i++ {
+			if parts[i] == "zones" {
+				z := parts[i+1]
+				if z != "" && !seen[z] {
+					seen[z] = true
+					zones = append(zones, z)
+				}
+				break
+			}
+		}
+	}
+	return zones
+}
+
 func (ng ComputeClassGenerator) generateRuleRequirements(requirements nodeGroupRequirements, cc computeclass.CRD, rule rules.Rule) []nodeGroupRequirements {
 	requirements.computeClass = cc
 	requirements.computeClassRule = rule
@@ -1859,9 +1900,14 @@ func (ng ComputeClassGenerator) generateRuleRequirements(requirements nodeGroupR
 	requirements.totalLSSDCount = int(rule.TotalLSSDCount())
 	requirements.bootDiskEncryptionKey = rule.BootDiskKMSKey()
 	requirements.secondaryBootDisks = rule.SecondaryBootDisks()
+	requirements.bootDiskStoragePools = rule.BootDiskStoragePools()
 	requirements.maxPodsPerNode = rule.MaxPodsPerNode()
 	requirements.linuxNodeConfig = linuxNodeConfigFromCCRule(rule)
 	requirements.kubeletConfig = kubeletConfigFromCCRule(rule)
+
+	if len(requirements.bootDiskStoragePools) > 0 {
+		requirements.specifiedZones = extractStoragePoolZones(requirements.bootDiskStoragePools)
+	}
 
 	if len(rule.Reservations()) == 0 {
 		return []nodeGroupRequirements{requirements}
@@ -1871,7 +1917,9 @@ func (ng ComputeClassGenerator) generateRuleRequirements(requirements nodeGroupR
 	for i, reservation := range rule.Reservations() {
 		requirements := requirements
 		// Populating specifiedZones which is the main source of information about zones to be included in injected node pools.
-		requirements.specifiedZones = reservation.Zones()
+		if len(reservation.Zones()) > 0 {
+			requirements.specifiedZones = reservation.Zones()
+		}
 		requirements.reservation.project = reservation.Project()
 		requirements.reservation.affinity = reservation.Affinity()
 		requirements.reservation.name = reservation.Name()

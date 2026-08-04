@@ -304,6 +304,10 @@ const (
 	// CA internal use only
 	SecondaryBootDisksLabelKey = "secondary-boot-disks-label-key"
 
+	// BootDiskStoragePoolsLabelKey is for boot disk storage pools
+	// CA internal use only
+	BootDiskStoragePoolsLabelKey = "boot-disk-storage-pools-label-key"
+
 	// NodeGroupDynamicBootDiskSizeEnabledLabelKey is for node group dynamic boot disk size
 	// CA internal use only
 	NodeGroupDynamicBootDiskSizeEnabledLabelKey = "cloud.google.com/node-group-dynamic-boot-disk-enabled-label-key"

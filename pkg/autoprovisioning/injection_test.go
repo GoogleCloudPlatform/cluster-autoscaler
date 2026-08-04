@@ -11469,6 +11469,121 @@ func TestSecondaryBootDisksIntegration_UpdateNodePoolSpecWithRequirements(t *tes
 	}
 }
 
+// TestBootDiskStoragePoolsIntegration_UpdateNodePoolSpecWithRequirements tests storage pools integration
+func TestBootDiskStoragePoolsIntegration_UpdateNodePoolSpecWithRequirements(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("c4-standard-4").Build()
+	generator := NewBootDiskConfigGenerator(provider)
+
+	storagePools := []string{
+		"projects/project1/zones/us-central1-a/storagePools/pool-1",
+		"projects/project1/zones/us-central1-a/storagePools/pool-2",
+	}
+
+	params := &nodeGroupParameters{
+		systemLabels: make(map[string]string),
+	}
+	ngReq := nodeGroupRequirements{
+		bootDiskStoragePools: storagePools,
+	}
+
+	err := generator.UpdateParameters(params, ngReq, NodeGroupOptions{})
+	assert.NoError(t, err)
+
+	spec := &gkeclient.NodePoolSpec{
+		Labels: map[string]string{},
+	}
+	err2 := generator.UpdateNodePoolSpec(spec, params.systemLabels, nil)
+	assert.NoError(t, err2)
+
+	if diff := cmp.Diff(spec.StoragePools, storagePools); diff != "" {
+		t.Errorf("Storage pools differ: %s", diff)
+	}
+}
+
+func TestBootDiskStoragePools_UpdateRequirements(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("c4-standard-4").Build()
+	generator := NewBootDiskConfigGenerator(provider)
+
+	ngReq := &nodeGroupRequirements{
+		bootDiskStoragePools: []string{"projects/project1/zones/us-central1-a/storagePools/pool-1"},
+	}
+	podReq := &podrequirements.Requirements{
+		LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{}),
+	}
+
+	err := generator.UpdateRequirements(ngReq, podReq, machinetypes.GpuRequest{}, TpuRequest{})
+	assert.NoError(t, err)
+	assert.Equal(t, machinetypes.DiskTypeHyperdiskBalanced, ngReq.bootDiskType)
+}
+
+func TestExtractStoragePoolZones(t *testing.T) {
+	testCases := []struct {
+		name         string
+		storagePools []string
+		wantZones    []string
+	}{
+		{
+			name:         "Empty storage pools",
+			storagePools: nil,
+			wantZones:    nil,
+		},
+		{
+			name: "Single storage pool",
+			storagePools: []string{
+				"projects/proj-1/zones/us-central1-a/storagePools/pool-1",
+			},
+			wantZones: []string{"us-central1-a"},
+		},
+		{
+			name: "Multiple storage pools with distinct zones",
+			storagePools: []string{
+				"projects/proj-1/zones/us-central1-a/storagePools/pool-1",
+				"projects/proj-1/zones/us-central1-b/storagePools/pool-2",
+			},
+			wantZones: []string{"us-central1-a", "us-central1-b"},
+		},
+		{
+			name: "Multiple storage pools with duplicate zones deduplicated",
+			storagePools: []string{
+				"projects/proj-1/zones/us-central1-a/storagePools/pool-1",
+				"projects/proj-1/zones/us-central1-a/storagePools/pool-2",
+			},
+			wantZones: []string{"us-central1-a"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := extractStoragePoolZones(tc.storagePools)
+			assert.Equal(t, tc.wantZones, got)
+		})
+	}
+}
+
+func TestBootDiskStoragePools_SpecifiedZonesFiltering(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("c3d-highcpu-4").Build()
+	specifiedZonesGen := NewSpecifiedZonesGenerator(provider, false, testOptionsTracker(nil))
+
+	options := []NodeGroupOptions{
+		{Zone: "us-central1-a"},
+		{Zone: "us-central1-b"},
+		{Zone: "us-central1-c"},
+	}
+
+	ngReq := nodeGroupRequirements{
+		bootDiskStoragePools: []string{
+			"projects/proj-1/zones/us-central1-a/storagePools/pool-a",
+			"projects/proj-1/zones/us-central1-b/storagePools/pool-b",
+		},
+		specifiedZones: []string{"us-central1-a", "us-central1-b"},
+	}
+
+	filteredOpts := specifiedZonesGen.GenerateNodeGroupOptionsForRequirements(options, ngReq)
+	assert.Equal(t, 2, len(filteredOpts))
+	assert.Equal(t, "us-central1-a", filteredOpts[0].Zone)
+	assert.Equal(t, "us-central1-b", filteredOpts[1].Zone)
+}
+
 // TestReservationGenerator_matchReservationBlock test reservation block validation
 func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 	projectID := "project"

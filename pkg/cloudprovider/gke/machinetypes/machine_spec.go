@@ -27,6 +27,7 @@ type MachineSpec struct {
 	GpuType                  string
 	TpuType                  string
 	BootDiskType             string
+	BootDiskStoragePools     []string
 	ComputeClassName         string
 	ExplicitMachineTypes     []string
 	ConfidentialNodesEnabled bool

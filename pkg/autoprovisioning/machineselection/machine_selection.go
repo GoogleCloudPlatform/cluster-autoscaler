@@ -93,6 +93,10 @@ func (s Selector) selectMachineSpec(
 	if reservationMachineType != "" {
 		explicitMachineTypes = append(explicitMachineTypes, reservationMachineType)
 	}
+	var bootDiskStoragePools []string
+	if rule != nil {
+		bootDiskStoragePools = rule.BootDiskStoragePools()
+	}
 	return machinetypes.MachineSpec{
 		Families:                 families,
 		ComputeClassName:         computeClassName,
@@ -100,6 +104,7 @@ func (s Selector) selectMachineSpec(
 		GpuType:                  specifiedGpu,
 		TpuType:                  specifiedTpu,
 		BootDiskType:             specifiedBootDiskType,
+		BootDiskStoragePools:     bootDiskStoragePools,
 		ExplicitMachineTypes:     explicitMachineTypes,
 		ConfidentialNodesEnabled: s.CloudProvider.AreConfidentialNodesEnabled(),
 		ConfidentialNodeType:     s.CloudProvider.GetConfidentialInstanceType(),
@@ -440,6 +445,9 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	}
 	if !family.IsDiskTypeSupported(spec.BootDiskType) {
 		return NewBootDiskTypeIncompatibleError(machineGroupName, spec.BootDiskType)
+	}
+	if len(spec.BootDiskStoragePools) > 0 && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced) {
+		return NewBootDiskTypeIncompatibleError(machineGroupName, machinetypes.DiskTypeHyperdiskBalanced)
 	}
 	// K80 has some additional restrictions on min_cpu_platform.
 	if spec.GpuType == machinetypes.NvidiaTeslaK80.Name() && machinetypes.PlatformIsAtLeast(spec.MinCpuPlatform, machinetypes.IntelSkylake) {

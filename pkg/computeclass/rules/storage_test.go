@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -60,6 +61,9 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 		DiskImage: fmt.Sprintf("projects/%s/global/images/%s", project2, "disk2"),
 		Mode:      mode1,
 	}
+
+	storagePool1 := "projects/test-project/zones/us-central1-a/storagePools/pool-1"
+	storagePool2 := "projects/test-project/zones/us-central1-a/storagePools/pool-2"
 
 	testCases := []struct {
 		name      string
@@ -366,6 +370,64 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 			expected: true,
 		},
 		{
+			name: "rule with boot disk storage pools, node group with matching storage pools - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:  nonDefaultMachineType,
+				StoragePools: []string{storagePool1, storagePool2},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskStoragePoolsRule([]string{storagePool1, storagePool2}),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with boot disk storage pools in different order - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:  nonDefaultMachineType,
+				StoragePools: []string{storagePool2, storagePool1},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskStoragePoolsRule([]string{storagePool1, storagePool2}),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with boot disk storage pools, node group with different storage pools - no matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:  nonDefaultMachineType,
+				StoragePools: []string{storagePool1},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskStoragePoolsRule([]string{storagePool1, storagePool2}),
+			),
+			expected: false,
+		},
+		{
+			name: "rule with boot disk storage pools, node group without storage pools - no matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskStoragePoolsRule([]string{storagePool1}),
+			),
+			expected: false,
+		},
+		{
+			name: "rule without boot disk storage pools, node group with storage pools - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:  nonDefaultMachineType,
+				StoragePools: []string{storagePool1},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+			),
+			expected: true,
+		},
+		{
 			name: "rule with secondary boot disk and storage, the order of rule configuration should not matter",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:       nonDefaultMachineType,
@@ -466,5 +528,13 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
 		})
+	}
+}
+
+func TestStorageRuleGetters(t *testing.T) {
+	pools := []string{"projects/p/zones/us-central1-a/storagePools/sp1"}
+	r := NewRule(WithBootDiskStoragePoolsRule(pools))
+	if diff := cmp.Diff(pools, r.BootDiskStoragePools()); diff != "" {
+		t.Errorf("BootDiskStoragePools() mismatch (-want +got):\n%s", diff)
 	}
 }

@@ -254,6 +254,9 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		)
 		ruleOpts = append(ruleOpts, storageOpt)
 		ruleOpts = checkSecondaryBootDiskRules(p, ccc, ruleOpts)
+		if len(p.Storage.BootDiskStoragePools) > 0 {
+			ruleOpts = append(ruleOpts, rules.WithBootDiskStoragePoolsRule(p.Storage.BootDiskStoragePools))
+		}
 	}
 
 	if p.Location != nil {

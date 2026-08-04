@@ -4105,6 +4105,66 @@ func TestSecondaryBootDisks(t *testing.T) {
 	}
 }
 
+func TestStoragePools(t *testing.T) {
+	testCases := []struct {
+		name               string
+		apiClusterResponse string
+		wantedStoragePools []string
+	}{
+		{
+			name: "Test storage pools presence",
+			apiClusterResponse: `{
+				"createTime": "2024-08-27T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "storage-pools-pool",
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					},
+					"config": {
+					  "machineType": "c4-standard-4",
+					  "storagePools": [
+						"projects/project1/zones/us-central1-a/storagePools/pool-1",
+						"projects/project1/zones/us-central1-a/storagePools/pool-2"
+					  ]
+					}
+				  }
+				]
+			}`,
+			wantedStoragePools: []string{
+				"projects/project1/zones/us-central1-a/storagePools/pool-1",
+				"projects/project1/zones/us-central1-a/storagePools/pool-2",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster-1").Return(tc.apiClusterResponse).Once()
+			client := newTestAutoscalingGkeClientV1beta1(t, "project1", "us-central1-b", "cluster-1", server.URL)
+			cluster, err := client.GetCluster()
+			if err != nil {
+				t.Errorf("GetCluster returned %+v and error %v, want no error", cluster, err)
+			}
+
+			if len(cluster.NodePools) != 1 {
+				t.Fatalf("Incorrect number of node pools, want 1, got %v", len(cluster.NodePools))
+			}
+
+			nodePool := cluster.NodePools[0]
+			if diff := cmp.Diff(tc.wantedStoragePools, nodePool.Spec.StoragePools); diff != "" {
+				t.Errorf("Unexpected storage pools: %v", diff)
+			}
+		})
+	}
+}
+
 func TestLinuxNodeConfig(t *testing.T) {
 	testCases := []struct {
 		name               string

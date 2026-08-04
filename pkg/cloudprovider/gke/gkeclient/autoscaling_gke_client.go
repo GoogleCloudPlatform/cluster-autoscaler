@@ -228,6 +228,7 @@ type NodePoolSpec struct {
 	MaxRunDurationInSeconds  string // String has to be a parsable integer representing number of seconds, no unit
 	FlexStart                bool
 	SecondaryBootDisks       []*gke_api_beta.SecondaryBootDisk
+	StoragePools             []string
 	AutopilotManaged         bool
 	ServiceAccount           string
 	LinuxNodeConfig          *LinuxNodeConfig

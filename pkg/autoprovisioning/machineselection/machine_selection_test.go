@@ -1383,6 +1383,26 @@ func TestLimitMachineSpec(t *testing.T) {
 			},
 			expectedErr: NewMachineConfigInvalidError(machinetypes.Constraints{GpuType: "gpu-type-1", CpuPlatform: machinetypes.IntelCascadeLake}.String(), "no machine types supporting all parts of the config found"),
 		},
+		"supported family with BootDiskStoragePools": {
+			spec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:       machinetypes.AnyPlatform,
+				BootDiskStoragePools: []string{"projects/test-project/zones/us-central1-a/storagePools/test-pool"},
+			},
+			expectedSpec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:       machinetypes.AnyPlatform,
+				BootDiskStoragePools: []string{"projects/test-project/zones/us-central1-a/storagePools/test-pool"},
+			},
+		},
+		"error if machine family does not support hyperdisk-balanced for BootDiskStoragePools": {
+			spec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.E2},
+				MinCpuPlatform:       machinetypes.AnyPlatform,
+				BootDiskStoragePools: []string{"projects/test-project/zones/us-central1-a/storagePools/test-pool"},
+			},
+			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "e2"`, machinetypes.DiskTypeHyperdiskBalanced),
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithConfidentialNodesEnabled(tc.confidentialNodes).WithConfidentialInstanceType(tc.confidentialInstanceType).Build()

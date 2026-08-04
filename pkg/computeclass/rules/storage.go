@@ -40,6 +40,7 @@ type StorageRule interface {
 	EphemerslStorageLSSDCount() int
 	TotalLSSDCount() int64
 	SecondaryBootDisks() []*gke_api_beta.SecondaryBootDisk
+	BootDiskStoragePools() []string
 }
 
 type storageRule struct {
@@ -48,6 +49,7 @@ type storageRule struct {
 	bootDiskKMSKey            *string
 	ephemeralStorageLSSDCount *int
 	secondaryBootDisks        []*gke_api_beta.SecondaryBootDisk
+	bootDiskStoragePools      []string
 }
 
 // Matches returns true if the nodegroup is within one of the nodepools.
@@ -62,7 +64,8 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		r.bootDiskSize == nil &&
 		r.bootDiskKMSKey == nil &&
 		r.ephemeralStorageLSSDCount == nil &&
-		len(r.secondaryBootDisks) == 0 {
+		len(r.secondaryBootDisks) == 0 &&
+		len(r.bootDiskStoragePools) == 0 {
 		return true
 	}
 
@@ -92,6 +95,16 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 					return disk1.DiskImage < disk2.DiskImage
 				}
 				return disk1.Mode < disk2.Mode
+			})) {
+			return false
+		}
+	}
+
+	// Check for boot disk storage pools.
+	if len(r.bootDiskStoragePools) > 0 {
+		if !cmp.Equal(mig.Spec().StoragePools, r.bootDiskStoragePools,
+			cmpopts.SortSlices(func(p1, p2 string) bool {
+				return p1 < p2
 			})) {
 			return false
 		}
@@ -157,6 +170,11 @@ func (r *storageRule) SecondaryBootDisks() []*gke_api_beta.SecondaryBootDisk {
 	return r.secondaryBootDisks
 }
 
+// BootDiskStoragePools returns boot disk storage pools slice collection
+func (r *storageRule) BootDiskStoragePools() []string {
+	return r.bootDiskStoragePools
+}
+
 // WithStorageRule returns RuleOption setting basic StorageRule.
 func WithStorageRule(bootDiskType *string, bootDiskSize *int, bootDiskKMSKey *string, ephemeralStorageLSSDCount *int) RuleOption {
 	return func(r *rule) {
@@ -172,6 +190,13 @@ func WithSecondaryBootDiskRule(diskImageName string, project string, mode string
 	return func(r *rule) {
 		gkeApiSecondaryBootDisk := GenerateGkeApiSecondaryBootDisk(diskImageName, project, mode)
 		r.storageRule.secondaryBootDisks = append(r.storageRule.secondaryBootDisks, gkeApiSecondaryBootDisk)
+	}
+}
+
+// WithBootDiskStoragePoolsRule returns RuleOption setting bootDiskStoragePools to StorageRule.
+func WithBootDiskStoragePoolsRule(storagePools []string) RuleOption {
+	return func(r *rule) {
+		r.storageRule.bootDiskStoragePools = storagePools
 	}
 }
 
