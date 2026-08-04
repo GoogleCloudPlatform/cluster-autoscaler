@@ -204,7 +204,7 @@ func (m *mockCSNBufferConsumptionProcessor) CleanUp() {
 }
 
 func TestNewGkeInternalPodListProcessorNil(t *testing.T) {
-	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if processor.defragProcessor != nil {
 		t.Errorf("Expected defragProcessor to be strictly nil")
 	}

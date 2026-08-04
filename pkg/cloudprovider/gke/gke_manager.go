@@ -235,6 +235,8 @@ type GkeManager interface {
 	GetDefaultNodePoolMinCpuPlatform() string
 	// GetDefaultNodePoolDiskSizeGB returns a default node pool disk size GiB
 	GetDefaultNodePoolDiskSizeGB() int64
+	// IsMachineSerenityLabelsEnabled returns whether machine serenity labels are enabled.
+	IsMachineSerenityLabelsEnabled() bool
 	// GetImageTypeForNap returns the Node Autoprovisioning Image Type for a mig.
 	GetImageTypeForNap(mig *GkeMig) string
 	// GetOsDistributionForNap returns the Node Autoprovisioning Operating System distribution for a mig.
@@ -886,6 +888,11 @@ func (m *gkeManagerImpl) AreConfidentialNodesEnabled() bool {
 // GetConfidentialInstanceType returns the confidential instance type of the cluster.
 func (m *gkeManagerImpl) GetConfidentialInstanceType() string {
 	return m.confidentialInstanceType
+}
+
+// IsMachineSerenityLabelsEnabled returns whether machine serenity labels are enabled.
+func (m *gkeManagerImpl) IsMachineSerenityLabelsEnabled() bool {
+	return m.managerOptions.MachineSerenityLabelsEnabled
 }
 
 // IsClusterUsingPSCInfrastructure checks if cluster is using PSC infrastructure. If so, cluster support public and private nodes.

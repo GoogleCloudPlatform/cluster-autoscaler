@@ -44,4 +44,6 @@ type ProcessorsCloudProvider interface {
 	SetRecommendation(migId string, rec gke.ScaleUpRecommendation)
 	PopRecommendation(migId string) (rec gke.ScaleUpRecommendation, ok bool)
 	ClearRecommendations()
+	IsMachineSerenityLabelsEnabled() bool
+	IsE4StatefulEnabledInAutopilot() bool
 }

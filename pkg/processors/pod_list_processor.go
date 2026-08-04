@@ -83,6 +83,7 @@ type GkeInternalPodListProcessor struct {
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor
 	cbFakePodStateObserver         *cb_metrics.FakePodStateObserver
 	ccMinCapacityProcessor         *cc_processors.MinCapacityPodListProcessor
+	storageNodeAffinityProcessor   *StorageNodeAffinityPodListProcessor
 
 	experimentsManager experiments.Manager
 }
@@ -109,6 +110,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor,
 	cbReactionTimeReporter *cb_metrics.FakePodStateObserver,
 	ccMinCapacityProcessor *cc_processors.MinCapacityPodListProcessor,
+	storageNodeAffinityProcessor *StorageNodeAffinityPodListProcessor,
 	em experiments.Manager,
 ) *GkeInternalPodListProcessor {
 	p := &GkeInternalPodListProcessor{
@@ -132,6 +134,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		podStateObserver:               podStateObserver,
 		cbFakePodStateObserver:         cbReactionTimeReporter,
 		ccMinCapacityProcessor:         ccMinCapacityProcessor,
+		storageNodeAffinityProcessor:   storageNodeAffinityProcessor,
 		experimentsManager:             em,
 	}
 	if defragProcessor != nil {
@@ -155,17 +158,27 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 
 	klog.Infof("Unschedulable pods count before processing: %v", len(unschedulablePods))
 
+	var err error
+
 	p.podStatusAggregator.Unschedulable = append([]*apiv1.Pod{}, unschedulablePods...)
+
+	if p.storageNodeAffinityProcessor != nil {
+		if cp, ok := context.CloudProvider.(ProcessorsCloudProvider); ok && cp.IsMachineSerenityLabelsEnabled() && cp.IsE4StatefulEnabledInAutopilot() {
+			unschedulablePods, err = p.storageNodeAffinityProcessor.Process(context, unschedulablePods)
+			if err != nil {
+				return []*apiv1.Pod{}, err
+			}
+		}
+	}
 
 	if p.csnNodeReconcilationProcessor != nil {
 		// Updates context before processing.
-		err := p.csnNodeReconcilationProcessor.Preprocess(context)
+		err = p.csnNodeReconcilationProcessor.Preprocess(context)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
 	}
 
-	var err error
 	if p.ekvmsProcessor != nil {
 		// Updates context before processing.
 		err = p.ekvmsProcessor.Preprocess(context)

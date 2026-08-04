@@ -49,6 +49,7 @@ type AutoprovisioningCloudProvider interface {
 	// IsClusterUsingPSCInfrastructure checks if cluster is using PSC infrastructure. If so, cluster supports public and private nodes.
 	IsClusterUsingPSCInfrastructure() bool
 	IsAutopilotEnabled() bool
+	IsMachineSerenityLabelsEnabled() bool
 	IsDefaultCCCEnabled() bool
 	IsCompactPlacementEnabled() bool
 	// GetDefaultEnablePrivateNodes return default value for enablePrivateNodes.

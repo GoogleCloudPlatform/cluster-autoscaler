@@ -864,6 +864,11 @@ func (p *gkeCloudProviderImpl) GetConfidentialInstanceType() string {
 	return p.gkeManager.GetConfidentialInstanceType()
 }
 
+// IsMachineSerenityLabelsEnabled returns whether machine serenity labels are enabled.
+func (p *gkeCloudProviderImpl) IsMachineSerenityLabelsEnabled() bool {
+	return p.gkeManager.IsMachineSerenityLabelsEnabled()
+}
+
 // GetDefaultNodePoolDiskType returns a default node pool disk type.
 func (p *gkeCloudProviderImpl) GetDefaultNodePoolDiskType() string {
 	return p.gkeManager.GetDefaultNodePoolDiskType()

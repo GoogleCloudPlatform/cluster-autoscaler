@@ -852,6 +852,11 @@ func (cp *TestAutoprovisioningCloudProvider) IsClusterUsingPSCInfrastructure() b
 	return cp.isClusterUsingPSCInfrastructure
 }
 
+// IsMachineSerenityLabelsEnabled checks if machine serenity labels are enabled.
+func (cp *TestAutoprovisioningCloudProvider) IsMachineSerenityLabelsEnabled() bool {
+	return true
+}
+
 // IsAutopilotEnabled checks if Autopilot is enabled.
 func (cp *TestAutoprovisioningCloudProvider) IsAutopilotEnabled() bool {
 	return cp.isAutopilotEnabled
@@ -1467,6 +1472,12 @@ func (m *GkeCloudProviderMock) GetConfidentialInstanceType() string {
 	return args.Get(0).(string)
 }
 
+// IsMachineSerenityLabelsEnabled returns whether machine serenity labels are enabled.
+func (m *GkeCloudProviderMock) IsMachineSerenityLabelsEnabled() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 // GetDefaultNodePoolDiskType returns a default node pool disk type
 func (m *GkeCloudProviderMock) GetDefaultNodePoolDiskType() string {
 	args := m.Called()
@@ -1824,6 +1835,10 @@ func (fake *FakeGkeManager) AreConfidentialNodesEnabled() bool {
 
 func (fake *FakeGkeManager) GetConfidentialInstanceType() string {
 	panic("not implemented")
+}
+
+func (fake *FakeGkeManager) IsMachineSerenityLabelsEnabled() bool {
+	return true
 }
 
 func (fake *FakeGkeManager) GetDefaultNodePoolDiskType() string {
@@ -2670,6 +2685,12 @@ func (m *GkeManagerMock) AreConfidentialNodesEnabled() bool {
 func (m *GkeManagerMock) GetConfidentialInstanceType() string {
 	args := m.Called()
 	return args.Get(0).(string)
+}
+
+// IsMachineSerenityLabelsEnabled is a mocked method
+func (m *GkeManagerMock) IsMachineSerenityLabelsEnabled() bool {
+	args := m.Called()
+	return args.Bool(0)
 }
 
 // IsClusterUsingPSCInfrastructure is a mocked method
