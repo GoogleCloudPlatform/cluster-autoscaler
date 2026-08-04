@@ -596,3 +596,108 @@ func TestFleetEfficiencyFilter_Errors(t *testing.T) {
 		runFleetEfficiencyTest(t, tc)
 	}
 }
+
+func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
+	f := newTestFixture()
+
+	// Defining rules with the same priority score that mix "fleet-efficiency" and "lowest-cost"
+	// is impossible in production due to CCC validation.
+	// On unit test level this however makes sense for completeness, so it is covered with tests.
+	tests := []fleetEfficiencyTestCase{
+		{
+			name: "explicit lowest-cost overrides explicit fleet-efficiency and cluster default",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyLowestCost)),
+							crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+							crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-other"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2, f.optOther},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2, f.optOther},
+		},
+		{
+			name: "explicit lowest-cost on last rule overrides cluster default fleet-efficiency",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyLowestCost)),
+							crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name: "explicit fleet-efficiency on last rule overrides cluster default lowest-cost",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+							crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+		{
+			name: "inherits cluster default fleet-efficiency",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+	}
+
+	for _, tc := range tests {
+		runFleetEfficiencyTest(t, tc)
+	}
+}
