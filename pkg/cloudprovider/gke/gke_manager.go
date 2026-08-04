@@ -314,6 +314,10 @@ type GkeManager interface {
 	ResizingEnabled(machineFamily string) bool
 	// IsResizableVmEnabledInAutopilot returns true if resizable VM for the given family should be used for autoprovisioning in Autopilot.
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
+	// IsE4StatefulEnabledInAutopilot returns true if E4 is enabled for stateful autoprovisioning in Autopilot.
+	IsE4StatefulEnabledInAutopilot() bool
+	// IsE4PrioritizationEnabledInAutopilot returns true if E4 prioritization is enabled in Autopilot.
+	IsE4PrioritizationEnabledInAutopilot() bool
 	// IsResizableVmWithinPodFamilyEnabled returns true if resizable VMs for the given family can be used within a pod family.
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	// IsExtendedFallbacksEnabled returns true if extended fallbacks are enabled.
@@ -2865,6 +2869,16 @@ func (m *gkeManagerImpl) ScaleDownGpuUtilizationThresholdOverride(nodeGroup clou
 // IsResizableVmEnabledInAutopilot returns true if resizable VM for the given family is enabled for Autopilot.
 func (m *gkeManagerImpl) IsResizableVmEnabledInAutopilot(machineFamily string) bool {
 	return m.resizableVmAutoprovisioningProvider.IsResizableVmEnabledInAutopilot(machineFamily)
+}
+
+// IsE4StatefulEnabledInAutopilot returns true if E4 is enabled for stateful Autopilot workloads.
+func (m *gkeManagerImpl) IsE4StatefulEnabledInAutopilot() bool {
+	return m.resizableVmAutoprovisioningProvider.IsE4StatefulEnabledInAutopilot()
+}
+
+// IsE4PrioritizationEnabledInAutopilot returns true if E4 prioritization is enabled in Autopilot.
+func (m *gkeManagerImpl) IsE4PrioritizationEnabledInAutopilot() bool {
+	return m.resizableVmAutoprovisioningProvider.IsE4PrioritizationEnabledInAutopilot()
 }
 
 // IsResizableVmWithinPodFamilyEnabled returns true if resizable VMs for the given family can be used within a pod family.

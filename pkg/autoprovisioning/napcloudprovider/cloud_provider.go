@@ -42,6 +42,8 @@ type AutoprovisioningCloudProvider interface {
 	GetAutoprovisioningLocations() []string
 	GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
+	IsE4StatefulEnabledInAutopilot() bool
+	IsE4PrioritizationEnabledInAutopilot() bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	IsExtendedFallbacksEnabled() bool
 	// IsClusterUsingPSCInfrastructure checks if cluster is using PSC infrastructure. If so, cluster supports public and private nodes.

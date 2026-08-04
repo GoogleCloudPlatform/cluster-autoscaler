@@ -23,6 +23,8 @@ type ExperimentFlagCache[T bool | string] interface {
 
 type ResizableVmAutoprovisioningProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
+	IsE4StatefulEnabledInAutopilot() bool
+	IsE4PrioritizationEnabledInAutopilot() bool
 	ResizingEnabled(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	IsExtendedFallbacksEnabled() bool

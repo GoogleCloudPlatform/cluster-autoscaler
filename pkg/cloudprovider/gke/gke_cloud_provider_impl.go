@@ -487,6 +487,16 @@ func (p *gkeCloudProviderImpl) IsResizableVmEnabledInAutopilot(machineFamily str
 	return p.gkeManager.IsResizableVmEnabledInAutopilot(machineFamily)
 }
 
+// IsE4StatefulEnabledInAutopilot returns true if E4 should be used for stateful autoprovisioning in Autopilot.
+func (p *gkeCloudProviderImpl) IsE4StatefulEnabledInAutopilot() bool {
+	return p.gkeManager.IsE4StatefulEnabledInAutopilot()
+}
+
+// IsE4PrioritizationEnabledInAutopilot returns true if E4 prioritization is enabled in Autopilot.
+func (p *gkeCloudProviderImpl) IsE4PrioritizationEnabledInAutopilot() bool {
+	return p.gkeManager.IsE4PrioritizationEnabledInAutopilot()
+}
+
 // IsResizableVmWithinPodFamilyEnabled returns true if resizable VMs for the given family can be used within a pod family.
 func (p *gkeCloudProviderImpl) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	return p.gkeManager.IsResizableVmWithinPodFamilyEnabled(machineFamily)

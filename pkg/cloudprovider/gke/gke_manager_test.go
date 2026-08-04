@@ -3768,6 +3768,16 @@ func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutop
 	return args.Get(0).(bool)
 }
 
+func (mekp *mockResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopilot() bool {
+	args := mekp.Called()
+	return args.Get(0).(bool)
+}
+
+func (mekp *mockResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	args := mekp.Called()
+	return args.Get(0).(bool)
+}
+
 func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEdpEnabled() bool {
 	args := mekp.Called()
 	return args.Get(0).(bool)

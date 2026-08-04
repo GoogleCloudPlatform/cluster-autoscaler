@@ -110,6 +110,20 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutopilot(ma
 	}
 }
 
+func (p *ResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopilot() bool {
+	if e4Provider, ok := p.e4AutoprovisioningProvider.(*e4AutoprovisioningProvider); ok {
+		return e4Provider.isEnabledInAutopilot() && e4Provider.isStatefulEnabled
+	}
+	return false
+}
+
+func (p *ResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	if e4Provider, ok := p.e4AutoprovisioningProvider.(*e4AutoprovisioningProvider); ok {
+		return e4Provider.isPrioritizationEnabled
+	}
+	return false
+}
+
 func (p *ResizableVmAutoprovisioningProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	switch machineFamily {
 	case machinetypes.EK.Name():

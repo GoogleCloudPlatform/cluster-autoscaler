@@ -131,6 +131,9 @@ const E4aUasUpsizabilityBufferFlag = "AutopilotE4A::UasUpsizabilityBuffer"
 const E4AOnManagedNodesMinCAVersionFlag = "E4AOnManagedNodes::MinCaVersion"
 const E4AOnManagedNodesEnabledFlag = "E4AOnManagedNodes::Enabled"
 
+const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
+const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
+
 const AutopilotArmMachineFallbacksMinCAVersionFlag = "AutopilotArmPodFamilyMachineFallbacks::MinCAVersion"
 const AutopilotArmMachineFallbacksEnabledFlag = "AutopilotArmPodFamilyMachineFallbacks::Enabled"
 

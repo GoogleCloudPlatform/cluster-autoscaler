@@ -310,6 +310,8 @@ type e4AutoprovisioningProvider struct {
 	metrics                     resizableVmMetrics
 	countProvider               nodesCountProvider
 	isExtendedFallbacksEnabled  bool
+	isStatefulEnabled           bool
+	isPrioritizationEnabled     bool
 }
 
 func newE4AutoprovisioningProvider(experimentsManager experiments.Manager, bpChecker *balloonPodChecker, autopilotEnabled bool, enabledOnManagedNodesCAFlag bool, metrics resizableVmMetrics) *e4AutoprovisioningProvider {
@@ -330,9 +332,27 @@ func (p *e4AutoprovisioningProvider) refresh() {
 	p.refreshLaunchStatus()
 	p.refreshManagedNodesStatus()
 	p.refreshExtendedFallbacksStatus()
+	p.refreshStatefulStatus()
+	p.refreshPrioritizationStatus()
 
 	p.metrics.UpdateResizableVmLaunchStatus(machinetypes.E4.Name(), string(p.status.phase), string(p.status.source))
 	p.metrics.UpdateResizableVmAutopilotComputeClassStatus(machinetypes.E4.Name(), p.enabledOnManagedNodes)
+}
+
+func (p *e4AutoprovisioningProvider) refreshStatefulStatus() {
+	if p.experimentsManager != nil {
+		p.isStatefulEnabled = p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4StatefulMinCAVersionFlag, false)
+	} else {
+		p.isStatefulEnabled = false
+	}
+}
+
+func (p *e4AutoprovisioningProvider) refreshPrioritizationStatus() {
+	if p.experimentsManager != nil {
+		p.isPrioritizationEnabled = p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4PrioritizationMinCAVersionFlag, false)
+	} else {
+		p.isPrioritizationEnabled = false
+	}
 }
 
 func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {

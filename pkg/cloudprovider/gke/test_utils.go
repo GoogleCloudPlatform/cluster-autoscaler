@@ -377,40 +377,41 @@ func (s *TestMigSpecBuilder) SpecBuild() *gkeclient.NodePoolSpec {
 // TestAutoprovisioningCloudProvider extends TestCloudProvider with node locations.
 type TestAutoprovisioningCloudProvider struct {
 	*testprovider.TestCloudProvider
-	network                           *gce_api.Network
-	nodeLocations                     []string
-	autoprovisioningLocations         []string
-	allZones                          []string
-	standardZones                     []string
-	aiZones                           []string
-	trimmedLocations                  []string
-	confidentialNodesEnabled          bool
-	confidentialInstanceType          string
-	isClusterUsingPSCInfrastructure   bool
-	resizableVmInAutopilotEnabled     map[string]bool
-	resizableVmWithinPodFamilyEnabled map[string]bool
-	isAutopilotEnabled                bool
-	isDefaultCCCEnabled               bool
-	isCompactPlacementEnabled         bool
-	defaultNodePoolDiskType           string
-	defaultNodePoolMinCpuPlatform     string
-	defaultEnablePrivateNodes         bool
-	validateGpuConfigErrorPerGpuType  map[string]error
-	gkeMigs                           []*GkeMig
-	injectedNodeGroups                []cloudprovider.NodeGroup
-	nodeGroupsBlockedByServerError    []cloudprovider.NodeGroup
-	nodeGroupsBlockedByNotFoundError  []cloudprovider.NodeGroup
-	autoprovisioningDefaultFamily     *machinetypes.MachineFamily
-	autoprovisioningSecondaryFamily   *machinetypes.MachineFamily
-	autoprovisioningEligibility       AutoprovisioningEligibility
-	validMachineTypes                 map[gce.MachineTypeKey]bool
-	isEkSpotEnabled                   bool
-	isResizableVmEdpEnabled           bool
-	extendedFallbacksEnabled          bool
-	isArmMachineFallbacksEnabled      bool
-	machineTypesPerZone               map[string][]string
-	machineConfigProvider             *machinetypes.MachineConfigProvider
-	nodePoolSpec                      *gkeclient.NodePoolSpec
+	network                               *gce_api.Network
+	nodeLocations                         []string
+	autoprovisioningLocations             []string
+	allZones                              []string
+	standardZones                         []string
+	aiZones                               []string
+	trimmedLocations                      []string
+	confidentialNodesEnabled              bool
+	confidentialInstanceType              string
+	isClusterUsingPSCInfrastructure       bool
+	resizableVmInAutopilotEnabled         map[string]bool
+	resizableVmStatefulInAutopilotEnabled map[string]bool
+	resizableVmWithinPodFamilyEnabled     map[string]bool
+	isAutopilotEnabled                    bool
+	isDefaultCCCEnabled                   bool
+	isCompactPlacementEnabled             bool
+	defaultNodePoolDiskType               string
+	defaultNodePoolMinCpuPlatform         string
+	defaultEnablePrivateNodes             bool
+	validateGpuConfigErrorPerGpuType      map[string]error
+	gkeMigs                               []*GkeMig
+	injectedNodeGroups                    []cloudprovider.NodeGroup
+	nodeGroupsBlockedByServerError        []cloudprovider.NodeGroup
+	nodeGroupsBlockedByNotFoundError      []cloudprovider.NodeGroup
+	autoprovisioningDefaultFamily         *machinetypes.MachineFamily
+	autoprovisioningSecondaryFamily       *machinetypes.MachineFamily
+	autoprovisioningEligibility           AutoprovisioningEligibility
+	validMachineTypes                     map[gce.MachineTypeKey]bool
+	isEkSpotEnabled                       bool
+	isResizableVmEdpEnabled               bool
+	extendedFallbacksEnabled              bool
+	isArmMachineFallbacksEnabled          bool
+	machineTypesPerZone                   map[string][]string
+	machineConfigProvider                 *machinetypes.MachineConfigProvider
+	nodePoolSpec                          *gkeclient.NodePoolSpec
 }
 
 // TestAutoprovisioningCloudProviderBuilder is used to create test GKE CloudProvider
@@ -597,6 +598,17 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithResizableVmInAutopilotEna
 			p.resizableVmInAutopilotEnabled = make(map[string]bool)
 		}
 		p.resizableVmInAutopilotEnabled[machineFamily] = enabled
+	})
+	return b
+}
+
+// WithResizableVmStatefulInAutopilotEnabled enables resizable VM stateful in autopilot in provider
+func (b *TestAutoprovisioningCloudProviderBuilder) WithResizableVmStatefulInAutopilotEnabled(machineFamily string, enabled bool) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		if p.resizableVmStatefulInAutopilotEnabled == nil {
+			p.resizableVmStatefulInAutopilotEnabled = make(map[string]bool)
+		}
+		p.resizableVmStatefulInAutopilotEnabled[machineFamily] = enabled
 	})
 	return b
 }
@@ -791,6 +803,14 @@ func (cp *TestAutoprovisioningCloudProvider) UseAutoprovisioningFeaturesForNodeG
 
 func (cp *TestAutoprovisioningCloudProvider) IsResizableVmEnabledInAutopilot(machineFamily string) bool {
 	return cp.resizableVmInAutopilotEnabled[machineFamily]
+}
+
+func (cp *TestAutoprovisioningCloudProvider) IsE4StatefulEnabledInAutopilot() bool {
+	return cp.resizableVmStatefulInAutopilotEnabled[machinetypes.E4.Name()]
+}
+
+func (cp *TestAutoprovisioningCloudProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	return true
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsResizableVmEdpEnabled() bool {
@@ -1528,6 +1548,18 @@ func (m *GkeCloudProviderMock) QueuedProvisioningNodeHasScaleDownImmunity(node *
 	return args.Get(0).(bool)
 }
 
+// IsE4StatefulEnabledInAutopilot returns whether stateful features are enabled for E4.
+func (m *GkeCloudProviderMock) IsE4StatefulEnabledInAutopilot() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
+// IsE4PrioritizationEnabledInAutopilot returns whether E4 prioritization is enabled in Autopilot.
+func (m *GkeCloudProviderMock) IsE4PrioritizationEnabledInAutopilot() bool {
+	args := m.Called()
+	return args.Bool(0)
+}
+
 // IsAutopilotEnabled checks if autopilot is enabled.
 func (m *GkeCloudProviderMock) IsAutopilotEnabled() bool {
 	args := m.Called()
@@ -1938,6 +1970,14 @@ func (fake *FakeGkeManager) IsResizableVmEnabledInAutopilot(machineFamily string
 	return fake.resizableVmInAutopilotEnabled[machineFamily]
 }
 
+func (fake *FakeGkeManager) IsE4StatefulEnabledInAutopilot() bool {
+	return fake.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name())
+}
+
+func (fake *FakeGkeManager) IsE4PrioritizationEnabledInAutopilot() bool {
+	return true
+}
+
 func (fake *FakeGkeManager) IsResizableVmEdpEnabled() bool {
 	panic("not implemented")
 }
@@ -2197,6 +2237,18 @@ func (m *GkeManagerMock) ExperimentsManager() experiments.Manager {
 // IsResizableVmEnabledInAutopilot is a mocked method.
 func (m *GkeManagerMock) IsResizableVmEnabledInAutopilot(machineFamily string) bool {
 	args := m.Called(machineFamily)
+	return args.Get(0).(bool)
+}
+
+// IsE4StatefulEnabledInAutopilot is a mocked method.
+func (m *GkeManagerMock) IsE4StatefulEnabledInAutopilot() bool {
+	args := m.Called()
+	return args.Get(0).(bool)
+}
+
+// IsE4PrioritizationEnabledInAutopilot is a mocked method.
+func (m *GkeManagerMock) IsE4PrioritizationEnabledInAutopilot() bool {
+	args := m.Called()
 	return args.Get(0).(bool)
 }
 
