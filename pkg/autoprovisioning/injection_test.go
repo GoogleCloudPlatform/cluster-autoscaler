@@ -8898,7 +8898,7 @@ func TestLinuxNodeConfigGenerator_UpdateNodePoolSpec(t *testing.T) {
 
 func TestKubeletConfigGenerator_UpdateParameters(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		kubeletConfig  *gke_api_beta.NodeKubeletConfig
+		kubeletConfig  *gkeclient.NodeKubeletConfig
 		expectedLabels map[string]string
 	}{
 		"nil config": {
@@ -8906,11 +8906,11 @@ func TestKubeletConfigGenerator_UpdateParameters(t *testing.T) {
 			expectedLabels: map[string]string{},
 		},
 		"empty config": {
-			kubeletConfig:  &gke_api_beta.NodeKubeletConfig{},
+			kubeletConfig:  &gkeclient.NodeKubeletConfig{},
 			expectedLabels: map[string]string{labelKubeletConfig: "{}"},
 		},
 		"config with fields": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:       true,
 				CpuCfsQuotaPeriod: "100ms",
 				CpuManagerPolicy:  "static",
@@ -8952,7 +8952,7 @@ func TestKubeletConfigGenerator_UpdateNodePoolSpec(t *testing.T) {
 				labelKubeletConfig: "{}",
 			},
 			expectedNodePoolSpec: &gkeclient.NodePoolSpec{
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			},
 		},
 		"config with fields": {
@@ -8960,7 +8960,7 @@ func TestKubeletConfigGenerator_UpdateNodePoolSpec(t *testing.T) {
 				labelKubeletConfig: `{"cpuCfsQuotaPeriod":"100ms","podPidsLimit":"10000"}`,
 			},
 			expectedNodePoolSpec: &gkeclient.NodePoolSpec{
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuotaPeriod: "100ms",
 					PodPidsLimit:      10000,
 				},
@@ -11007,7 +11007,7 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 						withComputeClass(ccWithKubeletConfig),
 						withNodeConfigRule(kubeletConfigRule),
 						withSystemLabels(systemLabels),
-						withKubeletConfig(&gke_api_beta.NodeKubeletConfig{
+						withKubeletConfig(&gkeclient.NodeKubeletConfig{
 							CpuCfsQuota:       cpuCfsQuota,
 							CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 							CpuManagerPolicy:  cpuManagerPolicy,
@@ -12763,7 +12763,7 @@ func withLinuxNodeConfig(linuxNodeConfig *gkeclient.LinuxNodeConfig) testNodeGro
 	}
 }
 
-func withKubeletConfig(kubeletConfig *gke_api_beta.NodeKubeletConfig) testNodeGroupRequirementsOpt {
+func withKubeletConfig(kubeletConfig *gkeclient.NodeKubeletConfig) testNodeGroupRequirementsOpt {
 	return func(ngreq *nodeGroupRequirements) {
 		ngreq.kubeletConfig = kubeletConfig
 	}

@@ -32,7 +32,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 
-	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
@@ -212,8 +211,8 @@ func linuxNodeConfigFromCCRule(rule rules.Rule) *gkeclient.LinuxNodeConfig {
 	return linuxNodeConfig
 }
 
-func kubeletConfigFromCCRule(rule rules.Rule) *gke_api_beta.NodeKubeletConfig {
-	kubeletConfig := &gke_api_beta.NodeKubeletConfig{}
+func kubeletConfigFromCCRule(rule rules.Rule) *gkeclient.NodeKubeletConfig {
+	kubeletConfig := &gkeclient.NodeKubeletConfig{}
 	if cpuCfsQuota := rule.CpuCfsQuota(); cpuCfsQuota != nil {
 		kubeletConfig.CpuCfsQuota = *cpuCfsQuota
 		kubeletConfig.ForceSendFields = append(kubeletConfig.ForceSendFields, fieldCpuCfsQuota)
@@ -256,109 +255,109 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gke_api_beta.NodeKubeletConfig {
 	}
 	if val := rule.EvictionSoftMemoryAvailable(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.MemoryAvailable = *val
 	}
 	if val := rule.EvictionSoftNodefsAvailable(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.NodefsAvailable = *val
 	}
 	if val := rule.EvictionSoftImagefsAvailable(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.ImagefsAvailable = *val
 	}
 	if val := rule.EvictionSoftImagefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.ImagefsInodesFree = *val
 	}
 	if val := rule.EvictionSoftNodefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.NodefsInodesFree = *val
 	}
 	if val := rule.EvictionSoftPidAvailable(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
-			kubeletConfig.EvictionSoft = &gke_api_beta.EvictionSignals{}
+			kubeletConfig.EvictionSoft = &gkeclient.EvictionSignals{}
 		}
 		kubeletConfig.EvictionSoft.PidAvailable = *val
 	}
 	if val := rule.EvictionSoftGracePeriodMemoryAvailable(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.MemoryAvailable = *val
 	}
 	if val := rule.EvictionSoftGracePeriodNodefsAvailable(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.NodefsAvailable = *val
 	}
 	if val := rule.EvictionSoftGracePeriodImagefsAvailable(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.ImagefsAvailable = *val
 	}
 	if val := rule.EvictionSoftGracePeriodImagefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.ImagefsInodesFree = *val
 	}
 	if val := rule.EvictionSoftGracePeriodNodefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.NodefsInodesFree = *val
 	}
 	if val := rule.EvictionSoftGracePeriodPidAvailable(); val != nil {
 		if kubeletConfig.EvictionSoftGracePeriod == nil {
-			kubeletConfig.EvictionSoftGracePeriod = &gke_api_beta.EvictionGracePeriod{}
+			kubeletConfig.EvictionSoftGracePeriod = &gkeclient.EvictionGracePeriod{}
 		}
 		kubeletConfig.EvictionSoftGracePeriod.PidAvailable = *val
 	}
 	if val := rule.EvictionMinimumReclaimMemoryAvailable(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.MemoryAvailable = *val
 	}
 	if val := rule.EvictionMinimumReclaimNodefsAvailable(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.NodefsAvailable = *val
 	}
 	if val := rule.EvictionMinimumReclaimImagefsAvailable(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.ImagefsAvailable = *val
 	}
 	if val := rule.EvictionMinimumReclaimImagefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.ImagefsInodesFree = *val
 	}
 	if val := rule.EvictionMinimumReclaimNodefsInodesFree(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.NodefsInodesFree = *val
 	}
 	if val := rule.EvictionMinimumReclaimPidAvailable(); val != nil {
 		if kubeletConfig.EvictionMinimumReclaim == nil {
-			kubeletConfig.EvictionMinimumReclaim = &gke_api_beta.EvictionMinimumReclaim{}
+			kubeletConfig.EvictionMinimumReclaim = &gkeclient.EvictionMinimumReclaim{}
 		}
 		kubeletConfig.EvictionMinimumReclaim.PidAvailable = *val
 	}
@@ -367,18 +366,18 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gke_api_beta.NodeKubeletConfig {
 	}
 	if topologyManagerPolicy := rule.TopologyManagerPolicy(); topologyManagerPolicy != nil {
 		if kubeletConfig.TopologyManager == nil {
-			kubeletConfig.TopologyManager = &gke_api_beta.TopologyManager{}
+			kubeletConfig.TopologyManager = &gkeclient.TopologyManager{}
 		}
 		kubeletConfig.TopologyManager.Policy = *topologyManagerPolicy
 	}
 	if topologyManagerScope := rule.TopologyManagerScope(); topologyManagerScope != nil {
 		if kubeletConfig.TopologyManager == nil {
-			kubeletConfig.TopologyManager = &gke_api_beta.TopologyManager{}
+			kubeletConfig.TopologyManager = &gkeclient.TopologyManager{}
 		}
 		kubeletConfig.TopologyManager.Scope = *topologyManagerScope
 	}
 	if memoryManagerPolicy := rule.MemoryManagerPolicy(); memoryManagerPolicy != nil {
-		kubeletConfig.MemoryManager = &gke_api_beta.MemoryManager{Policy: *memoryManagerPolicy}
+		kubeletConfig.MemoryManager = &gkeclient.MemoryManager{Policy: *memoryManagerPolicy}
 	}
 	if shutdownGracePeriodSeconds := rule.ShutdownGracePeriodSeconds(); shutdownGracePeriodSeconds != nil {
 		kubeletConfig.ShutdownGracePeriodSeconds = *shutdownGracePeriodSeconds
@@ -391,12 +390,12 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gke_api_beta.NodeKubeletConfig {
 	}
 	if val := rule.CrashLoopBackOffMaxContainerRestartPeriod(); val != nil {
 		if kubeletConfig.CrashLoopBackOff == nil {
-			kubeletConfig.CrashLoopBackOff = &gke_api_beta.CrashLoopBackOffConfig{}
+			kubeletConfig.CrashLoopBackOff = &gkeclient.CrashLoopBackOffConfig{}
 		}
 		kubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod = *val
 	}
 
-	if reflect.DeepEqual(kubeletConfig, &gke_api_beta.NodeKubeletConfig{}) {
+	if reflect.DeepEqual(kubeletConfig, &gkeclient.NodeKubeletConfig{}) {
 		return nil
 	}
 	return kubeletConfig
@@ -524,7 +523,7 @@ func linuxNodeConfigSignature(linuxNodeConfig *gkeclient.LinuxNodeConfig) string
 	return fmt.Sprintf("linuxNodeConfig: <%s>", strings.Join(linuxConfigParts, ", "))
 }
 
-func serializeKubeletConfig(kubeletConfig *gke_api_beta.NodeKubeletConfig) (string, error) {
+func serializeKubeletConfig(kubeletConfig *gkeclient.NodeKubeletConfig) (string, error) {
 	if kubeletConfig == nil {
 		return "", nil
 	}
@@ -535,11 +534,11 @@ func serializeKubeletConfig(kubeletConfig *gke_api_beta.NodeKubeletConfig) (stri
 	return string(kubeletConfigJsonBytes), nil
 }
 
-func deserializeKubeletConfig(kubeletConfig string) (*gke_api_beta.NodeKubeletConfig, error) {
+func deserializeKubeletConfig(kubeletConfig string) (*gkeclient.NodeKubeletConfig, error) {
 	if kubeletConfig == "" {
 		return nil, nil
 	}
-	var deserializedKubeletConfig *gke_api_beta.NodeKubeletConfig
+	var deserializedKubeletConfig *gkeclient.NodeKubeletConfig
 	linuxNodeConfigJsonBytes := []byte(kubeletConfig)
 	err := json.Unmarshal(linuxNodeConfigJsonBytes, &deserializedKubeletConfig)
 	if err != nil {
@@ -569,7 +568,7 @@ func evictionSignature(evictionSignals any, prefix string) string {
 	var memoryAvailable, nodefsAvailable, imagefsAvailable, imagefsInodesFree, nodefsInodesFree, pidAvailable string
 
 	switch v := evictionSignals.(type) {
-	case *gke_api_beta.EvictionSignals:
+	case *gkeclient.EvictionSignals:
 		if v == nil {
 			return ""
 		}
@@ -579,7 +578,7 @@ func evictionSignature(evictionSignals any, prefix string) string {
 		imagefsInodesFree = v.ImagefsInodesFree
 		nodefsInodesFree = v.NodefsInodesFree
 		pidAvailable = v.PidAvailable
-	case *gke_api_beta.EvictionGracePeriod:
+	case *gkeclient.EvictionGracePeriod:
 		if v == nil {
 			return ""
 		}
@@ -589,7 +588,7 @@ func evictionSignature(evictionSignals any, prefix string) string {
 		imagefsInodesFree = v.ImagefsInodesFree
 		nodefsInodesFree = v.NodefsInodesFree
 		pidAvailable = v.PidAvailable
-	case *gke_api_beta.EvictionMinimumReclaim:
+	case *gkeclient.EvictionMinimumReclaim:
 		if v == nil {
 			return ""
 		}
@@ -627,7 +626,7 @@ func evictionSignature(evictionSignals any, prefix string) string {
 	return fmt.Sprintf("%s: <%s>", prefix, strings.Join(parts, ", "))
 }
 
-func kubeletConfigSignature(kubeletConfig *gke_api_beta.NodeKubeletConfig) string {
+func kubeletConfigSignature(kubeletConfig *gkeclient.NodeKubeletConfig) string {
 	if kubeletConfig == nil {
 		return ""
 	}
@@ -695,10 +694,10 @@ func kubeletConfigSignature(kubeletConfig *gke_api_beta.NodeKubeletConfig) strin
 	if mm := kubeletConfig.MemoryManager; mm != nil && mm.Policy != "" {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("MemoryManagerPolicy: %q", mm.Policy))
 	}
-	if slices.Contains(kubeletConfig.ForceSendFields, "ShutdownGracePeriodSeconds") {
+	if kubeletConfig.ShutdownGracePeriodSeconds != 0 || slices.Contains(kubeletConfig.ForceSendFields, "ShutdownGracePeriodSeconds") {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ShutdownGracePeriodSeconds: %d", kubeletConfig.ShutdownGracePeriodSeconds))
 	}
-	if slices.Contains(kubeletConfig.ForceSendFields, "ShutdownGracePeriodCriticalPodsSeconds") {
+	if kubeletConfig.ShutdownGracePeriodCriticalPodsSeconds != 0 || slices.Contains(kubeletConfig.ForceSendFields, "ShutdownGracePeriodCriticalPodsSeconds") {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ShutdownGracePeriodCriticalPodsSeconds: %d", kubeletConfig.ShutdownGracePeriodCriticalPodsSeconds))
 	}
 	if kubeletConfig.CrashLoopBackOff != nil && kubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod != "" {

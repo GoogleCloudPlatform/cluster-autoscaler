@@ -207,7 +207,7 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						"test-sysctl-key": "test-sysctl-value",
 					},
 				},
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &NodeKubeletConfig{
 					CpuManagerPolicy: "test-manager-policy",
 				},
 				ReservationAffinity: &gke_api_beta.ReservationAffinity{
@@ -4260,7 +4260,7 @@ func TestNodeKubeletConfig(t *testing.T) {
 	testCases := []struct {
 		name               string
 		apiClusterResponse string
-		wantKubeletConfig  *gke_api_beta.NodeKubeletConfig
+		wantKubeletConfig  *NodeKubeletConfig
 	}{
 		{
 			name: "kubelet config not present",
@@ -4307,10 +4307,111 @@ func TestNodeKubeletConfig(t *testing.T) {
 				  }
 				]
 			  }`,
-			wantKubeletConfig: &gke_api_beta.NodeKubeletConfig{
+			wantKubeletConfig: &NodeKubeletConfig{
 				CpuCfsQuota:       true,
 				CpuCfsQuotaPeriod: "300ms",
 				CpuManagerPolicy:  "none",
+			},
+		},
+		{
+			name: "all kubelet config fields present",
+			apiClusterResponse: `{
+				"createTime": "2024-08-27T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 2,
+					"name": "foo-bar",
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					},
+					"config": {
+					  "kubeletConfig": {
+						"allowedUnsafeSysctls": [
+							"kernel.msgmax",
+							"kernel.shmmax"
+						],
+						"containerLogMaxFiles": 5,
+						"containerLogMaxSize": "10Mi",
+						"cpuCfsQuota": true,
+						"cpuCfsQuotaPeriod": "100ms",
+						"cpuManagerPolicy": "static",
+						"crashLoopBackOff": {
+							"maxContainerRestartPeriod": "300s"
+						},
+						"evictionMaxPodGracePeriodSeconds": 30,
+						"evictionMinimumReclaim": {
+							"imagefsAvailable": "10%",
+							"imagefsInodesFree": "5%",
+							"memoryAvailable": "100Mi",
+							"nodefsAvailable": "10%",
+							"nodefsInodesFree": "5%",
+							"pidAvailable": "10%"
+						},
+						"evictionSoft": {
+							"imagefsAvailable": "15%",
+							"imagefsInodesFree": "10%",
+							"memoryAvailable": "200Mi",
+							"nodefsAvailable": "15%",
+							"nodefsInodesFree": "10%",
+							"pidAvailable": "15%"
+						},
+						"evictionSoftGracePeriod": {
+							"imagefsAvailable": "1m",
+							"imagefsInodesFree": "1m",
+							"memoryAvailable": "30s",
+							"nodefsAvailable": "2m",
+							"nodefsInodesFree": "1m",
+							"pidAvailable": "1m"
+						},
+						"imageGcHighThresholdPercent": 80,
+						"imageGcLowThresholdPercent": 60,
+						"imageMaximumGcAge": "720h",
+						"imageMinimumGcAge": "2m",
+						"insecureKubeletReadonlyPortEnabled": true,
+						"maxParallelImagePulls": 3,
+						"memoryManager": {
+							"policy": "Static"
+						},
+						"podPidsLimit": "1024",
+						"shutdownGracePeriodCriticalPodsSeconds": 10,
+						"shutdownGracePeriodSeconds": 30,
+						"singleProcessOomKill": true,
+						"topologyManager": {
+							"policy": "single-numa-node",
+							"scope": "pod"
+						}
+					  }
+					}
+				  }
+				]
+			  }`,
+			wantKubeletConfig: &NodeKubeletConfig{
+				AllowedUnsafeSysctls:                   []string{"kernel.msgmax", "kernel.shmmax"},
+				ContainerLogMaxFiles:                   5,
+				ContainerLogMaxSize:                    "10Mi",
+				CpuCfsQuota:                            true,
+				CpuCfsQuotaPeriod:                      "100ms",
+				CpuManagerPolicy:                       "static",
+				CrashLoopBackOff:                       &CrashLoopBackOffConfig{MaxContainerRestartPeriod: "300s"},
+				EvictionMaxPodGracePeriodSeconds:       30,
+				EvictionMinimumReclaim:                 &EvictionMinimumReclaim{ImagefsAvailable: "10%", ImagefsInodesFree: "5%", MemoryAvailable: "100Mi", NodefsAvailable: "10%", NodefsInodesFree: "5%", PidAvailable: "10%"},
+				EvictionSoft:                           &EvictionSignals{ImagefsAvailable: "15%", ImagefsInodesFree: "10%", MemoryAvailable: "200Mi", NodefsAvailable: "15%", NodefsInodesFree: "10%", PidAvailable: "15%"},
+				EvictionSoftGracePeriod:                &EvictionGracePeriod{ImagefsAvailable: "1m", ImagefsInodesFree: "1m", MemoryAvailable: "30s", NodefsAvailable: "2m", NodefsInodesFree: "1m", PidAvailable: "1m"},
+				ImageGcHighThresholdPercent:            80,
+				ImageGcLowThresholdPercent:             60,
+				ImageMaximumGcAge:                      "720h",
+				ImageMinimumGcAge:                      "2m",
+				InsecureKubeletReadonlyPortEnabled:     true,
+				MaxParallelImagePulls:                  3,
+				MemoryManager:                          &MemoryManager{Policy: "Static"},
+				PodPidsLimit:                           1024,
+				ShutdownGracePeriodCriticalPodsSeconds: 10,
+				ShutdownGracePeriodSeconds:             30,
+				SingleProcessOomKill:                   true,
+				TopologyManager:                        &TopologyManager{Policy: "single-numa-node", Scope: "pod"},
 			},
 		},
 	}

@@ -33,7 +33,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 
 	"github.com/stretchr/testify/assert"
-	gke_api_beta "google.golang.org/api/container/v1beta1"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/test"
@@ -399,7 +398,7 @@ func TestDeserializeLinuxNodeConfig(t *testing.T) {
 
 func TestSerializeKubeletConfig(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		kubeletConfig *gke_api_beta.NodeKubeletConfig
+		kubeletConfig *gkeclient.NodeKubeletConfig
 		expected      string
 		expectErr     bool
 	}{
@@ -409,48 +408,63 @@ func TestSerializeKubeletConfig(t *testing.T) {
 			expectErr:     false,
 		},
 		"empty config": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+			kubeletConfig: &gkeclient.NodeKubeletConfig{},
 			expected:      `{}`,
 			expectErr:     false,
 		},
 		"config with fields": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                true,
 				CpuCfsQuotaPeriod:          "100ms",
 				CpuManagerPolicy:           "static",
 				PodPidsLimit:               10000,
 				ShutdownGracePeriodSeconds: 30,
-				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
 			},
 			expected:  `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","crashLoopBackOff":{"maxContainerRestartPeriod":"10s"},"podPidsLimit":"10000","shutdownGracePeriodSeconds":30}`,
 			expectErr: false,
 		},
-		"config with forcesendfields": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+		"config with shutdownGracePeriodSeconds": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                true,
 				CpuCfsQuotaPeriod:          "100ms",
 				CpuManagerPolicy:           "static",
 				PodPidsLimit:               10000,
-				ShutdownGracePeriodSeconds: 0,
-				ForceSendFields:            []string{"ShutdownGracePeriodSeconds"},
+				ShutdownGracePeriodSeconds: 30,
 			},
-			expected:  `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000","shutdownGracePeriodSeconds":0}`,
+			expected:  `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000","shutdownGracePeriodSeconds":30}`,
 			expectErr: false,
 		},
-		"config without forcesendfields": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+		"config with cpuCfsQuota=true": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota: true,
 			},
 			expected:  `{"cpuCfsQuota":true}`,
 			expectErr: false,
 		},
-		"config without forcesendfields and cpuCfsQuota=false": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+		"config with cpuCfsQuota=false": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota: false,
 			},
 			expected:  `{}`,
+			expectErr: false,
+		},
+		"config with forcesendfields": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
+				ShutdownGracePeriodSeconds: 0,
+				ForceSendFields:            []string{"ShutdownGracePeriodSeconds"},
+			},
+			expected:  `{"shutdownGracePeriodSeconds":0}`,
+			expectErr: false,
+		},
+		"config with forcesendfields and cpuCfsQuota=false": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
+				CpuCfsQuota:     false,
+				ForceSendFields: []string{"CpuCfsQuota"},
+			},
+			expected:  `{"cpuCfsQuota":false}`,
 			expectErr: false,
 		},
 	} {
@@ -493,7 +507,7 @@ func TestKubeletConfigFromCCRuleAndSerialize(t *testing.T) {
 func TestDeserializeKubeletConfig(t *testing.T) {
 	for tn, tc := range map[string]struct {
 		kubeletConfig string
-		expected      *gke_api_beta.NodeKubeletConfig
+		expected      *gkeclient.NodeKubeletConfig
 		expectErr     bool
 	}{
 		"nil config": {
@@ -503,16 +517,16 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 		},
 		"empty config": {
 			kubeletConfig: `{}`,
-			expected:      &gke_api_beta.NodeKubeletConfig{},
+			expected:      &gkeclient.NodeKubeletConfig{},
 			expectErr:     false,
 		},
 		"config with fields": {
 			kubeletConfig: `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","crashLoopBackOff":{"maxContainerRestartPeriod":"10s"},"podPidsLimit":"10000"}`,
-			expected: &gke_api_beta.NodeKubeletConfig{
+			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:       true,
 				CpuCfsQuotaPeriod: "100ms",
 				CpuManagerPolicy:  "static",
-				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
 				PodPidsLimit:    10000,
@@ -520,9 +534,9 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 			},
 			expectErr: false,
 		},
-		"config with forcesendfields": {
+		"config with zero shutdownGracePeriodSeconds": {
 			kubeletConfig: `{"cpuCfsQuota":true,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000","shutdownGracePeriodSeconds":0}`,
-			expected: &gke_api_beta.NodeKubeletConfig{
+			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                true,
 				CpuCfsQuotaPeriod:          "100ms",
 				CpuManagerPolicy:           "static",
@@ -532,9 +546,9 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 			},
 			expectErr: false,
 		},
-		"config with forcesendfields and cpuCfsQuota false": {
+		"config with cpuCfsQuota false": {
 			kubeletConfig: `{"cpuCfsQuota":false,"cpuCfsQuotaPeriod":"100ms","cpuManagerPolicy":"static","podPidsLimit":"10000"}`,
-			expected: &gke_api_beta.NodeKubeletConfig{
+			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:       false,
 				CpuCfsQuotaPeriod: "100ms",
 				CpuManagerPolicy:  "static",
@@ -562,7 +576,7 @@ func TestDeserializeKubeletConfig(t *testing.T) {
 }
 func TestKubeletConfigSignature(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		kubeletConfig *gke_api_beta.NodeKubeletConfig
+		kubeletConfig *gkeclient.NodeKubeletConfig
 		expected      string
 	}{
 		"nil config": {
@@ -570,18 +584,24 @@ func TestKubeletConfigSignature(t *testing.T) {
 			expected:      "",
 		},
 		"empty config": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+			kubeletConfig: &gkeclient.NodeKubeletConfig{},
 			expected:      "kubelet-config: <>",
 		},
-		"config with cpuCfsQuota=false": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
-				CpuCfsQuota:     false,
-				ForceSendFields: []string{"CpuCfsQuota"},
+		"config with cpuCfsQuota=true": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
+				CpuCfsQuota: true,
 			},
-			expected: "kubelet-config: <CpuCfsQuota: false>",
+			expected: "kubelet-config: <CpuCfsQuota: true>",
+		},
+		"config with forcesendfields": {
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
+				ShutdownGracePeriodSeconds: 0,
+				ForceSendFields:            []string{"ShutdownGracePeriodSeconds"},
+			},
+			expected: "kubelet-config: <ShutdownGracePeriodSeconds: 0>",
 		},
 		"config with all fields": {
-			kubeletConfig: &gke_api_beta.NodeKubeletConfig{
+			kubeletConfig: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                      true,
 				CpuCfsQuotaPeriod:                "100ms",
 				CpuManagerPolicy:                 "static",
@@ -596,7 +616,7 @@ func TestKubeletConfigSignature(t *testing.T) {
 				AllowedUnsafeSysctls:             []string{"net.ipv4.tcp_max_syn_backlog"},
 				SingleProcessOomKill:             true,
 				EvictionMaxPodGracePeriodSeconds: 60,
-				EvictionSoft: &gke_api_beta.EvictionSignals{
+				EvictionSoft: &gkeclient.EvictionSignals{
 					MemoryAvailable:   "2Gi",
 					NodefsAvailable:   "10%",
 					ImagefsAvailable:  "15%",
@@ -604,7 +624,7 @@ func TestKubeletConfigSignature(t *testing.T) {
 					NodefsInodesFree:  "5%",
 					PidAvailable:      "10%",
 				},
-				EvictionSoftGracePeriod: &gke_api_beta.EvictionGracePeriod{
+				EvictionSoftGracePeriod: &gkeclient.EvictionGracePeriod{
 					MemoryAvailable:   "2m",
 					NodefsAvailable:   "90s",
 					ImagefsAvailable:  "90s",
@@ -612,7 +632,7 @@ func TestKubeletConfigSignature(t *testing.T) {
 					NodefsInodesFree:  "90s",
 					PidAvailable:      "90s",
 				},
-				EvictionMinimumReclaim: &gke_api_beta.EvictionMinimumReclaim{
+				EvictionMinimumReclaim: &gkeclient.EvictionMinimumReclaim{
 					MemoryAvailable:   "5%",
 					NodefsAvailable:   "5%",
 					ImagefsAvailable:  "5%",
@@ -620,21 +640,20 @@ func TestKubeletConfigSignature(t *testing.T) {
 					NodefsInodesFree:  "1%",
 					PidAvailable:      "1%",
 				},
-				TopologyManager: &gke_api_beta.TopologyManager{
+				TopologyManager: &gkeclient.TopologyManager{
 					Policy: "best-effort",
 					Scope:  "container",
 				},
-				MemoryManager: &gke_api_beta.MemoryManager{
+				MemoryManager: &gkeclient.MemoryManager{
 					Policy: "Static",
 				},
 				ShutdownGracePeriodSeconds:             120,
-				ShutdownGracePeriodCriticalPodsSeconds: 0,
-				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				ShutdownGracePeriodCriticalPodsSeconds: 30,
+				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
-				ForceSendFields: []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
 			},
-			expected: "kubelet-config: <CpuCfsQuota: true, CpuCfsQuotaPeriod: \"100ms\", CpuManagerPolicy: \"static\", PodPidsLimit: 10000, ImageGcLowThresholdPercent: 80, ImageGcHighThresholdPercent: 90, ImageMinimumGcAge: \"2m\", ImageMaximumGcAge: \"1h\", ContainerLogMaxSize: \"10M\", ContainerLogMaxFiles: 5, AllowedUnsafeSysctls: [net.ipv4.tcp_max_syn_backlog], MaxParallelImagePulls: 5, SingleProcessOomKill: true, EvictionSoft: <MemoryAvailable: \"2Gi\", NodefsAvailable: \"10%\", ImagefsAvailable: \"15%\", ImagefsInodesFree: \"5%\", NodefsInodesFree: \"5%\", PidAvailable: \"10%\">, EvictionSoftGracePeriod: <MemoryAvailable: \"2m\", NodefsAvailable: \"90s\", ImagefsAvailable: \"90s\", ImagefsInodesFree: \"90s\", NodefsInodesFree: \"90s\", PidAvailable: \"90s\">, EvictionMinimumReclaim: <MemoryAvailable: \"5%\", NodefsAvailable: \"5%\", ImagefsAvailable: \"5%\", ImagefsInodesFree: \"1%\", NodefsInodesFree: \"1%\", PidAvailable: \"1%\">, EvictionMaxPodGracePeriodSeconds: 60, TopologyManagerPolicy: \"best-effort\", TopologyManagerScope: \"container\", MemoryManagerPolicy: \"Static\", ShutdownGracePeriodSeconds: 120, ShutdownGracePeriodCriticalPodsSeconds: 0, CrashLoopBackOff: <maxContainerRestartPeriod: \"10s\">>",
+			expected: "kubelet-config: <CpuCfsQuota: true, CpuCfsQuotaPeriod: \"100ms\", CpuManagerPolicy: \"static\", PodPidsLimit: 10000, ImageGcLowThresholdPercent: 80, ImageGcHighThresholdPercent: 90, ImageMinimumGcAge: \"2m\", ImageMaximumGcAge: \"1h\", ContainerLogMaxSize: \"10M\", ContainerLogMaxFiles: 5, AllowedUnsafeSysctls: [net.ipv4.tcp_max_syn_backlog], MaxParallelImagePulls: 5, SingleProcessOomKill: true, EvictionSoft: <MemoryAvailable: \"2Gi\", NodefsAvailable: \"10%\", ImagefsAvailable: \"15%\", ImagefsInodesFree: \"5%\", NodefsInodesFree: \"5%\", PidAvailable: \"10%\">, EvictionSoftGracePeriod: <MemoryAvailable: \"2m\", NodefsAvailable: \"90s\", ImagefsAvailable: \"90s\", ImagefsInodesFree: \"90s\", NodefsInodesFree: \"90s\", PidAvailable: \"90s\">, EvictionMinimumReclaim: <MemoryAvailable: \"5%\", NodefsAvailable: \"5%\", ImagefsAvailable: \"5%\", ImagefsInodesFree: \"1%\", NodefsInodesFree: \"1%\", PidAvailable: \"1%\">, EvictionMaxPodGracePeriodSeconds: 60, TopologyManagerPolicy: \"best-effort\", TopologyManagerScope: \"container\", MemoryManagerPolicy: \"Static\", ShutdownGracePeriodSeconds: 120, ShutdownGracePeriodCriticalPodsSeconds: 30, CrashLoopBackOff: <maxContainerRestartPeriod: \"10s\">>",
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
@@ -857,7 +876,7 @@ func TestPlacementGroupSpec(t *testing.T) {
 func TestKubeletConfigFromCCRule(t *testing.T) {
 	for tn, tc := range map[string]struct {
 		rule     rules.Rule
-		expected *gke_api_beta.NodeKubeletConfig
+		expected *gkeclient.NodeKubeletConfig
 	}{
 		"rule without kubelet config rules": {
 			rule:     rules.NewRule(rules.WithAutopilotModeRule()),
@@ -904,7 +923,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				rules.WithShutdownGracePeriodCriticalPodsSecondsRule(0),
 				rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule("10s"),
 			),
-			expected: &gke_api_beta.NodeKubeletConfig{
+			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                      true,
 				CpuCfsQuotaPeriod:                "100ms",
 				CpuManagerPolicy:                 "static",
@@ -919,7 +938,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				AllowedUnsafeSysctls:             []string{"net.ipv4.tcp_max_syn_backlog"},
 				SingleProcessOomKill:             true,
 				EvictionMaxPodGracePeriodSeconds: 60,
-				EvictionSoft: &gke_api_beta.EvictionSignals{
+				EvictionSoft: &gkeclient.EvictionSignals{
 					MemoryAvailable:   "2Gi",
 					NodefsAvailable:   "10%",
 					ImagefsAvailable:  "15%",
@@ -927,7 +946,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 					NodefsInodesFree:  "5%",
 					PidAvailable:      "10%",
 				},
-				EvictionSoftGracePeriod: &gke_api_beta.EvictionGracePeriod{
+				EvictionSoftGracePeriod: &gkeclient.EvictionGracePeriod{
 					MemoryAvailable:   "2m",
 					NodefsAvailable:   "90s",
 					ImagefsAvailable:  "90s",
@@ -935,7 +954,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 					NodefsInodesFree:  "90s",
 					PidAvailable:      "90s",
 				},
-				EvictionMinimumReclaim: &gke_api_beta.EvictionMinimumReclaim{
+				EvictionMinimumReclaim: &gkeclient.EvictionMinimumReclaim{
 					MemoryAvailable:   "5%",
 					NodefsAvailable:   "5%",
 					ImagefsAvailable:  "5%",
@@ -943,16 +962,16 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 					NodefsInodesFree:  "1%",
 					PidAvailable:      "1%",
 				},
-				TopologyManager: &gke_api_beta.TopologyManager{
+				TopologyManager: &gkeclient.TopologyManager{
 					Policy: "best-effort",
 					Scope:  "container",
 				},
-				MemoryManager: &gke_api_beta.MemoryManager{
+				MemoryManager: &gkeclient.MemoryManager{
 					Policy: "Static",
 				},
 				ShutdownGracePeriodSeconds:             120,
 				ShutdownGracePeriodCriticalPodsSeconds: 0,
-				CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
 				ForceSendFields: []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},

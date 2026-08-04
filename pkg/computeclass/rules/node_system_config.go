@@ -19,7 +19,6 @@ import (
 	"sort"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
-	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/klog/v2"
@@ -362,7 +361,7 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 	}
 
 	// Check for kubelet config.
-	var npKubeletConfig *gke_api_beta.NodeKubeletConfig
+	var npKubeletConfig *gkeclient.NodeKubeletConfig
 	var ruleKubeletConfig *kubeletConfig = r.kubeletConfig
 	if mig.Spec() != nil && mig.Spec().KubeletConfig != nil {
 		npKubeletConfig = mig.Spec().KubeletConfig
@@ -517,7 +516,7 @@ func compareEvictionThresholds(rule *evictionThresholds, mem, nodefs, imagefs, i
 }
 
 // compareEvictionSoft compares the rule for EvictionSoft against the node pool's config.
-func compareEvictionSoft(rule *evictionThresholds, np *gke_api_beta.EvictionSignals) bool {
+func compareEvictionSoft(rule *evictionThresholds, np *gkeclient.EvictionSignals) bool {
 	if np == nil {
 		return false // Rule exists, but the config doesn't.
 	}
@@ -525,7 +524,7 @@ func compareEvictionSoft(rule *evictionThresholds, np *gke_api_beta.EvictionSign
 }
 
 // compareEvictionSoftGracePeriod compares the rule for EvictionSoftGracePeriod against the node pool's config.
-func compareEvictionSoftGracePeriod(rule *evictionThresholds, np *gke_api_beta.EvictionGracePeriod) bool {
+func compareEvictionSoftGracePeriod(rule *evictionThresholds, np *gkeclient.EvictionGracePeriod) bool {
 	if np == nil {
 		return false
 	}
@@ -533,7 +532,7 @@ func compareEvictionSoftGracePeriod(rule *evictionThresholds, np *gke_api_beta.E
 }
 
 // compareEvictionMinimumReclaim compares the rule for EvictionMinimumReclaim against the node pool's config.
-func compareEvictionMinimumReclaim(rule *evictionThresholds, np *gke_api_beta.EvictionMinimumReclaim) bool {
+func compareEvictionMinimumReclaim(rule *evictionThresholds, np *gkeclient.EvictionMinimumReclaim) bool {
 	if np == nil {
 		return false
 	}

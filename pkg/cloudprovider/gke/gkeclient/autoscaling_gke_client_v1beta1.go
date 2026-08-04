@@ -248,7 +248,7 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 				SecondaryBootDisks:          pool.Config.SecondaryBootDisks,
 				ServiceAccount:              pool.Config.ServiceAccount,
 				LinuxNodeConfig:             linuxNodeConfig(pool.Config.LinuxNodeConfig),
-				KubeletConfig:               pool.Config.KubeletConfig,
+				KubeletConfig:               nodeKubeletConfig(pool.Config.KubeletConfig),
 				SelfServiceMetadata:         selfservice.NodepoolMetadata(pool),
 				UpgradeSettings:             pool.UpgradeSettings,
 				Subnetwork:                  subnet,
@@ -788,7 +788,7 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		SecondaryBootDisks:  spec.SecondaryBootDisks,
 		ServiceAccount:      spec.ServiceAccount,
 		LinuxNodeConfig:     v1beta1LinuxNodeConfig(spec.LinuxNodeConfig),
-		KubeletConfig:       spec.KubeletConfig,
+		KubeletConfig:       v1beta1NodeKubeletConfig(spec.KubeletConfig),
 		ReservationAffinity: spec.ReservationAffinity,
 	}
 	if spec.ArchTaintBehavior != "" {

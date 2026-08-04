@@ -231,7 +231,7 @@ type NodePoolSpec struct {
 	AutopilotManaged         bool
 	ServiceAccount           string
 	LinuxNodeConfig          *LinuxNodeConfig
-	KubeletConfig            *gke_api_beta.NodeKubeletConfig
+	KubeletConfig            *NodeKubeletConfig
 	ReservationBlockCount    int64
 	ReservationSubBlockCount int64
 	// SelfServiceMetadata represents metadata of self-service. It is

@@ -262,7 +262,7 @@ func TestNodeSystemConfig(t *testing.T) {
 				LinuxNodeConfig: &gkeclient.LinuxNodeConfig{
 					Sysctls: map[string]string{"foo": "not-bar"},
 				},
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:       cpuCfsQuota,
 					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 				},
@@ -278,7 +278,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule without kubelet config, node group with cpuCfsQuota true - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:       true,
 					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 				},
@@ -292,7 +292,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule without kubelet config, node group with cpuCfsQuota false - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:       false,
 					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 				},
@@ -306,7 +306,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with kubelet config, node group with same kubelet config - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:                 cpuCfsQuota,
 					CpuCfsQuotaPeriod:           cpuCfsQuotaPeriod,
 					CpuManagerPolicy:            cpuManagerPolicy,
@@ -319,7 +319,7 @@ func TestNodeSystemConfig(t *testing.T) {
 					AllowedUnsafeSysctls:        allowedUnsafeSysctls,
 					MaxParallelImagePulls:       maxParallelImagePulls,
 					SingleProcessOomKill:        singleProcessOOMKill,
-					EvictionSoft: &gke_api_beta.EvictionSignals{
+					EvictionSoft: &gkeclient.EvictionSignals{
 						MemoryAvailable:   evictionSoftMemoryAvailable,
 						NodefsAvailable:   evictionSoftNodefsAvailable,
 						ImagefsAvailable:  evictionSoftImagefsAvailable,
@@ -327,7 +327,7 @@ func TestNodeSystemConfig(t *testing.T) {
 						NodefsInodesFree:  evictionSoftNodefsInodesFree,
 						PidAvailable:      evictionSoftPidAvailable,
 					},
-					EvictionSoftGracePeriod: &gke_api_beta.EvictionGracePeriod{
+					EvictionSoftGracePeriod: &gkeclient.EvictionGracePeriod{
 						MemoryAvailable:   evictionSoftGracePeriodMemoryAvailable,
 						NodefsAvailable:   evictionSoftGracePeriodNodefsAvailable,
 						ImagefsAvailable:  evictionSoftGracePeriodImagefsAvailable,
@@ -335,7 +335,7 @@ func TestNodeSystemConfig(t *testing.T) {
 						NodefsInodesFree:  evictionSoftGracePeriodNodefsInodesFree,
 						PidAvailable:      evictionSoftGracePeriodPidAvailable,
 					},
-					EvictionMinimumReclaim: &gke_api_beta.EvictionMinimumReclaim{
+					EvictionMinimumReclaim: &gkeclient.EvictionMinimumReclaim{
 						MemoryAvailable:   evictionMinimumReclaimMemoryAvailable,
 						NodefsAvailable:   evictionMinimumReclaimNodefsAvailable,
 						ImagefsAvailable:  evictionMinimumReclaimImagefsAvailable,
@@ -344,16 +344,16 @@ func TestNodeSystemConfig(t *testing.T) {
 						PidAvailable:      evictionMinimumReclaimPidAvailable,
 					},
 					EvictionMaxPodGracePeriodSeconds: evictionMaxPodGracePeriodSeconds,
-					TopologyManager: &gke_api_beta.TopologyManager{
+					TopologyManager: &gkeclient.TopologyManager{
 						Policy: topologyManagerPolicyBestEffort,
 						Scope:  topologyManagerScopeContainer,
 					},
-					MemoryManager: &gke_api_beta.MemoryManager{
+					MemoryManager: &gkeclient.MemoryManager{
 						Policy: memoryManagerPolicyStatic,
 					},
 					ShutdownGracePeriodSeconds:             shutdownGracePeriodSeconds,
 					ShutdownGracePeriodCriticalPodsSeconds: shutdownGracePeriodCriticalPodsSeconds,
-					CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+					CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 						MaxContainerRestartPeriod: "10s",
 					},
 				},
@@ -404,7 +404,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule without kubelet config, node group with kubelet config - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:                 cpuCfsQuota,
 					CpuCfsQuotaPeriod:           cpuCfsQuotaPeriod,
 					CpuManagerPolicy:            cpuManagerPolicy,
@@ -421,7 +421,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with subset of kubelet configs as in node group - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
 					CpuCfsQuota:       cpuCfsQuota,
 					CpuCfsQuotaPeriod: cpuCfsQuotaPeriod,
 					CpuManagerPolicy:  cpuManagerPolicy,
@@ -603,8 +603,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with eviction soft, node group with same eviction soft - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					EvictionSoft: &gke_api_beta.EvictionSignals{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					EvictionSoft: &gkeclient.EvictionSignals{
 						MemoryAvailable:   evictionSoftMemoryAvailable,
 						NodefsAvailable:   evictionSoftNodefsAvailable,
 						ImagefsAvailable:  evictionSoftImagefsAvailable,
@@ -629,8 +629,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with eviction soft, node group with different eviction soft - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					EvictionSoft: &gke_api_beta.EvictionSignals{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					EvictionSoft: &gkeclient.EvictionSignals{
 						MemoryAvailable: "500Mi",
 					},
 				},
@@ -645,7 +645,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with eviction soft, node group without eviction soft - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:   nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			}).Build(),
 			rule: NewRule(
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
@@ -657,8 +657,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with full eviction config, node group with same eviction config - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					EvictionSoft: &gke_api_beta.EvictionSignals{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					EvictionSoft: &gkeclient.EvictionSignals{
 						MemoryAvailable:   evictionSoftMemoryAvailable,
 						NodefsAvailable:   evictionSoftNodefsAvailable,
 						ImagefsAvailable:  evictionSoftImagefsAvailable,
@@ -666,7 +666,7 @@ func TestNodeSystemConfig(t *testing.T) {
 						NodefsInodesFree:  evictionSoftNodefsInodesFree,
 						PidAvailable:      evictionSoftPidAvailable,
 					},
-					EvictionSoftGracePeriod: &gke_api_beta.EvictionGracePeriod{
+					EvictionSoftGracePeriod: &gkeclient.EvictionGracePeriod{
 						MemoryAvailable:   evictionSoftGracePeriodMemoryAvailable,
 						NodefsAvailable:   evictionSoftGracePeriodNodefsAvailable,
 						ImagefsAvailable:  evictionSoftGracePeriodImagefsAvailable,
@@ -674,7 +674,7 @@ func TestNodeSystemConfig(t *testing.T) {
 						NodefsInodesFree:  evictionSoftGracePeriodNodefsInodesFree,
 						PidAvailable:      evictionSoftGracePeriodPidAvailable,
 					},
-					EvictionMinimumReclaim: &gke_api_beta.EvictionMinimumReclaim{
+					EvictionMinimumReclaim: &gkeclient.EvictionMinimumReclaim{
 						MemoryAvailable:   evictionMinimumReclaimMemoryAvailable,
 						NodefsAvailable:   evictionMinimumReclaimNodefsAvailable,
 						ImagefsAvailable:  evictionMinimumReclaimImagefsAvailable,
@@ -717,8 +717,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with topology manager, node group with same topology manager - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					TopologyManager: &gke_api_beta.TopologyManager{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					TopologyManager: &gkeclient.TopologyManager{
 						Policy: topologyManagerPolicyBestEffort,
 						Scope:  topologyManagerScopeContainer,
 					},
@@ -735,8 +735,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with topology manager, node group with different topology manager - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					TopologyManager: &gke_api_beta.TopologyManager{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					TopologyManager: &gkeclient.TopologyManager{
 						Policy: topologyManagerPolicyRestricted,
 						Scope:  topologyManagerScopePod,
 					},
@@ -753,8 +753,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with topology manager, node group with same policy but different scope - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					TopologyManager: &gke_api_beta.TopologyManager{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					TopologyManager: &gkeclient.TopologyManager{
 						Policy: topologyManagerPolicyBestEffort,
 						Scope:  topologyManagerScopePod,
 					},
@@ -771,7 +771,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with topology manager, node group without topology manager - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:   nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			}).Build(),
 			rule: NewRule(
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
@@ -783,8 +783,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with memory manager, node group with same memory manager - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					MemoryManager: &gke_api_beta.MemoryManager{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					MemoryManager: &gkeclient.MemoryManager{
 						Policy: memoryManagerPolicyStatic,
 					},
 				},
@@ -799,8 +799,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with memory manager, node group with different memory manager - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					MemoryManager: &gke_api_beta.MemoryManager{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					MemoryManager: &gkeclient.MemoryManager{
 						Policy: "None",
 					},
 				},
@@ -815,7 +815,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with memory manager, node group without memory manager - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:   nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			}).Build(),
 			rule: NewRule(
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
@@ -827,7 +827,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with memory manager policy None, node group without memory manager - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:   nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			}).Build(),
 			rule: NewRule(
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
@@ -839,8 +839,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with memory manager policy None, node group with memory manager policy None - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					MemoryManager: &gke_api_beta.MemoryManager{Policy: "None"},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					MemoryManager: &gkeclient.MemoryManager{Policy: "None"},
 				},
 			}).Build(),
 			rule: NewRule(
@@ -1216,8 +1216,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with crashLoopBackOff, node group with same crashLoopBackOff - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 						MaxContainerRestartPeriod: "10s",
 					},
 				},
@@ -1232,8 +1232,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with crashLoopBackOff, node group with different max container restart period - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 						MaxContainerRestartPeriod: "10s",
 					},
 				},
@@ -1248,7 +1248,7 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule with crashLoopBackOff, node group without crashLoopBackOff - non matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType:   nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{},
+				KubeletConfig: &gkeclient.NodeKubeletConfig{},
 			}).Build(),
 			rule: NewRule(
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
@@ -1260,8 +1260,8 @@ func TestNodeSystemConfig(t *testing.T) {
 			name: "rule without crashLoopBackOff, node group with crashLoopBackOff - matching",
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
-				KubeletConfig: &gke_api_beta.NodeKubeletConfig{
-					CrashLoopBackOff: &gke_api_beta.CrashLoopBackOffConfig{
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 						MaxContainerRestartPeriod: "10s",
 					},
 				},

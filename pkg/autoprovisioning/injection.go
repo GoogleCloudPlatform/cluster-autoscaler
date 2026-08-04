@@ -237,7 +237,7 @@ type nodeGroupRequirements struct {
 	flexStartReq                flexStartRequirements
 	secondaryBootDisks          []*gke_api_beta.SecondaryBootDisk
 	linuxNodeConfig             *gkeclient.LinuxNodeConfig
-	kubeletConfig               *gke_api_beta.NodeKubeletConfig
+	kubeletConfig               *gkeclient.NodeKubeletConfig
 	maxPodsPerNode              int
 	specifiedZones              []string
 	confidentialNodeType        string
