@@ -24,6 +24,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	quota "k8s.io/apiserver/pkg/quota/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer/fakepods"
@@ -192,6 +193,9 @@ func (c *Controller) resolveMutation(key string) error {
 	defer cancel()
 
 	templateCopy := ds.Spec.Template.DeepCopy()
+	templateCopy.OwnerReferences = []metav1.OwnerReference{
+		*metav1.NewControllerRef(ds, appsv1.SchemeGroupVersion.WithKind("DaemonSet")),
+	}
 	start := time.Now()
 	updatedPod, err := c.resolver.Resolve(ctx, ds.Namespace, templateCopy)
 	observeDryRunResolution(err, time.Since(start))

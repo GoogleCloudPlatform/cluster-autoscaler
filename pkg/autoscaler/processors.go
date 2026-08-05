@@ -677,7 +677,7 @@ func setUpProcessors(
 
 	var mutationInjector *daemonsetmutation.Injector
 	if options.DaemonSetMutationEnabled {
-		dryRunResolver := fakepods.NewDryRunResolver(kubeClient)
+		dryRunResolver := daemonsetmutation.NewDryRunResolver(kubeClient)
 		mutationCache := daemonsetmutation.NewMutationCache()
 		mutationController := daemonsetmutation.NewController(context, mutationCache, dryRunResolver, informerFactory)
 		mutationInjector = daemonsetmutation.NewInjector(mutationCache, mutationController)

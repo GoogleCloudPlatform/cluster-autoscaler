@@ -71,44 +71,95 @@ func TestController_Enqueue_Deduplication(t *testing.T) {
 	assert.Equal(t, 1, ctrl.queue.Len())
 }
 
-func TestController_ResolveMutation_Success(t *testing.T) {
+func TestController_ResolveMutation(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
-	mutationCache := NewMutationCache()
-	ctrl := NewController(context.Background(), mutationCache, resolverWithOverhead("1500m"), testInformerFactory())
-	t.Cleanup(ctrl.CleanUp)
-
-	err := ctrl.dsInformer.GetStore().Add(ds)
-	assert.NoError(t, err)
-
-	ctrl.Enqueue(ds)
 	key, _ := cache.MetaNamespaceKeyFunc(ds)
-	err = ctrl.resolveMutation(key)
 
-	assert.NoError(t, err)
-	pod, stale := mutationCache.Get(ds.UID, ds.Generation)
-	assert.False(t, stale)
-	assert.NotNil(t, pod)
-	assert.Equal(t, resource.MustParse("1500m"), pod.Spec.Overhead[apiv1.ResourceCPU])
-}
+	tests := []struct {
+		name               string
+		setupStore         bool
+		resolver           fakepods.Resolver
+		key                string
+		expectedStale      bool
+		expectedPod        bool
+		expectedOverhead   string
+		expectedCacheEmpty bool
+	}{
+		{
+			name:             "success with overhead",
+			setupStore:       true,
+			resolver:         resolverWithOverhead("1500m"),
+			key:              key,
+			expectedStale:    false,
+			expectedPod:      true,
+			expectedOverhead: "1500m",
+		},
+		{
+			name:             "success no change",
+			setupStore:       true,
+			resolver:         resolverWithoutChange(),
+			key:              key,
+			expectedStale:    false,
+			expectedPod:      true,
+			expectedOverhead: "",
+		},
+		{
+			name:          "resolver error (fallback)",
+			setupStore:    true,
+			resolver:      resolverWithError(assert.AnError),
+			key:           key,
+			expectedStale: false,
+			expectedPod:   false,
+		},
+		{
+			name:          "nil resolver",
+			setupStore:    true,
+			resolver:      nil,
+			key:           key,
+			expectedStale: true,
+			expectedPod:   false,
+		},
+		{
+			name:               "ds not exists",
+			setupStore:         false,
+			resolver:           resolverWithoutChange(),
+			key:                "default/non-existent",
+			expectedCacheEmpty: true,
+		},
+	}
 
-func TestController_ResolveMutation_Success_NoChange(t *testing.T) {
-	ds, _ := setUpTestPodAndDS()
-	mutationCache := NewMutationCache()
-	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
-	t.Cleanup(ctrl.CleanUp)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutationCache := NewMutationCache()
+			ctrl := NewController(context.Background(), mutationCache, tt.resolver, testInformerFactory())
+			t.Cleanup(ctrl.CleanUp)
 
-	err := ctrl.dsInformer.GetStore().Add(ds)
-	assert.NoError(t, err)
+			if tt.setupStore {
+				err := ctrl.dsInformer.GetStore().Add(ds)
+				assert.NoError(t, err)
+			}
 
-	ctrl.Enqueue(ds)
-	key, _ := cache.MetaNamespaceKeyFunc(ds)
-	err = ctrl.resolveMutation(key)
+			err := ctrl.resolveMutation(tt.key)
+			assert.NoError(t, err)
 
-	assert.NoError(t, err)
-	pod, stale := mutationCache.Get(ds.UID, ds.Generation)
-	assert.False(t, stale)
-	assert.NotNil(t, pod)
-	assert.Empty(t, pod.Spec.Overhead)
+			if tt.expectedCacheEmpty {
+				assert.Empty(t, mutationCache.items)
+			} else {
+				pod, stale := mutationCache.Get(ds.UID, ds.Generation)
+				assert.Equal(t, tt.expectedStale, stale)
+				if tt.expectedPod {
+					assert.NotNil(t, pod)
+					if tt.expectedOverhead != "" {
+						assert.Equal(t, resource.MustParse(tt.expectedOverhead), pod.Spec.Overhead[apiv1.ResourceCPU])
+					} else {
+						assert.Empty(t, pod.Spec.Overhead)
+					}
+				} else {
+					assert.Nil(t, pod)
+				}
+			}
+		})
+	}
 }
 
 func TestController_ResolveMutation_CachedNotStale(t *testing.T) {
@@ -138,53 +189,6 @@ func TestController_ResolveMutation_CachedNotStale(t *testing.T) {
 	err = ctrl.resolveMutation(key)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, resolveCount)
-}
-
-func TestController_ResolveMutation_Error(t *testing.T) {
-	ds, _ := setUpTestPodAndDS()
-	mutationCache := NewMutationCache()
-	ctrl := NewController(context.Background(), mutationCache, resolverWithError(assert.AnError), testInformerFactory())
-	t.Cleanup(ctrl.CleanUp)
-
-	err := ctrl.dsInformer.GetStore().Add(ds)
-	assert.NoError(t, err)
-
-	ctrl.Enqueue(ds)
-	key, _ := cache.MetaNamespaceKeyFunc(ds)
-	err = ctrl.resolveMutation(key)
-
-	assert.NoError(t, err)
-	pod, stale := mutationCache.Get(ds.UID, ds.Generation)
-	assert.False(t, stale)
-	assert.Nil(t, pod)
-}
-
-func TestController_ResolveMutation_NilResolver(t *testing.T) {
-	ds, _ := setUpTestPodAndDS()
-	mutationCache := NewMutationCache()
-	ctrl := NewController(context.Background(), mutationCache, nil, testInformerFactory())
-	t.Cleanup(ctrl.CleanUp)
-
-	err := ctrl.dsInformer.GetStore().Add(ds)
-	assert.NoError(t, err)
-
-	ctrl.Enqueue(ds)
-	key, _ := cache.MetaNamespaceKeyFunc(ds)
-	err = ctrl.resolveMutation(key)
-	assert.NoError(t, err)
-	pod, stale := mutationCache.Get(ds.UID, ds.Generation)
-	assert.True(t, stale)
-	assert.Nil(t, pod)
-}
-
-func TestController_ResolveMutation_JobNotExists(t *testing.T) {
-	mutationCache := NewMutationCache()
-	ctrl := NewController(context.Background(), mutationCache, resolverWithoutChange(), testInformerFactory())
-	t.Cleanup(ctrl.CleanUp)
-
-	err := ctrl.resolveMutation("default/non-existent")
-	assert.NoError(t, err)
-	assert.Empty(t, mutationCache.items)
 }
 
 func TestController_Informer_Update(t *testing.T) {
@@ -299,53 +303,178 @@ func TestController_InformerEvents_Lifecycle(t *testing.T) {
 	})
 }
 
-func TestResourcesChanged_NilInputs(t *testing.T) {
-	changed, _, _ := resourcesChanged(nil, nil)
-	assert.True(t, changed)
-	changed, _, _ = resourcesChanged(&apiv1.PodTemplateSpec{}, nil)
-	assert.True(t, changed)
-	changed, _, _ = resourcesChanged(nil, &apiv1.Pod{})
-	assert.True(t, changed)
-}
-
-func TestResourcesChanged_ChangeAndNoChange(t *testing.T) {
+func TestResourcesChanged(t *testing.T) {
 	ds, _ := setUpTestPodAndDS()
 	template := &ds.Spec.Template
-
-	// No change
 	pod := podutil.GetPodFromTemplate(template)
-	changed, _, _ := resourcesChanged(template, pod)
-	assert.False(t, changed)
-
-	// Change (overhead added)
 	podWithOverhead := mutatePodOverhead(template, "100m")
-	changed, oldReq, newReq := resourcesChanged(template, podWithOverhead)
-	assert.True(t, changed)
-	assert.NotEqual(t, oldReq, newReq)
-}
 
-func TestDryRunPodResolver_Resolve(t *testing.T) {
-	namespace := "default"
-	template := &apiv1.PodTemplateSpec{
-		Spec: apiv1.PodSpec{
-			Containers: []apiv1.Container{
-				{Name: "main"},
+	tests := []struct {
+		name            string
+		template        *apiv1.PodTemplateSpec
+		pod             *apiv1.Pod
+		expectedChanged bool
+		assertReqs      func(t *testing.T, oldReq, newReq apiv1.ResourceList)
+	}{
+		{
+			name:            "nil inputs",
+			template:        nil,
+			pod:             nil,
+			expectedChanged: true,
+		},
+		{
+			name:            "nil pod",
+			template:        &apiv1.PodTemplateSpec{},
+			pod:             nil,
+			expectedChanged: true,
+		},
+		{
+			name:            "nil template",
+			template:        nil,
+			pod:             &apiv1.Pod{},
+			expectedChanged: true,
+		},
+		{
+			name:            "no change",
+			template:        template,
+			pod:             pod,
+			expectedChanged: false,
+		},
+		{
+			name:            "overhead added (changed)",
+			template:        template,
+			pod:             podWithOverhead,
+			expectedChanged: true,
+			assertReqs: func(t *testing.T, oldReq, newReq apiv1.ResourceList) {
+				assert.NotEqual(t, oldReq, newReq)
 			},
 		},
 	}
 
-	fakeClient := fake.NewSimpleClientset()
-	var createOptions metav1.CreateOptions
-	fakeClient.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		createAction := action.(clienttesting.CreateActionImpl)
-		createOptions = createAction.GetCreateOptions()
-		return true, createAction.GetObject(), nil
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed, oldReq, newReq := resourcesChanged(tt.template, tt.pod)
+			assert.Equal(t, tt.expectedChanged, changed)
+			if tt.assertReqs != nil {
+				tt.assertReqs(t, oldReq, newReq)
+			}
+		})
+	}
+}
 
-	resolver := fakepods.NewDryRunResolver(fakeClient)
-	_, err := resolver.Resolve(context.Background(), namespace, template)
+func TestDryRunResolver_Resolve(t *testing.T) {
+	isController := true
+	blockOwnerDeletion := true
+	ownerRef := metav1.OwnerReference{
+		APIVersion:         "apps/v1",
+		Kind:               "DaemonSet",
+		Name:               "test-ds",
+		UID:                "test-uid",
+		Controller:         &isController,
+		BlockOwnerDeletion: &blockOwnerDeletion,
+	}
+
+	tests := []struct {
+		name                 string
+		template             *apiv1.PodTemplateSpec
+		expectedErr          string
+		expectedGenerateName string
+		expectedOwnerRefs    []metav1.OwnerReference
+		expectedDryRun       bool
+	}{
+		{
+			name: "success with owner reference",
+			template: &apiv1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					OwnerReferences: []metav1.OwnerReference{ownerRef},
+				},
+				Spec: apiv1.PodSpec{
+					Containers: []apiv1.Container{{Name: "main"}},
+				},
+			},
+			expectedGenerateName: "test-ds-",
+			expectedOwnerRefs:    []metav1.OwnerReference{ownerRef},
+			expectedDryRun:       true,
+		},
+		{
+			name: "success without owner reference",
+			template: &apiv1.PodTemplateSpec{
+				Spec: apiv1.PodSpec{
+					Containers: []apiv1.Container{{Name: "main"}},
+				},
+			},
+			expectedGenerateName: "ds-mutation-dryrun-",
+			expectedOwnerRefs:    nil,
+			expectedDryRun:       true,
+		},
+		{
+			name:        "nil template",
+			template:    nil,
+			expectedErr: "template is nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset()
+			var createdPod *apiv1.Pod
+			var createOptions metav1.CreateOptions
+			fakeClient.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+				createAction := action.(clienttesting.CreateActionImpl)
+				createOptions = createAction.GetCreateOptions()
+				createdPod = createAction.GetObject().(*apiv1.Pod)
+				return true, createdPod, nil
+			})
+
+			resolver := NewDryRunResolver(fakeClient)
+			pod, err := resolver.Resolve(context.Background(), "default", tt.template)
+
+			if tt.expectedErr != "" {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), tt.expectedErr)
+				assert.Nil(t, pod)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, pod)
+				assert.Equal(t, tt.expectedGenerateName, pod.GenerateName)
+				assert.Equal(t, tt.expectedOwnerRefs, pod.OwnerReferences)
+				if tt.expectedDryRun {
+					assert.Equal(t, []string{metav1.DryRunAll}, createOptions.DryRun)
+				}
+			}
+		})
+	}
+}
+
+func TestController_ResolveMutation_SetsOwnerReference(t *testing.T) {
+	ds, _ := setUpTestPodAndDS()
+	mutationCache := NewMutationCache()
+
+	var capturedTemplate *apiv1.PodTemplateSpec
+	resolver := &fakePodResolver{
+		resolveFunc: func(template *apiv1.PodTemplateSpec) (*apiv1.Pod, error) {
+			capturedTemplate = template
+			return podutil.GetPodFromTemplate(template), nil
+		},
+	}
+	ctrl := NewController(context.Background(), mutationCache, resolver, testInformerFactory())
+	t.Cleanup(ctrl.CleanUp)
+
+	err := ctrl.dsInformer.GetStore().Add(ds)
 	assert.NoError(t, err)
-	assert.Equal(t, []string{metav1.DryRunAll}, createOptions.DryRun)
+
+	ctrl.Enqueue(ds)
+	key, _ := cache.MetaNamespaceKeyFunc(ds)
+	err = ctrl.resolveMutation(key)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, capturedTemplate)
+	assert.Len(t, capturedTemplate.OwnerReferences, 1)
+	assert.Equal(t, ds.Name, capturedTemplate.OwnerReferences[0].Name)
+	assert.Equal(t, ds.UID, capturedTemplate.OwnerReferences[0].UID)
+	assert.Equal(t, "DaemonSet", capturedTemplate.OwnerReferences[0].Kind)
+	assert.Equal(t, "apps/v1", capturedTemplate.OwnerReferences[0].APIVersion)
+	assert.True(t, *capturedTemplate.OwnerReferences[0].Controller)
 }
 
 func TestFormatResourceList(t *testing.T) {
