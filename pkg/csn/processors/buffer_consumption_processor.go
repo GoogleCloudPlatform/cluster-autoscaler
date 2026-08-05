@@ -17,6 +17,7 @@ package processors
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"time"
 
@@ -35,16 +36,19 @@ import (
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 const (
 	bufferConsumptionMetricLabel          = "scaleUp:CSNbufferConsumptionProcessor"
 	schedulingThroughInformersMetricLabel = "scaleUp:CSNschedulingThroughInformers"
 	bufferConsumptionLogPrefix            = "CSN Buffer Consumption processor:"
+	defaultPodAgeFallbackThreshold        = 10 * time.Minute
 )
 
 type csnMetrics interface {
 	SetCSNInvalidCondition(condition internalmetrics.CSNInvalidCondition)
+	UpdateCSNConsideredPods(counts map[internalmetrics.CSNConsideredPodsKey]int)
 }
 
 // BufferConsumptionProcessor is a processor that consumes CSN nodes to schedule pods (and filter out scheduled pods). go/csn-in-ca
@@ -53,6 +57,7 @@ type BufferConsumptionProcessor struct {
 	simulator          *scheduling.HintingSimulator
 	experimentsManager experiments.Manager
 	metrics            csnMetrics
+	clock              clock.PassiveClock
 }
 
 func NewBufferConsumptionProcessor(nodeController csnNodeController, experimentsManager experiments.Manager) *BufferConsumptionProcessor {
@@ -61,11 +66,12 @@ func NewBufferConsumptionProcessor(nodeController csnNodeController, experiments
 		simulator:          scheduling.NewHintingSimulator(),
 		experimentsManager: experimentsManager,
 		metrics:            internalmetrics.Metrics,
+		clock:              clock.RealClock{},
 	}
 }
 
 func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	defer metrics.UpdateDurationFromStart(bufferConsumptionMetricLabel, time.Now())
+	defer metrics.UpdateDurationFromStart(bufferConsumptionMetricLabel, p.clock.Now())
 
 	snapshot := ctx.ClusterSnapshot
 	snapshot.Fork()
@@ -83,12 +89,22 @@ func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, un
 		klog.Infof("%s filtered out %d unhelpablePods", bufferConsumptionLogPrefix, unhelpablePodsNum)
 	}
 
-	nodesOfScheduledPods, err := p.consumeCSNBuffers(ctx, helpablePods)
+	now := p.clock.Now()
+	threshold := p.podAgeFallbackThreshold()
+	podAgeFallbackEnabled := p.isPodAgeFallbackEnabled()
+	nodesOfScheduledPods, err := p.consumeCSNBuffers(ctx, helpablePods, now, threshold, podAgeFallbackEnabled)
 	if err != nil {
 		snapshot.Revert()
 		klog.Errorf("%s error while consuming CSN buffers: %v", bufferConsumptionLogPrefix, err)
 		p.metrics.SetCSNInvalidCondition(internalmetrics.CSNBufferConsumptionProcessorError)
 		return unschedulablePods, nil // Snapshot is reverted, so we should return the original unschedulable pods.
+	}
+
+	// We reuse now, threshold and podAgeFallbackEnabled values here to make them consistent with consumeCSNBuffers().
+	// So even if giraffe flag changes, or a new pod becomes old, they will have consistent results.
+	// If they become out of sync, it won't break anything though. It is just nicer to have the metric correspond to the what is being considered at a given time.
+	if podAgeFallbackEnabled {
+		p.emitConsideredPodsMetrics(unschedulablePods, nodesOfScheduledPods, now, threshold)
 	}
 
 	// Remove scheduled pods.
@@ -109,7 +125,7 @@ func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, un
 func (p *BufferConsumptionProcessor) CleanUp() {}
 
 // Note: consumeCSNBuffers assumes that it is already under a forked snapshot.
-func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) (nodesOfScheduledPods map[*apiv1.Pod]string, err error) {
+func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod, now time.Time, threshold time.Duration, podAgeFallbackEnabled bool) (nodesOfScheduledPods map[*apiv1.Pod]string, err error) {
 	snapshot := ctx.ClusterSnapshot
 
 	classifiedNodes, err := classifyNodes(snapshot)
@@ -143,16 +159,45 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingC
 		return alreadyConsumedNodes[ni.Node().Name]
 	}
 
-	nodesOfScheduledPods, err = schedulePodsOnCSNNodes(snapshot, p.simulator, unschedulablePods,
-		schedulePodsOnCSNNodesOptions{ignoreBufferAssignment: true},
+	var normalPods, oldPods []*apiv1.Pod
+	if podAgeFallbackEnabled {
+		for _, pod := range unschedulablePods {
+			if isPodTooOld(pod, now, threshold) {
+				oldPods = append(oldPods, pod)
+			} else {
+				normalPods = append(normalPods, pod)
+			}
+		}
+		if len(oldPods) > 0 {
+			klog.Infof("%s found %d pods that are older than %v, suspended nodes will not be considered for scheduling those pods", bufferConsumptionLogPrefix, len(oldPods), threshold)
+		}
+	} else {
+		normalPods = unschedulablePods
+	}
+
+	commonSchedulingPriorities := []priorityFilter{
 		alreadyConsumedFilter,
 		// Upcoming nodes are not returned from the controller.List call.
 		// Otherwise, the node is either already chilling or being chilling, both are okay.
 		// Even if such a node is in backoff, it still doesn't block scheduling from Kubernetes Scheduler.
 		isChillingFilter,
-		// If the node isn't returned from the controller.List call, then it is likely either backed-off, deleted or being suspended.
-		// In all those cases we want to skip scheduling on it.
-		allOfPriorityFilters(nodeControllerFilter, isSuspendedFilter),
+	}
+
+	nodesOfScheduledPods, err = schedulePodGroupsOnCSNNodes(snapshot, p.simulator,
+		schedulePodsOnCSNNodesOptions{ignoreBufferAssignment: true},
+		podGroup{
+			pods:       oldPods,
+			priorities: commonSchedulingPriorities,
+		},
+		podGroup{
+			pods: normalPods,
+			priorities: append(commonSchedulingPriorities,
+				// If the node isn't returned from the controller.List call, then it is likely either backed-off, deleted or being suspended.
+				// In all those cases we want to skip scheduling on it.
+				// Note that old pods can't be scheduled on suspended nodes (go/csn-backoff-strategy).
+				allOfPriorityFilters(nodeControllerFilter, isSuspendedFilter),
+			),
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error scheduling pods: %v", err)
@@ -198,6 +243,51 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingC
 	}
 
 	return nodesOfScheduledPods, nil
+}
+
+func (p *BufferConsumptionProcessor) emitConsideredPodsMetrics(unschedulablePods []*apiv1.Pod, nodesOfScheduledPods map[*apiv1.Pod]string, now time.Time, threshold time.Duration) {
+	consideredPods := map[internalmetrics.CSNConsideredPodsKey]int{}
+	for _, pod := range unschedulablePods {
+		isOld := isPodTooOld(pod, now, threshold)
+		var status internalmetrics.CSNPodStatus
+		if annotator.IsUnhelpablePod(pod) {
+			status = internalmetrics.CSNPodUnhelpable
+		} else if nodesOfScheduledPods[pod] != "" {
+			status = internalmetrics.CSNPodScheduled
+		} else {
+			status = internalmetrics.CSNPodUnschedulable
+		}
+		consideredPods[internalmetrics.CSNConsideredPodsKey{Status: status, IsOld: isOld}]++
+	}
+	p.metrics.UpdateCSNConsideredPods(consideredPods)
+}
+
+func (p *BufferConsumptionProcessor) isPodAgeFallbackEnabled() bool {
+	if p.experimentsManager == nil {
+		return false
+	}
+	return p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ColdStandbyNodesBackoffMinCAVersionFlag, false)
+}
+
+func (p *BufferConsumptionProcessor) podAgeFallbackThreshold() time.Duration {
+	if !p.isPodAgeFallbackEnabled() {
+		return math.MaxInt64
+	}
+	if p.experimentsManager == nil {
+		return defaultPodAgeFallbackThreshold
+	}
+	threshold := p.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(experiments.ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag, defaultPodAgeFallbackThreshold)
+	if threshold <= 0 {
+		return defaultPodAgeFallbackThreshold
+	}
+	return threshold
+}
+
+func isPodTooOld(pod *apiv1.Pod, now time.Time, threshold time.Duration) bool {
+	if pod.CreationTimestamp.IsZero() {
+		return false
+	}
+	return now.Sub(pod.CreationTimestamp.Time) > threshold
 }
 
 func filterNodeControllerNodes(nodesToConsume map[string]bool, nodeControllerNodes map[string]bool) []string {
@@ -285,7 +375,7 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughSnapshot(chillingNodeIn
 // consumedNodesThroughInformers returns nodes that should be consumed based on the current state of pods in the cluster.
 // This is used to mitigate race conditions between CA loop and scheduler (since scheduler can schedule pods on them).
 func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *classifiedNodes, kubeClients context.AutoscalingKubeClients) (map[string]bool, error) {
-	defer metrics.UpdateDurationFromStart(schedulingThroughInformersMetricLabel, time.Now())
+	defer metrics.UpdateDurationFromStart(schedulingThroughInformersMetricLabel, p.clock.Now())
 
 	loggingQuota := logging.CSNPodLoggingQuota()
 

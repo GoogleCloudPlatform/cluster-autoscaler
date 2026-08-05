@@ -84,6 +84,7 @@ import (
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
+	csn_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
@@ -625,8 +626,8 @@ func setUpProcessors(
 	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
 	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
 	if options.CSNEnabled && cbReady {
-		nodeBasedBackoff := gke_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
-		csnBackoff := gke_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
+		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
+		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff)
 		go csnNodeController.Run(context)

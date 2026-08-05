@@ -922,6 +922,15 @@ var (
 		[]string{"condition"},
 	)
 
+	csnConsideredPods = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "csn_considered_pods",
+			Help:      "Number and status of incoming pods considered by CSN buffer consumption processor",
+		},
+		[]string{"status", "is_old"},
+	)
+
 	napEnabled = k8smetrics.NewGauge(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1177,6 +1186,7 @@ var allMetrics = []k8smetrics.Registerable{
 	capacityBuffersNumberMetric,
 	csnEnabled,
 	csnInvalidCondition,
+	csnConsideredPods,
 	napEnabled,
 	flexAdvisorCacheQueryCount,
 	flexAdvisorActiveScopes,
@@ -1494,6 +1504,34 @@ const (
 // SetCSNInvalidCondition records invalid CSN conditions in the cluster.
 func (*prometheusMetrics) SetCSNInvalidCondition(condition CSNInvalidCondition) {
 	csnInvalidCondition.WithLabelValues(string(condition)).Set(1)
+}
+
+// CSNPodStatus represents the status of a pod considered by the CSN buffer consumption processor.
+type CSNPodStatus string
+
+const (
+	// CSNPodUnhelpable means the pod is no longer considered because it is marked as unhelpable by CA.
+	CSNPodUnhelpable CSNPodStatus = "unhelpable"
+	// CSNPodScheduled means the pod is scheduled during the simulation inside the CSN buffer consumption processor.
+	CSNPodScheduled CSNPodStatus = "scheduled"
+	// CSNPodUnschedulable means the pod is attempted to be scheduled during the simulation inside the CSN buffer consumption processor, but it remains unschedulable.
+	// Such pods will be considered for scale-up.
+	CSNPodUnschedulable CSNPodStatus = "unschedulable"
+)
+
+// CSNConsideredPodsKey represents the key for pods considered by CSN buffer consumption processor.
+type CSNConsideredPodsKey struct {
+	Status CSNPodStatus
+	IsOld  bool
+}
+
+// UpdateCSNConsideredPods records the number of incoming pods considered by CSN buffer consumption processor in each status/age category.
+func (*prometheusMetrics) UpdateCSNConsideredPods(counts map[CSNConsideredPodsKey]int) {
+	csnConsideredPods.Reset()
+
+	for key, count := range counts {
+		csnConsideredPods.WithLabelValues(string(key.Status), boolToString(key.IsOld)).Set(float64(count))
+	}
 }
 
 // UpdateNapEnabled records if NodeAutoprovisioning is enabled

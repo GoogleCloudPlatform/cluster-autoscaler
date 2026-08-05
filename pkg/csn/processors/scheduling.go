@@ -17,6 +17,7 @@ package processors
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -66,10 +67,28 @@ type schedulePodsOnCSNNodesOptions struct {
 	ignoreBufferAssignment bool
 }
 
+type podGroup struct {
+	pods       []*apiv1.Pod
+	priorities []priorityFilter
+}
+
 // schedulePodsOnCSNNodes schedules pods on CSN nodes -even if they are suspended- and returns the node names of the scheduled pods.
 // Internally, it does this by temporarily adjusting them (e.g. removing CSN hard taint) and then schedule the pods on them, however the priorityFilter still runs on the original node (not the modified one) for correctness.
 func schedulePodsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, opts schedulePodsOnCSNNodesOptions, priorities ...priorityFilter) (map[*apiv1.Pod]string, error) {
-	if len(pods) == 0 {
+	return schedulePodGroupsOnCSNNodes(sn, simulator, opts, podGroup{
+		pods:       pods,
+		priorities: priorities,
+	})
+}
+
+// schedulePodGroupsOnCSNNodes schedules multiple groups of pods sequentially on CSN nodes with their corresponding priority filters.
+// It clones CSN nodes, forks the snapshot, and makes CSN nodes schedulable only ONCE across all groups.
+func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, opts schedulePodsOnCSNNodesOptions, groups ...podGroup) (map[*apiv1.Pod]string, error) {
+	totalPods := 0
+	for _, g := range groups {
+		totalPods += len(g.pods)
+	}
+	if totalPods == 0 {
 		return map[*apiv1.Pod]string{}, nil
 	}
 
@@ -100,27 +119,34 @@ func schedulePodsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *sched
 		return nil, fmt.Errorf("failed to make CSN nodes schedulable: %v", err)
 	}
 
-	// We need to adjust priorities to run against the original nodes, not the modified nodes.
-	newPriorities := []priorityFilter{}
-	for _, priority := range priorities {
-		newPriorities = append(newPriorities, func(ni *framework.NodeInfo) bool {
-			node := ni.Node()
-			originalNI, ok := originalNodeInfo[node.Name]
-			// TODO(b/479842232): This is fine as we will not have non-CSN nodes in the originalNodeInfo.
-			// Their priority will thus be lowest possible,
-			// but we don't want to schedule non-CSN nodes in this function, so its ok.
-			if !ok {
-				return false
-			}
-			return priority(originalNI)
-		})
-	}
-	priorities = newPriorities
+	nodesOfScheduledPods := map[*apiv1.Pod]string{}
+	for _, g := range groups {
+		if len(g.pods) == 0 {
+			continue
+		}
 
-	nodesOfScheduledPods, err := schedulePods(sn, simulator, pods, priorities...)
-	if err != nil {
-		sn.Revert()
-		return nil, fmt.Errorf("failed to schedule pods: %v", err)
+		// We need to adjust priorities to run against the original nodes, not the modified nodes.
+		newPriorities := []priorityFilter{}
+		for _, priority := range g.priorities {
+			newPriorities = append(newPriorities, func(ni *framework.NodeInfo) bool {
+				node := ni.Node()
+				originalNI, ok := originalNodeInfo[node.Name]
+				// TODO(b/479842232): This is fine as we will not have non-CSN nodes in the originalNodeInfo.
+				// Their priority will thus be lowest possible,
+				// but we don't want to schedule non-CSN nodes in this function, so its ok.
+				if !ok {
+					return false
+				}
+				return priority(originalNI)
+			})
+		}
+
+		scheduled, err := schedulePods(sn, simulator, g.pods, newPriorities...)
+		if err != nil {
+			sn.Revert()
+			return nil, fmt.Errorf("failed to schedule pods: %v", err)
+		}
+		maps.Copy(nodesOfScheduledPods, scheduled)
 	}
 
 	// We revert the changes since we adjusted nodes to make them schedulable, we should revert them back as we already got the scheduling info.

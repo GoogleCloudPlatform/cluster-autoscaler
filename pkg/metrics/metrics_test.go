@@ -277,6 +277,48 @@ func TestSetCSNInvalidCondition(t *testing.T) {
 	assert.Equal(t, float64(1), val)
 }
 
+func TestUpdateCSNConsideredPods(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	pm := &prometheusMetrics{}
+
+	counts := map[CSNConsideredPodsKey]int{
+		{Status: CSNPodScheduled, IsOld: false}:    2,
+		{Status: CSNPodUnschedulable, IsOld: true}: 1,
+		{Status: CSNPodUnhelpable, IsOld: false}:   5,
+	}
+	pm.UpdateCSNConsideredPods(counts)
+
+	gauge := csnConsideredPods.WithLabelValues(string(CSNPodScheduled), "false")
+	val, err := testutil.GetGaugeMetricValue(gauge)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2), val)
+
+	gauge = csnConsideredPods.WithLabelValues(string(CSNPodUnschedulable), "true")
+	val, err = testutil.GetGaugeMetricValue(gauge)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	gauge = csnConsideredPods.WithLabelValues(string(CSNPodUnhelpable), "false")
+	val, err = testutil.GetGaugeMetricValue(gauge)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(5), val)
+
+	// Verify Reset on next update
+	newCounts := map[CSNConsideredPodsKey]int{
+		{Status: CSNPodScheduled, IsOld: false}: 1,
+	}
+	pm.UpdateCSNConsideredPods(newCounts)
+	gauge = csnConsideredPods.WithLabelValues(string(CSNPodScheduled), "false")
+	val, err = testutil.GetGaugeMetricValue(gauge)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	gauge = csnConsideredPods.WithLabelValues(string(CSNPodUnhelpable), "false")
+	val, err = testutil.GetGaugeMetricValue(gauge)
+	assert.NoError(t, err)
+	assert.Equal(t, float64(0), val)
+}
+
 func TestRegisterPodsSchedulableOnVmUpsizes(t *testing.T) {
 	registerOnce.Do(RegisterAll)
 	pm := &prometheusMetrics{}

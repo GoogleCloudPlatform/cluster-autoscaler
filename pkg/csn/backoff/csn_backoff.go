@@ -22,6 +22,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
 	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
+	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 )
 
 // CSNCompositeBackoff handles backoff logic specifically for CSN (Cold Standby Nodes, publicly known as standby buffers) resumption errors.
@@ -35,14 +36,14 @@ import (
 //
 // For design details, see go/csn-backoff-strategy.
 type CSNCompositeBackoff struct {
-	CompositeBackoff
+	gke_backoff.CompositeBackoff
 	csnBackoff base_backoff.Backoff
 	mu         sync.Mutex
 }
 
 // NewCSNCompositeBackoff creates a new CSNCompositeBackoff combining a composite backoff and a dedicated CSN backoff while allowing for direct access to the CSN backoff.
 func NewCSNCompositeBackoff(composite base_backoff.Backoff, csnBackoff base_backoff.Backoff) *CSNCompositeBackoff {
-	syncComposite := NewSynchronizedCompositeBackoff([]base_backoff.Backoff{composite, csnBackoff}, nil)
+	syncComposite := gke_backoff.NewSynchronizedCompositeBackoff([]base_backoff.Backoff{composite, csnBackoff}, nil)
 	return &CSNCompositeBackoff{
 		CompositeBackoff: syncComposite,
 		csnBackoff:       csnBackoff,

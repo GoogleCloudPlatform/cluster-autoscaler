@@ -16,10 +16,14 @@ package processors
 
 import (
 	"errors"
+	"math"
 	"testing"
+
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
 	autoscalingcontext "k8s.io/autoscaler/cluster-autoscaler/context"
 	"k8s.io/autoscaler/cluster-autoscaler/simulator/clustersnapshot/store"
@@ -38,10 +42,15 @@ import (
 
 type mockCSNMetrics struct {
 	invalidConditions []internalmetrics.CSNInvalidCondition
+	consideredPods    map[internalmetrics.CSNConsideredPodsKey]int
 }
 
 func (m *mockCSNMetrics) SetCSNInvalidCondition(condition internalmetrics.CSNInvalidCondition) {
 	m.invalidConditions = append(m.invalidConditions, condition)
+}
+
+func (m *mockCSNMetrics) UpdateCSNConsideredPods(counts map[internalmetrics.CSNConsideredPodsKey]int) {
+	m.consideredPods = counts
 }
 
 func withUnhelpableAnnotation() func(*apiv1.Pod) {
@@ -475,6 +484,115 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectedAllConsumedNodes:  []string{"node-1"},
 			expectedMetrics:           []internalmetrics.CSNInvalidCondition{internalmetrics.SuspendedNodeWithBlockingPods},
 		},
+		{
+			name: "Pod age fallback disabled: old pod is scheduled on suspended node",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				buildOldTestPod("p1", 1000, 1*GiB),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(false),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1"},
+		},
+		{
+			name: "Pod age fallback enabled: old pod is excluded from suspended node and falls back to NAP",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				buildOldTestPod("p1", 1000, 1*GiB),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(true),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{"p1"},
+			expectedAllConsumedNodes:  []string{},
+		},
+		{
+			name: "Pod age fallback enabled: old pod is scheduled on chilling node instead of suspended node",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+				create8CPUTestNode(t, "node-2", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+				{Name: "node-2", DesiredState: csn.NodeStateChilling},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				buildOldTestPod("p1", 1000, 1*GiB),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(true),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-2"},
+		},
+		{
+			name: "Pod age fallback enabled: normal pod goes to suspended node, old pod goes to chilling node",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+				create8CPUTestNode(t, "node-2", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+				{Name: "node-2", DesiredState: csn.NodeStateChilling},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("normal-pod", 8000, 1*GiB),
+				buildOldTestPod("old-pod", 8000, 1*GiB),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(true),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1", "node-2"},
+		},
+		{
+			name: "Pod age fallback enabled: old pod is scheduled on already consumed suspended node",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			podsCreatedOutsideCA: []*apiv1.Pod{
+				test.BuildTestPod("existing-pod", 100, 100, test.WithNodeName("node-1")),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				buildOldTestPod("old-pod", 1000, 1*GiB),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(true),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1"},
+			expectedMetrics:           []internalmetrics.CSNInvalidCondition{internalmetrics.SuspendedNodeWithBlockingPods},
+		},
+		{
+			name: "Pod age fallback enabled with custom giraffe threshold (5m): pod older than 5m is excluded from suspended node",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				func() *apiv1.Pod {
+					pod := test.BuildTestPod("p1", 1000, 1*GiB)
+					pod.CreationTimestamp = metav1.NewTime(time.Now().Add(-6 * time.Minute))
+					return pod
+				}(),
+			},
+			experimentsManager:        podAgeFallbackExperimentManager(true, "300"),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{"p1"},
+			expectedAllConsumedNodes:  []string{},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -541,6 +659,211 @@ func TestBufferConsumptionProcess(t *testing.T) {
 				node := ni.Node()
 				assert.Equal(t, csn.NodeStateConsumed, csn.ClassifyNode(node))
 			}
+		})
+	}
+}
+
+func TestBufferConsumptionProcess_ConsideredPodsMetric(t *testing.T) {
+	testCases := []struct {
+		name                   string
+		initialNodes           []*apiv1.Node
+		csnNodes               []nodecontroller.CSNNode
+		unschedulablePods      []*apiv1.Pod
+		experimentsManager     experiments.Manager
+		expectedConsideredPods map[internalmetrics.CSNConsideredPodsKey]int
+	}{
+		{
+			name: "CSN considered pods metric recorded correctly",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p-unhelpable", 100, 100, withUnhelpableAnnotation()),
+				test.BuildTestPod("p-scheduled", 1000, 1*GiB),
+				test.BuildTestPod("p-unschedulable", 10000, 10*GiB),
+				buildOldTestPod("p-old-unschedulable", 10000, 10*GiB),
+			},
+			experimentsManager: podAgeFallbackExperimentManager(true),
+			expectedConsideredPods: map[internalmetrics.CSNConsideredPodsKey]int{
+				{Status: internalmetrics.CSNPodUnhelpable, IsOld: false}:    1,
+				{Status: internalmetrics.CSNPodScheduled, IsOld: false}:     1,
+				{Status: internalmetrics.CSNPodUnschedulable, IsOld: false}: 1,
+				{Status: internalmetrics.CSNPodUnschedulable, IsOld: true}:  1,
+			},
+		},
+		{
+			name: "CSN considered pods metric not recorded when pod age fallback disabled",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p-unhelpable", 100, 100, withUnhelpableAnnotation()),
+				test.BuildTestPod("p-scheduled", 1000, 1*GiB),
+				test.BuildTestPod("p-unschedulable", 10000, 10*GiB),
+				buildOldTestPod("p-old-unschedulable", 10000, 10*GiB),
+			},
+			experimentsManager:     podAgeFallbackExperimentManager(false),
+			expectedConsideredPods: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
+			for _, node := range tc.initialNodes {
+				nodeInfo := framework.NewNodeInfo(node, nil)
+				err := clusterSnapshot.AddNodeInfo(nodeInfo)
+				assert.NoError(t, err)
+			}
+			podLister := kubernetes.NewTestPodLister(nil)
+			nodeLister := kubernetes.NewTestNodeLister(tc.initialNodes)
+			autoscalingCtx := &autoscalingcontext.AutoscalingContext{
+				ClusterSnapshot:      clusterSnapshot,
+				ClusterStateRegistry: clusterstate.NewClusterStateRegistry(nil, nil, nil, nil, nil),
+				AutoscalingKubeClients: autoscalingcontext.AutoscalingKubeClients{
+					ListerRegistry: kubernetes.NewListerRegistry(nodeLister, nil, podLister, nil, nil, nil, nil, nil, nil),
+				},
+			}
+
+			mockController := nodecontrollertesting.NewMockCSNNodeController(tc.csnNodes)
+			for _, n := range tc.initialNodes {
+				mockController.SetCurrentState(n.Name, csn.ClassifyNode(n))
+			}
+
+			experimentsManager := tc.experimentsManager
+			if experimentsManager == nil {
+				experimentsManager = experiments.NewMockManager()
+			}
+			mockMetrics := &mockCSNMetrics{}
+			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
+			processor.metrics = mockMetrics
+
+			_, err := processor.Process(autoscalingCtx, tc.unschedulablePods)
+			assert.NoError(t, err)
+
+			if len(tc.expectedConsideredPods) == 0 {
+				assert.Empty(t, mockMetrics.consideredPods, "Expected considered pods to be empty")
+			} else {
+				assert.Equal(t, tc.expectedConsideredPods, mockMetrics.consideredPods, "Unexpected considered pods")
+			}
+		})
+	}
+}
+
+func buildOldTestPod(name string, cpu int64, memory int64) *apiv1.Pod {
+	pod := test.BuildTestPod(name, cpu, memory)
+	pod.CreationTimestamp = metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	return pod
+}
+
+func podAgeFallbackExperimentManager(enabled bool, thresholdSeconds ...string) experiments.Manager {
+	stringFlags := map[string]string{}
+	if len(thresholdSeconds) > 0 && thresholdSeconds[0] != "" {
+		stringFlags[experiments.ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag] = thresholdSeconds[0]
+	}
+	return experiments.NewMockManagerWithOptions(
+		version.Version{},
+		map[string]bool{experiments.ColdStandbyNodesBackoffMinCAVersionFlag: enabled},
+		stringFlags,
+	)
+}
+
+func TestIsPodTooOld(t *testing.T) {
+	now := time.Now()
+	testCases := []struct {
+		name     string
+		pod      *apiv1.Pod
+		expected bool
+	}{
+		{
+			name:     "Pod without creation timestamp is not too old",
+			pod:      test.BuildTestPod("p1", 100, 100),
+			expected: false,
+		},
+		{
+			name: "Pod created exactly 10 minutes ago is not too old",
+			pod: func() *apiv1.Pod {
+				p := test.BuildTestPod("p2", 100, 100)
+				p.CreationTimestamp = metav1.NewTime(now.Add(-10 * time.Minute))
+				return p
+			}(),
+			expected: false,
+		},
+		{
+			name: "Pod created more than 10 minutes ago is too old",
+			pod: func() *apiv1.Pod {
+				p := test.BuildTestPod("p3", 100, 100)
+				p.CreationTimestamp = metav1.NewTime(now.Add(-10*time.Minute - 1*time.Second))
+				return p
+			}(),
+			expected: true,
+		},
+		{
+			name: "Pod created less than 10 minutes ago is not too old",
+			pod: func() *apiv1.Pod {
+				p := test.BuildTestPod("p4", 100, 100)
+				p.CreationTimestamp = metav1.NewTime(now.Add(-9 * time.Minute))
+				return p
+			}(),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, isPodTooOld(tc.pod, now, 10*time.Minute))
+		})
+	}
+}
+
+func TestPodAgeFallbackThreshold(t *testing.T) {
+	testCases := []struct {
+		name     string
+		em       experiments.Manager
+		expected time.Duration
+	}{
+		{
+			name:     "Nil experiments manager returns MaxInt64",
+			em:       nil,
+			expected: math.MaxInt64,
+		},
+		{
+			name:     "Disabled experiment returns MaxInt64",
+			em:       podAgeFallbackExperimentManager(false),
+			expected: math.MaxInt64,
+		},
+		{
+			name:     "Unconfigured flag returns default threshold",
+			em:       podAgeFallbackExperimentManager(true),
+			expected: 10 * time.Minute,
+		},
+		{
+			name:     "Valid configured flag returns configured duration",
+			em:       podAgeFallbackExperimentManager(true, "300"),
+			expected: 5 * time.Minute,
+		},
+		{
+			name:     "Zero flag falls back to default threshold",
+			em:       podAgeFallbackExperimentManager(true, "0"),
+			expected: 10 * time.Minute,
+		},
+		{
+			name:     "Negative flag falls back to default threshold",
+			em:       podAgeFallbackExperimentManager(true, "-60"),
+			expected: 10 * time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewBufferConsumptionProcessor(nil, tc.em)
+			assert.Equal(t, tc.expected, p.podAgeFallbackThreshold())
 		})
 	}
 }
