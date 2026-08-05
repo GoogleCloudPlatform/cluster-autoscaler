@@ -141,8 +141,8 @@ github.com/googleapis/enterprise-certificate-proxy v0.3.16 h1:F/VPrx0YPBdksZJQdC
 github.com/googleapis/enterprise-certificate-proxy v0.3.16/go.mod h1:9Yb0eAkH/Xqhvv3zbeKf/+wMJqCeocWc6KIhDvEAuYE=
 github.com/googleapis/gax-go/v2 v2.22.0 h1:PjIWBpgGIVKGoCXuiCoP64altEJCj3/Ei+kSU5vlZD4=
 github.com/googleapis/gax-go/v2 v2.22.0/go.mod h1:irWBbALSr0Sk3qlqb9SyJ1h68WjgeFuiOzI4Rqw5+aY=
-github.com/googlecloudplatform/compute-class-api v0.0.0-20260803182200-4ccff1b0cf13 h1:hwVbTjQoC8Zu8QU1erz9Jtpp5F+yY0scLtBtqc24KH8=
-github.com/googlecloudplatform/compute-class-api v0.0.0-20260803182200-4ccff1b0cf13/go.mod h1:NF67Vi7+1oTaS6ilGd8chZiLKMgKdrKOWAfFSlJa/Gw=
+github.com/googlecloudplatform/compute-class-api v0.0.0-20260805190545-013f71ab155d h1:Pcs6EQvGXHeEWXru3RV9DGj7TB8WFQqsHC7wn4ZtJ8Q=
+github.com/googlecloudplatform/compute-class-api v0.0.0-20260805190545-013f71ab155d/go.mod h1:NF67Vi7+1oTaS6ilGd8chZiLKMgKdrKOWAfFSlJa/Gw=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 h1:HWRh5R2+9EifMyIHV7ZV+MIZqgz+PMpZ14Jynv3O2Zs=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0/go.mod h1:JfhWUomR1baixubs02l85lZYYOm7LV6om4ceouMv45c=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
