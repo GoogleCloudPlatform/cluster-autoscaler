@@ -789,6 +789,7 @@ func TestNodeStateManager_WithoutBackedOffSuspendedFilter(t *testing.T) {
 			m := NewNodeStateManager(nodeSource.RegisterNodeHandler, WithBackoff(mb), WithCloudProvider(cp), WithExperimentsManager(em))
 			mustRunManager(t, m)
 			nodeSource.AddNodes(suspendedBackedOffNode, chillingBackedOffNode, suspendedNotBackedOffNode)
+			m.UpdateBackoffStatus()
 
 			allNodes := m.List()
 			assert.Len(t, allNodes, 3)

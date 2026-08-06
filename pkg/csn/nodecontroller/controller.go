@@ -52,22 +52,7 @@ type CSNNode struct {
 	DesiredState         csn.NodeState
 	HasPendingOperations bool
 	Buffer               *BufferInfo
-
-	isBackedOffFunc func() bool
-}
-
-// IsBackedOff returns whether the node is currently backed off.
-// This is lazily evaluated when called to avoid unnecessary computations when unneeded.
-func (n CSNNode) IsBackedOff() bool {
-	if n.isBackedOffFunc == nil {
-		return false
-	}
-	return n.isBackedOffFunc()
-}
-
-// SetIsBackedOffFunc sets the function used to lazily evaluate backoff status.
-func (n *CSNNode) SetIsBackedOffFunc(f func() bool) {
-	n.isBackedOffFunc = f
+	IsBackedOff          bool
 }
 
 // BufferInfo contains information about the buffer to which a
@@ -92,7 +77,7 @@ var (
 		return !n.HasPendingOperations
 	}
 	WithoutBackedOffSuspendedFilter CSNFilter = func(n CSNNode) bool {
-		return !(n.State == csn.NodeStateSuspended && n.IsBackedOff())
+		return !(n.State == csn.NodeStateSuspended && n.IsBackedOff)
 	}
 )
 
@@ -279,6 +264,10 @@ func (c *csnNodeController) Reconcile() {
 	c.reconciler.Reconcile()
 }
 
+func (c *csnNodeController) UpdateBackoffStatus() {
+	c.nodeStateManager.UpdateBackoffStatus()
+}
+
 func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
 	desiredState := tn.DesiredState
 	if desiredState == "" {
@@ -298,9 +287,7 @@ func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
 		DesiredState:         desiredState,
 		HasPendingOperations: tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp),
 		Buffer:               buffer,
-		isBackedOffFunc: func() bool {
-			return c.nodeStateManager.IsNodeBackedOff(node)
-		},
+		IsBackedOff:          tn.IsBackedOff,
 	}
 }
 

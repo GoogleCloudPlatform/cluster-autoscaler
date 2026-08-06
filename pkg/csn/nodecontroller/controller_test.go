@@ -868,6 +868,7 @@ func TestWithoutBackedOffSuspendedFilter(t *testing.T) {
 					withCSNBackoffExperiment(tc.experimentEnabled),
 				)
 				synctest.Wait()
+				c.UpdateBackoffStatus()
 
 				nodes, err := c.List()
 				assert.NoError(t, err)
@@ -914,9 +915,10 @@ func TestCustomCallerFilters(t *testing.T) {
 			withCSNBackoffExperiment(true),
 		)
 		synctest.Wait()
+		c.UpdateBackoffStatus()
 
 		customFilter := func(n CSNNode) bool {
-			return (n.State == csn.NodeStateSuspended && n.IsBackedOff()) || (n.State == csn.NodeStateChilling && n.Name == "n3")
+			return (n.State == csn.NodeStateSuspended && n.IsBackedOff) || (n.State == csn.NodeStateChilling && n.Name == "n3")
 		}
 
 		filtered, err := c.List(customFilter)

@@ -47,6 +47,7 @@ type csnNodeController interface {
 	MarkAsSuspendable(nodeInfos []*framework.NodeInfo) set.Set[string]
 	ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer)
 	Reconcile()
+	UpdateBackoffStatus()
 }
 
 type cloudProvider interface {
@@ -93,11 +94,12 @@ func (p *NodeReconcilationProcessor) Preprocess(ctx *context.AutoscalingContext)
 	return nil
 }
 
-// proprocess should be executed under fork.
+// preprocess should be executed under fork.
 func (p *NodeReconcilationProcessor) preprocess(snapshot clustersnapshot.ClusterSnapshot) error {
 	go func() {
 		p.nodeController.Reconcile()
 	}()
+	p.nodeController.UpdateBackoffStatus()
 	csnNodes, err := p.nodeController.List(nodecontroller.WithoutBackedOffSuspendedFilter)
 	if err != nil {
 		return fmt.Errorf("error listing CSN nodes: %v", err)

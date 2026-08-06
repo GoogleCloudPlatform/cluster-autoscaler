@@ -159,7 +159,24 @@ func (m *NodeStateManager) IsBackoffEnabled() bool {
 	return m.backoffEnabled
 }
 
-func (m *NodeStateManager) IsNodeBackedOff(node *v1.Node) bool {
+// UpdateBackoffStatus updates the IsBackedOff status for all suspended tracked nodes.
+func (m *NodeStateManager) UpdateBackoffStatus() {
+	m.nodeMutex.Lock()
+	defer m.nodeMutex.Unlock()
+
+	for _, tn := range m.trackedNodes {
+		if tn == nil {
+			continue
+		}
+		if tn.State == csn.NodeStateSuspended || tn.State == csn.NodeStateChilling {
+			tn.IsBackedOff = m.isNodeBackedOff(tn.Node)
+		} else {
+			tn.IsBackedOff = false
+		}
+	}
+}
+
+func (m *NodeStateManager) isNodeBackedOff(node *v1.Node) bool {
 	if m.backoff == nil || m.cloudProvider == nil || !m.backoffEnabled {
 		return false
 	}
@@ -175,7 +192,7 @@ func (m *NodeStateManager) WithoutBackedOffSuspendedFilter(tn *TrackedNode) bool
 	if tn == nil {
 		return true
 	}
-	return tn.State != csn.NodeStateSuspended || !m.IsNodeBackedOff(tn.Node)
+	return tn.State != csn.NodeStateSuspended || !tn.IsBackedOff
 }
 
 func (m *NodeStateManager) Run(ctx context.Context) error {

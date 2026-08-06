@@ -31,6 +31,7 @@ type TrackedNode struct {
 	State             csn.NodeState
 	DesiredState      csn.NodeState
 	PendingOperations ops.OperationType
+	IsBackedOff       bool
 }
 
 // NodeFilter allows for excluding certain nodes from the output of `List`.

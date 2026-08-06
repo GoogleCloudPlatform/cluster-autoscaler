@@ -63,8 +63,7 @@ func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nod
 		n := node
 		n.State = currentState
 		n.HasPendingOperations = hasPendingOps
-		isBackedOff := m.backedOffNodes[node.Name]
-		n.SetIsBackedOffFunc(func() bool { return isBackedOff })
+		n.IsBackedOff = m.backedOffNodes[node.Name]
 
 		pass := true
 		for _, filter := range filters {
@@ -105,6 +104,12 @@ func (m *MockCSNNodeController) MarkAsSuspendable(nodeInfos []*framework.NodeInf
 func (m *MockCSNNodeController) Reconcile() {
 	m.reconcileCalls += 1
 	m.reconcileChan <- struct{}{}
+}
+
+func (m *MockCSNNodeController) UpdateBackoffStatus() {
+	for i, node := range m.nodes {
+		m.nodes[i].IsBackedOff = m.backedOffNodes[node.Name]
+	}
 }
 
 func (m *MockCSNNodeController) SetNonSuspendableNodes(nodes []string) {
