@@ -18,14 +18,14 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // defragActuator is responsible for scaling down candidates and checking scale-down status

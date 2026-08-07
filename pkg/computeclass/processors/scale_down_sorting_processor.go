@@ -19,12 +19,12 @@ import (
 	"math"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // cloudProvider specifies the subset of cloudprovider.CloudProvider used by the processor.

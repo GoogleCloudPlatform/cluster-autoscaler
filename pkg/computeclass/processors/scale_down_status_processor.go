@@ -15,11 +15,11 @@
 package processors
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 )
 
 type scaleDownStatusMetrics interface {

@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 func TestBackoff(t *testing.T) {

@@ -21,6 +21,9 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/actuation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
@@ -35,9 +38,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 )
 
 // defragNodeFilterFactory is a factory for defragNodeFilter.

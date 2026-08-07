@@ -25,16 +25,16 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 const (

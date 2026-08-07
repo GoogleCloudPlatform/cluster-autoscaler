@@ -15,10 +15,10 @@
 package types
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 // ScaleUpMig contains information about a scaled up MIG.

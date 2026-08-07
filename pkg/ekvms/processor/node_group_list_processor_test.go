@@ -22,11 +22,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -34,6 +29,11 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestNodeGroupListProcessor(t *testing.T) {

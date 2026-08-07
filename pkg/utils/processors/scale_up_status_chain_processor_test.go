@@ -21,15 +21,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
 	vis_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 func TestBuildProcessorOrder(t *testing.T) {

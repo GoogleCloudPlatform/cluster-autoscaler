@@ -17,10 +17,10 @@ package backoff
 import (
 	"time"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 )
 
 const (

@@ -22,15 +22,15 @@ import (
 	"reflect"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 )
 
 const (

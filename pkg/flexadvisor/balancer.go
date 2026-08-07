@@ -22,17 +22,17 @@ import (
 	"slices"
 
 	"k8s.io/apimachinery/pkg/util/uuid"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // ScaleUpBalancer tries to keep the new sizes of similar NodeGroups balanced, when scaling up respecting the guidance from Flex Advisor.

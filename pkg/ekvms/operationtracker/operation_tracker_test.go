@@ -30,10 +30,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	ca_taints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
@@ -46,6 +42,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/kubernetes/pkg/util/taints"
 	clock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	ca_taints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 const (

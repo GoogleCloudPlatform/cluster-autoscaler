@@ -24,14 +24,14 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	rrclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 )
 
 func TestLocationPolicyAnyBalancer(t *testing.T) {

@@ -17,10 +17,6 @@ package processors
 import (
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
-	statusprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
@@ -28,6 +24,10 @@ import (
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	statusprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 type nodeGroupScaleDownInfo struct {

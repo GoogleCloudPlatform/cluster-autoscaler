@@ -23,9 +23,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_clientset "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
 )
 
 // this is just for internal bookkeeping, it should never show up outside of CA.

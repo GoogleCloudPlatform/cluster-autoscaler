@@ -19,12 +19,12 @@ import (
 	"testing"
 
 	gke_api_beta "google.golang.org/api/container/v1beta1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 func TestReservationsRuleMatchesNodeGroup(t *testing.T) {

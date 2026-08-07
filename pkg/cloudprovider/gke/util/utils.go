@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"k8s.io/klog/v2"
 )
 
 // RightShiftTransformResourceLimiter adds an offset equivalent of additionalResources

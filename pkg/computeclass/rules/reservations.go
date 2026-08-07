@@ -17,9 +17,9 @@ package rules
 import (
 	"slices"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // Reservation defines a single reservation to be used by the provisioned node.

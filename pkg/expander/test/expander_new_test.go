@@ -24,6 +24,9 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gkepriceexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
+	testoptions "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/testutils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -32,9 +35,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	testutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	gkepriceexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
-	testoptions "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/testutils"
 )
 
 func buildGKEStrategy(t *testing.T, cluster *impostor.Cluster) (expander.Strategy, gkepriceexpander.ClusterAnalyzer) {

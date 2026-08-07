@@ -20,13 +20,13 @@ import (
 	"fmt"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	internal_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 )
 
 const (

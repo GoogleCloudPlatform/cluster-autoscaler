@@ -20,14 +20,14 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
-	"k8s.io/klog/v2"
 )
 
 // AugmentingNodeInfoProvider augments nodeInfos returned by provided TemplateNodeInfoProvider

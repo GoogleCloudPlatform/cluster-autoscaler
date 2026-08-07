@@ -17,8 +17,6 @@ package processors
 import (
 	"testing"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -26,6 +24,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 func TestCrdScaleUpStatusProcessor(t *testing.T) {

@@ -22,10 +22,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

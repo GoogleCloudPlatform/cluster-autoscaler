@@ -20,11 +20,11 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 )
 
 type scaleUpState struct {

@@ -15,8 +15,8 @@
 package gkeprice
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 const (

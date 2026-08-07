@@ -24,11 +24,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 const (

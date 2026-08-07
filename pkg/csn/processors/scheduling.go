@@ -21,11 +21,11 @@ import (
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
-	"k8s.io/kubernetes/pkg/util/taints"
 )
 
 type priorityFilter func(ni *framework.NodeInfo) bool

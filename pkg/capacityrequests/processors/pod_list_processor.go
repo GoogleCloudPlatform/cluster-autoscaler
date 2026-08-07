@@ -16,13 +16,13 @@ package processors
 
 import (
 	apiv1 "k8s.io/api/core/v1"
+	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
-	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 
 	"k8s.io/apimachinery/pkg/labels"
 

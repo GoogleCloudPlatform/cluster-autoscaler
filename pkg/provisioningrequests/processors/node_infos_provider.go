@@ -20,6 +20,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	oss_nodeinfosprovider "sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -27,10 +31,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 
 	"k8s.io/klog/v2"
 )

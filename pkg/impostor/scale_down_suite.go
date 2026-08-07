@@ -23,6 +23,8 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	kube_record "k8s.io/client-go/tools/record"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/utils"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -33,8 +35,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability/rules"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/options"
-	kube_record "k8s.io/client-go/tools/record"
-	"k8s.io/klog/v2"
 )
 
 // ScaleDownSuite encapsulates functionality used for testing scale down.

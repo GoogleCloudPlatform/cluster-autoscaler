@@ -15,8 +15,8 @@
 package rules
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // TpuRule is an interface for rules with TPU.

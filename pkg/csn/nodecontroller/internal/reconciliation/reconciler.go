@@ -18,7 +18,6 @@ import (
 	"sync/atomic"
 
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal"
@@ -26,6 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/set"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const logPrefix = "CSN Reconciler:"

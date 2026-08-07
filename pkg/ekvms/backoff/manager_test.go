@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -35,6 +34,7 @@ import (
 	resizable_vm_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	clock "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 var caVersion = getCaVersion("35.197.0")

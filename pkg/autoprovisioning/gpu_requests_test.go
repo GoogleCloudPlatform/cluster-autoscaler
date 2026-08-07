@@ -27,11 +27,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
 	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -51,6 +46,11 @@ import (
 	internal_customresources "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/customresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleblocking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 func TestGpuPodsRequirements(t *testing.T) {

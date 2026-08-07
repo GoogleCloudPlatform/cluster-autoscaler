@@ -17,10 +17,10 @@ package nodequota
 import (
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 // NodeQuotaProcessor updates MaxNodesTotal to match GKE node quota at the end of each autoscaler loop.

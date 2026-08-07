@@ -17,10 +17,6 @@ package processor
 import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config"
@@ -28,6 +24,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	ekvms_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 type resizingEnabledProvider interface {

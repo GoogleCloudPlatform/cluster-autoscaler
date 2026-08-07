@@ -23,11 +23,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops/retry"
 	statetest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state/test"
 	"k8s.io/utils/set"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type fakeQueue struct {

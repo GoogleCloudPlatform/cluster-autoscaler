@@ -19,11 +19,6 @@ import (
 	"fmt"
 
 	"google.golang.org/api/googleapi"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -31,6 +26,11 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	internal_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // Balancer defines a location policy specific balancing strategy.

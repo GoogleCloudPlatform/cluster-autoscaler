@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
@@ -32,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 )
 
 const provisioningDecisionNotificationChanSize = 10

@@ -25,11 +25,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/client-go/kubernetes/fake"
 	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -38,6 +33,11 @@ import (
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 var (

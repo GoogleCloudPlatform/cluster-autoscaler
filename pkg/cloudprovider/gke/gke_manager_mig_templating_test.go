@@ -26,15 +26,15 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	kubeletapis "k8s.io/kubelet/pkg/apis"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 // params: machineType, serialized guestAccelerators, serialized labels, additional properties field if needed

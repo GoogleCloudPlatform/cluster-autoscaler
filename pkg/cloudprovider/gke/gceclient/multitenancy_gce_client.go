@@ -27,9 +27,9 @@ import (
 
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type MultitenancyGCEClient interface {

@@ -15,8 +15,8 @@
 package logging
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 )
 
 const (

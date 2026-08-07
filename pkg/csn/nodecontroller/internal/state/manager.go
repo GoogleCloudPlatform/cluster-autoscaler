@@ -23,8 +23,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
@@ -32,6 +30,8 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/set"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 )
 
 const (

@@ -17,11 +17,11 @@ package gkedebuggingsnapshot
 import (
 	"fmt"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	kubernetes2 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // GkeDebuggingSnapshotter is the impl of GkeDebuggingSnapshotter

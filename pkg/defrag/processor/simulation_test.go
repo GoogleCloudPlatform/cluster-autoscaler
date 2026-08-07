@@ -29,6 +29,9 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	schedulerframework "k8s.io/kube-scheduler/framework"
+	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/predicate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -36,9 +39,6 @@ import (
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	schedulerframework "k8s.io/kube-scheduler/framework"
-	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 )
 
 func TestSimulatePodsScheduling(t *testing.T) {

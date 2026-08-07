@@ -15,12 +15,12 @@
 package estimator
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // mppnAnalysisFunc analyzes estimation result and based on it and cluster state

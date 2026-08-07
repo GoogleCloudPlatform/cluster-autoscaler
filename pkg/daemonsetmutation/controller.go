@@ -27,12 +27,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	quota "k8s.io/apiserver/pkg/quota/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
-	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
+	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 const (

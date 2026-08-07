@@ -16,11 +16,11 @@ package processor
 
 import (
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	ek "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 type ScaleDownNodeProcessor struct {

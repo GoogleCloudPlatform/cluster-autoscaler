@@ -28,10 +28,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apilabels "k8s.io/apimachinery/pkg/labels"
 	quota "k8s.io/apiserver/pkg/quota/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	taintutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
@@ -43,6 +39,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/controller/daemon"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	taintutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 const (

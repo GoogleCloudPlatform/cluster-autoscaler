@@ -18,13 +18,13 @@ import (
 	"errors"
 	"fmt"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/klog/v2"
 )
 
 // TotalMaxSizeProcessor wraps the NodeGroupSetProcessor and enforces

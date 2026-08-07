@@ -22,8 +22,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	osconfig "k8s.io/gke-autoscaling/cluster-autoscaler/config"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -33,6 +31,8 @@ import (
 	visibilityfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/fake"
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 // TestScaleUpSimulationForSkippedNodeGroups verifies the "Scale Up Simulations for Skipped Node Groups" feature.

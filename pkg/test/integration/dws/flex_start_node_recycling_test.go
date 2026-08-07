@@ -32,14 +32,14 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/node"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestNodeRecyclingCustomComputeClass(t *testing.T) {

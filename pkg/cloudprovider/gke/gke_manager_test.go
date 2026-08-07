@@ -36,13 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
-	autoscalererrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
@@ -67,6 +60,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
+	autoscalererrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 const (

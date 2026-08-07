@@ -15,11 +15,11 @@
 package binpacking
 
 import (
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/binpacking"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
 type binpackingMetrics interface {

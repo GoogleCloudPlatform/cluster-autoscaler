@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/observers/loopstart"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/observers/loopstart"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 )
 
 const maxNAPWaitTime = 15 * time.Minute

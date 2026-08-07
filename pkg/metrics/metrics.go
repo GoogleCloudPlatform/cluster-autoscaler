@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	k8smetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
 	_ "k8s.io/component-base/metrics/prometheus/workqueue"
@@ -28,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 )
 
 // TaskQueuePhase describes the task queue phase.

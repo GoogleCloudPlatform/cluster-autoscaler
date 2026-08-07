@@ -32,8 +32,8 @@ import (
 
 	"k8s.io/utils/ptr"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const (

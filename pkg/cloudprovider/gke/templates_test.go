@@ -26,12 +26,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	quota "k8s.io/apiserver/pkg/quota/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	gpuUtils "sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -39,6 +33,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	gpuUtils "sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 func TestBuildNodeFromTemplateSetsResources(t *testing.T) {

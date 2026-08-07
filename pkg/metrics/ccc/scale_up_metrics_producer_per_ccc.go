@@ -18,9 +18,9 @@ import (
 	"reflect"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // cccProvider allows fetching the CCC name for a NodeGroup.

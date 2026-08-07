@@ -22,13 +22,6 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -37,6 +30,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 )
 
 const (

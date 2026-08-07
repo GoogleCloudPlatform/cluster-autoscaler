@@ -20,10 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	resourceapi "k8s.io/api/resource/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestTpuResourceSlicesForNode(t *testing.T) {

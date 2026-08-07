@@ -18,8 +18,8 @@ import (
 	"fmt"
 
 	v1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func CreateNode(name string, opts ...func(*v1.Node)) *v1.Node {

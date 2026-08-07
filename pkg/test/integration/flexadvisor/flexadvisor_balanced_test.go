@@ -23,14 +23,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 // TestBalancedLocationPolicy verifies the behavior of the BALANCED location policy

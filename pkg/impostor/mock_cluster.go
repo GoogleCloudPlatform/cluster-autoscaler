@@ -30,6 +30,9 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	gceprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
@@ -37,9 +40,6 @@ import (
 	kubernetesutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	testutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
-	"k8s.io/klog/v2"
 )
 
 func init() {

@@ -18,12 +18,12 @@ import (
 	"fmt"
 	"time"
 
+	computeclass "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
-	computeclass "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
-	"k8s.io/klog/v2"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"

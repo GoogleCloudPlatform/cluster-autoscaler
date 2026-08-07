@@ -17,6 +17,11 @@ package autoprovisioning
 import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
@@ -25,11 +30,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
-	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
-	"k8s.io/klog/v2"
 )
 
 // gpuPodsRequirements returns nodeGroupRequirements for each GPU spec (<gpu type, gpu partition size>) requested by

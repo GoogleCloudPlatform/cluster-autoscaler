@@ -25,11 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
-	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	fakepods "sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -42,6 +37,11 @@ import (
 	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
 	clock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/ptr"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	fakepods "sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	podstatetypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate/types"
 )

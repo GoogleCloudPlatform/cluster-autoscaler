@@ -23,6 +23,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	klog "k8s.io/klog/v2"
+	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	gce_cloudprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -32,8 +34,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
-	klog "k8s.io/klog/v2"
-	"k8s.io/utils/set"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"

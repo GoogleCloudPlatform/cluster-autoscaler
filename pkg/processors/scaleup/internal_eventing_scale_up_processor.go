@@ -19,11 +19,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 )
 
 const (

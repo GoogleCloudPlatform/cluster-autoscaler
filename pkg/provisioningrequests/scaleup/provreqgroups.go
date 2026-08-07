@@ -20,10 +20,10 @@ import (
 	"sort"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
-	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 )
 
 // ProvReqGroup embeds Pod equivalence groups with an ID of their respective ProvReq.

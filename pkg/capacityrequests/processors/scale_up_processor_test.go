@@ -18,14 +18,14 @@ import (
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
-	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	client_testing "k8s.io/client-go/testing"
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	"github.com/stretchr/testify/assert"
 )

@@ -17,8 +17,6 @@ package processors
 import (
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	crd_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
@@ -27,6 +25,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/nodequota"
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 // GkeInternalAutoscalingStatusProcessor is an AutoscalingStatusProcessor used in gke internal CA.

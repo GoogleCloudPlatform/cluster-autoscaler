@@ -15,11 +15,11 @@
 package types
 
 import (
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
+	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
-	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 )
 
 // ScaleDownNode contains information about a scaled down node.

@@ -21,10 +21,10 @@ import (
 	"strconv"
 	"strings"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	mcv1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	v1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const bytesPerMiB = 1024 * 1024

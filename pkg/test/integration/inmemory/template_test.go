@@ -22,9 +22,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 // templateTestAdvancedScenario is a template for writing Big Unit Tests.

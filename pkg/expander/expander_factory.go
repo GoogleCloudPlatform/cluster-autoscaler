@@ -20,12 +20,6 @@ import (
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
-	"sigs.k8s.io/cluster-autoscaler/pkg/expander/factory"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	cccLister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
@@ -39,6 +33,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/snowflake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander/factory"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // ExpanderStrategyFromString creates an expander.Strategy according to its name

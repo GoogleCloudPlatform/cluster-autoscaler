@@ -23,6 +23,13 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
+	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
+	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/util/taints"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -32,13 +39,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
-	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
-	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/util/taints"
-	"k8s.io/utils/ptr"
 )
 
 const (

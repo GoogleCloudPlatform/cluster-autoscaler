@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	provreqtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/provreq"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestFlexStartTPU_NonQueued_NonNAP(t *testing.T) {

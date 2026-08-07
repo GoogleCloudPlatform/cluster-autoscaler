@@ -20,18 +20,18 @@ import (
 	"k8s.io/klog/v2"
 
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 
 	apiv1 "k8s.io/api/core/v1"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/common"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	pod "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
-	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 )
 
 const (

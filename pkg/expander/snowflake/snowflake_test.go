@@ -18,8 +18,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 )
 
 func TestBestOptions(t *testing.T) {

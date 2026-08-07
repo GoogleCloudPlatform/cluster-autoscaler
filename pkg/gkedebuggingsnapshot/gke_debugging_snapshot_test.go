@@ -22,9 +22,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	cr_v1 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	cr_v1 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 )
 
 func TestBasicSetterWorkflow(t *testing.T) {

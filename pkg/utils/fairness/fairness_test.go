@@ -22,9 +22,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"k8s.io/klog/v2"
 	. "k8s.io/utils/clock/testing"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestAdmit(t *testing.T) {

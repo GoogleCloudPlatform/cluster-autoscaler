@@ -18,11 +18,11 @@ import (
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	test_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	volume "k8s.io/cloud-provider/volume/helpers"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	test_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 type staticClusterAnalyzer struct {

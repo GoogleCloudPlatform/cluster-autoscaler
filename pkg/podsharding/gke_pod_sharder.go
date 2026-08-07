@@ -17,7 +17,6 @@ package podsharding
 import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	gketpu "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
@@ -27,6 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
 
 type machineConfigProvider interface {

@@ -15,10 +15,10 @@
 package extendeddurationpods
 
 import (
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 )
 
 // ExtendedDurationPodsFirstDecreasingPodOrderer is an extension of estimator.EstimationPodOrderer

@@ -16,9 +16,9 @@ package scalabilitytest
 
 import (
 	apiv1 "k8s.io/api/core/v1"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	klog "k8s.io/klog/v2"
 )
 
 const preferredInstanceType = "n1-standard-1"

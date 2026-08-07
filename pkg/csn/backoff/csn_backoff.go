@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
+	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
-	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 )
 
 // CSNCompositeBackoff handles backoff logic specifically for CSN (Cold Standby Nodes, publicly known as standby buffers) resumption errors.

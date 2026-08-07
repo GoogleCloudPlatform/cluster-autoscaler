@@ -16,10 +16,10 @@ package testing
 
 import (
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	"k8s.io/utils/set"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // MockCSNNodeController is a mock implementation of csnNodeController for testing.

@@ -19,9 +19,9 @@ import (
 	"sort"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 type linuxNodeConfig struct {

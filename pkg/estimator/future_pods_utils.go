@@ -16,9 +16,6 @@ package estimator
 
 import (
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
@@ -26,6 +23,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
 	schedulerframework "k8s.io/kube-scheduler/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 const maxSupportedPodsPerNode int = 256

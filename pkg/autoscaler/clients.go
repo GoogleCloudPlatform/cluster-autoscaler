@@ -27,10 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	provreqclientset "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/clientset/versioned"
 	provreqinformers "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/informers/externalversions"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/provreq"
-	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
-	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -62,6 +58,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/informers/externalversions"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/listers/nodemanagement.gke.io/v1alpha1"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/provreq"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
+	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 )
 
 // KubeConfig returns the rest config and config json from AutoscalingOptions.

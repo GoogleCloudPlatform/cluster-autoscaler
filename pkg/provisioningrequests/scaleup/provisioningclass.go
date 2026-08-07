@@ -19,6 +19,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	cactx "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
@@ -31,9 +34,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 )
 
 // QueuedProvisioningClass wraps orchestrator to implement OSS ProvisioningClass interface.

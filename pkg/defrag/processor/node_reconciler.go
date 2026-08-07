@@ -22,12 +22,12 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
-	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
-	cataints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
+	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
+	cataints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 const defaultParallelism = 100

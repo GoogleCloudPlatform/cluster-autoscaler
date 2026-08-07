@@ -28,12 +28,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
-	kubeutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	listersv1 "k8s.io/client-go/listers/apps/v1"
 	v1batchlister "k8s.io/client-go/listers/batch/v1"
 	v1lister "k8s.io/client-go/listers/core/v1"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+	kubeutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 )
 
 type listerRegistry struct {

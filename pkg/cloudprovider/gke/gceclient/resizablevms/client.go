@@ -17,9 +17,9 @@ package resizablevms
 import (
 	"context"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // Client is used for communicating with VM resizing endpoint

@@ -23,9 +23,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 // NodePatcher is a function that patches a node. Returns if the node was patched and an error.

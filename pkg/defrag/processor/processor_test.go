@@ -29,6 +29,11 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
+	. "k8s.io/utils/clock/testing"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
@@ -41,11 +46,6 @@ import (
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
-	. "k8s.io/utils/clock/testing"
 )
 
 func TestCleanUpCandidates(t *testing.T) {

@@ -18,11 +18,11 @@ import (
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 )
 
 type testResources struct {

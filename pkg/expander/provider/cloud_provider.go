@@ -15,8 +15,8 @@
 package provider
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // GkeExpanderCloudProvider is a CloudProvider sub-interface used in expander package.

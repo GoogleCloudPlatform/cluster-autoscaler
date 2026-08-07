@@ -23,11 +23,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/kubernetes/pkg/api/v1/pod"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 func calculateRequestedResources(clientSet clientset.Interface, node *v1.Node) (size.Allocatable, error) {

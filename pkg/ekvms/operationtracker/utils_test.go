@@ -21,11 +21,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 func TestCalculateRequestedResources(t *testing.T) {

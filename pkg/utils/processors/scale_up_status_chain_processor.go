@@ -22,10 +22,6 @@ import (
 	"slices"
 	"sync"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
@@ -37,6 +33,10 @@ import (
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
 	vis_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 var ProcessorOrder, _ = buildProcessorOrder()

@@ -26,6 +26,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
+	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
@@ -33,11 +38,6 @@ import (
 	provreq_pods "sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	kubeutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
-	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
-	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 )
 
 // SETUP

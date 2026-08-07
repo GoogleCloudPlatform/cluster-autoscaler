@@ -23,6 +23,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/policy/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	. "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
@@ -32,8 +34,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	. "k8s.io/utils/clock/testing"
 )
 
 func TestStartScaleDown(t *testing.T) {

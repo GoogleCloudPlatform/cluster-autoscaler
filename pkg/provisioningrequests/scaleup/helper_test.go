@@ -17,8 +17,8 @@ package scaleup
 import (
 	"testing"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 func TestAggregateAutoscalerErrors(t *testing.T) {

@@ -19,6 +19,13 @@ import (
 	"fmt"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	kube_client "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/accelerators"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/billing"
+	klog "k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	capacitybuffer "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	controller "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/controller"
@@ -27,13 +34,6 @@ import (
 	cbmetrics "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/metrics"
 	translators "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/translators"
 	updater "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/updater"
-	kube_client "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/accelerators"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/billing"
-	klog "k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 )
 
 // NewCapacityBufferClientIfCRDPresent creates a CapacityBufferClient if the CapacityBuffer CRD is present in the cluster.

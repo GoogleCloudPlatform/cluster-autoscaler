@@ -32,11 +32,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	test_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"k8s.io/utils/ptr"
 )
 
 func newTestAutoscalingInternalGceClientWithTimeout(t *testing.T, projectId, url string, provider MigInfoProvider, timeout time.Duration, opts ...Option) *autoscalingInternalGceClient {

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 )
 
 const defaultBufferSize = 100

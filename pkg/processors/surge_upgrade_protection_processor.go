@@ -18,10 +18,10 @@ import (
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	kube "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // SurgeUpgradeScaleDownNodeProcessor prevents scale down of nodes undergoing upgrade

@@ -17,8 +17,8 @@ package rules
 import (
 	"testing"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 func TestNodepoolsRuleMatchesNodeGroup(t *testing.T) {

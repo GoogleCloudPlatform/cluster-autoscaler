@@ -25,8 +25,8 @@ import (
 
 	gcev1 "google.golang.org/api/compute/v1"
 	gkeapibeta "google.golang.org/api/container/v1beta1"
-	fakek8s "sigs.k8s.io/cluster-autoscaler/pkg/utils/fake"
 	fakegce "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
+	fakek8s "sigs.k8s.io/cluster-autoscaler/pkg/utils/fake"
 )
 
 type Client struct {

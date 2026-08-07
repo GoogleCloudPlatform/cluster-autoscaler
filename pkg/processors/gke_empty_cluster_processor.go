@@ -18,9 +18,9 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
-	"k8s.io/klog/v2"
 )
 
 const readinessAfterClusterProvisioningTimeout = 15 * time.Second

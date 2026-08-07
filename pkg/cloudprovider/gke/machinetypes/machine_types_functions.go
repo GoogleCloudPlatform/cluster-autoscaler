@@ -20,8 +20,8 @@ import (
 	"strconv"
 	"strings"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 var machineGenerationRegex = regexp.MustCompile("^[a-zA-Z]+([0-9]+)[a-zA-Z]*$")

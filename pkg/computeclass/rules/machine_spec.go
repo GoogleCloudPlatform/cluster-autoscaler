@@ -15,9 +15,9 @@
 package rules
 
 import (
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/klog/v2"
 )
 
 const (

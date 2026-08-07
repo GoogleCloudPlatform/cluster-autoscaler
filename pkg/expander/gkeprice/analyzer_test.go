@@ -24,6 +24,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	expanderutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/test"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -31,9 +34,6 @@ import (
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	expanderutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/test"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 )
 
 type testNodeLister struct {

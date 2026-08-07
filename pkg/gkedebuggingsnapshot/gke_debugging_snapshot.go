@@ -18,11 +18,11 @@ import (
 	"encoding/json"
 
 	"k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	cr_v1 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	v1alpha12 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/apis/nodemanagement.gke.io/v1alpha1"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // GkeDebuggingSnapshot is the data bean to capture all internal and external fields

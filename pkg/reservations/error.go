@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // UnusableReservationError - provided reservation is not usable.

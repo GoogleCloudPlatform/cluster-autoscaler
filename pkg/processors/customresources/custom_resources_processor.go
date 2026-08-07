@@ -19,12 +19,6 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
-	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gke_dra "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -36,6 +30,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
+	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 var resources = []string{"cpu", string(nodetemplate.MemoryResource), string(nodetemplate.EphemeralStorageResource)}

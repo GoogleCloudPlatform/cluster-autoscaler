@@ -20,8 +20,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/client-go/kubernetes"
+	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 // DryRunResolver creates a fully defaulted and validated Pod using server-side dry-run,

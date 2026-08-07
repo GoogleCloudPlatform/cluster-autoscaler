@@ -19,11 +19,11 @@ import (
 	"sort"
 	"strings"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	klog "k8s.io/klog/v2"
 )
 
 const (

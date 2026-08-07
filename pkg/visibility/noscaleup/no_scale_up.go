@@ -22,9 +22,6 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
-	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
@@ -32,6 +29,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/zonetypes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // NoScaleUp describes an interface used to obtain information about the reasons behind a lack of scale-up.

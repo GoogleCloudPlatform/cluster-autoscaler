@@ -19,6 +19,12 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -28,12 +34,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability/rules"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/options"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 )
 
 const DefragProcessorName = "defrag"

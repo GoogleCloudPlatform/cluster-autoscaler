@@ -24,9 +24,9 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	gkeapibeta "google.golang.org/api/container/v1beta1"
 	"google.golang.org/api/googleapi"
-	gceinternal "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	gceinternal "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const (

@@ -23,12 +23,12 @@ import (
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 	klog "k8s.io/klog/v2"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	provreq_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // Values represents possible values expressed by node selector/affinity: a set of strings (most commonly a singleton), or

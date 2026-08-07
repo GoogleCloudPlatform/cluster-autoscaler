@@ -16,8 +16,8 @@ package gkeprice
 
 import (
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 const (

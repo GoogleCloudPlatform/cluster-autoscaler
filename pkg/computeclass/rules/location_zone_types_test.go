@@ -21,12 +21,12 @@ import (
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/zonetypes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 func TestLocationZoneTypesRuleMatchesNodeGroup(t *testing.T) {

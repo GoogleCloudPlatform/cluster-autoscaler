@@ -15,10 +15,10 @@
 package processors
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 // CapacityRequestScaleUpProcessor sets appropriate status on Capacity Requests

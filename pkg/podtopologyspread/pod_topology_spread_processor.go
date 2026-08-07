@@ -25,6 +25,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
@@ -32,12 +38,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
-	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 )
 
 const (

@@ -18,14 +18,14 @@ import (
 	"sync"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 )
 
 // NodeShapeKey represents a comparable version of a node shape used as a map key.

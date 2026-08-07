@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/utilization"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
-	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 )
 
 func TestGetNewReasons(t *testing.T) {

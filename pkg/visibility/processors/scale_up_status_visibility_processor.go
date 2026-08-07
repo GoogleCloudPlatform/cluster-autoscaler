@@ -18,10 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/events"
@@ -29,6 +25,10 @@ import (
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	klog "k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 // ScaleUpStatusVisibilityProcessor analyses the scale up status and emits appropriate visibility events.

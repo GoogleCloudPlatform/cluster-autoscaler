@@ -20,6 +20,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -30,8 +32,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
-	"k8s.io/klog/v2"
-	"k8s.io/utils/clock"
 )
 
 // candidatePods keeps info about Candidate pods schedulability

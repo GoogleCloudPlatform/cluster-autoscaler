@@ -21,9 +21,9 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 type mockSerenityCloudProvider struct {

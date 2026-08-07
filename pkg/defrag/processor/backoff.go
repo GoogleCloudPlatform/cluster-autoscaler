@@ -17,9 +17,9 @@ package processor
 import (
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 // defragBackoff is responsible for tracking backoff of defrag candidate nodes

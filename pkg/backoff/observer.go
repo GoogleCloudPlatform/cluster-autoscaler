@@ -17,8 +17,8 @@ package backoff
 import (
 	"time"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // BackoffObserver is a listener interface for backoff events.

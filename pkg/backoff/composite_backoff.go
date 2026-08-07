@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 
 	klog "k8s.io/klog/v2"
 )

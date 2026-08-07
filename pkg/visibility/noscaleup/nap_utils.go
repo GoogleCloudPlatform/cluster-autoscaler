@@ -17,13 +17,13 @@ package noscaleup
 import (
 	"sort"
 
-	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/noderesources"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 )
 
 type migReasonsInfo struct {

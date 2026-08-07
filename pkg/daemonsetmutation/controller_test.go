@@ -24,12 +24,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
-	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
+	podutil "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 func TestController_Enqueue_NilResolver(t *testing.T) {

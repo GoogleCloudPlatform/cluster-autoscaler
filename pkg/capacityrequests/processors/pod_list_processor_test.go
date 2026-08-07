@@ -23,17 +23,17 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
+	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
+	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
+	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
-	"k8s.io/client-go/tools/cache"
-	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
-	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
-	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 )
 
 type commonState struct {

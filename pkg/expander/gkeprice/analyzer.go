@@ -18,13 +18,13 @@ import (
 	"fmt"
 	"math"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"

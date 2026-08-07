@@ -20,14 +20,14 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
 	gceprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	priceexpander "sigs.k8s.io/cluster-autoscaler/pkg/expander/price"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	testutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	units "sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
