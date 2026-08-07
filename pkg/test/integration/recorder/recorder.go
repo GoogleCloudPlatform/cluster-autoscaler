@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/core"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	"k8s.io/client-go/tools/record"
 )
 

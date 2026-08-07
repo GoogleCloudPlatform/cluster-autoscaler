@@ -17,7 +17,7 @@ package bulkmig
 import (
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type bulkMigClientFake struct {

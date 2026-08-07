@@ -17,8 +17,8 @@ package backoff
 import (
 	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/processors/customresources"
-	base_backoff "k8s.io/autoscaler/cluster-autoscaler/utils/backoff"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
+	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 )
 

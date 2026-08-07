@@ -19,9 +19,9 @@ import (
 	"sort"
 	"strings"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaleup/orchestrator"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	klog "k8s.io/klog/v2"
 )

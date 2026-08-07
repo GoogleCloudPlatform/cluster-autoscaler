@@ -14,7 +14,7 @@
 
 package machinetypes
 
-import "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+import "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 
 // NewTestMachineFamily returns a new MachineFamily object to use in test code.
 func NewTestMachineFamily(name string, machineTypes []MachineType, platformReqLower, platformReqUpper CpuPlatform, gpuTypes []Gpu, bootDiskTypes []string) MachineFamily {

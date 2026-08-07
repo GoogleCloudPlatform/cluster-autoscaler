@@ -19,7 +19,7 @@ import (
 	"sort"
 
 	"gopkg.in/yaml.v2"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	node_version "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 )
 

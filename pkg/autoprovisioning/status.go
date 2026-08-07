@@ -17,7 +17,7 @@ package autoprovisioning
 import (
 	"k8s.io/apimachinery/pkg/types"
 
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 const (

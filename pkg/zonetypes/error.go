@@ -17,7 +17,7 @@ package zonetypes
 import (
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // MissingAIZonesError - no AI zones were found in the region, either there are no

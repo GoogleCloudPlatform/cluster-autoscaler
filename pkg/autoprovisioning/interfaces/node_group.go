@@ -17,7 +17,7 @@ package interfaces
 import (
 	"reflect"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // CreateNodePoolResult represents result of creating node pool.

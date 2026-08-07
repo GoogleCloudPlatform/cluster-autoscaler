@@ -25,7 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	tu "k8s.io/autoscaler/cluster-autoscaler/utils/test"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"

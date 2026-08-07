@@ -23,7 +23,7 @@ import (
 
 	gce_api_v1 "google.golang.org/api/compute/v1"
 	"google.golang.org/protobuf/types/known/durationpb"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	klog "k8s.io/klog/v2"

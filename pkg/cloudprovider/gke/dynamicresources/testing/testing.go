@@ -20,7 +20,7 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 func NewResourceClaim(name string, exactReq *resourceapi.ExactDeviceRequest) *resourceapi.ResourceClaim {

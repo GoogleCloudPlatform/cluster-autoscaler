@@ -16,7 +16,7 @@ package rules
 
 import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // AllocationStrategyRule is an interface for rules with an AllocationStrategy.

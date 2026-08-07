@@ -19,10 +19,10 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
-	"k8s.io/autoscaler/cluster-autoscaler/core/utils"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/customresources"
-	kube_utils "k8s.io/autoscaler/cluster-autoscaler/utils/kubernetes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
+	kube_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	klog "k8s.io/klog/v2"
 
 	kube "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"

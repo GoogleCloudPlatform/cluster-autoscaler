@@ -15,7 +15,7 @@
 package rules
 
 import (
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // MinimumCapacityRule is an interface for rules with MinimumCapacity defined.

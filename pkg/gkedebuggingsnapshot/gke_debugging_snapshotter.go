@@ -17,8 +17,8 @@ package gkedebuggingsnapshot
 import (
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/debuggingsnapshot"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/debuggingsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	kubernetes2 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	"k8s.io/klog/v2"

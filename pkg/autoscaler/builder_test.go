@@ -21,9 +21,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/oauth2"
-	"k8s.io/autoscaler/cluster-autoscaler/loop"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/provreq"
-	"k8s.io/autoscaler/cluster-autoscaler/provisioningrequest/provreqclient"
+	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/provreq"
+	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqclient"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/rest"
 	fakeapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/fake"

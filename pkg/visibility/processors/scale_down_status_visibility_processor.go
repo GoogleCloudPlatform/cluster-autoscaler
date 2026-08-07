@@ -17,10 +17,10 @@ package processors
 import (
 	"time"
 
-	"k8s.io/autoscaler/cluster-autoscaler/context"
-	scaledownstatus "k8s.io/autoscaler/cluster-autoscaler/core/scaledown/status"
-	"k8s.io/autoscaler/cluster-autoscaler/metrics"
-	statusprocessors "k8s.io/autoscaler/cluster-autoscaler/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	statusprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"

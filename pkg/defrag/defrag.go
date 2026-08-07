@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/rand"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
-	"k8s.io/autoscaler/cluster-autoscaler/expander"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 )
 
 // HardTaint is applied to candidate nodes to prevent pods from scheduling.

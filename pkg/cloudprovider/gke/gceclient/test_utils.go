@@ -18,7 +18,7 @@ import (
 	"time"
 
 	gce_api "google.golang.org/api/compute/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type autoscalingInternalGceClientMock struct {

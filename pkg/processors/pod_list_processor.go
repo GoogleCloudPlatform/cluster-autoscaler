@@ -16,13 +16,13 @@ package processors
 
 import (
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/autoscaler/cluster-autoscaler/context"
-	"k8s.io/autoscaler/cluster-autoscaler/core/podlistprocessor"
-	cbprocessors "k8s.io/autoscaler/cluster-autoscaler/processors/capacitybuffer"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/podinjection"
-	"k8s.io/autoscaler/cluster-autoscaler/processors/pods"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/drainability"
-	"k8s.io/autoscaler/cluster-autoscaler/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/podlistprocessor"
+	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/pods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
 	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"

@@ -22,8 +22,8 @@ import (
 
 	"google.golang.org/api/googleapi"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	caerrors "k8s.io/autoscaler/cluster-autoscaler/utils/errors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 const (

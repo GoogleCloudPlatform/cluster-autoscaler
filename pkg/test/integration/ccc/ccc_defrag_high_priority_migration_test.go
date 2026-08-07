@@ -27,7 +27,7 @@ import (
 	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	tu "k8s.io/autoscaler/cluster-autoscaler/utils/test"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 

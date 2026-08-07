@@ -15,9 +15,9 @@
 package utils
 
 import (
-	"k8s.io/autoscaler/cluster-autoscaler/context"
-	"k8s.io/autoscaler/cluster-autoscaler/core/scaledown/status"
-	processors "k8s.io/autoscaler/cluster-autoscaler/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
+	processors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 // ScaleDownStatusChainProcessor chains the execution of a list of scale down status Processors.

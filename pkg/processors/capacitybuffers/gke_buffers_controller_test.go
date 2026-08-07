@@ -22,7 +22,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/autoscaler/cluster-autoscaler/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	"k8s.io/client-go/discovery"
 	kube_client "k8s.io/client-go/kubernetes"
 )

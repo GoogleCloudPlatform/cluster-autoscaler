@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/autoscaler/cluster-autoscaler/clusterstate"
-	"k8s.io/autoscaler/cluster-autoscaler/config"
-	autoscalingctx "k8s.io/autoscaler/cluster-autoscaler/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
+	autoscalingctx "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 var testStartTime = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
