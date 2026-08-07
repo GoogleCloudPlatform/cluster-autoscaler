@@ -44,6 +44,7 @@ require (
 	k8s.io/kubelet v0.36.3
 	k8s.io/kubernetes v1.36.3
 	k8s.io/utils v0.0.0-20260617174310-a95e086a2553
+	sigs.k8s.io/cluster-autoscaler v0.0.0-20260804091429-b95492b5cd3b
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0
 	sigs.k8s.io/yaml v1.6.0
@@ -156,7 +157,6 @@ require (
 	k8s.io/dynamic-resource-allocation v0.36.3 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250922181213-ec3ebc5fd46b // indirect
 	k8s.io/kube-openapi v0.0.0-20260624041617-8f3fa4921821 // indirect
-	sigs.k8s.io/cluster-autoscaler v0.0.0-20260804091429-b95492b5cd3b
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
@@ -181,6 +181,7 @@ replace (
 	k8s.io/controller-manager => k8s.io/controller-manager v0.36.3
 	k8s.io/cri-api => k8s.io/cri-api v0.36.3
 	k8s.io/cri-client => k8s.io/cri-client v0.36.3
+	k8s.io/cri-streaming => k8s.io/cri-streaming v0.36.3
 	k8s.io/csi-translation-lib => k8s.io/csi-translation-lib v0.36.3
 	k8s.io/dynamic-resource-allocation => k8s.io/dynamic-resource-allocation v0.36.3
 	k8s.io/endpointslice => k8s.io/endpointslice v0.36.3
@@ -199,6 +200,7 @@ replace (
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.3
 	k8s.io/sample-cli-plugin => k8s.io/sample-cli-plugin v0.36.3
 	k8s.io/sample-controller => k8s.io/sample-controller v0.36.3
+	k8s.io/streaming => k8s.io/streaming v0.36.3
 )
 
 // Internally managed library forks and packages
@@ -211,7 +213,3 @@ replace (
 
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
-
-replace k8s.io/cri-streaming => k8s.io/cri-streaming v0.36.3
-
-replace k8s.io/streaming => k8s.io/streaming v0.36.3
