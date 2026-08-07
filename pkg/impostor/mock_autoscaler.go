@@ -95,7 +95,7 @@ func CreateAutoscalingContext(opts *config.AutoscalingOptions, provider *MockClo
 		AutoscalingOptions:     *opts,
 		CloudProvider:          provider,
 		FrameworkHandle:        fwHandle,
-		ClusterSnapshot:        predicate.NewPredicateSnapshot(store.NewBasicSnapshotStore(), fwHandle, opts.DynamicResourceAllocationEnabled, defaultPredicateParallelism, opts.CSINodeAwareSchedulingEnabled),
+		ClusterSnapshot:        predicate.NewPredicateSnapshot(store.NewBasicSnapshotStore(), fwHandle, opts.DynamicResourceAllocationEnabled, defaultPredicateParallelism, opts.CSINodeAwareSchedulingEnabled, 0),
 		ProcessorCallbacks:     callbacks.NewTestProcessorCallbacks(),
 		AutoscalingKubeClients: kubeClients,
 		DebuggingSnapshotter:   debuggingSnapshotter,

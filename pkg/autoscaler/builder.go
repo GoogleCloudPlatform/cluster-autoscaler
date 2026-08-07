@@ -689,7 +689,7 @@ func (b *Builder) Build(
 		return nil, nil, err
 	}
 	var snapshotStore clustersnapshot.ClusterSnapshotStore = store.NewDeltaSnapshotStore()
-	clusterSnapshot := predicate.NewPredicateSnapshot(snapshotStore, fwHandle, autoscalingOptions.DynamicResourceAllocationEnabled, autoscalingOptions.PredicateParallelism, autoscalingOptions.CSINodeAwareSchedulingEnabled)
+	clusterSnapshot := predicate.NewPredicateSnapshot(snapshotStore, fwHandle, autoscalingOptions.DynamicResourceAllocationEnabled, autoscalingOptions.PredicateParallelism, autoscalingOptions.CSINodeAwareSchedulingEnabled, autoscalingOptions.SchedulerVerbosityOffset)
 
 	var futureReservationsPuller FutureReservationsPuller = futurereservations.NewNoOpPuller()
 	if autoscalingOptions.FutureReservationsBackoffEnabled {

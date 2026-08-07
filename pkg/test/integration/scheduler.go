@@ -44,7 +44,7 @@ func (f *FakeSet) RunScheduler(ctx context.Context, t *testing.T) {
 	fwHandle := f.fwHandle
 
 	snapshotStore := store.NewBasicSnapshotStore()
-	snapshot := predicate.NewPredicateSnapshot(snapshotStore, fwHandle, true, 1, false)
+	snapshot := predicate.NewPredicateSnapshot(snapshotStore, fwHandle, true, 1, false, 0)
 
 	nodes, scheduledPods, unscheduledPods, err := f.collectClusterState(ctx)
 	if err != nil {

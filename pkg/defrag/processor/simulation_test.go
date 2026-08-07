@@ -835,7 +835,7 @@ type mockSnapshotStore struct {
 
 func newMockSnapshotStore() *mockSnapshotStore {
 	store := store.NewBasicSnapshotStore()
-	predicateSnapshot := predicate.NewPredicateSnapshot(store, nil, false, 1, false)
+	predicateSnapshot := predicate.NewPredicateSnapshot(store, nil, false, 1, false, 0)
 	return &mockSnapshotStore{s: predicateSnapshot, m: mock.Mock{}}
 }
 
