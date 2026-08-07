@@ -32,8 +32,7 @@ require (
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
 	k8s.io/apiserver v0.36.3
-	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260723110148-0f4e9d76a21e
-	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260723110148-0f4e9d76a21e
+	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/client-go v0.36.3
 	k8s.io/cloud-provider v0.36.3
 	k8s.io/cloud-provider-gcp/providers v0.28.2
@@ -157,6 +156,7 @@ require (
 	k8s.io/dynamic-resource-allocation v0.36.3 // indirect
 	k8s.io/gengo/v2 v2.0.0-20250922181213-ec3ebc5fd46b // indirect
 	k8s.io/kube-openapi v0.0.0-20260624041617-8f3fa4921821 // indirect
+	sigs.k8s.io/cluster-autoscaler v0.0.0-20260804091429-b95492b5cd3b
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
@@ -213,6 +213,4 @@ replace k8s.io/cri-streaming => k8s.io/cri-streaming v0.36.3
 
 replace k8s.io/streaming => k8s.io/streaming v0.36.3
 
-replace k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260723110148-0f4e9d76a21e
-
-replace k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260723110148-0f4e9d76a21e
+replace k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
