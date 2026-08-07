@@ -204,7 +204,10 @@ replace (
 // Internally managed library forks and packages
 //
 // Managed in the scope of the sync process
-replace k8s.io/gke-autoscaling/cluster-autoscaler/apis => ./apis
+replace (
+	k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
+	k8s.io/gke-autoscaling/cluster-autoscaler/apis => ./apis
+)
 
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
@@ -212,5 +215,3 @@ replace github.com/golang/glog => ./modreplaces/glog
 replace k8s.io/cri-streaming => k8s.io/cri-streaming v0.36.3
 
 replace k8s.io/streaming => k8s.io/streaming v0.36.3
-
-replace k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
