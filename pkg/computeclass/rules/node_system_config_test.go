@@ -45,6 +45,8 @@ func TestNodeSystemConfig(t *testing.T) {
 	allowedUnsafeSysctls := []string{"kernel.shm*", "kernel.msg*", "kernel.sem", "fs.mqueue.*", "net.*"}
 	maxParallelImagePulls := int64(5)
 	singleProcessOOMKill := true
+	containerLogMaxWorkers := int64(4)
+	containerLogMonitorInterval := "10s"
 
 	hugepageSize1g := int64(3)
 	hugepageSize2m := int64(1024)
@@ -316,6 +318,8 @@ func TestNodeSystemConfig(t *testing.T) {
 					ImageMaximumGcAge:           imageMaximumGcAge,
 					ContainerLogMaxFiles:        containerLogMaxFiles,
 					ContainerLogMaxSize:         containerLogMaxSize,
+					ContainerLogMaxWorkers:      containerLogMaxWorkers,
+					ContainerLogMonitorInterval: containerLogMonitorInterval,
 					AllowedUnsafeSysctls:        allowedUnsafeSysctls,
 					MaxParallelImagePulls:       maxParallelImagePulls,
 					SingleProcessOomKill:        singleProcessOOMKill,
@@ -369,6 +373,8 @@ func TestNodeSystemConfig(t *testing.T) {
 				WithImageMaximumGcAgeRule(imageMaximumGcAge),
 				WithContainerLogMaxFilesRule(containerLogMaxFiles),
 				WithContainerLogMaxSizeRule(containerLogMaxSize),
+				WithContainerLogMaxWorkersRule(containerLogMaxWorkers),
+				WithContainerLogMonitorIntervalRule(containerLogMonitorInterval),
 				WithAllowedUnsafeSysctlsRule(allowedUnsafeSysctls),
 				WithMaxParallelImagePullsRule(maxParallelImagePulls),
 				WithSingleProcessOOMKill(singleProcessOOMKill),

@@ -184,6 +184,12 @@ func ruleOptsForNodeSystemConfig(cccNodeSystemConfig *ccc_api.NodeSystemConfig) 
 		if containerLogMaxFiles := cccNodeSystemConfig.KubeletConfig.ContainerLogMaxFiles; containerLogMaxFiles != nil {
 			ruleOpts = append(ruleOpts, rules.WithContainerLogMaxFilesRule(*containerLogMaxFiles))
 		}
+		if containerLogMaxWorkers := cccNodeSystemConfig.KubeletConfig.ContainerLogMaxWorkers; containerLogMaxWorkers != nil {
+			ruleOpts = append(ruleOpts, rules.WithContainerLogMaxWorkersRule(*containerLogMaxWorkers))
+		}
+		if containerLogMonitorInterval := cccNodeSystemConfig.KubeletConfig.ContainerLogMonitorInterval; containerLogMonitorInterval != nil {
+			ruleOpts = append(ruleOpts, rules.WithContainerLogMonitorIntervalRule(*containerLogMonitorInterval))
+		}
 		if allowedUnsafeSysctls := cccNodeSystemConfig.KubeletConfig.AllowedUnsafeSysctls; allowedUnsafeSysctls != nil {
 			ruleOpts = append(ruleOpts, rules.WithAllowedUnsafeSysctlsRule(allowedUnsafeSysctls))
 		}

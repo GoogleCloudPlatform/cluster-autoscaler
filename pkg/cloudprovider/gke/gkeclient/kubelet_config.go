@@ -87,6 +87,8 @@ type NodeKubeletConfig struct {
 	AllowedUnsafeSysctls                   []string                 `json:"allowedUnsafeSysctls,omitempty"`
 	ContainerLogMaxFiles                   int64                    `json:"containerLogMaxFiles,omitempty"`
 	ContainerLogMaxSize                    string                   `json:"containerLogMaxSize,omitempty"`
+	ContainerLogMaxWorkers                 int64                    `json:"containerLogMaxWorkers,omitempty"`
+	ContainerLogMonitorInterval            string                   `json:"containerLogMonitorInterval,omitempty"`
 	CpuCfsQuota                            bool                     `json:"cpuCfsQuota,omitempty"`
 	CpuCfsQuotaPeriod                      string                   `json:"cpuCfsQuotaPeriod,omitempty"`
 	CpuManagerPolicy                       string                   `json:"cpuManagerPolicy,omitempty"`

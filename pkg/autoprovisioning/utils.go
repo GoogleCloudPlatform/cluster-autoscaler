@@ -244,6 +244,12 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gkeclient.NodeKubeletConfig {
 	if containerLogMaxFiles := rule.ContainerLogMaxFiles(); containerLogMaxFiles != nil {
 		kubeletConfig.ContainerLogMaxFiles = *containerLogMaxFiles
 	}
+	if containerLogMaxWorkers := rule.ContainerLogMaxWorkers(); containerLogMaxWorkers != nil {
+		kubeletConfig.ContainerLogMaxWorkers = *containerLogMaxWorkers
+	}
+	if containerLogMonitorInterval := rule.ContainerLogMonitorInterval(); containerLogMonitorInterval != nil {
+		kubeletConfig.ContainerLogMonitorInterval = *containerLogMonitorInterval
+	}
 	if allowedUnsafeSysctls := rule.AllowedUnsafeSysctls(); allowedUnsafeSysctls != nil {
 		kubeletConfig.AllowedUnsafeSysctls = allowedUnsafeSysctls
 	}
@@ -661,6 +667,12 @@ func kubeletConfigSignature(kubeletConfig *gkeclient.NodeKubeletConfig) string {
 	}
 	if kubeletConfig.ContainerLogMaxFiles != 0 {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ContainerLogMaxFiles: %d", kubeletConfig.ContainerLogMaxFiles))
+	}
+	if kubeletConfig.ContainerLogMaxWorkers != 0 {
+		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ContainerLogMaxWorkers: %d", kubeletConfig.ContainerLogMaxWorkers))
+	}
+	if kubeletConfig.ContainerLogMonitorInterval != "" {
+		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ContainerLogMonitorInterval: %q", kubeletConfig.ContainerLogMonitorInterval))
 	}
 	if len(kubeletConfig.AllowedUnsafeSysctls) > 0 {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("AllowedUnsafeSysctls: %v", kubeletConfig.AllowedUnsafeSysctls))

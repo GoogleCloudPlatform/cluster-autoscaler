@@ -109,6 +109,8 @@ type kubeletConfig struct {
 	imageMaximumGcAge                      *string
 	containerLogMaxSize                    *string
 	containerLogMaxFiles                   *int64
+	containerLogMaxWorkers                 *int64
+	containerLogMonitorInterval            *string
 	allowedUnsafeSysctls                   []string
 	maxParallelImagePulls                  *int64
 	singleProcessOOMKill                   *bool
@@ -142,6 +144,8 @@ type NodeSystemConfigRule interface {
 	ImageMaximumGcAge() *string
 	ContainerLogMaxSize() *string
 	ContainerLogMaxFiles() *int64
+	ContainerLogMaxWorkers() *int64
+	ContainerLogMonitorInterval() *string
 	AllowedUnsafeSysctls() []string
 	MaxParallelImagePulls() *int64
 	SingleProcessOOMKill() *bool
@@ -400,6 +404,12 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		if ruleKubeletConfig.containerLogMaxFiles != nil && *ruleKubeletConfig.containerLogMaxFiles != npKubeletConfig.ContainerLogMaxFiles {
 			return false
 		}
+		if ruleKubeletConfig.containerLogMaxWorkers != nil && *ruleKubeletConfig.containerLogMaxWorkers != npKubeletConfig.ContainerLogMaxWorkers {
+			return false
+		}
+		if ruleKubeletConfig.containerLogMonitorInterval != nil && *ruleKubeletConfig.containerLogMonitorInterval != npKubeletConfig.ContainerLogMonitorInterval {
+			return false
+		}
 		if ruleKubeletConfig.allowedUnsafeSysctls != nil && !stringArrayDeepEqual(ruleKubeletConfig.allowedUnsafeSysctls, npKubeletConfig.AllowedUnsafeSysctls) {
 			return false
 		}
@@ -642,6 +652,20 @@ func (r *nodeSystemConfigRule) ContainerLogMaxFiles() *int64 {
 		return nil
 	}
 	return r.kubeletConfig.containerLogMaxFiles
+}
+
+func (r *nodeSystemConfigRule) ContainerLogMaxWorkers() *int64 {
+	if r.kubeletConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.containerLogMaxWorkers
+}
+
+func (r *nodeSystemConfigRule) ContainerLogMonitorInterval() *string {
+	if r.kubeletConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.containerLogMonitorInterval
 }
 
 func (r *nodeSystemConfigRule) AllowedUnsafeSysctls() []string {
@@ -1055,6 +1079,24 @@ func WithContainerLogMaxFilesRule(containerLogMaxFiles int64) RuleOption {
 			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
 		}
 		r.nodeSystemConfigRule.kubeletConfig.containerLogMaxFiles = &containerLogMaxFiles
+	}
+}
+
+func WithContainerLogMaxWorkersRule(containerLogMaxWorkers int64) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.kubeletConfig == nil {
+			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
+		}
+		r.nodeSystemConfigRule.kubeletConfig.containerLogMaxWorkers = &containerLogMaxWorkers
+	}
+}
+
+func WithContainerLogMonitorIntervalRule(containerLogMonitorInterval string) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.kubeletConfig == nil {
+			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
+		}
+		r.nodeSystemConfigRule.kubeletConfig.containerLogMonitorInterval = &containerLogMonitorInterval
 	}
 }
 
