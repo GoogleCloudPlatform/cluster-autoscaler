@@ -400,6 +400,17 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gkeclient.NodeKubeletConfig {
 		}
 		kubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod = *val
 	}
+	if rule.CpuReservedMillicore() != nil || rule.MemoryReservedMib() != nil {
+		if kubeletConfig.ReservedResourcesConfig == nil {
+			kubeletConfig.ReservedResourcesConfig = &gkeclient.ReservedResourcesConfig{}
+		}
+		if val := rule.CpuReservedMillicore(); val != nil {
+			kubeletConfig.ReservedResourcesConfig.CpuReservedMillicore = *val
+		}
+		if val := rule.MemoryReservedMib(); val != nil {
+			kubeletConfig.ReservedResourcesConfig.MemoryReservedMib = *val
+		}
+	}
 
 	if reflect.DeepEqual(kubeletConfig, &gkeclient.NodeKubeletConfig{}) {
 		return nil
@@ -714,6 +725,18 @@ func kubeletConfigSignature(kubeletConfig *gkeclient.NodeKubeletConfig) string {
 	}
 	if kubeletConfig.CrashLoopBackOff != nil && kubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod != "" {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("CrashLoopBackOff: <maxContainerRestartPeriod: %q>", kubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod))
+	}
+	if rrc := kubeletConfig.ReservedResourcesConfig; rrc != nil {
+		var parts []string
+		if rrc.CpuReservedMillicore != 0 {
+			parts = append(parts, fmt.Sprintf("cpuReservedMillicore: %d", rrc.CpuReservedMillicore))
+		}
+		if rrc.MemoryReservedMib != 0 {
+			parts = append(parts, fmt.Sprintf("memoryReservedMib: %d", rrc.MemoryReservedMib))
+		}
+		if len(parts) > 0 {
+			kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ReservedResourcesConfig: <%s>", strings.Join(parts, ", ")))
+		}
 	}
 
 	return fmt.Sprintf("kubelet-config: <%s>", strings.Join(kubeletConfigParts, ", "))

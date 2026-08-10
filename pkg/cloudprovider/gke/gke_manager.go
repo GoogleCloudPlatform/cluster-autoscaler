@@ -550,6 +550,7 @@ type GkeManagerOptions struct {
 	asyncNodePoolsEnabled             bool
 	enableUserAnyZoneSelection        bool
 	MachineSerenityLabelsEnabled      bool
+	DefaultReservedResourcesV2Enabled bool
 }
 
 // CreateGkeManager constructs GkeManager object.
@@ -612,7 +613,7 @@ func CreateGkeManager(
 		location:                            location,
 		projectId:                           projectId,
 		clusterName:                         clusterName,
-		templates:                           &GkeTemplateBuilder{machineSerenityLabelsEnabled: managerOptions.MachineSerenityLabelsEnabled},
+		templates:                           &GkeTemplateBuilder{machineSerenityLabelsEnabled: managerOptions.MachineSerenityLabelsEnabled, defaultReservedResourcesV2Enabled: managerOptions.DefaultReservedResourcesV2Enabled},
 		interrupt:                           make(chan struct{}),
 		surgeUpgradeResourceTracker:         tracker,
 		clusterCreateTime:                   time.Time{},

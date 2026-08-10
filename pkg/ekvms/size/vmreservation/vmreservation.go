@@ -21,17 +21,19 @@ import (
 
 type VmReservation interface {
 	CalculateKernelReserved(osInfo gce.MigOsInfo, physicalMemory int64) int64
-	PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64) int64
-	PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool) int64
+	PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64, version string, osDistribution gce.OperatingSystemDistribution) int64
+	PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool, version string, osDistribution gce.OperatingSystemDistribution, maxPodsPerNode int64) int64
 }
 
 type reservation struct {
-	reserved *gke.GkeReserved
+	reserved                          *gke.GkeReserved
+	defaultReservedResourcesV2Enabled bool
 }
 
-func New(reserved *gke.GkeReserved) VmReservation {
+func New(reserved *gke.GkeReserved, defaultReservedResourcesV2Enabled bool) VmReservation {
 	return &reservation{
-		reserved: reserved,
+		reserved:                          reserved,
+		defaultReservedResourcesV2Enabled: defaultReservedResourcesV2Enabled,
 	}
 }
 
@@ -39,10 +41,10 @@ func (r *reservation) CalculateKernelReserved(osInfo gce.MigOsInfo, physicalMemo
 	return r.reserved.CalculateKernelReserved(osInfo, physicalMemory)
 }
 
-func (r *reservation) PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64) int64 {
-	return gke.PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode)
+func (r *reservation) PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64, version string, osDistribution gce.OperatingSystemDistribution) int64 {
+	return gke.PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode, version, osDistribution, r.defaultReservedResourcesV2Enabled)
 }
 
-func (r *reservation) PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool) int64 {
-	return gke.PredictKubeReservedMemory(physicalMemory, gcfsEnabled)
+func (r *reservation) PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool, version string, osDistribution gce.OperatingSystemDistribution, maxPodsPerNode int64) int64 {
+	return gke.PredictKubeReservedMemory(physicalMemory, gcfsEnabled, version, osDistribution, maxPodsPerNode, r.defaultReservedResourcesV2Enabled)
 }

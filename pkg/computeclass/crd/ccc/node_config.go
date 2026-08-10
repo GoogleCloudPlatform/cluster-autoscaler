@@ -286,6 +286,12 @@ func ruleOptsForNodeSystemConfig(cccNodeSystemConfig *ccc_api.NodeSystemConfig) 
 				ruleOpts = append(ruleOpts, rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule(*maxContainerRestartPeriod))
 			}
 		}
+		if rrc := cccNodeSystemConfig.KubeletConfig.ReservedResourcesConfig; rrc != nil {
+			ruleOpts = append(ruleOpts, rules.WithReservedResourcesConfigRule(
+				rrc.CpuReservedMillicore,
+				rrc.MemoryReservedMib,
+			))
+		}
 	}
 
 	return ruleOpts, nil

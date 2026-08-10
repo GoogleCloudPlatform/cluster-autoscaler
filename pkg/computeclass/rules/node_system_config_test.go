@@ -1465,6 +1465,44 @@ func TestNodeSystemConfig(t *testing.T) {
 			),
 			expected: false,
 		},
+		{
+			name: "rule with ReservedResourcesConfig - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					ReservedResourcesConfig: &gkeclient.ReservedResourcesConfig{
+						CpuReservedMillicore:          100,
+						EffectiveCpuReservedMillicore: 100,
+						MemoryReservedMib:             200,
+						EffectiveMemoryReservedMib:    200,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithReservedResourcesConfigRule(ptr.To(int64(100)), ptr.To(int64(200))),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with ReservedResourcesConfig - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					ReservedResourcesConfig: &gkeclient.ReservedResourcesConfig{
+						CpuReservedMillicore:          50,
+						EffectiveCpuReservedMillicore: 50,
+						MemoryReservedMib:             100,
+						EffectiveMemoryReservedMib:    100,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithReservedResourcesConfigRule(ptr.To(int64(100)), ptr.To(int64(200))),
+			),
+			expected: false,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

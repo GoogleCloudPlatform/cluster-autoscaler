@@ -136,6 +136,13 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{GracefulDegradationEnabled: false}}, // Assert that the field value is modified.
 			wantRestart:                 true,
 		},
+		{
+			testName:                    "DefaultReservedResourcesV2Enabled_field_is_tracked",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{DefaultReservedResourcesV2Enabled: false}},
+			experimentValues:            map[string]bool{experiments.DefaultReservedResourcesMinCAVersionFlag: true},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{DefaultReservedResourcesV2Enabled: true}},
+			wantRestart:                 true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()

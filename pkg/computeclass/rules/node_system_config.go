@@ -98,6 +98,11 @@ type crashLoopBackOff struct {
 	maxContainerRestartPeriod *string
 }
 
+type reservedResourcesConfig struct {
+	cpuReservedMillicore *int64
+	memoryReservedMib    *int64
+}
+
 type kubeletConfig struct {
 	cpuCfsQuota                            *bool
 	cpuCfsQuotaPeriod                      *string
@@ -124,6 +129,7 @@ type kubeletConfig struct {
 	shutdownGracePeriodSeconds             *int64
 	shutdownGracePeriodCriticalPodsSeconds *int64
 	crashLoopBackOff                       *crashLoopBackOff
+	reservedResourcesConfig                *reservedResourcesConfig
 }
 
 // NodeSystemConfigRule is an interface for rules with node system config.
@@ -184,6 +190,8 @@ type NodeSystemConfigRule interface {
 	CustomNodeInit() *CustomNodeInit
 	KernelOverrides() *KernelOverrides
 	TimeZone() *string
+	CpuReservedMillicore() *int64
+	MemoryReservedMib() *int64
 }
 
 type nodeSystemConfigRule struct {
@@ -459,6 +467,21 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 			}
 			if ruleKubeletConfig.crashLoopBackOff.maxContainerRestartPeriod != nil && *ruleKubeletConfig.crashLoopBackOff.maxContainerRestartPeriod != npKubeletConfig.CrashLoopBackOff.MaxContainerRestartPeriod {
 				return false
+			}
+		}
+		if ruleKubeletConfig.reservedResourcesConfig != nil {
+			if npKubeletConfig.ReservedResourcesConfig == nil {
+				return false
+			}
+			if ruleKubeletConfig.reservedResourcesConfig.cpuReservedMillicore != nil {
+				if npKubeletConfig.ReservedResourcesConfig.CpuReservedMillicore != *ruleKubeletConfig.reservedResourcesConfig.cpuReservedMillicore {
+					return false
+				}
+			}
+			if ruleKubeletConfig.reservedResourcesConfig.memoryReservedMib != nil {
+				if npKubeletConfig.ReservedResourcesConfig.MemoryReservedMib != *ruleKubeletConfig.reservedResourcesConfig.memoryReservedMib {
+					return false
+				}
 			}
 		}
 	}
@@ -898,6 +921,20 @@ func (r *nodeSystemConfigRule) CrashLoopBackOffMaxContainerRestartPeriod() *stri
 		return nil
 	}
 	return r.kubeletConfig.crashLoopBackOff.maxContainerRestartPeriod
+}
+
+func (r *nodeSystemConfigRule) CpuReservedMillicore() *int64 {
+	if r.kubeletConfig == nil || r.kubeletConfig.reservedResourcesConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.reservedResourcesConfig.cpuReservedMillicore
+}
+
+func (r *nodeSystemConfigRule) MemoryReservedMib() *int64 {
+	if r.kubeletConfig == nil || r.kubeletConfig.reservedResourcesConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.reservedResourcesConfig.memoryReservedMib
 }
 func (r *nodeSystemConfigRule) AdditionalEtcHosts() []*EtcHostsEntry {
 	if r.linuxNodeConfig == nil {
@@ -1590,6 +1627,18 @@ func WithTimeZoneRule(val string) RuleOption {
 			r.nodeSystemConfigRule.linuxNodeConfig = &linuxNodeConfig{}
 		}
 		r.nodeSystemConfigRule.linuxNodeConfig.timeZone = &val
+	}
+}
+
+func WithReservedResourcesConfigRule(cpuReserved, memoryReserved *int64) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.kubeletConfig == nil {
+			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
+		}
+		r.nodeSystemConfigRule.kubeletConfig.reservedResourcesConfig = &reservedResourcesConfig{
+			cpuReservedMillicore: cpuReserved,
+			memoryReservedMib:    memoryReserved,
+		}
 	}
 }
 

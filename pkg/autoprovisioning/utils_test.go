@@ -924,6 +924,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				rules.WithShutdownGracePeriodSecondsRule(120),
 				rules.WithShutdownGracePeriodCriticalPodsSecondsRule(0),
 				rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule("10s"),
+				rules.WithReservedResourcesConfigRule(int64Ptr(100), int64Ptr(200)),
 			),
 			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                      true,
@@ -975,6 +976,10 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				ShutdownGracePeriodCriticalPodsSeconds: 0,
 				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
+				},
+				ReservedResourcesConfig: &gkeclient.ReservedResourcesConfig{
+					CpuReservedMillicore: 100,
+					MemoryReservedMib:    200,
 				},
 				ForceSendFields: []string{"CpuCfsQuota", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
 			},

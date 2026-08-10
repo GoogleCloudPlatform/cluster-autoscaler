@@ -41,8 +41,8 @@ func (m *MockVmReservation) CalculateKernelReserved(osInfo gce.MigOsInfo, physic
 	}
 }
 
-func (m *MockVmReservation) PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool) int64 {
-	args := m.MethodCalled("PredictKubeReservedMemory", physicalMemory, gcfsEnabled)
+func (m *MockVmReservation) PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool, version string, osDistribution gce.OperatingSystemDistribution, maxPodsPerNode int64) int64 {
+	args := m.MethodCalled("PredictKubeReservedMemory", physicalMemory, gcfsEnabled, version, osDistribution, maxPodsPerNode)
 	switch v := args.Get(0).(type) {
 	case int64:
 		return v
@@ -53,8 +53,8 @@ func (m *MockVmReservation) PredictKubeReservedMemory(physicalMemory int64, gcfs
 	}
 }
 
-func (m *MockVmReservation) PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64) int64 {
-	args := m.MethodCalled("PredictKubeReservedCpuMillicores", physicalCpuMillicores, machineType)
+func (m *MockVmReservation) PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64, version string, osDistribution gce.OperatingSystemDistribution) int64 {
+	args := m.MethodCalled("PredictKubeReservedCpuMillicores", physicalCpuMillicores, machineType, maxPodsPerNode, version, osDistribution)
 	switch v := args.Get(0).(type) {
 	case int64:
 		return v

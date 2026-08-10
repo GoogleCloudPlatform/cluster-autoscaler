@@ -111,6 +111,7 @@ type InternalOptions struct {
 	EkvmsIncrementStep                           apiv1.ResourceList
 	EkvmsAllocationSafetyBuffer                  apiv1.ResourceList
 	MachineSerenityLabelsEnabled                 bool
+	DefaultReservedResourcesV2Enabled            bool
 	PendingPodsMetricEnabled                     bool
 	ResolveInstanceRefUsingNodePoolLabel         bool
 	MetricsPerCccEnabled                         bool

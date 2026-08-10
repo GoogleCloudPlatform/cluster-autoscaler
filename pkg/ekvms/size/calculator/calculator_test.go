@@ -38,7 +38,7 @@ func TestConvertBetweenVmSizeAndAllocatable(t *testing.T) {
 	mockReservation.On("CalculateKernelReserved", mock.Anything, mock.Anything).Return(func(physicalMemory int64) int64 {
 		return physicalMemory / 16
 	})
-	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything).Return(func(physicalMemory int64) int64 {
+	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(func(physicalMemory int64) int64 {
 		// We shouldn't attempt calling this function with size not divisible by MiB as there is rounding that breaks monotonicity of the binary search.
 		if physicalMemory%size.MiB != 0 {
 			assert.Fail(t, "physicalMemory argument in PredictKubeReservedMemory should be multiple of MiB")
@@ -46,7 +46,7 @@ func TestConvertBetweenVmSizeAndAllocatable(t *testing.T) {
 		}
 		return physicalMemory / 11
 	})
-	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything).Return(func(physicalCpuMillicores int64) int64 {
+	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(func(physicalCpuMillicores int64) int64 {
 		return physicalCpuMillicores / 11
 	})
 
@@ -458,8 +458,8 @@ func (m *mockClusterVersionProvider) GetClusterVersion() string {
 func TestMinAllocatable(t *testing.T) {
 	mockReservation := new(vmreservation_test.MockVmReservation)
 	mockReservation.On("CalculateKernelReserved", mock.Anything, mock.Anything).Return(int64(0))
-	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything).Return(int64(0))
-	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
 
 	minVmSize := apiv1.ResourceList{
 		"cpu":    resource.MustParse("250m"),
@@ -499,8 +499,8 @@ func TestMinAllocatable(t *testing.T) {
 func TestRoundUp(t *testing.T) {
 	mockReservation := new(vmreservation_test.MockVmReservation)
 	mockReservation.On("CalculateKernelReserved", mock.Anything, mock.Anything).Return(int64(0))
-	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything).Return(int64(0))
-	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
 
 	minVmSize := apiv1.ResourceList{
 		"cpu":    resource.MustParse("250m"),

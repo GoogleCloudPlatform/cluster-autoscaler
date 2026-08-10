@@ -2329,6 +2329,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		MultitenancyEnabled:               opts.MultitenancyEnabled,
 		enableUserAnyZoneSelection:        opts.EnableUserAnyZoneSelection,
 		MachineSerenityLabelsEnabled:      opts.MachineSerenityLabelsEnabled,
+		DefaultReservedResourcesV2Enabled: opts.DefaultReservedResourcesV2Enabled,
 	}
 
 	manager, err := CreateGkeManager(

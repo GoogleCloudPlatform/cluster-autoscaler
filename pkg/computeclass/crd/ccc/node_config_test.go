@@ -198,6 +198,10 @@ func TestRuleOptsForNodeSystemConfig(t *testing.T) {
 					CrashLoopBackOff: &ccc_api.CrashLoopBackOff{
 						MaxContainerRestartPeriod: stringPtr("10s"),
 					},
+					ReservedResourcesConfig: &ccc_api.ReservedResourcesConfig{
+						CpuReservedMillicore: int64Ptr(100),
+						MemoryReservedMib:    int64Ptr(200),
+					},
 				},
 			},
 			expected: []rules.RuleOption{
@@ -241,6 +245,7 @@ func TestRuleOptsForNodeSystemConfig(t *testing.T) {
 				rules.WithShutdownGracePeriodSecondsRule(120),
 				rules.WithShutdownGracePeriodCriticalPodsSecondsRule(60),
 				rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule("10s"),
+				rules.WithReservedResourcesConfigRule(int64Ptr(100), int64Ptr(200)),
 			},
 		},
 		{

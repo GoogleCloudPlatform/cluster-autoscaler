@@ -367,7 +367,7 @@ func TestBuildKubeReserved(t *testing.T) {
 		tb := GkeTemplateBuilder{}
 		expectedReserved, err := makeResourceList(tc.reservedCpu, tc.reservedMemory, 0, tc.reservedStorage)
 		assert.NoError(t, err)
-		kubeReserved := tb.BuildKubeReserved(tc.physicalCpu, tc.physicalMemory, "n1-standard-1", tc.physicalStorage, tc.gcfsEnabled, tc.ephemeralLocalSsdCount, tc.maxPodsPerNode)
+		kubeReserved := tb.BuildKubeReserved(tc.physicalCpu, tc.physicalMemory, "n1-standard-1", tc.physicalStorage, tc.gcfsEnabled, tc.ephemeralLocalSsdCount, tc.maxPodsPerNode, 0, 0, "", gce.OperatingSystemDistributionDefault)
 		assertEqualResourceLists(t, "Kube reserved", expectedReserved, kubeReserved)
 	}
 }
@@ -707,7 +707,7 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 			}
 
 			assert.NoError(t, err)
-			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode), gce.ParseEvictionHardOrGetDefault(nil))
+			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(nil))
 			assertEqualResourceLists(t, "Allocatable", expectedAllocatable, node.Status.Allocatable)
 		})
 	}
@@ -1075,4 +1075,44 @@ func TestBuildNodeFromMigSpec_NodeVersion(t *testing.T) {
 	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 1, 1, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
 	assert.NoError(t, err)
 	assert.Equal(t, nodeVersion, node.Status.NodeInfo.KubeletVersion)
+}
+
+func TestBuildNodeFromMigSpec_ReservedResourcesConfig(t *testing.T) {
+	arch := gce.DefaultArch
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: "project1",
+			Zone:    "us-central1-b",
+			Name:    "nodeautoprovisioning-323233232",
+		},
+		gkeManager:      &GkeManagerMock{},
+		minSize:         0,
+		maxSize:         10000,
+		autoprovisioned: true,
+		exist:           true,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "n1-standard-1",
+			NodeVersion:        "1.37.0-gke.0",
+			SystemArchitecture: &arch,
+			KubeletConfig: &gkeclient.NodeKubeletConfig{
+				ReservedResourcesConfig: &gkeclient.ReservedResourcesConfig{
+					CpuReservedMillicore:          150,
+					EffectiveCpuReservedMillicore: 150,
+					MemoryReservedMib:             500,
+					EffectiveMemoryReservedMib:    500,
+				},
+			},
+		},
+	}
+	tb := &GkeTemplateBuilder{}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), "1.37.0-gke.0", false)
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 1, 4*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+
+	// CPU allocatable should be 1000m - 150m = 850m
+	assert.Equal(t, int64(850), node.Status.Allocatable.Cpu().MilliValue())
+	// Memory allocatable should be capacity - 500MiB - evictionHard
+	expectedMemoryAllocatable := node.Status.Capacity.Memory().Value() - 500*MiB - gce.GetKubeletEvictionHardForMemory(nil)
+	assert.Equal(t, expectedMemoryAllocatable, node.Status.Allocatable.Memory().Value())
 }

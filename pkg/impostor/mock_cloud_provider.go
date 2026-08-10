@@ -111,7 +111,7 @@ func BuildTestGcpNode(nodeName, machineType string, gpusCount int64, maxPodPerNo
 	node.Status.Allocatable[apiv1.ResourcePods] = *resource.NewQuantity(maxPodPerNodeCount-daemonSetPods, resource.DecimalSI)
 
 	node.Status.Capacity[apiv1.ResourceCPU] = *resource.NewMilliQuantity(millicpu, resource.DecimalSI)
-	allocatableMilliCPU := millicpu - gke.PredictKubeReservedCpuMillicores(millicpu, machineType, gkelabels.DefaultMaxPodsPerNode)
+	allocatableMilliCPU := millicpu - gke.PredictKubeReservedCpuMillicores(millicpu, machineType, gkelabels.DefaultMaxPodsPerNode, "", gceprovider.OperatingSystemDistributionDefault, false)
 	allocatableMilliCPU -= daemonSetMilliCPU
 	node.Status.Allocatable[apiv1.ResourceCPU] = *resource.NewMilliQuantity(allocatableMilliCPU, resource.DecimalSI)
 
@@ -119,7 +119,7 @@ func BuildTestGcpNode(nodeName, machineType string, gpusCount int64, maxPodPerNo
 	migOsInfo := gceprovider.NewMigOsInfo(gceprovider.OperatingSystemLinux, gceprovider.OperatingSystemDistributionDefault, gceprovider.DefaultArch)
 	capacityMemory := mem - r.CalculateKernelReserved(migOsInfo, mem)
 	node.Status.Capacity[apiv1.ResourceMemory] = *resource.NewQuantity(capacityMemory, resource.DecimalSI)
-	allocatableMemory := capacityMemory - gke.PredictKubeReservedMemory(mem, false) - gceprovider.GetKubeletEvictionHardForMemory(evictionHard)
+	allocatableMemory := capacityMemory - gke.PredictKubeReservedMemory(mem, false, "", gceprovider.OperatingSystemDistributionDefault, gkelabels.DefaultMaxPodsPerNode, false) - gceprovider.GetKubeletEvictionHardForMemory(evictionHard)
 	allocatableMemory -= daemonSetMemory
 	node.Status.Allocatable[apiv1.ResourceMemory] = *resource.NewQuantity(allocatableMemory, resource.DecimalSI)
 

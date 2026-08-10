@@ -334,7 +334,7 @@ func setUpProcessors(
 		IncrementStep: options.EkvmsIncrementStep,
 		SafetyBuffer:  options.EkvmsAllocationSafetyBuffer,
 	})
-	resizeCalculator := calculator.New(vmreservation.New(gkeReserved), provider, options.IsClusterUsingDPV1, limitProvider)
+	resizeCalculator := calculator.New(vmreservation.New(gkeReserved, options.DefaultReservedResourcesV2Enabled), provider, options.IsClusterUsingDPV1, limitProvider)
 	autoscalingProcessors := processors.DefaultProcessors(options.AutoscalingOptions)
 
 	// Insert the ShortLivedUpgradeNodeInfoProvider right after MixedTemplateNodeInfoProvider, which provides the initial nodeInfos.

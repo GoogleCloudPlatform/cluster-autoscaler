@@ -206,3 +206,6 @@ const GracefulDegradationMinCAVersionFlag = "GracefulDegradation::MinCAVersion"
 // TODO(b/539947856): Remove once Giraffe experiment is concluded
 const EnableNestedVirtualizationEnabledFlag = "EnableNestedVirtualization::Enabled"
 const EnableNestedVirtualizationMinCAVersionFlag = "EnableNestedVirtualization::MinCAVersion"
+
+const DefaultReservedResourcesEnabledFlag = "DefaultReservedResources::Enabled"
+const DefaultReservedResourcesMinCAVersionFlag = "DefaultReservedResources::MinCAVersion"

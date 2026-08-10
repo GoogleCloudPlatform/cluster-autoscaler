@@ -26,12 +26,24 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 )
 
-func PredictKubeReservedMemoryHelper(physicalCpuMillicores int64, _ string, gcfsEnabled bool, _ int64) int64 {
-	return PredictKubeReservedMemory(physicalCpuMillicores, gcfsEnabled)
+func PredictKubeReservedMemoryHelper(physicalMemory int64, _ string, gcfsEnabled bool, maxPodsPerNode int64) int64 {
+	return PredictKubeReservedMemory(physicalMemory, gcfsEnabled, "", gce.OperatingSystemDistributionDefault, maxPodsPerNode, false)
 }
 
 func PredictKubeReservedCpuMillicoresHelper(physicalCpuMillicores int64, machineType string, _ bool, maxPodsPerNode int64) int64 {
-	return PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode)
+	return PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode, "", gce.OperatingSystemDistributionDefault, false)
+}
+
+func PredictKubeReservedMemoryHelperV2(physicalMemory int64, _ string, gcfsEnabled bool, maxPodsPerNode int64) int64 {
+	return PredictKubeReservedMemory(physicalMemory, gcfsEnabled, "1.37.0-gke.0", gce.OperatingSystemDistributionCOS, maxPodsPerNode, true)
+}
+
+func PredictKubeReservedMemoryHelperV2Ubuntu(physicalMemory int64, _ string, gcfsEnabled bool, maxPodsPerNode int64) int64 {
+	return PredictKubeReservedMemory(physicalMemory, gcfsEnabled, "1.37.0-gke.0", gce.OperatingSystemDistributionUbuntu, maxPodsPerNode, true)
+}
+
+func PredictKubeReservedCpuMillicoresHelperV2(physicalCpuMillicores int64, machineType string, _ bool, maxPodsPerNode int64) int64 {
+	return PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode, "1.37.0-gke.0", gce.OperatingSystemDistributionCOS, true)
 }
 
 func TestPredictKubeReserved(t *testing.T) {
@@ -122,6 +134,41 @@ func TestPredictKubeReserved(t *testing.T) {
 			capacity:         8000,
 			maxPodsPerNode:   32,
 			expectedReserved: 90,
+		},
+		{
+			name:             "V2 memory: COS, capacity 16GiB, mppn 110",
+			function:         PredictKubeReservedMemoryHelperV2,
+			capacity:         16384 * MiB,
+			maxPodsPerNode:   110,
+			expectedReserved: 2150 * MiB,
+		},
+		{
+			name:             "V2 memory: COS, capacity 16GiB, mppn 30",
+			function:         PredictKubeReservedMemoryHelperV2,
+			capacity:         16384 * MiB,
+			maxPodsPerNode:   30,
+			expectedReserved: 950 * MiB,
+		},
+		{
+			name:             "V2 memory: Ubuntu, capacity 16GiB, mppn 30",
+			function:         PredictKubeReservedMemoryHelperV2Ubuntu,
+			capacity:         16384 * MiB,
+			maxPodsPerNode:   30,
+			expectedReserved: 1150 * MiB,
+		},
+		{
+			name:             "V2 memory: COS, GCFS enabled, capacity 16GiB, mppn 30",
+			function:         PredictKubeReservedMemoryHelperV2,
+			capacity:         16384 * MiB,
+			gcfsEnabled:      true,
+			maxPodsPerNode:   30,
+			expectedReserved: 1054 * MiB,
+		},
+		{
+			name:             "V2 cpu: massive machine capped",
+			function:         PredictKubeReservedCpuMillicoresHelperV2,
+			capacity:         512000,
+			expectedReserved: 1000,
 		},
 	}
 	for _, tc := range testCases {
@@ -488,4 +535,26 @@ func TestNewGkeReservedFromBytesContent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPredictKubeReserved_DefaultReservedResourcesV2Flag(t *testing.T) {
+	physicalMemory := int64(128 * 1024 * MiB) // 128 GiB
+	physicalCpu := int64(32 * 1000)
+
+	// When flag is false, even on version 1.37, should use V1 formula
+	memFlagFalse := PredictKubeReservedMemory(physicalMemory, false, "1.37.0-gke.0", gce.OperatingSystemDistributionCOS, 110, false)
+	memV1Expected := PredictKubeReservedMemory(physicalMemory, false, "", gce.OperatingSystemDistributionCOS, 110, false)
+	assert.Equal(t, memV1Expected, memFlagFalse)
+
+	cpuFlagFalse := PredictKubeReservedCpuMillicores(physicalCpu, "e2-standard-32", 110, "1.37.0-gke.0", gce.OperatingSystemDistributionCOS, false)
+	cpuV1Expected := PredictKubeReservedCpuMillicores(physicalCpu, "e2-standard-32", 110, "", gce.OperatingSystemDistributionCOS, false)
+	assert.Equal(t, cpuV1Expected, cpuFlagFalse)
+
+	// When flag is true AND version >= 1.37, should use V2 formula
+	memFlagTrueVer137 := PredictKubeReservedMemory(physicalMemory, false, "1.37.0-gke.0", gce.OperatingSystemDistributionCOS, 110, true)
+	assert.NotEqual(t, memV1Expected, memFlagTrueVer137)
+
+	// When flag is true BUT version < 1.37, should fallback to V1 formula
+	memFlagTrueVer136 := PredictKubeReservedMemory(physicalMemory, false, "1.36.0-gke.0", gce.OperatingSystemDistributionCOS, 110, true)
+	assert.Equal(t, memV1Expected, memFlagTrueVer136)
 }

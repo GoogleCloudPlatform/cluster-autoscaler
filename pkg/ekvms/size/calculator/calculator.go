@@ -198,10 +198,13 @@ func (c *calculator) calculateKernelReserved(node *apiv1.Node) int64 {
 	return c.reservation.CalculateKernelReserved(getGkeMigOsInfo(c.provider, node), maxPhysicalMemoryInKb*size.KiB)
 }
 
-func (c *calculator) calculateKubeReservedForMemory(_ *apiv1.Node, physicalMemoryInKb int64) int64 {
+func (c *calculator) calculateKubeReservedForMemory(node *apiv1.Node, physicalMemoryInKb int64) int64 {
 	// TODO(b/326220707): GCFS is always true for autopilot, however this will reserve slightly more memory if EKVM ship to standard cluster and GCFS is disabled.
 	gcfsEnabled := true
-	return c.reservation.PredictKubeReservedMemory(physicalMemoryInKb*size.KiB, gcfsEnabled)
+	version := getNodeVersion(c.provider, node)
+	osDist := getOsDistribution(node)
+	maxPods := getMaxPodsPerNode(node)
+	return c.reservation.PredictKubeReservedMemory(physicalMemoryInKb*size.KiB, gcfsEnabled, version, osDist, maxPods)
 }
 
 func (c *calculator) calculateKubeReservedForCpuMillicores(node *apiv1.Node, physicalCpuMillicores, maxPodsPerNode int64) int64 {
@@ -214,7 +217,9 @@ func (c *calculator) calculateKubeReservedForCpuMillicores(node *apiv1.Node, phy
 		klog.Warningf("Failed to get machine type for node %q, proceeding with an unknown machine type. Error: %v", node.Name, err)
 		machineType = "unknown"
 	}
-	return c.reservation.PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode)
+	version := getNodeVersion(c.provider, node)
+	osDist := getOsDistribution(node)
+	return c.reservation.PredictKubeReservedCpuMillicores(physicalCpuMillicores, machineType, maxPodsPerNode, version, osDist)
 }
 
 // MakeVmSizeValid increases the given VM size as necessary to match requirements

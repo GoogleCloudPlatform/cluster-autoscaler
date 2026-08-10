@@ -43,7 +43,8 @@ const (
 // GkeTemplateBuilder builds templates for GKE cloud provider.
 type GkeTemplateBuilder struct {
 	gce.GceTemplateBuilder
-	machineSerenityLabelsEnabled bool
+	machineSerenityLabelsEnabled      bool
+	defaultReservedResourcesV2Enabled bool
 }
 
 // BuildNodeFromMigSpec builds node based on MIG's spec.
@@ -126,7 +127,25 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		}
 	}
 
-	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, gcfsEnabled, ephemeralLocalSsdCount, maxPodsPerNode)
+	var version string
+	var osDistribution gce.OperatingSystemDistribution
+	if migOsInfo != nil {
+		version = migOsInfo.NodeVersion()
+		osDistribution = migOsInfo.OsDistribution()
+	}
+	var effectiveCpu, effectiveMemory int64
+	if mig.Spec().KubeletConfig != nil && mig.Spec().KubeletConfig.ReservedResourcesConfig != nil {
+		rrc := mig.Spec().KubeletConfig.ReservedResourcesConfig
+		effectiveCpu = rrc.EffectiveCpuReservedMillicore
+		if effectiveCpu == 0 {
+			effectiveCpu = rrc.CpuReservedMillicore
+		}
+		effectiveMemory = rrc.EffectiveMemoryReservedMib
+		if effectiveMemory == 0 {
+			effectiveMemory = rrc.MemoryReservedMib
+		}
+	}
+	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, gcfsEnabled, ephemeralLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)
 	evictionHard := gce.ParseEvictionHardOrGetDefault(nil)
 
 	node.Status = apiv1.NodeStatus{
@@ -152,9 +171,24 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 // BuildKubeReserved builds kube reserved resources based on node physical resources.
 // See calculateReserved for more details
 func (t *GkeTemplateBuilder) BuildKubeReserved(cpu, physicalMemory int64, machineType string, ephemeralStorageGiB int64,
-	gcfsEnabled bool, ephemeralLocalSsdCount int64, maxPodsPerNode int64) apiv1.ResourceList {
-	cpuReservedMillicores := PredictKubeReservedCpuMillicores(cpu*1000, machineType, maxPodsPerNode)
-	memoryReserved := PredictKubeReservedMemory(physicalMemory, gcfsEnabled)
+	gcfsEnabled bool, ephemeralLocalSsdCount int64, maxPodsPerNode int64, effectiveCpu, effectiveMemory int64,
+	version string, osDistribution gce.OperatingSystemDistribution) apiv1.ResourceList {
+
+	var cpuReservedMillicores int64
+	var memoryReserved int64
+
+	if effectiveCpu > 0 {
+		cpuReservedMillicores = effectiveCpu
+	} else {
+		cpuReservedMillicores = PredictKubeReservedCpuMillicores(cpu*1000, machineType, maxPodsPerNode, version, osDistribution, t.defaultReservedResourcesV2Enabled)
+	}
+
+	if effectiveMemory > 0 {
+		memoryReserved = effectiveMemory * MiB
+	} else {
+		memoryReserved = PredictKubeReservedMemory(physicalMemory, gcfsEnabled, version, osDistribution, maxPodsPerNode, t.defaultReservedResourcesV2Enabled)
+	}
+
 	reserved := apiv1.ResourceList{}
 	reserved[apiv1.ResourceCPU] = *resource.NewMilliQuantity(cpuReservedMillicores, resource.DecimalSI)
 	reserved[apiv1.ResourceMemory] = *resource.NewQuantity(memoryReserved, resource.BinarySI)

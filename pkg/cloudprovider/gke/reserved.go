@@ -19,6 +19,7 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
+	node_version "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
@@ -75,6 +76,8 @@ var (
 			marginalReservedRate: 0.02,
 		},
 	}
+
+	minVersionReservedResourcesV2 = node_version.Version{1, 37, 0, 0}
 )
 
 // GkeReserved implement gce.OsReservedCalculator interface.
@@ -165,14 +168,70 @@ func binarySearchFirstTrue(low, high int64, f func(int64) bool) int64 {
 	return result
 }
 
+func isReservedResourcesV2Enabled(flagEnable bool, version string) bool {
+	if !flagEnable || version == "" {
+		return false
+	}
+	v, err := node_version.FromString(version)
+	if err != nil {
+		klog.Warningf("Failed to parse node version %q: %v. Falling back to legacy reservation.", version, err)
+		return false
+	}
+
+	return !v.LessThan(minVersionReservedResourcesV2)
+}
+
 // PredictKubeReservedMemory calculates kube-reserved memory based on physical memory.
-func PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool) int64 {
-	return memoryReservedMiB(physicalMemory/MiB, gcfsEnabled) * MiB
+func PredictKubeReservedMemory(physicalMemory int64, gcfsEnabled bool, version string, osDistribution gce.OperatingSystemDistribution, maxPodsPerNode int64, defaultReservedResourcesV2Enabled bool) int64 {
+	if !isReservedResourcesV2Enabled(defaultReservedResourcesV2Enabled, version) {
+		return memoryReservedMiB(physicalMemory/MiB, gcfsEnabled) * MiB
+	}
+	return memoryReservedMiBV2(physicalMemory/MiB, gcfsEnabled, osDistribution, maxPodsPerNode) * MiB
 }
 
 // PredictKubeReservedCpuMillicores calculates kube-reserved cpu based on physical cpu.
-func PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64) int64 {
-	return cpuReservedMillicores(physicalCpuMillicores, machineType, maxPodsPerNode)
+func PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64, version string, osDistribution gce.OperatingSystemDistribution, defaultReservedResourcesV2Enabled bool) int64 {
+	if !isReservedResourcesV2Enabled(defaultReservedResourcesV2Enabled, version) {
+		return cpuReservedMillicores(physicalCpuMillicores, machineType, maxPodsPerNode)
+	}
+	return cpuReservedMillicoresV2(physicalCpuMillicores, machineType, maxPodsPerNode, osDistribution)
+}
+
+func memoryReservedMiBV2(memoryCapacityMiB int64, gcfsEnabled bool, osDistribution gce.OperatingSystemDistribution, mppn int64) int64 {
+	if mppn <= 0 || osDistribution == gce.OperatingSystemDistributionWindowsLTSC || osDistribution == gce.OperatingSystemDistributionWindowsSAC {
+		return memoryReservedMiB(memoryCapacityMiB, gcfsEnabled)
+	}
+
+	oldReserved := memoryReservedMiB(memoryCapacityMiB, gcfsEnabled)
+
+	var overhead int64 = 500
+	if osDistribution == gce.OperatingSystemDistributionUbuntu {
+		overhead += 200
+	}
+	if gcfsEnabled {
+		overhead += memoryReservedForGCFSMiB(memoryCapacityMiB)
+	}
+	mppnReserved := mppn*15 + overhead
+
+	if oldReserved < mppnReserved {
+		return oldReserved
+	}
+	return mppnReserved
+}
+
+func cpuReservedMillicoresV2(cpuCapacityMillicores int64, machineType string, maxPodsPerNode int64, osDistribution gce.OperatingSystemDistribution) int64 {
+	_, isFractionalMachine := e2FractionalMillicores[machineType]
+	isWindows := osDistribution == gce.OperatingSystemDistributionWindowsLTSC || osDistribution == gce.OperatingSystemDistributionWindowsSAC
+
+	if isWindows || isFractionalMachine {
+		return cpuReservedMillicores(cpuCapacityMillicores, machineType, maxPodsPerNode)
+	}
+
+	reserved := cpuReservedMillicores(cpuCapacityMillicores, machineType, maxPodsPerNode)
+	if reserved > 1000 {
+		return 1000
+	}
+	return reserved
 }
 
 // PredictKubeReservedEphemeralStorage calculates kube-reserved ephemeral storage based on physical ephemeral storage.
