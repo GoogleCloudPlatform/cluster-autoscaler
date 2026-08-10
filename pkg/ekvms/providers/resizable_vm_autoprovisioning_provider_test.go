@@ -236,3 +236,88 @@ func TestHasActiveResizableNodes(t *testing.T) {
 		})
 	}
 }
+
+func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
+	mockMetrics := &mockResizableVmMetrics{}
+	mockMetrics.On("UpdateResizableVmLaunchStatus", mock.Anything, mock.Anything, mock.Anything).Return()
+	mockMetrics.On("UpdateResizableVmAutopilotComputeClassStatus", mock.Anything, mock.Anything).Return()
+	bpChecker := &balloonPodChecker{isBalloonPodCreatable: true}
+
+	tests := []struct {
+		name             string
+		autopilotEnabled bool
+		managedNodesFlag bool
+		experimentFlags  map[string]bool
+		expectedResult   bool
+	}{
+		{
+			name:             "Autopilot cluster with stateful enabled",
+			autopilotEnabled: true,
+			managedNodesFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Autopilot cluster with stateful disabled",
+			autopilotEnabled: true,
+			managedNodesFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
+			},
+			expectedResult: false,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and stateful enabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and stateful disabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
+			},
+			expectedResult: false,
+		},
+		{
+			name:             "Standard cluster without Managed Nodes and stateful enabled",
+			autopilotEnabled: false,
+			managedNodesFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			em := experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentFlags, nil)
+			ekProvider, _ := newEkAutoprovisioningProvider(string(resizable_vm_types.EkAutoprovisioningDisabled), em, bpChecker, true, true, mockMetrics)
+			e4Provider := newE4AutoprovisioningProvider(em, bpChecker, tc.autopilotEnabled, tc.managedNodesFlag, mockMetrics)
+			e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningDisabled), em, bpChecker, true, true, mockMetrics)
+
+			provider := &ResizableVmAutoprovisioningProvider{
+				machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
+				ekAutoprovisioningProvider:  ekProvider,
+				e4AutoprovisioningProvider:  e4Provider,
+				e4aAutoprovisioningProvider: e4aProvider,
+			}
+			provider.Refresh()
+
+			assert.Equal(t, tc.expectedResult, provider.IsE4StatefulEnabledInAutopilot())
+		})
+	}
+}

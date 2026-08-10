@@ -112,7 +112,7 @@ func (p *ResizableVmAutoprovisioningProvider) IsResizableVmEnabledInAutopilot(ma
 
 func (p *ResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopilot() bool {
 	if e4Provider, ok := p.e4AutoprovisioningProvider.(*e4AutoprovisioningProvider); ok {
-		return e4Provider.isEnabledInAutopilot() && e4Provider.isStatefulEnabled
+		return (e4Provider.isEnabledInAutopilot() || e4Provider.managedNodesEnabled()) && e4Provider.isStatefulEnabled
 	}
 	return false
 }
