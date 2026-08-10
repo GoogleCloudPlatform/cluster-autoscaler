@@ -84,8 +84,8 @@ func TestRegisterScaleUp(t *testing.T) {
 
 	want := `# HELP cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc [ALPHA] Number of node provisioning attempts per CCC.
 # TYPE cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc counter
-cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="default-ccc",entity_type="ccc"} 2
-cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="high-cpu",entity_type="ccc"} 3
+cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="default-ccc",entity_type="ComputeClass"} 2
+cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc{entity_name="high-cpu",entity_type="ComputeClass"} 3
 `
 
 	if err := testutil.CollectAndCompare(scaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc"); err != nil {
@@ -108,14 +108,14 @@ func TestRegisterFailedScaleUp(t *testing.T) {
 
 	p.RegisterFailedScaleUp(ng1, 1, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeResourcePoolExhausted}, now)
 
-	want := `# HELP cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc [ALPHA] Number of node provisioning failures per CCC.
-# TYPE cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc counter
-cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="default-ccc",entity_type="ccc",reason="RESERVATION_NOT_FOUND"} 1
-cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="high-cpu",entity_type="ccc",reason="QUOTA_EXCEEDED"} 1
-cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc{entity_name="high-cpu",entity_type="ccc",reason="RESOURCE_POOL_EXHAUSTED"} 1
+	want := `# HELP cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc [ALPHA] Number of node provisioning failures per CCC.
+# TYPE cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc counter
+cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc{entity_name="default-ccc",entity_type="ComputeClass",reason="RESERVATION_NOT_FOUND"} 1
+cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc{entity_name="high-cpu",entity_type="ComputeClass",reason="QUOTA_EXCEEDED"} 1
+cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc{entity_name="high-cpu",entity_type="ComputeClass",reason="RESOURCE_POOL_EXHAUSTED"} 1
 `
 
-	if err := testutil.CollectAndCompare(failedScaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_cluster_node_provisioning_failures_count_per_ccc"); err != nil {
+	if err := testutil.CollectAndCompare(failedScaleUpAttempts, strings.NewReader(want), "cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc_per_ccc"); err != nil {
 		t.Errorf("unexpected collecting result: %v", err)
 	}
 }

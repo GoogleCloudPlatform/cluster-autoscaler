@@ -58,7 +58,7 @@ var (
 	failedScaleUpAttempts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
-			Name:      cccMetricName("cluster_node_provisioning_failures_count"),
+			Name:      cccMetricName("cluster_node_provisioning_failed_attempts_count_per_ccc"),
 			Help:      "Number of node provisioning failures per CCC.",
 		},
 		[]string{entityTypeLabel, entityNameLabel, "reason"},
@@ -92,11 +92,11 @@ func (m *prometheusMetrics) ObservePodSchedulingDuration(duration time.Duration,
 }
 
 func (m *prometheusMetrics) RegisterScaleUp(cccName string, delta int) {
-	scaleUpAttempts.WithLabelValues(cccEntityType, cccName).Add(float64(delta))
+	scaleUpAttempts.WithLabelValues(computeClassEntityType, cccName).Add(float64(delta))
 }
 
 func (m *prometheusMetrics) RegisterFailedScaleUp(cccName string, reason string) {
-	failedScaleUpAttempts.WithLabelValues(cccEntityType, cccName, reason).Inc()
+	failedScaleUpAttempts.WithLabelValues(computeClassEntityType, cccName, reason).Inc()
 }
 
 // cccMetricName adds the _per_ccc suffix to the given metric name.
