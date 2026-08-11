@@ -16,6 +16,7 @@ package reconciliation
 
 import (
 	"sync/atomic"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -85,6 +86,13 @@ func NewReconciler(
 	}
 }
 
+func targetNodeState(tn state.TrackedNode) csn.NodeState {
+	if tn.DesiredState != "" {
+		return tn.DesiredState
+	}
+	return tn.State
+}
+
 // Reconcile will enqueue consumption for any node
 // if its state deviates from the one expected by the CSN Node Controller.
 // In the future this could be expanded to force the actual state to
@@ -94,9 +102,17 @@ func (r *Reconciler) Reconcile() {
 		return
 	}
 	defer r.running.Store(false)
+
+	// Evaluate total duration of Reconciler and emit the result
+	before := time.Now()
+	defer func() {
+		reconcileDurationSeconds.WithLabelValues().Observe(time.Since(before).Seconds())
+	}()
+
 	trackedNodes := r.stateManager.List(state.WithoutPendingOperationsFilter)
 	r.refreshInvalidCounts(trackedNodes)
 	if len(trackedNodes) == 0 {
+		updateDeviatingNodes(nil)
 		return
 	}
 
@@ -118,12 +134,14 @@ func (r *Reconciler) Reconcile() {
 		migToNodeNames[ref].Insert(tn.Node.Name)
 	}
 
+	deviatingCounts := make(map[deviatingNodeKey]int)
 	for mig, nodeNames := range migToNodeNames {
-		r.reconcileMig(mig, nodeNames)
+		r.reconcileMig(mig, nodeNames, deviatingCounts)
 	}
+	updateDeviatingNodes(deviatingCounts)
 }
 
-func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string]) {
+func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string], deviatingCounts map[deviatingNodeKey]int) {
 	nodesToConsume := set.New[string]()
 	for nodeName := range nodeNames {
 		tn, ok := r.stateManager.Get(nodeName)
@@ -156,6 +174,13 @@ func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string]) {
 		}
 
 		r.invalidCount[nodeName] += 1
+
+		deviatingCounts[deviatingNodeKey{
+			state:        string(targetNodeState(tn)),
+			gceStatus:    instance.GCEStatus,
+			invalidCount: r.invalidCount[nodeName],
+		}] += 1
+
 		if r.invalidCount[nodeName] < r.cfg.MaxInvalidCount {
 			continue
 		}
@@ -164,6 +189,7 @@ func (r *Reconciler) reconcileMig(mig gce.GceRef, nodeNames set.Set[string]) {
 			logPrefix, nodeName, tn.State, tn.DesiredState,
 			instance.GCEStatus,
 		)
+		reconcileRequestsTotal.WithLabelValues(string(targetNodeState(tn)), string(csn.NodeStateConsumed)).Inc()
 		nodesToConsume.Insert(tn.Node.Name)
 		delete(r.invalidCount, nodeName)
 	}
@@ -185,10 +211,7 @@ func (r *Reconciler) isStatusAsExpected(tn state.TrackedNode, instanceStatus str
 	if internal.IsStopped(instanceStatus) {
 		return true
 	}
-	nodeState := tn.State
-	if tn.DesiredState != "" {
-		nodeState = tn.DesiredState
-	}
+	nodeState := targetNodeState(tn)
 	switch nodeState {
 	case csn.NodeStateSuspended:
 		return internal.IsSuspended(instanceStatus)
