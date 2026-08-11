@@ -232,11 +232,35 @@ func TestNodeLimit(t *testing.T) {
 			if manager == nil {
 				manager = experiments.NewMockManager()
 			}
-			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager)
+			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager, nil)
 			got := threshold.NodeLimit(tc.nodeGroup, tc.estimationContext)
 
 			assert.Equal(t, tc.want, got.Limit)
 			mockProvider.AssertExpectations(t)
 		})
 	}
+}
+
+func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
+	mockProvider := new(instanceavailability.MockProvider)
+	snapshot := api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 0}).Build().NewSnapshot()
+	mockProvider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot).Once()
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "scope-1",
+		},
+	}, "", false, nil, nil)
+	mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
+	cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	tracker := NewScaleUpLimiterTracker(true, nil)
+	threshold := NewInstanceAvailabilityThreshold(mockProvider, nil, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, experiments.NewMockManager(), tracker)
+	mig := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
+
+	result := threshold.NodeLimit(mig, estimator.NewEstimationContext(0, nil, 0))
+
+	assert.Equal(t, -1, result.Limit)
+	assert.True(t, tracker.HasRemovedScaleUpOptions())
+	assert.Equal(t, []string{"scope-1"}, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
 }

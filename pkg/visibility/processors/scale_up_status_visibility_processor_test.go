@@ -32,6 +32,7 @@ import (
 	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/events"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/noscaleup"
@@ -363,7 +364,7 @@ func TestNoScaleUpNegativeEventsFlag(t *testing.T) {
 		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: false, IncludePerMigStatuses: false},
 		data:      NewSharedData(),
 		idGen:     new(visibility.MockEventIDGenerator),
-		noScaleUp: noscaleup.NewNoScaleUp(time.Minute, false),
+		noScaleUp: noscaleup.NewNoScaleUp(time.Minute, false, nil),
 	}
 
 	unschedulablePods := []status.NoScaleUpInfo{
@@ -535,7 +536,7 @@ func TestSpreadingEvents(t *testing.T) {
 		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
 		data:      NewSharedData(),
 		idGen:     new(visibility.MockEventIDGenerator),
-		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false),
+		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
 	}
 	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 	podGroupsLen := 80
@@ -600,7 +601,7 @@ func TestMaxLengthOfNoScaleUpEvent(t *testing.T) {
 		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
 		data:      NewSharedData(),
 		idGen:     new(visibility.MockEventIDGenerator),
-		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false),
+		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
 	}
 	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 	podGroupsLen := 80
@@ -744,4 +745,22 @@ func TestFailedScaleUpEventEmitted(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProcess_ResetsScaleUpLimiterTracker(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
+	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
+	processor := &ScaleUpStatusVisibilityProcessor{
+		data:                  NewSharedData(),
+		idGen:                 new(visibility.MockEventIDGenerator),
+		noScaleUp:             noscaleup.NewNoScaleUp(time.Minute, false, tracker),
+		scaleUpLimiterTracker: tracker,
+	}
+	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+
+	processor.Process(ctx, &status.ScaleUpStatus{Result: status.ScaleUpNoOptionsAvailable})
+
+	assert.False(t, tracker.HasRemovedScaleUpOptions())
+	assert.Empty(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
+	assert.Empty(t, tracker.GetRemovedNodeGroupIds())
 }

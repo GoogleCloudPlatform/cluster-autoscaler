@@ -25,6 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
@@ -41,15 +42,17 @@ type NoScaleUp interface {
 }
 
 type throttledNoScaleUp struct {
-	recentlyReportedReasons         *reasonsReportTracker
-	simulationForSkippedMigsEnabled bool
+	recentlyReportedReasons          *reasonsReportTracker
+	simulationForSkippedMigsEnabled  bool
+	flexAdvisorScaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker
 }
 
 // NewNoScaleUp returns a new default instance implementing NoScaleUp.
-func NewNoScaleUp(stalenessThreshold time.Duration, simulationForSkippedMigsEnabled bool) NoScaleUp {
+func NewNoScaleUp(stalenessThreshold time.Duration, simulationForSkippedMigsEnabled bool, flexAdvisorScaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) NoScaleUp {
 	return &throttledNoScaleUp{
-		recentlyReportedReasons:         newReasonsReportTracker(stalenessThreshold),
-		simulationForSkippedMigsEnabled: simulationForSkippedMigsEnabled,
+		recentlyReportedReasons:          newReasonsReportTracker(stalenessThreshold),
+		simulationForSkippedMigsEnabled:  simulationForSkippedMigsEnabled,
+		flexAdvisorScaleUpLimiterTracker: flexAdvisorScaleUpLimiterTracker,
 	}
 }
 
@@ -64,6 +67,10 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 	ns.recentlyReportedReasons.removeOld(now)
 
 	if len(scaleUpStatus.NoScaleUpInfos) == 0 {
+		if ns.isFlexAdvisorCuttingAllMigs(scaleUpStatus, napStatus) {
+			allCurrentReasons := ns.computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus)
+			return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
+		}
 		// If there are no unschedulable pods, don't provide any reasons, they won't make sense anyway.
 		return &Reasons{}
 	}
@@ -75,6 +82,46 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 		PodGroups:   ns.computePodGroups(scaleUpStatus, napStatus),
 	}
 	return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
+}
+
+func (ns *throttledNoScaleUp) isFlexAdvisorCuttingAllMigs(scaleUpStatus *vistypes.ScaleUpStatus, napStatus *vistypes.NapStatus) bool {
+	if ns.flexAdvisorScaleUpLimiterTracker == nil || !ns.flexAdvisorScaleUpLimiterTracker.HasRemovedScaleUpOptions() {
+		return false
+	}
+	if scaleUpStatus.Result == status.ScaleUpSuccessful || scaleUpStatus.Result == status.ScaleUpNotNeeded {
+		return false
+	}
+	if napStatus.Result != autoprovisioning.ProcessingOk {
+		return false
+	}
+	return true
+}
+
+func (ns *throttledNoScaleUp) computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus *vistypes.ScaleUpStatus) *Reasons {
+	var topLevelNap *vistypes.Message
+	scopes := ns.flexAdvisorScaleUpLimiterTracker.GetFlexibilityScopesWithRemovedScaleUpOptions()
+	if len(scopes) > 0 {
+		topLevelNap = vistypes.NewNoScaleUpNapCapacityConstraintsMsg(scopes...)
+	}
+
+	migsById := scaleUpStatus.GetMigsById()
+	var skippedMigs []*vistypes.MigExplanation
+	for _, migId := range ns.flexAdvisorScaleUpLimiterTracker.GetRemovedNodeGroupIds() {
+		mig, found := migsById[migId]
+		if !found || !mig.Exists {
+			continue
+		}
+		skippedMigs = append(skippedMigs, &vistypes.MigExplanation{
+			Mig:    mig,
+			Reason: vistypes.NewNoScaleUpMigSkippedMsg([]string{vistypes.ReasonSkippedDueToCapacityConstraints}),
+		})
+	}
+
+	return &Reasons{
+		TopLevel:    ns.computeTopLevel(scaleUpStatus.Result),
+		TopLevelNap: topLevelNap,
+		SkippedMigs: skippedMigs,
+	}
 }
 
 func (ns *throttledNoScaleUp) computeTopLevel(result status.ScaleUpResult) *vistypes.Message {

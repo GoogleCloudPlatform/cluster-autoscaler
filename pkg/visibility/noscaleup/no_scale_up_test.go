@@ -37,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	internal_customresources "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/customresources"
@@ -64,7 +65,7 @@ import (
 
 func TestGetNewReasons(t *testing.T) {
 	now := time.Now()
-	nsu := NewNoScaleUp(time.Minute, false)
+	nsu := NewNoScaleUp(time.Minute, false, nil)
 
 	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
 	noScaleUpInfo := &vistypes.NoScaleUpInfo{
@@ -122,7 +123,7 @@ func TestGetNewReasons(t *testing.T) {
 
 func TestGetNewReasonsWithSimulationEnabled(t *testing.T) {
 	now := time.Now()
-	nsu := NewNoScaleUp(time.Minute, true)
+	nsu := NewNoScaleUp(time.Minute, true, nil)
 
 	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
 	noScaleUpInfo := &vistypes.NoScaleUpInfo{
@@ -428,7 +429,7 @@ func TestPodLevelNapReasons(t *testing.T) {
 			assert.NoError(t, err)
 			napStatus := vistypes.GetNapStatus(ctx)
 
-			noScaleUp := NewNoScaleUp(time.Minute, false)
+			noScaleUp := NewNoScaleUp(time.Minute, false, nil)
 			reasons := noScaleUp.GetNewReasons(vizStatus, napStatus, time.Now())
 			assert.Equal(t, 1, len(reasons.PodGroups))
 			assert.ElementsMatch(t, tc.expectedReasons, reasons.PodGroups[0].NapReasons)
@@ -708,4 +709,97 @@ func buildPodWithNodeSelector(name string, millicpu, mem int64, nodeSelector map
 	pod := test.BuildTestPod(name, millicpu, mem)
 	pod.Spec.NodeSelector = nodeSelector
 	return pod
+}
+
+func TestGetNewReasons_CapacityConstraintsWhenFlexAdvisorCutsAllMigs(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
+	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
+	nsu := NewNoScaleUp(time.Minute, false, tracker)
+	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
+	scaleUpStatus := &vistypes.ScaleUpStatus{
+		Result:         status.ScaleUpNoOptionsAvailable,
+		ConsideredMigs: []*vistypes.GkeMig{mig1},
+		NoScaleUpInfos: nil,
+	}
+	napStatus := &vistypes.NapStatus{
+		Result: autoprovisioning.ProcessingOk,
+	}
+
+	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
+
+	assert.Nil(t, reasons.TopLevel)
+	assert.Equal(t, vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1"), reasons.TopLevelNap)
+	assert.Equal(t, []*vistypes.MigExplanation{
+		{Mig: mig1, Reason: vistypes.NewNoScaleUpMigSkippedMsg([]string{vistypes.ReasonSkippedDueToCapacityConstraints})},
+	}, reasons.SkippedMigs)
+}
+
+func TestGetNewReasons_NoCapacityConstraintsWhenScaleUpSuccessful(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
+	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
+	nsu := NewNoScaleUp(time.Minute, false, tracker)
+	scaleUpStatus := &vistypes.ScaleUpStatus{
+		Result: status.ScaleUpSuccessful,
+	}
+	napStatus := &vistypes.NapStatus{
+		Result: autoprovisioning.ProcessingOk,
+	}
+
+	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
+
+	assert.True(t, reasons.IsEmpty())
+}
+
+func TestGetNewReasons_NoCapacityConstraintsWhenScaleUpNotNeeded(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
+	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
+	nsu := NewNoScaleUp(time.Minute, false, tracker)
+	scaleUpStatus := &vistypes.ScaleUpStatus{
+		Result: status.ScaleUpNotNeeded,
+	}
+	napStatus := &vistypes.NapStatus{
+		Result: autoprovisioning.ProcessingOk,
+	}
+
+	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
+
+	assert.True(t, reasons.IsEmpty())
+}
+
+func TestGetNewReasons_NoCapacityConstraintsWhenNapError(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
+	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
+	nsu := NewNoScaleUp(time.Minute, false, tracker)
+	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
+	scaleUpStatus := &vistypes.ScaleUpStatus{
+		Result:         status.ScaleUpNoOptionsAvailable,
+		ConsideredMigs: []*vistypes.GkeMig{mig1},
+		NoScaleUpInfos: nil,
+	}
+	napStatus := &vistypes.NapStatus{
+		Result: autoprovisioning.NapDisabled,
+	}
+
+	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
+
+	assert.True(t, reasons.IsEmpty())
+}
+
+func TestGetNewReasons_NoCapacityConstraintsWhenTrackerDisabled(t *testing.T) {
+	tracker := flexadvisor.NewScaleUpLimiterTracker(false, nil)
+	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
+	nsu := NewNoScaleUp(time.Minute, false, tracker)
+	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
+	scaleUpStatus := &vistypes.ScaleUpStatus{
+		Result:         status.ScaleUpNoOptionsAvailable,
+		ConsideredMigs: []*vistypes.GkeMig{mig1},
+		NoScaleUpInfos: nil,
+	}
+	napStatus := &vistypes.NapStatus{
+		Result: autoprovisioning.ProcessingOk,
+	}
+
+	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
+
+	assert.True(t, reasons.IsEmpty())
 }

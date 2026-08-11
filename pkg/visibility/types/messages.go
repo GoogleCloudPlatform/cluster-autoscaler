@@ -92,6 +92,8 @@ const (
 	NoScaleUpNapNoLocationsAvailable
 	// NoScaleUpNapNodeGroupsLimitReached - NAP didn't provision any node groups because maximut count of autoprovisioned node groups has been reached.
 	NoScaleUpNapNodeGroupsLimitReached
+	// NoScaleUpNapCapacityConstraints - NAP didn't provision any node groups because options were constrained by capacity limits.
+	NoScaleUpNapCapacityConstraints
 
 	// NoScaleUpNapPodInvalidLabelValue - pod requests an invalid value for label.
 	NoScaleUpNapPodInvalidLabelValue
@@ -262,6 +264,11 @@ const (
 	_maxMessageId
 )
 
+const (
+	// ReasonSkippedDueToCapacityConstraints is the reason text for a MIG skipped due to capacity limits.
+	ReasonSkippedDueToCapacityConstraints = "skipped due to capacity constraints"
+)
+
 // MessageIdToStringMap maps enum IDs to their textual representation.
 var MessageIdToStringMap = map[MessageId]string{
 	ScaleUpErrorOutOfResources:                         "scale.up.error.out.of.resources",
@@ -299,6 +306,7 @@ var MessageIdToStringMap = map[MessageId]string{
 	NoScaleUpNapUnexpectedError:        "no.scale.up.nap.unexpected.error",
 	NoScaleUpNapNoLocationsAvailable:   "no.scale.up.nap.no.locations.available",
 	NoScaleUpNapNodeGroupsLimitReached: "no.scale.up.nap.node.groups.limit.reached",
+	NoScaleUpNapCapacityConstraints:    "no.scale.up.nap.capacity.constraints",
 
 	NoScaleUpNapPodInvalidLabelValue:                        "no.scale.up.nap.pod.invalid.label.value",
 	NoScaleUpNapPodMachineFamilyUnknown:                     "no.scale.up.nap.pod.machine.family.unknown",
@@ -571,6 +579,18 @@ func NewNoScaleUpNapNoLocationsAvailableMsg() *Message {
 // NewNoScaleUpNapNodeGroupsLimitReachedMsg creates and returns a "NAP didn't provision any node groups because maximut count of autoprovisioned node groups has been reached" message.
 func NewNoScaleUpNapNodeGroupsLimitReachedMsg() *Message {
 	return &Message{Id: NoScaleUpNapNodeGroupsLimitReached}
+}
+
+// NewNoScaleUpNapCapacityConstraintsMsg creates and returns a message indicating no NAP node groups provisioned due to capacity limits.
+func NewNoScaleUpNapCapacityConstraintsMsg(flexibilityScopes ...string) *Message {
+	var params []string
+	if len(flexibilityScopes) > 0 {
+		params = []string{strings.Join(flexibilityScopes, ", ")}
+	}
+	return &Message{
+		Id:     NoScaleUpNapCapacityConstraints,
+		Params: params,
+	}
 }
 
 // NewNoScaleUpNapUnexpectedErrorMsg creates and returns a "NAP didn't provision any node groups because of an unexpected error" message.

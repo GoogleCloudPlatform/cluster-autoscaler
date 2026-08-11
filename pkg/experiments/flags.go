@@ -175,6 +175,9 @@ const FlexAdvisorMaxActiveScopes = "FlexAdvisor::MaxActiveScopes"
 const FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag = "FlexAdvisorGeneratorMachineErrorsCache::Enabled"
 const FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag = "FlexAdvisorGeneratorMachineErrorsCache::MinCAVersion"
 
+const FlexAdvisorScaleUpLimiterTrackerEnabledFlag = "FlexAdvisorScaleUpLimiterTracker::Enabled"
+const FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag = "FlexAdvisorScaleUpLimiterTracker::MinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"

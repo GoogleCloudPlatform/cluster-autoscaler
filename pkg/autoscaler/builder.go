@@ -806,7 +806,9 @@ func (b *Builder) Build(
 
 	// Initializing GCE Flex Advisor
 	var flexAdvisor instanceavailability.Provider
+	var scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker
 	if autoscalingOptions.GCEFlexAdvisorEnabled {
+		scaleUpLimiterTracker = flexadvisor.NewScaleUpLimiterTracker(autoscalingOptions.GCEFlexAdvisorEnabled, experimentsManager)
 		flexAdvisor, err = flexadvisor.NewFlexAdvisor(bgContext, cloudProvider, b.npcCrdLister, cloudProvider, b.optsTracker, cccStatusUpdatesCh)
 		if err != nil {
 			klog.Errorf("cannot create Flex Advisor. Error: %v", err)
@@ -828,6 +830,7 @@ func (b *Builder) Build(
 			b.npcCrdLister,
 			cloudProvider,
 			experimentsManager,
+			scaleUpLimiterTracker,
 		))
 	}
 
@@ -951,7 +954,8 @@ func (b *Builder) Build(
 		b.eventLogger,
 		cccStatusUpdatesCh,
 		minCapacityObserver,
-		defragMinQuotasTrackerFactory)
+		defragMinQuotasTrackerFactory,
+		scaleUpLimiterTracker)
 	if err != nil {
 		return nil, nil, err
 	}

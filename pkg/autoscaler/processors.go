@@ -250,7 +250,7 @@ func initAutoprovisioningProcessors(
 	return nodeGroupManager, nodeGroupManager
 }
 
-func initVisibilityProcessors(options internalopts.AutoscalingOptions, provider GkeCloudProvider, eventLogger visibility.EventLogger) (*viz_processors.AutoscalingStatusVisibilityProcessor, status.ScaleUpStatusProcessor, status.ScaleDownStatusProcessor, error) {
+func initVisibilityProcessors(options internalopts.AutoscalingOptions, provider GkeCloudProvider, eventLogger visibility.EventLogger, scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) (*viz_processors.AutoscalingStatusVisibilityProcessor, status.ScaleUpStatusProcessor, status.ScaleDownStatusProcessor, error) {
 	var logger visibility.EventLogger
 	if options.UseAutoscalerVisibility {
 		logger = eventLogger
@@ -263,7 +263,7 @@ func initVisibilityProcessors(options internalopts.AutoscalingOptions, provider 
 
 	failedScaleUpEventLogger := events.NewFailedScaleUpEventLogger()
 	autoscalingStatusProcessor := viz_processors.NewAutoscalingStatusVisibilityProcessor(logger, opts, sharedData, failedScaleUpEventLogger)
-	scaleUpStatusProcessor := viz_processors.NewScaleUpStatusVisibilityProcessor(logger, opts, sharedData, failedScaleUpEventLogger)
+	scaleUpStatusProcessor := viz_processors.NewScaleUpStatusVisibilityProcessor(logger, opts, sharedData, failedScaleUpEventLogger, scaleUpLimiterTracker)
 	scaleDownStatusProcessor := viz_processors.NewScaleDownStatusVisibilityProcessor(logger, opts, sharedData)
 
 	return autoscalingStatusProcessor, scaleUpStatusProcessor, scaleDownStatusProcessor, nil
@@ -321,7 +321,8 @@ func setUpProcessors(
 	eventLogger visibility.EventLogger,
 	updatesCh chan npc_status.UpdateMessage,
 	minCapacityObserver npc_processors.MinCapacityObserver,
-	minQuotasTrackerFactory *resourcequotas.TrackerFactory) (*processors.AutoscalingProcessors, error) {
+	minQuotasTrackerFactory *resourcequotas.TrackerFactory,
+	scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) (*processors.AutoscalingProcessors, error) {
 
 	allowlistedSystemLabelsMatcher, err := labels.NewMatcher(systemLabelPatterns)
 	if err != nil {
@@ -537,7 +538,7 @@ func setUpProcessors(
 
 	autoscalingProcessors.ScaleDownNodeProcessor = scaledown.NewGkeInternalAutoscalingScaleDownNodeProcessor(scaleDownNodeProcessors)
 
-	vizAutoscalingStatusProcessor, vizScaleUpStatusProcessor, vizScaleDownStatusProcessor, err := initVisibilityProcessors(*options, provider, eventLogger)
+	vizAutoscalingStatusProcessor, vizScaleUpStatusProcessor, vizScaleDownStatusProcessor, err := initVisibilityProcessors(*options, provider, eventLogger, scaleUpLimiterTracker)
 	if err != nil {
 		return nil, err
 	}

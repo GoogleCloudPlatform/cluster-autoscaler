@@ -37,6 +37,7 @@ type instanceAvailabilityThreshold struct {
 	cccLister                lister.Lister
 	cloudProvider            InstanceAvailabilityCloudProvider
 	experimentsManager       experiments.Manager
+	limiterTracker           ScaleUpLimiterTracker
 }
 
 type InstanceAvailabilityCloudProvider interface {
@@ -44,7 +45,7 @@ type InstanceAvailabilityCloudProvider interface {
 }
 
 // NewInstanceAvailabilityThreshold returns an instance of instanceAvailabilityThreshold.
-func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, puller *gceclient.ReservationsPuller, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, cccLister lister.Lister, cloudProvider InstanceAvailabilityCloudProvider, experimentsManager experiments.Manager) *instanceAvailabilityThreshold {
+func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, puller *gceclient.ReservationsPuller, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, cccLister lister.Lister, cloudProvider InstanceAvailabilityCloudProvider, experimentsManager experiments.Manager, limiterTracker ScaleUpLimiterTracker) *instanceAvailabilityThreshold {
 	return &instanceAvailabilityThreshold{
 		provider:                 provider,
 		reservationPuller:        puller,
@@ -52,6 +53,7 @@ func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, pu
 		cccLister:                cccLister,
 		cloudProvider:            cloudProvider,
 		experimentsManager:       experimentsManager,
+		limiterTracker:           limiterTracker,
 	}
 }
 
@@ -71,12 +73,14 @@ func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGr
 
 	guidanceIdsUsed := make(map[string]bool)
 	instanceReferencesProcessed := make(map[string]bool)
+	flexibilityScopes := make(map[string]bool)
 
 	for _, ng := range allUniqueNodeGroups(append(estimationContext.SimilarNodeGroups(), nodeGroup)) {
 		instanceRef, err := ConstructInstanceReference(ng, t.cccLister, t.experimentsManager)
 		if err != nil {
 			return estimator.NodeLimitResult{Limit: 0}
 		}
+		flexibilityScopes[instanceRef.FlexibilityScopeKey] = true
 
 		snapshot := t.provider.GetInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 		if snapshot == nil {
@@ -106,6 +110,11 @@ func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGr
 	}
 	if maxNodeLimit <= 0 {
 		klog.Infof("FlexAdvisor: removing %s from bin packing due to no capacity, instanceReferencesProcessed=%v, guidancesUsed=%v", nodeGroup.Id(), slices.Collect(maps.Keys(instanceReferencesProcessed)), slices.Collect(maps.Keys(guidanceIdsUsed)))
+		if t.limiterTracker != nil {
+			for scope := range flexibilityScopes {
+				t.limiterTracker.MarkScaleUpOptionRemoved(nodeGroup.Id(), scope)
+			}
+		}
 		return estimator.NodeLimitResult{Limit: -1}
 	}
 	klog.Infof("FlexAdvisor: setting %s bin packing maxNodeLimit to %d based on instanceReferencesProcessed=%v, guidancesUsed=%v", nodeGroup.Id(), maxNodeLimit, slices.Collect(maps.Keys(instanceReferencesProcessed)), slices.Collect(maps.Keys(guidanceIdsUsed)))

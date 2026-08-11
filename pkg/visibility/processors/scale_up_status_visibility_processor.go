@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/events"
@@ -39,17 +40,19 @@ type ScaleUpStatusVisibilityProcessor struct {
 	idGen                    visibility.EventIDGenerator
 	noScaleUp                noscaleup.NoScaleUp
 	failedScaleUpEventLogger events.FailedScaleUpEventLogger
+	scaleUpLimiterTracker    flexadvisor.ScaleUpLimiterTracker
 }
 
 // NewScaleUpStatusVisibilityProcessor creates and returns a default instance of ScaleUpStatusVisibilityProcessor.
-func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts visibility.VisibilityOptions, data *SharedData, eventLogger events.FailedScaleUpEventLogger) status.ScaleUpStatusProcessor {
+func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts visibility.VisibilityOptions, data *SharedData, eventLogger events.FailedScaleUpEventLogger, scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) status.ScaleUpStatusProcessor {
 	return &ScaleUpStatusVisibilityProcessor{
 		logger:                   logger,
 		opts:                     opts,
 		data:                     data,
 		idGen:                    new(visibility.UuidEventIDGenerator),
-		noScaleUp:                noscaleup.NewNoScaleUp(visibility.NegativeEventsStalenessThreshold, opts.ScaleUpSimulationForSkippedNodeGroupsEnabled),
+		noScaleUp:                noscaleup.NewNoScaleUp(visibility.NegativeEventsStalenessThreshold, opts.ScaleUpSimulationForSkippedNodeGroupsEnabled, scaleUpLimiterTracker),
 		failedScaleUpEventLogger: eventLogger,
+		scaleUpLimiterTracker:    scaleUpLimiterTracker,
 	}
 }
 
@@ -57,6 +60,9 @@ func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts vis
 func (p *ScaleUpStatusVisibilityProcessor) Process(context *context.AutoscalingContext, originalScaleUpStatus *status.ScaleUpStatus) {
 	startTime := time.Now()
 	defer metrics.UpdateDurationFromStart(internalmetrics.CaVizScaleUp, startTime)
+	if p.scaleUpLimiterTracker != nil {
+		defer p.scaleUpLimiterTracker.Reset()
+	}
 
 	scaleUpStatus, err := vistypes.ConvertScaleUpStatus(originalScaleUpStatus)
 	if err != nil {
