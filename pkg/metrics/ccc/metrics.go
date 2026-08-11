@@ -58,7 +58,7 @@ var (
 	failedScaleUpAttempts = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
-			Name:      cccMetricName("cluster_node_provisioning_failed_attempts_count_per_ccc"),
+			Name:      cccMetricName("cluster_node_provisioning_failed_attempts_count"),
 			Help:      "Number of node provisioning failures per CCC.",
 		},
 		[]string{entityTypeLabel, entityNameLabel, "reason"},
