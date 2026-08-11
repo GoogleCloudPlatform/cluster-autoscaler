@@ -2676,6 +2676,23 @@ func TestListSupportedDisks(t *testing.T) {
 	}
 }
 
+func TestN2SupportedDisks(t *testing.T) {
+	// Verify that N2 does not expose hyperdisk-balanced or hyperdisk-extreme
+	// for non-confidential nodes, aligning with GCE hardware constraints.
+	nonConfDisks := N2.ListSupportedDisks(false /* isConfidentialNode */)
+	assert.NotContains(t, nonConfDisks, DiskTypeHyperdiskBalanced)
+	assert.NotContains(t, nonConfDisks, DiskTypeHyperdiskExtreme)
+	assert.NotContains(t, nonConfDisks, DiskTypeHyperdiskBalancedHighAvailability)
+	assert.NotContains(t, nonConfDisks, DiskTypeHyperdiskMl)
+
+	// Verify allowed N2 disk types
+	assert.Contains(t, nonConfDisks, DiskTypeHyperdiskThroughput)
+	assert.Contains(t, nonConfDisks, DiskTypeBalanced)
+	assert.Contains(t, nonConfDisks, DiskTypePDExtreme)
+	assert.Contains(t, nonConfDisks, DiskTypeSSD)
+	assert.Contains(t, nonConfDisks, DiskTypeStandard)
+}
+
 func TestGetMachineGeneration(t *testing.T) {
 	testCases := []struct {
 		machineType string

@@ -800,17 +800,17 @@ func TestConditionalLabels(t *testing.T) {
 			daemonSetConditions:          &DaemonSetConditions{},
 			machineSerenityLabelsEnabled: true,
 			notContainLabels: map[string]string{
-				"disk-type.gke.io/hyperdisk-throughput": "true",
-				"disk-type.gke.io/hyperdisk-extreme":    "true",
-			},
-			containLabels: map[string]string{
-				"disk-type.gke.io/pd-balanced":                          "true",
-				"disk-type.gke.io/pd-standard":                          "true",
-				"disk-type.gke.io/pd-ssd":                               "true",
+				"disk-type.gke.io/hyperdisk-throughput":                 "true",
+				"disk-type.gke.io/hyperdisk-extreme":                    "true",
 				"disk-type.gke.io/hyperdisk-balanced":                   "true",
 				"disk-type.gke.io/hyperdisk-balanced-high-availability": "true",
 				"disk-type.gke.io/hyperdisk-ml":                         "true",
-				"disk-type.gke.io/pd-extreme":                           "true",
+			},
+			containLabels: map[string]string{
+				"disk-type.gke.io/pd-balanced": "true",
+				"disk-type.gke.io/pd-standard": "true",
+				"disk-type.gke.io/pd-ssd":      "true",
+				"disk-type.gke.io/pd-extreme":  "true",
 			},
 		},
 		{

@@ -6945,13 +6945,10 @@ func TestAddSupportedDiskTypeLabelsToNode(t *testing.T) {
 			machineType:    "n2-standard-96",
 			isConfidential: true,
 			expectedLabels: map[string]string{
-				"disk-type.gke.io/pd-balanced":                          "true",
-				"disk-type.gke.io/pd-standard":                          "true",
-				"disk-type.gke.io/pd-ssd":                               "true",
-				"disk-type.gke.io/hyperdisk-balanced":                   "true",
-				"disk-type.gke.io/hyperdisk-balanced-high-availability": "true",
-				"disk-type.gke.io/hyperdisk-ml":                         "true",
-				"disk-type.gke.io/pd-extreme":                           "true",
+				"disk-type.gke.io/pd-balanced": "true",
+				"disk-type.gke.io/pd-standard": "true",
+				"disk-type.gke.io/pd-ssd":      "true",
+				"disk-type.gke.io/pd-extreme":  "true",
 			},
 		},
 	}
