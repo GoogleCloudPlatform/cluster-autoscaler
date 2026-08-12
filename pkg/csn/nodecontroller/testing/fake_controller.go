@@ -49,11 +49,12 @@ func NewMockCSNNodeController(nodes []nodecontroller.CSNNode) *MockCSNNodeContro
 	}
 }
 
-func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nodecontroller.CSNNode, error) {
+func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nodecontroller.CSNNode, map[string]int, error) {
 	if m.listErr != nil {
-		return nil, m.listErr
+		return nil, nil, m.listErr
 	}
 	var nodes []nodecontroller.CSNNode
+	filteredCounts := make(map[string]int)
 	for _, node := range m.nodes {
 		currentState, ok := m.currentStates[node.Name]
 		if !ok {
@@ -67,16 +68,24 @@ func (m *MockCSNNodeController) List(filters ...nodecontroller.CSNFilter) ([]nod
 
 		pass := true
 		for _, filter := range filters {
-			if filter != nil && !filter(n) {
-				pass = false
-				break
+			if filter == nil {
+				continue
 			}
+			ok, reason := filter(n)
+			if ok {
+				continue
+			}
+			if reason != "" {
+				filteredCounts[reason]++
+			}
+			pass = false
+			break
 		}
 		if pass {
 			nodes = append(nodes, n)
 		}
 	}
-	return nodes, m.listErr
+	return nodes, filteredCounts, m.listErr
 }
 
 func (m *MockCSNNodeController) Consume(nodes []string) set.Set[string] {

@@ -141,9 +141,12 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingC
 		return nil, fmt.Errorf("error getting already consumed nodes: %v", err)
 	}
 
-	csnNodes, err := p.nodeController.List(nodecontroller.WithoutPendingOperationsFilter, nodecontroller.WithoutBackedOffSuspendedFilter)
+	csnNodes, filteredCounts, err := p.nodeController.List(nodecontroller.WithoutPendingOperationsFilter, nodecontroller.WithoutBackedOffSuspendedFilter)
 	if err != nil {
 		return nil, fmt.Errorf("error listing CSN nodes: %v", err)
+	}
+	if len(filteredCounts) > 0 {
+		klog.V(4).Infof("%s Filtered out CSN nodes during buffer consumption: %v", bufferConsumptionLogPrefix, filteredCounts)
 	}
 
 	nodeControllerNodes := map[string]bool{}

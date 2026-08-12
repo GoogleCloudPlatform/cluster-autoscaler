@@ -378,7 +378,7 @@ func TestList(t *testing.T) {
 
 			tc.setup(fs)
 
-			got := m.List()
+			got, _ := m.List()
 			assert.ElementsMatch(t, tc.expectedNodes, got)
 		})
 	}
@@ -392,7 +392,7 @@ func TestList_Copy(t *testing.T) {
 	node := test.CreateNode("test-node", test.StateOpt(csn.NodeStateSuspended))
 	fs.AddNodes(node)
 
-	got := m.List()
+	got, _ := m.List()
 	if len(got) != 1 {
 		t.Fatalf("Expected at list one TrackedNode in List output")
 	}
@@ -400,7 +400,7 @@ func TestList_Copy(t *testing.T) {
 	got[0].State = "modified-state"
 
 	// List again
-	got2 := m.List()
+	got2, _ := m.List()
 	assert.Len(t, got2, 1)
 
 	// Verify original is untouched
@@ -426,9 +426,10 @@ func TestList_WithFilters(t *testing.T) {
 	assert.Empty(t, m.SetPendingOperation(ops.AssignBufferOp, true, set.New(bufferAssignNode.Name)))
 
 	testCases := []struct {
-		name          string
-		filters       []NodeFilter
-		expectedNodes []TrackedNode
+		name           string
+		filters        []NodeFilter
+		expectedNodes  []TrackedNode
+		expectedCounts map[string]int
 	}{
 		{
 			name:    "no_filters",
@@ -457,6 +458,7 @@ func TestList_WithFilters(t *testing.T) {
 					PendingOperations: ops.AssignBufferOp,
 				},
 			},
+			expectedCounts: map[string]int{},
 		},
 		{
 			name:    "without_pending_operations",
@@ -473,13 +475,38 @@ func TestList_WithFilters(t *testing.T) {
 					PendingOperations: ops.AssignBufferOp,
 				},
 			},
+			expectedCounts: map[string]int{"WithoutPendingOperations": 2},
+		},
+		{
+			name: "multiple_filters_different_keys",
+			filters: []NodeFilter{
+				WithoutPendingOperationsFilter,
+				func(tn *TrackedNode) (bool, string) {
+					if tn.State == csn.NodeStateChilling && tn.PendingOperations == ops.NoOp {
+						return false, "CustomChillingFilter"
+					}
+					return true, ""
+				},
+			},
+			expectedNodes: []TrackedNode{
+				{
+					Node:              bufferAssignNode,
+					State:             csn.NodeStateChilling,
+					PendingOperations: ops.AssignBufferOp,
+				},
+			},
+			expectedCounts: map[string]int{
+				"WithoutPendingOperations": 2,
+				"CustomChillingFilter":     1,
+			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := m.List(tc.filters...)
+			got, counts := m.List(tc.filters...)
 			assert.ElementsMatch(t, tc.expectedNodes, got)
+			assert.Equal(t, tc.expectedCounts, counts)
 		})
 	}
 }
@@ -791,10 +818,10 @@ func TestNodeStateManager_WithoutBackedOffSuspendedFilter(t *testing.T) {
 			nodeSource.AddNodes(suspendedBackedOffNode, chillingBackedOffNode, suspendedNotBackedOffNode)
 			m.UpdateBackoffStatus()
 
-			allNodes := m.List()
+			allNodes, _ := m.List()
 			assert.Len(t, allNodes, 3)
 
-			filteredNodes := m.List(m.WithoutBackedOffSuspendedFilter)
+			filteredNodes, _ := m.List(m.WithoutBackedOffSuspendedFilter)
 			names := []string{}
 			for _, tn := range filteredNodes {
 				names = append(names, tn.Node.Name)

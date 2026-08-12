@@ -42,7 +42,7 @@ const (
 )
 
 type csnNodeController interface {
-	List(filters ...nodecontroller.CSNFilter) ([]nodecontroller.CSNNode, error)
+	List(filters ...nodecontroller.CSNFilter) ([]nodecontroller.CSNNode, map[string]int, error)
 	Consume(nodes []string) set.Set[string]
 	MarkAsSuspendable(nodeInfos []*framework.NodeInfo) set.Set[string]
 	ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer)
@@ -100,9 +100,12 @@ func (p *NodeReconcilationProcessor) preprocess(snapshot clustersnapshot.Cluster
 		p.nodeController.Reconcile()
 	}()
 	p.nodeController.UpdateBackoffStatus()
-	csnNodes, err := p.nodeController.List(nodecontroller.WithoutBackedOffSuspendedFilter)
+	csnNodes, filteredCounts, err := p.nodeController.List(nodecontroller.WithoutBackedOffSuspendedFilter)
 	if err != nil {
 		return fmt.Errorf("error listing CSN nodes: %v", err)
+	}
+	if len(filteredCounts) > 0 {
+		klog.V(4).Infof("%s Filtered out CSN nodes during preprocessing: %v", nodeReconciliationLogPrefix, filteredCounts)
 	}
 
 	csnNodesByName := make(map[string]nodecontroller.CSNNode, len(csnNodes))

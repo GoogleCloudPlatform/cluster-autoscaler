@@ -70,14 +70,20 @@ func (b *BufferInfo) Id() string {
 }
 
 // CSNFilter represents a filter used for listing CSN nodes.
-type CSNFilter func(CSNNode) bool
+type CSNFilter func(CSNNode) (bool, string)
 
 var (
-	WithoutPendingOperationsFilter CSNFilter = func(n CSNNode) bool {
-		return !n.HasPendingOperations
+	WithoutPendingOperationsFilter CSNFilter = func(n CSNNode) (bool, string) {
+		if n.HasPendingOperations {
+			return false, "WithoutPendingOperations"
+		}
+		return true, ""
 	}
-	WithoutBackedOffSuspendedFilter CSNFilter = func(n CSNNode) bool {
-		return !(n.State == csn.NodeStateSuspended && n.IsBackedOff)
+	WithoutBackedOffSuspendedFilter CSNFilter = func(n CSNNode) (bool, string) {
+		if n.State == csn.NodeStateSuspended && n.IsBackedOff {
+			return false, "WithoutBackedOffSuspended"
+		}
+		return true, ""
 	}
 )
 
@@ -291,23 +297,23 @@ func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
 	}
 }
 
-func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, error) {
+func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, map[string]int, error) {
 	stateFilters := make([]state.NodeFilter, 0, len(filters))
 	for _, filter := range filters {
 		if filter == nil {
 			continue
 		}
-		stateFilters = append(stateFilters, func(tn *state.TrackedNode) bool {
+		stateFilters = append(stateFilters, func(tn *state.TrackedNode) (bool, string) {
 			return filter(c.toCSNNode(tn))
 		})
 	}
 
-	trackedNodes := c.nodeStateManager.List(stateFilters...)
+	trackedNodes, counts := c.nodeStateManager.List(stateFilters...)
 	result := make([]CSNNode, 0, len(trackedNodes))
 	for _, tn := range trackedNodes {
 		result = append(result, c.toCSNNode(&tn))
 	}
-	return result, nil
+	return result, counts, nil
 }
 
 func (c *csnNodeController) ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer) {

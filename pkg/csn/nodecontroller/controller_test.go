@@ -121,7 +121,7 @@ func TestList(t *testing.T) {
 				synctest.Wait()
 
 				// Verify after init
-				actualNodes, err := c.List()
+				actualNodes, _, err := c.List()
 				assert.NoError(t, err)
 				assert.True(t, nodesMatch(actualNodes, tc.expectedNodesAfterInit), "Nodes after init did not match expected nodes")
 
@@ -131,7 +131,7 @@ func TestList(t *testing.T) {
 					assert.NoError(t, err)
 				}
 				synctest.Wait()
-				actualNodes, err = c.List()
+				actualNodes, _, err = c.List()
 				assert.NoError(t, err)
 				assert.True(t, nodesMatch(actualNodes, tc.expectedNodesAfterAdd), "Nodes after add did not match expected nodes")
 
@@ -141,7 +141,7 @@ func TestList(t *testing.T) {
 					assert.NoError(t, err)
 				}
 				synctest.Wait()
-				actualNodes, err = c.List()
+				actualNodes, _, err = c.List()
 				assert.NoError(t, err)
 				assert.True(t, nodesMatch(actualNodes, tc.expectedNodesAfterDelete), "Nodes after delete did not match expected nodes")
 			})
@@ -183,7 +183,7 @@ func TestReconciliation(t *testing.T) {
 		synctest.Wait()
 
 		// Verify after init
-		gotNodes, err := c.List()
+		gotNodes, _, err := c.List()
 		assert.NoError(t, err)
 		assert.True(t, nodesMatch(gotNodes, []CSNNode{
 			{Name: suspendedNode.Name, DesiredState: csn.NodeStateSuspended},
@@ -201,7 +201,7 @@ func TestReconciliation(t *testing.T) {
 		synctest.Wait()
 
 		// The state for the previously suspended node should be consumed.
-		gotNodes, err = c.List()
+		gotNodes, _, err = c.List()
 		assert.NoError(t, err)
 		assert.True(t, nodesMatch(gotNodes, []CSNNode{
 			{Name: suspendedNode.Name, DesiredState: csn.NodeStateConsumed},
@@ -242,7 +242,7 @@ func TestLogNSoftTaintsPresent(t *testing.T) {
 		synctest.Wait()
 
 		// Verify after init
-		gotNodes, err := c.List()
+		gotNodes, _, err := c.List()
 		assert.NoError(t, err)
 		assert.Len(t, gotNodes, len(csnNodes))
 
@@ -312,7 +312,7 @@ func TestList_PendingOperations(t *testing.T) {
 		)
 		synctest.Wait()
 		// Initially, node should be visible
-		list, err := c.List(WithoutPendingOperationsFilter)
+		list, _, err := c.List(WithoutPendingOperationsFilter)
 		assert.NoError(t, err)
 		assert.Len(t, list, 1)
 
@@ -322,19 +322,20 @@ func TestList_PendingOperations(t *testing.T) {
 		assert.Equal(t, 1, suspended.Len())
 
 		// Node should be hidden now because operation is pending (and blocked)
-		list, err = c.List(WithoutPendingOperationsFilter)
+		list, counts, err := c.List(WithoutPendingOperationsFilter)
 		assert.NoError(t, err)
 		assert.Len(t, list, 0)
+		assert.Equal(t, map[string]int{"WithoutPendingOperations": 1}, counts)
 
 		// Node should still be visible without filter
-		list, err = c.List()
+		list, _, err = c.List()
 		assert.NoError(t, err)
 		assert.Len(t, list, 1)
 
 		// Unblock
 		<-blockSuspend
 		synctest.Wait()
-		list, err = c.List(WithoutPendingOperationsFilter)
+		list, _, err = c.List(WithoutPendingOperationsFilter)
 		assert.NoError(t, err)
 		assert.Len(t, list, 1)
 	})
@@ -379,7 +380,7 @@ func TestConsume(t *testing.T) {
 				)
 				synctest.Wait()
 				// Verify node is tracked
-				nodes, err := c.List()
+				nodes, _, err := c.List()
 				assert.NoError(t, err)
 				if len(nodes) != 1 {
 					t.Fatalf("Expected to find 1 node in `List` output")
@@ -391,7 +392,7 @@ func TestConsume(t *testing.T) {
 				consumed := c.Consume([]string{tc.node.Name})
 				assert.ElementsMatch(t, []string{tc.node.Name}, consumed.UnsortedList())
 
-				nodes, err = c.List()
+				nodes, _, err = c.List()
 				assert.NoError(t, err)
 				if len(nodes) != 1 {
 					t.Fatalf("Expected to find 1 node in `List` output")
@@ -561,7 +562,7 @@ func TestMarkAsSuspendable(t *testing.T) {
 				suspended := c.MarkAsSuspendable(nodes)
 				assert.ElementsMatch(t, tc.expectedSuspended, suspended.UnsortedList())
 
-				list, err := c.List()
+				list, _, err := c.List()
 				assert.NoError(t, err)
 				// If we expect it to be untracked, verify it's not in list
 				if tc.expectedState == "" {
@@ -649,7 +650,7 @@ func TestProcessBufferAssignment(t *testing.T) {
 			assert.Equal(t, assignedNode, n)
 		}
 
-		nodes, err := c.List()
+		nodes, _, err := c.List()
 		assert.NoError(t, err)
 		assert.Len(t, nodes, len(assignments))
 		for _, n := range nodes {
@@ -833,16 +834,19 @@ func TestWithoutBackedOffSuspendedFilter(t *testing.T) {
 		name              string
 		experimentEnabled bool
 		expectedNodeNames []string
+		expectedCounts    map[string]int
 	}{
 		{
 			name:              "experiment enabled filters out backed-off suspended nodes",
 			experimentEnabled: true,
 			expectedNodeNames: []string{"n2", "n3"},
+			expectedCounts:    map[string]int{"WithoutBackedOffSuspended": 1},
 		},
 		{
 			name:              "experiment disabled does not filter out backed-off suspended nodes",
 			experimentEnabled: false,
 			expectedNodeNames: []string{"n1", "n2", "n3"},
+			expectedCounts:    map[string]int{},
 		},
 	}
 
@@ -870,12 +874,13 @@ func TestWithoutBackedOffSuspendedFilter(t *testing.T) {
 				synctest.Wait()
 				c.UpdateBackoffStatus()
 
-				nodes, err := c.List()
+				nodes, _, err := c.List()
 				assert.NoError(t, err)
 				assert.Len(t, nodes, 3)
 
-				nodesFiltered, err := c.List(WithoutBackedOffSuspendedFilter)
+				nodesFiltered, counts, err := c.List(WithoutBackedOffSuspendedFilter)
 				assert.NoError(t, err)
+				assert.Equal(t, tc.expectedCounts, counts)
 				names := []string{}
 				for _, node := range nodesFiltered {
 					names = append(names, node.Name)
@@ -917,16 +922,23 @@ func TestCustomCallerFilters(t *testing.T) {
 		synctest.Wait()
 		c.UpdateBackoffStatus()
 
-		customFilter := func(n CSNNode) bool {
-			return (n.State == csn.NodeStateSuspended && n.IsBackedOff) || (n.State == csn.NodeStateChilling && n.Name == "n3")
+		customFilter := func(n CSNNode) (bool, string) {
+			if !((n.State == csn.NodeStateSuspended && n.IsBackedOff) || (n.State == csn.NodeStateChilling && n.Name == "n3")) {
+				return false, "custom"
+			}
+			return true, ""
 		}
 
-		filtered, err := c.List(customFilter)
+		filtered, counts, err := c.List(WithoutBackedOffSuspendedFilter, customFilter)
 		assert.NoError(t, err)
+		assert.Equal(t, map[string]int{
+			"WithoutBackedOffSuspended": 1,
+			"custom":                    1,
+		}, counts)
 		names := []string{}
 		for _, node := range filtered {
 			names = append(names, node.Name)
 		}
-		assert.ElementsMatch(t, []string{"n1", "n3"}, names)
+		assert.ElementsMatch(t, []string{"n3"}, names)
 	})
 }

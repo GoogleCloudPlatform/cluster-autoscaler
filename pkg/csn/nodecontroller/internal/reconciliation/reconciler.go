@@ -33,7 +33,7 @@ const logPrefix = "CSN Reconciler:"
 
 // NodeStateManager allows for retrieving node state.
 type NodeStateManager interface {
-	List(filters ...state.NodeFilter) []state.TrackedNode
+	List(filters ...state.NodeFilter) ([]state.TrackedNode, map[string]int)
 	Get(nodeName string) (state.TrackedNode, bool)
 }
 
@@ -102,14 +102,13 @@ func (r *Reconciler) Reconcile() {
 		return
 	}
 	defer r.running.Store(false)
-
 	// Evaluate total duration of Reconciler and emit the result
 	before := time.Now()
 	defer func() {
 		reconcileDurationSeconds.WithLabelValues().Observe(time.Since(before).Seconds())
 	}()
 
-	trackedNodes := r.stateManager.List(state.WithoutPendingOperationsFilter)
+	trackedNodes, _ := r.stateManager.List(state.WithoutPendingOperationsFilter)
 	r.refreshInvalidCounts(trackedNodes)
 	if len(trackedNodes) == 0 {
 		updateDeviatingNodes(nil)

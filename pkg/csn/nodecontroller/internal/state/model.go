@@ -35,14 +35,17 @@ type TrackedNode struct {
 }
 
 // NodeFilter allows for excluding certain nodes from the output of `List`.
-type NodeFilter func(*TrackedNode) bool
+type NodeFilter func(*TrackedNode) (bool, string)
 
 // WithoutPendingOperationsFilter excludes nodes that have pending suspend or consume operations.
-func WithoutPendingOperationsFilter(tn *TrackedNode) bool {
+func WithoutPendingOperationsFilter(tn *TrackedNode) (bool, string) {
 	if tn == nil {
-		return true
+		return true, ""
 	}
-	return !tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp)
+	if tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp) {
+		return false, "WithoutPendingOperations"
+	}
+	return true, ""
 }
 
 // PendingOperationOpt can be added to modify SetPendingOperation calls.

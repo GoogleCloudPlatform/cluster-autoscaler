@@ -188,11 +188,14 @@ func (m *NodeStateManager) isNodeBackedOff(node *v1.Node) bool {
 }
 
 // WithoutBackedOffSuspendedFilter excludes nodes that are suspended and backed-off.
-func (m *NodeStateManager) WithoutBackedOffSuspendedFilter(tn *TrackedNode) bool {
+func (m *NodeStateManager) WithoutBackedOffSuspendedFilter(tn *TrackedNode) (bool, string) {
 	if tn == nil {
-		return true
+		return true, ""
 	}
-	return tn.State != csn.NodeStateSuspended || !tn.IsBackedOff
+	if tn.State == csn.NodeStateSuspended && tn.IsBackedOff {
+		return false, "WithoutBackedOffSuspended"
+	}
+	return true, ""
 }
 
 func (m *NodeStateManager) Run(ctx context.Context) error {
@@ -269,25 +272,34 @@ func (m *NodeStateManager) Get(nodeName string) (TrackedNode, bool) {
 }
 
 // List returns references to all nodes currently tracked
-// by the NodeStateManager.
-func (m *NodeStateManager) List(filters ...NodeFilter) []TrackedNode {
+// by the NodeStateManager, along with a map of filter names to the count of nodes excluded by each filter.
+func (m *NodeStateManager) List(filters ...NodeFilter) ([]TrackedNode, map[string]int) {
 	m.nodeMutex.RLock()
 	defer m.nodeMutex.RUnlock()
 
 	var result []TrackedNode
+	filteredCounts := make(map[string]int)
 	for _, tn := range m.trackedNodes {
-		if tn != nil && m.allFiltersPass(tn, filters...) {
+		if tn != nil && m.allFiltersPass(tn, filteredCounts, filters...) {
 			result = append(result, *tn)
 		}
 	}
-	return result
+	return result, filteredCounts
 }
 
-func (m *NodeStateManager) allFiltersPass(n *TrackedNode, filters ...NodeFilter) bool {
+func (m *NodeStateManager) allFiltersPass(n *TrackedNode, filteredCounts map[string]int, filters ...NodeFilter) bool {
 	for _, filter := range filters {
-		if filter != nil && !filter(n) {
-			return false
+		if filter == nil {
+			continue
 		}
+		pass, reason := filter(n)
+		if pass {
+			continue
+		}
+		if reason != "" {
+			filteredCounts[reason]++
+		}
+		return false
 	}
 	return true
 }
