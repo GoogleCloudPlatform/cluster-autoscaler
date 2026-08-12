@@ -22,14 +22,14 @@ import (
 )
 
 type DelayedOp struct {
-	Op           ops.Operation
-	ExecuteAfter time.Time
+	Op      ops.Operation
+	ReadyAt time.Time
 }
 
 // RetryQueue is a data structure that can be used for storing
 // operations that should be run later.
 // It allows for easy retrieval of operations ready to be retried
-// as determined by the ExecuteAfter field.
+// as determined by the ReadyAt field.
 type RetryQueue struct {
 	heap *heapAdapter[DelayedOp]
 }
@@ -38,7 +38,7 @@ type RetryQueue struct {
 func NewRetryQueue() *RetryQueue {
 	return &RetryQueue{
 		heap: &heapAdapter[DelayedOp]{less: func(op1, op2 DelayedOp) bool {
-			return op1.ExecuteAfter.Before(op2.ExecuteAfter)
+			return op1.ReadyAt.Before(op2.ReadyAt)
 		}},
 	}
 }
@@ -53,7 +53,7 @@ func (q *RetryQueue) PopReadyToRun(now time.Time) []DelayedOp {
 	var readyOps []DelayedOp
 	for {
 		op, ok := q.heap.Peek()
-		if !ok || !now.After(op.ExecuteAfter) {
+		if !ok || now.Before(op.ReadyAt) {
 			break
 		}
 		readyOps = append(readyOps, heap.Pop(q.heap).(DelayedOp))

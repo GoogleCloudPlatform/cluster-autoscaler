@@ -117,12 +117,14 @@ func TestRetryQueue_PopReadyToRun(t *testing.T) {
 			},
 		},
 		{
-			name: "not_ready_exactly_at_deadline",
+			name: "ready_exactly_at_deadline",
 			ops: []DelayedOp{
-				{ExecuteAfter: now.Add(10 * time.Minute)},
+				delayedOp(now.Add(10 * time.Minute)),
 			},
 			advanceTime: 10 * time.Minute,
-			expectReady: nil, // clock.Now().After(op.ExecuteAfter) is used
+			expectReady: []DelayedOp{
+				delayedOp(now.Add(10 * time.Minute)),
+			},
 		},
 		{
 			name: "ready_just_after_deadline",
@@ -152,7 +154,7 @@ func TestRetryQueue_PopReadyToRun(t *testing.T) {
 	}
 }
 
-func delayedOp(executeAfter time.Time) DelayedOp {
+func delayedOp(readyAt time.Time) DelayedOp {
 	return DelayedOp{
 		Op: ops.Operation{
 			MIG: gce.GceRef{
@@ -163,6 +165,6 @@ func delayedOp(executeAfter time.Time) DelayedOp {
 			Type:      ops.SuspendOp,
 			NodeNames: set.New[string]("node-1", "node-2"),
 		},
-		ExecuteAfter: executeAfter,
+		ReadyAt: readyAt,
 	}
 }

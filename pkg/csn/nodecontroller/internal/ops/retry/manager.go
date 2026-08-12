@@ -120,7 +120,7 @@ func (m *BackoffManager) AddFailedNodes(op ops.Operation, failedNodes set.Set[st
 				Type:      op.Type,
 				NodeNames: set.New(nodeName),
 			},
-			ExecuteAfter: m.clock.Now().Add(delay),
+			ReadyAt: m.clock.Now().Add(delay),
 		})
 		result.BackedOffNodes.Insert(nodeName)
 	}
@@ -225,7 +225,7 @@ func (m *BackoffManager) setNextExecutionTime(timer clock.Timer, now time.Time) 
 		// next execution to be triggered by queue entry
 		return
 	}
-	timer.Reset(firstToRun.ExecuteAfter.Sub(now))
+	timer.Reset(firstToRun.ReadyAt.Sub(now))
 }
 
 func (m *BackoffManager) emitEvent(e Event) {
