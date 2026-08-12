@@ -44,19 +44,20 @@ func TestObserveDryRunResolution(t *testing.T) {
 	initNotFound := getVal("error", "not_found")
 	initRateLimited := getVal("error", "rate_limited")
 	initInternal := getVal("error", "internal")
-	initDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
+	initSuccessMutatedDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "mutated")
+	initSuccessUnmutatedDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "unmutated")
 
 	// Success mutated case
 	observeDryRunResolution(true, nil, 5*time.Second)
 	assert.Equal(t, initMutated+1, getVal("success", "mutated"))
-	durationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
-	assert.Equal(t, initDurationVal+5.0, durationVal)
+	durationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "mutated")
+	assert.Equal(t, initSuccessMutatedDurationVal+5.0, durationVal)
 
 	// Success unmutated case
 	observeDryRunResolution(false, nil, 3*time.Second)
 	assert.Equal(t, initUnmutated+1, getVal("success", "unmutated"))
-	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
-	assert.Equal(t, initDurationVal+8.0, durationVal)
+	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "unmutated")
+	assert.Equal(t, initSuccessUnmutatedDurationVal+3.0, durationVal)
 
 	// Context timeout case
 	observeDryRunResolution(false, context.DeadlineExceeded, 1*time.Second)
@@ -94,13 +95,15 @@ func TestObserveDryRunResolution(t *testing.T) {
 
 	// Context Canceled case (should be ignored completely)
 	currOther := getVal("error", "other")
-	currDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
+	currOtherDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
 	observeDryRunResolution(false, context.Canceled, 1*time.Second)
 	assert.Equal(t, currOther, getVal("error", "other"))
-	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
-	assert.Equal(t, currDurationVal, durationVal)
+	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
+	assert.Equal(t, currOtherDurationVal, durationVal)
 
 	// Generic error case
 	observeDryRunResolution(false, errors.New("dryrun failed"), 10*time.Second)
 	assert.Equal(t, currOther+1, getVal("error", "other"))
+	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
+	assert.Equal(t, currOtherDurationVal+10.0, durationVal)
 }

@@ -77,7 +77,8 @@ func GetDaemonSetMutationResolutionsCountForTest(status, reason string) (float64
 	return testutil.GetCounterMetricValue(counter)
 }
 
-// GetDaemonSetMutationResolutionDurationSumForTest returns the sum of observed durations (only for tests).
-func GetDaemonSetMutationResolutionDurationSumForTest() (float64, error) {
-	return testutil.GetHistogramMetricValue(dsMutationResolutionDuration.ObserverMetric)
+// GetDaemonSetMutationResolutionDurationSumForTest returns the sum of observed durations for a status and reason (only for tests).
+func GetDaemonSetMutationResolutionDurationSumForTest(status, reason string) (float64, error) {
+	observer := dsMutationResolutionDuration.WithLabelValues(status, reason)
+	return testutil.GetHistogramMetricValue(observer)
 }

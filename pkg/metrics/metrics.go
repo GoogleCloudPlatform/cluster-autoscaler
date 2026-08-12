@@ -1110,13 +1110,14 @@ var (
 		[]string{"status", "reason"},
 	)
 
-	dsMutationResolutionDuration = k8smetrics.NewHistogram(
+	dsMutationResolutionDuration = k8smetrics.NewHistogramVec(
 		&k8smetrics.HistogramOpts{
 			Namespace: caNamespace,
 			Name:      "daemonset_mutation_resolution_duration_seconds",
 			Help:      "Duration of dry-run webhook resolutions.",
 			Buckets:   DurationBuckets1sTo24h,
 		},
+		[]string{"status", "reason"},
 	)
 )
 
@@ -1985,5 +1986,5 @@ func (*prometheusMetrics) ObserveCCApiPatch(duration time.Duration, code string)
 // ObserveDaemonSetMutationResolution reports duration, status, and reason for daemonset mutation resolutions.
 func (m *prometheusMetrics) ObserveDaemonSetMutationResolution(status, reason string, duration time.Duration) {
 	dsMutationResolutionsTotal.WithLabelValues(status, reason).Inc()
-	dsMutationResolutionDuration.Observe(duration.Seconds())
+	dsMutationResolutionDuration.WithLabelValues(status, reason).Observe(duration.Seconds())
 }
