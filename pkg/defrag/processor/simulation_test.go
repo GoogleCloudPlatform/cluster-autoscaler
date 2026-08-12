@@ -847,6 +847,18 @@ func (m *mockSnapshotStore) PodGroupStates() schedulerframework.PodGroupStateLis
 	return m.s.PodGroupStates()
 }
 
+func (m *mockSnapshotStore) PodGroups() schedulerframework.PodGroupLister {
+	return m.s.PodGroups()
+}
+
+func (m *mockSnapshotStore) CompositePodGroupStates() schedulerframework.CompositePodGroupStateLister {
+	return m.s.CompositePodGroupStates()
+}
+
+func (m *mockSnapshotStore) CompositePodGroups() schedulerframework.CompositePodGroupLister {
+	return m.s.CompositePodGroups()
+}
+
 func (m *mockSnapshotStore) StorageInfos() schedulerframework.StorageInfoLister {
 	return m.s.StorageInfos()
 }
