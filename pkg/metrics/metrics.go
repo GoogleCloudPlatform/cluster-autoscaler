@@ -1105,9 +1105,9 @@ var (
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
 			Name:      "daemonset_mutation_resolutions_total",
-			Help:      "Counter of background dry-run pod creation calls tagged by outcome status.",
+			Help:      "Counter of background dry-run pod creation calls tagged by outcome status and reason.",
 		},
-		[]string{"status"},
+		[]string{"status", "reason"},
 	)
 
 	dsMutationResolutionDuration = k8smetrics.NewHistogram(
@@ -1982,8 +1982,8 @@ func (*prometheusMetrics) ObserveCCApiPatch(duration time.Duration, code string)
 	ccStatusApiPatchDuration.WithLabelValues(code).Observe(duration.Seconds())
 }
 
-// ObserveDaemonSetMutationResolution reports duration and status for daemonset mutation resolutions.
-func (m *prometheusMetrics) ObserveDaemonSetMutationResolution(status string, duration time.Duration) {
-	dsMutationResolutionsTotal.WithLabelValues(status).Inc()
+// ObserveDaemonSetMutationResolution reports duration, status, and reason for daemonset mutation resolutions.
+func (m *prometheusMetrics) ObserveDaemonSetMutationResolution(status, reason string, duration time.Duration) {
+	dsMutationResolutionsTotal.WithLabelValues(status, reason).Inc()
 	dsMutationResolutionDuration.Observe(duration.Seconds())
 }

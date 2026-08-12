@@ -71,9 +71,9 @@ func ResetAllForTest() {
 	}
 }
 
-// GetDaemonSetMutationResolutionsCountForTest returns the current count for a given status (only for tests).
-func GetDaemonSetMutationResolutionsCountForTest(status string) (float64, error) {
-	counter := dsMutationResolutionsTotal.WithLabelValues(status)
+// GetDaemonSetMutationResolutionsCountForTest returns the current count for a given status and reason (only for tests).
+func GetDaemonSetMutationResolutionsCountForTest(status, reason string) (float64, error) {
+	counter := dsMutationResolutionsTotal.WithLabelValues(status, reason)
 	return testutil.GetCounterMetricValue(counter)
 }
 

@@ -23,34 +23,38 @@ import (
 	cametrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
-func observeDryRunResolution(err error, duration time.Duration) {
+func observeDryRunResolution(mutated bool, err error, duration time.Duration) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
-	cametrics.Metrics.ObserveDaemonSetMutationResolution(classifyError(err), duration)
+	status, reason := classifyOutcome(mutated, err)
+	cametrics.Metrics.ObserveDaemonSetMutationResolution(status, reason, duration)
 }
 
-func classifyError(err error) string {
+func classifyOutcome(mutated bool, err error) (string, string) {
 	if err == nil {
-		return "success"
+		if mutated {
+			return "success", "mutated"
+		}
+		return "success", "unmutated"
 	}
 	if errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err) || apierrors.IsServerTimeout(err) {
-		return "error_timeout"
+		return "error", "timeout"
 	}
 	if apierrors.IsForbidden(err) {
-		return "error_forbidden"
+		return "error", "forbidden"
 	}
 	if apierrors.IsInvalid(err) {
-		return "error_invalid"
+		return "error", "invalid"
 	}
 	if apierrors.IsNotFound(err) {
-		return "error_not_found"
+		return "error", "not_found"
 	}
 	if apierrors.IsTooManyRequests(err) {
-		return "error_rate_limited"
+		return "error", "rate_limited"
 	}
 	if apierrors.IsInternalError(err) || apierrors.IsServiceUnavailable(err) {
-		return "error_internal"
+		return "error", "internal"
 	}
-	return "error_other"
+	return "error", "other"
 }

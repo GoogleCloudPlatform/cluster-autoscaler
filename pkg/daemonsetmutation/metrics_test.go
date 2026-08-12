@@ -31,69 +31,76 @@ func TestObserveDryRunResolution(t *testing.T) {
 	cametrics.RegisterAll()
 	cametrics.ResetAllForTest()
 
-	getVal := func(status string) float64 {
-		val, _ := cametrics.GetDaemonSetMutationResolutionsCountForTest(status)
+	getVal := func(status, reason string) float64 {
+		val, _ := cametrics.GetDaemonSetMutationResolutionsCountForTest(status, reason)
 		return val
 	}
 
-	initSuccess := getVal("success")
-	initTimeout := getVal("error_timeout")
-	initForbidden := getVal("error_forbidden")
-	initInvalid := getVal("error_invalid")
-	initNotFound := getVal("error_not_found")
-	initRateLimited := getVal("error_rate_limited")
-	initInternal := getVal("error_internal")
+	initMutated := getVal("success", "mutated")
+	initUnmutated := getVal("success", "unmutated")
+	initTimeout := getVal("error", "timeout")
+	initForbidden := getVal("error", "forbidden")
+	initInvalid := getVal("error", "invalid")
+	initNotFound := getVal("error", "not_found")
+	initRateLimited := getVal("error", "rate_limited")
+	initInternal := getVal("error", "internal")
 	initDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 
-	// Success case
-	observeDryRunResolution(nil, 5*time.Second)
-	assert.Equal(t, initSuccess+1, getVal("success"))
+	// Success mutated case
+	observeDryRunResolution(true, nil, 5*time.Second)
+	assert.Equal(t, initMutated+1, getVal("success", "mutated"))
 	durationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 	assert.Equal(t, initDurationVal+5.0, durationVal)
 
+	// Success unmutated case
+	observeDryRunResolution(false, nil, 3*time.Second)
+	assert.Equal(t, initUnmutated+1, getVal("success", "unmutated"))
+	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
+	assert.Equal(t, initDurationVal+8.0, durationVal)
+
 	// Context timeout case
-	observeDryRunResolution(context.DeadlineExceeded, 1*time.Second)
-	assert.Equal(t, initTimeout+1, getVal("error_timeout"))
+	observeDryRunResolution(false, context.DeadlineExceeded, 1*time.Second)
+	assert.Equal(t, initTimeout+1, getVal("error", "timeout"))
 
 	// API Forbidden case
 	forbiddenErr := apierrors.NewForbidden(schema.GroupResource{Group: "", Resource: "pods"}, "fake-pod", errors.New("policy block"))
-	observeDryRunResolution(forbiddenErr, 1*time.Second)
-	assert.Equal(t, initForbidden+1, getVal("error_forbidden"))
+	observeDryRunResolution(false, forbiddenErr, 1*time.Second)
+	assert.Equal(t, initForbidden+1, getVal("error", "forbidden"))
 
 	// API Invalid case
 	invalidErr := apierrors.NewInvalid(schema.GroupKind{Group: "", Kind: "Pod"}, "fake-pod", field.ErrorList{})
-	observeDryRunResolution(invalidErr, 1*time.Second)
-	assert.Equal(t, initInvalid+1, getVal("error_invalid"))
+	observeDryRunResolution(false, invalidErr, 1*time.Second)
+	assert.Equal(t, initInvalid+1, getVal("error", "invalid"))
 
 	// API NotFound case
 	notFoundErr := apierrors.NewNotFound(schema.GroupResource{Group: "", Resource: "namespaces"}, "fake-ns")
-	observeDryRunResolution(notFoundErr, 1*time.Second)
-	assert.Equal(t, initNotFound+1, getVal("error_not_found"))
+	observeDryRunResolution(false, notFoundErr, 1*time.Second)
+	assert.Equal(t, initNotFound+1, getVal("error", "not_found"))
 
 	// API TooManyRequests case
 	rateLimitErr := apierrors.NewTooManyRequests("throttled", 10)
-	observeDryRunResolution(rateLimitErr, 1*time.Second)
-	assert.Equal(t, initRateLimited+1, getVal("error_rate_limited"))
+	observeDryRunResolution(false, rateLimitErr, 1*time.Second)
+	assert.Equal(t, initRateLimited+1, getVal("error", "rate_limited"))
 
 	// API Internal case
 	internalErr := apierrors.NewInternalError(errors.New("db error"))
-	observeDryRunResolution(internalErr, 1*time.Second)
-	assert.Equal(t, initInternal+1, getVal("error_internal"))
+	observeDryRunResolution(false, internalErr, 1*time.Second)
+	assert.Equal(t, initInternal+1, getVal("error", "internal"))
 
 	// API ServiceUnavailable case
 	unavailableErr := apierrors.NewServiceUnavailable("down")
-	observeDryRunResolution(unavailableErr, 1*time.Second)
-	assert.Equal(t, initInternal+2, getVal("error_internal")) // Increments initInternal by 2 total
+	observeDryRunResolution(false, unavailableErr, 1*time.Second)
+	assert.Equal(t, initInternal+2, getVal("error", "internal")) // Increments initInternal by 2 total
 
 	// Context Canceled case (should be ignored completely)
-	currOther := getVal("error_other")
+	currOther := getVal("error", "other")
 	currDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
-	observeDryRunResolution(context.Canceled, 1*time.Second)
-	assert.Equal(t, currOther, getVal("error_other"))
+	observeDryRunResolution(false, context.Canceled, 1*time.Second)
+	assert.Equal(t, currOther, getVal("error", "other"))
 	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 	assert.Equal(t, currDurationVal, durationVal)
 
 	// Generic error case
-	observeDryRunResolution(errors.New("dryrun failed"), 10*time.Second)
-	assert.Equal(t, currOther+1, getVal("error_other"))
+	observeDryRunResolution(false, errors.New("dryrun failed"), 10*time.Second)
+	assert.Equal(t, currOther+1, getVal("error", "other"))
 }
