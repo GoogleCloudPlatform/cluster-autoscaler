@@ -634,6 +634,14 @@ func WithEmitNoScaleUpCAVizEvents(enabled bool) Option[*config.AutoscalingOption
 	}
 }
 
+// WithScaleUpSimulationForSkippedNodeGroups enables or disables scale up simulation for skipped node groups.
+func WithScaleUpSimulationForSkippedNodeGroups(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ScaleUpSimulationForSkippedNodeGroupsEnabled = enabled
+		return o
+	}
+}
+
 // WithInitialNodeGroupBackoffDuration sets the InitialNodeGroupBackoffDuration setting.
 func WithInitialNodeGroupBackoffDuration(d time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

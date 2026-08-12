@@ -60,6 +60,7 @@ import (
 	prmanager "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
 	integration_ccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	provreqtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/provreq"
+	visibilityfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/fake"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
@@ -125,6 +126,7 @@ type FakeSet struct {
 	GkeService          *gkeclientfake.Client
 	fwHandle            *framework.Handle
 	FlexAdvisorClient   fakeflexadvisor.FakeFlexAdvisorClient
+	EventLogger         *visibilityfake.EventLogger
 	CccClient           *cccfake.Clientset
 	PRClientset         *provreqtest.FakeClientset
 	ProvReqClient       *provreqclient.ProvisioningRequestClient
@@ -143,6 +145,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	rrClient := resizerequest.NewResizeRequestClient(gceService)
 	mccClient := setupFakeMachineConfigClient()
 	fwHandle := newSimulatorHandle(ctx, t, informerFactory)
+	eventLogger := visibilityfake.NewEventLogger()
 
 	return &FakeSet{
 		KubeClient:          kubeClient,
@@ -152,6 +155,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		GceService:          gceService,
 		GkeService:          gkeclientfake.NewClient(gceService, k8s),
 		fwHandle:            fwHandle,
+		EventLogger:         eventLogger,
 		CccClient:           cccfake.NewSimpleClientset(),
 		PRClientset:         provreqtest.NewFakeClientset(),
 		ResizeRequestClient: rrClient,
@@ -295,6 +299,7 @@ func DefaultAutoscalingBuilder(
 		WithAtomicResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexAdvisorClient(&infra.Fakes.FlexAdvisorClient).
+		WithEventLogger(infra.Fakes.EventLogger).
 		WithProvReqManager(prManager).
 		WithMachineConfigProvider(machineConfigProvider).
 		WithProviderConfigInformer(provConfigInformer).
