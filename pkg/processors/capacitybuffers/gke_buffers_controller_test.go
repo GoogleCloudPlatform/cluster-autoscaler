@@ -54,7 +54,7 @@ func TestGetGkeBufferStrategies(t *testing.T) {
 }
 
 type mockDiscovery struct {
-	discovery.DiscoveryInterface
+	discovery.DiscoveryInterfaces
 	serverResourcesForGroupVersionFunc func(groupVersion string) (*metav1.APIResourceList, error)
 }
 
@@ -67,10 +67,10 @@ func (m *mockDiscovery) ServerResourcesForGroupVersion(groupVersion string) (*me
 
 type mockKubeClient struct {
 	kube_client.Interface
-	discoveryClient discovery.DiscoveryInterface
+	discoveryClient discovery.DiscoveryInterfaces
 }
 
-func (m *mockKubeClient) Discovery() discovery.DiscoveryInterface {
+func (m *mockKubeClient) Discovery() discovery.DiscoveryInterfaces {
 	return m.discoveryClient
 }
 
