@@ -24,12 +24,15 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/component-base/metrics/testutil"
+	cametrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
 func TestObserveDryRunResolution(t *testing.T) {
+	cametrics.RegisterAll()
+	cametrics.ResetAllForTest()
+
 	getVal := func(status string) float64 {
-		val, _ := testutil.GetCounterMetricValue(DryrunResolutionsTotal.WithLabelValues(status))
+		val, _ := cametrics.GetDaemonSetMutationResolutionsCountForTest(status)
 		return val
 	}
 
@@ -40,12 +43,12 @@ func TestObserveDryRunResolution(t *testing.T) {
 	initNotFound := getVal("error_not_found")
 	initRateLimited := getVal("error_rate_limited")
 	initInternal := getVal("error_internal")
-	initDurationVal, _ := testutil.GetHistogramMetricValue(ResolutionDuration.ObserverMetric)
+	initDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 
 	// Success case
 	observeDryRunResolution(nil, 5*time.Second)
 	assert.Equal(t, initSuccess+1, getVal("success"))
-	durationVal, _ := testutil.GetHistogramMetricValue(ResolutionDuration.ObserverMetric)
+	durationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 	assert.Equal(t, initDurationVal+5.0, durationVal)
 
 	// Context timeout case
@@ -84,10 +87,10 @@ func TestObserveDryRunResolution(t *testing.T) {
 
 	// Context Canceled case (should be ignored completely)
 	currOther := getVal("error_other")
-	currDurationVal, _ := testutil.GetHistogramMetricValue(ResolutionDuration.ObserverMetric)
+	currDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 	observeDryRunResolution(context.Canceled, 1*time.Second)
 	assert.Equal(t, currOther, getVal("error_other"))
-	durationVal, _ = testutil.GetHistogramMetricValue(ResolutionDuration.ObserverMetric)
+	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest()
 	assert.Equal(t, currDurationVal, durationVal)
 
 	// Generic error case

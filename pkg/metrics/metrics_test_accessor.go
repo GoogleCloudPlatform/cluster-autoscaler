@@ -70,3 +70,14 @@ func ResetAllForTest() {
 		}
 	}
 }
+
+// GetDaemonSetMutationResolutionsCountForTest returns the current count for a given status (only for tests).
+func GetDaemonSetMutationResolutionsCountForTest(status string) (float64, error) {
+	counter := dsMutationResolutionsTotal.WithLabelValues(status)
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDaemonSetMutationResolutionDurationSumForTest returns the sum of observed durations (only for tests).
+func GetDaemonSetMutationResolutionDurationSumForTest() (float64, error) {
+	return testutil.GetHistogramMetricValue(dsMutationResolutionDuration.ObserverMetric)
+}

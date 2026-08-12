@@ -20,42 +20,14 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	k8smetrics "k8s.io/component-base/metrics"
-	"k8s.io/component-base/metrics/legacyregistry"
 	cametrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
-
-var (
-	// DryrunResolutionsTotal tracks dry-run webhook resolution outcomes.
-	DryrunResolutionsTotal = k8smetrics.NewCounterVec(
-		&k8smetrics.CounterOpts{
-			Name: "daemonset_mutation_resolutions_total",
-			Help: "Counter of background dry-run pod creation calls tagged by outcome status.",
-		},
-		[]string{"status"},
-	)
-
-	// ResolutionDuration tracks duration of dry-run webhook resolutions.
-	ResolutionDuration = k8smetrics.NewHistogram(
-		&k8smetrics.HistogramOpts{
-			Name:    "daemonset_mutation_resolution_duration_seconds",
-			Help:    "Duration of dry-run webhook resolutions.",
-			Buckets: cametrics.DurationBuckets1sTo24h,
-		},
-	)
-)
-
-func init() {
-	legacyregistry.MustRegister(DryrunResolutionsTotal)
-	legacyregistry.MustRegister(ResolutionDuration)
-}
 
 func observeDryRunResolution(err error, duration time.Duration) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
-	DryrunResolutionsTotal.WithLabelValues(classifyError(err)).Inc()
-	ResolutionDuration.Observe(duration.Seconds())
+	cametrics.Metrics.ObserveDaemonSetMutationResolution(classifyError(err), duration)
 }
 
 func classifyError(err error) string {

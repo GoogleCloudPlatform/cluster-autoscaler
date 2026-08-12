@@ -1100,6 +1100,24 @@ var (
 		},
 		[]string{"code"},
 	)
+
+	dsMutationResolutionsTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "daemonset_mutation_resolutions_total",
+			Help:      "Counter of background dry-run pod creation calls tagged by outcome status.",
+		},
+		[]string{"status"},
+	)
+
+	dsMutationResolutionDuration = k8smetrics.NewHistogram(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "daemonset_mutation_resolution_duration_seconds",
+			Help:      "Duration of dry-run webhook resolutions.",
+			Buckets:   DurationBuckets1sTo24h,
+		},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1206,6 +1224,8 @@ var allMetrics = []k8smetrics.Registerable{
 	ccStatusUpdatesTotal,
 	ccStatusApiPatchRequestsTotal,
 	ccStatusApiPatchDuration,
+	dsMutationResolutionsTotal,
+	dsMutationResolutionDuration,
 }
 
 // RegisterAll registers all metrics.
@@ -1960,4 +1980,10 @@ func (*prometheusMetrics) RegisterCCStatusUpdate(dropped bool) {
 func (*prometheusMetrics) ObserveCCApiPatch(duration time.Duration, code string) {
 	ccStatusApiPatchRequestsTotal.WithLabelValues(code).Inc()
 	ccStatusApiPatchDuration.WithLabelValues(code).Observe(duration.Seconds())
+}
+
+// ObserveDaemonSetMutationResolution reports duration and status for daemonset mutation resolutions.
+func (m *prometheusMetrics) ObserveDaemonSetMutationResolution(status string, duration time.Duration) {
+	dsMutationResolutionsTotal.WithLabelValues(status).Inc()
+	dsMutationResolutionDuration.Observe(duration.Seconds())
 }
