@@ -59,15 +59,15 @@ type cloudProvider interface {
 
 // NodeReconciliationProcessor is a processor that reconciles the state of CSN nodes in the Cluster Autoscaler's ClusterSnapshot
 // with the desired state from the CSN node controller. go/csn-in-ca
-type NodeReconcilationProcessor struct {
+type NodeReconciliationProcessor struct {
 	nodeController     csnNodeController
 	cloudProvider      cloudProvider
 	experimentsManager experiments.Manager
 	metrics            csnMetrics
 }
 
-func NewNodeReconciliationProcessor(nodeController csnNodeController, cloudProvider cloudProvider, experimentsManager experiments.Manager) *NodeReconcilationProcessor {
-	return &NodeReconcilationProcessor{
+func NewNodeReconciliationProcessor(nodeController csnNodeController, cloudProvider cloudProvider, experimentsManager experiments.Manager) *NodeReconciliationProcessor {
+	return &NodeReconciliationProcessor{
 		nodeController:     nodeController,
 		cloudProvider:      cloudProvider,
 		experimentsManager: experimentsManager,
@@ -75,7 +75,7 @@ func NewNodeReconciliationProcessor(nodeController csnNodeController, cloudProvi
 	}
 }
 
-func (p *NodeReconcilationProcessor) Preprocess(ctx *ca_context.AutoscalingContext) error {
+func (p *NodeReconciliationProcessor) Preprocess(ctx *ca_context.AutoscalingContext) error {
 	defer metrics.UpdateDurationFromStart(context.TODO(), nodeReconciliationMetricLabel, time.Now())
 
 	snapshot := ctx.ClusterSnapshot
@@ -98,7 +98,11 @@ func (p *NodeReconcilationProcessor) Preprocess(ctx *ca_context.AutoscalingConte
 }
 
 // preprocess should be executed under fork.
-func (p *NodeReconcilationProcessor) preprocess(snapshot clustersnapshot.ClusterSnapshot) error {
+func (p *NodeReconciliationProcessor) preprocess(snapshot clustersnapshot.ClusterSnapshot) error {
+	// Trigger reconciliation asynchronously to avoid blocking the main CA loop, because Reconcile()
+	// performs synchronous GCE API network calls to inspect instance statuses.
+	// This introduces a 1-loop delay before any enqueued operations (e.g. FailNodeOp)
+	// take effect in the cluster snapshot, which is acceptable.
 	go func() {
 		p.nodeController.Reconcile()
 	}()
@@ -178,7 +182,7 @@ func (p *NodeReconcilationProcessor) preprocess(snapshot clustersnapshot.Cluster
 	return nil
 }
 
-func (p *NodeReconcilationProcessor) markUpcomingCSNNode(ni *framework.NodeInfo) {
+func (p *NodeReconciliationProcessor) markUpcomingCSNNode(ni *framework.NodeInfo) {
 	node := ni.Node()
 	// Node is already a CSN node, no need to modify it
 	if csn.IsCSNNode(node) {
