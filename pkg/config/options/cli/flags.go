@@ -27,7 +27,6 @@ import (
 	"k8s.io/klog/v2"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/config/flags"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/scheduler"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
@@ -177,26 +176,26 @@ func ComponentVersion() version.Version {
 	return v
 }
 
-func OssOptionsFromFlags() config.AutoscalingOptions {
-	genericOptions := flags.AutoscalingOptions()
-
+// PostProcessOssOptions modifies the OSS options after they are parsed
+// from command line to comply with GKE specific requirements.
+func PostProcessOssOptions(ossOptions *config.AutoscalingOptions) {
 	// Enable bypassing schedulers only when proactive-scaleups is enabled
-	if !genericOptions.ProactiveScaleupEnabled {
-		genericOptions.BypassedSchedulers = scheduler.SchedulersMap([]string{})
+	if !ossOptions.ProactiveScaleupEnabled {
+		ossOptions.BypassedSchedulers = scheduler.SchedulersMap([]string{})
 	} else {
 		klog.Infof("Proactive scaleup is enabled, allowing scheduler bypassing")
 		// BypassedSchedulers is already set in the AutoscalingOptions() call above
 	}
 
 	// Add the defrag taints to the list of status taints
-	allStatusTaints := genericOptions.StatusTaints
+	allStatusTaints := ossOptions.StatusTaints
 	allStatusTaints = append(allStatusTaints, defrag.HardTaint, defrag.SoftTaint)
 	// Ignore taints we apply during Balloon Pod resizes.
 	allStatusTaints = append(allStatusTaints, resizable_types.BPResizeTaint.Key)
 	// Ignore taints we apply for CSN nodes.
 	allStatusTaints = append(allStatusTaints, csn.BufferAssignmentKey)
 	allStatusTaints = append(allStatusTaints, csn.SuspendedTaintKey)
-	genericOptions.StatusTaints = allStatusTaints
+	ossOptions.StatusTaints = allStatusTaints
 
 	// Update ExpendablePodsPriorityCutoff if autopilot is enabled
 	if *autopilotEnabled {
@@ -204,27 +203,25 @@ func OssOptionsFromFlags() config.AutoscalingOptions {
 		if strconv.IntSize == 64 {
 			t = -math.MaxInt64
 		}
-		genericOptions.ExpendablePodsPriorityCutoff = t
+		ossOptions.ExpendablePodsPriorityCutoff = t
 	}
 
-	if genericOptions.AsyncNodeGroupsEnabled && *cpMaxParallelOps < 1 {
+	if ossOptions.AsyncNodeGroupsEnabled && *cpMaxParallelOps < 1 {
 		klog.Fatalf("Async node pools require max GKE CP concurrent ops > 0, got: %d", *cpMaxParallelOps)
 	}
 
-	if err := parsing.ValidateMppnFlags(genericOptions.ExpanderNames); err != nil {
+	if err := parsing.ValidateMppnFlags(ossOptions.ExpanderNames); err != nil {
 		klog.Fatalf("max pods per node flags invalid: %v", err)
 	}
 
-	genericOptions.GCEOptions.LocalSSDDiskSizeProvider = localssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes)
-	if !genericOptions.FrequentLoopsEnabled {
+	ossOptions.GCEOptions.LocalSSDDiskSizeProvider = localssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes)
+	if !ossOptions.FrequentLoopsEnabled {
 		klog.Fatalf("Running without FrequentLoopsEnabled option is no longer supported.")
 	}
 
 	// GKE clusterautoscaler always uses ProvReqs, forcing the flag on
-	genericOptions.ProvisioningRequestEnabled = true
-	genericOptions.ScaleDownEnabled = true
-
-	return genericOptions
+	ossOptions.ProvisioningRequestEnabled = true
+	ossOptions.ScaleDownEnabled = true
 }
 
 func InternalOptsFromFlags() internalopts.InternalOptions {

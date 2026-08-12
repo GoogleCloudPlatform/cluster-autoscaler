@@ -34,6 +34,7 @@ import (
 	kube_client "k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/leaderelection"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config/flags"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
@@ -177,14 +178,21 @@ func main() {
 	klog.EnableContextualLogging(false)
 	ctrl.SetLogger(klog.NewKlogr())
 
+	ossFlags := flags.AutoscalingFlags{}
+	ossFlags.AddFlags(pflag.CommandLine)
 	leaderElection := defaultLeaderElectionConfiguration()
 	leaderElection.LeaderElect = true
 	componentopts.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
-
 	kube_flag.InitFlags()
 
+	ossOptions, err := ossFlags.Options()
+	if err != nil {
+		klog.Fatalf("Unable to resolve autoscaling options: %v", err)
+	}
+	cli.PostProcessOssOptions(&ossOptions)
+
 	optionsFromFlags := internalopts.AutoscalingOptions{
-		AutoscalingOptions: cli.OssOptionsFromFlags(),
+		AutoscalingOptions: ossOptions,
 		InternalOptions:    cli.InternalOptsFromFlags(),
 	}
 	experimentsManager := optstracking.InitExperimentsManager(optionsFromFlags)
