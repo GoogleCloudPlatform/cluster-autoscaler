@@ -123,7 +123,7 @@ func TestTaintTracker_HandleNodeEvent(t *testing.T) {
 		{
 			name: "node_count_event_ignored",
 			events: []state.NodeEvent{
-				state.NodeCounts{Counts: map[csn.NodeState]int{csn.NodeStateSuspended: 5}},
+				state.NodeCounts{Counts: map[state.NodeCountsState]int{{State: csn.NodeStateSuspended, BackedOff: true}: 5}},
 			},
 			expectedTaintCount: []int{0},
 			expectTracked:      []bool{false},

@@ -664,6 +664,31 @@ func TestPeriodicMetricsSync(t *testing.T) {
 	fakeClock := clock.NewFakeClock(time.Now())
 	eventChan := make(chan NodeEvent, 10)
 	metricInterval := 10 * time.Second
+
+	mig1 := gke.NewTestGkeMigBuilder().
+		SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig-1"}).
+		Build()
+
+	mb := &test.MockBackoff{
+		BackedOffMigs: map[string]bool{
+			mig1.Id(): true,
+		},
+	}
+
+	node1 := test.CreateNode("node1", test.StateOpt(csn.NodeStateSuspended))
+	node2 := test.CreateNode("node2", test.StateOpt(csn.NodeStateChilling))
+
+	cp := &mockCloudProvider{
+		nodeNameToMIG: map[string]*gke.GkeMig{
+			node1.Name: mig1,
+		},
+	}
+	em := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		map[string]bool{experiments.ColdStandbyNodesBackoffMinCAVersionFlag: true},
+		nil,
+	)
+
 	m := NewNodeStateManager(
 		fs.RegisterNodeHandler,
 		WithClock(fakeClock),
@@ -673,13 +698,15 @@ func TestPeriodicMetricsSync(t *testing.T) {
 				eventChan <- n
 			}
 		}),
+		WithBackoff(mb),
+		WithCloudProvider(cp),
+		WithExperimentsManager(em),
 	)
 
 	mustRunManager(t, m)
 
-	node1 := test.CreateNode("node1", test.StateOpt(csn.NodeStateSuspended))
-	node2 := test.CreateNode("node2", test.StateOpt(csn.NodeStateChilling))
 	fs.AddNodes(node1, node2)
+	m.UpdateBackoffStatus()
 
 	fakeClock.Step(metricInterval + time.Second)
 
@@ -688,8 +715,8 @@ func TestPeriodicMetricsSync(t *testing.T) {
 	if !ok {
 		t.Fatalf("Unexpected event type: %T", countsEvent)
 	}
-	assert.Equal(t, 1, countsEvent.Counts[csn.NodeStateSuspended])
-	assert.Equal(t, 1, countsEvent.Counts[csn.NodeStateChilling])
+	assert.Equal(t, 1, countsEvent.Counts[NodeCountsState{State: csn.NodeStateSuspended, BackedOff: true}])
+	assert.Equal(t, 1, countsEvent.Counts[NodeCountsState{State: csn.NodeStateChilling, BackedOff: false}])
 
 	fs.AddNodes(
 		test.CreateNode("node3", test.StateOpt(csn.NodeStateChilling)),
@@ -703,8 +730,8 @@ func TestPeriodicMetricsSync(t *testing.T) {
 	if !ok {
 		t.Fatalf("Unexpected event type: %T", countsEvent)
 	}
-	assert.Equal(t, 2, countsEvent.Counts[csn.NodeStateChilling])
-	assert.Equal(t, 0, countsEvent.Counts[csn.NodeStateSuspended])
+	assert.Equal(t, 2, countsEvent.Counts[NodeCountsState{State: csn.NodeStateChilling, BackedOff: false}])
+	assert.Equal(t, 0, countsEvent.Counts[NodeCountsState{State: csn.NodeStateSuspended, BackedOff: true}])
 }
 
 type FakeNodeSource struct {
