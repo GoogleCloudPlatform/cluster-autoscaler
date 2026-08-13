@@ -27,83 +27,175 @@ import (
 	cametrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
-func TestObserveDryRunResolution(t *testing.T) {
-	cametrics.RegisterAll()
-	cametrics.ResetAllForTest()
-
-	getVal := func(status, reason string) float64 {
-		val, _ := cametrics.GetDaemonSetMutationResolutionsCountForTest(status, reason)
-		return val
+func TestClassifyOutcome(t *testing.T) {
+	testCases := []struct {
+		name           string
+		changed        bool
+		err            error
+		expectedStatus string
+		expectedReason string
+	}{
+		{
+			name:           "success with changed resources",
+			changed:        true,
+			err:            nil,
+			expectedStatus: "success",
+			expectedReason: "mutated",
+		},
+		{
+			name:           "success with unchanged resources",
+			changed:        false,
+			err:            nil,
+			expectedStatus: "success",
+			expectedReason: "unmutated",
+		},
+		{
+			name:           "context deadline exceeded",
+			changed:        false,
+			err:            context.DeadlineExceeded,
+			expectedStatus: "error",
+			expectedReason: "timeout",
+		},
+		{
+			name:           "api timeout error",
+			changed:        false,
+			err:            apierrors.NewTimeoutError("timeout", 1),
+			expectedStatus: "error",
+			expectedReason: "timeout",
+		},
+		{
+			name:           "api server timeout error",
+			changed:        false,
+			err:            apierrors.NewServerTimeout(schema.GroupResource{Resource: "pods"}, "create", 1),
+			expectedStatus: "error",
+			expectedReason: "timeout",
+		},
+		{
+			name:           "api forbidden error",
+			changed:        false,
+			err:            apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "fake-pod", errors.New("policy block")),
+			expectedStatus: "error",
+			expectedReason: "forbidden",
+		},
+		{
+			name:           "api invalid error",
+			changed:        false,
+			err:            apierrors.NewInvalid(schema.GroupKind{Kind: "Pod"}, "fake-pod", field.ErrorList{}),
+			expectedStatus: "error",
+			expectedReason: "invalid",
+		},
+		{
+			name:           "api not found error",
+			changed:        false,
+			err:            apierrors.NewNotFound(schema.GroupResource{Resource: "namespaces"}, "fake-ns"),
+			expectedStatus: "error",
+			expectedReason: "not_found",
+		},
+		{
+			name:           "api too many requests (rate limited)",
+			changed:        false,
+			err:            apierrors.NewTooManyRequests("throttled", 10),
+			expectedStatus: "error",
+			expectedReason: "rate_limited",
+		},
+		{
+			name:           "api internal error",
+			changed:        false,
+			err:            apierrors.NewInternalError(errors.New("db error")),
+			expectedStatus: "error",
+			expectedReason: "internal",
+		},
+		{
+			name:           "api service unavailable error",
+			changed:        false,
+			err:            apierrors.NewServiceUnavailable("down"),
+			expectedStatus: "error",
+			expectedReason: "internal",
+		},
+		{
+			name:           "generic other error",
+			changed:        false,
+			err:            errors.New("dryrun failed"),
+			expectedStatus: "error",
+			expectedReason: "other",
+		},
 	}
 
-	initMutated := getVal("success", "mutated")
-	initUnmutated := getVal("success", "unmutated")
-	initTimeout := getVal("error", "timeout")
-	initForbidden := getVal("error", "forbidden")
-	initInvalid := getVal("error", "invalid")
-	initNotFound := getVal("error", "not_found")
-	initRateLimited := getVal("error", "rate_limited")
-	initInternal := getVal("error", "internal")
-	initSuccessMutatedDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "mutated")
-	initSuccessUnmutatedDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "unmutated")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotStatus, gotReason := classifyOutcome(tc.changed, tc.err)
+			assert.Equal(t, tc.expectedStatus, gotStatus)
+			assert.Equal(t, tc.expectedReason, gotReason)
+		})
+	}
+}
 
-	// Success mutated case
-	observeDryRunResolution(true, nil, 5*time.Second)
-	assert.Equal(t, initMutated+1, getVal("success", "mutated"))
-	durationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "mutated")
-	assert.Equal(t, initSuccessMutatedDurationVal+5.0, durationVal)
+func TestObserveDryRunResolution(t *testing.T) {
+	cametrics.RegisterAll()
 
-	// Success unmutated case
-	observeDryRunResolution(false, nil, 3*time.Second)
-	assert.Equal(t, initUnmutated+1, getVal("success", "unmutated"))
-	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("success", "unmutated")
-	assert.Equal(t, initSuccessUnmutatedDurationVal+3.0, durationVal)
+	testCases := []struct {
+		name           string
+		changed        bool
+		err            error
+		duration       time.Duration
+		expectedStatus string
+		expectedReason string
+		expectRecorded bool
+	}{
+		{
+			name:           "records success changed outcome and duration",
+			changed:        true,
+			err:            nil,
+			duration:       5 * time.Second,
+			expectedStatus: "success",
+			expectedReason: "mutated",
+			expectRecorded: true,
+		},
+		{
+			name:           "records success unchanged outcome and duration",
+			changed:        false,
+			err:            nil,
+			duration:       3 * time.Second,
+			expectedStatus: "success",
+			expectedReason: "unmutated",
+			expectRecorded: true,
+		},
+		{
+			name:           "records error outcome and duration",
+			changed:        false,
+			err:            errors.New("dryrun failed"),
+			duration:       10 * time.Second,
+			expectedStatus: "error",
+			expectedReason: "other",
+			expectRecorded: true,
+		},
+		{
+			name:           "ignores context canceled completely",
+			changed:        false,
+			err:            context.Canceled,
+			duration:       1 * time.Second,
+			expectedStatus: "error",
+			expectedReason: "other",
+			expectRecorded: false,
+		},
+	}
 
-	// Context timeout case
-	observeDryRunResolution(false, context.DeadlineExceeded, 1*time.Second)
-	assert.Equal(t, initTimeout+1, getVal("error", "timeout"))
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cametrics.ResetAllForTest()
 
-	// API Forbidden case
-	forbiddenErr := apierrors.NewForbidden(schema.GroupResource{Group: "", Resource: "pods"}, "fake-pod", errors.New("policy block"))
-	observeDryRunResolution(false, forbiddenErr, 1*time.Second)
-	assert.Equal(t, initForbidden+1, getVal("error", "forbidden"))
+			observeDryRunResolution(tc.changed, tc.err, tc.duration)
 
-	// API Invalid case
-	invalidErr := apierrors.NewInvalid(schema.GroupKind{Group: "", Kind: "Pod"}, "fake-pod", field.ErrorList{})
-	observeDryRunResolution(false, invalidErr, 1*time.Second)
-	assert.Equal(t, initInvalid+1, getVal("error", "invalid"))
+			count, _ := cametrics.GetDaemonSetMutationResolutionsCountForTest(tc.expectedStatus, tc.expectedReason)
+			durationSum, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest(tc.expectedStatus, tc.expectedReason)
 
-	// API NotFound case
-	notFoundErr := apierrors.NewNotFound(schema.GroupResource{Group: "", Resource: "namespaces"}, "fake-ns")
-	observeDryRunResolution(false, notFoundErr, 1*time.Second)
-	assert.Equal(t, initNotFound+1, getVal("error", "not_found"))
-
-	// API TooManyRequests case
-	rateLimitErr := apierrors.NewTooManyRequests("throttled", 10)
-	observeDryRunResolution(false, rateLimitErr, 1*time.Second)
-	assert.Equal(t, initRateLimited+1, getVal("error", "rate_limited"))
-
-	// API Internal case
-	internalErr := apierrors.NewInternalError(errors.New("db error"))
-	observeDryRunResolution(false, internalErr, 1*time.Second)
-	assert.Equal(t, initInternal+1, getVal("error", "internal"))
-
-	// API ServiceUnavailable case
-	unavailableErr := apierrors.NewServiceUnavailable("down")
-	observeDryRunResolution(false, unavailableErr, 1*time.Second)
-	assert.Equal(t, initInternal+2, getVal("error", "internal")) // Increments initInternal by 2 total
-
-	// Context Canceled case (should be ignored completely)
-	currOther := getVal("error", "other")
-	currOtherDurationVal, _ := cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
-	observeDryRunResolution(false, context.Canceled, 1*time.Second)
-	assert.Equal(t, currOther, getVal("error", "other"))
-	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
-	assert.Equal(t, currOtherDurationVal, durationVal)
-
-	// Generic error case
-	observeDryRunResolution(false, errors.New("dryrun failed"), 10*time.Second)
-	assert.Equal(t, currOther+1, getVal("error", "other"))
-	durationVal, _ = cametrics.GetDaemonSetMutationResolutionDurationSumForTest("error", "other")
-	assert.Equal(t, currOtherDurationVal+10.0, durationVal)
+			if !tc.expectRecorded {
+				assert.Equal(t, 0.0, count)
+				assert.Equal(t, 0.0, durationSum)
+			} else {
+				assert.Equal(t, 1.0, count)
+				assert.Equal(t, tc.duration.Seconds(), durationSum)
+			}
+		})
+	}
 }
