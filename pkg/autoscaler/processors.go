@@ -657,7 +657,7 @@ func setUpProcessors(
 	autoscalingProcessors.PodListProcessor =
 		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconcilationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, storageNodeAffinityProcessor, experimentsManager)
 
-	metricsFilterProcessor := metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter)
+	autoscalingProcessors.ScaleStateNotifier.Register(metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter))
 
 	autoscalingProcessors.ActionableClusterProcessor = internal_processors.NewGkeEmptyClusterProcessor()
 
@@ -685,7 +685,7 @@ func setUpProcessors(
 		mutationController.Start()
 	}
 
-	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, metricsFilterProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
+	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
 
 	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, npcCrdLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor

@@ -19,10 +19,8 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
-	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 )
 
 // MetricsFilterScaleUpProcessor returns info on stockouts and quota issues to
@@ -31,28 +29,34 @@ type MetricsFilterScaleUpProcessor struct {
 	metricsFilter filter.MetricsFilter
 }
 
-// Process processes scale up failures to inform the MetricsFilter.
-func (m *MetricsFilterScaleUpProcessor) Process(_ *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, _ time.Time) error {
-	for nodeGroupId, failures := range csr.GetScaleUpFailures() {
-		for _, failure := range failures {
-			reason := metrics.FailedScaleUpReason(failure.ErrorInfo.ErrorCode)
-			switch reason {
-			case gce.ErrorCodeResourcePoolExhausted:
-				m.metricsFilter.ObserveNodeGroupStockOut(nodeGroupId)
-			case gce.ErrorCodeQuotaExceeded, gce.ErrorIPSpaceExhausted, gkeclient.ServiceAccountDeleted:
-				m.metricsFilter.ObserveNodeGroupFilterableIssue(nodeGroupId)
-			}
-		}
-	}
-	return nil
-}
-
-// CleanUp cleans up the processor
-func (m *MetricsFilterScaleUpProcessor) CleanUp() {}
-
 // NewMetricsFilterScaleUpProcessor returns a MetricsFilterScaleUpProcessor
 func NewMetricsFilterScaleUpProcessor(filter filter.MetricsFilter) *MetricsFilterScaleUpProcessor {
 	return &MetricsFilterScaleUpProcessor{
 		metricsFilter: filter,
 	}
+}
+
+// RegisterFailedScaleUp records failed scale-up for a nodegroup to inform the MetricsFilter.
+func (m *MetricsFilterScaleUpProcessor) RegisterFailedScaleUp(nodeGroup cloudprovider.NodeGroup, _ int, errorInfo cloudprovider.InstanceErrorInfo, _ time.Time) {
+	if nodeGroup == nil || m.metricsFilter == nil {
+		return
+	}
+	switch errorInfo.ErrorCode {
+	case gce.ErrorCodeResourcePoolExhausted:
+		m.metricsFilter.ObserveNodeGroupStockOut(nodeGroup.Id())
+	case gce.ErrorCodeQuotaExceeded, gce.ErrorIPSpaceExhausted, gkeclient.ServiceAccountDeleted:
+		m.metricsFilter.ObserveNodeGroupFilterableIssue(nodeGroup.Id())
+	}
+}
+
+// RegisterScaleUp records when scale up happened for a nodegroup.
+func (m *MetricsFilterScaleUpProcessor) RegisterScaleUp(_ cloudprovider.NodeGroup, _ int, _ time.Time) {
+}
+
+// RegisterScaleDown records when scale down happened for a nodegroup.
+func (m *MetricsFilterScaleUpProcessor) RegisterScaleDown(_ cloudprovider.NodeGroup, _ string, _ time.Time, _ time.Time) {
+}
+
+// RegisterFailedScaleDown records failed scale-down for a nodegroup.
+func (m *MetricsFilterScaleUpProcessor) RegisterFailedScaleDown(_ cloudprovider.NodeGroup, _ string, _ time.Time) {
 }

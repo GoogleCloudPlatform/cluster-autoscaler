@@ -21,7 +21,6 @@ import (
 	crd_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
-	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/nodequota"
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	klog "k8s.io/klog/v2"
@@ -33,7 +32,6 @@ import (
 type GkeInternalAutoscalingStatusProcessor struct {
 	quotaProcessor                  *nodequota.NodeQuotaProcessor
 	vizProcessor                    *viz_processors.AutoscalingStatusVisibilityProcessor
-	metricsFilterProcessor          *metrics_processors.MetricsFilterScaleUpProcessor
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor
 	edpMetrics                      *edps.Metrics
 	observabilityProcessor          *crd_status.CrdResourceReportingProcessor
@@ -57,14 +55,6 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(context *context.Autosca
 			// we can't really do much about those errors on top of logging them
 			// and it doesn't feel worth it trying to try and aggregate them
 			err = vizErr
-		}
-	}
-	if p.metricsFilterProcessor != nil {
-		metricsErr := p.metricsFilterProcessor.Process(context, csr, now)
-		if metricsErr != nil {
-			klog.Errorf("Metrics status processor failed with error: %v", metricsErr)
-			// same as above. log the error and override the last error.
-			err = metricsErr
 		}
 	}
 	if p.edpUpgradeNodeTaintingProcessor != nil {
@@ -108,9 +98,6 @@ func (p *GkeInternalAutoscalingStatusProcessor) CleanUp() {
 	if p.vizProcessor != nil {
 		p.vizProcessor.CleanUp()
 	}
-	if p.metricsFilterProcessor != nil {
-		p.metricsFilterProcessor.CleanUp()
-	}
 	if p.edpUpgradeNodeTaintingProcessor != nil {
 		p.edpUpgradeNodeTaintingProcessor.CleanUp()
 	}
@@ -126,7 +113,6 @@ func (p *GkeInternalAutoscalingStatusProcessor) CleanUp() {
 func NewGkeInternalAutoscalingStatusProcessor(
 	quotaProcessor *nodequota.NodeQuotaProcessor,
 	vizProcessor *viz_processors.AutoscalingStatusVisibilityProcessor,
-	metricsProcessor *metrics_processors.MetricsFilterScaleUpProcessor,
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor,
 	edpMetrics *edps.Metrics,
 	observabilityProcessor *status.CrdResourceReportingProcessor,
@@ -134,7 +120,6 @@ func NewGkeInternalAutoscalingStatusProcessor(
 	return &GkeInternalAutoscalingStatusProcessor{
 		quotaProcessor:                  quotaProcessor,
 		vizProcessor:                    vizProcessor,
-		metricsFilterProcessor:          metricsProcessor,
 		edpUpgradeNodeTaintingProcessor: edpUpgradeNodeTaintingProcessor,
 		edpMetrics:                      edpMetrics,
 		observabilityProcessor:          observabilityProcessor,
