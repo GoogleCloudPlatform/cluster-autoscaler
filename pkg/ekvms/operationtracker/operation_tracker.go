@@ -22,6 +22,10 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
@@ -35,6 +39,7 @@ import (
 	ekvms_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
+	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
@@ -51,6 +56,9 @@ const (
 	resizeUnknownStateNodeTimeout    = 5 * time.Minute
 	maxFixUnknownStateNodeAttempts   = 5
 	reconcileNodeStateRequeueBackoff = 30 * time.Second
+	cacheStaleRequeueBackoff         = 1 * time.Second
+	cacheStaleTimeout                = 15 * time.Second
+	getNodeTimeout                   = 10 * time.Second
 	fixerLogPrefix                   = "Resizable VM fixer: "
 	downsizeDelayAfterTaint          = 1 * time.Second
 )
@@ -210,7 +218,10 @@ type operationTracker struct {
 	nodeStateManager                 nodeStateManager
 	nodesBeingProcessed              nodetracker.Interface
 	vmStateCache                     *vmStateCache
+	consistencyStore                 consistencyutil.ConsistencyStore
 	reconcileNodeStateRequeueBackoff time.Duration
+	cacheStaleRequeueBackoff         time.Duration
+	cacheStaleTimeout                time.Duration
 	waitingOnAdd                     sync.WaitGroup // Currently used for testing only.
 
 	fixerEnabled  bool
@@ -224,6 +235,10 @@ func New(clientSet clientset.Interface, informerFactory informers.SharedInformer
 
 // newOperationTracker builds and returns a new operationTracker instance.
 func newOperationTracker(clientSet clientset.Interface, informerFactory informers.SharedInformerFactory, provider cloudProvider, nodeStateManager nodeStateManager, metrics resizeMetrics, sizeCalculator calculator.Calculator, workers int, fixerEnabled bool, fixerInterval time.Duration, clock clock.PassiveClock) *operationTracker {
+	store := consistencyutil.NewConsistencyStore(map[schema.GroupResource]consistencyutil.LastSyncRVGetter{
+		{Resource: "nodes"}: informerFactory.Core().V1().Nodes().Informer().GetStore(),
+	})
+
 	opTracker := &operationTracker{
 		clientSet:       clientSet,
 		provider:        provider,
@@ -232,14 +247,18 @@ func newOperationTracker(clientSet clientset.Interface, informerFactory informer
 		sizeCalculator:  sizeCalculator,
 		clock:           clock,
 		balloonPodResizer: &defaultBalloonPodResizer{
-			bPController: newBalloonPodController(clientSet, informerFactory),
-			clientSet:    clientSet,
+			bPController:     newBalloonPodController(clientSet, informerFactory),
+			clientSet:        clientSet,
+			consistencyStore: store,
 		},
 		opQueue:                          newOperationQueue("OperationTracker"),
 		nodeStateManager:                 nodeStateManager,
 		nodesBeingProcessed:              nodetracker.New(clock),
 		vmStateCache:                     newVmStateCache(provider),
+		consistencyStore:                 store,
 		reconcileNodeStateRequeueBackoff: reconcileNodeStateRequeueBackoff,
+		cacheStaleRequeueBackoff:         cacheStaleRequeueBackoff,
+		cacheStaleTimeout:                cacheStaleTimeout,
 		waitingOnAdd:                     sync.WaitGroup{},
 		fixerEnabled:                     fixerEnabled,
 		fixerInterval:                    fixerInterval,
@@ -356,6 +375,7 @@ func (o *operationTracker) tryToUpdate(node *v1.Node) bool {
 	// due to gceCache.instanceToMig cache already being invalidated.
 	if taints.HasTaint(node, taints.ToBeDeletedTaint) {
 		o.nodeStateManager.deleteNode(node.Name)
+		o.consistencyStore.Clear(types.NamespacedName{Name: node.Name}, "")
 		return true
 	}
 
@@ -475,6 +495,7 @@ func (o *operationTracker) onDeleteNode(obj interface{}) {
 		return
 	}
 	o.nodeStateManager.deleteNode(node.Name)
+	o.consistencyStore.Clear(types.NamespacedName{Name: node.Name}, "")
 	err = o.vmStateCache.invalidate(node)
 	if err != nil {
 		klog.Warningf("Invalidating current vm size cache for node %q failed: %v", node.Name, err)
@@ -526,6 +547,10 @@ func (o *operationTracker) processNextOperation() bool {
 	}
 	defer o.opQueue.Done(operation)
 
+	if !o.waitForNodeConsistency(operation) {
+		return true
+	}
+
 	switch {
 	case operation.resize != nil:
 		o.handleResizeOperation(*operation.resize)
@@ -540,6 +565,64 @@ func (o *operationTracker) processNextOperation() bool {
 		klog.Errorf("Operation not supported: %+v", operation)
 	}
 	return true
+}
+
+// waitForNodeConsistency blocks until the local informer cache has observed all recent writes
+// for the operation's target node before allowing the operation to execute.
+//
+// If the cache remains stale beyond cacheStaleTimeout, it fetches the node directly from the API server:
+//   - If the node is not found on the API server (deleted), it clears the consistency store constraint
+//     and returns true so the operation can proceed and handle node deletion.
+//   - If direct retrieval fails with a transient error, it re-enqueues the operation at the front
+//     of the queue and returns false to retry.
+//   - If the node is retrieved successfully, it updates the node state in nodeStateManager,
+//     clears the consistency store constraint, and returns true to proceed (or false if untracked).
+//
+// Returns true if the operation should be executed, or false if it was re-enqueued for retry or dropped.
+func (o *operationTracker) waitForNodeConsistency(operation operation) bool {
+	nodeName := operation.nodeName()
+	if nodeName == "" {
+		return false
+	}
+
+	waitStart := o.clock.Now()
+	for {
+		err := o.consistencyStore.EnsureReady(types.NamespacedName{Name: nodeName})
+		if err == nil {
+			return true
+		}
+
+		waitDuration := o.clock.Since(waitStart)
+		if waitDuration >= o.cacheStaleTimeout {
+			klog.Warningf("Cache for node %q remained stale after %v, fetching node directly from API server: %v", nodeName, o.cacheStaleTimeout, err)
+			node, getErr := o.getNode(nodeName)
+			if getErr != nil {
+				if apierrors.IsNotFound(getErr) {
+					klog.V(2).Infof("Node %q was deleted from API server, assuming up-to-date and allowing operation to proceed", nodeName)
+					o.consistencyStore.Clear(types.NamespacedName{Name: nodeName}, "")
+					return true
+				}
+				klog.Errorf("Failed to get node %q directly from API server: %v, retrying operation", nodeName, getErr)
+				o.opQueue.EnqueueFront(operation)
+				return false
+			}
+
+			o.consistencyStore.Clear(types.NamespacedName{Name: nodeName}, "")
+			if !o.tryToUpdate(node) {
+				klog.Warningf("Node %q fetched directly from API server is not tracked in nodeStateManager, dropping operation", nodeName)
+				return false
+			}
+			return true
+		}
+
+		time.Sleep(o.cacheStaleRequeueBackoff)
+	}
+}
+
+func (o *operationTracker) getNode(nodeName string) (*v1.Node, error) {
+	ctx, cancelFunc := context.WithTimeout(context.Background(), getNodeTimeout)
+	defer cancelFunc()
+	return o.clientSet.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 }
 
 func (o *operationTracker) handleFixOperation(op fixOperation) error {

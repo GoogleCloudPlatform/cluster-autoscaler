@@ -121,6 +121,23 @@ func TestMixOfEnqueueAndEnqueueAfter(t *testing.T) {
 	assert.Equal(t, node.Name, gotNodeName)
 }
 
+func TestEnqueueFront(t *testing.T) {
+	node := test.BuildTestNode("node1", 1000, 1024)
+
+	fixOp := operation{fix: &fixOperation{NodeName: node.Name, MachineFamily: "ek"}}
+	resizeOp := operation{resize: &ResizeOperation{NodeName: node.Name, StartingSize: newSize(100, 100), DesiredSize: newSize(200, 200)}}
+
+	opQueue := newOperationQueue("test")
+	defer opQueue.ShutDown()
+
+	opQueue.Enqueue(fixOp)
+	opQueue.EnqueueFront(resizeOp)
+
+	op, quit := opQueue.Get()
+	assert.False(t, quit)
+	assert.Equal(t, resizeOp, op)
+}
+
 func TestGet(t *testing.T) {
 	node1 := test.BuildTestNode("node1", 1000, 1024)
 	node2 := test.BuildTestNode("node2", 1000, 1024)

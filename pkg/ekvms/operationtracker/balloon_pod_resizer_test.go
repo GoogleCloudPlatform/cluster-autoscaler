@@ -17,6 +17,7 @@ package operationtracker
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,10 +29,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -102,7 +106,7 @@ func TestResizeBalloonPod(t *testing.T) {
 				mockBPController.On("CreateBalloonPod", mock.Anything, tc.expectedBalloonPodCpu, tc.expectedBalloonPodMem).Return(tc.createBalloonPodErr).Once()
 			}
 
-			balloonPodResizer := &defaultBalloonPodResizer{
+			balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore(),
 				bPController: mockBPController,
 				clientSet:    fakeClient,
 			}
@@ -165,7 +169,7 @@ func TestAddTaint(t *testing.T) {
 				})
 			}
 
-			balloonPodResizer := &defaultBalloonPodResizer{
+			balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore(),
 				clientSet: fakeClient,
 			}
 
@@ -242,7 +246,7 @@ func TestRemoveTaint(t *testing.T) {
 				})
 			}
 
-			balloonPodResizer := &defaultBalloonPodResizer{
+			balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore(),
 				clientSet: fakeClient,
 			}
 
@@ -295,7 +299,7 @@ func TestHasTaint(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			balloonPodResizer := &defaultBalloonPodResizer{}
+			balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore()}
 			got := balloonPodResizer.hasTaint(tc.node)
 			assert.Equal(t, tc.expected, got)
 		})
@@ -316,7 +320,7 @@ func TestAddTaintWithConcurrentUpdate(t *testing.T) {
 	freshNode.Spec.Taints = append(freshNode.Spec.Taints, concurrentTaint)
 
 	fakeClient := fake.NewSimpleClientset(freshNode.DeepCopy())
-	balloonPodResizer := &defaultBalloonPodResizer{clientSet: fakeClient}
+	balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore(), clientSet: fakeClient}
 
 	updatedNode, err := balloonPodResizer.addTaint(staleNode, timeAdded)
 
@@ -333,11 +337,71 @@ func TestRemoveTaintWithConcurrentUpdate(t *testing.T) {
 	freshNode.Spec.Taints = append(freshNode.Spec.Taints, concurrentTaint)
 
 	fakeClient := fake.NewSimpleClientset(freshNode.DeepCopy())
-	balloonPodResizer := &defaultBalloonPodResizer{clientSet: fakeClient}
+	balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyutil.NewNoopConsistencyStore(), clientSet: fakeClient}
 
 	updatedNode, err := balloonPodResizer.removeTaint(staleNode)
 
 	assert.NoError(t, err)
 	assert.False(t, balloonPodResizer.hasTaint(updatedNode), "Expected BPResize taint to be removed")
 	assert.Contains(t, updatedNode.Spec.Taints, concurrentTaint, "Expected concurrent taint to be preserved")
+}
+
+// fakeRVGetter implements LastSyncRVGetter for testing ConsistencyStore.
+type fakeRVGetter struct {
+	mu sync.Mutex
+	rv string
+}
+
+func (f *fakeRVGetter) setRV(rv string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rv = rv
+}
+
+func (f *fakeRVGetter) LastStoreSyncResourceVersion() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rv
+}
+
+func TestBalloonPodResizerConsistencyStore(t *testing.T) {
+	node := testNode.DeepCopy()
+	node.ResourceVersion = "1"
+
+	fakeClient := fake.NewSimpleClientset(node)
+	rvGetter := &fakeRVGetter{rv: "1"}
+
+	consistencyStore := consistencyutil.NewConsistencyStore(map[schema.GroupResource]consistencyutil.LastSyncRVGetter{
+		{Resource: "nodes"}: rvGetter,
+	})
+
+	balloonPodResizer := &defaultBalloonPodResizer{consistencyStore: consistencyStore,
+		clientSet: fakeClient,
+	}
+
+	// Fake patch returning a different ResourceVersion simulating APIServer write.
+	fakeClient.PrependReactor("patch", "nodes", func(action client_testing.Action) (bool, runtime.Object, error) {
+		updatedNode := testNode.DeepCopy()
+		updatedNode.ResourceVersion = "2"
+		updatedNode.Spec.Taints = []v1.Taint{*ekvmtypes.BPResizeTaint.DeepCopy()}
+		return true, updatedNode, nil
+	})
+
+	if err := consistencyStore.EnsureReady(types.NamespacedName{Name: node.Name}); err != nil {
+		t.Fatalf("ConsistencyStore should be ready initially, got: %v", err)
+	}
+
+	if _, err := balloonPodResizer.addTaint(node, time.Now()); err != nil {
+		t.Fatalf("Unexpected addTaint error: %v", err)
+	}
+
+	if err := consistencyStore.EnsureReady(types.NamespacedName{Name: node.Name}); err == nil {
+		t.Fatal("ConsistencyStore should NOT be ready after write because RV is stale (1 < 2)")
+	}
+
+	rvGetter.rv = "2"
+
+	if err := consistencyStore.EnsureReady(types.NamespacedName{Name: node.Name}); err != nil {
+		t.Fatalf("ConsistencyStore should be ready after RV caught up, got: %v", err)
+	}
 }

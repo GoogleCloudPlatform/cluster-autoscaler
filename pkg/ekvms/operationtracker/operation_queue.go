@@ -43,17 +43,21 @@ func newOperationQueue(name string) *operationQueue {
 }
 
 func (q *operationQueue) Enqueue(op operation) {
-	q.enqueue(op, 0)
+	q.enqueue(op, 0, false)
+}
+
+func (q *operationQueue) EnqueueFront(op operation) {
+	q.enqueue(op, 0, true)
 }
 
 // Don't use it for upsizes with high priority (currently upsizes) until b/423865823 is fixed.
 // TODO(b/423865823): Remove the above comment after the bug is fixed.
 func (q *operationQueue) EnqueueAfter(op operation, delay time.Duration) {
-	q.enqueue(op, delay)
+	q.enqueue(op, delay, false)
 }
 
 // enqueue places operation in the queue based on the operation node.
-func (q *operationQueue) enqueue(op operation, delay time.Duration) {
+func (q *operationQueue) enqueue(op operation, delay time.Duration, front bool) {
 	nodeName := op.nodeName()
 	if nodeName == "" {
 		klog.Warningf("Operation Queue: Node name is empty in operation: %+v", op)
@@ -64,7 +68,13 @@ func (q *operationQueue) enqueue(op operation, delay time.Duration) {
 	defer q.mux.Unlock()
 
 	upsizesBefore := countUpsizes(q.operationsPerNode[nodeName])
-	q.operationsPerNode[nodeName] = squashOperations(append(q.operationsPerNode[nodeName], op))
+	var ops []operation
+	if front {
+		ops = append([]operation{op}, q.operationsPerNode[nodeName]...)
+	} else {
+		ops = append(q.operationsPerNode[nodeName], op)
+	}
+	q.operationsPerNode[nodeName] = squashOperations(ops)
 	upsizesAfter := countUpsizes(q.operationsPerNode[nodeName])
 	q.upsizeCounter = q.upsizeCounter + upsizesAfter - upsizesBefore
 

@@ -22,11 +22,14 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	"k8s.io/klog/v2"
+	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/kubernetes/pkg/util/taints"
 )
 
@@ -44,8 +47,9 @@ type balloonPodController interface {
 }
 
 type defaultBalloonPodResizer struct {
-	bPController balloonPodController
-	clientSet    clientset.Interface
+	bPController     balloonPodController
+	clientSet        clientset.Interface
+	consistencyStore consistencyutil.ConsistencyStore
 }
 
 func (b *defaultBalloonPodResizer) init() error {
@@ -87,6 +91,9 @@ func (b *defaultBalloonPodResizer) addTaint(node *v1.Node, timeAdded time.Time) 
 	if err == nil && elapsedTime > patchLoggingThreshold {
 		klog.Warningf("Adding taint %q to node %q took more than %v: %v", ekvmtypes.BPResizeTaint.Key, node.Name, patchLoggingThreshold, elapsedTime)
 	}
+	if err == nil {
+		b.consistencyStore.WroteAt(types.NamespacedName{Name: node.Name}, node.UID, schema.GroupResource{Resource: "nodes"}, node.ResourceVersion)
+	}
 	return node, err
 }
 
@@ -101,6 +108,9 @@ func (b *defaultBalloonPodResizer) removeTaint(node *v1.Node) (*v1.Node, error) 
 	elapsedTime := time.Since(currentTime)
 	if err == nil && elapsedTime > patchLoggingThreshold {
 		klog.Warningf("Removing taint %q to node %q took more than %v: %v", ekvmtypes.BPResizeTaint.Key, node.Name, patchLoggingThreshold, elapsedTime)
+	}
+	if err == nil {
+		b.consistencyStore.WroteAt(types.NamespacedName{Name: node.Name}, node.UID, schema.GroupResource{Resource: "nodes"}, node.ResourceVersion)
 	}
 	return node, err
 }

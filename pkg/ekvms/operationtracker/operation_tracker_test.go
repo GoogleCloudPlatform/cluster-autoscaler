@@ -30,6 +30,8 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
@@ -40,6 +42,7 @@ import (
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/kubernetes/pkg/util/taints"
 	clock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -81,7 +84,7 @@ func TestOnUpdateNode(t *testing.T) {
 			mockBackoff := &mockBackoff{}
 			mockBackoff.On("DeleteNode", family, testResizableNodeName).Once()
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, &identitySizeCalculator{}, testClock)
-			ot := newOperationTracker(nil, nil, cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
 
 			node := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
 			ekNode := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).Build()
@@ -364,7 +367,7 @@ func TestOnAddNode(t *testing.T) {
 
 					ekCalculator := calculator_test.New()
 					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, ekCalculator, testClock)
-					ot := newOperationTracker(nil, nil, cloudProvider, nodeStateManager, metrics, ekCalculator, 1, false, fixerInterval, testClock)
+					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, ekCalculator, 1, false, fixerInterval, testClock)
 					ot.balloonPodResizer = mockBalloonPodResizer
 					if tc.cachedCurrentEkVmStates != nil {
 						ot.vmStateCache.vmStates = tc.cachedCurrentEkVmStates
@@ -427,7 +430,7 @@ func TestOnDeleteNode(t *testing.T) {
 			mockBackoff.On("DeleteNode", family, node.Name).Once()
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, ekCalculator, testClock)
 
-			ot := newOperationTracker(nil, nil, cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock)
 			ot.balloonPodResizer = mockBalloonPodResizer
 			ot.onAddNode(node)
 			ot.waitingOnAdd.Wait()
@@ -1994,4 +1997,151 @@ func (m *mockMetrics) RegisterResizableVmReconcileNodeStateEvents(machineFamily 
 
 func (m *mockMetrics) RegisterVmResizeOperation(machineFamily, direction, reason string, status metrics.OperationStatus) {
 	m.MethodCalled("RegisterVmResizeOperation", machineFamily, direction, reason, status)
+}
+
+type cacheStaleTestFixture struct {
+	node             *v1.Node
+	fakeClient       *fake.Clientset
+	rvGetter         *fakeRVGetter
+	consistencyStore consistencyutil.ConsistencyStore
+	testClock        *clock.FakeClock
+	nodeStateManager nodeStateManager
+	ot               *operationTracker
+	op               operation
+}
+
+func setupCacheStaleTest(initialAPIServerNodes ...runtime.Object) *cacheStaleTestFixture {
+	node := test.BuildTestNode("node1", 1000, 1024)
+	node.Spec.ProviderID = "gce://project/zone/node1"
+	node.ResourceVersion = "2"
+
+	fakeClient := fake.NewSimpleClientset(initialAPIServerNodes...)
+
+	rvGetter := &fakeRVGetter{rv: "1"}
+	consistencyStore := consistencyutil.NewConsistencyStore(map[schema.GroupResource]consistencyutil.LastSyncRVGetter{
+		{Resource: "nodes"}: rvGetter,
+	})
+	consistencyStore.WroteAt(types.NamespacedName{Name: node.Name}, node.UID, schema.GroupResource{Resource: "nodes"}, "2")
+
+	testClock := clock.NewFakeClock(testStartTime)
+	nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, &mockBackoff{}, &identitySizeCalculator{}, testClock)
+	nodeStateManager.setNode(node.Name, ResizableNode{Node: node, MachineFamily: "ek"})
+
+	cloudProvider := &mockCloudProvider{}
+	cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	metrics := &mockMetrics{}
+	metrics.On("RegisterVmResizeOperation", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+
+	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+	ot.consistencyStore = consistencyStore
+	ot.cacheStaleRequeueBackoff = 1 * time.Millisecond
+	ot.cacheStaleTimeout = 5 * time.Millisecond
+
+	mockBalloonPodResizer := &mockBalloonPodResizer{}
+	mockBalloonPodResizer.On("addTaint", mock.Anything, mock.Anything).Return(node, nil)
+	mockBalloonPodResizer.On("removeTaint", mock.Anything).Return(node, nil)
+	mockBalloonPodResizer.On("resizeBalloonPod", mock.Anything, mock.Anything).Return(nil)
+	ot.balloonPodResizer = mockBalloonPodResizer
+
+	op := operation{resize: &ResizeOperation{NodeName: node.Name, StartingSize: newSize(100, 100), DesiredSize: newSize(200, 200)}}
+	ot.opQueue.Enqueue(op)
+
+	return &cacheStaleTestFixture{
+		node:             node,
+		fakeClient:       fakeClient,
+		rvGetter:         rvGetter,
+		consistencyStore: consistencyStore,
+		testClock:        testClock,
+		nodeStateManager: nodeStateManager,
+		ot:               ot,
+		op:               op,
+	}
+}
+
+func assertDirectNodeGetAction(t *testing.T, fakeClient *fake.Clientset, nodeName string) {
+	t.Helper()
+	var getActions []client_testing.GetAction
+	for _, action := range fakeClient.Actions() {
+		if action.GetVerb() == "get" && action.GetResource().Resource == "nodes" {
+			if getAction, ok := action.(client_testing.GetAction); ok {
+				getActions = append(getActions, getAction)
+			}
+		}
+	}
+	assert.Len(t, getActions, 1)
+	assert.Equal(t, nodeName, getActions[0].GetName())
+}
+
+func TestProcessNextOperationCacheStale_InformerUnblocks(t *testing.T) {
+	f := setupCacheStaleTest()
+
+	// Since cache is stale, processNextOperation will block.
+	// We bump the RV to 2 to successfully unblock the loop before timeout.
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		f.rvGetter.setRV("2")
+	}()
+
+	assert.True(t, f.ot.processNextOperation())
+	assert.False(t, f.ot.opQueue.IsNodeResizingOrPending(f.node.Name))
+	assert.Empty(t, f.fakeClient.Actions())
+	assert.NoError(t, f.consistencyStore.EnsureReady(types.NamespacedName{Name: f.node.Name}))
+}
+
+func TestProcessNextOperationCacheStale_TimeoutDirectGet(t *testing.T) {
+	node := test.BuildTestNode("node1", 1000, 1024)
+	node.Spec.ProviderID = "gce://project/zone/node1"
+	node.ResourceVersion = "2"
+
+	f := setupCacheStaleTest(node)
+
+	// Timeout triggers direct GET from API server
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		f.testClock.Step(10 * time.Millisecond)
+	}()
+
+	assert.True(t, f.ot.processNextOperation())
+	assert.False(t, f.ot.opQueue.IsNodeResizingOrPending(f.node.Name))
+	assertDirectNodeGetAction(t, f.fakeClient, f.node.Name)
+	assert.NoError(t, f.consistencyStore.EnsureReady(types.NamespacedName{Name: f.node.Name}))
+}
+
+func TestProcessNextOperationCacheStale_TimeoutNodeDeletedOnAPIServer(t *testing.T) {
+	f := setupCacheStaleTest() // API server has no nodes, direct GET returns 404 NotFound
+
+	// Timeout triggers direct GET from API server
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		f.testClock.Step(10 * time.Millisecond)
+	}()
+
+	assert.True(t, f.ot.processNextOperation())
+	assert.False(t, f.ot.opQueue.IsNodeResizingOrPending(f.node.Name))
+	assertDirectNodeGetAction(t, f.fakeClient, f.node.Name)
+	assert.NoError(t, f.consistencyStore.EnsureReady(types.NamespacedName{Name: f.node.Name}))
+}
+
+func TestProcessNextOperationCacheStale_TimeoutGetErrorRetries(t *testing.T) {
+	f := setupCacheStaleTest()
+	f.fakeClient.PrependReactor("get", "nodes", func(action client_testing.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("internal API server error")
+	})
+
+	// Timeout triggers direct GET error from API server
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		f.testClock.Step(10 * time.Millisecond)
+	}()
+
+	// processNextOperation returns true (worker continues), but operation was re-enqueued at front.
+	assert.True(t, f.ot.processNextOperation())
+	assert.True(t, f.ot.opQueue.IsNodeResizingOrPending(f.node.Name))
+	assertDirectNodeGetAction(t, f.fakeClient, f.node.Name)
+
+	// Next Get pops the retried operation.
+	retriedOp, quit := f.ot.opQueue.Get()
+	assert.False(t, quit)
+	assert.Equal(t, f.op, retriedOp)
 }
