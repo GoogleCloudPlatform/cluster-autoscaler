@@ -227,6 +227,8 @@ type nodeGroupRequirements struct {
 	bootDiskSize                  int
 	bootDiskEncryptionKey         string
 	bootDiskEncryptionAnnotation  string
+	bootDiskProvisionedIops       int64
+	bootDiskProvisionedThroughput int64
 	ephemeralStorageLocalSSDCount int
 	// Sum of all local SSDs to provision for the node, including ephemeral
 	// storage, data cache, NVME block, and swap dedicated local SSDs.
@@ -349,6 +351,8 @@ func (r nodeGroupRequirements) String() string {
 	buffer.WriteString(fmt.Sprintf("boot disk size: <%v>, ", r.bootDiskSize))
 	buffer.WriteString(fmt.Sprintf("boot disk encryption key: <%v>, ", r.bootDiskEncryptionKey))
 	buffer.WriteString(fmt.Sprintf("boot disk encryption annotation: <%v>, ", r.bootDiskEncryptionAnnotation))
+	buffer.WriteString(fmt.Sprintf("boot disk provisioned iops: <%v>, ", r.bootDiskProvisionedIops))
+	buffer.WriteString(fmt.Sprintf("boot disk provisioned throughput: <%v>, ", r.bootDiskProvisionedThroughput))
 	buffer.WriteString(fmt.Sprintf("reservation request: <%s>, ", r.reservation.Signature()))
 	buffer.WriteString(fmt.Sprintf("secondary boot disks: <%s>, ", r.secondaryBootDisksSignature()))
 	buffer.WriteString(fmt.Sprintf("boot disk storage pools: <%v>, ", r.bootDiskStoragePools))
@@ -406,6 +410,8 @@ func (r nodeGroupRequirements) signature() string {
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskSize))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskEncryptionKey))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskEncryptionAnnotation))
+	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskProvisionedIops))
+	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskProvisionedThroughput))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.secondaryBootDisksSignature()))
 	buffer.WriteString(fmt.Sprintf("%v\n", r.bootDiskStoragePools))
 	buffer.WriteString(fmt.Sprintf("%v\n", linuxNodeConfigSignature(r.linuxNodeConfig)))
@@ -1757,6 +1763,12 @@ func (bcg *BootDiskConfigGenerator) UpdateParameters(params *nodeGroupParameters
 	if ngReq.bootDiskEncryptionAnnotation != "" {
 		params.systemLabels[gkelabels.BootDiskEncryptionAnnotationKey] = ngReq.bootDiskEncryptionAnnotation
 	}
+	if ngReq.bootDiskProvisionedIops > 0 {
+		params.systemLabels[gkelabels.BootDiskProvisionedIopsLabelKey] = strconv.FormatInt(ngReq.bootDiskProvisionedIops, 10)
+	}
+	if ngReq.bootDiskProvisionedThroughput > 0 {
+		params.systemLabels[gkelabels.BootDiskProvisionedThroughputLabelKey] = strconv.FormatInt(ngReq.bootDiskProvisionedThroughput, 10)
+	}
 	if len(ngReq.secondaryBootDisks) != 0 {
 		// http://screenshot/BXxDYkzQ5PiCTLq.png
 		// Json parsing is around 3 times more time consuming than the primitive custom one,
@@ -1851,6 +1863,24 @@ func (bcg *BootDiskConfigGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolS
 		spec.StoragePools = deserializedStoragePools
 	}
 
+	if v, exist := systemLabels[gkelabels.BootDiskProvisionedIopsLabelKey]; exist {
+		iops, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("unable to parse int value %q for boot disk provisioned iops label", v)
+		}
+		spec.BootDiskProvisionedIops = iops
+		klog.Infof("UpdateNodePoolSpec: set spec.BootDiskProvisionedIops=%d", iops)
+	}
+
+	if v, exist := systemLabels[gkelabels.BootDiskProvisionedThroughputLabelKey]; exist {
+		throughput, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("unable to parse int value %q for boot disk provisioned throughput label", v)
+		}
+		spec.BootDiskProvisionedThroughput = throughput
+		klog.Infof("UpdateNodePoolSpec: set spec.BootDiskProvisionedThroughput=%d", throughput)
+	}
+
 	return nil
 }
 
@@ -1901,6 +1931,8 @@ func (ng ComputeClassGenerator) generateRuleRequirements(requirements nodeGroupR
 	requirements.bootDiskEncryptionKey = rule.BootDiskKMSKey()
 	requirements.secondaryBootDisks = rule.SecondaryBootDisks()
 	requirements.bootDiskStoragePools = rule.BootDiskStoragePools()
+	requirements.bootDiskProvisionedIops = rule.BootDiskProvisionedIops()
+	requirements.bootDiskProvisionedThroughput = rule.BootDiskProvisionedThroughput()
 	requirements.maxPodsPerNode = rule.MaxPodsPerNode()
 	requirements.linuxNodeConfig = linuxNodeConfigFromCCRule(rule)
 	requirements.kubeletConfig = kubeletConfigFromCCRule(rule)

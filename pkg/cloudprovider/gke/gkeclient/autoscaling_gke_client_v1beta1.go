@@ -793,6 +793,15 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		KubeletConfig:       v1beta1NodeKubeletConfig(spec.KubeletConfig),
 		ReservationAffinity: spec.ReservationAffinity,
 	}
+	if spec.BootDiskProvisionedIops > 0 || spec.BootDiskProvisionedThroughput > 0 {
+		config.BootDisk = &gke_api_beta.BootDisk{
+			DiskType:              spec.DiskType,
+			SizeGb:                spec.DiskSize,
+			ProvisionedIops:       spec.BootDiskProvisionedIops,
+			ProvisionedThroughput: spec.BootDiskProvisionedThroughput,
+		}
+	}
+	klog.Infof("createNodePoolRequest for %s: spec.StoragePools=%+v, config.BootDisk=%+v", name, spec.StoragePools, config.BootDisk)
 	if spec.ArchTaintBehavior != "" {
 		config.TaintConfig = &gke_api_beta.TaintConfig{
 			ArchitectureTaintBehavior: spec.ArchTaintBehavior,

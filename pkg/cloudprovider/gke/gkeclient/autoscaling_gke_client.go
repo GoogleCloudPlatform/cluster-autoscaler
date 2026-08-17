@@ -186,30 +186,32 @@ func (c Cluster) NetdEnabled() bool {
 
 // NodePoolSpec contains the information needed to create a new node pool
 type NodePoolSpec struct {
-	Accelerators         []*gke_api_beta.AcceleratorConfig
-	LocalSSDConfig       *LocalSSDConfig
-	MachineType          string
-	ComputeClass         string
-	Labels               map[string]string
-	Metadata             map[string]string
-	Taints               []apiv1.Taint
-	Locations            []string
-	DiskSize             int64
-	DiskType             string
-	DiskEncryptionKey    string
-	Preemptible          bool
-	Spot                 bool
-	ImageType            string
-	MinCpuPlatform       string
-	SystemArchitecture   *gce.SystemArchitecture
-	Defaults             *gke_api_beta.AutoprovisioningNodePoolDefaults
-	ReservationAffinity  *gke_api_beta.ReservationAffinity
-	ExtendedDurationPods string
-	PlacementGroup       placement.Spec
-	SandboxType          sandbox.Type
-	TpuType              string
-	TpuTopology          string
-	TpuMultiHost         bool
+	Accelerators                  []*gke_api_beta.AcceleratorConfig
+	LocalSSDConfig                *LocalSSDConfig
+	MachineType                   string
+	ComputeClass                  string
+	Labels                        map[string]string
+	Metadata                      map[string]string
+	Taints                        []apiv1.Taint
+	Locations                     []string
+	DiskSize                      int64
+	DiskType                      string
+	DiskEncryptionKey             string
+	BootDiskProvisionedIops       int64
+	BootDiskProvisionedThroughput int64
+	Preemptible                   bool
+	Spot                          bool
+	ImageType                     string
+	MinCpuPlatform                string
+	SystemArchitecture            *gce.SystemArchitecture
+	Defaults                      *gke_api_beta.AutoprovisioningNodePoolDefaults
+	ReservationAffinity           *gke_api_beta.ReservationAffinity
+	ExtendedDurationPods          string
+	PlacementGroup                placement.Spec
+	SandboxType                   sandbox.Type
+	TpuType                       string
+	TpuTopology                   string
+	TpuMultiHost                  bool
 	// MaxPodsPerNode sets the Max Pods Constraint value for given node pool.
 	// If it's 0, it means it's unset, and we rely on control plane defaulting
 	// to set appropriate value.

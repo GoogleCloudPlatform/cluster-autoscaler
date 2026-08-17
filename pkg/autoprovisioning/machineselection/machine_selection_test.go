@@ -1403,6 +1403,28 @@ func TestLimitMachineSpec(t *testing.T) {
 			},
 			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "e2"`, machinetypes.DiskTypeHyperdiskBalanced),
 		},
+		"supported family with BootDiskProvisionedIops and BootDiskProvisionedThroughput": {
+			spec: machinetypes.MachineSpec{
+				Families:                      []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:                machinetypes.AnyPlatform,
+				BootDiskProvisionedIops:       4000,
+				BootDiskProvisionedThroughput: 200,
+			},
+			expectedSpec: machinetypes.MachineSpec{
+				Families:                      []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:                machinetypes.AnyPlatform,
+				BootDiskProvisionedIops:       4000,
+				BootDiskProvisionedThroughput: 200,
+			},
+		},
+		"error if machine family does not support hyperdisk-balanced for BootDiskProvisionedIops": {
+			spec: machinetypes.MachineSpec{
+				Families:                []machinetypes.MachineFamily{machinetypes.E2},
+				MinCpuPlatform:          machinetypes.AnyPlatform,
+				BootDiskProvisionedIops: 4000,
+			},
+			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "e2"`, machinetypes.DiskTypeHyperdiskBalanced),
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithConfidentialNodesEnabled(tc.confidentialNodes).WithConfidentialInstanceType(tc.confidentialInstanceType).Build()

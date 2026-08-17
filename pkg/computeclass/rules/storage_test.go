@@ -519,6 +519,26 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 			),
 			expected: false,
 		},
+		{
+			name:      "rule and nodegroup matching boot disk provisioned iops and throughput",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{MachineType: nonDefaultMachineType, BootDiskProvisionedIops: 3000, BootDiskProvisionedThroughput: 140}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskProvisionedIopsRule(3000),
+				WithBootDiskProvisionedThroughputRule(140),
+			),
+			expected: true,
+		},
+		{
+			name:      "rule and nodegroup mismatching boot disk provisioned iops",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{MachineType: nonDefaultMachineType, BootDiskProvisionedIops: 4000, BootDiskProvisionedThroughput: 140}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithBootDiskProvisionedIopsRule(3000),
+				WithBootDiskProvisionedThroughputRule(140),
+			),
+			expected: false,
+		},
 	}
 
 	for _, tc := range testCases {

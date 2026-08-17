@@ -308,6 +308,14 @@ const (
 	// CA internal use only
 	BootDiskStoragePoolsLabelKey = "boot-disk-storage-pools-label-key"
 
+	// BootDiskProvisionedIopsLabelKey is for provisioned IOPS
+	// CA internal use only
+	BootDiskProvisionedIopsLabelKey = "boot-disk-provisioned-iops-label-key"
+
+	// BootDiskProvisionedThroughputLabelKey is for provisioned throughput
+	// CA internal use only
+	BootDiskProvisionedThroughputLabelKey = "boot-disk-provisioned-throughput-label-key"
+
 	// NodeGroupDynamicBootDiskSizeEnabledLabelKey is for node group dynamic boot disk size
 	// CA internal use only
 	NodeGroupDynamicBootDiskSizeEnabledLabelKey = "cloud.google.com/node-group-dynamic-boot-disk-enabled-label-key"
