@@ -15,6 +15,8 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -22,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -44,8 +46,8 @@ func NewNodeGroupListProcessor(NodeGroupListProcessor nodegroups.NodeGroupListPr
 // Reservations are respected. If a slice-of-hardware pod consumes reservation then
 // the pod can only fit on node group with same machine type as reservation.
 // This is handled by the scheduling simulation.
-func (p *nodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
-	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, nodeGroups, nodeInfos, unschedulablePods)
+func (p *nodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, autoscalingCtx, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil {
 		klog.Errorf("Cannot process nodegroups from NAP, error: %v", err)
 		return nodeGroups, nodeInfos, err
@@ -77,10 +79,10 @@ func (p *nodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGr
 			klog.Warningf("Failed to get template node info for a node group")
 			continue
 		}
-		ctx.ClusterSnapshot.Fork()
-		defer ctx.ClusterSnapshot.Revert()
+		autoscalingCtx.ClusterSnapshot.Fork()
+		defer autoscalingCtx.ClusterSnapshot.Revert()
 		// Add node to cluster snapshot
-		if err := ctx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
+		if err := autoscalingCtx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
 			klog.Errorf("Couldn't add node to cluster snapshot: %v", err)
 			continue
 		}
@@ -97,7 +99,7 @@ func (p *nodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGr
 				continue
 			}
 			// Check if pod schedulable on nodegroup.
-			if predicateErr := ctx.ClusterSnapshot.CheckPredicates(unschedulablePod, nodeInfo.Node().Name); predicateErr != nil {
+			if predicateErr := autoscalingCtx.ClusterSnapshot.CheckPredicates(unschedulablePod, nodeInfo.Node().Name); predicateErr != nil {
 				// Not schedulable
 				continue
 			}

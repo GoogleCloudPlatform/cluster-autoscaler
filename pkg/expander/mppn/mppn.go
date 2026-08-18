@@ -15,6 +15,8 @@
 package mppn
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -36,7 +38,7 @@ func NewFilter(gcr gkeprice.GroupCountReducer, autopilotCluster bool) *Filter {
 	}
 }
 
-func (f *Filter) BestOptions(options []expander.Option, _ map[string]*framework.NodeInfo) []expander.Option {
+func (f *Filter) BestOptions(ctx context.Context, options []expander.Option, _ map[string]*framework.NodeInfo) []expander.Option {
 	var result []expander.Option
 	autopilotOptions := options
 	if !f.autopilotCluster {
@@ -87,7 +89,7 @@ func isAutopilotManaged(option expander.Option) bool {
 func (f *Filter) getOptionPenalty(option expander.Option) float64 {
 	penalty := 1.0
 	mig := option.NodeGroup.(*gke.GkeMig)
-	if !option.NodeGroup.Exist() {
+	if !option.NodeGroup.Exist(context.TODO()) {
 		penalty = f.gcr.BaseGroupCreationPenalty()
 	}
 	return penalty * getMppnPenalty(option, mig)

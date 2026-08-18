@@ -92,7 +92,7 @@ func (s *defragSimulator) simulateNodeRemovals(
 		}
 	}
 	for _, node := range candidateNodes {
-		removableNode, unremovableNode := rs.SimulateNodeRemoval(node, destinationMap, s.clock.Now(), s.pdbTracker)
+		removableNode, unremovableNode := rs.SimulateNodeRemoval(context.TODO(), node, destinationMap, s.clock.Now(), s.pdbTracker)
 		if removableNode != nil {
 			nodesToScaleDown = append(nodesToScaleDown, removableNode.Node.Name)
 		} else if unremovableNode != nil {

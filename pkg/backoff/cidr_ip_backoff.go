@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,7 @@ func (b *CidrIpBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *fra
 	// in NAP, subnetwork and pod IP range are selected by the control plane.
 	// Therefore, if we encounter IP exhaustion error on a fresh NAP node, it means that the control plane
 	// could not find an IP range with enough IP addresses and we should backoff the entire NAP.
-	if gkeMig.Autoprovisioned() {
+	if gkeMig.Autoprovisioned(context.TODO()) {
 		// In NAP, we first create an empty node pool, and then we scale it up to the desired size.
 		// Because of that, the IP space exhaustion error will throw on already existing node pool
 		// during its initial scale up. We don't want to backoff NAP when scaling up a node pool
@@ -111,7 +112,7 @@ func (b *CidrIpBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, nodeInf
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 
-	if !nodeGroup.Exist() && b.napBackoff.BackoffUntil().After(currentTime) {
+	if !nodeGroup.Exist(context.TODO()) && b.napBackoff.BackoffUntil().After(currentTime) {
 		return base_backoff.Status{IsBackedOff: true, ErrorInfo: b.napBackoff.ErrorInfo()}
 	}
 	podIpv4CidrBlock := getPodIpv4CidrBlockForNodeGroup(nodeGroup)
@@ -204,7 +205,7 @@ func (b *CidrIpBackoff) backoffExponential(podIpv4CidrBlock string, errorInfo cl
 // node pool. We assume that scale up is initial if there are no nodes in the group,
 // or all nodes are in InstanceCreating state.
 func isInitialScaleUp(nodeGroup cloudprovider.NodeGroup) (bool, error) {
-	nodes, err := nodeGroup.Nodes()
+	nodes, err := nodeGroup.Nodes(context.TODO())
 	if err != nil {
 		return false, err
 	}

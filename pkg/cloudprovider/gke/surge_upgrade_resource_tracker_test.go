@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	clock "k8s.io/utils/clock/testing"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -195,7 +196,7 @@ func TestSurgeResourceTracker_GetSurgeNodesInNodeGroup(t *testing.T) {
 			up.EXPECT().List(labels.Everything()).Return(tc.mockUpdateInfos, tc.mockErr).Times(1)
 			provider := testprovider.NewTestCloudProviderBuilder().Build()
 			processor := NewMockProcessor()
-			processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+			processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 			testClock := clock.NewFakeClock(testStartTime)
 			tracker := NewSurgeUpgradeResourceTracker(processor, kube.NewTestNodeLister(tc.nodes), kubernetes.NewUpdateInfoFetcher(up, testClock))
 			if tc.expectedError {
@@ -274,7 +275,7 @@ func TestSurgeResourceTracker_GetSurgeResources(t *testing.T) {
 			testClock := clock.NewFakeClock(testStartTime)
 			fetcher := kubernetes.NewUpdateInfoFetcher(up, testClock)
 			processor := NewMockProcessor()
-			processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+			processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 			tracker := NewSurgeUpgradeResourceTracker(processor, kube.NewTestNodeLister(tc.nodes), fetcher)
 			if tc.expectedError {
 				assert.Error(t, tracker.Refresh())
@@ -282,7 +283,7 @@ func TestSurgeResourceTracker_GetSurgeResources(t *testing.T) {
 			}
 			assert.NoError(t, tracker.Refresh())
 
-			gotSurgeResources, _ := tracker.GetSurgeResources(func(node *apiv1.Node) (group cloudprovider.NodeGroup, e error) {
+			gotSurgeResources, _ := tracker.GetSurgeResources(func(context context.Context, node *apiv1.Node) (group cloudprovider.NodeGroup, e error) {
 				return nil, nil
 			})
 			assert.Equal(t, tc.expectedResources, gotSurgeResources)

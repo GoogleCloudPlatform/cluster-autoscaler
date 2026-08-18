@@ -123,6 +123,7 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 	err = mgr.Add(manager.RunnableFunc(func(ctx ctx.Context) error {
 		loopStart := time.Now()
 		lastRun := time.Now()
+		iteration := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -133,13 +134,14 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 			default:
 				trigger.Wait(lastRun)
 				lastRun = time.Now()
-				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun)
+				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun, iteration)
 				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
 				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
 					// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.
 					klog.Fatalf("Cluster Autoscaler configuration changed, restarting to pick up a new configuration.")
 				}
 			}
+			iteration++
 		}
 	}))
 	if err != nil {

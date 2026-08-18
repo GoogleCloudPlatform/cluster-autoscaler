@@ -59,7 +59,7 @@ func TestProcess(t *testing.T) {
 			}
 			qw := &mockQuotaWatcher{quota: tc.quota}
 			processor := NewNodeQuotaProcessor(qw)
-			err := processor.Process(ctx, &clusterstate.ClusterStateRegistry{}, testStartTime)
+			err := processor.Process(context.TODO(), ctx, &clusterstate.ClusterStateRegistry{}, testStartTime)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.expectedMaxNodesTotal, ctx.MaxNodesTotal)
 		})

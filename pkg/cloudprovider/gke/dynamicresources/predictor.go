@@ -15,6 +15,7 @@
 package dynamicresources
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -128,7 +129,7 @@ func (p *ResourcePredictor) ResourceSlicesForNode(nodePoolSpec *gkeclient.NodePo
 // FilterOutNodesWithUnreadyResources is called synchronously in StaticAutoscaler.RunOnce(), right after the DRA snapshot is obtained
 // and before it's used to seed ClusterSnapshot for the loop. ResourcePredictor uses this method to safely update its state based on
 // the DRA snapshot.
-func (p *ResourcePredictor) FilterOutNodesWithUnreadyResources(_ *ca_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *drasnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+func (p *ResourcePredictor) FilterOutNodesWithUnreadyResources(ctx context.Context, _ *ca_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *drasnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
 	// Only the main goroutine should modify ClusterSnapshot and the associated DRA snapshot. Since this method is called synchronously from
 	// the main goroutine, it should be safe to read the DRA snapshot here.
 	p.updateDraState(draSnapshot)
@@ -138,7 +139,7 @@ func (p *ResourcePredictor) FilterOutNodesWithUnreadyResources(_ *ca_context.Aut
 }
 
 // GetNodeResourceTargets is a no-op, needed to satisfy the CustomResourcesProcessor interface.
-func (p *ResourcePredictor) GetNodeResourceTargets(_ *ca_context.AutoscalingContext, _ *apiv1.Node, _ cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+func (p *ResourcePredictor) GetNodeResourceTargets(ctx context.Context, _ *ca_context.AutoscalingContext, _ *apiv1.Node, _ cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
 	return nil, nil
 }
 

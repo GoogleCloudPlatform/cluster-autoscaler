@@ -15,6 +15,7 @@
 package impostor
 
 import (
+	"context"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -176,10 +177,10 @@ func DefaultTestAutoscaler(provider *MockCloudProvider) *TestAutoscaler {
 
 // getNodeInfosForGroups creates NodeInfos for all existing node groups
 func (a *TestAutoscaler) getNodeInfosForGroups() map[string]*framework.NodeInfo {
-	nodeGroups := a.provider.NodeGroups()
+	nodeGroups := a.provider.NodeGroups(context.TODO())
 	result := make(map[string]*framework.NodeInfo, len(nodeGroups))
 	for _, group := range nodeGroups {
-		nodeInfo, err := group.TemplateNodeInfo()
+		nodeInfo, err := group.TemplateNodeInfo(context.TODO())
 		if err != nil {
 			panic(err)
 		}
@@ -205,8 +206,8 @@ func (a *TestAutoscaler) ScaleUpOptions(pods []*apiv1.Pod) ([]expander.Option, m
 		OptionsTracker:                   tracking.FakeOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 	}
 	manager := autoprovisioning.NewAutoprovisioningNodeGroupManager(opts)
-	nodeGroups, nodeInfosForGroups, err := manager.Process(
-		a.context, a.provider.NodeGroups(), a.getNodeInfosForGroups(), pods)
+	nodeGroups, nodeInfosForGroups, err := manager.Process(context.TODO(),
+		a.context, a.provider.NodeGroups(context.TODO()), a.getNodeInfosForGroups(), pods)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -230,8 +231,8 @@ func (a *TestAutoscaler) GetNodeGroupsForScaleUp(pods []*apiv1.Pod) ([]cloudprov
 		OptionsTracker:                   tracking.FakeOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	manager := autoprovisioning.NewAutoprovisioningNodeGroupManager(opts)
-	nodeGroups, nodeInfosForGroups, err := manager.Process(
-		a.context, a.provider.NodeGroups(), a.getNodeInfosForGroups(), pods)
+	nodeGroups, nodeInfosForGroups, err := manager.Process(context.TODO(),
+		a.context, a.provider.NodeGroups(context.TODO()), a.getNodeInfosForGroups(), pods)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -254,7 +255,7 @@ func (a *TestAutoscaler) BestScaleUpOption(strategy expander.Strategy, pods []*a
 	if len(options) == 0 {
 		return nil, nil, errors.NewAutoscalerError(errors.InternalError, "No valid options found")
 	}
-	option := strategy.BestOption(options, nodeInfosForGroups)
+	option := strategy.BestOption(context.TODO(), options, nodeInfosForGroups)
 	if option == nil {
 		return nil, nil, errors.NewAutoscalerError(errors.InternalError, "No option selected by expander strategy")
 	}

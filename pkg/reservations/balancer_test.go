@@ -15,6 +15,7 @@
 package reservations
 
 import (
+	"context"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -151,10 +152,10 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
 				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything).Once().Return(
-					func(ctx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+					func(autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 						// use OSS balancer which should distribute remaining nodes
 						ossBalancer := &nodegroupset.BalancingNodeGroupSetProcessor{}
-						return ossBalancer.BalanceScaleUpBetweenGroups(ctx, groups, newNodes)
+						return ossBalancer.BalanceScaleUpBetweenGroups(context.TODO(), autoscalingCtx, groups, newNodes)
 					},
 				)
 				registerMock(&mockBalancer.Mock)
@@ -199,10 +200,10 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			}
 			processor := NewReservationBalancingProcessor(fallbackBalancers, puller, localssdsize.NewSimpleLocalSSDProvider(), provider)
 
-			ctx := &autoscaling_context.AutoscalingContext{
+			autoscalingCtx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
-			scaleUpInfos, err := processor.BalanceScaleUpBetweenGroups(ctx, tc.groups, tc.newNodes)
+			scaleUpInfos, err := processor.BalanceScaleUpBetweenGroups(context.TODO(), autoscalingCtx, tc.groups, tc.newNodes)
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
@@ -302,14 +303,14 @@ func TestDistributeNewNodes(t *testing.T) {
 type noopTestBalancingProcessor struct {
 }
 
-func (p *noopTestBalancingProcessor) FindSimilarNodeGroups(*autoscaling_context.AutoscalingContext, cloudprovider.NodeGroup, map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+func (p *noopTestBalancingProcessor) FindSimilarNodeGroups(context.Context, *autoscaling_context.AutoscalingContext, cloudprovider.NodeGroup, map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
 	return nil, nil
 }
 
-func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(_ *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.Context, _ *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 	var scaleUpInfos []nodegroupset.ScaleUpInfo
 	for _, group := range groups {
-		currentSize, err := group.TargetSize()
+		currentSize, err := group.TargetSize(context.TODO())
 		if err != nil {
 			return scaleUpInfos, auto_errors.NewAutoscalerErrorf(auto_errors.CloudProviderError, "failed to get node group size: %v", err)
 		}
@@ -318,7 +319,7 @@ func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(_ *autoscaling_
 			Group:       group,
 			CurrentSize: currentSize,
 			NewSize:     currentSize,
-			MaxSize:     group.MaxSize(),
+			MaxSize:     group.MaxSize(context.TODO()),
 		})
 	}
 	return scaleUpInfos, nil

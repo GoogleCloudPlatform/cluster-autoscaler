@@ -144,7 +144,7 @@ func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceCon
 	var err error
 	defer func() {
 		waitDuration := time.Since(waitStart)
-		oss_metrics.UpdateDuration("FlexAdvisor:AwaitInstanceAvailability", waitDuration)
+		oss_metrics.UpdateDuration(context.TODO(), "FlexAdvisor:AwaitInstanceAvailability", waitDuration)
 		if waitDuration > 100*time.Millisecond {
 			if err == nil {
 				klog.Warningf("FlexAdvisor: waited %v for GCE Flex Advisor consultation, flexibilityScopeKey=%v, err=nil", waitDuration, flexibilityScopeKey)

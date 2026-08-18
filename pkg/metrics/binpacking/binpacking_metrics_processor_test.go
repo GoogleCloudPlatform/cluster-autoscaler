@@ -15,6 +15,7 @@
 package binpacking
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -22,7 +23,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 )
 
@@ -107,7 +108,7 @@ func TestBinpackingMetricsProcessor(t *testing.T) {
 			processor.metrics = mockMetrics
 
 			for i, op := range tc.operations {
-				ctx := &context.AutoscalingContext{}
+				ctx := &ca_context.AutoscalingContext{}
 				switch op.opType {
 				case initBinpacking:
 					var nodeGroups []cloudprovider.NodeGroup
@@ -123,7 +124,7 @@ func TestBinpackingMetricsProcessor(t *testing.T) {
 				case stopBinpacking:
 					options := []expander.Option{{Debug: fmt.Sprintf("options-%d", i)}}
 					mockLimiter.On("StopBinpacking", ctx, options).Return(op.opResult).Once()
-					assert.Equal(t, op.opResult, processor.StopBinpacking(ctx, options))
+					assert.Equal(t, op.opResult, processor.StopBinpacking(context.TODO(), ctx, options))
 				case finalizeBinpacking:
 					mockMetrics.On("ObserveBinpackingNodeGroupTotal", op.opStats.total).Once()
 					mockMetrics.On("ObserveBinpackingNodeGroupProcessed", op.opStats.processed).Once()
@@ -166,19 +167,19 @@ type mockBinpackingLimiter struct {
 	mock.Mock
 }
 
-func (m *mockBinpackingLimiter) InitBinpacking(context *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
+func (m *mockBinpackingLimiter) InitBinpacking(context *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
 	m.Called(context, nodeGroups)
 }
 
-func (m *mockBinpackingLimiter) MarkProcessed(context *context.AutoscalingContext, nodegroupId string) {
+func (m *mockBinpackingLimiter) MarkProcessed(context *ca_context.AutoscalingContext, nodegroupId string) {
 	m.Called(context, nodegroupId)
 }
 
-func (m *mockBinpackingLimiter) StopBinpacking(context *context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
-	return m.Called(context, evaluatedOptions).Bool(0)
+func (m *mockBinpackingLimiter) StopBinpacking(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
+	return m.Called(ctx, autoscalingCtx, evaluatedOptions).Bool(0)
 }
 
-func (m *mockBinpackingLimiter) FinalizeBinpacking(context *context.AutoscalingContext, finalOptions []expander.Option) {
+func (m *mockBinpackingLimiter) FinalizeBinpacking(context *ca_context.AutoscalingContext, finalOptions []expander.Option) {
 	m.Called(context, finalOptions)
 }
 

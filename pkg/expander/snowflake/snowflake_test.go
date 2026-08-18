@@ -15,6 +15,7 @@
 package snowflake
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,7 @@ func TestBestOptions(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			sf := NewSnowflakeFilter(tc.isAutopilotEnabled)
-			assert.ElementsMatch(t, tc.wantOptions, sf.BestOptions(tc.options, nil))
+			assert.ElementsMatch(t, tc.wantOptions, sf.BestOptions(context.TODO(), tc.options, nil))
 		})
 	}
 }

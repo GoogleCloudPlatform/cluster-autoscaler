@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -59,11 +60,11 @@ func TestGetsOtherNodeGroupsInSameNodePool(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 
-			ctx := &context.AutoscalingContext{}
+			ctx := &ca_context.AutoscalingContext{}
 			innerProcessor := &mockNodeGroupSetProcessor{}
 
 			processor := NewNodePoolAwareNodeGroupSetProcessor(innerProcessor)
-			gotNgs, err := processor.FindSimilarNodeGroups(ctx, test.input, buildTestNodeInfosForMigs(migs...))
+			gotNgs, err := processor.FindSimilarNodeGroups(context.TODO(), ctx, test.input, buildTestNodeInfosForMigs(migs...))
 
 			assert.NoError(t, err)
 			assert.Equal(t, len(test.want), len(gotNgs))
@@ -100,13 +101,13 @@ func TestFallbackToInnerProcessor(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{}
+			ctx := &ca_context.AutoscalingContext{}
 			innerProcessor := &mockNodeGroupSetProcessor{}
 			processor := NewNodePoolAwareNodeGroupSetProcessor(innerProcessor)
 
 			// Expect a fallback call to inner processor
 			innerProcessor.On("FindSimilarNodeGroups", ctx, test.input, mock.Anything).Return([]cloudprovider.NodeGroup{}, nil).Once()
-			gotNgs, err := processor.FindSimilarNodeGroups(ctx, test.input, buildTestNodeInfosForMigs([]*gke.GkeMig{migWithNilSimilarGroups1, migWithNilSimilarGroups2}...))
+			gotNgs, err := processor.FindSimilarNodeGroups(context.TODO(), ctx, test.input, buildTestNodeInfosForMigs([]*gke.GkeMig{migWithNilSimilarGroups1, migWithNilSimilarGroups2}...))
 
 			assert.NoError(t, err)
 			assert.Equal(t, 0, len(gotNgs))
@@ -130,13 +131,13 @@ type mockNodeGroupSetProcessor struct {
 	mock.Mock
 }
 
-func (m *mockNodeGroupSetProcessor) FindSimilarNodeGroups(ctx *context.AutoscalingContext, ng cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
-	args := m.Called(ctx, ng, nodeInfos)
+func (m *mockNodeGroupSetProcessor) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, ng cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
+	args := m.Called(ctx, autoscalingCtx, ng, nodeInfos)
 	return args.Get(0).([]cloudprovider.NodeGroup), nil
 }
 
-func (m *mockNodeGroupSetProcessor) BalanceScaleUpBetweenGroups(ctx *context.AutoscalingContext, ngs []cloudprovider.NodeGroup, n int) ([]nodegroupset.ScaleUpInfo, errors.AutoscalerError) {
-	args := m.Called(ctx, ngs, n)
+func (m *mockNodeGroupSetProcessor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, ngs []cloudprovider.NodeGroup, n int) ([]nodegroupset.ScaleUpInfo, errors.AutoscalerError) {
+	args := m.Called(ctx, autoscalingCtx, ngs, n)
 	return args.Get(0).([]nodegroupset.ScaleUpInfo), nil
 }
 

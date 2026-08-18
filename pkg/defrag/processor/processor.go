@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -165,8 +166,8 @@ func NewProcessor(opts Options) *Processor {
 }
 
 // Process returns pods that defrag would like to consider for scale-up
-func (p *Processor) Process(ctx *cacontext.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	p.ctx = ctx
+func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	p.ctx = autoscalingCtx
 	p.pickedCandidateInfo = nil
 
 	nodeFilter, err := p.nodeFilterFactory.NewDefragNodeFilter(p.ctx)
@@ -181,7 +182,7 @@ func (p *Processor) Process(ctx *cacontext.AutoscalingContext, unschedulablePods
 	if err := p.cleanUpCandidates(nodeFilter); err != nil {
 		return nil, err
 	}
-	if err := p.nodeReconciler.Reconcile(ctx, p.candidateInfos); err != nil {
+	if err := p.nodeReconciler.Reconcile(autoscalingCtx, p.candidateInfos); err != nil {
 		return nil, err
 	}
 	pods, err := p.processCandidates(nodeFilter)
@@ -493,7 +494,7 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 
 // BestOptions filters expansion options that are acceptable for currently
 // picked defrag Candidate. If no Candidate is picked for this loop it returns all
-func (p *Processor) BestOptions(options []expander.Option, _ map[string]*framework.NodeInfo) []expander.Option {
+func (p *Processor) BestOptions(ctx context.Context, options []expander.Option, _ map[string]*framework.NodeInfo) []expander.Option {
 	if p.pickedCandidateInfo == nil {
 		return options
 	}

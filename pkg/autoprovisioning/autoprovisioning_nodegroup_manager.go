@@ -15,6 +15,7 @@
 package autoprovisioning
 
 import (
+	"context"
 	"math"
 	"math/rand"
 	"reflect"
@@ -27,7 +28,7 @@ import (
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -265,14 +266,14 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 }
 
 // Process adds autoprovisioned node groups based on unschedulable pods.
-func (m *AutoprovisioningNodeGroupManager) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (m *AutoprovisioningNodeGroupManager) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	// NAP reports its status via ProcessorCallbacks to e.g. the visibility processors.
 	status := NewProcessingStatus()
-	ctx.ProcessorCallbacks.SetExtraValue(ProcessingStatusContextKey, status)
+	autoscalingCtx.ProcessorCallbacks.SetExtraValue(ProcessingStatusContextKey, status)
 
 	// WATCH OUT: This is called and returned even if NAP is disabled.
 	if m.scaleBlockingProcessor != nil {
-		nodeGroups = m.scaleBlockingProcessor.FilterNoScaleUpNodeGroups(ctx, nodeGroups)
+		nodeGroups = m.scaleBlockingProcessor.FilterNoScaleUpNodeGroups(autoscalingCtx, nodeGroups)
 	}
 
 	// Exit early if NAP is disabled.
@@ -292,7 +293,7 @@ func (m *AutoprovisioningNodeGroupManager) Process(ctx *context.AutoscalingConte
 	}
 
 	// Prepare all common data and components required for injecting new node groups.
-	injectionCtx, err := m.prepareInjectionContext(ctx, nodeGroups, nodeInfos, status)
+	injectionCtx, err := m.prepareInjectionContext(autoscalingCtx, nodeGroups, nodeInfos, status)
 	if err != nil {
 		// prepareInjectionContext sets its own result on the status object in case of errors.
 		return nil, nil, err
@@ -344,7 +345,7 @@ func (m *AutoprovisioningNodeGroupManager) Process(ctx *context.AutoscalingConte
 		}
 	}
 
-	snapshotter := ctx.DebuggingSnapshotter.(*gkedebuggingsnapshot.GkeDebuggingSnapshotter)
+	snapshotter := autoscalingCtx.DebuggingSnapshotter.(*gkedebuggingsnapshot.GkeDebuggingSnapshotter)
 	if !snapshotter.IsSnapshotterDisabled() {
 		snapshotter.CacheTemplateNodeLastUsedByNAP(virtualNodeInfos(injectionCtx.allNodeGroups(), injectionCtx.nodeInfos))
 	}
@@ -354,7 +355,7 @@ func (m *AutoprovisioningNodeGroupManager) Process(ctx *context.AutoscalingConte
 }
 
 // CreateNodeGroup creates autoprovisioned node group.
-func (m *AutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
+func (m *AutoprovisioningNodeGroupManager) CreateNodeGroup(context *ca_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
 	if !m.cloudProvider.IsNodeAutoprovisioningEnabled() {
 		return nodegroups.CreateNodeGroupResult{}, errors.NewAutoscalerErrorf(errors.InternalError, "tried to create a node group, but autoprovisioning is disabled node_group=%s", nodeGroup.Id())
 	}
@@ -374,7 +375,7 @@ func (m *AutoprovisioningNodeGroupManager) CreateNodeGroup(context *context.Auto
 }
 
 // CreateNodeGroupAsync asynchronously created autoprovisioned node group.
-func (m *AutoprovisioningNodeGroupManager) CreateNodeGroupAsync(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, initializer nodegroups.AsyncNodeGroupInitializer) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
+func (m *AutoprovisioningNodeGroupManager) CreateNodeGroupAsync(context *ca_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, initializer nodegroups.AsyncNodeGroupInitializer) (nodegroups.CreateNodeGroupResult, errors.AutoscalerError) {
 	if !m.cloudProvider.IsNodeAutoprovisioningEnabled() {
 		return nodegroups.CreateNodeGroupResult{}, errors.NewAutoscalerErrorf(errors.InternalError, "tried to create node group, but autoprovisioning is disabled node_group=%s", nodeGroup.Id())
 	}
@@ -426,7 +427,7 @@ func mapTargetSizesToInt(sizes map[string]int64) map[string]int {
 }
 
 func (m *AutoprovisioningNodeGroupManager) reportNodePoolCreation(
-	ctx *context.AutoscalingContext,
+	ctx *ca_context.AutoscalingContext,
 	oldId string,
 	mig interfaces.AutoprovisionedNodeGroup,
 	createResult interfaces.CreateNodePoolResult,
@@ -454,13 +455,13 @@ func (m *AutoprovisioningNodeGroupManager) reportNodePoolCreation(
 			err)
 
 		reason := recognizeFailedScaleUpReason(err)
-		availableGPUTypes := ctx.CloudProvider.GetAvailableGPUTypes()
+		availableGPUTypes := ctx.CloudProvider.GetAvailableGPUTypes(context.TODO())
 		gpuResource, gpuType := "", ""
-		nodeInfo, templErr := mig.TemplateNodeInfo()
+		nodeInfo, templErr := mig.TemplateNodeInfo(context.TODO())
 		if templErr != nil {
 			klog.Warningf("Failed to get template node info for a node group node_group=%s", templErr)
 		} else {
-			gpuResource, gpuType = gpu.GetGpuInfoForMetrics(ctx.CloudProvider.GetNodeGpuConfig(nodeInfo.Node()), availableGPUTypes, nodeInfo.Node(), mig)
+			gpuResource, gpuType = gpu.GetGpuInfoForMetrics(context.TODO(), ctx.CloudProvider.GetNodeGpuConfig(context.TODO(), nodeInfo.Node()), availableGPUTypes, nodeInfo.Node(), mig)
 		}
 		metrics.RegisterFailedScaleUp(reason, gpuResource, gpuType, "")
 
@@ -518,11 +519,11 @@ func convertCreateNodeGroupResult(createResult interfaces.CreateNodePoolResult) 
 }
 
 // RemoveUnneededNodeGroups removes node groups that are not needed anymore.
-func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *context.AutoscalingContext) (removedNodeGroups []cloudprovider.NodeGroup, err error) {
+func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext) (removedNodeGroups []cloudprovider.NodeGroup, err error) {
 	if !m.cloudProvider.IsNodeAutoprovisioningEnabled() {
 		return nil, nil
 	}
-	unblockedNodeGroups, err := m.gkeNodeGroups(context)
+	unblockedNodeGroups, err := m.gkeNodeGroups(autoscalingCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -540,7 +541,7 @@ func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *con
 	// Find candidates for deletion.
 	unneededNodeGroups := map[string]interfaces.AutoprovisionedNodeGroup{}
 	for _, nodePoolMig := range nodePoolMigs {
-		if !nodePoolMig.Autoprovisioned() {
+		if !nodePoolMig.Autoprovisioned(ctx) {
 			continue
 		}
 		if !m.cloudProvider.UseAutoprovisioningFeaturesForNodeGroup(nodePoolMig) {
@@ -553,7 +554,7 @@ func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *con
 			continue
 		}
 
-		targetSize, err := nodePoolMig.TargetSize()
+		targetSize, err := nodePoolMig.TargetSize(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -586,10 +587,10 @@ func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *con
 			continue
 		}
 		if m.asyncNodeGroupDeletionEnabled {
-			return m.deleteNodeGroupAsync(context, nodePoolMig)
+			return m.deleteNodeGroupAsync(autoscalingCtx, nodePoolMig)
 		}
-		err := nodePoolMig.Delete()
-		m.reportNodePoolDeletion(context, nodePoolMig, err)
+		err := nodePoolMig.Delete(ctx)
+		m.reportNodePoolDeletion(autoscalingCtx, nodePoolMig, err)
 		if err != nil {
 			return nil, err
 		}
@@ -598,7 +599,7 @@ func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(context *con
 	return nil, nil
 }
 
-func (m *AutoprovisioningNodeGroupManager) deleteNodeGroupAsync(context *context.AutoscalingContext, nodePoolMig interfaces.AutoprovisionedNodeGroup) ([]cloudprovider.NodeGroup, error) {
+func (m *AutoprovisioningNodeGroupManager) deleteNodeGroupAsync(context *ca_context.AutoscalingContext, nodePoolMig interfaces.AutoprovisionedNodeGroup) ([]cloudprovider.NodeGroup, error) {
 	finalizer := interfaces.AsyncNodeGroupFinalizerFunc(func(result interfaces.AsyncDeleteNodePoolResult) {
 		m.reportNodePoolDeletion(context, nodePoolMig, result.Error)
 	})
@@ -614,7 +615,7 @@ func (m *AutoprovisioningNodeGroupManager) deleteNodeGroupAsync(context *context
 	return []cloudprovider.NodeGroup{nodePoolMig}, nil
 }
 
-func (m *AutoprovisioningNodeGroupManager) reportNodePoolDeletion(context *context.AutoscalingContext, nodePoolMig interfaces.AutoprovisionedNodeGroup, err error) {
+func (m *AutoprovisioningNodeGroupManager) reportNodePoolDeletion(context *ca_context.AutoscalingContext, nodePoolMig interfaces.AutoprovisionedNodeGroup, err error) {
 	if err != nil {
 		context.LogRecorder.Eventf(apiv1.EventTypeWarning, "FailedToDeleteNodeGroup",
 			"NodeAutoprovisioning: attempt to delete node group failed node_group=%v err=%v", nodePoolMig.Id(), err)
@@ -631,10 +632,10 @@ func (m *AutoprovisioningNodeGroupManager) reportNodePoolDeletion(context *conte
 	}
 }
 
-func (m *AutoprovisioningNodeGroupManager) gkeNodeGroups(context *context.AutoscalingContext) ([]interfaces.AutoprovisionedNodeGroup, error) {
-	nodeGroups := m.cloudProvider.NodeGroups()
+func (m *AutoprovisioningNodeGroupManager) gkeNodeGroups(autoscalingCtx *ca_context.AutoscalingContext) ([]interfaces.AutoprovisionedNodeGroup, error) {
+	nodeGroups := m.cloudProvider.NodeGroups(context.TODO())
 	if m.scaleBlockingProcessor != nil {
-		nodeGroups = m.scaleBlockingProcessor.FilterNoScaleDownNodeGroups(context, nodeGroups)
+		nodeGroups = m.scaleBlockingProcessor.FilterNoScaleDownNodeGroups(autoscalingCtx, nodeGroups)
 	}
 	return toAutoprovisionedNodeGroups(nodeGroups)
 }

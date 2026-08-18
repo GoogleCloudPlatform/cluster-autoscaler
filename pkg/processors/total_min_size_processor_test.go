@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -24,11 +25,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -330,11 +332,11 @@ func TestCompositeScaleDownSetProcessorGetNodesToRemove(t *testing.T) {
 				assert.NoError(t, err)
 			}
 			gkeManager.On("GetMigNodes", mock.AnythingOfType("*gke.GkeMig")).Return([]gce.GceInstance{}, nil)
-			ctx := context.AutoscalingContext{
+			ctx := ca_context.AutoscalingContext{
 				CloudProvider:   cloudProvider,
 				ClusterSnapshot: snapshot,
 			}
-			got, _ := s.FilterUnremovableNodes(&ctx, nodes.NewDefaultScaleDownContext(), allCandidates)
+			got, _ := s.FilterUnremovableNodes(context.TODO(), &ctx, nodes.NewDefaultScaleDownContext(), allCandidates)
 			if !reflect.DeepEqual(got, tt.wantNodes) {
 				t.Errorf("TotalMinSizeProcessor.GetNodesToRemove() got:\n%+v\n, want:\n%+v", got, tt.wantNodes)
 			}
@@ -388,7 +390,7 @@ func TestGetNodesBeingDeletedInNodeGroup(t *testing.T) {
 			cloudProvider := &gke.GkeCloudProviderMock{}
 			cloudProvider.On("NodeGroupForNode", node).Return(tt.nodeGroup, tt.nodeGroupError)
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				CloudProvider: cloudProvider,
 			}
 			scaleDownCtx := &nodes.ScaleDownContext{}

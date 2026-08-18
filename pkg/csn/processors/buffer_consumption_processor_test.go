@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
@@ -636,7 +637,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
 			processor.metrics = mockMetrics
 
-			remainingPods, err := processor.Process(autoscalingCtx, tc.unschedulablePods)
+			remainingPods, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
 
 			if tc.expectErr {
 				assert.Error(t, err)
@@ -744,7 +745,7 @@ func TestBufferConsumptionProcess_ConsideredPodsMetric(t *testing.T) {
 			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
 			processor.metrics = mockMetrics
 
-			_, err := processor.Process(autoscalingCtx, tc.unschedulablePods)
+			_, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
 			assert.NoError(t, err)
 
 			if len(tc.expectedConsideredPods) == 0 {

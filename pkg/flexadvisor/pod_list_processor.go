@@ -15,12 +15,14 @@
 package flexadvisor
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 type podListProcessorMetrics interface {
@@ -58,7 +60,7 @@ func NewPodListProcessor(provider instanceavailability.Provider, cccLister liste
 }
 
 // Process the list of unschedulable pods and register all the CCCs from unschedulable pods, in flex advisor
-func (p *PodListProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *PodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	if !IsFlexAdvisorProcessingEnabled(p.experimentsManager) {
 		return unschedulablePods, nil
 	}

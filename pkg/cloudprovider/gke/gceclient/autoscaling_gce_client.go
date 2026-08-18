@@ -294,7 +294,7 @@ func (client *autoscalingInternalGceClient) CreateInstancesWithRecommendation(mi
 	if err != nil {
 		return nil, err
 	}
-	return createdIds, client.WaitForOperation(op.Name, op.OperationType, migRef.Project, migRef.Zone)
+	return createdIds, client.WaitForOperation(context.TODO(), op.Name, op.OperationType, migRef.Project, migRef.Zone)
 }
 
 func instanceIdsToNamesMap(instanceProviderIds []string) map[string]bool {
@@ -332,7 +332,7 @@ func (client *autoscalingInternalGceClient) FetchAcceleratorTypes(zone string) (
 	return resp, err
 }
 
-func (client *autoscalingInternalGceClient) FetchMigInstances(migRef gce.GceRef) ([]gce.GceInstance, error) {
+func (client *autoscalingInternalGceClient) FetchMigInstances(ctx context.Context, migRef gce.GceRef) ([]gce.GceInstance, error) {
 	ignoreStockouts, capacityCheckTimeoutExpired := client.ignoreInstanceCreationStockoutErrors(migRef)
 	b := newInstanceListBuilder(migRef, client.migInfoProvider.QueuedProvisioning(migRef), ignoreStockouts, capacityCheckTimeoutExpired)
 	return fetchMigInstancesBeta[gce.GceInstance](client, b, migRef)
@@ -551,8 +551,8 @@ func (i *instanceListBuilder) build() []gce.GceInstance {
 }
 
 // FetchAllInstances fetches all GceInstances of the cluster in the project in the zone
-func (client *autoscalingInternalGceClient) FetchAllInstances(project, zone, _ string) ([]gce.GceInstance, error) {
-	instances, err := client.AutoscalingGceClient.FetchAllInstances(project, zone, fmt.Sprintf("labels.goog-k8s-cluster-name=%s", client.clusterName))
+func (client *autoscalingInternalGceClient) FetchAllInstances(ctx context.Context, project, zone, _ string) ([]gce.GceInstance, error) {
+	instances, err := client.AutoscalingGceClient.FetchAllInstances(ctx, project, zone, fmt.Sprintf("labels.goog-k8s-cluster-name=%s", client.clusterName))
 	return instances, err
 }
 
@@ -668,7 +668,7 @@ func (client *autoscalingInternalGceClient) ResumeInstances(migRef gce.GceRef, i
 	if err != nil {
 		return fmt.Errorf("failed to call ResumeInstances for mig %q: %v", migRef.String(), err)
 	}
-	err = client.WaitForOperation(op.Name, op.OperationType, migRef.Project, migRef.Zone)
+	err = client.WaitForOperation(context.TODO(), op.Name, op.OperationType, migRef.Project, migRef.Zone)
 	gke_metrics.EmitGceLatency("instance_group_managers", "resume_instances_polling", nil, err, start)
 	if err != nil {
 		return fmt.Errorf("failed to wait for ResumeInstances operation %s for mig %q: %v", op.Name, migRef.String(), err)
@@ -696,7 +696,7 @@ func (client *autoscalingInternalGceClient) SuspendInstances(migRef gce.GceRef, 
 	if err != nil {
 		return fmt.Errorf("failed to call SuspendInstances for mig %q: %v", migRef.String(), err)
 	}
-	err = client.WaitForOperation(op.Name, op.OperationType, migRef.Project, migRef.Zone)
+	err = client.WaitForOperation(context.TODO(), op.Name, op.OperationType, migRef.Project, migRef.Zone)
 	gke_metrics.EmitGceLatency("instance_group_managers", "suspend_instances_polling", nil, err, start)
 	if err != nil {
 		return fmt.Errorf("failed to wait for SuspendInstances operation %s for mig %q: %v", op.Name, migRef.String(), err)

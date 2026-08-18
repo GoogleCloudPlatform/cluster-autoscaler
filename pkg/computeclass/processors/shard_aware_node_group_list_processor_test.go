@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -829,7 +830,7 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 				gkeManager.On("GetMigTemplateNodeInfo", ng).Return(framework.NewTestNodeInfo(&node), nil)
 			}
 
-			gotNodegroups, _, err := processor.Process(nil, tc.nodegroups, nil, tc.unschedulablePods)
+			gotNodegroups, _, err := processor.Process(context.TODO(), nil, tc.nodegroups, nil, tc.unschedulablePods)
 			assert.NoError(t, err)
 			if assert.Equal(t, len(tc.wantNodegroups), len(gotNodegroups)) {
 				for i := range gotNodegroups {

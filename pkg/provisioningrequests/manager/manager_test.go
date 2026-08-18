@@ -145,7 +145,7 @@ func TestCreateQueuedBulkInstances(t *testing.T) {
 				MigName:            mig.GceRef().Name,
 				NodePoolName:       fmt.Sprintf("np-%s", mig.GceRef().Name),
 				AcceleratorType:    "nvidia-tesla-t4",
-				MigAutoProvisioned: mig.Autoprovisioned(),
+				MigAutoProvisioned: mig.Autoprovisioned(context.TODO()),
 				ProvisioningMode:   queuedwrapper.ProvisioningModeBulkMig,
 			}
 
@@ -222,7 +222,7 @@ func TestCreateResizeRequest(t *testing.T) {
 				MigName:            mig.GceRef().Name,
 				NodePoolName:       fmt.Sprintf("np-%s", mig.GceRef().Name),
 				AcceleratorType:    "nvidia-tesla-t4",
-				MigAutoProvisioned: mig.Autoprovisioned(),
+				MigAutoProvisioned: mig.Autoprovisioned(context.TODO()),
 				ProvisioningMode:   queuedwrapper.ProvisioningModeResizeRequest,
 			}
 
@@ -235,10 +235,10 @@ func TestCreateResizeRequest(t *testing.T) {
 }
 
 type fakeProvReqClient interface {
-	UpdateProvisioningRequest(*v1.ProvisioningRequest) (*v1.ProvisioningRequest, error)
-	DeleteProvisioningRequest(*v1.ProvisioningRequest) error
-	ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error)
-	ProvisioningRequest(string, string) (*provreqwrapper.ProvisioningRequest, error)
+	UpdateProvisioningRequest(context.Context, *v1.ProvisioningRequest) (*v1.ProvisioningRequest, error)
+	DeleteProvisioningRequest(context.Context, *v1.ProvisioningRequest) error
+	ProvisioningRequests(context.Context) ([]*provreqwrapper.ProvisioningRequest, error)
+	ProvisioningRequest(context.Context, string, string) (*provreqwrapper.ProvisioningRequest, error)
 	ProvisioningRequestNoCache(string, string) (*provreqwrapper.ProvisioningRequest, error)
 }
 
@@ -319,7 +319,7 @@ func (m *testMig) Version() string {
 	return m.version
 }
 
-func (m *testMig) IncreaseSize(delta int) error {
+func (m *testMig) IncreaseSize(ctx context.Context, delta int) error {
 	if m.simulateResizeErr {
 		return fmt.Errorf("resize error")
 	}

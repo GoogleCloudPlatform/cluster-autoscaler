@@ -16,6 +16,7 @@ package metrics_processors
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"time"
 
@@ -32,7 +33,7 @@ import (
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/klog/v2"
 	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
@@ -155,13 +156,13 @@ func (p *ScaleUpStatusMetricsProcessor) forgetPod(podId types.UID) {
 }
 
 // Process analyses the scale up status and emits appropriate visibility events.
-func (p *ScaleUpStatusMetricsProcessor) Process(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (p *ScaleUpStatusMetricsProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	now := time.Now()
-	p.processImpl(context, scaleUpStatus, now)
+	p.processImpl(autoscalingCtx, scaleUpStatus, now)
 }
 
 // This version allows passing timestamp for easier testing.
-func (p *ScaleUpStatusMetricsProcessor) processImpl(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus, now time.Time) {
+func (p *ScaleUpStatusMetricsProcessor) processImpl(context *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus, now time.Time) {
 	seen := make(map[types.UID]bool)
 
 	// Inform Metrics Filter of the scale up

@@ -221,7 +221,7 @@ func TestNodeRecyclingCustomComputeClass(t *testing.T) {
 				// Second loop evaluates target sizes and executes the actual CA Scale-Up.
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
-				nodeGroups := autoscaler.AutoscalingContext.CloudProvider.NodeGroups()
+				nodeGroups := autoscaler.AutoscalingContext.CloudProvider.NodeGroups(context.TODO())
 				initialNgId := validateInitialNodeGroupSize(t, nodeGroups, numPods)
 				if initialNgId == "" {
 					return
@@ -231,7 +231,7 @@ func TestNodeRecyclingCustomComputeClass(t *testing.T) {
 				var instances []string
 				for _, ng := range nodeGroups {
 					if ng.Id() == initialNgId {
-						insts, _ := ng.Nodes()
+						insts, _ := ng.Nodes(context.TODO())
 						for _, inst := range insts {
 							instances = append(instances, inst.Id)
 						}
@@ -273,7 +273,7 @@ func TestNodeRecyclingCustomComputeClass(t *testing.T) {
 				// This simulates the nodes getting closer to their max duration.
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, maxRunDuration-setupTimeout+1*time.Minute)
 
-				nodeGroups = autoscaler.AutoscalingContext.CloudProvider.NodeGroups()
+				nodeGroups = autoscaler.AutoscalingContext.CloudProvider.NodeGroups(context.TODO())
 				validateReplacementNodeGroupCreated(t, nodeGroups, initialNgId, numPods)
 			})
 		})
@@ -285,7 +285,7 @@ func validateInitialNodeGroupSize(t *testing.T, nodeGroups []cloudprovider.NodeG
 	var initialNgId string
 	for _, ng := range nodeGroups {
 		if strings.Contains(ng.Id(), "nap") {
-			size, _ := ng.TargetSize()
+			size, _ := ng.TargetSize(context.TODO())
 			// Ensure it cleanly hit the full number of bounds for the pod set
 			if size == numPods {
 				initialNgId = ng.Id()
@@ -305,7 +305,7 @@ func validateReplacementNodeGroupCreated(t *testing.T, nodeGroups []cloudprovide
 	foundReplacement := false
 	for _, ng := range nodeGroups {
 		if strings.Contains(ng.Id(), "nap") && ng.Id() != initialNgId {
-			size, _ := ng.TargetSize()
+			size, _ := ng.TargetSize(context.TODO())
 			if size >= numPods {
 				foundReplacement = true
 			}
@@ -314,7 +314,7 @@ func validateReplacementNodeGroupCreated(t *testing.T, nodeGroups []cloudprovide
 	if !foundReplacement {
 		for _, ng := range nodeGroups {
 			if ng.Id() == initialNgId {
-				size, _ := ng.TargetSize()
+				size, _ := ng.TargetSize(context.TODO())
 				if size >= numPods*2 { // Wait for the full set of replacements instead of partial
 					foundReplacement = true
 				}

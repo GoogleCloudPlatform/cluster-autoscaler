@@ -189,7 +189,7 @@ func TestPodAnnotations(t *testing.T) {
 
 			for _, suStatus := range tc.scaleUpStatuses {
 				clock.now = suStatus.time
-				annotator.Process(&ca_context.AutoscalingContext{}, suStatus.status)
+				annotator.Process(context.TODO(), &ca_context.AutoscalingContext{}, suStatus.status)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				defer cancel()
 				annotator.annotatorLoop(ctx)
@@ -220,12 +220,12 @@ func TestPodsCleared(t *testing.T) {
 	tst2 := tst1.Add(31 * time.Minute)
 	clock := fakeClock{now: tst1}
 	annotator, _ := setUpAnnotator(pods, pods, ttl, &clock)
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}, {Pod: pods[1]}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}, {Pod: pods[1]}}})
 	if l := len(annotator.unhelpablePods); l != 2 {
 		t.Errorf("Incorrect number of elements in unhelpablepods map; got: %d, want: %d.", l, 2)
 	}
 	clock.now = tst2
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}}})
 	if l := len(annotator.unhelpablePods); l != 1 {
 		t.Errorf("Incorrect number of elements in unhelpablepods map; got: %d, want: %d.", l, 1)
 	}
@@ -238,17 +238,17 @@ func TestDuplicatesAreNotEmitted(t *testing.T) {
 	tst2 := tst1.Add(40 * time.Minute)
 	clock := fakeClock{now: tst1}
 	annotator, _ := setUpAnnotator(pods, pods, defaultPodTTL, &clock)
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
 	if l := len(annotator.podsToAnnotate); l != 1 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 1)
 	}
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
 	// no element was removed, so we don't expect any new elements in the queue
 	if l := len(annotator.podsToAnnotate); l != 1 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 1)
 	}
 	clock.now = tst2
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{}})
 	// pod has new unhelpable until - should be added to queue
 	if l := len(annotator.podsToAnnotate); l != 2 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 2)

@@ -168,14 +168,14 @@ func TestScaleUpSimulationForSkippedNodeGroups(t *testing.T) {
 
 				// Verify the MIG is backed off
 				var testMig cloudprovider.NodeGroup
-				for _, ng := range autoscaler.CloudProvider.NodeGroups() {
+				for _, ng := range autoscaler.CloudProvider.NodeGroups(context.TODO()) {
 					if strings.Contains(ng.Id(), testNodePool.Name) {
 						testMig = ng
 						break
 					}
 				}
 				assert.NotNil(t, testMig, "Failed to find node group %s", testNodePool.Name)
-				assert.True(t, autoscaler.ClusterStateRegistry.BackoffStatusForNodeGroup(testMig, time.Now()).IsBackedOff, "MIG should be backed off")
+				assert.True(t, autoscaler.ClusterStateRegistry.BackoffStatusForNodeGroup(context.TODO(), testMig, time.Now()).IsBackedOff, "MIG should be backed off")
 
 				// Clear the visibility events recorded so far during setup
 				fakeLogger.Clear()

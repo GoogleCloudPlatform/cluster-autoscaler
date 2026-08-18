@@ -309,7 +309,7 @@ func TestNodeLimit(t *testing.T) {
 				manager = experiments.NewMockManager()
 			}
 			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager, nil)
-			got := threshold.NodeLimit(tc.nodeGroup, tc.estimationContext)
+			got := threshold.NodeLimit(context.TODO(), tc.nodeGroup, tc.estimationContext)
 
 			assert.Equal(t, tc.want, got.Limit)
 			mockProvider.AssertExpectations(t)
@@ -334,7 +334,7 @@ func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
 	threshold := NewInstanceAvailabilityThreshold(mockProvider, nil, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, experiments.NewMockManager(), tracker)
 	mig := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
 
-	result := threshold.NodeLimit(mig, estimator.NewEstimationContext(0, nil, 0))
+	result := threshold.NodeLimit(context.TODO(), mig, estimator.NewEstimationContext(0, nil, 0))
 
 	assert.Equal(t, -1, result.Limit)
 	assert.True(t, tracker.HasRemovedScaleUpOptions())

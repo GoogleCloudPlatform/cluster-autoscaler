@@ -51,7 +51,7 @@ type Manager interface {
 }
 
 type cloudProvider interface {
-	NodeGroupForNode(node *v1.Node) (cloudprovider.NodeGroup, error)
+	NodeGroupForNode(ctx context.Context, node *v1.Node) (cloudprovider.NodeGroup, error)
 	ResizingEnabled(machineFamily string) bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }

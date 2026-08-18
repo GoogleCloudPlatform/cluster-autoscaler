@@ -15,6 +15,7 @@
 package daemonset
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -28,7 +29,7 @@ import (
 	"k8s.io/klog/v2"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -67,7 +68,7 @@ func (p *plugin) String() string {
 	return PluginName
 }
 
-func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	targetNodes := unschedulableDSPodsTargetNodes(ctx)
 
 	now := p.clock.Now()
@@ -110,7 +111,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 	return defrag.NewCandidateWithLimit(unfitNodes, defrag.Partial, p.config.MaxCandidateNodeCount)
 }
 
-func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
+func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
 	targetNodes := unschedulableDSPodsTargetNodes(ctx)
 
 	var candidateNodes []string
@@ -122,12 +123,12 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 	return candidateNodes
 }
 
-func (p *plugin) IsExpansionOptionValid(_ *context.AutoscalingContext, _ *defrag.Candidate, _ expander.Option) bool {
+func (p *plugin) IsExpansionOptionValid(_ *ca_context.AutoscalingContext, _ *defrag.Candidate, _ expander.Option) bool {
 	// All expansion options should schedule all DaemonSet pods, assuming --force-ds option is enabled
 	return true
 }
 
-func (p *plugin) BackoffDuration(_ *context.AutoscalingContext, _ *defrag.Candidate) time.Duration {
+func (p *plugin) BackoffDuration(_ *ca_context.AutoscalingContext, _ *defrag.Candidate) time.Duration {
 	return 5 * time.Minute
 }
 
@@ -138,7 +139,7 @@ func (p *plugin) Type() defrag.PluginType {
 // checkNodeStatus checks a single node and returns its status.
 // It determines if the node is unfit and if it's subject to the grace period.
 func (p *plugin) checkNodeStatus(
-	ctx *context.AutoscalingContext,
+	ctx *ca_context.AutoscalingContext,
 	nodeInfo *framework.NodeInfo,
 	hasUnschedulableDSPod bool,
 ) nodeStatus {
@@ -170,7 +171,7 @@ func (p *plugin) checkNodeStatus(
 	return NodeUnfit
 }
 
-func unschedulableDSPodsTargetNodes(autoscalingCtx *context.AutoscalingContext) sets.Set[string] {
+func unschedulableDSPodsTargetNodes(autoscalingCtx *ca_context.AutoscalingContext) sets.Set[string] {
 	targetNodes := make(sets.Set[string])
 	if autoscalingCtx.ListerRegistry == nil || autoscalingCtx.ListerRegistry.AllPodLister() == nil {
 		klog.Errorf("AllPodLister is not set in AutoscalingContext")
@@ -224,8 +225,8 @@ func getNodeTargetedByDaemonSetPod(pod *apiv1.Pod) string {
 	return ""
 }
 
-func (p *plugin) enabledViaCCC(ctx *context.AutoscalingContext, node *apiv1.Node) (bool, error) {
-	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+func (p *plugin) enabledViaCCC(ctx *ca_context.AutoscalingContext, node *apiv1.Node) (bool, error) {
+	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 	if err != nil {
 		return false, fmt.Errorf("failed to get node group for node %s: %v", node.Name, err)
 	}

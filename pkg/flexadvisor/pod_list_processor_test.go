@@ -15,6 +15,7 @@
 package flexadvisor
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -104,7 +105,7 @@ func TestProcess(t *testing.T) {
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1, crd2}, labels.ComputeClassLabel)
 
 			processor := NewPodListProcessor(provider, mockLister, experiments.NewMockManager())
-			got, err := processor.Process(nil, tc.unschedulablePods)
+			got, err := processor.Process(context.TODO(), nil, tc.unschedulablePods)
 
 			assert.ElementsMatch(t, tc.want, got)
 			assert.NoError(t, err)
@@ -142,7 +143,7 @@ func TestProcess_FlexAdvisorDisabled(t *testing.T) {
 	mockManager := experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{})
 
 	processor := NewPodListProcessor(provider, mockLister, mockManager)
-	got, err := processor.Process(nil, []*apiv1.Pod{pod1})
+	got, err := processor.Process(context.TODO(), nil, []*apiv1.Pod{pod1})
 
 	assert.ElementsMatch(t, []*apiv1.Pod{pod1}, got)
 	assert.NoError(t, err)
@@ -184,7 +185,7 @@ func TestProcess_RegistersScopesAndEmitsMetrics(t *testing.T) {
 	mockMetrics.On("UpdateFlexAdvisorRejectedScopes", 200).Return().Once()
 
 	processor := NewPodListProcessor(provider, mockLister, mockManager, withPodListProcessorMetrics(mockMetrics))
-	got, err := processor.Process(nil, pods)
+	got, err := processor.Process(context.TODO(), nil, pods)
 
 	assert.ElementsMatch(t, pods, got)
 	assert.NoError(t, err)

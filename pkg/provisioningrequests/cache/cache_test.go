@@ -15,6 +15,7 @@
 package provreqcache
 
 import (
+	"context"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
@@ -48,9 +49,9 @@ func TestCache(t *testing.T) {
 	for _, tc := range tests {
 		client := &fakeClient{prs: tc.prs1}
 		cache := NewQueuedProvisioningCache(client)
-		cache.Refresh()
+		cache.Refresh(context.TODO())
 		client.prs = tc.prs2
-		cache.Refresh()
+		cache.Refresh(context.TODO())
 		for _, wantPr := range tc.wantPrs {
 			gotPr := cache.PendingProvReq(wantPr.namespace, wantPr.name)
 			if gotPr == nil {
@@ -74,7 +75,7 @@ func (c *fakeClient) ProvisioningRequestsInState(state provreqstate.Provisioning
 	return c.prs, nil
 }
 
-func (c *fakeClient) ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error) {
+func (c *fakeClient) ProvisioningRequests(ctx context.Context) ([]*provreqwrapper.ProvisioningRequest, error) {
 	return c.prs, nil
 }
 

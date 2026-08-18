@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -108,7 +109,7 @@ func (p *ProvisioningRequestPodListProcessor) InjectProvisioningRequestPods(ca_c
 	}
 	klogx.V(1).Over(loggingQuota).Infof("There are also %v other ProvReqs for which pods were added", -loggingQuota.Left())
 	if p.ossProvReqInjector != nil {
-		return p.ossProvReqInjector.Process(ca_ctx, unschedulablePods)
+		return p.ossProvReqInjector.Process(context.TODO(), ca_ctx, unschedulablePods)
 	}
 	return unschedulablePods, nil
 }
@@ -142,7 +143,7 @@ func (p *ProvisioningRequestPodListProcessor) logIgnoredInScaleUpEvent(ca_ctx *c
 	}
 
 	var event *eventInfo
-	pr, err := p.prClient.ProvisioningRequest(pod.Namespace, prName)
+	pr, err := p.prClient.ProvisioningRequest(context.TODO(), pod.Namespace, prName)
 	if err != nil {
 		if !errors.IsNotFound(err) {
 			klog.Warningf("While fetching Provisioning Request %s/%s got unrecognized error: %v", pod.Namespace, prName, err)

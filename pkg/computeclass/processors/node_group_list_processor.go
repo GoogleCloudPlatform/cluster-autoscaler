@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"math/rand"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -69,13 +70,13 @@ func NewNodeGroupListProcessor(lister lister.Lister, ngListProcessor nodegroups.
 }
 
 // Process processes the nodegroups and order them on the basis of crd priorities.
-func (p *nodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *nodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 
 	// Reset to avoid accumulating data over multiple runs
 	p.nodegroupBucket = make(map[string]int)
 	p.nodegroupsCountPerBucket = make(map[int]int)
 
-	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, nodeGroups, nodeInfos, unschedulablePods)
+	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, autoscalingCtx, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil {
 		klog.Errorf("Cannot process nodegroups from NAP, error: %v", err)
 		return nodeGroups, nodeInfos, err
@@ -108,7 +109,7 @@ func (p *nodeGroupListProcessor) CleanUp() {
 }
 
 // InitBinpacking initialises the BinpackingLimiter.
-func (p *nodeGroupListProcessor) InitBinpacking(context *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
+func (p *nodeGroupListProcessor) InitBinpacking(context *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
 	// p.nodegroupsCountPerBucket & p.nodegroupBucket are set in
 	// p.Process() method
 	p.nodegroupsProcessedPerBucket = make(map[int]int)
@@ -116,7 +117,7 @@ func (p *nodeGroupListProcessor) InitBinpacking(context *context.AutoscalingCont
 
 // StopBinpacking is used to make decisions on the evaluated expansion options.
 // Binpacking would be stopped if we have evaluated all nodegroups from Nth Bucket.
-func (p *nodeGroupListProcessor) StopBinpacking(context *context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
+func (p *nodeGroupListProcessor) StopBinpacking(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
 	bucket := p.nodegroupBucket[p.lastProcessedNodegroup]
 	// Check if all the previous buckets are already filled
 	for previous := 0; previous < bucket; previous++ {
@@ -134,7 +135,7 @@ func (p *nodeGroupListProcessor) StopBinpacking(context *context.AutoscalingCont
 }
 
 // MarkProcessed marks the nodegroup as processed.
-func (p *nodeGroupListProcessor) MarkProcessed(context *context.AutoscalingContext, nodegroupId string) {
+func (p *nodeGroupListProcessor) MarkProcessed(context *ca_context.AutoscalingContext, nodegroupId string) {
 	bucket := p.nodegroupBucket[nodegroupId]
 	p.nodegroupsProcessedPerBucket[bucket]++
 	p.lastProcessedNodegroup = nodegroupId
@@ -142,7 +143,7 @@ func (p *nodeGroupListProcessor) MarkProcessed(context *context.AutoscalingConte
 }
 
 // FinalizeBinpacking is only here to satisfy the interface.
-func (p *nodeGroupListProcessor) FinalizeBinpacking(context *context.AutoscalingContext, finalOptions []expander.Option) {
+func (p *nodeGroupListProcessor) FinalizeBinpacking(context *ca_context.AutoscalingContext, finalOptions []expander.Option) {
 }
 
 // flattenNodeGroupsByBucket converts 2-d slice to 1-d and stores information for binpacking limiter.

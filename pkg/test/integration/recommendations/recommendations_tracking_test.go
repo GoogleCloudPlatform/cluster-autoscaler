@@ -302,7 +302,7 @@ func TestRecommendationsTracking_Safeguard_LoopStartClear(t *testing.T) {
 			Source:           internalmetrics.FA,
 		}
 
-		groups := autoscaler.CloudProvider.NodeGroups()
+		groups := autoscaler.CloudProvider.NodeGroups(context.Background())
 		assert.NotEmpty(t, groups)
 		gkeGroup, ok := groups[0].(gke.NodeGroup)
 		assert.True(t, ok)

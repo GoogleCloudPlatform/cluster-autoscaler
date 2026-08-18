@@ -15,6 +15,7 @@
 package extendeddurationpods
 
 import (
+	"context"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -22,7 +23,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	ca_taints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
@@ -51,8 +52,8 @@ func NewUpgradeNodeTaintingProcessor(nodeProcessingLimitPerLoop int) *UpgradeNod
 
 // Process adds taints to EDP nodes which are on a lower node version than the cluster version. This is block new pods to schedule on these nodes
 // as they're due to undergo the cluster upgrade process
-func (u *UpgradeNodeTaintingProcessor) Process(ctx *context.AutoscalingContext, _ *clusterstate.ClusterStateRegistry, _ time.Time) error {
-	eligibleNodes := UpgradeEligibleEdpNodes(ctx)
+func (u *UpgradeNodeTaintingProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, _ *clusterstate.ClusterStateRegistry, _ time.Time) error {
+	eligibleNodes := UpgradeEligibleEdpNodes(autoscalingCtx)
 
 	filteredNodes := u.getFilteredNodes(eligibleNodes)
 	klog.V(3).Infof("total node count: %d, for processing of edp upgrade taints", len(filteredNodes))
@@ -63,7 +64,7 @@ func (u *UpgradeNodeTaintingProcessor) Process(ctx *context.AutoscalingContext, 
 	// (a single notTargetGkeVersionTaint call is cheap, and we do a lot of them during scale-down anyway).
 	// It's safer than a background async loop because it doesn't interfere with other regular loop calls.
 	for _, node := range filteredNodes {
-		_, err := ca_taints.AddTaints(node.Node(), ctx.ClientSet, []v1.Taint{*notTargetGkeVersionTaint}, false)
+		_, err := ca_taints.AddTaints(ctx, node.Node(), autoscalingCtx.ClientSet, []v1.Taint{*notTargetGkeVersionTaint}, false)
 		if err != nil {
 			klog.Warningf("Error while tainting EDP node, %s, for upgrade: %q", node.Node().Name, err)
 		}

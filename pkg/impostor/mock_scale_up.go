@@ -15,10 +15,11 @@
 package impostor
 
 import (
+	"context"
 	"reflect"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -48,7 +49,7 @@ var (
 )
 
 // ScaleUp is borrowed from oss/cluster-autoscaler/core/scale_up.go
-func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod,
+func ScaleUp(autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod,
 	upcomingNodes []*framework.NodeInfo,
 	nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo) ([]expander.Option, errors.AutoscalerError) {
 
@@ -58,13 +59,13 @@ func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod
 
 	skippedNodeGroups := map[string]status.Reasons{}
 	for _, nodeGroup := range nodeGroups {
-		currentTargetSize, err := nodeGroup.TargetSize()
+		currentTargetSize, err := nodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Failed to get node group size: %v", err)
 			skippedNodeGroups[nodeGroup.Id()] = notReadyReason
 			continue
 		}
-		if currentTargetSize >= nodeGroup.MaxSize() {
+		if currentTargetSize >= nodeGroup.MaxSize(context.TODO()) {
 			klog.V(4).Infof("Skipping node group %s - max size reached", nodeGroup.Id())
 			skippedNodeGroups[nodeGroup.Id()] = maxLimitReachedReason
 			continue
@@ -82,12 +83,12 @@ func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod
 			Pods:      make([]*apiv1.Pod, 0),
 		}
 
-		context.ClusterSnapshot.Fork()
+		autoscalingCtx.ClusterSnapshot.Fork()
 
 		// add test node to snapshot
-		if err := context.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
+		if err := autoscalingCtx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
 			klog.Errorf("Error while adding test Node; %v", err)
-			context.ClusterSnapshot.Revert()
+			autoscalingCtx.ClusterSnapshot.Revert()
 			// TODO: Or should I just skip the node group? specifically if Revert fails it is fatal error.
 			//       Maybe we should not return error from Revert as we cannot handle it in any way on the caller side?
 			return nil, errors.ToAutoscalerError(errors.InternalError, err)
@@ -95,7 +96,7 @@ func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod
 
 		for _, eg := range podEquivalenceGroups {
 			samplePod := eg.pods[0]
-			if err := context.ClusterSnapshot.CheckPredicates(samplePod, nodeInfo.Node().Name); err == nil {
+			if err := autoscalingCtx.ClusterSnapshot.CheckPredicates(samplePod, nodeInfo.Node().Name); err == nil {
 				// add pods to option
 				option.Pods = append(option.Pods, eg.pods...)
 				// mark pod group as (theoretically) schedulable
@@ -109,7 +110,7 @@ func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod
 			}
 		}
 
-		context.ClusterSnapshot.Revert()
+		autoscalingCtx.ClusterSnapshot.Revert()
 
 		if len(option.Pods) > 0 {
 			builder, _ := estimator.NewEstimatorBuilder(
@@ -118,13 +119,13 @@ func ScaleUp(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod
 				estimator.NewDecreasingPodOrderer(),
 				nil, false)
 
-			podEstimator := builder(context.ClusterSnapshot, nil)
+			podEstimator := builder(autoscalingCtx.ClusterSnapshot, nil)
 			podGroups := []estimator.PodEquivalenceGroup{}
 			for _, group := range equivalence.BuildPodGroups(option.Pods) {
 				podGroups = append(podGroups, estimator.PodEquivalenceGroup{Pods: group.Pods})
 			}
 
-			option.NodeCount, option.Pods = podEstimator.Estimate(podGroups, nodeInfo, nodeGroup)
+			option.NodeCount, option.Pods = podEstimator.Estimate(context.TODO(), podGroups, nodeInfo, nodeGroup)
 			if option.NodeCount > 0 {
 				expansionOptions = append(expansionOptions, option)
 			} else {

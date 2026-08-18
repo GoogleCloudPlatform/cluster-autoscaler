@@ -15,6 +15,7 @@
 package gkeprice
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -41,14 +42,14 @@ type testPricingModel struct {
 	podPrice  map[string]float64
 }
 
-func (tpm *testPricingModel) NodePrice(node *apiv1.Node, startTime time.Time, endTime time.Time) (float64, error) {
+func (tpm *testPricingModel) NodePrice(ctx context.Context, node *apiv1.Node, startTime time.Time, endTime time.Time) (float64, error) {
 	if price, found := tpm.nodePrice[node.Name]; found {
 		return price, nil
 	}
 	return 0.0, fmt.Errorf("price for node %v not found", node.Name)
 }
 
-func (tpm *testPricingModel) PodPrice(node *apiv1.Pod, startTime time.Time, endTime time.Time) (float64, error) {
+func (tpm *testPricingModel) PodPrice(ctx context.Context, node *apiv1.Pod, startTime time.Time, endTime time.Time) (float64, error) {
 	if price, found := tpm.podPrice[node.Name]; found {
 		return price, nil
 	}
@@ -70,9 +71,9 @@ func TestPriceExpander(t *testing.T) {
 	provider.AddNodeGroup("ng2", 1, 10, 1)
 	provider.AddNode("ng1", n1)
 	provider.AddNode("ng2", n2)
-	ng1, _ := provider.NodeGroupForNode(n1)
-	ng2, _ := provider.NodeGroupForNode(n2)
-	ng3, _ := provider.NewNodeGroup("MT1", nil, nil, nil, nil)
+	ng1, _ := provider.NodeGroupForNode(context.TODO(), n1)
+	ng2, _ := provider.NodeGroupForNode(context.TODO(), n2)
+	ng3, _ := provider.NewNodeGroup(context.TODO(), "MT1", nil, nil, nil, nil)
 
 	ni1 := framework.NewTestNodeInfo(n1)
 	ni2 := framework.NewTestNodeInfo(n2)
@@ -109,7 +110,7 @@ func TestPriceExpander(t *testing.T) {
 			"n2": 200.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options, nodeInfosForGroups).Debug, "ng1")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng1")
 
 	// First node group is cheaper, however, the second one is preferred.
 	pricingModel = &testPricingModel{
@@ -123,7 +124,7 @@ func TestPriceExpander(t *testing.T) {
 			"n2": 200.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 4, WithPvmUnfitnessPenalty()).BestOption(options, nodeInfosForGroups).Debug, "ng2")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 4, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng2")
 
 	// All node groups accept the same set of pods. Lots of nodes.
 	options1b := []expander.Option{
@@ -153,7 +154,7 @@ func TestPriceExpander(t *testing.T) {
 			"n2": 200.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 4, WithPvmUnfitnessPenalty()).BestOption(options1b, nodeInfosForGroups).Debug, "ng1")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 4, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options1b, nodeInfosForGroups).Debug, "ng1")
 
 	// Second node group is cheaper
 	pricingModel = &testPricingModel{
@@ -167,7 +168,7 @@ func TestPriceExpander(t *testing.T) {
 			"n2": 100.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options, nodeInfosForGroups).Debug, "ng2")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng2")
 
 	// First group accept 1 pod and second accepts 2.
 	options2 := []expander.Option{
@@ -197,14 +198,14 @@ func TestPriceExpander(t *testing.T) {
 	}
 	// Both node groups are equally expensive. However 2
 	// accept two pods.
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options2, nodeInfosForGroups).Debug, "ng2")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options2, nodeInfosForGroups).Debug, "ng2")
 
 	// Errors are expected
 	pricingModel = &testPricingModel{
 		podPrice:  map[string]float64{},
 		nodePrice: map[string]float64{},
 	}
-	assert.Nil(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options2, nodeInfosForGroups))
+	assert.Nil(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options2, nodeInfosForGroups))
 
 	// Add node info for autoprovisioned group.
 	nodeInfosForGroups["autoprovisioned-MT1"] = ni3
@@ -242,7 +243,7 @@ func TestPriceExpander(t *testing.T) {
 			"n3": 200.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options3, nodeInfosForGroups).Debug, "ng2")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options3, nodeInfosForGroups).Debug, "ng2")
 
 	// Choose non-existing group when non-existing is cheaper.
 	pricingModel = &testPricingModel{
@@ -257,7 +258,7 @@ func TestPriceExpander(t *testing.T) {
 			"n3": 90.0,
 		},
 	}
-	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options3, nodeInfosForGroups).Debug, "ng3")
+	assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options3, nodeInfosForGroups).Debug, "ng3")
 }
 
 func TestBestOption_HighCPUPreemptionVmOverHighMemPreemptionVm(t *testing.T) {
@@ -285,9 +286,9 @@ func TestBestOption_HighCPUPreemptionVmOverHighMemPreemptionVm(t *testing.T) {
 			provider.AddNode("prem-n1-highcpu-32", preemptionHicpu)
 			provider.AddNode("prem-n1-highmem-16", preemptionHimem)
 			provider.AddNode("n1-highmem-16", himem)
-			ng1, _ := provider.NodeGroupForNode(preemptionHicpu)
-			ng2, _ := provider.NodeGroupForNode(preemptionHimem)
-			ng3, _ := provider.NodeGroupForNode(himem)
+			ng1, _ := provider.NodeGroupForNode(context.TODO(), preemptionHicpu)
+			ng2, _ := provider.NodeGroupForNode(context.TODO(), preemptionHimem)
+			ng3, _ := provider.NodeGroupForNode(context.TODO(), himem)
 
 			ni1 := framework.NewTestNodeInfo(preemptionHicpu)
 			ni2 := framework.NewTestNodeInfo(preemptionHimem)
@@ -320,9 +321,9 @@ func TestBestOption_HighCPUPreemptionVmOverHighMemPreemptionVm(t *testing.T) {
 				},
 			}
 
-			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options, nodeInfosForGroups).Debug, "ng1")
+			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng1")
 
-			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2).BestOption(options, nodeInfosForGroups).Debug, "ng2")
+			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng2")
 		})
 	}
 }
@@ -347,8 +348,8 @@ func TestBestOption_UnfitPreemptionVmOverNonPreemptibleOfSameSize(t *testing.T) 
 			provider.AddNodeGroup("n1-highmem-16", 1, 1000, 1000)
 			provider.AddNode("prem-n1-highmem-16", preemptionHimem)
 			provider.AddNode("n1-highmem-16", himem)
-			ng1, _ := provider.NodeGroupForNode(preemptionHimem)
-			ng2, _ := provider.NodeGroupForNode(himem)
+			ng1, _ := provider.NodeGroupForNode(context.TODO(), preemptionHimem)
+			ng2, _ := provider.NodeGroupForNode(context.TODO(), himem)
 
 			ni1 := framework.NewTestNodeInfo(preemptionHimem)
 			ni2 := framework.NewTestNodeInfo(himem)
@@ -374,7 +375,7 @@ func TestBestOption_UnfitPreemptionVmOverNonPreemptibleOfSameSize(t *testing.T) 
 				},
 			}
 
-			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(options, nodeInfosForGroups).Debug, "ng1")
+			assert.Contains(t, NewTestStrategy(provider, pricingModel, 2, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), options, nodeInfosForGroups).Debug, "ng1")
 		})
 	}
 }
@@ -420,9 +421,9 @@ func TestBestOption_CustomGPU(t *testing.T) {
 	provider.AddNode("node-group-a2-highgpu-2g", a2VM2Gpus)
 	provider.AddNode("node-group-a2-highgpu-4g", a2VM4Gpus)
 
-	ng1, _ := provider.NodeGroupForNode(a2VM1Gpu)
-	ng2, _ := provider.NodeGroupForNode(a2VM2Gpus)
-	ng4, _ := provider.NodeGroupForNode(a2VM4Gpus)
+	ng1, _ := provider.NodeGroupForNode(context.TODO(), a2VM1Gpu)
+	ng2, _ := provider.NodeGroupForNode(context.TODO(), a2VM2Gpus)
+	ng4, _ := provider.NodeGroupForNode(context.TODO(), a2VM4Gpus)
 
 	ni1 := framework.NewTestNodeInfo(a2VM1Gpu)
 	ni2 := framework.NewTestNodeInfo(a2VM2Gpus)
@@ -560,7 +561,7 @@ func TestBestOption_CustomGPU(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Contains(t, NewTestStrategy(provider, pricingModel, 1, WithPvmUnfitnessPenalty()).BestOption(tc.options, nodeInfosForGroups).Debug, tc.bestOption)
+			assert.Contains(t, NewTestStrategy(provider, pricingModel, 1, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), tc.options, nodeInfosForGroups).Debug, tc.bestOption)
 		})
 	}
 }
@@ -593,9 +594,9 @@ func TestBestOption_VariousGPUs(t *testing.T) {
 	provider.AddNode("node-group-n1-v100", n1VM1GpuV100)
 	provider.AddNode("node-group-n1-k80", n1VM1GpuK80)
 
-	ng, _ := provider.NodeGroupForNode(n1VM)
-	ngV100, _ := provider.NodeGroupForNode(n1VM1GpuV100)
-	ngK80, _ := provider.NodeGroupForNode(n1VM1GpuK80)
+	ng, _ := provider.NodeGroupForNode(context.TODO(), n1VM)
+	ngV100, _ := provider.NodeGroupForNode(context.TODO(), n1VM1GpuV100)
+	ngK80, _ := provider.NodeGroupForNode(context.TODO(), n1VM1GpuK80)
 
 	ni := framework.NewTestNodeInfo(n1VM)
 	niV100 := framework.NewTestNodeInfo(n1VM1GpuV100)
@@ -663,7 +664,7 @@ func TestBestOption_VariousGPUs(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Contains(t, NewTestStrategy(provider, pricingModel, 1, WithPvmUnfitnessPenalty()).BestOption(tc.options, nodeInfosForGroups).Debug, tc.bestOption)
+			assert.Contains(t, NewTestStrategy(provider, pricingModel, 1, WithPvmUnfitnessPenalty()).BestOption(context.TODO(), tc.options, nodeInfosForGroups).Debug, tc.bestOption)
 		})
 	}
 }
@@ -803,7 +804,7 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 
-			gotDebug := NewTestStrategy(provider, pricingModel, 2, WithReservations(tc.reservations)).BestOption(options, nodeInfos).Debug
+			gotDebug := NewTestStrategy(provider, pricingModel, 2, WithReservations(tc.reservations)).BestOption(context.TODO(), options, nodeInfos).Debug
 			assert.Contains(t, gotDebug, fmt.Sprintf("total_reservations=%d", tc.wantTotalReservations))
 			assert.Contains(t, gotDebug, fmt.Sprintf("all_nodes_price=%f", tc.wantTotalNodePrice))
 		})
@@ -923,7 +924,7 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 
-			bestOption := NewTestStrategy(provider, pricingModel, 4, WithReservations(tc.reservations)).BestOption(options, nodeInfos)
+			bestOption := NewTestStrategy(provider, pricingModel, 4, WithReservations(tc.reservations)).BestOption(context.TODO(), options, nodeInfos)
 			assert.Contains(t, bestOption.Debug, "cheaper")
 		})
 	}
@@ -1061,7 +1062,7 @@ func TestBestOption_NewNodeGroup(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 
-			bestOption := NewTestStrategy(provider, pricingModel, 1, WithRelaxedGroupPenaltyChecker(NewStaticRelaxedGroupPenaltyChecker(tc.relaxedGroupPenalty))).BestOption(options, nodeInfos)
+			bestOption := NewTestStrategy(provider, pricingModel, 1, WithRelaxedGroupPenaltyChecker(NewStaticRelaxedGroupPenaltyChecker(tc.relaxedGroupPenalty))).BestOption(context.TODO(), options, nodeInfos)
 			var want string
 			if tc.wantExpensive {
 				want = "expensive"
@@ -1153,7 +1154,7 @@ func TestUpcomingNodeGroups(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			strategy := NewTestStrategy(provider, pricingModel, 2, WithUpcomingChecker(uc))
-			gotOption := strategy.BestOption(options, nodeInfosForGroups)
+			gotOption := strategy.BestOption(context.TODO(), options, nodeInfosForGroups)
 			if gotOption == nil {
 				t.Errorf("strategy returned nil option")
 			} else if gotOption.NodeGroup.Id() != tc.wantNg {

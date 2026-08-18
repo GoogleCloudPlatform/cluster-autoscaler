@@ -34,7 +34,7 @@ const (
 // cloudProviderRefresher is a subset of the CloudProvider interface needed for refreshing the Cluster state. It's used as function param instead of the full
 // CloudProvider, so that testing is easy.
 type cloudProviderRefresher interface {
-	Refresh() error
+	Refresh(context.Context) error
 }
 
 // WaitForInformerSyncWithClusterRefresh is a wrapper around SharedInformerFactory.WaitForCacheSync(), which periodically refreshes the GKE Cluster state
@@ -83,7 +83,7 @@ func waitForInformerSyncWithClusterRefresh(informerFactory informers.SharedInfor
 		// Refresh the GKE Cluster state. AutoscalingOptions fields tracked by OptionsTracker that depend on the Cluster proto are recomputed as part of the refresh.
 		// Note that a cloudProvider.Refresh() call only refreshes the Cluster state if more than gke.ClusterRefreshInterval time has passed since the last refresh.
 		// We're intentionally using a slightly higher value for the timeout, so this call should always refresh the Cluster state.
-		if err := cloudProvider.Refresh(); err != nil {
+		if err := cloudProvider.Refresh(context.TODO()); err != nil {
 			return false, err
 		}
 

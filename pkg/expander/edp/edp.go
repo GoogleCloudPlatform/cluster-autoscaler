@@ -15,6 +15,8 @@
 package edp
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -38,7 +40,7 @@ func NewEdpFilter(provider edpCloudProvider) *EdpFilter {
 	}
 }
 
-func (edp *EdpFilter) BestOptions(options []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
+func (edp *EdpFilter) BestOptions(ctx context.Context, options []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
 	edpOptions, regularOptions := splitEdpOptions(options, nodeInfos)
 	edpOptionsWithEdps := filterOutOptsWithoutEdps(edpOptions)
 	edpOptionsByEdpNodeSelector := groupOptsByLabelValue(edpOptionsWithEdps, nodeInfos, gkelabels.ExtendedDurationPodsLabel)

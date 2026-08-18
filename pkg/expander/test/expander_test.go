@@ -15,6 +15,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"testing"
@@ -37,8 +38,8 @@ type priceExpanderWrapper struct {
 	priceExpander expander.Filter
 }
 
-func (p *priceExpanderWrapper) BestOption(expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
-	opts := p.priceExpander.BestOptions(expansionOptions, nodeInfos)
+func (p *priceExpanderWrapper) BestOption(ctx context.Context, expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
+	opts := p.priceExpander.BestOptions(ctx, expansionOptions, nodeInfos)
 	if len(opts) == 0 {
 		return nil
 	}

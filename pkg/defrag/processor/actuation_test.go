@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	v1 "k8s.io/api/policy/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	. "k8s.io/utils/clock/testing"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
@@ -342,7 +343,7 @@ func TestStartScaleDown(t *testing.T) {
 			}
 			pdbTracker := pdb.NewBasicRemainingPdbTracker()
 			assert.NoError(t, pdbTracker.SetPdbs(tc.pdbs))
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot:     snapshot,
 				ScaleDownActuator:   scaleDownActuator,
 				RemainingPdbTracker: pdbTracker,
@@ -594,7 +595,7 @@ type mockScaleDownActuator struct {
 	mock.Mock
 }
 
-func (m *mockScaleDownActuator) StartDeletion(empty, drain []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
+func (m *mockScaleDownActuator) StartDeletion(ctx context.Context, empty, drain []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
 	args := m.Called(empty, drain)
 
 	result := args.Get(0).(status.ScaleDownResult)
@@ -605,7 +606,7 @@ func (m *mockScaleDownActuator) StartDeletion(empty, drain []*apiv1.Node) (statu
 	return result, nodes, args.Get(2).(caerrors.AutoscalerError)
 }
 
-func (m *mockScaleDownActuator) StartForceDeletion(empty, drain []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
+func (m *mockScaleDownActuator) StartForceDeletion(ctx context.Context, empty, drain []*apiv1.Node) (status.ScaleDownResult, []*status.ScaleDownNode, errors.AutoscalerError) {
 	args := m.Called(empty, drain)
 
 	result := args.Get(0).(status.ScaleDownResult)
@@ -633,7 +634,7 @@ type mockScaleDownStatusProcessor struct {
 	mock.Mock
 }
 
-func (m *mockScaleDownStatusProcessor) Process(ctx *context.AutoscalingContext, status *status.ScaleDownStatus) {
+func (m *mockScaleDownStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleDownStatus) {
 	m.Called(ctx, status)
 }
 

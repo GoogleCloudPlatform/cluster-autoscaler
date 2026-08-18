@@ -15,6 +15,7 @@
 package nodeinfosprovider
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -22,7 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
@@ -68,12 +69,12 @@ func newCoreDistributionMetrics() *coreDistributionMetrics {
 	}
 }
 
-func (m *coreDistributionMetrics) UpdateMetrics(ctx *context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) {
+func (m *coreDistributionMetrics) UpdateMetrics(ctx *ca_context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) {
 	m.updateCoreDistribution(ctx, nodeInfos)
 	m.logCoreDistribution()
 }
 
-func (m *coreDistributionMetrics) updateCoreDistribution(ctx *context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) {
+func (m *coreDistributionMetrics) updateCoreDistribution(ctx *ca_context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) {
 	provider, ok := ctx.CloudProvider.(metricsCloudProvider)
 	if !ok {
 		klog.Errorf("skipping update, could not cast the CloudProvider to the metricsCloudProvider")
@@ -88,7 +89,7 @@ func (m *coreDistributionMetrics) updateCoreDistribution(ctx *context.Autoscalin
 
 	newCoreDistribution := make(map[distributionConfig]distribution)
 	for _, mig := range provider.GetGkeMigs() {
-		targetSize, err := mig.TargetSize()
+		targetSize, err := mig.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("skipping update, cannot get target size of mig: %v", err)
 			return

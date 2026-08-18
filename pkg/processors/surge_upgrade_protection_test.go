@@ -15,22 +15,27 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/apis/nodemanagement.gke.io/v1alpha1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/listers/nodemanagement.gke.io/v1alpha1/mock"
+
 	clock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -232,13 +237,13 @@ func TestSurgeUpdateScaleDownNodeProcessor(t *testing.T) {
 			for _, ngNodes := range testCase.nodeGroups {
 				allNodes = append(allNodes, ngNodes...)
 			}
-			ctx := context.AutoscalingContext{CloudProvider: cp}
+			ctx := ca_context.AutoscalingContext{CloudProvider: cp}
 			processor := NewSurgeUpgradeScaleDownNodeProcessor(fetcher)
 
 			got, _ := processor.GetPodDestinationCandidates(&ctx, allNodes)
 			assert.Equal(t, testCase.expectedPodDestinations, got, testCase.desc)
 
-			got, _ = processor.GetScaleDownCandidates(&ctx, allNodes)
+			got, _ = processor.GetScaleDownCandidates(context.TODO(), &ctx, allNodes)
 			assert.Equal(t, testCase.expectedScaleDownCandidates, got, testCase.desc)
 
 			ctrl.Finish()

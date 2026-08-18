@@ -15,6 +15,7 @@
 package fleetefficiency
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -201,7 +202,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 		klog.LogToStderr(false)
 		defer klog.LogToStderr(true)
 
-		gotOptions := filter.BestOptions(tc.options, nodeInfos)
+		gotOptions := filter.BestOptions(context.TODO(), tc.options, nodeInfos)
 		assert.ElementsMatch(t, tc.expectedBestOptions, gotOptions)
 		flexAdvisor.AssertExpectations(t)
 
@@ -407,7 +408,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 
 type firstOptionFallback struct{}
 
-func (f *firstOptionFallback) BestOption(options []expander.Option, nodeInfo map[string]*framework.NodeInfo) *expander.Option {
+func (f *firstOptionFallback) BestOption(ctx context.Context, options []expander.Option, nodeInfo map[string]*framework.NodeInfo) *expander.Option {
 	if len(options) == 0 {
 		return nil
 	}
@@ -567,7 +568,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, options.ClusterDefaultAllocationStrategyLowestCost, true, experiments.NewMockManager())
 
 			// We don't care about the returned options here, just that the fallback logic was triggered and recorded metrics.
-			_ = filter.BestOptions(tc.options, map[string]*framework.NodeInfo{})
+			_ = filter.BestOptions(context.TODO(), tc.options, map[string]*framework.NodeInfo{})
 
 			// Verify metrics
 			count, err := metrics.GetNodesWithAllocationStrategyCountForTest(string(tc.expectedRequestedStrategy), tc.expectedReason, tc.expectedMachineType)

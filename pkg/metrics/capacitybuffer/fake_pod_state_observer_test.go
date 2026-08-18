@@ -15,6 +15,7 @@
 package capacitybuffer
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -675,7 +676,7 @@ func TestFakePodStateObserver_EndToEnd(t *testing.T) {
 
 				for _, step := range loop.scaleUps {
 					fakeClock.SetTime(st.Add(step.t))
-					observer.Process(&ca_context.AutoscalingContext{}, step.scaleUp)
+					observer.Process(context.TODO(), &ca_context.AutoscalingContext{}, step.scaleUp)
 				}
 			}
 

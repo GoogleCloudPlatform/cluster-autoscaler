@@ -15,6 +15,7 @@
 package autoprovisioning
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -23,7 +24,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	testutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -71,7 +72,7 @@ func TestSortedNodeGroupListProcessor_Process(t *testing.T) {
 	} {
 		t.Run(tn, func(t *testing.T) {
 			processor := NewSortedNodeGroupListProcessor(&mockNodeGroupListProcessor{})
-			got, _, err := processor.Process(nil, tc.nodeGroups, nil, nil)
+			got, _, err := processor.Process(context.TODO(), nil, tc.nodeGroups, nil, nil)
 			if err != nil {
 				t.Errorf("sortedNodeGroupListProcessor.Process(nil, %v, nil, nil) returned error %v", tc.nodeGroups, err)
 			}
@@ -87,7 +88,7 @@ func TestNewSortedNodeGroupListProcessor_Process_Error(t *testing.T) {
 	p := &mockNodeGroupListProcessor{errorToReturn: want}
 	processor := NewSortedNodeGroupListProcessor(p)
 
-	_, _, got := processor.Process(nil, nil, nil, nil)
+	_, _, got := processor.Process(context.TODO(), nil, nil, nil, nil)
 
 	if got != want {
 		t.Errorf("sortedNodeGroupListProcessor.Process(nil, nil, nil, nil) = %v, want %v", got, want)
@@ -103,7 +104,8 @@ func (m *mockNodeGroupListProcessor) CleanUp() {
 	m.cleanUpCallsCount++
 }
 
-func (m *mockNodeGroupListProcessor) Process(_ *context.AutoscalingContext,
+func (m *mockNodeGroupListProcessor) Process(ctx context.Context,
+	_ *ca_context.AutoscalingContext,
 	nodeGroups []cloudprovider.NodeGroup,
 	nodeInfos map[string]*framework.NodeInfo,
 	_ []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
@@ -117,7 +119,7 @@ type fakeNodeGroup struct {
 	nodeId                         string
 }
 
-func (f *fakeNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (f *fakeNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	if f.errorInsteadOfTemplateNodeInfo {
 		return nil, errors.New("test error")
 	}

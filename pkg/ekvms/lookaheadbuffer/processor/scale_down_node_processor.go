@@ -15,11 +15,13 @@
 package processor
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	ek "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -34,7 +36,7 @@ func NewScaleDownNodeProcessor(experimentsManager experiments.Manager) *ScaleDow
 }
 
 // GetPodDestinationCandidates filters out nodes which contain lookahead pods.
-func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	if !p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodes) {
 		return nodes, nil
 	}
@@ -50,7 +52,7 @@ func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.Autosc
 	return candidates, nil
 }
 
-func isPodDestinationCandidate(ctx *context.AutoscalingContext, node *apiv1.Node) bool {
+func isPodDestinationCandidate(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
 	// Filter out nil pointers.
 	if node == nil {
 		return false
@@ -73,7 +75,7 @@ func isPodDestinationCandidate(ctx *context.AutoscalingContext, node *apiv1.Node
 }
 
 // GetScaleDownCandidates should be a no-op.
-func (p *ScaleDownNodeProcessor) GetScaleDownCandidates(_ *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *ScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, _ *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return nodes, nil
 }
 

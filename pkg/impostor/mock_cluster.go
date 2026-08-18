@@ -15,6 +15,7 @@
 package impostor
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -269,7 +270,7 @@ func (c *Cluster) GetNodeGroup(name string) cloudprovider.NodeGroup {
 
 // NodeGroups lists all node groups
 func (c *Cluster) NodeGroups() []cloudprovider.NodeGroup {
-	return c.provider.NodeGroups()
+	return c.provider.NodeGroups(context.TODO())
 }
 
 // BuildNodeForGroup creates a node for given node group template
@@ -278,7 +279,7 @@ func (c *Cluster) BuildNodeForGroup(nodeName, poolName string) *apiv1.Node {
 	if group == nil {
 		panic(poolName)
 	}
-	nodeInfo, err := group.TemplateNodeInfo()
+	nodeInfo, err := group.TemplateNodeInfo(context.TODO())
 	if err != nil {
 		panic(err)
 	}
@@ -298,7 +299,7 @@ func (c *Cluster) ScaleUpNodeGroup(name string, delta int) []*apiv1.Node {
 		panic(name)
 	}
 	testGroup := group.(*MockNodeGroup)
-	targetSize, err := testGroup.TargetSize()
+	targetSize, err := testGroup.TargetSize(context.TODO())
 	if err != nil {
 		panic(err)
 	}

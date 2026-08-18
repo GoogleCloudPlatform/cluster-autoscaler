@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -781,7 +782,7 @@ type mockCloudProvider struct {
 	cloudProvider
 }
 
-func (m *mockCloudProvider) NodeGroupForNode(_ *v1.Node) (cloudprovider.NodeGroup, error) {
+func (m *mockCloudProvider) NodeGroupForNode(ctx context.Context, _ *v1.Node) (cloudprovider.NodeGroup, error) {
 	args := m.MethodCalled("NodeGroupForNode")
 	return args.Get(0).(cloudprovider.NodeGroup), args.Error(1)
 }

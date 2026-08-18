@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,10 +24,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -54,22 +56,22 @@ func TestProcessorE2E(t *testing.T) {
 	nodeInfos := map[string]*framework.NodeInfo{}
 	// Node groups of different machine types.
 	nonSohwC3Standard4 := buildMig("non-sohw1", "c3-standard-4", 4000, 16000, nil, nil)
-	nodeInfos[nonSohwC3Standard4.Id()], _ = nonSohwC3Standard4.TemplateNodeInfo()
+	nodeInfos[nonSohwC3Standard4.Id()], _ = nonSohwC3Standard4.TemplateNodeInfo(context.TODO())
 	nonSohwC3Standard8 := buildMig("non-sohw2", "c3-standard-8", 8000, 32000, nil, nil)
-	nodeInfos[nonSohwC3Standard8.Id()], _ = nonSohwC3Standard8.TemplateNodeInfo()
+	nodeInfos[nonSohwC3Standard8.Id()], _ = nonSohwC3Standard8.TemplateNodeInfo(context.TODO())
 	nonSohwC3Standard22 := buildMig("non-sohw2", "c3-standard-22", 22000, 64000, nil, nil)
-	nodeInfos[nonSohwC3Standard22.Id()], _ = nonSohwC3Standard22.TemplateNodeInfo()
+	nodeInfos[nonSohwC3Standard22.Id()], _ = nonSohwC3Standard22.TemplateNodeInfo(context.TODO())
 	// Slice of hardware nodeGroups
 	sohwC3Standard4 := buildMig("sohw-1", "c3-standard-4", 4000, 16000, sohwLabels, sohwExtraResources)
-	nodeInfos[sohwC3Standard4.Id()], _ = sohwC3Standard4.TemplateNodeInfo()
+	nodeInfos[sohwC3Standard4.Id()], _ = sohwC3Standard4.TemplateNodeInfo(context.TODO())
 	sohwC3Standard8 := buildMig("sohw-2", "c3-standard-8", 8000, 32000, sohwLabels, sohwExtraResources)
-	nodeInfos[sohwC3Standard8.Id()], _ = sohwC3Standard8.TemplateNodeInfo()
+	nodeInfos[sohwC3Standard8.Id()], _ = sohwC3Standard8.TemplateNodeInfo(context.TODO())
 	sohwC3Standard22 := buildMig("sohw-3", "c3-standard-22", 22000, 64000, sohwLabels, sohwExtraResources)
-	nodeInfos[sohwC3Standard22.Id()], _ = sohwC3Standard22.TemplateNodeInfo()
+	nodeInfos[sohwC3Standard22.Id()], _ = sohwC3Standard22.TemplateNodeInfo(context.TODO())
 	sohwC3Standard44a := buildMig("sohw-4a", "c3-standard-44", 44000, 128000, sohwLabels, sohwExtraResources)
-	nodeInfos[sohwC3Standard44a.Id()], _ = sohwC3Standard44a.TemplateNodeInfo()
+	nodeInfos[sohwC3Standard44a.Id()], _ = sohwC3Standard44a.TemplateNodeInfo(context.TODO())
 	sohwC3Standard44b := buildMig("sohw-4b", "c3-standard-44", 44000, 128000, sohwLabels, sohwExtraResources)
-	nodeInfos[sohwC3Standard44b.Id()], _ = sohwC3Standard44b.TemplateNodeInfo()
+	nodeInfos[sohwC3Standard44b.Id()], _ = sohwC3Standard44b.TemplateNodeInfo(context.TODO())
 
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 		WithMachineTypes("c3-standard-4", "c3-standard-8", "c3-standard-22", "c3-standard-44", "e2-standard-4", "e2-standard-8").
@@ -202,14 +204,14 @@ func TestProcessorE2E(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				CloudProvider:        provider,
 				ProcessorCallbacks:   callbacks.NewTestProcessorCallbacks(),
 				ClusterSnapshot:      testsnapshot.NewTestSnapshotOrDie(t),
 				DebuggingSnapshotter: debuggingSnapshotter,
 			}
 
-			gotNodeGroups, _, gotError := sohwNodeGroupListProcessor.Process(ctx, tc.nodeGroups, nodeInfos, tc.unschedulablePods)
+			gotNodeGroups, _, gotError := sohwNodeGroupListProcessor.Process(context.TODO(), ctx, tc.nodeGroups, nodeInfos, tc.unschedulablePods)
 			assert.NoError(t, gotError)
 			assert.Equal(t, len(tc.wantNodegroups), len(gotNodeGroups))
 			// Processor should return the correct node groups.

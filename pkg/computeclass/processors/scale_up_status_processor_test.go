@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -337,7 +338,7 @@ func TestCrdScaleUpStatusProcessor(t *testing.T) {
 			mockProvider.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.N1)
 			mockProvider.On("IsAutopilotEnabled").Return(false)
 			processor := NewCrdScaleUpStatusProcessor(mockLister, mockProvider, mockMetricsObserver)
-			processor.Process(nil, tc.scaleUpStatus)
+			processor.Process(context.TODO(), nil, tc.scaleUpStatus)
 			mockMetricsObserver.AssertNumberOfCalls(t, "IncreaseScaledUpNodesPerRule", len(tc.wantResult))
 			for _, wantResult := range tc.wantResult {
 				mockMetricsObserver.AssertCalled(t, "IncreaseScaledUpNodesPerRule", wantResult.wantRuleIndex, wantResult.wantCount, wantResult.wantCrdType)

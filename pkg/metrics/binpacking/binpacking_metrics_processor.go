@@ -15,9 +15,11 @@
 package binpacking
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/binpacking"
 )
@@ -47,7 +49,7 @@ func NewBinpackingMetricsProcessor(binpackingLimiter binpacking.BinpackingLimite
 }
 
 // InitBinpacking initializes the binpacking algorithm.
-func (p *binpackingMetricsProcessor) InitBinpacking(context *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
+func (p *binpackingMetricsProcessor) InitBinpacking(context *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) {
 	p.totalNodeGroupsCount = len(nodeGroups)
 	p.processedNodeGroupsCount = 0
 
@@ -56,18 +58,18 @@ func (p *binpackingMetricsProcessor) InitBinpacking(context *context.Autoscaling
 
 // MarkProcessed is called both after a node group is skipped and after the node
 // group is processed.
-func (p *binpackingMetricsProcessor) MarkProcessed(context *context.AutoscalingContext, nodegroupId string) {
+func (p *binpackingMetricsProcessor) MarkProcessed(context *ca_context.AutoscalingContext, nodegroupId string) {
 	p.binpackingLimiter.MarkProcessed(context, nodegroupId)
 }
 
 // StopBinpacking is called only after the node group is processed.
-func (p *binpackingMetricsProcessor) StopBinpacking(context *context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
+func (p *binpackingMetricsProcessor) StopBinpacking(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, evaluatedOptions []expander.Option) bool {
 	p.processedNodeGroupsCount += 1
-	return p.binpackingLimiter.StopBinpacking(context, evaluatedOptions)
+	return p.binpackingLimiter.StopBinpacking(ctx, autoscalingCtx, evaluatedOptions)
 }
 
 // FinalizeBinpacking finalizes the binpacking algorithm.
-func (p *binpackingMetricsProcessor) FinalizeBinpacking(context *context.AutoscalingContext, finalOptions []expander.Option) {
+func (p *binpackingMetricsProcessor) FinalizeBinpacking(context *ca_context.AutoscalingContext, finalOptions []expander.Option) {
 	p.metrics.ObserveBinpackingNodeGroupTotal(p.totalNodeGroupsCount)
 	p.metrics.ObserveBinpackingNodeGroupProcessed(p.processedNodeGroupsCount)
 	p.metrics.ObserveBinpackingNodeGroupSkipped(p.totalNodeGroupsCount - p.processedNodeGroupsCount)

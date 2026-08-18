@@ -164,6 +164,7 @@ func (o *Orchestrator) Initialize(
 // an unexpected error occurred. Assumes that all nodes in the cluster are ready
 // and in sync with instance groups.
 func (o *Orchestrator) ScaleUp(
+	ctx context.Context,
 	unschedulablePods []*apiv1.Pod,
 	nodes []*apiv1.Node,
 	daemonSets []*appsv1.DaemonSet,
@@ -178,11 +179,11 @@ func (o *Orchestrator) ScaleUp(
 	// If Provisioning Request shard was not picked, fall-back to OSS logic.
 	podShard := podsharding.GetSelectedPodShard(o.autoscalingContext)
 	if podShard == nil || podShard.NodeGroupDescriptor.ProvisioningClassName != queuedwrapper.QueuedProvisioningClassName {
-		return o.wrappedOrchestrator.ScaleUp(unschedulablePods, nodes, daemonSets, nodeInfos, allOrNothing)
+		return o.wrappedOrchestrator.ScaleUp(context.TODO(), unschedulablePods, nodes, daemonSets, nodeInfos, allOrNothing)
 	}
 	isParallel := podShard.NodeGroupDescriptor.ProvisioningCapacitySearchStrategy == queuedwrapper.CapacitySearchStrategyObtainability
 
-	nodeGroups := o.autoscalingContext.CloudProvider.NodeGroups()
+	nodeGroups := o.autoscalingContext.CloudProvider.NodeGroups(context.TODO())
 	podEquivalenceGroups := equivalence.BuildPodGroups(unschedulablePods)
 	prGroups := buildProvReqGroups(podEquivalenceGroups)
 	if len(prGroups) == 0 {
@@ -193,13 +194,13 @@ func (o *Orchestrator) ScaleUp(
 	}
 
 	if o.processors != nil && o.processors.NodeGroupListProcessor != nil {
-		nodeGroups, nodeInfos, err = o.processors.NodeGroupListProcessor.Process(o.autoscalingContext, nodeGroups, nodeInfos, unschedulablePods)
+		nodeGroups, nodeInfos, err = o.processors.NodeGroupListProcessor.Process(context.TODO(), o.autoscalingContext, nodeGroups, nodeInfos, unschedulablePods)
 		if err != nil {
 			return scaleUpError(&status.ScaleUpStatus{}, errors.ToAutoscalerError(errors.InternalError, err))
 		}
 	}
 
-	tracker, err := o.quotasTrackerFactory.NewQuotasTracker(o.autoscalingContext, nodes)
+	tracker, err := o.quotasTrackerFactory.NewQuotasTracker(context.TODO(), o.autoscalingContext, nodes)
 	if err != nil {
 		return scaleUpError(&status.ScaleUpStatus{}, errors.ToAutoscalerError(errors.InternalError, err).AddPrefix("could not create quotas tracker: "))
 	}
@@ -210,7 +211,7 @@ func (o *Orchestrator) ScaleUp(
 	validNodeGroups, skippedNodeGroups := o.filterValidScaleUpNodeGroups(nodeGroups, nodeInfos, tracker, now)
 	schedulablePods := map[string][]estimator.PodEquivalenceGroup{}
 	for _, nodeGroup := range validNodeGroups {
-		schedulablePods[nodeGroup.Id()] = o.wrappedOrchestrator.SchedulablePodGroups(podEquivalenceGroups, nodeGroup, nodeInfos[nodeGroup.Id()])
+		schedulablePods[nodeGroup.Id()] = o.wrappedOrchestrator.SchedulablePodGroups(context.TODO(), podEquivalenceGroups, nodeGroup, nodeInfos[nodeGroup.Id()])
 	}
 
 	expansionOptions, compositeOptionsMap, skippedNodeGroups, aErr := o.computeExpansionOptions(validNodeGroups, skippedNodeGroups, nodes, nodeInfos, prGroups, tracker, now, isParallel)
@@ -219,7 +220,7 @@ func (o *Orchestrator) ScaleUp(
 	}
 
 	// Pick some expansion option.
-	initialOption := o.autoscalingContext.ExpanderStrategy.BestOption(expansionOptions, nodeInfos)
+	initialOption := o.autoscalingContext.ExpanderStrategy.BestOption(ctx, expansionOptions, nodeInfos)
 	if initialOption == nil || initialOption.NodeCount <= 0 {
 		// We only fail the first ProvReq here - empty best option means that
 		// no NodeGroup scale up is possible to host the Pods corresponding to
@@ -238,7 +239,7 @@ func (o *Orchestrator) ScaleUp(
 	}
 
 	var createNodeGroupResults []nodegroups.CreateNodeGroupResult
-	if !initialOption.NodeGroup.Exist() && !o.processors.AsyncNodeGroupStateChecker.IsUpcoming(initialOption.NodeGroup) {
+	if !initialOption.NodeGroup.Exist(context.TODO()) && !o.processors.AsyncNodeGroupStateChecker.IsUpcoming(initialOption.NodeGroup) {
 		oldId := initialOption.NodeGroup.Id()
 		var scaleUpStatus *status.ScaleUpStatus
 		if o.autoscalingContext.AsyncNodeGroupsEnabled {
@@ -252,9 +253,9 @@ func (o *Orchestrator) ScaleUp(
 				o.autoscalingContext,
 				o.prCache,
 			)
-			createNodeGroupResults, scaleUpStatus, aErr = o.wrappedOrchestrator.CreateNodeGroupAsync(initialOption, nodeInfos, schedulablePods, podEquivalenceGroups, daemonSets, initializer)
+			createNodeGroupResults, scaleUpStatus, aErr = o.wrappedOrchestrator.CreateNodeGroupAsync(context.TODO(), initialOption, nodeInfos, schedulablePods, podEquivalenceGroups, daemonSets, initializer)
 		} else {
-			createNodeGroupResults, scaleUpStatus, aErr = o.wrappedOrchestrator.CreateNodeGroup(initialOption, nodeInfos, schedulablePods, podEquivalenceGroups, daemonSets)
+			createNodeGroupResults, scaleUpStatus, aErr = o.wrappedOrchestrator.CreateNodeGroup(context.TODO(), initialOption, nodeInfos, schedulablePods, podEquivalenceGroups, daemonSets)
 		}
 
 		if aErr != nil {
@@ -325,7 +326,7 @@ func (o *Orchestrator) ScaleUp(
 		}(optionIdx, optionToExecute)
 	}
 	wg.Wait()
-	o.clusterStateRegistry.Recalculate()
+	o.clusterStateRegistry.Recalculate(context.TODO())
 
 	if len(scaleUpState.autoscalerErrors) > 0 {
 		klog.V(1).Infof("Got %d autoscaler errors during scale up.", len(scaleUpState.autoscalerErrors))
@@ -347,10 +348,11 @@ func (o *Orchestrator) ScaleUp(
 
 // ScaleUpToNodeGroupMinSize calls wrapped ScaleUpToNodeGroupMinSize.
 func (o *Orchestrator) ScaleUpToNodeGroupMinSize(
+	ctx context.Context,
 	nodes []*apiv1.Node,
 	nodeInfos map[string]*framework.NodeInfo,
 ) (*status.ScaleUpStatus, errors.AutoscalerError) {
-	return o.wrappedOrchestrator.ScaleUpToNodeGroupMinSize(nodes, nodeInfos)
+	return o.wrappedOrchestrator.ScaleUpToNodeGroupMinSize(ctx, nodes, nodeInfos)
 }
 
 func (o *Orchestrator) intersectAllCompositeOptionsForSimilarNodeGroups(
@@ -417,7 +419,7 @@ func (o *Orchestrator) findSimilarNodeGroupsForParallelQueueing(
 	now time.Time,
 ) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
 	result := []cloudprovider.NodeGroup{}
-	similarGroups, aErr := o.processors.NodeGroupSetProcessor.FindSimilarNodeGroups(o.autoscalingContext, nodeGroup, nodeInfos)
+	similarGroups, aErr := o.processors.NodeGroupSetProcessor.FindSimilarNodeGroups(context.TODO(), o.autoscalingContext, nodeGroup, nodeInfos)
 	if aErr != nil {
 		klog.Errorf("Failed to find similar node groups: %v", aErr)
 		return nil, aErr
@@ -425,7 +427,7 @@ func (o *Orchestrator) findSimilarNodeGroupsForParallelQueueing(
 
 	klog.V(1).Infof("Parallel queueing in %s: considering %d similar nodeGroups", nodeGroup.Id(), len(similarGroups))
 	for _, ng := range similarGroups {
-		if ng.Exist() && !o.clusterStateRegistry.NodeGroupScaleUpSafety(ng, now).SafeToScale {
+		if ng.Exist(context.TODO()) && !o.clusterStateRegistry.NodeGroupScaleUpSafety(context.TODO(), ng, now).SafeToScale {
 			klog.V(4).Infof("Skipping checking %v for parallelization, not ready for scaleup", ng.Id())
 			continue
 		}
@@ -454,7 +456,7 @@ func (o *Orchestrator) computeExpansionOptions(
 	var expansionOptions []expander.Option
 	for _, nodeGroup := range validNodeGroups {
 		// Populate required fields
-		currentTargetSize, err := nodeGroup.TargetSize()
+		currentTargetSize, err := nodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Failed to get node group size: %v", err)
 			skippedNodeGroups[nodeGroup] = orchestrator.NotReadyReason
@@ -527,19 +529,19 @@ func (o *Orchestrator) filterValidScaleUpNodeGroups(
 			continue
 		}
 
-		if skipReason := o.wrappedOrchestrator.IsNodeGroupReadyToScaleUp(nodeGroup, now); skipReason != nil {
+		if skipReason := o.wrappedOrchestrator.IsNodeGroupReadyToScaleUp(context.TODO(), nodeGroup, now); skipReason != nil {
 			skippedNodeGroups[nodeGroup] = skipReason
 			continue
 		}
 
-		currentTargetSize, err := nodeGroup.TargetSize()
+		currentTargetSize, err := nodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Failed to get node group size: %v", err)
 			skippedNodeGroups[nodeGroup] = orchestrator.NotReadyReason
 			continue
 		}
-		if currentTargetSize >= nodeGroup.MaxSize() {
-			klog.V(4).Infof("Skipping node group %s - max size (%v) reached ", nodeGroup.Id(), nodeGroup.MaxSize())
+		if currentTargetSize >= nodeGroup.MaxSize(context.TODO()) {
+			klog.V(4).Infof("Skipping node group %s - max size (%v) reached ", nodeGroup.Id(), nodeGroup.MaxSize(context.TODO()))
 			skippedNodeGroups[nodeGroup] = orchestrator.MaxLimitReachedReason
 			continue
 		}
@@ -551,7 +553,7 @@ func (o *Orchestrator) filterValidScaleUpNodeGroups(
 			continue
 		}
 
-		if skipReason := o.wrappedOrchestrator.IsNodeGroupResourceExceeded(tracker, nodeGroup, nodeInfo, 1); skipReason != nil {
+		if skipReason := o.wrappedOrchestrator.IsNodeGroupResourceExceeded(context.TODO(), tracker, nodeGroup, nodeInfo, 1); skipReason != nil {
 			skippedNodeGroups[nodeGroup] = skipReason
 			continue
 		}
@@ -576,7 +578,7 @@ func (o *Orchestrator) computeExpansionOption(
 	partialOptions := make([]PartialOption, 0)
 
 	// Limit the number of nodes we estimate to the max scale up possible.
-	nodeEstimationCap := nodeGroup.MaxSize() - currentTargetSize
+	nodeEstimationCap := nodeGroup.MaxSize(context.TODO()) - currentTargetSize
 	if mig, ok := nodeGroup.(*gke.GkeMig); ok {
 		nodeEstimationCap = min(nodeEstimationCap, mig.GetInstanceLimit()-currentTargetSize)
 	}
@@ -593,7 +595,7 @@ func (o *Orchestrator) computeExpansionOption(
 		// - all those pods in a single pod shard are able to get scheduled in a single node group.
 		// Otherwise the ProvReq won't find any expansion options and fail after some time.
 
-		schedulablePodGroups := o.wrappedOrchestrator.SchedulablePodGroups(provReqGroup.PodGroups, nodeGroup, nodeInfo)
+		schedulablePodGroups := o.wrappedOrchestrator.SchedulablePodGroups(context.TODO(), provReqGroup.PodGroups, nodeGroup, nodeInfo)
 		// Check whether all ProvReq's PodEquivalenceGroups fit in the same single node group
 		if len(schedulablePodGroups) != len(provReqGroup.PodGroups) {
 			if i == 0 {
@@ -639,15 +641,15 @@ func (o *Orchestrator) computeExpansionOption(
 			o.napResourceAnalyzerFunc,
 			o.fastpathBinpackingEnabled,
 		)
-		estimatedNodeCount, estimatedPods := estimator.Estimate(schedulablePodGroups, nodeInfo, nodeGroup)
+		estimatedNodeCount, estimatedPods := estimator.Estimate(context.TODO(), schedulablePodGroups, nodeInfo, nodeGroup)
 
 		if o.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ProvisioningRequestsZeroOrMaxRoundUpEnabledFlag, false) {
 			// Special handling for groups that only scale from zero to max.
 			if mig, ok := nodeGroup.(*gke.GkeMig); ok {
-				if opts, err := mig.GetOptions(o.autoscalingContext.NodeGroupDefaults); err == nil {
+				if opts, err := mig.GetOptions(context.TODO(), o.autoscalingContext.NodeGroupDefaults); err == nil {
 					if opts != nil && opts.ZeroOrMaxNodeScaling {
 						// For zero-or-max scaling groups, the only valid value of node count is node group's max size.
-						if estimatedNodeCount > nodeGroup.MaxSize() {
+						if estimatedNodeCount > nodeGroup.MaxSize(context.TODO()) {
 							// We would have to cap the node count, which means not all pods will be
 							// accommodated. This violates the principle of all-or-nothing strategy.
 							estimatedPods = nil
@@ -655,7 +657,7 @@ func (o *Orchestrator) computeExpansionOption(
 						}
 						if estimatedNodeCount > 0 {
 							// Cap or increase the number of nodes to the only valid value - node group's max size.
-							estimatedNodeCount = nodeGroup.MaxSize()
+							estimatedNodeCount = nodeGroup.MaxSize(context.TODO())
 						}
 					}
 				}
@@ -891,7 +893,7 @@ func (o *Orchestrator) reassignOptionToRecommendedLocation(
 	now time.Time,
 ) (*CompositeOption, error) {
 	// Recompute similar node groups in case they need to be updated
-	option.SimilarNodeGroups = o.wrappedOrchestrator.ComputeSimilarNodeGroups(option.NodeGroup, nodeInfos, schedulablePods, now)
+	option.SimilarNodeGroups = o.wrappedOrchestrator.ComputeSimilarNodeGroups(context.TODO(), option.NodeGroup, nodeInfos, schedulablePods, now)
 	klog.V(2).Infof("Found %d similar node groups", len(option.SimilarNodeGroups))
 	if !o.autoscalingContext.BalanceSimilarNodeGroups || len(option.SimilarNodeGroups) < 1 {
 		return option, nil
@@ -905,11 +907,11 @@ func (o *Orchestrator) reassignOptionToRecommendedLocation(
 	targetMigs := []*gke.GkeMig{selectedMig}
 	// Each mig has an equivalent instance template, so we pick the first one.
 	for _, ng := range option.SimilarNodeGroups {
-		targetSize, err := ng.TargetSize()
+		targetSize, err := ng.TargetSize(context.TODO())
 		if err != nil {
 			return nil, fmt.Errorf("couldn't obtain target size for node group %s: %s", ng.Id(), err)
 		}
-		ngRoomLeft := ng.MaxSize() - targetSize
+		ngRoomLeft := ng.MaxSize(context.TODO()) - targetSize
 		if _, ok := compositeOptions[ng.Id()]; !ok {
 			klog.V(4).Infof("Ignoring Mig %s for resize request of size at least %v, it can fit only %v nodes", ng.Id(), option.NodeCount, ngRoomLeft)
 		} else {
@@ -975,7 +977,7 @@ func (o *Orchestrator) isParallelScaleupWithinResourceLimits(
 	klog.V(1).Infof("Checking limits for parallel scaleup in %s, total count: %d", initialCompositeOption.NodeGroup.Id(), totalCount)
 
 	// Check total cluster size limits
-	cappedNodeCount, aErr := o.wrappedOrchestrator.GetCappedNewNodeCount(totalCount, len(nodes))
+	cappedNodeCount, aErr := o.wrappedOrchestrator.GetCappedNewNodeCount(context.TODO(), totalCount, len(nodes))
 	if aErr != nil {
 		return nil, aErr
 	}
@@ -999,12 +1001,12 @@ func (o *Orchestrator) isParallelScaleupWithinResourceLimits(
 	}
 
 	// Check per-mig limits and total resources
-	tracker, err := o.quotasTrackerFactory.NewQuotasTracker(o.autoscalingContext, nodes)
+	tracker, err := o.quotasTrackerFactory.NewQuotasTracker(context.TODO(), o.autoscalingContext, nodes)
 	if err != nil {
 		return nil, errors.ToAutoscalerError(errors.InternalError, err).AddPrefix("could not create quotas tracker: ")
 	}
 	for _, option := range parallelizedOptions {
-		currentTargetSize, err := option.Option.NodeGroup.TargetSize()
+		currentTargetSize, err := option.Option.NodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			return nil, errors.ToAutoscalerError(errors.InternalError, err).AddPrefix("failed to get group target size: ")
 		}
@@ -1027,7 +1029,7 @@ func (o *Orchestrator) isWithinResourceLimits(
 	applyDelta applyDelta,
 ) (status.Reasons, errors.AutoscalerError) {
 	// Check cluster wide node count limit.
-	cappedNodeCount, aErr := o.wrappedOrchestrator.GetCappedNewNodeCount(option.NodeCount, allNodesCount)
+	cappedNodeCount, aErr := o.wrappedOrchestrator.GetCappedNewNodeCount(context.TODO(), option.NodeCount, allNodesCount)
 	if aErr != nil {
 		return nil, aErr
 	}
@@ -1036,7 +1038,7 @@ func (o *Orchestrator) isWithinResourceLimits(
 	}
 
 	// Check if a max size will not be breached.
-	if currentTargetSize+option.NodeCount > option.NodeGroup.MaxSize() {
+	if currentTargetSize+option.NodeCount > option.NodeGroup.MaxSize(context.TODO()) {
 		return orchestrator.MaxLimitReachedReason, nil
 	}
 
@@ -1117,7 +1119,7 @@ func (o *Orchestrator) setParallelQueueingDetailsForPR(prNamespace, prName strin
 	details := &queuedwrapper.ProvisioningClassDetails{
 		NodePoolName:            mig.NodePoolName(),
 		AcceleratorType:         mig.Accelerators(),
-		NodePoolAutoProvisioned: queuedwrapper.AutoprovisionedStatusFromBool(mig.Autoprovisioned()),
+		NodePoolAutoProvisioned: queuedwrapper.AutoprovisionedStatusFromBool(mig.Autoprovisioned(context.TODO())),
 		PodTemplateName:         manager.PodTemplateNames(pr.PodTemplates),
 		ProvisioningMode:        queuedwrapper.ProvisioningModeResizeRequest,
 		ResizeRequestName:       resizerequestclient.ResizeRequestName(pr.Namespace, pr.Name),
@@ -1131,7 +1133,7 @@ func (o *Orchestrator) setParallelQueueingDetailsForPR(prNamespace, prName strin
 		return fmt.Errorf("couldn't update Provisioning Request %s/%s with parallel details: %w", prNamespace, prName, err)
 	}
 
-	if _, err := o.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+	if _, err := o.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 		return fmt.Errorf("while updating Provisioning Request %s/%s got error: %w", prNamespace, prName, err)
 	}
 
@@ -1160,7 +1162,7 @@ func (o *Orchestrator) failProvisioningRequest(prNamespace, prName string, skipp
 		}
 	}
 
-	if _, err := o.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+	if _, err := o.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 		return fmt.Errorf("while updating Provisioning Request %s/%s got error: %w", prNamespace, prName, err)
 	}
 	return baseError
@@ -1172,7 +1174,7 @@ func isRetriable(pr *provreqwrapper.ProvisioningRequest, now time.Time) bool {
 }
 
 func (o *Orchestrator) getRemainingPods(egs []*equivalence.PodGroup, nodeGroups []cloudprovider.NodeGroup, skipped map[string]status.Reasons, nodeInfos map[string]*framework.NodeInfo) []status.NoScaleUpInfo {
-	infos := o.wrappedOrchestrator.GetRemainingPods(egs, nodeGroups, skipped, nodeInfos)
+	infos := o.wrappedOrchestrator.GetRemainingPods(context.TODO(), egs, nodeGroups, skipped, nodeInfos)
 	filtered := make([]status.NoScaleUpInfo, 0, len(infos))
 	for _, info := range infos {
 		_, consumingProvReq := pods.ProvisioningRequestName(info.Pod)

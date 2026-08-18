@@ -16,6 +16,7 @@ package flexadvisor
 
 import (
 	"container/heap"
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -29,7 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -69,37 +70,37 @@ func NewScaleUpBalancer(nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	}
 }
 
-func (b *ScaleUpBalancer) FindSimilarNodeGroups(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
-	return b.NodeGroupSetProcessor.FindSimilarNodeGroups(context, nodeGroup, nodeInfosForGroups)
+func (b *ScaleUpBalancer) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+	return b.NodeGroupSetProcessor.FindSimilarNodeGroups(ctx, autoscalingCtx, nodeGroup, nodeInfosForGroups)
 }
 
 // BalanceScaleUpBetweenGroups balances the scale up based on Flex Advisor guidance and notify Flex Advisor about the scale up decision.
-func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 	if !IsFlexAdvisorProcessingEnabled(b.experimentsManager) {
 		klog.Info("FlexAdvisor: balancer processing is disabled by FlexAdvisorProcessing experiment, falling back to balancing logic")
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 	sampleGkeNodeGroup, err := getSampleGkeNodeGroup(groups)
 	if err != nil {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, due to an error extracting sample gke.NodeGroup err: %v", err)
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	locationPolicy := sampleGkeNodeGroup.LocationPolicy()
 
 	if sampleGkeNodeGroup.IsTpuMig() && !isFlexAdvisorTPUEnabled(b.experimentsManager) {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, TPU scale ups are not supported by Flex Advisor")
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 	if sampleGkeNodeGroup.FlexStart() && !isFlexAdvisorDWSEnabled(b.experimentsManager) {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, Flex start scale ups are not supported by Flex Advisor")
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 	if !isFlexAdvisorReservationSpecificMigsProcessingEnabled(b.experimentsManager) {
 		for _, ng := range groups {
 			if hasReservationAffinitySpecific(ng) {
 				klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, node group %s targets a specific reservation", ng.Id())
-				return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+				return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 			}
 		}
 	}
@@ -107,19 +108,19 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.Autoscali
 	// For Location policy ANY we still rely on RLA.
 	// If RLA based balancing failed we re-attempt with Flex Advisor.
 	if locationPolicy == gke.LocationPolicyAny && !b.ignoreRLA {
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	scaleUpInfos, maxNewNodesFromNGs, err := maxScaleUpsByCloudProvider(groups)
 	if err != nil {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, due to an error extracting data from cloud provider err: %v", err)
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	balancingInfos, maxNewNodesFromFA, err := BalancingInfoFromFlexAdvisor(b.provider, b.cccLister, scaleUpInfos, b.experimentsManager, newNodes)
 	if err != nil {
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, due to an error extracting balancing info from Flex Advisor err: %v", err)
-		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	initialNewNodes := newNodes
@@ -162,11 +163,11 @@ func maxScaleUpsByCloudProvider(groups []cloudprovider.NodeGroup) ([]nodegroupse
 	scaleUpInfos := make([]nodegroupset.ScaleUpInfo, 0)
 	possibleMaxScaleUpSize := 0
 	for _, ng := range groups {
-		currentSize, err := ng.TargetSize()
+		currentSize, err := ng.TargetSize(context.TODO())
 		if err != nil {
 			return []nodegroupset.ScaleUpInfo{}, 0, err
 		}
-		maxSize := ng.MaxSize()
+		maxSize := ng.MaxSize(context.TODO())
 		if currentSize >= maxSize {
 			// group already maxed, ignore it
 			continue

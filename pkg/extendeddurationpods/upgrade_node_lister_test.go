@@ -15,6 +15,7 @@
 package extendeddurationpods
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,9 +24,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -79,7 +82,7 @@ func TestEligibleNodes(t *testing.T) {
 			}
 
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				CloudProvider:   cp,
 			}
@@ -87,7 +90,7 @@ func TestEligibleNodes(t *testing.T) {
 				cp.On("GetClusterVersion").Return(tc.clusterVersion)
 			}
 			if tc.nodes != nil {
-				err := snapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+				err := snapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 				assert.NoError(t, err)
 			}
 			actual := UpgradeEligibleEdpNodes(ctx)

@@ -15,12 +15,14 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -28,8 +30,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+
 	testCloudProvider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -64,7 +67,7 @@ type extendedNode struct {
 	skipNodeGroup bool
 }
 
-func initTestCase(t *testing.T, extendedNodes []extendedNode) ([]*apiv1.Node, *context.AutoscalingContext, *crdScaleDownSortingProcessor) {
+func initTestCase(t *testing.T, extendedNodes []extendedNode) ([]*apiv1.Node, *ca_context.AutoscalingContext, *crdScaleDownSortingProcessor) {
 	cp := NewMockCloudProvider()
 	crds := make([]crd.CRD, 0)
 	allNodes := make([]*apiv1.Node, 0)
@@ -111,7 +114,7 @@ func initTestCase(t *testing.T, extendedNodes []extendedNode) ([]*apiv1.Node, *c
 	crdLister := lister.NewMockCrdLister(crds)
 	crdLister.SetCrdLabel("crd-1")
 	processor := NewCrdScaleDownSortingProcessor(crdLister, cp)
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider:   cp,
 		ClusterSnapshot: snapshot,
 	}
@@ -384,7 +387,7 @@ func TestScaleDownSortingProcessorIntegration(t *testing.T) {
 			nodes, ctx, comparer := initTestCase(t, tc.nodes)
 			comparers := []scaledowncandidates.CandidatesComparer{comparer}
 			sortingProcessor := scaledowncandidates.NewScaleDownCandidatesSortingProcessor(comparers)
-			sortedNodes, err := sortingProcessor.GetScaleDownCandidates(ctx, nodes)
+			sortedNodes, err := sortingProcessor.GetScaleDownCandidates(context.TODO(), ctx, nodes)
 			assert.Equal(t, tc.wantOrder, sortedNodes)
 			if tc.wantErr {
 				assert.Error(t, err)

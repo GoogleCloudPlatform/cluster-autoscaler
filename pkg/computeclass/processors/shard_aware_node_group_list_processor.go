@@ -15,6 +15,8 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -22,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -39,8 +41,8 @@ func NewShardAwareNodeGroupListProcessor(nodeGroupListProcessor nodegroups.NodeG
 	}
 }
 
-func (p *shardAwareNodeGroupListProcessor) Process(autoscalingContext *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
-	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(autoscalingContext, nodeGroups, nodeInfos, unschedulablePods)
+func (p *shardAwareNodeGroupListProcessor) Process(ctx context.Context, autoscalingContext *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, autoscalingContext, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil {
 		return nodeGroups, nodeInfos, err
 	}

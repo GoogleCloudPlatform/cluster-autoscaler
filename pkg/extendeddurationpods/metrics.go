@@ -15,6 +15,7 @@
 package extendeddurationpods
 
 import (
+	"context"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/utilization"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
@@ -87,9 +88,9 @@ type metricTuple struct {
 }
 
 // Process is the processing func for calculating and updating edp node metrics.
-func (m *Metrics) Process(ctx *context.AutoscalingContext, _ *clusterstate.ClusterStateRegistry, _ time.Time) error {
+func (m *Metrics) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, _ *clusterstate.ClusterStateRegistry, _ time.Time) error {
 	metrics.Metrics.ResetNodeUtilization()
-	allNodes, err := ctx.ClusterSnapshot.ListNodeInfos()
+	allNodes, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return err
 	}
@@ -99,7 +100,7 @@ func (m *Metrics) Process(ctx *context.AutoscalingContext, _ *clusterstate.Clust
 		if node.Node() == nil {
 			continue
 		}
-		for _, t := range getContributingTuples(ctx, node) {
+		for _, t := range getContributingTuples(autoscalingCtx, node) {
 			if t.utilBucket == utilizationUnsupported {
 				klog.Errorf("Unsupported utilization found for node: %s, %+v", node.Node().Name, t)
 			}
@@ -121,7 +122,7 @@ func (m *Metrics) CleanUp() {
 }
 
 // getContributingTuples adds the node utilization contributors based on the utilization calculator used for scale-down for edp nodes.
-func getContributingTuples(ctx *context.AutoscalingContext, nodeInfo *framework.NodeInfo) []metricTuple {
+func getContributingTuples(ctx *ca_context.AutoscalingContext, nodeInfo *framework.NodeInfo) []metricTuple {
 	var tuples []metricTuple
 	if utils.IsNodeInfoUpcoming(nodeInfo) {
 		return tuples
@@ -143,7 +144,7 @@ func getContributingTuples(ctx *context.AutoscalingContext, nodeInfo *framework.
 	if packed {
 		nodeType = edpPacked
 	}
-	gpuConfig := ctx.CloudProvider.GetNodeGpuConfig(nodeInfo.Node())
+	gpuConfig := ctx.CloudProvider.GetNodeGpuConfig(context.TODO(), nodeInfo.Node())
 	if gpuConfig != nil {
 		nodeType = edpGpu
 		if packed {

@@ -89,8 +89,8 @@ func (p *Processor) Preprocess(unschedulablePods []*apiv1.Pod) {
 	p.updateBackoffs(unschedulablePods)
 }
 
-func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	defer metrics.UpdateDurationFromStart(metricLabel, time.Now())
+func (p *Processor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	defer metrics.UpdateDurationFromStart(context.TODO(), metricLabel, time.Now())
 
 	var configs []PTSConfig
 	for _, dd := range p.domainDiscoveries {
@@ -127,7 +127,7 @@ func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePod
 		return cmp.Compare(a.pod.Name, b.pod.Name)
 	})
 
-	allPods, podsToNodes, err := allScheduledPods(ctx)
+	allPods, podsToNodes, err := allScheduledPods(autoscalingCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePod
 	// We need to schedule pods after replacing PTS with nodeSelector.
 	// Otherwise, pods that can be scheduled after PTS processor but not scheduled in the existing FilterOutSchedulable processor will result in an unwanted scale up.
 	// We also need this code to happen after FilterOutSchedulable bec in case we have maxSkew=2, we will scale-up a node while Scheduler will pick existing domain if there is space there, making the scale-up useless and unwanted.
-	res, err := p.simulator.TrySchedulePods(context.Background(), ctx.ClusterSnapshot, ptsPods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), autoscalingCtx.ClusterSnapshot, ptsPods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: func(nodeInfo *framework.NodeInfo) bool {
 			return nodeNotBeingRemoved(nodeInfo.Node())
 		},

@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
@@ -38,8 +39,8 @@ type mockTemplateNodeInfoProvider struct {
 	mock.Mock
 }
 
-func (m *mockTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
-	args := m.Called(ctx, nodes, daemonsets, taintConfig, now)
+func (m *mockTemplateNodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+	args := m.Called(ctx, autoscalingCtx, nodes, daemonsets, taintConfig, now)
 	var nodeInfos map[string]*framework.NodeInfo
 	if args.Get(0) != nil {
 		nodeInfos = args.Get(0).(map[string]*framework.NodeInfo)
@@ -139,7 +140,7 @@ func TestNodeInfoProvider_Process(t *testing.T) {
 			}, nil)
 
 			p := NewNodeInfoProvider(mockBaseProvider, mockCloudProvider, experimentsManager)
-			res, err := p.Process(&context.AutoscalingContext{}, nil, nil, taints.TaintConfig{}, time.Now())
+			res, err := p.Process(context.TODO(), &ca_context.AutoscalingContext{}, nil, nil, taints.TaintConfig{}, time.Now())
 
 			assert.NoError(t, err)
 			assert.Len(t, res, 1)

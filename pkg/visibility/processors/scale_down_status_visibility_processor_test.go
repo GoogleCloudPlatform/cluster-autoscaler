@@ -15,13 +15,17 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"google.golang.org/protobuf/testing/protocmp"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
@@ -29,14 +33,14 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/utilization"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
+
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 )
 
@@ -348,7 +352,7 @@ func TestNoScaleDownNegativeEventsFlag(t *testing.T) {
 	}
 
 	// Check that negative event is not logged with the flag turned off.
-	processor.Process(&context.AutoscalingContext{}, &status.ScaleDownStatus{
+	processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, &status.ScaleDownStatus{
 		Result:           status.ScaleDownInCooldown,
 		UnremovableNodes: unremovableNodes,
 	})
@@ -356,7 +360,7 @@ func TestNoScaleDownNegativeEventsFlag(t *testing.T) {
 
 	// Turn the flag on and check that the negative event is correctly logged.
 	processor.opts.EmitNoScaleDownEvents = true
-	processor.Process(&context.AutoscalingContext{}, &status.ScaleDownStatus{
+	processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, &status.ScaleDownStatus{
 		Result:           status.ScaleDownInCooldown,
 		UnremovableNodes: unremovableNodes,
 	})
@@ -435,7 +439,7 @@ func TestNodePoolDeletedEvent(t *testing.T) {
 }
 
 func TestProcessNoScaleDownEvent(t *testing.T) {
-	ctx := &context.AutoscalingContext{}
+	ctx := &ca_context.AutoscalingContext{}
 	scaleDownStatus := &status.ScaleDownStatus{Result: 1337}
 	vizScaleDownStatus := &vistypes.ScaleDownStatus{Result: 1337}
 
@@ -453,7 +457,7 @@ func TestProcessNoScaleDownEvent(t *testing.T) {
 
 	// Assert that nothing is logged if NoScaleDown doesn't return any reasons.
 	noScaleDownMock.On("GetNewReasons", vizScaleDownStatus, mock.Anything).Return(&noscaledown.Reasons{}).Once()
-	processor.Process(ctx, scaleDownStatus)
+	processor.Process(context.TODO(), ctx, scaleDownStatus)
 
 	// Assert that the correct event is logged if NoScaleDown does return reasons.
 	topLevel := &vistypes.Message{Id: 1, Params: []string{"a", "b", "c"}}
@@ -476,7 +480,7 @@ func TestProcessNoScaleDownEvent(t *testing.T) {
 	noScaleDownMock.On("GetNewReasons", vizScaleDownStatus, mock.Anything).Return(returnedReasons).Once()
 	loggerMock.On("LogEvent", mock.Anything).Return(nil).Once()
 	noScaleDownMock.On("MarkReasonsReported", returnedReasons, mock.Anything).Return().Once()
-	processor.Process(ctx, scaleDownStatus)
+	processor.Process(context.TODO(), ctx, scaleDownStatus)
 
 	loggedNoScaleDownData := loggerMock.Calls[0].Arguments.Get(0).(*vispb.AutoscalerEvent).GetNoDecisionStatus().GetNoScaleDown()
 	if diff := cmp.Diff(topLevel.Proto(), loggedNoScaleDownData.GetReason(), protocmp.Transform()); diff != "" {
@@ -490,7 +494,7 @@ func TestProcessNoScaleDownEvent(t *testing.T) {
 	// Assert that if the logger fails to log, the reasons are not marked as reported.
 	noScaleDownMock.On("GetNewReasons", vizScaleDownStatus, mock.Anything).Return(returnedReasons).Once()
 	loggerMock.On("LogEvent", mock.Anything).Return(fmt.Errorf("Some error")).Once()
-	processor.Process(ctx, scaleDownStatus)
+	processor.Process(context.TODO(), ctx, scaleDownStatus)
 
 	loggerMock.AssertExpectations(t)
 	noScaleDownMock.AssertExpectations(t)

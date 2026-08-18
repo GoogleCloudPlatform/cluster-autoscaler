@@ -15,6 +15,7 @@
 package customresources
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -22,32 +23,40 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
 	gce_api "google.golang.org/api/compute/v1"
+
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	clock "k8s.io/utils/clock/testing"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	clock "k8s.io/utils/clock/testing"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -108,7 +117,7 @@ func TestWorstAllocatableBasic(t *testing.T) {
 	gkeManagerMock := &gke.GkeManagerMock{}
 	gkeManagerMock.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.N1)
 	provider, _ := buildGkeCloudProvider(gkeManagerMock)
-	ctx := &context.AutoscalingContext{CloudProvider: provider}
+	ctx := &ca_context.AutoscalingContext{CloudProvider: provider}
 
 	for i, test := range tests {
 		machineType := "mT"
@@ -185,7 +194,7 @@ func TestWorstAllocatableMultipleNodes(t *testing.T) {
 	provider, _ := buildGkeCloudProvider(gkeManagerMock)
 	cache := nodetemplate.NewCache()
 	p := NewProcessor(cache)
-	p.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	p.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 
 	ref1 := gce.GceRef{
 		Project: "project1",
@@ -293,7 +302,7 @@ func TestNodeIsNotConsideredTwoTimes(t *testing.T) {
 	provider, _ := buildGkeCloudProvider(gkeManagerMock)
 	cache := nodetemplate.NewCache()
 	p := NewProcessor(cache)
-	p.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	p.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	fakeClock := clock.NewFakePassiveClock(time.Now())
 	p.clock = fakeClock
 
@@ -370,7 +379,7 @@ func TestErrorCases(t *testing.T) {
 	provider, _ := buildGkeCloudProvider(gkeManagerMock)
 	cache := nodetemplate.NewCache()
 	p := NewProcessor(cache)
-	p.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	p.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 
 	// Node Group is not autoscaled.
 	node1 := BuildTestNode("notAutoscalingNode", 1000, 1200)
@@ -556,7 +565,7 @@ func TestDraProcessors(t *testing.T) {
 
 			templateNodeInfoProvider := nodeinfosprovider.NewDefaultTemplateNodeInfoProvider(nil, false)
 			templateNodeInfoRegistry := nodeinfosprovider.NewTemplateNodeInfoRegistry(templateNodeInfoProvider)
-			autoscalingCtx := &context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				CloudProvider:            provider,
 				AutoscalingOptions:       config.AutoscalingOptions{DynamicResourceAllocationEnabled: tc.draEnabled},
 				TemplateNodeInfoRegistry: templateNodeInfoRegistry,
@@ -569,7 +578,7 @@ func TestDraProcessors(t *testing.T) {
 			assert.NotNil(t, commonProcessor.GetDraResourcePredictor())
 
 			// Assert that the result Node lists are as expected.
-			gotAllNodes, gotReadyNodes := commonProcessor.FilterOutNodesWithUnreadyResources(autoscalingCtx, tc.allNodes, tc.readyNodes, draSnapshot, csisnapshot.NewEmptySnapshot())
+			gotAllNodes, gotReadyNodes := commonProcessor.FilterOutNodesWithUnreadyResources(context.TODO(), autoscalingCtx, tc.allNodes, tc.readyNodes, draSnapshot, csisnapshot.NewEmptySnapshot())
 			assert.Equal(t, tc.wantAllNodes, gotAllNodes)
 			assert.Equal(t, tc.wantReadyNodes, gotReadyNodes)
 
@@ -589,7 +598,7 @@ func TestGetNodeResourceTargets_DraGpuTpu(t *testing.T) {
 	gkeManagerMock.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.N1)
 	machineConfigProvider := machinetypes.NewMachineConfigProvider(nil)
 	provider, _ := gke.BuildGkeCloudProvider(gkeManagerMock, nil, nil, false, "us-test1", nil, false, false, nil, "", nil, machineConfigProvider, nil, 1000)
-	ctx := &context.AutoscalingContext{CloudProvider: provider}
+	ctx := &ca_context.AutoscalingContext{CloudProvider: provider}
 	cache := nodetemplate.NewCache()
 	processor := NewProcessor(cache) // Centralized Processor
 	processor.SetContext(ctx)
@@ -680,7 +689,7 @@ func TestGetNodeResourceTargets_DraGpuTpu(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			targets, err := processor.GetNodeResourceTargets(ctx, tc.node, tc.nodeGroup)
+			targets, err := processor.GetNodeResourceTargets(context.TODO(), ctx, tc.node, tc.nodeGroup)
 
 			if tc.wantErr {
 				assert.Error(t, err)

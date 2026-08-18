@@ -15,6 +15,7 @@
 package status
 
 import (
+	"context"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -37,7 +38,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -376,7 +377,7 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 				}
 			}
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				CloudProvider:   provider,
 			}
@@ -395,7 +396,7 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 
 			// Use synctest.Test so that timestamps returned by `time.Now()` would be deterministic.
 			synctest.Test(t, func(t *testing.T) {
-				err := processor.Process(ctx, &clusterstate.ClusterStateRegistry{}, time.Now())
+				err := processor.Process(context.TODO(), ctx, &clusterstate.ClusterStateRegistry{}, time.Now())
 				if err != nil {
 					t.Fatalf("Process returned an error: %v", err)
 				}

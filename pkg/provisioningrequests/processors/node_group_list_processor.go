@@ -15,12 +15,14 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/scaleup/reasons"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -37,8 +39,8 @@ func NewFilterQueuedNodeGroupListProcessor(nodeGroupListProcessor nodegroups.Nod
 }
 
 // Process first calls nodeGroupListProcessor and then filters out all nodegroups that are queued.
-func (p *filterQueuedNodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
-	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, nodeGroups, nodeInfos, unschedulablePods)
+func (p *filterQueuedNodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, autoscalingCtx, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil {
 		klog.Errorf("Cannot filter DWS nodegroups, error: %v", err)
 		return nodeGroups, nodeInfos, err

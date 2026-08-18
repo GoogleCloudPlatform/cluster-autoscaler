@@ -15,6 +15,7 @@
 package gceclient
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sync"
@@ -173,7 +174,7 @@ func (a *autoscalingInternalGceClientMock) SuspendInstances(migRef gce.GceRef, i
 	return a.suspendInstances(migRef, instances, forceSuspend)
 }
 
-func (a *autoscalingInternalGceClientMock) FetchZones(region string) ([]string, error) {
+func (a *autoscalingInternalGceClientMock) FetchZones(ctx context.Context, region string) ([]string, error) {
 	return a.fetchZones(region)
 }
 

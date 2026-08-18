@@ -15,6 +15,7 @@
 package reservations
 
 import (
+	"context"
 	"fmt"
 
 	gce_api "google.golang.org/api/compute/v1"
@@ -70,7 +71,7 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) bool {
 	mig, ok := nodegroup.(*gke.GkeMig)
 	if !ok {
-		klog.Errorf("Nodegroup - %v cannot be converted to MIG", nodegroup.Debug())
+		klog.Errorf("Nodegroup - %v cannot be converted to MIG", nodegroup.Debug(context.TODO()))
 		return false
 	}
 

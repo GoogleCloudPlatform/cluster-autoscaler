@@ -547,7 +547,7 @@ func (g *GceClient) findMachineType(name, zone string) *gcev1.MachineType {
 
 // --- AutoscalingFakeGceClient implementation ---
 
-func (g *GceClient) FetchMachineType(zone, machineType string) (*gcev1.MachineType, error) {
+func (g *GceClient) FetchMachineType(ctx context.Context, zone, machineType string) (*gcev1.MachineType, error) {
 	g.Lock()
 	defer g.Unlock()
 
@@ -601,7 +601,7 @@ func (g *GceClient) FetchAllMigs(zone string) ([]*gcev1.InstanceGroupManager, er
 	return results, nil
 }
 
-func (g *GceClient) FetchMig(ref gceinternal.GceRef) (*gcev1.InstanceGroupManager, error) {
+func (g *GceClient) FetchMig(ctx context.Context, ref gceinternal.GceRef) (*gcev1.InstanceGroupManager, error) {
 	g.Lock()
 	defer g.Unlock()
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
@@ -611,7 +611,7 @@ func (g *GceClient) FetchMig(ref gceinternal.GceRef) (*gcev1.InstanceGroupManage
 	return nil, fmt.Errorf("MIG %s in zone %s not found in fake GCE", ref.Name, ref.Zone)
 }
 
-func (g *GceClient) FetchAllInstances(project, zone string, filter string) ([]gceinternal.GceInstance, error) {
+func (g *GceClient) FetchAllInstances(ctx context.Context, project, zone string, filter string) ([]gceinternal.GceInstance, error) {
 	g.Lock()
 	defer g.Unlock()
 	var results []gceinternal.GceInstance
@@ -625,7 +625,7 @@ func (g *GceClient) FetchAllInstances(project, zone string, filter string) ([]gc
 	return results, nil
 }
 
-func (g *GceClient) FetchMigTargetSize(ref gceinternal.GceRef) (int64, error) {
+func (g *GceClient) FetchMigTargetSize(ctx context.Context, ref gceinternal.GceRef) (int64, error) {
 	g.Lock()
 	defer g.Unlock()
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
@@ -635,11 +635,11 @@ func (g *GceClient) FetchMigTargetSize(ref gceinternal.GceRef) (int64, error) {
 	return 0, fmt.Errorf("MIG %s in zone %s not found in fake GCE", ref.Name, ref.Zone)
 }
 
-func (g *GceClient) FetchMigBasename(ref gceinternal.GceRef) (string, error) {
+func (g *GceClient) FetchMigBasename(ctx context.Context, ref gceinternal.GceRef) (string, error) {
 	return ref.Name, nil
 }
 
-func (g *GceClient) FetchMigInstances(ref gceinternal.GceRef) ([]gceinternal.GceInstance, error) {
+func (g *GceClient) FetchMigInstances(ctx context.Context, ref gceinternal.GceRef) ([]gceinternal.GceInstance, error) {
 	g.Lock()
 	defer g.Unlock()
 	var results []gceinternal.GceInstance
@@ -653,7 +653,7 @@ func (g *GceClient) FetchMigInstances(ref gceinternal.GceRef) ([]gceinternal.Gce
 	return results, nil
 }
 
-func (g *GceClient) FetchMigTemplateName(migRef gceinternal.GceRef) (gceinternal.InstanceTemplateName, error) {
+func (g *GceClient) FetchMigTemplateName(ctx context.Context, migRef gceinternal.GceRef) (gceinternal.InstanceTemplateName, error) {
 	g.Lock()
 	defer g.Unlock()
 	key := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
@@ -675,7 +675,7 @@ func (g *GceClient) FetchMigTemplateName(migRef gceinternal.GceRef) (gceinternal
 	}, nil
 }
 
-func (g *GceClient) FetchMigTemplate(migRef gceinternal.GceRef, templateName string, regional bool) (*gcev1.InstanceTemplate, error) {
+func (g *GceClient) FetchMigTemplate(ctx context.Context, migRef gceinternal.GceRef, templateName string, regional bool) (*gcev1.InstanceTemplate, error) {
 	g.Lock()
 	defer g.Unlock()
 	if t, found := g.templates[templateName]; found {
@@ -688,7 +688,7 @@ func (g *GceClient) FetchMigTemplate(migRef gceinternal.GceRef, templateName str
 	return nil, fmt.Errorf("template %s not found in fake GCE", templateName)
 }
 
-func (g *GceClient) FetchMigsWithName(zone string, filter *regexp.Regexp) ([]string, error) {
+func (g *GceClient) FetchMigsWithName(ctx context.Context, zone string, filter *regexp.Regexp) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
 	var links []string
@@ -711,7 +711,7 @@ func (g *GceClient) fetchZones(region string) ([]string, error) {
 	return results, nil
 }
 
-func (g *GceClient) FetchZones(region string) ([]string, error) {
+func (g *GceClient) FetchZones(ctx context.Context, region string) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
 	return g.fetchZones(region)
@@ -792,7 +792,7 @@ func (g *GceClient) FetchReservation(projectID string, name string) (*gcev1.Rese
 	return nil, fmt.Errorf("reservation %s not found in fake GCE", name)
 }
 
-func (g *GceClient) FetchListManagedInstancesResults(migRef gceinternal.GceRef) (string, error) {
+func (g *GceClient) FetchListManagedInstancesResults(ctx context.Context, migRef gceinternal.GceRef) (string, error) {
 	g.Lock()
 	defer g.Unlock()
 	key := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
@@ -802,7 +802,7 @@ func (g *GceClient) FetchListManagedInstancesResults(migRef gceinternal.GceRef) 
 	return "", fmt.Errorf("MIG %s in zone %s not found in fake GCE", migRef.Name, migRef.Zone)
 }
 
-func (g *GceClient) ResizeMig(ref gceinternal.GceRef, size int64) error {
+func (g *GceClient) ResizeMig(ctx context.Context, ref gceinternal.GceRef, size int64) error {
 	g.Lock()
 	defer g.Unlock()
 
@@ -825,7 +825,7 @@ func (g *GceClient) ResizeMig(ref gceinternal.GceRef, size int64) error {
 	return g.reconcileMIGInstances(ref.Project, key, template)
 }
 
-func (g *GceClient) DeleteInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
+func (g *GceClient) DeleteInstances(ctx context.Context, migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
 	g.Lock()
 	defer g.Unlock()
 
@@ -879,7 +879,7 @@ func (g *GceClient) CreateInstancesWithRecommendation(ref gceinternal.GceRef, te
 	return g.createInstancesLocked(ref, templateName, count, names)
 }
 
-func (g *GceClient) CreateInstances(ref gceinternal.GceRef, templateName string, count int64, names []string) ([]string, error) {
+func (g *GceClient) CreateInstances(ctx context.Context, ref gceinternal.GceRef, templateName string, count int64, names []string) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
 
@@ -1119,7 +1119,7 @@ func randString(n int) string {
 	return string(b)
 }
 
-func (g *GceClient) WaitForOperation(operationName, operationType, project, zone string) error {
+func (g *GceClient) WaitForOperation(ctx context.Context, operationName, operationType, project, zone string) error {
 	return nil
 }
 

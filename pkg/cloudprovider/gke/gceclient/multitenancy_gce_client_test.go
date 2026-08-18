@@ -140,7 +140,7 @@ func TestAddProviderConfig(t *testing.T) {
 					return
 				}
 			}
-			_, err := mtGCEClient.CreateInstances(tc.gceRef, "", 0, nil)
+			_, err := mtGCEClient.CreateInstances(context.TODO(), tc.gceRef, "", 0, nil)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("got: %v, want: %v", err, tc.wantErr)
 				return
@@ -279,7 +279,7 @@ func TestDeleteProviderConfig(t *testing.T) {
 					return
 				}
 			}
-			_, err := mtGCEClient.CreateInstances(tc.gceRef, "", 0, nil)
+			_, err := mtGCEClient.CreateInstances(context.TODO(), tc.gceRef, "", 0, nil)
 			if (err != nil) != tc.wantGCEErr {
 				t.Errorf("got: %v, want: %v", err, tc.wantGCEErr)
 				return
@@ -313,12 +313,12 @@ func TestMTCreateInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.CreateInstances(gce.GceRef{Project: "bad-project"}, "", 0, nil)
+	_, err := mtGCEClient.CreateInstances(context.TODO(), gce.GceRef{Project: "bad-project"}, "", 0, nil)
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	_, err = mtGCEClient.CreateInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, "", 0, nil)
+	_, err = mtGCEClient.CreateInstances(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID}, "", 0, nil)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -385,12 +385,12 @@ func TestMTDeleteInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	err := mtGCEClient.DeleteInstances(gce.GceRef{Project: "bad-project"}, nil)
+	err := mtGCEClient.DeleteInstances(context.TODO(), gce.GceRef{Project: "bad-project"}, nil)
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	err = mtGCEClient.DeleteInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil)
+	err = mtGCEClient.DeleteInstances(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID}, nil)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -461,12 +461,12 @@ func TestMTFetchAllInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchAllInstances("bad-project", "", "")
+	_, err := mtGCEClient.FetchAllInstances(context.TODO(), "bad-project", "", "")
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	instances, err := mtGCEClient.FetchAllInstances(fooProviderConfig.ProjectID, "", "")
+	instances, err := mtGCEClient.FetchAllInstances(context.TODO(), fooProviderConfig.ProjectID, "", "")
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -594,12 +594,12 @@ func TestMTFetchListManagedInstancesResults(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchListManagedInstancesResults(gce.GceRef{Project: "bad-project"})
+	_, err := mtGCEClient.FetchListManagedInstancesResults(context.TODO(), gce.GceRef{Project: "bad-project"})
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	res, err := mtGCEClient.FetchListManagedInstancesResults(gce.GceRef{Project: fooProviderConfig.ProjectID})
+	res, err := mtGCEClient.FetchListManagedInstancesResults(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID})
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -622,14 +622,14 @@ func TestMTFetchMachineType(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClientWithClusterProject(t, "bad-project", server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchMachineType("us-central1-a", "fast-machine")
+	_, err := mtGCEClient.FetchMachineType(context.TODO(), "us-central1-a", "fast-machine")
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
 	// override the cluster project ID to a registered ProviderConfig.
 	mtGCEClient.clusterProjectID = fooProviderConfig.ProjectID
-	machineType, err := mtGCEClient.FetchMachineType("us-central1-a", "fast-machine")
+	machineType, err := mtGCEClient.FetchMachineType(context.TODO(), "us-central1-a", "fast-machine")
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -690,12 +690,12 @@ func TestMTFetchMigBasename(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchMigBasename(gce.GceRef{Project: "bad-project"})
+	_, err := mtGCEClient.FetchMigBasename(context.TODO(), gce.GceRef{Project: "bad-project"})
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	res, err := mtGCEClient.FetchMigBasename(gce.GceRef{Project: fooProviderConfig.ProjectID})
+	res, err := mtGCEClient.FetchMigBasename(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID})
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -722,12 +722,12 @@ func TestMTFetchMigInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchMigInstances(gce.GceRef{Project: "bad-project"})
+	_, err := mtGCEClient.FetchMigInstances(context.TODO(), gce.GceRef{Project: "bad-project"})
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	_, err = mtGCEClient.FetchMigInstances(gce.GceRef{Project: fooProviderConfig.ProjectID})
+	_, err = mtGCEClient.FetchMigInstances(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID})
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -746,12 +746,12 @@ func TestMTFetchMigTargetSize(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchMigTargetSize(gce.GceRef{Project: "bad-project"})
+	_, err := mtGCEClient.FetchMigTargetSize(context.TODO(), gce.GceRef{Project: "bad-project"})
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	res, err := mtGCEClient.FetchMigTargetSize(gce.GceRef{Project: fooProviderConfig.ProjectID})
+	res, err := mtGCEClient.FetchMigTargetSize(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID})
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -774,12 +774,12 @@ func TestMTFetchMigTemplate(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	_, err := mtGCEClient.FetchMigTemplate(gce.GceRef{Project: "bad-project"}, "", false)
+	_, err := mtGCEClient.FetchMigTemplate(context.TODO(), gce.GceRef{Project: "bad-project"}, "", false)
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	res, err := mtGCEClient.FetchMigTemplate(gce.GceRef{Project: fooProviderConfig.ProjectID}, "", false)
+	res, err := mtGCEClient.FetchMigTemplate(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID}, "", false)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -836,7 +836,7 @@ func TestMTOperations(t *testing.T) {
 			name: "FetchMigTemplateName failure",
 			data: gce_api.InstanceGroupManager{},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return client.FetchMigTemplateName(gce.GceRef{Project: "bad-project", Zone: "us-central1-a", Name: "test-mig"})
+				return client.FetchMigTemplateName(context.TODO(), gce.GceRef{Project: "bad-project", Zone: "us-central1-a", Name: "test-mig"})
 			},
 			wantErr: true,
 		},
@@ -844,7 +844,7 @@ func TestMTOperations(t *testing.T) {
 			name: "FetchMigTemplateName success",
 			data: gce_api.InstanceGroupManager{InstanceTemplate: "projects/test-project/us-central1-a/instanceTemplates/test-template"},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return client.FetchMigTemplateName(gce.GceRef{Project: fooProviderConfig.ProjectID, Zone: "us-central1-a", Name: "test-mig"})
+				return client.FetchMigTemplateName(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID, Zone: "us-central1-a", Name: "test-mig"})
 			},
 			want: gce.InstanceTemplateName{
 				Name:     "test-template",
@@ -961,7 +961,7 @@ func TestMTOperations(t *testing.T) {
 				client.clusterProjectID = "bad-project"
 			},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return client.FetchZones("us-central1")
+				return client.FetchZones(context.TODO(), "us-central1")
 			},
 			wantErr: true,
 		},
@@ -972,7 +972,7 @@ func TestMTOperations(t *testing.T) {
 				client.clusterProjectID = fooProviderConfig.ProjectID
 			},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return client.FetchZones("us-central1")
+				return client.FetchZones(context.TODO(), "us-central1")
 			},
 			want: []string{"foo"},
 		},
@@ -980,7 +980,7 @@ func TestMTOperations(t *testing.T) {
 			name: "ResizeMig failure",
 			data: gce_api.Operation{Status: "DONE"},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return nil, client.ResizeMig(gce.GceRef{Project: "bad-project"}, 0)
+				return nil, client.ResizeMig(context.TODO(), gce.GceRef{Project: "bad-project"}, 0)
 			},
 			wantErr: true,
 		},
@@ -988,14 +988,14 @@ func TestMTOperations(t *testing.T) {
 			name: "ResizeMig success",
 			data: gce_api.Operation{Status: "DONE"},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return nil, client.ResizeMig(gce.GceRef{Project: fooProviderConfig.ProjectID}, 0)
+				return nil, client.ResizeMig(context.TODO(), gce.GceRef{Project: fooProviderConfig.ProjectID}, 0)
 			},
 		},
 		{
 			name: "WaitForOperation failure",
 			data: gce_api.Operation{Status: "DONE"},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return nil, client.WaitForOperation("", "", "bad-project", "")
+				return nil, client.WaitForOperation(context.TODO(), "", "", "bad-project", "")
 			},
 			wantErr: true,
 		},
@@ -1003,7 +1003,7 @@ func TestMTOperations(t *testing.T) {
 			name: "WaitForOperation success",
 			data: gce_api.Operation{Status: "DONE"},
 			methodCall: func(client *multitenancyGCEClient) (any, error) {
-				return nil, client.WaitForOperation("", "", fooProviderConfig.ProjectID, "")
+				return nil, client.WaitForOperation(context.TODO(), "", "", fooProviderConfig.ProjectID, "")
 			},
 		},
 		{
@@ -1072,7 +1072,7 @@ func TestMTFetchMigsWithName(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	res, err := mtGCEClient.FetchMigsWithName("us-central1-a", nil)
+	res, err := mtGCEClient.FetchMigsWithName(context.TODO(), "us-central1-a", nil)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return
@@ -1285,7 +1285,7 @@ func TestMTPerTenantAuth(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 4. Trigger client creation and API call
-	_, err = mtGCEClient.CreateInstances(gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"}, "", 0, nil)
+	_, err = mtGCEClient.CreateInstances(context.TODO(), gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"}, "", 0, nil)
 	assert.NoError(t, err)
 }
 
@@ -1331,7 +1331,7 @@ func TestMTPerTenantAuthFallback(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 3. Trigger client creation and API call
-	_, err = mtGCEClient.CreateInstances(gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"}, "", 0, nil)
+	_, err = mtGCEClient.CreateInstances(context.TODO(), gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"}, "", 0, nil)
 	assert.NoError(t, err)
 }
 

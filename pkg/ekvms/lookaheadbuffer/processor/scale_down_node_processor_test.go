@@ -15,14 +15,16 @@
 package processor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -97,7 +99,7 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 				}
 			}
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 
@@ -137,7 +139,7 @@ func TestGetScaleDownCandidates(t *testing.T) {
 		err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(node, pods...))
 		assert.NoError(t, err)
 	}
-	got, err := p.GetScaleDownCandidates(&context.AutoscalingContext{
+	got, err := p.GetScaleDownCandidates(context.TODO(), &ca_context.AutoscalingContext{
 		ClusterSnapshot: snapshot,
 	}, nodes)
 	assert.NoError(t, err)

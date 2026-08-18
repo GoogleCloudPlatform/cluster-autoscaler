@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -29,7 +30,7 @@ import (
 
 // cloudProvider specifies the subset of cloudprovider.CloudProvider used by the processor.
 type cloudProvider interface {
-	NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error)
+	NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error)
 	GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily
 	IsAutopilotEnabled() bool
 }
@@ -104,7 +105,7 @@ func (p *crdScaleDownSortingProcessor) getCrdForNode(node *apiv1.Node) (crd.CRD,
 	if node == nil {
 		return nil, nil, fmt.Errorf("expected node; got %v", node)
 	}
-	nodeGroup, err := p.cloudProvider.NodeGroupForNode(node)
+	nodeGroup, err := p.cloudProvider.NodeGroupForNode(context.TODO(), node)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Failed to retrieve node group for node %s: %v", node.Name, err)
 	}

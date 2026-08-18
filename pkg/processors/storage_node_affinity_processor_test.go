@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 type mockSerenityCloudProvider struct {
@@ -77,8 +78,8 @@ func TestStorageNodeAffinityPodListProcessor(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
-	processedPods, err := processor.Process(ctx, []*apiv1.Pod{pod})
+	ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+	processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Equal(t, "true", processedPods[0].Spec.NodeSelector["disk-type.gke.io/hyperdisk-balanced"])
@@ -153,15 +154,15 @@ func TestStorageNodeAffinityPodListProcessor_DualStorage(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
-	processedPods, err := processor.Process(ctx, []*apiv1.Pod{pod})
+	ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+	processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Equal(t, "true", processedPods[0].Spec.NodeSelector["disk-type.gke.io/hyperdisk-balanced"])
 	assert.Equal(t, "true", processedPods[0].Spec.NodeSelector["disk-type.gke.io/pd-balanced"])
 
 	// Test skip when experiment flag is disabled (ctx is nil or IsMachineSerenityLabelsEnabled is false)
-	skippedPods, err := processor.Process(nil, []*apiv1.Pod{pod})
+	skippedPods, err := processor.Process(context.TODO(), nil, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, skippedPods, 1)
 	assert.Nil(t, skippedPods[0].Spec.NodeSelector)
@@ -210,8 +211,8 @@ func TestStorageNodeAffinityPodListProcessor_NonGkePdCsiDriver(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
-	processedPods, err := processor.Process(ctx, []*apiv1.Pod{pod})
+	ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+	processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Nil(t, processedPods[0].Spec.NodeSelector)
@@ -260,8 +261,8 @@ func TestStorageNodeAffinityPodListProcessor_DynamicDiskType(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
-	processedPods, err := processor.Process(ctx, []*apiv1.Pod{pod})
+	ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+	processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Nil(t, processedPods[0].Spec.NodeSelector)
@@ -316,8 +317,8 @@ func TestStorageNodeAffinityPodListProcessor_BoundPV(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
-	processedPods, err := processor.Process(ctx, []*apiv1.Pod{pod})
+	ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+	processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Equal(t, "true", processedPods[0].Spec.NodeSelector["disk-type.gke.io/hyperdisk-balanced"])

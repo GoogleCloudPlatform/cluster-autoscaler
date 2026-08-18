@@ -191,7 +191,7 @@ func TestReconcileCandidates(t *testing.T) {
 				},
 			}
 			reconciler := newNodeReconciler(nodeReconcilerOptions{})
-			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
 			client.PrependReactor("patch", "nodes", func(action ktesting.Action) (bool, runtime.Object, error) {
 				patchAction := action.(ktesting.PatchAction)
@@ -298,7 +298,7 @@ func TestReconcileCandidate(t *testing.T) {
 				_, err := client.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
 				assert.NoError(t, err)
 			}
-			err := snapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err := snapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
 			info := &candidateInfo{candidate: tc.candidate, creationTime: timeNow}
 			ctx := &cacontext.AutoscalingContext{

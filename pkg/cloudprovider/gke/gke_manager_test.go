@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -628,14 +629,14 @@ func (m *migInfoProviderStub) FlexStartNonQueued(migRef gce.GceRef) bool {
 	return m.flexStartNonQueued[migRef]
 }
 
-func (m *migInfoProviderStub) GetMigInstanceTemplateName(migRef gce.GceRef) (gce.InstanceTemplateName, error) {
+func (m *migInfoProviderStub) GetMigInstanceTemplateName(ctx context.Context, migRef gce.GceRef) (gce.InstanceTemplateName, error) {
 	if m.instanceTemplate == nil {
 		return gce.InstanceTemplateName{}, nil
 	}
 	return m.instanceTemplate[migRef], nil
 }
 
-func (m *migInfoProviderStub) GetMigInstances(migRef gce.GceRef) ([]gce.GceInstance, error) {
+func (m *migInfoProviderStub) GetMigInstances(ctx context.Context, migRef gce.GceRef) ([]gce.GceInstance, error) {
 	if m.instances == nil {
 		return nil, nil
 	}
@@ -650,15 +651,15 @@ func (m *migInfoProviderStub) GetListManagedInstancesResults(_ gce.GceRef) (stri
 	return "", nil
 }
 
-func (m *migInfoProviderStub) GetMigForInstance(instanceRef gce.GceRef) (gce.Mig, error) {
+func (m *migInfoProviderStub) GetMigForInstance(ctx context.Context, instanceRef gce.GceRef) (gce.Mig, error) {
 	return nil, nil
 }
 
-func (m *migInfoProviderStub) RegenerateMigInstancesCache() error {
+func (m *migInfoProviderStub) RegenerateMigInstancesCache(ctx context.Context) error {
 	return nil
 }
 
-func (m *migInfoProviderStub) GetMigTargetSize(_ gce.GceRef) (int64, error) {
+func (m *migInfoProviderStub) GetMigTargetSize(ctx context.Context, _ gce.GceRef) (int64, error) {
 	return 0, nil
 }
 
@@ -666,19 +667,19 @@ func (m *migInfoProviderStub) GetMigIsStable(_ gce.GceRef) (bool, error) {
 	return true, nil
 }
 
-func (m *migInfoProviderStub) GetMigBasename(_ gce.GceRef) (string, error) {
+func (m *migInfoProviderStub) GetMigBasename(ctx context.Context, _ gce.GceRef) (string, error) {
 	return "", nil
 }
 
-func (m *migInfoProviderStub) GetMigInstanceTemplate(_ gce.GceRef) (*gce_api.InstanceTemplate, error) {
+func (m *migInfoProviderStub) GetMigInstanceTemplate(ctx context.Context, _ gce.GceRef) (*gce_api.InstanceTemplate, error) {
 	return nil, nil
 }
 
-func (m *migInfoProviderStub) GetMigKubeEnv(_ gce.GceRef) (gce.KubeEnv, error) {
+func (m *migInfoProviderStub) GetMigKubeEnv(ctx context.Context, _ gce.GceRef) (gce.KubeEnv, error) {
 	return gce.KubeEnv{}, nil
 }
 
-func (m *migInfoProviderStub) GetMigMachineType(_ gce.GceRef) (gce.MachineType, error) {
+func (m *migInfoProviderStub) GetMigMachineType(ctx context.Context, _ gce.GceRef) (gce.MachineType, error) {
 	return gce.MachineType{}, nil
 }
 
@@ -864,8 +865,8 @@ func validateMig(t *testing.T, mig gce.Mig, zone string, name string, minSize in
 	assert.Equal(t, name, mig.GceRef().Name)
 	assert.Equal(t, zone, mig.GceRef().Zone)
 	assert.Equal(t, projectId, mig.GceRef().Project)
-	assert.Equal(t, minSize, mig.MinSize())
-	assert.Equal(t, maxSize, mig.MaxSize())
+	assert.Equal(t, minSize, mig.MinSize(context.TODO()))
+	assert.Equal(t, maxSize, mig.MaxSize(context.TODO()))
 }
 
 // validateInGkeMigsSet should be used for all validation where more than 1 Migs are present in the cache
@@ -1933,7 +1934,7 @@ func TestCreateNodePool(t *testing.T) {
 	mig := newTestMigSpec(g)
 	newMig, err := g.CreateNodePool(mig)
 	assert.NoError(t, err)
-	assert.True(t, newMig.MainCreatedMig.Exist())
+	assert.True(t, newMig.MainCreatedMig.Exist(context.TODO()))
 	migs := g.GetGkeMigs()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(migs))
@@ -1963,7 +1964,7 @@ func TestCreateNodePool_TPUMultiHost_DifferentMainMigZone(t *testing.T) {
 	mig.spec.MachineType = machineTypeTPU
 	newMig, err := g.CreateNodePool(mig)
 	assert.NoError(t, err)
-	assert.True(t, newMig.MainCreatedMig.Exist())
+	assert.True(t, newMig.MainCreatedMig.Exist(context.TODO()))
 	migs := g.GetGkeMigs()
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(migs))
@@ -3089,7 +3090,7 @@ func TestGetSetMigSize(t *testing.T) {
 	mock.AssertExpectationsForObjects(t, server)
 
 	// We call API again after cache invalidation
-	g.cache.InvalidateAllMigTargetSizes()
+	g.cache.InvalidateAllMigTargetSizes(context.TODO())
 
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-nodeautoprovisioning-323233232").Return(getInstanceGroupManagerNamed(autoprovisionedPoolMigName, zoneB, 7)).Once()
 	size, err = g.GetMigSize(mig2)
@@ -4331,7 +4332,7 @@ func TestMigInstancesCache(t *testing.T) {
 
 		go func() {
 			err := cache.SetMigInstances(ref, []gce.GceInstance{instance}, time.Now())
-			gotInstances, found := cache.GetMigInstances(ref)
+			gotInstances, found := cache.GetMigInstances(context.TODO(), ref)
 			assert.Nil(t, err)
 			assert.True(t, found)
 			assert.Equal(t, 1, len(gotInstances))
@@ -5170,7 +5171,7 @@ type mockAutoscalingGceClient struct {
 	gce.AutoscalingGceClient
 }
 
-func (fagc *mockAutoscalingGceClient) FetchMigInstances(migRef gce.GceRef) ([]gce.GceInstance, error) {
+func (fagc *mockAutoscalingGceClient) FetchMigInstances(ctx context.Context, migRef gce.GceRef) ([]gce.GceInstance, error) {
 	args := fagc.Called(migRef)
 	return args.Get(0).([]gce.GceInstance), args.Error(1)
 }
@@ -5424,7 +5425,7 @@ func TestInstanceByRef(t *testing.T) {
 			}
 
 			if tc.expectedCacheFetch {
-				gceCache.InvalidateMigInstances(migRef)
+				gceCache.InvalidateMigInstances(context.TODO(), migRef)
 				gceClient.On("FetchMigInstances", migRef).Return(tc.instances, nil).Once()
 				gceClient.On("FetchAllMigs", migRef.Zone).Return(
 					[]*gce_api_compute.InstanceGroupManager{

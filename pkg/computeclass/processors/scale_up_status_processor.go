@@ -15,10 +15,12 @@
 package processors
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
@@ -48,7 +50,7 @@ func NewCrdScaleUpStatusProcessor(lister lister.Lister, provider crdScaleUpStatu
 }
 
 // Process processes the state of the cluster after a scale-up
-func (p *CrdScaleUpStatusProcessor) Process(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (p *CrdScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	if scaleUpStatus == nil || scaleUpStatus.Result != status.ScaleUpSuccessful {
 		return
 	}

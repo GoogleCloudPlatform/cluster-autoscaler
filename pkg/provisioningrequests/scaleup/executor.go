@@ -15,6 +15,7 @@
 package scaleup
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -23,7 +24,7 @@ import (
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
@@ -36,14 +37,14 @@ import (
 )
 
 type scaleUpExecutor struct {
-	autoscalingContext         *context.AutoscalingContext
+	autoscalingContext         *ca_context.AutoscalingContext
 	scaleStateNotifier         nodegroupchange.NodeGroupChangeObserver
 	asyncNodeGroupStateChecker asyncnodegroups.AsyncNodeGroupStateChecker
 }
 
 // newScaleUpExecutor returns new instance of scaleUpExecutor.
 func newScaleUpExecutor(
-	autoscalingContext *context.AutoscalingContext,
+	autoscalingContext *ca_context.AutoscalingContext,
 	scaleStateNotifier nodegroupchange.NodeGroupChangeObserver,
 	asyncNodeGroupStateChecker asyncnodegroups.AsyncNodeGroupStateChecker,
 ) *scaleUpExecutor {
@@ -64,7 +65,7 @@ func (e *scaleUpExecutor) executeScaleUpForOption(
 	additionalInfo string,
 	shouldUpdateProvReqDetails manager.ShouldUpdateProvReqDetails,
 ) {
-	targetSize, err := option.NodeGroup.TargetSize()
+	targetSize, err := option.NodeGroup.TargetSize(context.TODO())
 	if err != nil {
 		scaleUpState.appendAutoscalerErrors(errors.ToAutoscalerError(errors.InternalError, err))
 		return
@@ -74,7 +75,7 @@ func (e *scaleUpExecutor) executeScaleUpForOption(
 		Group:       option.NodeGroup,
 		CurrentSize: targetSize,
 		NewSize:     targetSize + po.NodeCount,
-		MaxSize:     option.NodeGroup.MaxSize(),
+		MaxSize:     option.NodeGroup.MaxSize(context.TODO()),
 	}
 	klog.V(1).Infof("Final scale-up plan: %v. %s", scaleUpInfo, additionalInfo)
 	if aErr := e.executeScaleUp(scaleUpInfo, nodeInfos, po.ProvReqID, now, shouldUpdateProvReqDetails); aErr != nil {
@@ -94,13 +95,13 @@ func (e *scaleUpExecutor) executeScaleUp(
 	now time.Time,
 	shouldUpdateProvReqDetails manager.ShouldUpdateProvReqDetails,
 ) errors.AutoscalerError {
-	availableGPUTypes := e.autoscalingContext.CloudProvider.GetAvailableGPUTypes()
+	availableGPUTypes := e.autoscalingContext.CloudProvider.GetAvailableGPUTypes(context.TODO())
 	nodeInfo, ok := nodeInfos[info.Group.Id()]
 	if !ok {
 		return errors.NewAutoscalerErrorf(errors.InternalError, "ProvReqScale-up: failed to get node info for node group %s", info.Group.Id())
 	}
-	gpuConfig := e.autoscalingContext.CloudProvider.GetNodeGpuConfig(nodeInfo.Node())
-	gpuResourceName, gpuType := gpu.GetGpuInfoForMetrics(gpuConfig, availableGPUTypes, nodeInfo.Node(), nil)
+	gpuConfig := e.autoscalingContext.CloudProvider.GetNodeGpuConfig(context.TODO(), nodeInfo.Node())
+	gpuResourceName, gpuType := gpu.GetGpuInfoForMetrics(context.TODO(), gpuConfig, availableGPUTypes, nodeInfo.Node(), nil)
 
 	gkeMig, ok := info.Group.(*gke.GkeMig)
 	if !ok {
@@ -122,16 +123,16 @@ func (e *scaleUpExecutor) executeScaleUp(
 			ErrorCode:    string(aerr.Type()),
 			ErrorMessage: aerr.Error(),
 		}
-		e.scaleStateNotifier.RegisterFailedScaleUp(gkeMig, increase, instanceErrorInfo, now)
+		e.scaleStateNotifier.RegisterFailedScaleUp(context.TODO(), gkeMig, increase, instanceErrorInfo, now)
 		return aerr
 	}
-	if !info.Group.Exist() && e.asyncNodeGroupStateChecker.IsUpcoming(info.Group) {
+	if !info.Group.Exist(context.TODO()) && e.asyncNodeGroupStateChecker.IsUpcoming(info.Group) {
 		// Don't emit scale up event for upcoming node group as it will be generated after
 		// the node group is created, during initial scale up.
 		return nil
 	}
 
-	e.scaleStateNotifier.RegisterScaleUp(gkeMig, increase, now)
+	e.scaleStateNotifier.RegisterScaleUp(context.TODO(), gkeMig, increase, now)
 	metrics.RegisterScaleUp(increase, gpuResourceName, gpuType, "")
 	e.autoscalingContext.LogRecorder.Eventf(apiv1.EventTypeNormal, "ProvReqScaledUpGroup", "ProvReqScale-up: Provisioning Request %s/%s group %s size set to %d instead of %d (max: %d)", pr.Namespace, pr.Name, info.Group.Id(), info.NewSize, info.CurrentSize, info.MaxSize)
 	return nil

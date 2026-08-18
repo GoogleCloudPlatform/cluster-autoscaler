@@ -15,14 +15,18 @@
 package processors
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 )
 
@@ -113,7 +117,7 @@ func TestGetScaleDownCandidates(t *testing.T) {
 				for _, node := range tt.nodes {
 					cloudProvider.On("GkeMigForNode", node).Return(nodeToMig[node], nil).Once()
 				}
-				got, _ := p.GetScaleDownCandidates(nil, tt.nodes)
+				got, _ := p.GetScaleDownCandidates(context.TODO(), nil, tt.nodes)
 				assert.ElementsMatch(t, tt.want, got)
 			}
 		})

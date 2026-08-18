@@ -16,6 +16,7 @@ package processors
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math"
 	"reflect"
@@ -33,7 +34,7 @@ import (
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
 	vis_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
@@ -86,7 +87,7 @@ func NewScaleUpStatusChainProcessor() *ScaleUpStatusChainProcessor {
 }
 
 // Process executes Process for all of the internal processors.
-func (p *ScaleUpStatusChainProcessor) Process(context *context.AutoscalingContext, status *status.ScaleUpStatus) {
+func (p *ScaleUpStatusChainProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleUpStatus) {
 	// Scale-ups may happen in parallel. Example: scale-up during async node pool creation
 	// Process one scale-up status at a time, because many processors keep some state that and that leads to race conditions.
 	p.processingMutex.Lock()
@@ -95,7 +96,7 @@ func (p *ScaleUpStatusChainProcessor) Process(context *context.AutoscalingContex
 		p.sortProcessorsAsc()
 	}
 	for _, proc := range p.processors {
-		proc.Process(context, status)
+		proc.Process(ctx, autoscalingCtx, status)
 	}
 }
 

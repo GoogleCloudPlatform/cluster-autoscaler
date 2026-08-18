@@ -15,7 +15,7 @@
 package processor
 
 import (
-	gocontext "context"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -40,7 +40,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/controller/daemon"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	taintutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
@@ -98,7 +98,7 @@ func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider
 }
 
 // Process updates unschedulablePods by injecting lookahead pods.
-func (p *LookaheadPodInjectionProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	// Return early when not launched to avoid leaking any errors.
 	if status := p.launchStatus(); status != lookaheadbuffer.Enabled {
 		klog.V(4).Infof("Skipping lookahead buffer. Status: %q", status)
@@ -112,16 +112,16 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx *context.AutoscalingContext
 		return unschedulablePods, errors.New("sample node is nil in LookaheadPodInjectionProcessor pod list processor, it should be initialized correctly during the initialization of the processor")
 	}
 
-	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		p.emitLookaheadPodsCountMetric(nil)
 		return unschedulablePods, fmt.Errorf("failed to list nodeInfos from cluster snapshot: %v", err)
 	}
 
-	taintConfig := taintutils.NewTaintConfig(ctx.AutoscalingOptions)
+	taintConfig := taintutils.NewTaintConfig(autoscalingCtx.AutoscalingOptions)
 	requests := p.podRequestsPerWorkloadID(nodeInfos, &taintConfig)
 	topRequests := p.limitMaxWorkloadSeparations(requests)
-	lookaheadPods := p.createLookaheadPods(ctx, topRequests)
+	lookaheadPods := p.createLookaheadPods(autoscalingCtx, topRequests)
 
 	p.emitLookaheadPodsCountMetric(lookaheadPods)
 
@@ -174,7 +174,7 @@ func (p *LookaheadPodInjectionProcessor) limitMaxWorkloadSeparations(requests ma
 	return requests
 }
 
-func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *context.AutoscalingContext, requestsPerWorkloadID map[string]apiv1.ResourceList) []*apiv1.Pod {
+func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *ca_context.AutoscalingContext, requestsPerWorkloadID map[string]apiv1.ResourceList) []*apiv1.Pod {
 	lookaheadPods := []*apiv1.Pod{}
 	for id, requests := range requestsPerWorkloadID {
 		pods, err := p.createLookaheadPodsForWorkloadID(id, requests, ctx)
@@ -190,14 +190,14 @@ func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *context.Autosc
 }
 
 // createLookaheadPodsForWorkloadID creates lookahead pods for single workload ID.
-func (p *LookaheadPodInjectionProcessor) createLookaheadPodsForWorkloadID(workloadID string, requests apiv1.ResourceList, ctx *context.AutoscalingContext) ([]*apiv1.Pod, error) {
+func (p *LookaheadPodInjectionProcessor) createLookaheadPodsForWorkloadID(workloadID string, requests apiv1.ResourceList, ctx *ca_context.AutoscalingContext) ([]*apiv1.Pod, error) {
 	pods := p.laPodProvider.GetLookaheadPods(int(requests.Cpu().Value()), workloadID)
 	pods, err := p.subtractDaemonSet(ctx, pods, workloadID)
 	return pods, err
 }
 
 // subtractDaemonSet subtracts DaemonSet resource usage from lookahead pods to avoid overprovisioning and avoid having unschedulable lookahead pod indefinitely.
-func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *context.AutoscalingContext, pods []*apiv1.Pod, workloadID string) ([]*apiv1.Pod, error) {
+func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *ca_context.AutoscalingContext, pods []*apiv1.Pod, workloadID string) ([]*apiv1.Pod, error) {
 	dsSize, err := p.getTargetDaemonSetSize(ctx, podrequirements.WorkloadIDToTolerations(workloadID))
 	if err != nil {
 		return nil, err
@@ -220,8 +220,8 @@ func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *context.Autoscal
 }
 
 // getTargetDaemonSetSize estimates the aggregate resource requests of DaemonSets schedulable on a default, biggest EK node.
-func (p *LookaheadPodInjectionProcessor) getTargetDaemonSetSize(ctx *context.AutoscalingContext, tolerations []apiv1.Toleration) (apiv1.ResourceList, error) {
-	logger := klog.FromContext(gocontext.Background())
+func (p *LookaheadPodInjectionProcessor) getTargetDaemonSetSize(ctx *ca_context.AutoscalingContext, tolerations []apiv1.Toleration) (apiv1.ResourceList, error) {
+	logger := klog.FromContext(context.Background())
 	requests := apiv1.ResourceList{}
 	node := updateNodeWithWorkloadID(p.sampleNode.DeepCopy(), tolerations)
 	daemonSets, err := ctx.ListerRegistry.DaemonSetLister().List(apilabels.Everything())
@@ -391,7 +391,7 @@ func hasSupportedTaints(node *apiv1.Node, taintConfig *taintutils.TaintConfig) b
 	}
 
 	workloadIDTaints := podrequirements.ExtractWorkloadIDTaints(node)
-	sanitizedTaints := taintutils.SanitizeTaints(node.Spec.Taints, *taintConfig)
+	sanitizedTaints := taintutils.SanitizeTaints(context.TODO(), node.Spec.Taints, *taintConfig)
 
 	if len(workloadIDTaints) != len(sanitizedTaints) {
 		return false

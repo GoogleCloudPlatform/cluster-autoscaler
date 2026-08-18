@@ -15,6 +15,7 @@
 package estimator
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -201,9 +202,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 				similarNodeGroups = append(similarNodeGroups, mig)
 				gkeManagerMock.On("GetMigSize", mig).Return(int64(ng.nodesCount), nil)
 			}
-			var context estimator.EstimationContext
+			var autoscalingCtx estimator.EstimationContext
 			if !tt.emptyContext {
-				context = estimator.NewEstimationContext(0, similarNodeGroups, 0)
+				autoscalingCtx = estimator.NewEstimationContext(0, similarNodeGroups, 0)
 			}
 
 			thisNodeGroup := newTestGkeMig(gkeManagerMock, tt.thisNodeGroupConfig.zone, defaultMachineType, "DefaultNodePool", tt.thisNodeGroupConfig.maxNodes, tt.thisNodeGroupConfig.affinity)
@@ -229,7 +230,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 				optionsTracker:           optionsTracker,
 			}
 
-			if got := t.NodeLimit(thisNodeGroup, context); got.Limit != tt.wantThreshold {
+			if got := t.NodeLimit(context.TODO(), thisNodeGroup, autoscalingCtx); got.Limit != tt.wantThreshold {
 				t1.Errorf("NodeLimit() = %v, want %v", got.Limit, tt.wantThreshold)
 			}
 		})

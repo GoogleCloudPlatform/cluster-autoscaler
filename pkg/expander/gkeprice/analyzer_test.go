@@ -15,6 +15,7 @@
 package gkeprice
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -253,7 +254,7 @@ func TestGetPreferredCpuCountExisting(t *testing.T) {
 		analyzer := NewGroupingClusterAnalyzer(provider, newTestNodeLister(nodes), kube_util.NewTestPodLister(pods), nil)
 		analysis, err := analyzer.Analyze(nodeInfos)
 		assert.NoError(t, err)
-		nodeGroup, err := provider.NodeGroupForNode(nodes[0])
+		nodeGroup, err := provider.NodeGroupForNode(context.TODO(), nodes[0])
 		assert.NoError(t, err)
 		option := expander.Option{NodeGroup: nodeGroup}
 		result, err := analysis.GetPreferredCpuCount(option, nodeInfo)
@@ -284,7 +285,7 @@ func TestGetPreferredCpuCountNew(t *testing.T) {
 		provider := testprovider.NewTestCloudProviderBuilder().Build()
 		nodeGroupName := "ng"
 		provider.AddNodeGroup(nodeGroupName, 0, 0, 0)
-		nodeGroups := provider.NodeGroups()
+		nodeGroups := provider.NodeGroups(context.TODO())
 		assert.Equal(t, 1, len(nodeGroups))
 		nodeGroup := nodeGroups[0]
 		nodeInfos := make(map[string]*framework.NodeInfo)

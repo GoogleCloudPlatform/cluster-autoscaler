@@ -15,23 +15,28 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+
 	labelUtils "sigs.k8s.io/cluster-autoscaler/pkg/utils/labels"
 )
 
@@ -107,7 +112,7 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		extendedResources[HugepageSize2mResourceName] = *resource.NewQuantity(hugepage2m, resource.DecimalSI)
 	}
 
-	capacity, err := t.BuildCapacity(migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, ephemeralLocalSsdCount, pods, reserved, extendedResources)
+	capacity, err := t.BuildCapacity(context.TODO(), migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, ephemeralLocalSsdCount, pods, reserved, extendedResources)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +158,7 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		}
 	}
 	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, gcfsEnabled, ephemeralLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)
-	evictionHard := gce.ParseEvictionHardOrGetDefault(nil)
+	evictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 
 	node.Status = apiv1.NodeStatus{
 		Capacity:    capacity,

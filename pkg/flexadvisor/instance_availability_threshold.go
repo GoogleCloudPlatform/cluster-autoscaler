@@ -15,6 +15,7 @@
 package flexadvisor
 
 import (
+	"context"
 	"maps"
 	"slices"
 
@@ -63,7 +64,7 @@ func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, pu
 // max node limit is the sum of max node limits for nodegroup and all similar node groups.
 // In case of error, 0 is returned. Thresholds with 0 limits will be ignored in favor of thresholds with positive or negative limits.
 // -1 is returned when max node limit is zero, to disallow new nodes.
-func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) estimator.NodeLimitResult {
+func (t *instanceAvailabilityThreshold) NodeLimit(ctx context.Context, nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) estimator.NodeLimitResult {
 	if !IsFlexAdvisorProcessingEnabled(t.experimentsManager) {
 		klog.Info("FlexAdvisor: bin packer processing is disabled by FlexAdvisorProcessing experiment, skipping applying FlexAdvisor limits in bin packer")
 		return estimator.NodeLimitResult{Limit: 0}

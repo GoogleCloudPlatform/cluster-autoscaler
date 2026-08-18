@@ -68,7 +68,7 @@ type vizNapTestCloudProvider struct {
 }
 
 // NewNodeGroup is a mocked method.
-func (cp vizNapTestCloudProvider) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
+func (cp vizNapTestCloudProvider) NewNodeGroup(ctx context.Context, machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
 	zone, found := systemLabels[apiv1.LabelZoneFailureDomain]
 	if !found {
 		return nil, fmt.Errorf("zone not found in systemLabels")
@@ -100,7 +100,7 @@ func (cp vizNapTestCloudProvider) NewNodeGroup(machineType string, labels map[st
 }
 
 // GetResourceLimiter is a mocked method.
-func (cp vizNapTestCloudProvider) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) {
+func (cp vizNapTestCloudProvider) GetResourceLimiter(ctx context.Context) (*cloudprovider.ResourceLimiter, error) {
 	return cloudprovider.NewResourceLimiter(map[string]int64{}, map[string]int64{
 		cloudprovider.ResourceNameCores:  10,
 		cloudprovider.ResourceNameMemory: 10000000000,

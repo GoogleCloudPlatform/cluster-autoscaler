@@ -15,13 +15,15 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	corelisters "k8s.io/client-go/listers/core/v1"
 	storagelisters "k8s.io/client-go/listers/storage/v1"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 const (
@@ -57,7 +59,7 @@ func NewStorageNodeAffinityPodListProcessor(pvcLister corelisters.PersistentVolu
 }
 
 // Process injects storage nodeSelector labels into in-memory copies of unschedulable pods.
-func (p *StorageNodeAffinityPodListProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *StorageNodeAffinityPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	if ctx == nil {
 		klog.V(5).Infof("StorageNodeAffinityPodListProcessor.Process skipped (ctx is nil)")
 		return unschedulablePods, nil

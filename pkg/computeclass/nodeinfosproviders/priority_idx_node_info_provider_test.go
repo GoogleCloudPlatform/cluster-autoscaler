@@ -15,6 +15,7 @@
 package nodeinfosproviders
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -43,7 +44,7 @@ type fakeTemplateNodeInfoProvider struct {
 	returnedError     errors.AutoscalerError
 }
 
-func (m *fakeTemplateNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+func (m *fakeTemplateNodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
 	return m.returnedNodeInfos, m.returnedError
 }
 
@@ -133,7 +134,7 @@ func TestPriorityIdxNodeInfoProvider_Process(t *testing.T) {
 			matcher := computeclass.NewMatcher(mockLister, &computeclass.MockGKEProvider{})
 			provider := NewPriorityIdxNodeInfoProvider(fakeBaseProvider, matcher, mockLister, nil)
 
-			ctx := &context.AutoscalingContext{}
+			ctx := &ca_context.AutoscalingContext{}
 			nodes := []*apiv1.Node{}
 			daemonsets := []*appsv1.DaemonSet{}
 			taintConfig := taints.TaintConfig{}
@@ -151,7 +152,7 @@ func TestPriorityIdxNodeInfoProvider_Process(t *testing.T) {
 				}
 			}
 
-			res, err := provider.Process(ctx, nodes, daemonsets, taintConfig, now)
+			res, err := provider.Process(context.TODO(), ctx, nodes, daemonsets, taintConfig, now)
 
 			if tc.baseProviderErr != nil {
 				assert.Equal(t, tc.baseProviderErr, err, "Base provider error should be returned")

@@ -15,6 +15,7 @@
 package computeclass
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -49,7 +50,7 @@ const (
 
 // annotationCloudprovider defines the subset of cloudprovider.
 type annotationCloudprovider interface {
-	NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error)
+	NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error)
 	// This is only required for the Matcher.
 	IsAutopilotEnabled() bool
 }
@@ -102,7 +103,7 @@ func (p *cccNodeAnnotatorPlugin) GetAnnotation(node *apiv1.Node) (map[string]str
 		return map[string]string{gkelabels.CCCPriorityIndexAnnotationKey: cccDeletedAnnotationValue}, nil
 	}
 
-	nodeGroup, err := p.annotationCloudprovider.NodeGroupForNode(node)
+	nodeGroup, err := p.annotationCloudprovider.NodeGroupForNode(context.TODO(), node)
 	if err != nil {
 		// Failed to get NodeGroup for the node. This might be transient or indicate a config issue.
 		// Return error to signal issue, will retry next cycle.

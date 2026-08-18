@@ -15,6 +15,7 @@
 package scaleup
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
@@ -48,7 +49,7 @@ type AsyncDWSNodeGroupInitializer struct {
 	taintConfig            taints.TaintConfig
 	daemonSets             []*appsv1.DaemonSet
 	scaleUpStatusProcessor status.ScaleUpStatusProcessor
-	context                *context.AutoscalingContext
+	context                *ca_context.AutoscalingContext
 	prCache                *provreqcache.QueuedProvisioningCache
 }
 
@@ -71,7 +72,7 @@ func NewAsyncDWSNodeGroupInitializer(
 	taintConfig taints.TaintConfig,
 	daemonSets []*appsv1.DaemonSet,
 	scaleUpStatusProcessor status.ScaleUpStatusProcessor,
-	autoscalingContext *context.AutoscalingContext,
+	autoscalingContext *ca_context.AutoscalingContext,
 	prCache *provreqcache.QueuedProvisioningCache,
 ) *AsyncDWSNodeGroupInitializer {
 	return &AsyncDWSNodeGroupInitializer{
@@ -122,7 +123,7 @@ func (s *AsyncDWSNodeGroupInitializer) InitializeNodeGroup(result nodegroups.Asy
 	mainCreatedNodeGroup := result.CreationResult.MainCreatedNodeGroup
 	// If possible replace candidate node-info with node info based on created node group. The latter
 	// one should be more in line with nodes which will be created by node group.
-	nodeInfo, aErr := simulator.SanitizedTemplateNodeInfoFromNodeGroup(mainCreatedNodeGroup, s.daemonSets, s.taintConfig)
+	nodeInfo, aErr := simulator.SanitizedTemplateNodeInfoFromNodeGroup(context.TODO(), mainCreatedNodeGroup, s.daemonSets, s.taintConfig)
 	if aErr != nil {
 		klog.Warningf("Cannot build node info for newly created main node group %s. Using fallback. Error: %v", mainCreatedNodeGroup.Id(), aErr)
 		nodeInfo = s.nodeInfo
@@ -147,7 +148,7 @@ func (s *AsyncDWSNodeGroupInitializer) InitializeNodeGroup(result nodegroups.Asy
 					Group:       nodeGroup,
 					CurrentSize: currentTargetSize,
 					NewSize:     currentTargetSize + int(plannedPR.resize),
-					MaxSize:     nodeGroup.MaxSize(),
+					MaxSize:     nodeGroup.MaxSize(context.TODO()),
 				},
 			}
 			perGroupPlan[nodeGroup.Id()] = append(perGroupPlan[nodeGroup.Id()], scaleUp)
@@ -181,7 +182,7 @@ func (s *AsyncDWSNodeGroupInitializer) InitializeNodeGroup(result nodegroups.Asy
 		CreateNodeGroupResults: []nodegroups.CreateNodeGroupResult{result.CreationResult},
 		PodsTriggeredScaleUp:   s.triggeringPods,
 	}
-	s.scaleUpStatusProcessor.Process(s.context, scaleUpStatus)
+	s.scaleUpStatusProcessor.Process(context.TODO(), s.context, scaleUpStatus)
 }
 
 func (s *AsyncDWSNodeGroupInitializer) executeInitializationPlans(plans map[string][]ngScaleUp, nodeInfo *framework.NodeInfo, now time.Time) (errors.AutoscalerError, []cloudprovider.NodeGroup) {
@@ -231,5 +232,5 @@ func (s *AsyncDWSNodeGroupInitializer) executeInitializationPlans(plans map[stri
 
 func (s *AsyncDWSNodeGroupInitializer) emitScaleUpStatus(scaleUpStatus *status.ScaleUpStatus, err errors.AutoscalerError) {
 	status.UpdateScaleUpError(scaleUpStatus, err)
-	s.scaleUpStatusProcessor.Process(s.context, scaleUpStatus)
+	s.scaleUpStatusProcessor.Process(context.TODO(), s.context, scaleUpStatus)
 }

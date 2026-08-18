@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -76,7 +77,7 @@ func (b *ResourceBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInfo *f
 		return currentTime
 	}
 
-	if !nodeGroup.Autoprovisioned() {
+	if !nodeGroup.Autoprovisioned(context.TODO()) {
 		// we are using resource backoff based on non-autoprovisioned node groups. Motivation case below:
 		//
 		// Groups:

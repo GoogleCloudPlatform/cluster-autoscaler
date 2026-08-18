@@ -15,6 +15,7 @@
 package snowflake
 
 import (
+	"context"
 	"strings"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -37,7 +38,7 @@ func NewSnowflakeFilter(isAutopilotEnabled bool) *SnowflakeFilter {
 	}
 }
 
-func (sf *SnowflakeFilter) BestOptions(options []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
+func (sf *SnowflakeFilter) BestOptions(ctx context.Context, options []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
 	// This feature should only be enabled for Autopilot clusters.
 	if !sf.isAutopilotEnabled {
 		return options

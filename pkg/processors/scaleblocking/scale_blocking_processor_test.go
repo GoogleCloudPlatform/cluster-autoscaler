@@ -15,21 +15,19 @@
 package scaleblocking
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
-	"github.com/google/go-cmp/cmp/cmpopts"
-
-	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 
 	"github.com/google/go-cmp/cmp"
-
+	"github.com/google/go-cmp/cmp/cmpopts"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 )
 
 type mockBlockedMigsSource struct {
@@ -124,7 +122,7 @@ func TestFilterNoScaleNodeGroups(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+			ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 			source := &mockBlockedMigsSource{noScaleUpMigs: tc.noScaleUpMigs, noScaleDownMigs: tc.noScaleDownMigs, reason: BlockedMigReason("test-reason")}
 			processor := NewProcessor(nil, []BlockedMigsSource{source})
 			compareAllUnexportedOpt := cmp.Exporter(func(r reflect.Type) bool { return true })
@@ -191,10 +189,10 @@ func TestFilterNoScaleDownNodes(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+			ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 			source := &mockBlockedMigsSource{noScaleDownMigs: tc.noScaleDownMigs, reason: BlockedMigReason("test-reason")}
 			processor := NewProcessor(provider, []BlockedMigsSource{source})
-			gotScaleDownCandidates, err := processor.GetScaleDownCandidates(ctx, tc.nodes)
+			gotScaleDownCandidates, err := processor.GetScaleDownCandidates(context.TODO(), ctx, tc.nodes)
 			if err != nil {
 				t.Errorf("GetScaleDownCandidates unexpected error: %v", err)
 			}

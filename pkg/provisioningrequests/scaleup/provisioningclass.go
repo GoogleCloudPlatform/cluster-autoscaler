@@ -15,6 +15,7 @@
 package scaleup
 
 import (
+	"context"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -54,20 +55,21 @@ func (q *QueuedProvisioningClass) Initialize(
 }
 
 func (q *QueuedProvisioningClass) Provision(
+	ctx context.Context,
 	unschedulablePods []*apiv1.Pod,
 	nodes []*apiv1.Node,
 	daemonSets []*appsv1.DaemonSet,
 	nodeInfos map[string]*framework.NodeInfo,
 ) (*status.ScaleUpStatus, errors.AutoscalerError) {
 	// Since all pods come from one shard, it's enough to check Provisioning Class for first pod.
-	provReq, err := q.orchestrator.prClient.ProvisioningRequest(unschedulablePods[0].Namespace, unschedulablePods[0].OwnerReferences[0].Name)
+	provReq, err := q.orchestrator.prClient.ProvisioningRequest(context.TODO(), unschedulablePods[0].Namespace, unschedulablePods[0].OwnerReferences[0].Name)
 	if err != nil {
 		return scaleUpError(&status.ScaleUpStatus{}, errors.NewAutoscalerErrorf(errors.InternalError, "Failed to get ProvisiningRequest owner from pod %s", unschedulablePods[0].Name))
 	}
 	if provReq.Spec.ProvisioningClassName != queuedwrapper.QueuedProvisioningClassName {
 		return nil, nil
 	}
-	return q.orchestrator.ScaleUp(unschedulablePods, nodes, daemonSets, nodeInfos, false)
+	return q.orchestrator.ScaleUp(context.TODO(), unschedulablePods, nodes, daemonSets, nodeInfos, false)
 }
 
 func NewQueuedProvisioningClass(

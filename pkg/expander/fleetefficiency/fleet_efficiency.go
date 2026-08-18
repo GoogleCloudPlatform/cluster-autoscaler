@@ -15,6 +15,7 @@
 package fleetefficiency
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -80,7 +81,7 @@ func NewFilter(
 	}
 }
 
-func (f *fleetEfficiencyFilter) BestOptions(expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo) []expander.Option {
+func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo) []expander.Option {
 	if !IsFleetEfficiencyEnabled(f.gceFlexAdvisorEnabled, f.experimentsManager) {
 		klog.V(4).Infof("FleetEfficiencyFilter: expander disabled by experiments")
 		return expansionOptions
@@ -186,7 +187,7 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(expansionOptions []expan
 	if f.fallback == nil {
 		return expansionOptions
 	}
-	selected := f.fallback.BestOption(expansionOptions, nodeInfo)
+	selected := f.fallback.BestOption(context.TODO(), expansionOptions, nodeInfo)
 	if selected != nil {
 		f.recordMetric(requestedStrategy, fallbackReason, selected)
 		return []expander.Option{*selected}

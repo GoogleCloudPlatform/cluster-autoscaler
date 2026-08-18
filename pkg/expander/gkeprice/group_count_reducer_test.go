@@ -15,6 +15,7 @@
 package gkeprice
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -98,7 +99,7 @@ func TestProgressiveGroupCountReducer(t *testing.T) {
 			result := reducer.GroupCreationPenalty(tc.hasGpu)
 			assert.InEpsilon(t, tc.expectedResult, result, 0.01,
 				"hasGpu %v, pools %v, MIGs %v, result %v, expected %v",
-				tc.hasGpu, tc.poolCount, len(provider.NodeGroups()), result, tc.expectedResult)
+				tc.hasGpu, tc.poolCount, len(provider.NodeGroups(context.TODO())), result, tc.expectedResult)
 		})
 	}
 }
@@ -156,6 +157,6 @@ func TestProgressiveGroupCountReducerOnAutopilot(t *testing.T) {
 		result := reducer.GroupCreationPenalty(false)
 		assert.InEpsilon(t, tc.expectedResult, result, 0.01,
 			"test #%v: MIGs %v, result %v, expected %v",
-			idx, len(provider.NodeGroups()), result, tc.expectedResult)
+			idx, len(provider.NodeGroups(context.TODO())), result, tc.expectedResult)
 	}
 }

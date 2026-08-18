@@ -367,7 +367,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			}
 
 			tc.initialSetup(&balancersChain, iaProvider)
-			got, gotErr := balancersChain.rootBalancer.BalanceScaleUpBetweenGroups(&ca_context.AutoscalingContext{
+			got, gotErr := balancersChain.rootBalancer.BalanceScaleUpBetweenGroups(context.TODO(), &ca_context.AutoscalingContext{
 				ProvisioningRequestScaleUpMode: false,
 			}, tc.withMigs(), tc.newNodes)
 
@@ -531,7 +531,7 @@ func TestBalancerChainScaleUpTimeoutFallback_GceClient(t *testing.T) {
 
 				tc.initialSetup(mockBalancer, mockAdviceProvider, ctx)
 
-				got, gotErr := faBalancer.BalanceScaleUpBetweenGroups(&ca_context.AutoscalingContext{
+				got, gotErr := faBalancer.BalanceScaleUpBetweenGroups(context.TODO(), &ca_context.AutoscalingContext{
 					ProvisioningRequestScaleUpMode: false,
 				}, tc.withMigs(), tc.newNodes)
 

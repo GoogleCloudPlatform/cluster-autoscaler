@@ -42,12 +42,12 @@ type GceMigClient interface {
 
 // For Mig resizing, we can use existing methods as we don't require Beta API there.
 type gceMigClient interface {
-	ResizeMig(gce.GceRef, int64) error
+	ResizeMig(context.Context, gce.GceRef, int64) error
 }
 
 // For Mig resizing, we need to update the cache.
 type GceMigCache interface {
-	InvalidateMigTargetSize(migRef gce.GceRef)
+	InvalidateMigTargetSize(ctx context.Context, migRef gce.GceRef)
 	SetMigTargetSize(migRef gce.GceRef, size int64)
 }
 
@@ -121,8 +121,8 @@ func (client *bulkMigClientBeta) BulkMigStatus(migRef gce.GceRef) (Status, error
 // SetZeroTargetSize cancels the bulkMig queueing for capacity by setting Mig target size to 0.
 func (client *bulkMigClientBeta) SetZeroTargetSize(migRef gce.GceRef) error {
 	klog.V(0).Infof("Setting Bulk Mig %s size to 0", migRef)
-	client.migCache.InvalidateMigTargetSize(migRef)
-	err := client.migClient.ResizeMig(migRef, 0)
+	client.migCache.InvalidateMigTargetSize(context.TODO(), migRef)
+	err := client.migClient.ResizeMig(context.TODO(), migRef, 0)
 	if err != nil {
 		return err
 	}

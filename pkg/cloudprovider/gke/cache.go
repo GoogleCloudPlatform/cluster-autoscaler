@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -44,9 +45,9 @@ const (
 // Added only the functions are need in this GkeCache
 type GceCacheInterface interface {
 	// RegisterMig will register the Mig
-	RegisterMig(gce.Mig) bool
+	RegisterMig(context.Context, gce.Mig) bool
 	// UnregisterMig will un-register the Mig
-	UnregisterMig(gce.Mig) bool
+	UnregisterMig(context.Context, gce.Mig) bool
 	// GetMigs returns the cache Migs
 	GetMigs() []gce.Mig
 	// AddMachine adds machines to cache
@@ -56,15 +57,15 @@ type GceCacheInterface interface {
 	// GetMigBasename gets basename for given mig from cache.
 	GetMigBasename(gce.GceRef) (string, bool)
 	// InvalidateMigInstances clears the mig instances cache
-	InvalidateMigInstances(gce.GceRef)
+	InvalidateMigInstances(context.Context, gce.GceRef)
 	// InvalidateAllMigInstances clears the mig instances cache
-	InvalidateAllMigInstances()
+	InvalidateAllMigInstances(context.Context)
 	// InvalidateAllMigBasenames clears the basename cache
 	InvalidateAllMigBasenames()
 	// InvalidateAllMigTargetSizes clears the target size cache
-	InvalidateAllMigTargetSizes()
+	InvalidateAllMigTargetSizes(context.Context)
 	// InvalidateAllMigInstanceTemplateNames clears the instance template name cache
-	InvalidateAllMigInstanceTemplateNames()
+	InvalidateAllMigInstanceTemplateNames(context.Context)
 	// GetMachine retrieves machine type from cache under lock.
 	GetMachine(string, string) (gce.MachineType, bool)
 	// SetMachines sets the machines cache under lock.
@@ -72,7 +73,7 @@ type GceCacheInterface interface {
 	// InvalidateAllMachines invalidates the machines cache under lock.
 	InvalidateAllMachines()
 	// InvalidateMigTargetSize clears the target size cache
-	InvalidateMigTargetSize(gce.GceRef)
+	InvalidateMigTargetSize(context.Context, gce.GceRef)
 	// SetMigTargetSize sets targetSize for a GceRef
 	SetMigTargetSize(gce.GceRef, int64)
 	// SetResourceLimiter sets resource limiter.
@@ -87,7 +88,7 @@ type GceCacheInterface interface {
 	InvalidateAllListManagedInstancesResults()
 	// DropInstanceTemplatesForMissingMigs clears the instance template
 	// cache intended MIGs which are no longer present in the cluster
-	DropInstanceTemplatesForMissingMigs(currentMigs []gce.Mig)
+	DropInstanceTemplatesForMissingMigs(ctx context.Context, currentMigs []gce.Mig)
 }
 
 // GkeCache has embedded GceCache and gkeMigs to store and return GkeMig objects
@@ -151,7 +152,7 @@ func (g *GkeCache) RegisterMig(mig *GkeMig) bool {
 	g.mutex.Lock()
 	defer g.mutex.Unlock()
 	g.lastMigRegistration[mig.gceRef] = time.Now()
-	if !g.GceCacheInterface.RegisterMig(mig) {
+	if !g.GceCacheInterface.RegisterMig(context.TODO(), mig) {
 		// mig cache has not changed
 		return false
 	}
@@ -181,7 +182,7 @@ func (g *GkeCache) UnregisterMig(mig *GkeMig) bool {
 func (g *GkeCache) unregisterMigNoLock(mig *GkeMig) bool {
 	delete(g.blockedIrretrievableMigs, mig.gceRef)
 	delete(g.markedIrretrievableMigs, mig.gceRef)
-	if !g.GceCacheInterface.UnregisterMig(mig) {
+	if !g.GceCacheInterface.UnregisterMig(context.TODO(), mig) {
 		// mig cache has not changed
 		return false
 	}

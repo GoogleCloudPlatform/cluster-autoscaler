@@ -15,6 +15,7 @@
 package provreqstate
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -396,11 +397,11 @@ func isValid(conditionType string) bool {
 }
 
 type provreqClient interface {
-	ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error)
+	ProvisioningRequests(context.Context) ([]*provreqwrapper.ProvisioningRequest, error)
 }
 
 func ProvisioningRequestsInState(client provreqClient, state ProvisioningRequestState) ([]*provreqwrapper.ProvisioningRequest, error) {
-	prs, err := client.ProvisioningRequests()
+	prs, err := client.ProvisioningRequests(context.TODO())
 	if err != nil {
 		return nil, err
 	}

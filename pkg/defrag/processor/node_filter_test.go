@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
 
@@ -34,7 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
@@ -137,7 +138,7 @@ func TestNewValidCandidateNodes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 				CloudProvider:   testprovider.NewTestCloudProviderBuilder().Build(),
 			}
@@ -271,7 +272,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 				CloudProvider:   testprovider.NewTestCloudProviderBuilder().Build(),
 			}
@@ -370,8 +371,8 @@ func TestIsCandidateNodeValid(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: kubernetes.NewListerRegistry(nil, nil, nil, kubernetes.NewTestPodDisruptionBudgetLister(nil), nil, nil, nil, nil, nil),
 				},
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
@@ -478,7 +479,7 @@ func TestHasBlockingPods(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 				CloudProvider:   testprovider.NewTestCloudProviderBuilder().Build(),
 			}
@@ -654,7 +655,7 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			scaleDownActuator := &mockScaleDownActuator{}
 			scaleDownActuator.On("CheckStatus").Return(&tc.actuationStatus)
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				CloudProvider:     provider,
 				ClusterSnapshot:   testsnapshot.NewTestSnapshotOrDie(t),
 				ScaleDownActuator: scaleDownActuator,
@@ -720,7 +721,7 @@ func TestFilterNodesViolatingMinQuotas(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				CloudProvider:   provider,
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 			}
@@ -764,7 +765,7 @@ func TestFilterNodesViolatingMinQuotas_MultipleCandidates(t *testing.T) {
 		},
 	}
 
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider:   provider,
 		ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 	}
@@ -912,11 +913,11 @@ type mockScaleDownNodeProcessor struct {
 	candidatesFilter func([]*apiv1.Node) []*apiv1.Node
 }
 
-func (p *mockScaleDownNodeProcessor) GetPodDestinationCandidates(*context.AutoscalingContext, []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *mockScaleDownNodeProcessor) GetPodDestinationCandidates(*ca_context.AutoscalingContext, []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return nil, nil
 }
 
-func (p *mockScaleDownNodeProcessor) GetScaleDownCandidates(_ *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *mockScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, _ *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return p.candidatesFilter(nodes), nil
 }
 
@@ -950,11 +951,11 @@ func (f *testNodeFilter) ExcludeFromTracking(node *apiv1.Node) bool {
 
 type dummyCustomResourcesProcessor struct{}
 
-func (f *dummyCustomResourcesProcessor) FilterOutNodesWithUnreadyResources(context *context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+func (f *dummyCustomResourcesProcessor) FilterOutNodesWithUnreadyResources(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
 	return allNodes, readyNodes
 }
 
-func (f *dummyCustomResourcesProcessor) GetNodeResourceTargets(context *context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+func (f *dummyCustomResourcesProcessor) GetNodeResourceTargets(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
 	return nil, nil
 }
 

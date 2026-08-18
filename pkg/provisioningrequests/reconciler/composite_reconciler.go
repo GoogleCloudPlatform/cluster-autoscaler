@@ -15,6 +15,7 @@
 package reconciler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -22,16 +23,20 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
+
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/common"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
+
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
@@ -380,7 +385,7 @@ func updateProvisioningRequestToAcceptedState(prClient provreqClient, provReq *p
 	if err != nil {
 		return fmt.Errorf("failed to modify the Provisioning Request: %w", err)
 	}
-	_, err = prClient.UpdateProvisioningRequest(provReq.ProvisioningRequest)
+	_, err = prClient.UpdateProvisioningRequest(context.TODO(), provReq.ProvisioningRequest)
 	return err
 }
 
@@ -388,7 +393,7 @@ func clearProvisioningRequestDetails(prClient provreqClient, provReq *provreqwra
 	if err := provreqstate.ClearProvisioningClassDetails(provReq); err != nil {
 		return fmt.Errorf("failed to clear ProvReq details for %s/%s, including Resize Request and MIG names of the Provisioning Request: %w", provReq.Namespace, provReq.Name, err)
 	}
-	_, err := prClient.UpdateProvisioningRequest(provReq.ProvisioningRequest)
+	_, err := prClient.UpdateProvisioningRequest(context.TODO(), provReq.ProvisioningRequest)
 	return err
 }
 
@@ -400,7 +405,7 @@ func failProvReqsWithProperty(prClient provreqClient, prsInState []*provreqwrapp
 					pr.Namespace, pr.Name, failureReason, failureMessage, err)
 				continue
 			}
-			if _, err := prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+			if _, err := prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 				klog.Errorf("Got error when making an Update API call for Provisioning Request %s/%s to Failed state with reason %q message %q: %v",
 					pr.Namespace, pr.Name, failureReason, failureMessage, err)
 			}

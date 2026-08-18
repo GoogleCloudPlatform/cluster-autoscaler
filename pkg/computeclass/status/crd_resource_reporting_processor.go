@@ -15,13 +15,14 @@
 package status
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	computeclass "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 
@@ -85,7 +86,7 @@ func ReportingUnitsForResource(resourceName apiv1.ResourceName) crd.ResourceUnit
 }
 
 // Process calculates resources pertinent to each CRD rule and sends these data through the updatesCh channel.
-func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, _ time.Time) error {
+func (m *CrdResourceReportingProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, _ time.Time) error {
 	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(m.experimentsManager) {
 		return nil
 	}
@@ -100,7 +101,7 @@ func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext,
 		allCrdIds[CRDId{CRDLabel: c.Label(), CRDName: c.Name()}] = true
 	}
 
-	allNodes, err := ctx.ClusterSnapshot.ListNodeInfos()
+	allNodes, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return err
 	}
@@ -124,7 +125,7 @@ func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext,
 		if node.Node() == nil {
 			continue
 		}
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node.Node())
+		nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(context.TODO(), node.Node())
 		if err != nil {
 			klog.Warningf("Failed to get nodeGroup for node %q: %v", node.Node().Name, err)
 			continue
@@ -152,7 +153,7 @@ func (m *CrdResourceReportingProcessor) Process(ctx *context.AutoscalingContext,
 		}
 
 		resourceNames := []apiv1.ResourceName{apiv1.ResourceCPU, apiv1.ResourceMemory}
-		if gpuConfig := ctx.CloudProvider.GetNodeGpuConfig(node.Node()); gpuConfig != nil {
+		if gpuConfig := autoscalingCtx.CloudProvider.GetNodeGpuConfig(context.TODO(), node.Node()); gpuConfig != nil {
 			resourceNames = append(resourceNames, gpuConfig.ExtendedResourceName)
 		}
 		if tpu.NodeHasTpu(node.Node()) {

@@ -15,6 +15,8 @@
 package estimator
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
@@ -57,7 +59,7 @@ func (nrt *NapResourceTrimmer) NapResourceAnalyzerFunc() estimator.EstimationAna
 }
 
 func (nrt *NapResourceTrimmer) analysisChainFunc(clusterSnapshot clustersnapshot.ClusterSnapshot, nodeGroup cloudprovider.NodeGroup, newNodesWithPods map[string]bool) {
-	if nodeGroup.Exist() || !nodeGroup.Autoprovisioned() {
+	if nodeGroup.Exist(context.TODO()) || !nodeGroup.Autoprovisioned(context.TODO()) {
 		return
 	}
 

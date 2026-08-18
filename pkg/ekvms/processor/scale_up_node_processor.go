@@ -122,9 +122,9 @@ func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager ope
 
 // Process filters out pods that can be scheduled by performing resizable VM resizes.
 // It readjusts the balloon pod size for simulation purposes and requests upsizes in Manager.
-func (p *ScaleUpNodeProcessor) Process(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (p *ScaleUpNodeProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
-	return p.process(ctx, unschedulablePods, true, resizableFamilies)
+	return p.process(autoscalingCtx, unschedulablePods, true, resizableFamilies)
 }
 
 func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod, emitMetrics bool, resizableFamilies []machinetypes.MachineFamily) ([]*v1.Pod, error) {
@@ -139,7 +139,7 @@ func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unsch
 	}
 
 	if emitMetrics {
-		defer metrics.UpdateDurationFromStart(processResizableVmUpsizes, time.Now())
+		defer metrics.UpdateDurationFromStart(context.TODO(), processResizableVmUpsizes, time.Now())
 	}
 
 	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(true, operationtracker.ResizableOnly)
@@ -311,7 +311,7 @@ func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unsch
 
 // ScheduleLookaheadPods schedules lookahead pods considering UAS signal, without doing any upsizing for them.
 func (p *ScaleUpNodeProcessor) ScheduleLookaheadPods(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
-	defer metrics.UpdateDurationFromStart(scheduleLookaheadPods, time.Now())
+	defer metrics.UpdateDurationFromStart(context.TODO(), scheduleLookaheadPods, time.Now())
 
 	var laPods []*v1.Pod
 	var remainingPods []*v1.Pod

@@ -15,13 +15,16 @@
 package initialization
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
+
 	klog "k8s.io/klog/v2"
+
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 )
@@ -32,7 +35,7 @@ type gkeCloudProvider interface {
 
 // RecoverPendingScaleUps goes though all migs with queued provisioning enabled,
 // if it contains a Accepted Resize Request a pending scale up is logged with a most recent RRs time.
-func RecoverPendingScaleUps(context *ca_context.AutoscalingContext, cloudProvider gkeCloudProvider) gke.InitializationFunc {
+func RecoverPendingScaleUps(autoscalingCtx *ca_context.AutoscalingContext, cloudProvider gkeCloudProvider) gke.InitializationFunc {
 	return func() error {
 		loggingQuota := logging.NodeGroupLoggingQuota()
 		multiError := utils.NewMultiErr(10) // Catch first ten errors.
@@ -62,7 +65,7 @@ func RecoverPendingScaleUps(context *ca_context.AutoscalingContext, cloudProvide
 
 			if queuedNodes > 0 {
 				klogx.V(1).UpTo(loggingQuota).Infof("Recovering a pending queued scale-up in mig %q for %d nodes, last of which was triggered at %q", gkeMig.Id(), queuedNodes, latestTime.String())
-				context.ClusterStateRegistry.RegisterScaleUp(gkeMig, queuedNodes, latestTime)
+				autoscalingCtx.ClusterStateRegistry.RegisterScaleUp(context.TODO(), gkeMig, queuedNodes, latestTime)
 			}
 		}
 		klogx.V(1).Over(loggingQuota).Infof("There are also %v other node groups for which a scale up was recovered", -loggingQuota.Left())

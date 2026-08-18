@@ -15,6 +15,7 @@
 package validators
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -130,7 +131,7 @@ type fakeMachineTypeFetcher struct {
 	zoneMachineTypes *map[string]map[string]bool
 }
 
-func (f *fakeMachineTypeFetcher) FetchMachineType(zone, machineType string) (*gceapi.MachineType, error) {
+func (f *fakeMachineTypeFetcher) FetchMachineType(ctx context.Context, zone, machineType string) (*gceapi.MachineType, error) {
 	if err := f.fetchFun(); err != nil {
 		return nil, err
 	}
@@ -170,7 +171,7 @@ type fakeAdvancedMachineTypeFetcher struct {
 	fetchZoneMachinesFunction func(zone string) error
 }
 
-func (f *fakeAdvancedMachineTypeFetcher) FetchMachineType(zone, machineType string) (*gceapi.MachineType, error) {
+func (f *fakeAdvancedMachineTypeFetcher) FetchMachineType(ctx context.Context, zone, machineType string) (*gceapi.MachineType, error) {
 	if err := f.fetchMachineTypeFunction(zone, machineType); err != nil {
 		return nil, err
 	}

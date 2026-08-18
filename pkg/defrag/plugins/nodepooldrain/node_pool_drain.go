@@ -15,12 +15,13 @@
 package nodepooldrain
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 )
 
@@ -45,7 +46,7 @@ func (*plugin) String() string {
 	return PluginName
 }
 
-func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	var suitableNodes []string
 	for _, nodeName := range nodeNames {
 		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
@@ -54,7 +55,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 			continue
 		}
 
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(nodeInfo.Node())
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), nodeInfo.Node())
 		if err != nil {
 			klog.Errorf("Failed to get NodeGroup: %v", err)
 			continue
@@ -63,7 +64,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 			continue
 		}
 
-		if nodeGroup.MaxSize() == nodeDrainThreshold {
+		if nodeGroup.MaxSize(context.TODO()) == nodeDrainThreshold {
 			suitableNodes = append(suitableNodes, nodeName)
 		}
 	}
@@ -76,7 +77,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 	return defrag.NewCandidateWithLimit(suitableNodes, defrag.Partial, p.config.MaxCandidateNodeCount)
 }
 
-func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
+func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
 	var candidateNodes []string
 	for _, nodeName := range nodeNames {
 		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
@@ -85,7 +86,7 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 			continue
 		}
 
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(nodeInfo.Node())
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), nodeInfo.Node())
 		if err != nil {
 			klog.Errorf("Failed to get NodeGroup: %v", err)
 			continue
@@ -94,7 +95,7 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 			continue
 		}
 
-		if nodeGroup.MaxSize() != nodeDrainThreshold {
+		if nodeGroup.MaxSize(context.TODO()) != nodeDrainThreshold {
 			continue
 		}
 		candidateNodes = append(candidateNodes, nodeName)
@@ -102,11 +103,11 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 	return candidateNodes
 }
 
-func (*plugin) IsExpansionOptionValid(ctx *context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
+func (*plugin) IsExpansionOptionValid(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
 	return true
 }
 
-func (*plugin) BackoffDuration(ctx *context.AutoscalingContext, candidate *defrag.Candidate) time.Duration {
+func (*plugin) BackoffDuration(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate) time.Duration {
 	return 5 * time.Minute
 }
 

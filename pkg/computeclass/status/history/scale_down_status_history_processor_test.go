@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -242,7 +243,7 @@ func TestScaleDownStatusHistoryProcessor(t *testing.T) {
 
 			// Run all steps sequentially
 			for _, step := range tc.steps {
-				processor.Process(nil, step)
+				processor.Process(context.TODO(), nil, step)
 			}
 
 			// Consume all messages generated across all steps and apply to the persistent fake status
@@ -315,7 +316,7 @@ func TestScaleDownStatusHistoryProcessor_CleanupStalePendingDeletes(t *testing.T
 	processor.now = func() time.Time { return nowTime }
 
 	// 1. Register a pending delete
-	processor.Process(nil, &scaledownstatus.ScaleDownStatus{
+	processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{
 		ScaledDownNodes: []*scaledownstatus.ScaleDownNode{
 			{
 				NodeGroup: mig1,
@@ -329,12 +330,12 @@ func TestScaleDownStatusHistoryProcessor_CleanupStalePendingDeletes(t *testing.T
 
 	// 2. Run a loop after some time, but less than 15 minutes (e.g. 10 minutes) - should not be cleaned up
 	nowTime = nowTime.Add(10 * time.Minute)
-	processor.Process(nil, &scaledownstatus.ScaleDownStatus{})
+	processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{})
 	assert.Len(t, processor.pendingDeletes, 1)
 	assert.Contains(t, processor.pendingDeletes, "node-1")
 
 	// 3. Run a loop after 16 minutes (total 26 minutes) - should be cleaned up as stale
 	nowTime = nowTime.Add(16 * time.Minute)
-	processor.Process(nil, &scaledownstatus.ScaleDownStatus{})
+	processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{})
 	assert.Len(t, processor.pendingDeletes, 0)
 }

@@ -15,17 +15,21 @@
 package extendeddurationpods
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -123,7 +127,7 @@ func TestScaleDownProcessorGetScaleDownCandidates(t *testing.T) {
 	for testName, testCase := range testCases {
 		t.Run(testName, func(t *testing.T) {
 			processor := NewScaleDownProcessor()
-			nodes, err := processor.GetScaleDownCandidates(&context.AutoscalingContext{ClusterSnapshot: testCase.snapshot()}, testCase.candidateNodes)
+			nodes, err := processor.GetScaleDownCandidates(context.TODO(), &ca_context.AutoscalingContext{ClusterSnapshot: testCase.snapshot()}, testCase.candidateNodes)
 			assert.NoError(t, err)
 			assert.ElementsMatch(t, testCase.expectedNodes, nodes)
 		})
@@ -184,11 +188,11 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 		t.Run(testName, func(t *testing.T) {
 			processor := NewScaleDownProcessor()
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			ctx := context.AutoscalingContext{
+			ctx := ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				CloudProvider:   cp,
 			}
-			err := snapshot.SetClusterState(testCase.candidateNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err := snapshot.SetClusterState(context.TODO(), testCase.candidateNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
 			nodes, err := processor.GetPodDestinationCandidates(&ctx, testCase.candidateNodes)
 			assert.NoError(t, err)

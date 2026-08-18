@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -26,7 +27,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 )
 
@@ -54,9 +55,9 @@ func NewAutoscalingStatusVisibilityProcessor(logger visibility.EventLogger, opts
 }
 
 // Process processes the cluster state and logs appropriate events.
-func (p *AutoscalingStatusVisibilityProcessor) Process(context *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+func (p *AutoscalingStatusVisibilityProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
 	startTime := time.Now()
-	defer metrics.UpdateDurationFromStart(internalmetrics.CaVizStatus, startTime)
+	defer metrics.UpdateDurationFromStart(context.TODO(), internalmetrics.CaVizStatus, startTime)
 
 	p.data.PeriodicCleanup()
 
@@ -70,7 +71,7 @@ func (p *AutoscalingStatusVisibilityProcessor) Process(context *context.Autoscal
 		}
 	}
 
-	resultsEvent := p.processResultsEvent(context, csr, now)
+	resultsEvent := p.processResultsEvent(autoscalingCtx, csr, now)
 	if resultsEvent == nil {
 		return nil
 	}
@@ -102,14 +103,14 @@ func (p *AutoscalingStatusVisibilityProcessor) confirmStatusEventReported(status
 	p.lastReportedTargetSize = int(statusEvent.GetStatus().GetAutoscaledNodesTarget())
 }
 
-func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *context.AutoscalingContext, csr visibilityClusterStateRegistry) {
+func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *ca_context.AutoscalingContext, csr visibilityClusterStateRegistry) {
 	failures := csr.GetScaleUpFailures()
 	if len(failures) == 0 {
 		return
 	}
 	failuresAssociatedWithEvent := make(map[string][]*vistypes.Message)
 	nodeGroupsAssociatedWithEvent := make(map[string][]cloudprovider.NodeGroup)
-	nodeGroupsMap := cloudprovider.NodeGroupListToMapById(ctx.CloudProvider.NodeGroups())
+	nodeGroupsMap := cloudprovider.NodeGroupListToMapById(ctx.CloudProvider.NodeGroups(context.TODO()))
 	for nodeGroupId, failures := range failures {
 		errMsgs := make([]*vistypes.Message, 0)
 		for _, failure := range failures {
@@ -123,7 +124,7 @@ func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *conte
 		// TODO(b/519143061): Node group is no longer linked in scaleupfailures.Record
 		nodeGroup := nodeGroupsMap[nodeGroupId]
 		if nodeGroup == nil {
-			klog.Warningf("AutoscalingStatusVisibilityProcessor: nodegroup %v not found in cloudprovider.NodeGroups()", nodeGroupId)
+			klog.Warningf("AutoscalingStatusVisibilityProcessor: nodegroup %v not found in cloudprovider.NodeGroups(context.TODO())", nodeGroupId)
 		}
 		for _, eventId := range eventIds {
 			failuresAssociatedWithEvent[eventId] = append(failuresAssociatedWithEvent[eventId], errMsgs...)
@@ -133,7 +134,7 @@ func (p *AutoscalingStatusVisibilityProcessor) processScaleUpFailures(ctx *conte
 	p.emitFailedScaleUpEvents(ctx, failuresAssociatedWithEvent, nodeGroupsAssociatedWithEvent)
 }
 
-func (p *AutoscalingStatusVisibilityProcessor) emitFailedScaleUpEvents(ctx *context.AutoscalingContext, failuresAssociatedWithEvent map[string][]*vistypes.Message, nodeGroupsAssociatedWithEvent map[string][]cloudprovider.NodeGroup) {
+func (p *AutoscalingStatusVisibilityProcessor) emitFailedScaleUpEvents(ctx *ca_context.AutoscalingContext, failuresAssociatedWithEvent map[string][]*vistypes.Message, nodeGroupsAssociatedWithEvent map[string][]cloudprovider.NodeGroup) {
 	if p.failedScaleUpLogger == nil {
 		return
 	}
@@ -176,7 +177,7 @@ func (p *AutoscalingStatusVisibilityProcessor) processClusterStatusEvent(csr vis
 	}
 }
 
-func (p *AutoscalingStatusVisibilityProcessor) processResultsEvent(ctx *context.AutoscalingContext, csr visibilityClusterStateRegistry, now time.Time) *vispb.AutoscalerEvent {
+func (p *AutoscalingStatusVisibilityProcessor) processResultsEvent(ctx *ca_context.AutoscalingContext, csr visibilityClusterStateRegistry, now time.Time) *vispb.AutoscalerEvent {
 	p.processScaleUpFailures(ctx, csr)
 	p.processUnfinishedNodeGroups(csr)
 

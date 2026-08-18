@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -30,7 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
@@ -71,7 +72,7 @@ func NewScaleUpStatusHistoryProcessor(lister lister.Lister, provider machineConf
 	}
 }
 
-func (p *ScaleUpStatusHistoryProcessor) Process(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (p *ScaleUpStatusHistoryProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	if p.sharedData == nil || scaleUpStatus == nil {
 		return
 	}
@@ -238,5 +239,5 @@ func isAsyncNodeGroup(nodeGroup cloudprovider.NodeGroup) bool {
 	if !ok {
 		return false
 	}
-	return mig.IsUpcoming() && !mig.Exist()
+	return mig.IsUpcoming() && !mig.Exist(context.TODO())
 }

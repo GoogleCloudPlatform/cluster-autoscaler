@@ -343,8 +343,8 @@ func addTPUPods(infra *integration.TestInfrastructure, count int) {
 // currently growing). Returns 0 if no such node group exists.
 func firstTargetSize(t *testing.T, autoscaler *core.StaticAutoscaler) int {
 	t.Helper()
-	for _, nodeGroup := range autoscaler.AutoscalingContext.CloudProvider.NodeGroups() {
-		targetSize, err := nodeGroup.TargetSize()
+	for _, nodeGroup := range autoscaler.AutoscalingContext.CloudProvider.NodeGroups(context.Background()) {
+		targetSize, err := nodeGroup.TargetSize(context.Background())
 		if !assert.NoError(t, err) {
 			continue
 		}

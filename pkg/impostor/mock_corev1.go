@@ -294,7 +294,7 @@ func (n *mockNodes) Update(_ context.Context, node *corev1.Node, _ metav1.Update
 	if err != nil {
 		return nil, fmt.Errorf("failed to update node %v: %v", node.Name, err)
 	}
-	if err := n.clusterSnapshot.RemoveNodeInfo(node.Name); err != nil {
+	if err := n.clusterSnapshot.RemoveNodeInfo(context.TODO(), node.Name); err != nil {
 		return nil, err
 	}
 	var pods []*corev1.Pod
@@ -312,7 +312,7 @@ func (n *mockNodes) Delete(_ context.Context, name string, _ metav1.DeleteOption
 	// deleting from cluster snapshot
 	n.clusterSnapshotMutex.Lock()
 	defer n.clusterSnapshotMutex.Unlock()
-	if err := n.clusterSnapshot.RemoveNodeInfo(name); err != nil {
+	if err := n.clusterSnapshot.RemoveNodeInfo(context.TODO(), name); err != nil {
 		return err
 	}
 	return nil

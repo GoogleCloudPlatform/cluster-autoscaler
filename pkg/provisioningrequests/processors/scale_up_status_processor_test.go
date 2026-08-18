@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestProvisioningRequestScaleUpStatusProcessor(t *testing.T) {
 		},
 	}
 
-	processor.Process(nil, initialStatus)
+	processor.Process(context.TODO(), nil, initialStatus)
 	if diff := cmp.Diff(initialStatus, wantStatus); diff != "" {
 		t.Errorf("status diff (-want +got):\n%s", diff)
 	}

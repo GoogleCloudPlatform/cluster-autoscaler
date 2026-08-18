@@ -1992,15 +1992,15 @@ func TestOrchestrator_ScaleUp(t *testing.T) {
 
 			// Prepare processor and set pod shard.
 			processors, registry := NewTestProcessors(tt.options)
-			// Create context with non-random expander strategy.
-			context, err := NewScaleTestAutoscalingContext(tt.options, &fake.Clientset{}, listers, gkeCloudProvider, callbacks.NewTestProcessorCallbacks(), nil, registry)
+			// Create autoscalingCtx with non-random expander strategy.
+			autoscalingCtx, err := NewScaleTestAutoscalingContext(tt.options, &fake.Clientset{}, listers, gkeCloudProvider, callbacks.NewTestProcessorCallbacks(), nil, registry)
 			assert.NoError(t, err)
-			context.ExpanderStrategy = mockExpander{
+			autoscalingCtx.ExpanderStrategy = mockExpander{
 				optionToChoose: tt.bestOption,
 				wantOptions:    tt.wantOptions,
 				t:              t,
 			}
-			err = context.ClusterSnapshot.SetClusterState(nodes, kube_util.ScheduledPods(pods), drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err = autoscalingCtx.ClusterSnapshot.SetClusterState(context.TODO(), nodes, kube_util.ScheduledPods(pods), drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
 
 			if len(tt.napInjectedMigs) > 0 {
@@ -2014,15 +2014,15 @@ func TestOrchestrator_ScaleUp(t *testing.T) {
 			}
 			processors.NodeGroupListProcessor = provreq_processors.NewFilterQueuedNodeGroupListProcessor(processors.NodeGroupListProcessor)
 			podShard := buildPodShard(extraPods, tt.shardOptions)
-			podsharding.TestSetPodShard(&context, podShard)
+			podsharding.TestSetPodShard(&autoscalingCtx, podShard)
 			nodeGroupConfigProcessor := nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute})
 
 			// Prepare node infos and templates.
 			nodeInfoProvider := nodeinfosprovider.NewDefaultTemplateNodeInfoProvider(nil, false)
 			templateNodeInfoRegistry := nodeinfosprovider.NewTemplateNodeInfoRegistry(nodeInfoProvider)
-			nodeInfos, _ := nodeInfoProvider.Process(&context, nodes, []*appsv1.DaemonSet{}, taints.TaintConfig{}, now)
-			clusterState := clusterstate.NewClusterStateRegistry(gkeCloudProvider, context.LogRecorder, NewBackoff(), nodeGroupConfigProcessor, templateNodeInfoRegistry, clusterstate.WithAsyncNodeGroupStateChecker(processors.AsyncNodeGroupStateChecker), clusterstate.WithScaleStateNotifier(processors.ScaleStateNotifier))
-			err = clusterState.UpdateNodes(nodes, time.Now())
+			nodeInfos, _ := nodeInfoProvider.Process(context.TODO(), &autoscalingCtx, nodes, []*appsv1.DaemonSet{}, taints.TaintConfig{}, now)
+			clusterState := clusterstate.NewClusterStateRegistry(gkeCloudProvider, autoscalingCtx.LogRecorder, NewBackoff(), nodeGroupConfigProcessor, templateNodeInfoRegistry, clusterstate.WithAsyncNodeGroupStateChecker(processors.AsyncNodeGroupStateChecker), clusterstate.WithScaleStateNotifier(processors.ScaleStateNotifier))
+			err = clusterState.UpdateNodes(context.TODO(), nodes, time.Now())
 			assert.NoError(t, err)
 
 			// Create oss orchestrator.
@@ -2050,12 +2050,12 @@ func TestOrchestrator_ScaleUp(t *testing.T) {
 			})
 			gkeCloudProvider.On("GPULabel").Return("cloud.google.com/gke-accelerator")
 
-			o.Initialize(&context, processors, clusterState, estimatorBuilder, taints.TaintConfig{}, quotasTrackerFactory)
+			o.Initialize(&autoscalingCtx, processors, clusterState, estimatorBuilder, taints.TaintConfig{}, quotasTrackerFactory)
 			o.(*Orchestrator).now = func() time.Time { return exampleCurrentTime }
 
 			// Run scale up check expected out-out.
-			prCache.Refresh()
-			scaleUpStatus, gotAErr := o.ScaleUp(extraPods, nodes, []*appsv1.DaemonSet{}, nodeInfos, true)
+			prCache.Refresh(context.TODO())
+			scaleUpStatus, gotAErr := o.ScaleUp(context.TODO(), extraPods, nodes, []*appsv1.DaemonSet{}, nodeInfos, true)
 			got := simplifyScaleUpStatus(scaleUpStatus)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("Orchestrator.ScaleUp() (-want +got):\n%s\nScaleUpStatus: %+v\ngotAErr: %+v", diff, scaleUpStatus, gotAErr)
@@ -2074,7 +2074,7 @@ func TestOrchestrator_ScaleUp(t *testing.T) {
 
 			// Check if the state of ProvisioningRequests match.
 			prState := func(t *testing.T, ns, name string) (provreqstate.ProvisioningRequestState, *provreqwrapper.ProvisioningRequest) {
-				gotPR, err := fakeClient.ProvisioningRequest(ns, name)
+				gotPR, err := fakeClient.ProvisioningRequest(context.TODO(), ns, name)
 				assert.NoError(t, err)
 				return provreqstate.StateOfProvisioningRequest(gotPR), gotPR
 			}
@@ -2192,7 +2192,7 @@ func TestOrchestrator_highestMaxRunDuration(t *testing.T) {
 			orchestrator := Orchestrator{}
 			fakeClient := provreqclient.NewFakeProvisioningRequestClient(ctx, t, prs...)
 			orchestrator.prCache = provreqcache.NewQueuedProvisioningCache(fakeClient)
-			orchestrator.prCache.Refresh()
+			orchestrator.prCache.Refresh(context.TODO())
 			gotDuration := orchestrator.highestMaxRunDuration(&CompositeOption{partialOptions: partialOptions})
 
 			if gotDuration == nil || *gotDuration != tt.wantDuration {
@@ -2540,7 +2540,7 @@ type mockExpander struct {
 }
 
 // BestOption picks a defined node group to scale up.
-func (r mockExpander) BestOption(options []expander.Option, nodeInfo map[string]*framework.NodeInfo) *expander.Option {
+func (r mockExpander) BestOption(ctx context.Context, options []expander.Option, nodeInfo map[string]*framework.NodeInfo) *expander.Option {
 	if len(r.optionToChoose.GroupName) == 0 {
 		if len(options) > 0 {
 			assert.Failf(r.t, "received options, when none were expected", "expected to receive no options, but got: %+v", simplifyExpanderOptions(options))

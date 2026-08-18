@@ -15,6 +15,7 @@
 package metrics_processors
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -37,7 +38,7 @@ func NewMetricsFilterScaleUpProcessor(filter filter.MetricsFilter) *MetricsFilte
 }
 
 // RegisterFailedScaleUp records failed scale-up for a nodegroup to inform the MetricsFilter.
-func (m *MetricsFilterScaleUpProcessor) RegisterFailedScaleUp(nodeGroup cloudprovider.NodeGroup, _ int, errorInfo cloudprovider.InstanceErrorInfo, _ time.Time) {
+func (m *MetricsFilterScaleUpProcessor) RegisterFailedScaleUp(ctx context.Context, nodeGroup cloudprovider.NodeGroup, _ int, errorInfo cloudprovider.InstanceErrorInfo, _ time.Time) {
 	if nodeGroup == nil || m.metricsFilter == nil {
 		return
 	}
@@ -50,7 +51,7 @@ func (m *MetricsFilterScaleUpProcessor) RegisterFailedScaleUp(nodeGroup cloudpro
 }
 
 // RegisterScaleUp records when scale up happened for a nodegroup.
-func (m *MetricsFilterScaleUpProcessor) RegisterScaleUp(_ cloudprovider.NodeGroup, _ int, _ time.Time) {
+func (m *MetricsFilterScaleUpProcessor) RegisterScaleUp(ctx context.Context, _ cloudprovider.NodeGroup, _ int, _ time.Time) {
 }
 
 // RegisterScaleDown records when scale down happened for a nodegroup.

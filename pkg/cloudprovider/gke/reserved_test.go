@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -308,7 +309,7 @@ func TestGceReservedOSPartitionPrediction(t *testing.T) {
 	r := &GkeReserved{}
 	type testCase struct {
 		name           string
-		function       func(gce.MigOsInfo, int64) int64
+		function       func(context.Context, gce.MigOsInfo, int64) int64
 		osDistribution gce.OperatingSystemDistribution
 		diskSize       int64
 		expectedSize   int64
@@ -373,7 +374,7 @@ func TestGceReservedOSPartitionPrediction(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemDefault, tc.osDistribution, ""), "", false)
-		if actualReserved := tc.function(gkeMigOsInfo, tc.diskSize); actualReserved != tc.expectedSize {
+		if actualReserved := tc.function(context.TODO(), gkeMigOsInfo, tc.diskSize); actualReserved != tc.expectedSize {
 			t.Errorf("Test case: %s, Got f(%d b, %s ) = %d.  Want %d", tc.name, tc.diskSize, tc.osDistribution, actualReserved, tc.expectedSize)
 		}
 	}

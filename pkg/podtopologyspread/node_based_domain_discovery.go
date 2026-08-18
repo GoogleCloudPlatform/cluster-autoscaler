@@ -15,6 +15,7 @@
 package podtopologyspread
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -52,7 +53,7 @@ func (dd *nodeBasedDomainDiscovery) EligiblePTSPods(pods []*apiv1.Pod) []PTSConf
 	if !dd.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(nodeBasedExperimentName, false) {
 		return nil
 	}
-	defer metrics.UpdateDurationFromStart(nodeBasedDomainDiscoveryMetricLabel, time.Now())
+	defer metrics.UpdateDurationFromStart(context.TODO(), nodeBasedDomainDiscoveryMetricLabel, time.Now())
 	if len(pods) == 0 {
 		return nil
 	}
@@ -76,8 +77,8 @@ func (dd *nodeBasedDomainDiscovery) EligiblePTSPods(pods []*apiv1.Pod) []PTSConf
 
 	// 3. Track all the labels from nodepools (consider both empty and not empty to cover the case of manual label change).
 	nodePoolsNodeInfos := []schedulerframework.NodeInfo{}
-	for _, ng := range dd.cp.NodeGroups() {
-		nodeInfo, err := ng.TemplateNodeInfo()
+	for _, ng := range dd.cp.NodeGroups(context.TODO()) {
+		nodeInfo, err := ng.TemplateNodeInfo(context.TODO())
 		if err != nil {
 			klog.Warningf("Failed to get template node info for node group %q: %v", ng.Id(), err)
 			continue

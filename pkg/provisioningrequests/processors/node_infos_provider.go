@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"reflect"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	oss_nodeinfosprovider "sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -54,15 +55,15 @@ func NewShortLivedUpgradeNodeInfoProvider(nodeInfoProvider *oss_nodeinfosprovide
 	}
 }
 
-func (p *ShortLivedUpgradeNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
-	nodeInfos, err := p.nodeInfoProvider.Process(ctx, nodes, daemonsets, taintConfig, now)
+func (p *ShortLivedUpgradeNodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+	nodeInfos, err := p.nodeInfoProvider.Process(ctx, autoscalingCtx, nodes, daemonsets, taintConfig, now)
 	if err != nil {
 		return nil, err
 	}
 
 	loggingQuota := logging.NodeGroupLoggingQuota()
 	loggingAdditionalQuota := logging.NodeGroupLoggingQuota()
-	nodeGroups := ctx.CloudProvider.NodeGroups()
+	nodeGroups := autoscalingCtx.CloudProvider.NodeGroups(ctx)
 	for _, nodeGroup := range nodeGroups {
 		mig, ok := nodeGroup.(*gke.GkeMig)
 		if !ok {
@@ -79,7 +80,7 @@ func (p *ShortLivedUpgradeNodeInfoProvider) Process(ctx *context.AutoscalingCont
 		}
 		// nodeInfo was created from existing node, so it might have used incorrect InstanceTemplate
 		// overwrite with nodeInfo generated from Template, as it would be done in MixedTemplateNodeInfoProvider when there are no good node candidates
-		generatedNodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(nodeGroup, daemonsets, taintConfig)
+		generatedNodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(ctx, nodeGroup, daemonsets, taintConfig)
 		if err != nil {
 			klog.Errorf(`Failed to retrieve TemplateNodeInfo for MIG %s in %s, got error: %v"`, mig.GceRef().Name, mig.GceRef().Zone, err)
 			metrics.Metrics.RecordOverwrittenShortLivedNodeInfos(mig.GceRef().Name, nodeInfoOverwritingFailure)

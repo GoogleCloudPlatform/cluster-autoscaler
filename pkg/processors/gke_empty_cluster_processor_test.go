@@ -15,16 +15,18 @@
 package processors
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -108,7 +110,7 @@ func TestNotEnoughTimeHasPassedSinceCreateCluster(t *testing.T) {
 			if strings.Contains(tn, "cluster started") {
 				gkeManagerMock.On("ClusterStarted").Return(tc.ClusterStarted, nil).Once()
 			}
-			autoscalingContext := &context.AutoscalingContext{
+			autoscalingContext := &ca_context.AutoscalingContext{
 				CloudProvider:      gkeCloudProvider,
 				AutoscalingOptions: config.AutoscalingOptions{ScaleUpFromZero: tc.ScaleFromZeroFlag},
 				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
@@ -122,7 +124,7 @@ func TestNotEnoughTimeHasPassedSinceCreateCluster(t *testing.T) {
 			for i := 0; i < tc.ReadyNodes; i++ {
 				readyNodes = append(readyNodes, &apiv1.Node{})
 			}
-			abort, _ := emptyClusterProcessor.ShouldAbort(autoscalingContext, allNodes, readyNodes, startTime.Add(tc.CurrentTimeDelay))
+			abort, _ := emptyClusterProcessor.ShouldAbort(context.TODO(), autoscalingContext, allNodes, readyNodes, startTime.Add(tc.CurrentTimeDelay))
 			assert.EqualValues(t, tc.ExpectedOutput, abort)
 
 		})

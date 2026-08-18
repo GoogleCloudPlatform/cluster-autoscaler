@@ -15,6 +15,7 @@
 package mppn
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	gke_api_beta "google.golang.org/api/container/v1beta1"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -29,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+
 	test_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -452,7 +455,7 @@ func TestMppnFilter_BestOptions(t *testing.T) {
 			}
 			reducer := gkeprice.NewProgressiveGroupCountReducer(provider)
 			mf := NewFilter(reducer, tc.isAutopilotCluster)
-			gotOptions := mf.BestOptions(tc.inOptions, nodeInfos)
+			gotOptions := mf.BestOptions(context.TODO(), tc.inOptions, nodeInfos)
 			if diff := cmp.Diff(tc.wantOptions, gotOptions, cmpopts.IgnoreUnexported(gke.FakeGkeManager{}), cmp.AllowUnexported(gke.GkeMig{}), cmp.AllowUnexported(gke.GkeNodePool{}), cmpopts.SortSlices(optionsSortFunc)); diff != "" {
 				t.Errorf("Unexpected diff: %v", diff)
 			}

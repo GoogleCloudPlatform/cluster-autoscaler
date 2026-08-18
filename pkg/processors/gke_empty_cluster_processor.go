@@ -15,11 +15,12 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -35,18 +36,19 @@ func (e *GkeEmptyClusterProcessor) CleanUp() {
 }
 
 // ShouldAbort give the decision on whether CA can act on the cluster
-func (e *GkeEmptyClusterProcessor) ShouldAbort(context *context.AutoscalingContext,
+func (e *GkeEmptyClusterProcessor) ShouldAbort(ctx context.Context,
+	autoscalingCtx *ca_context.AutoscalingContext,
 	allNodes []*apiv1.Node,
 	readyNodes []*apiv1.Node,
 	currentTime time.Time) (bool, errors.AutoscalerError) {
 
-	gkeCloudProvider, ok := context.CloudProvider.(ProcessorsCloudProvider)
+	gkeCloudProvider, ok := autoscalingCtx.CloudProvider.(ProcessorsCloudProvider)
 	if !ok {
 		klog.Errorf("Unable to fetch ProcessorsCloudProvider. Aborting the loop")
 		return true, nil
 	}
 
-	if !context.AutoscalingOptions.ScaleUpFromZero {
+	if !autoscalingCtx.AutoscalingOptions.ScaleUpFromZero {
 		if len(allNodes) == 0 {
 			klog.Errorf("Scale from Zero is disabled and cluster is empty. Aborting the loop.")
 			return true, nil

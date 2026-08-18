@@ -15,6 +15,7 @@
 package customresources
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
@@ -65,7 +66,7 @@ func (p *DraCrpInternalOverride) CleanUp() {
 	p.wrap.CleanUp()
 }
 
-func (p *DraCrpInternalOverride) FilterOutNodesWithUnreadyResources(autoscalingCtx *context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *snapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+func (p *DraCrpInternalOverride) FilterOutNodesWithUnreadyResources(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, draSnapshot *snapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
 	newReadyNodes := make([]*apiv1.Node, 0, len(readyNodes))
 	unreadyNodes := make(map[string]*apiv1.Node)
 
@@ -102,11 +103,11 @@ func (p *DraCrpInternalOverride) FilterOutNodesWithUnreadyResources(autoscalingC
 		}
 	}
 
-	return p.wrap.FilterOutNodesWithUnreadyResources(autoscalingCtx, modifiedAllNodes, newReadyNodes, draSnapshot, csiSnapshot)
+	return p.wrap.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, modifiedAllNodes, newReadyNodes, draSnapshot, csiSnapshot)
 }
 
 // GetNodeResourceTargets returns the resources that are available on the node.
-func (p *DraCrpInternalOverride) GetNodeResourceTargets(ctx *context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+func (p *DraCrpInternalOverride) GetNodeResourceTargets(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
 	if !gkelabels.IsGkeDraNode(node.Labels) {
 		return nil, nil
 	}

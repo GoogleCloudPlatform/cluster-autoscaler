@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -62,11 +63,11 @@ func NewMultitenantScaleToZeroPodListProcessor(metricsFilter filter.MetricsFilte
 // daemonset or system pods. If this is true and has been true for the duration
 // of grace period it filters out non-ds pods both from list of unschedulable
 // pods and ClusterSnapshot for that tenant/supervisor
-func (p *MultitenantScaleToZeroPodListProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *MultitenantScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	if p.isMultitenantScaleToZeroExpDisabled() {
-		return p.backupScaleToZeroPodListProcessor.Process(context, unschedulablePods)
+		return p.backupScaleToZeroPodListProcessor.Process(ctx, autoscalingCtx, unschedulablePods)
 	}
-	nodeInfos, err := context.ClusterSnapshot.ListNodeInfos()
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		// This is the safe direction to fail (if in doubt don't take
 		// any action).
@@ -87,7 +88,7 @@ func (p *MultitenantScaleToZeroPodListProcessor) Process(context *context.Autosc
 	for tenantUID, pods := range tenantToUnschedulablePods {
 		tenantProcessor := p.tenantScaleToZeroProcessor(tenantUID)
 		klog.Infof("Checking for scale down to zero in tenant %s", tenantUID)
-		tenantLeftoverUnschedulablePods, err := tenantProcessor.Process(context, pods)
+		tenantLeftoverUnschedulablePods, err := tenantProcessor.Process(ctx, autoscalingCtx, pods)
 		if err != nil {
 			klog.Errorf("Encountered scale-to-0 error in tenant %s: %v", tenantUID, err)
 		}
@@ -96,7 +97,7 @@ func (p *MultitenantScaleToZeroPodListProcessor) Process(context *context.Autosc
 	}
 
 	supervisorProcessor := p.supervisorScaleToZeroProcessor()
-	supervisorLeftoverUnschedulablePods, err := supervisorProcessor.Process(context, supervisorUnschedulablePods)
+	supervisorLeftoverUnschedulablePods, err := supervisorProcessor.Process(ctx, autoscalingCtx, supervisorUnschedulablePods)
 	if err != nil {
 		klog.Errorf("Encountered scale-to-0 error in supervisor: %v", err)
 	}

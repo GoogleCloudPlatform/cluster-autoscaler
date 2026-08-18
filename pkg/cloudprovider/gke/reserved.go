@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -99,31 +100,31 @@ func NewGkeReservedForTesting() *GkeReserved {
 }
 
 // CalculateKernelReserved computes how much memory Linux kernel will reserve.
-func (r *GkeReserved) CalculateKernelReserved(m gce.MigOsInfo, physicalMemory int64) int64 {
+func (r *GkeReserved) CalculateKernelReserved(ctx context.Context, m gce.MigOsInfo, physicalMemory int64) int64 {
 	gkeMigOsInfo, ok := m.(*GkeMigOsInfo)
 	if ok && r.osReserved != nil {
 		val, err := r.osReserved.GetOsReservedValue(nodetemplate.MemoryResource, gkeMigOsInfo.NodeVersion(), gkeMigOsInfo.OsDistribution(), gkeMigOsInfo.Arch(), gkeMigOsInfo.ConfidentialNode(), physicalMemory)
 		if err != nil {
 			klog.Warningf("Could not get OS reserved memory from config; fallback to kernel reserved calculation. Error: %v", err)
-			return r.gceReserved.CalculateKernelReserved(m, physicalMemory)
+			return r.gceReserved.CalculateKernelReserved(context.TODO(), m, physicalMemory)
 		}
 		return val
 	}
-	return r.gceReserved.CalculateKernelReserved(m, physicalMemory)
+	return r.gceReserved.CalculateKernelReserved(context.TODO(), m, physicalMemory)
 }
 
 // CalculateOSReservedEphemeralStorage estimates how much ephemeral storage OS will reserve and eviction threshold.
-func (r *GkeReserved) CalculateOSReservedEphemeralStorage(m gce.MigOsInfo, diskSize int64) int64 {
+func (r *GkeReserved) CalculateOSReservedEphemeralStorage(ctx context.Context, m gce.MigOsInfo, diskSize int64) int64 {
 	gkeMigOsInfo, ok := m.(*GkeMigOsInfo)
 	if ok && r.osReserved != nil {
 		val, err := r.osReserved.GetOsReservedValue(nodetemplate.EphemeralStorageResource, gkeMigOsInfo.NodeVersion(), gkeMigOsInfo.OsDistribution(), gkeMigOsInfo.Arch(), false, diskSize)
 		if err != nil {
 			klog.Warningf("Could not get OS reserved ephemeral storage from config; fallback to kernel reserved calculation. Error: %v", err)
-			return r.gceReserved.CalculateKernelReserved(m, diskSize)
+			return r.gceReserved.CalculateKernelReserved(context.TODO(), m, diskSize)
 		}
 		return val
 	}
-	return r.gceReserved.CalculateOSReservedEphemeralStorage(m, diskSize)
+	return r.gceReserved.CalculateOSReservedEphemeralStorage(context.TODO(), m, diskSize)
 }
 
 // CalculateOSPhysicalEphemeralStorageGiB find minimum Physical disk size that accommodate Allocatable
@@ -139,7 +140,7 @@ func (r *GkeReserved) CalculatePhysicalEphemeralStorageGiB(m gce.MigOsInfo, allo
 
 func (r *GkeReserved) storageLeftForAllocatable(m gce.MigOsInfo, physicalGiB int64) int64 {
 	physical := physicalGiB * GiB
-	osReserved := r.CalculateOSReservedEphemeralStorage(m, physical)
+	osReserved := r.CalculateOSReservedEphemeralStorage(context.TODO(), m, physical)
 	kubeReserved := PredictKubeReservedEphemeralStorage(physicalGiB)
 	// TODO(b/325896400): Share the logic with cloudprovider/gce/templates.go:CalculateAllocatable
 	// evictionHard is nil because:

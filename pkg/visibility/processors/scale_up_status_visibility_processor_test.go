@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ import (
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
@@ -269,7 +270,7 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 			scaleUpStatus := &status.ScaleUpStatus{Result: 1337}
 			vizScaleUpStatus := &vistypes.ScaleUpStatus{Result: 1337}
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
 			}
 			ctx.ScaleUpSimulationForSkippedNodeGroupsEnabled = tc.simulationEnabled
@@ -287,7 +288,7 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 
 			// Assert that nothing is logged if NoScaleUp doesn't return any reasons.
 			noScaleUpMock.On("GetNewReasons", vizScaleUpStatus, vizNapStatus, mock.Anything).Return(&noscaleup.Reasons{}).Once()
-			processor.Process(ctx, scaleUpStatus)
+			processor.Process(context.TODO(), ctx, scaleUpStatus)
 
 			// Assert that the correct event is logged if NoScaleUp does return reasons.
 			returnedReasons := &noscaleup.Reasons{
@@ -299,7 +300,7 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 			noScaleUpMock.On("GetNewReasons", vizScaleUpStatus, vizNapStatus, mock.Anything).Return(returnedReasons).Once()
 			loggerMock.On("LogEvent", mock.Anything).Return(nil).Once()
 			noScaleUpMock.On("MarkReasonsReported", returnedReasons, mock.Anything).Return().Once()
-			processor.Process(ctx, scaleUpStatus)
+			processor.Process(context.TODO(), ctx, scaleUpStatus)
 
 			loggedNoScaleUpData := loggerMock.Calls[0].Arguments.Get(0).(*vispb.AutoscalerEvent).GetNoDecisionStatus().GetNoScaleUp()
 
@@ -346,7 +347,7 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 			// Assert that if the logger fails to log, the reasons are not marked as reported.
 			noScaleUpMock.On("GetNewReasons", vizScaleUpStatus, vizNapStatus, mock.Anything).Return(returnedReasons).Once()
 			loggerMock.On("LogEvent", mock.Anything).Return(fmt.Errorf("Some error")).Once()
-			processor.Process(ctx, scaleUpStatus)
+			processor.Process(context.TODO(), ctx, scaleUpStatus)
 
 			loggerMock.AssertExpectations(t)
 			noScaleUpMock.AssertExpectations(t)
@@ -358,7 +359,7 @@ func TestNoScaleUpNegativeEventsFlag(t *testing.T) {
 	loggerMock := new(visibility.MockEventLogger)
 	loggerMock.On("LogEvent", mock.Anything).Return(nil).Once()
 
-	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 	processor := ScaleUpStatusVisibilityProcessor{
 		logger:    loggerMock,
 		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: false, IncludePerMigStatuses: false},
@@ -372,12 +373,12 @@ func TestNoScaleUpNegativeEventsFlag(t *testing.T) {
 	}
 
 	// Check that negative event is not logged with the flag turned off.
-	processor.Process(ctx, &status.ScaleUpStatus{Result: status.ScaleUpNotTried, PodsRemainUnschedulable: unschedulablePods})
+	processor.Process(context.TODO(), ctx, &status.ScaleUpStatus{Result: status.ScaleUpNotTried, PodsRemainUnschedulable: unschedulablePods})
 	loggerMock.AssertNumberOfCalls(t, "LogEvent", 0)
 
 	// Turn the flag on and check that the negative event is correctly logged.
 	processor.opts.EmitNoScaleUpEvents = true
-	processor.Process(ctx, &status.ScaleUpStatus{Result: status.ScaleUpNotTried, PodsRemainUnschedulable: unschedulablePods})
+	processor.Process(context.TODO(), ctx, &status.ScaleUpStatus{Result: status.ScaleUpNotTried, PodsRemainUnschedulable: unschedulablePods})
 
 	loggerMock.AssertExpectations(t)
 	loggedEvent := loggerMock.Calls[0].Arguments.Get(0).(*vispb.AutoscalerEvent)
@@ -538,7 +539,7 @@ func TestSpreadingEvents(t *testing.T) {
 		idGen:     new(visibility.MockEventIDGenerator),
 		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
 	}
-	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 	podGroupsLen := 80
 	consideredMigsLen := 80
 	noScaleUpInfos, consideredMigs := createNoScaleUpInfos(podGroupsLen, consideredMigsLen, false, false)
@@ -603,7 +604,7 @@ func TestMaxLengthOfNoScaleUpEvent(t *testing.T) {
 		idGen:     new(visibility.MockEventIDGenerator),
 		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
 	}
-	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 	podGroupsLen := 80
 	consideredMigsLen := 80
 	noScaleUpInfos, consideredMigs := createNoScaleUpInfos(podGroupsLen, consideredMigsLen, true, true)
@@ -725,13 +726,13 @@ func TestFailedScaleUpEventEmitted(t *testing.T) {
 	for desc, tc := range tcs {
 		t.Run(desc, func(t *testing.T) {
 			fakeRecorder := kube_record.NewFakeRecorder(5)
-			ctx := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					Recorder: fakeRecorder,
 				},
 			}
 			processor := ScaleUpStatusVisibilityProcessor{data: NewSharedData(), idGen: new(visibility.MockEventIDGenerator), failedScaleUpEventLogger: events.NewFailedScaleUpEventLogger()}
-			processor.Process(ctx, &tc.status)
+			processor.Process(context.TODO(), ctx, &tc.status)
 			close(fakeRecorder.Events)
 			i := 0
 			for event := range fakeRecorder.Events {
@@ -756,9 +757,9 @@ func TestProcess_ResetsScaleUpLimiterTracker(t *testing.T) {
 		noScaleUp:             noscaleup.NewNoScaleUp(time.Minute, false, tracker),
 		scaleUpLimiterTracker: tracker,
 	}
-	ctx := &context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
 
-	processor.Process(ctx, &status.ScaleUpStatus{Result: status.ScaleUpNoOptionsAvailable})
+	processor.Process(context.TODO(), ctx, &status.ScaleUpStatus{Result: status.ScaleUpNoOptionsAvailable})
 
 	assert.False(t, tracker.HasRemovedScaleUpOptions())
 	assert.Empty(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())

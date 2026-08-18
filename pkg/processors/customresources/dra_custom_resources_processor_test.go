@@ -15,23 +15,30 @@
 package customresources
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	gke_api_beta "google.golang.org/api/container/v1beta1"
-	apiv1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	gke_api_beta "google.golang.org/api/container/v1beta1"
+
+	apiv1 "k8s.io/api/core/v1"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
+
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -220,14 +227,14 @@ func TestDraCrpInternalOverride_GetNodeResourceTargets(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{}
+			ctx := &ca_context.AutoscalingContext{}
 			processor := NewDraCrpInternalOverride()
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithNodePoolSpec(tc.nodePoolSpec).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			processor.SetCloudProvider(provider)
-			targets, err := processor.GetNodeResourceTargets(ctx, tc.node, tc.nodeGroup)
+			targets, err := processor.GetNodeResourceTargets(context.TODO(), ctx, tc.node, tc.nodeGroup)
 
 			if tc.wantErr {
 				assert.Error(t, err)
@@ -309,7 +316,7 @@ func TestDraCrpInternalOverride_FilterOutNodesWithUnreadyResources(t *testing.T)
 			// We need a DRA snapshot to avoid nil panics in OSS wrap
 			draSnapshot := drasnapshot.NewSnapshot(nil, nil, nil, nil)
 
-			gotAllNodes, gotReadyNodes := processor.FilterOutNodesWithUnreadyResources(&context.AutoscalingContext{CloudProvider: provider}, allNodes, readyNodes, draSnapshot, nil)
+			gotAllNodes, gotReadyNodes := processor.FilterOutNodesWithUnreadyResources(context.TODO(), &ca_context.AutoscalingContext{CloudProvider: provider}, allNodes, readyNodes, draSnapshot, nil)
 
 			if tc.wantUnready {
 				assert.Len(t, gotReadyNodes, 0)

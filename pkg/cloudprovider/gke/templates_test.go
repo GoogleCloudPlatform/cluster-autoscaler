@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -141,14 +142,14 @@ func TestBuildNodeFromTemplateSetsResources(t *testing.T) {
 			var node *apiv1.Node
 			kubeEnv, err := gce.ExtractKubeEnv(template)
 			if err == nil {
-				node, err = tb.BuildNodeFromTemplate(mig, gkeMigOsInfo, template, kubeEnv, tc.physicalCpu, tc.physicalMemory, tc.pods, &gce.GceReserved{}, localssdsize.NewSimpleLocalSSDProvider())
+				node, err = tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, tc.physicalCpu, tc.physicalMemory, tc.pods, &gce.GceReserved{}, localssdsize.NewSimpleLocalSSDProvider())
 			}
-			evictionHard := gce.ParseEvictionHardOrGetDefault(nil)
+			evictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 			if tc.expectedErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				capacity, err := tb.BuildCapacity(gkeMigOsInfo, tc.physicalCpu, tc.physicalMemory, tc.accelerators, -1, -1, tc.pods, &gce.GceReserved{}, nil)
+				capacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, tc.physicalCpu, tc.physicalMemory, tc.accelerators, -1, -1, tc.pods, &gce.GceReserved{}, nil)
 				assert.NoError(t, err)
 				assertEqualResourceLists(t, "Capacity", capacity, node.Status.Capacity)
 				if !tc.kubeReserved {
@@ -273,7 +274,7 @@ func TestBuildAllocatableFromKubeEnv(t *testing.T) {
 		kubeEnv, err := gce.ParseKubeEnv("instance-template", tc.kubeEnvValue)
 		assert.NoError(t, err)
 		tb := GkeTemplateBuilder{}
-		allocatable, err := tb.BuildAllocatableFromKubeEnv(capacity, kubeEnv, gce.ParseEvictionHardOrGetDefault(nil))
+		allocatable, err := tb.BuildAllocatableFromKubeEnv(context.TODO(), capacity, kubeEnv, gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
 		if tc.expectedErr {
 			assert.Error(t, err)
 		} else {
@@ -410,7 +411,7 @@ func TestParseEvictionHard(t *testing.T) {
 			gce.MemoryEvictionHardTag:           tc.memory,
 			gce.EphemeralStorageEvictionHardTag: tc.ephemeralStorage,
 		}
-		actualOutput := gce.ParseEvictionHardOrGetDefault(test)
+		actualOutput := gce.ParseEvictionHardOrGetDefault(context.TODO(), test)
 		assert.EqualValues(t, tc.memoryExpected, actualOutput.MemoryEvictionQuantity, "TestParseEviction Failed Memory. %v expected does not match %v actual.", tc.memoryExpected, actualOutput.MemoryEvictionQuantity)
 		assert.EqualValues(t, tc.ephemeralStorageRatioExpected, actualOutput.EphemeralStorageEvictionRatio, "TestParseEviction Failed Ephemeral Storage. %v expected does not match %v actual.", tc.memoryExpected, actualOutput.EphemeralStorageEvictionRatio)
 	}
@@ -686,7 +687,7 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 				assert.Equal(t, "2", val)
 			}
 
-			capacity, err := tb.BuildCapacity(gkeMigOsInfo, tc.cpu, tc.memory, nil, ephemeralGiB*GiB, localSsdCount, nil, &GkeReserved{}, nil)
+			capacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, tc.cpu, tc.memory, nil, ephemeralGiB*GiB, localSsdCount, nil, &GkeReserved{}, nil)
 			if tpuRequest, found := tc.extraResources[tpu.ResourceGoogleTPU]; found {
 				capacity[tpu.ResourceGoogleTPU] = tpuRequest.DeepCopy()
 			}
@@ -707,7 +708,7 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 			}
 
 			assert.NoError(t, err)
-			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(nil))
+			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
 			assertEqualResourceLists(t, "Allocatable", expectedAllocatable, node.Status.Allocatable)
 		})
 	}

@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -22,7 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
@@ -61,7 +62,7 @@ func NewProvisioningRequestScaleDownNodeProcessor(cloudProvider CloudProvider, s
 }
 
 // GetScaleDownCandidates returns nodes that potentially could be scaled down - it filters out the nodes with `QueuedProvisioning` flag to ensure they won't be deleted for `BookingDuration` period.
-func (p *ProvisioningRequestScaleDownNodeProcessor) GetScaleDownCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *ProvisioningRequestScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	var filteredNodes []*apiv1.Node
 
 	for _, node := range nodes {
@@ -100,7 +101,7 @@ func (p *ProvisioningRequestScaleDownNodeProcessor) GetScaleDownCandidates(ctx *
 }
 
 // GetPodDestinationCandidates is a no-op, this processor needs to define it to implement ScaleDownNodeProcessor.
-func (p *ProvisioningRequestScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *ProvisioningRequestScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return nodes, nil
 }
 

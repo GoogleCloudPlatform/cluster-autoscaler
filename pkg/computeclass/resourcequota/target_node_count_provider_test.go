@@ -17,10 +17,13 @@ limitations under the License.
 package resourcequota
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
@@ -163,7 +166,7 @@ func TestTargetNodeCountProvider_Quotas(t *testing.T) {
 			ccLister := lister.NewMockCrdLister(tc.crds)
 			provider := NewTargetNodeCountProvider(ccLister, tc.excludeTopLevel, nil)
 
-			quotas, err := provider.Quotas()
+			quotas, err := provider.Quotas(context.TODO())
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.expectedQuotas), len(quotas))
 
@@ -188,7 +191,7 @@ func TestTargetNodeCountProvider_Quotas_WithExclusion(t *testing.T) {
 	ccLister := lister.NewMockCrdLister(crds)
 	provider := NewTargetNodeCountProvider(ccLister, true, nil)
 
-	quotas, err := provider.Quotas()
+	quotas, err := provider.Quotas(context.TODO())
 	assert.NoError(t, err)
 	// We expect ONLY rule-level quota, spec-level should be excluded
 	assert.Equal(t, 1, len(quotas))
@@ -320,7 +323,7 @@ func TestTargetNodeCountProvider_Quotas_DisabledByExperiment(t *testing.T) {
 	)
 
 	provider := NewTargetNodeCountProvider(ccLister, false, mockManager)
-	quotas, err := provider.Quotas()
+	quotas, err := provider.Quotas(context.TODO())
 	assert.NoError(t, err)
 	assert.Empty(t, quotas)
 }

@@ -104,10 +104,10 @@ type provisioningRequestReconciler interface {
 }
 
 type provreqClient interface {
-	UpdateProvisioningRequest(*v1.ProvisioningRequest) (*v1.ProvisioningRequest, error)
-	DeleteProvisioningRequest(*v1.ProvisioningRequest) error
-	ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error)
-	ProvisioningRequest(string, string) (*provreqwrapper.ProvisioningRequest, error)
+	UpdateProvisioningRequest(context.Context, *v1.ProvisioningRequest) (*v1.ProvisioningRequest, error)
+	DeleteProvisioningRequest(context.Context, *v1.ProvisioningRequest) error
+	ProvisioningRequests(context.Context) ([]*provreqwrapper.ProvisioningRequest, error)
+	ProvisioningRequest(context.Context, string, string) (*provreqwrapper.ProvisioningRequest, error)
 }
 
 // provReqManager manages integration between Provisioning Requests and Resize Requests.
@@ -161,7 +161,7 @@ func (m *provReqManager) QueuedProvisioningNodeHasScaleDownImmunity(node *apiv1.
 
 // CreateQueuedBulkInstances creates new instances and updates state of the Provisioning Request.
 func (m *provReqManager) CreateQueuedBulkInstances(mig common.GkeMigWrapper, spec *ProvisioningRequestDetailsSpec) error {
-	pr, err := m.prClient.ProvisioningRequest(spec.ProvReqNamespace, spec.ProvReqName)
+	pr, err := m.prClient.ProvisioningRequest(context.TODO(), spec.ProvReqNamespace, spec.ProvReqName)
 	if err != nil {
 		return fmt.Errorf("couldn't retrieve Provisioning Request %s/%s: %w", spec.ProvReqNamespace, spec.ProvReqName, err)
 	}
@@ -169,7 +169,7 @@ func (m *provReqManager) CreateQueuedBulkInstances(mig common.GkeMigWrapper, spe
 	if err = provreqstate.SetProvisioningClassDetails(pr, details); err != nil {
 		return m.handleProvisioningClassDetailsError(pr, err)
 	}
-	if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+	if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 		return fmt.Errorf("couldn't update Provisioning Request %s/%s with the name of Bulk MIG: %w", pr.Namespace, pr.Name, err)
 	}
 
@@ -181,7 +181,7 @@ func (m *provReqManager) CreateQueuedBulkInstances(mig common.GkeMigWrapper, spe
 		klog.Errorf("UpdateNodePoolLabels for PR %s/%s failed with %v; spec: %+v", pr.Namespace, pr.Name, err, spec)
 		state = provreqstate.FailedState
 		err = provreqstate.SetStateCustomReasonMessage(pr, state, reasons.BulkNodePoolUpdateFailedReason, reasons.BulkNodePoolUpdateFailedMessage, metav1.Now())
-	} else if err = mig.IncreaseSize(int(spec.Delta)); err != nil {
+	} else if err = mig.IncreaseSize(context.TODO(), int(spec.Delta)); err != nil {
 		klog.Errorf("IncreaseSize for PR %s/%s failed with %v", pr.Namespace, pr.Name, err)
 		state = provreqstate.FailedState
 		err = provreqstate.SetStateCustomReasonMessage(pr, state, reasons.BulkIncreaseSizeFailedReason, reasons.BulkIncreaseSizeFailedMessage, metav1.Now())
@@ -194,7 +194,7 @@ func (m *provReqManager) CreateQueuedBulkInstances(mig common.GkeMigWrapper, spe
 
 // CreateResizeRequest creates new instance of Resize Request and updates state of the Provisioning Request.
 func (m *provReqManager) CreateResizeRequest(spec *ProvisioningRequestDetailsSpec, shouldUpdateProvReqDetails ShouldUpdateProvReqDetails) error {
-	pr, err := m.prClient.ProvisioningRequest(spec.ProvReqNamespace, spec.ProvReqName)
+	pr, err := m.prClient.ProvisioningRequest(context.TODO(), spec.ProvReqNamespace, spec.ProvReqName)
 	if err != nil {
 		return fmt.Errorf("couldn't retrieve Provisioning Request %s/%s: %w", spec.ProvReqNamespace, spec.ProvReqName, err)
 	}
@@ -205,7 +205,7 @@ func (m *provReqManager) CreateResizeRequest(spec *ProvisioningRequestDetailsSpe
 			if err = provreqstate.SetStateCustomReasonMessage(pr, provreqstate.FailedState, maxRunDurationParseErrorReason, maxRunDurationParseErrorMessage, metav1.Now()); err != nil {
 				return fmt.Errorf("Error while updating state of Provisioning Request %s/%s to %q with reason %q and message %q: %v", pr.Namespace, pr.Name, provreqstate.FailedState, maxRunDurationParseErrorReason, maxRunDurationParseErrorMessage, err)
 			}
-			pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest)
+			pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 		}
 		return err
 	}
@@ -215,7 +215,7 @@ func (m *provReqManager) CreateResizeRequest(spec *ProvisioningRequestDetailsSpe
 		if err = provreqstate.SetProvisioningClassDetails(pr, details); err != nil {
 			return m.handleProvisioningClassDetailsError(pr, err)
 		}
-		if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+		if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 			return fmt.Errorf("couldn't update Provisioning Request %s/%s with the name of Resize Request and MIG: %w", pr.Namespace, pr.Name, err)
 		}
 
@@ -259,7 +259,7 @@ func (m *provReqManager) handleProvisioningClassDetailsError(pr *provreqwrapper.
 		return fmt.Errorf("while moving the Provisioning Request %s/%s to Failed state got error: %w", pr.Namespace, pr.Name, err)
 	}
 	// attempt to persist the state to cluster
-	if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+	if pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 		return fmt.Errorf("couldn't update Provisioning Request %s/%s to Failed state, due to unexpected state: %w", pr.Namespace, pr.Name, err)
 	}
 	// successfully marked the Provisioning Request as Failed
@@ -270,7 +270,7 @@ func (m *provReqManager) finalizeProvisioningRequest(pr *provreqwrapper.Provisio
 	if err != nil {
 		finalError.Append(err)
 	} else if shouldUpdateProvReqDetails {
-		pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest)
+		pr.ProvisioningRequest, err = m.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 		if err != nil {
 			finalError.Append(err)
 		}
@@ -349,7 +349,7 @@ func (m *provReqManager) ResizeRequests(mig gce.GceRef) ([]resizerequestclient.R
 }
 
 func (m *provReqManager) updateProvisioningRequestCountMetric() error {
-	prs, err := m.prClient.ProvisioningRequests()
+	prs, err := m.prClient.ProvisioningRequests(context.TODO())
 	if err != nil {
 		return fmt.Errorf("error while listing Provisioning Requests: %w", err)
 	}

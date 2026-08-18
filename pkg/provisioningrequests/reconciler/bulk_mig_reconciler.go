@@ -15,16 +15,21 @@
 package reconciler
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
+
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/common"
@@ -32,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler/reasons"
+
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 )
@@ -157,7 +163,7 @@ func (r *bulkMigReconciler) reconcileAccepted(pr *provreqwrapper.ProvisioningReq
 		return false
 	}
 
-	_, err = r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest)
+	_, err = r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 	if err != nil {
 		klog.Errorf("Error while updating Provisioning Request %s/%s during reconciling with bulkMig %s: %v", pr.Namespace, pr.Name, migRef, err)
 	}

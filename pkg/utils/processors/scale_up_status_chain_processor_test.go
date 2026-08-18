@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"math"
 	"reflect"
 	"testing"
@@ -26,7 +27,7 @@ import (
 	processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
 	vis_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
@@ -100,10 +101,12 @@ func TestCapacityBufferFakePodStateObserverIsBeforeCapacityBufferFakePodsScaleUp
 
 type ptrProcessor struct{}
 
-func (p *ptrProcessor) Process(context *context.AutoscalingContext, status *status.ScaleUpStatus) {}
-func (p *ptrProcessor) CleanUp()                                                                  {}
+func (p *ptrProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleUpStatus) {
+}
+func (p *ptrProcessor) CleanUp() {}
 
 type valueProcessor struct{}
 
-func (p valueProcessor) Process(context *context.AutoscalingContext, status *status.ScaleUpStatus) {}
-func (p valueProcessor) CleanUp()                                                                  {}
+func (p valueProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleUpStatus) {
+}
+func (p valueProcessor) CleanUp() {}

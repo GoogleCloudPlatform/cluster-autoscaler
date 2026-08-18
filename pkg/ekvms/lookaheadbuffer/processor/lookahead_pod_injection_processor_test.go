@@ -15,39 +15,51 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
 	appsv1 "k8s.io/api/apps/v1"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	apilabels "k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+
 	v1 "k8s.io/client-go/listers/apps/v1"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+
 	npc_crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
+
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
+
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
+
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+
 	taintutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -765,8 +777,8 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			daemonSetLister := &mockDSLister{}
 			daemonSetLister.On("List", apilabels.Everything()).Return(tt.daemonsets, tt.dsListErr)
-			ctx := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: kubernetes.NewListerRegistry(nil, nil, nil, nil, daemonSetLister, nil, nil, nil, nil),
 				},
 			}
@@ -1080,9 +1092,9 @@ func TestProcess(t *testing.T) {
 
 			daemonSetLister := &mockDSLister{}
 			daemonSetLister.On("List", apilabels.Everything()).Return(tc.daemonSets, tc.fetchingDaemonSetsErr)
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: kubernetes.NewListerRegistry(nil, nil, nil, nil, daemonSetLister, nil, nil, nil, nil),
 				},
 			}
@@ -1104,7 +1116,7 @@ func TestProcess(t *testing.T) {
 				calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil)),
 				metrics)
 
-			actualPods, actualErr := p.Process(ctx, tc.unschedulablePods)
+			actualPods, actualErr := p.Process(context.TODO(), ctx, tc.unschedulablePods)
 			if tc.expectedErr {
 				assert.Error(t, actualErr)
 			} else {
@@ -1165,7 +1177,7 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 				mockCalc,
 				metrics)
 
-			ctx := &context.AutoscalingContext{}
+			ctx := &ca_context.AutoscalingContext{}
 			if tc.listNodeInfosErr != nil {
 				ctx.ClusterSnapshot = &mockSnapshot{listNodeInfosErr: tc.listNodeInfosErr}
 			} else {
@@ -1173,7 +1185,7 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 				ctx.ClusterSnapshot = snapshot
 			}
 
-			_, err := p.Process(ctx, nil)
+			_, err := p.Process(context.TODO(), ctx, nil)
 			if tc.expectedErr != "" {
 				assert.Error(t, err)
 				assert.Contains(t, err.Error(), tc.expectedErr)

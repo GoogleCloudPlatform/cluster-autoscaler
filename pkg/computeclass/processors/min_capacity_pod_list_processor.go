@@ -229,8 +229,8 @@ func (p *MinCapacityPodListProcessor) countExistingNodes(
 	}
 	matcher := computeclass.NewMatcher(p.ccLister, cp)
 
-	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups() {
-		targetSize, err := ng.TargetSize()
+	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
+		targetSize, err := ng.TargetSize(context.TODO())
 		if err != nil {
 			klog.Warningf("MinCapacityPodListProcessor: Failed to get target size for node group %s: %v", ng.Id(), err)
 			continue

@@ -15,13 +15,18 @@
 package noscaleup
 
 import (
+	"context"
+
 	stderrors "errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	appsv1 "k8s.io/api/apps/v1"
+
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
@@ -29,10 +34,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
+
 	npc_crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
@@ -40,14 +48,17 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+
 	internal_customresources "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/customresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/zonetypes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
+
 	core_test "sigs.k8s.io/cluster-autoscaler/pkg/core/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors"
@@ -58,6 +69,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -654,11 +666,11 @@ func TestNapPodErrToReasons(t *testing.T) {
 	}
 }
 
-func performNapScaleUp(t *testing.T, unschedulablePod *apiv1.Pod, autoprovisioningLocations []string, unavailableMachineTypesByZone map[string]map[string]bool, machineTypesWithInternalErrors map[string]bool) (*status.ScaleUpStatus, *context.AutoscalingContext, error) {
+func performNapScaleUp(t *testing.T, unschedulablePod *apiv1.Pod, autoprovisioningLocations []string, unavailableMachineTypesByZone map[string]map[string]bool, machineTypesWithInternalErrors map[string]bool) (*status.ScaleUpStatus, *ca_context.AutoscalingContext, error) {
 	provider := newVizNapTestCloudProvider(autoprovisioningLocations, unavailableMachineTypesByZone, machineTypesWithInternalErrors)
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(false)
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
 	opts := config.AutoscalingOptions{
 		EstimatorName: estimator.BinpackingEstimatorName,
 	}
@@ -701,7 +713,7 @@ func performNapScaleUp(t *testing.T, unschedulablePod *apiv1.Pod, autoprovisioni
 
 	scaleUpOrchestrator := orchestrator.New()
 	scaleUpOrchestrator.Initialize(&ctx, proc, clusterState, estimatorBuilder, taints.TaintConfig{}, quotasTrackerFactory)
-	scaleUpStatus, err := scaleUpOrchestrator.ScaleUp([]*apiv1.Pod{unschedulablePod}, []*apiv1.Node{}, []*appsv1.DaemonSet{}, map[string]*framework.NodeInfo{}, false)
+	scaleUpStatus, err := scaleUpOrchestrator.ScaleUp(context.TODO(), []*apiv1.Pod{unschedulablePod}, []*apiv1.Node{}, []*appsv1.DaemonSet{}, map[string]*framework.NodeInfo{}, false)
 	return scaleUpStatus, &ctx, err
 }
 

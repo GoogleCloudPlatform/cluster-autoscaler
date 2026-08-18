@@ -181,7 +181,7 @@ func TestProvisioningRequestPodListProcessorInjectProvisioningRequestPods(t *tes
 			p.cache = newEventCache(10)
 			p.now = nowFunc
 
-			context := &ca_context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
 			for _, pr := range tt.upcomingNGProvReqs {
@@ -191,8 +191,8 @@ func TestProvisioningRequestPodListProcessorInjectProvisioningRequestPods(t *tes
 				queuedProvisioningCache.UnregisterUpcomingProvReq(pr_pods.GetProvReqID(pr))
 			}
 
-			queuedProvisioningCache.Refresh()
-			got, err := p.InjectProvisioningRequestPods(context, tt.unschedulablePods)
+			queuedProvisioningCache.Refresh(context.TODO())
+			got, err := p.InjectProvisioningRequestPods(autoscalingCtx, tt.unschedulablePods)
 			if err != nil {
 				t.Errorf("ProvisioningRequestPodListProcessor.Process() error = %v", err)
 				return

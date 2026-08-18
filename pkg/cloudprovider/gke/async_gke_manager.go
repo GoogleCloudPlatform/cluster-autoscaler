@@ -924,7 +924,7 @@ func (m *asyncGkeManager) CreateInstances(mig gce.Mig, delta int64) error {
 			klog.Infof("Adding %d new instances in parallel to async created mig %v (upcomingMig: %v)", delta, createdMig.Id(), mig.Id())
 			// Invalidate cache for mig as it doesn't contain VM names that were added in the initial async scale-up.
 			// This invalidation happens at most once per newly created mig in the loop following mig async creation.
-			m.cache.InvalidateMigInstances(createdMig.GceRef())
+			m.cache.InvalidateMigInstances(context.TODO(), createdMig.GceRef())
 			upcoming.updater.ChangeTargetSize(mig.Id(), delta)
 			upcoming.markInProgressDirty()
 			m.runNodePoolInitalizer(upcoming)

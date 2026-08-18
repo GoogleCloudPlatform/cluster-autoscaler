@@ -58,7 +58,7 @@ type fakeCloudProvider struct {
 	clusterRefreshCalls int // Separate from the index so that we can assert the number of calls easily.
 }
 
-func (p *fakeCloudProvider) Refresh() error {
+func (p *fakeCloudProvider) Refresh(ctx context.Context) error {
 	p.clusterRefreshCalls++
 
 	refreshResult := p.clusterRefreshResults[p.clusterRefreshIndex]

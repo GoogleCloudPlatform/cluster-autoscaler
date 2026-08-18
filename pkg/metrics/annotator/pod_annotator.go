@@ -146,7 +146,7 @@ func filterOutScheduledPods(unschedulablePods []status.NoScaleUpInfo, realPods m
 }
 
 // Process annotates unhelpable pods based on scaleUpStatus.
-func (a *PodAnnotator) Process(ctx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (a *PodAnnotator) Process(_ context.Context, ctx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	now := a.clock.Now()
 
 	realPods := getRealPods(ctx, scaleUpStatus)

@@ -15,7 +15,9 @@
 package processors
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"context"
+
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/podlistprocessor"
 	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
@@ -49,13 +51,13 @@ import (
 )
 
 type ScaleToZeroProcessor interface {
-	Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
+	Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
 	Drainable(drainContext *drainability.DrainContext, pod *apiv1.Pod, node *framework.NodeInfo) drainability.Status
 	Name() string
 }
 
 type DefragProcessor interface {
-	Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
+	Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
 	DefragPickedCandidate() bool
 	CleanUp()
 }
@@ -177,7 +179,7 @@ func newSafeguardedDefaultPodListProcessor(nodeFilter func(*framework.NodeInfo) 
 }
 
 // Process calls all gke internal PodListProcessors.
-func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContext,
+func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
 	registerFlexAdvisorLate := flexadvisor.IsFlexAdvisorLateRegistrationEnabled(p.experimentsManager)
@@ -193,8 +195,8 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	p.podStatusAggregator.Unschedulable = append([]*apiv1.Pod{}, unschedulablePods...)
 
 	if p.storageNodeAffinityProcessor != nil {
-		if cp, ok := context.CloudProvider.(ProcessorsCloudProvider); ok && cp.IsMachineSerenityLabelsEnabled() && cp.IsE4StatefulEnabledInAutopilot() {
-			unschedulablePods, err = p.storageNodeAffinityProcessor.Process(context, unschedulablePods)
+		if cp, ok := autoscalingCtx.CloudProvider.(ProcessorsCloudProvider); ok && cp.IsMachineSerenityLabelsEnabled() && cp.IsE4StatefulEnabledInAutopilot() {
+			unschedulablePods, err = p.storageNodeAffinityProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 			if err != nil {
 				return []*apiv1.Pod{}, err
 			}
@@ -203,7 +205,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 
 	if p.csnNodeReconcilationProcessor != nil {
 		// Updates context before processing.
-		err = p.csnNodeReconcilationProcessor.Preprocess(context)
+		err = p.csnNodeReconcilationProcessor.Preprocess(autoscalingCtx)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -211,21 +213,21 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 
 	if p.ekvmsProcessor != nil {
 		// Updates context before processing.
-		err = p.ekvmsProcessor.Preprocess(context)
+		err = p.ekvmsProcessor.Preprocess(autoscalingCtx)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
 	}
 
 	if p.flexAdvisorPodListProcessor != nil && !registerFlexAdvisorLate {
-		_, err = p.flexAdvisorPodListProcessor.Process(context, unschedulablePods)
+		_, err = p.flexAdvisorPodListProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
 		}
 	}
 
 	if p.crProcessor != nil {
-		unschedulablePods, err = p.crProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.crProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -233,7 +235,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.cbPodInjectionProcessor != nil {
-		unschedulablePods, err = p.cbPodInjectionProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.cbPodInjectionProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Warningf("Failed to inject capacity buffers pods: %v", err)
 		}
@@ -245,7 +247,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.podInjectionProcessor != nil {
-		unschedulablePods, err = p.podInjectionProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.podInjectionProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Warningf("Failed to inject pods: %v", err)
 		}
@@ -253,7 +255,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.lookaheadPodsInjection != nil {
-		unschedulablePods, err = p.lookaheadPodsInjection.Process(context, unschedulablePods)
+		unschedulablePods, err = p.lookaheadPodsInjection.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Warningf("Failed to inject lookahead pods: %v", err)
 		}
@@ -261,14 +263,14 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.prProcessor != nil {
-		unschedulablePods = p.prProcessor.IgnorePodsConsumingProvisioningRequest(context, unschedulablePods)
+		unschedulablePods = p.prProcessor.IgnorePodsConsumingProvisioningRequest(autoscalingCtx, unschedulablePods)
 		klog.Infof("Unschedulable pods count after ProvisioningRequest.IgnorePodsConsumingProvisioningRequest: %v", len(unschedulablePods))
 	}
 
 	// TODO(b/519117759): Clean-up this experiment after launch.
 	runScaleToZeroLate := p.experimentsManager.DirectLaunchBoolFlag(experiments.ScaleToZeroLateRunFlag)
 	if p.scaleToZeroProcessor != nil && !runScaleToZeroLate {
-		unschedulablePods, err = p.scaleToZeroProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.scaleToZeroProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -283,21 +285,21 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	unschedulablePodsBeforeFiltering := unschedulablePods
-	unschedulablePods, err = p.processAndObserve(p.defaultPodListerProcessor, context, unschedulablePods, metrics.NoActionNeeded)
+	unschedulablePods, err = p.processAndObserve(p.defaultPodListerProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 	if err != nil {
 		return []*apiv1.Pod{}, err
 	}
 	klog.Infof("Unschedulable pods count after filtering out schedulable: %v", len(unschedulablePods))
 
 	if p.flexAdvisorPodListProcessor != nil && registerFlexAdvisorLate {
-		_, err = p.flexAdvisorPodListProcessor.Process(context, unschedulablePods)
+		_, err = p.flexAdvisorPodListProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
 		}
 	}
 
 	if p.ccMinCapacityProcessor != nil {
-		unschedulablePods, err = p.ccMinCapacityProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.ccMinCapacityProcessor.Process(autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -309,7 +311,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 		// 1. Due to "ek-consilidation" plugin which will undo the work of lookahead buffer if it is not aware of schedulde LA pods.
 		// 2. If there is always unschedulable pods in defrag step, defrag will run only once per 5 minutes which will decrease its throughput.
 		// This is likely not needed in post-v1 of lookahead buffer (as ek-consilidation might get removed and adding LA pods might occur after defrag).
-		unschedulablePods, err = p.ekvmsProcessor.ScheduleLookaheadPods(context, unschedulablePods)
+		unschedulablePods, err = p.ekvmsProcessor.ScheduleLookaheadPods(autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Warningf("Failed to schedule lookahead pods: %v", err)
 		}
@@ -317,7 +319,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.ossProvReqPodsInjector != nil {
-		unschedulablePods, err = p.ossProvReqPodsInjector.Process(context, unschedulablePods)
+		unschedulablePods, err = p.ossProvReqPodsInjector.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Warningf("Failed to inject pods for provisioned OSS ProvReqs : %v", err)
 		}
@@ -325,12 +327,12 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.enforceFakePodsLimitProcessor != nil {
-		unschedulablePods, _ = p.enforceFakePodsLimitProcessor.Process(context, unschedulablePods)
+		unschedulablePods, _ = p.enforceFakePodsLimitProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		klog.Infof("Unschedulable pods count after enforce fake pod limit processor: %v", len(unschedulablePods))
 	}
 
 	if p.prProcessor != nil {
-		unschedulablePods, err = p.prProcessor.InjectProvisioningRequestPods(context, unschedulablePods)
+		unschedulablePods, err = p.prProcessor.InjectProvisioningRequestPods(autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -341,7 +343,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	// We capture defragPickedCandidate locally rather than querying defrag state inside downstream processors.
 	// This ensures proper execution order: if a downstream processor relying on this state were moved before defragProcessor, querying the processor directly would return the value in the previous loop which is incorrect. Handling it explicitly here makes the dependency clear and enforces the correct pipeline order.
 	if p.defragProcessor != nil {
-		defragPods, err := p.defragProcessor.Process(context, unschedulablePods)
+		defragPods, err := p.defragProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Defrag processor failed: %v", err)
 		} else {
@@ -352,7 +354,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.podTopologySpreadProcessor != nil {
-		unschedulablePods, err = p.podTopologySpreadProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.podTopologySpreadProcessor.Process(ctx, autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -361,7 +363,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 
 	if p.ekvmsProcessor != nil {
 		unschedulablePodsBeforeEkvmsProcessor := unschedulablePods
-		unschedulablePods, err = p.processAndObserve(p.ekvmsProcessor, context, unschedulablePods, metrics.EkUpsize)
+		unschedulablePods, err = p.processAndObserve(p.ekvmsProcessor, autoscalingCtx, unschedulablePods, metrics.EkUpsize)
 		unschedulablePodsAfterEkvmsProcessor := unschedulablePods
 		p.ekvmsProcessor.TrackUnschedulablePods(unschedulablePodsBeforeFiltering, unschedulablePodsBeforeEkvmsProcessor, unschedulablePodsAfterEkvmsProcessor)
 		if err != nil {
@@ -374,9 +376,9 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 		if defragPickedCandidate {
 			// If defrag picked a candidate, we don't want to consider any of the unschedulable pods in CSN as we don't want to resume a node that might be a worse candidate.
 			// We still run the processor (but without any unschedulable pods) to trigger consumption of chilling CSN nodes where Kubernetes Scheduler scheduled pods on.
-			_, err = p.csnBufferConsumptionProcessor.Process(context, nil)
+			_, err = p.csnBufferConsumptionProcessor.Process(context.TODO(), autoscalingCtx, nil)
 		} else {
-			unschedulablePods, err = p.csnBufferConsumptionProcessor.Process(context, unschedulablePods)
+			unschedulablePods, err = p.csnBufferConsumptionProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		}
 		if err != nil {
 			return []*apiv1.Pod{}, err
@@ -385,7 +387,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.csnCSNPodsLifecycleProcessor != nil {
-		unschedulablePods, err = p.csnCSNPodsLifecycleProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.csnCSNPodsLifecycleProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -393,14 +395,14 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.capacityBufferMetricsProcessor != nil {
-		err := p.capacityBufferMetricsProcessor.ProcessMetrics(context, unschedulablePods)
+		err := p.capacityBufferMetricsProcessor.ProcessMetrics(autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Failed to process capacity buffer metrics: %v", err)
 		}
 	}
 
 	if p.scaleToZeroProcessor != nil && runScaleToZeroLate {
-		unschedulablePods, err = p.scaleToZeroProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.scaleToZeroProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -408,7 +410,7 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	}
 
 	if p.podShardingProcessor != nil {
-		unschedulablePods, err = p.podShardingProcessor.Process(context, unschedulablePods)
+		unschedulablePods, err = p.podShardingProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -418,9 +420,9 @@ func (p *GkeInternalPodListProcessor) Process(context *context.AutoscalingContex
 	return unschedulablePods, nil
 }
 
-func (p *GkeInternalPodListProcessor) processAndObserve(processor pods.PodListProcessor, context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
+func (p *GkeInternalPodListProcessor) processAndObserve(processor pods.PodListProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
 
-	withoutSchedulable, err := processor.Process(context, unschedulablePods)
+	withoutSchedulable, err := processor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 	if err != nil {
 		return []*apiv1.Pod{}, err
 	}

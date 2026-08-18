@@ -16,6 +16,7 @@ package reservations
 
 import (
 	"container/heap"
+	"context"
 	"fmt"
 	"reflect"
 
@@ -50,20 +51,20 @@ func NewReservationBalancingProcessor(p nodegroupset.NodeGroupSetProcessor, pull
 }
 
 // FindSimilarNodeGroups returns a list of NodeGroups similar to the one provided in parameter.
-func (p *ReservationBalancingProcessor) FindSimilarNodeGroups(context *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
-	return p.NodeGroupSetProcessor.FindSimilarNodeGroups(context, nodeGroup, nodeInfosForGroups)
+func (p *ReservationBalancingProcessor) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+	return p.NodeGroupSetProcessor.FindSimilarNodeGroups(ctx, autoscalingCtx, nodeGroup, nodeInfosForGroups)
 }
 
 // BalanceScaleUpBetweenGroups adds new nodes to the node groups to match unused reservations.
 // New nodes are added to node groups attempting to balance the new sizes of node groups.
 // Any remaining nodes are passed to the underlying NodeGroupSetProcessor for further balancing.
-func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(context *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 
 	var scaleUpInfos []nodegroupset.ScaleUpInfo
 
 	pullerReservations := p.puller.GetReservations()
 	// Subtract resources from reservations that can be used by upcoming nodes.
-	reservations := p.consumeUpcomingScaleUps(context, pullerReservations)
+	reservations := p.consumeUpcomingScaleUps(autoscalingCtx, pullerReservations)
 
 	balancingInfos, err := p.createBalancingInfos(groups, reservations)
 	if err != nil {
@@ -76,11 +77,11 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(context *aut
 	if wrapErr != nil {
 		klog.Infof("Falling back to balancing logic, due to an error in reservation based balancer Err: %v", wrapErr)
 		// Ignore whatever balancing we've done so far, balance using original nodeGroups
-		return p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	if newNodes-addedNodes > 0 {
-		scaleUpInfos, err = p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, wrappedNodeGroups, newNodes-addedNodes)
+		scaleUpInfos, err = p.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, wrappedNodeGroups, newNodes-addedNodes)
 		if err != nil {
 			return nil, err
 		}
@@ -105,7 +106,7 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(context *aut
 func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovider.NodeGroup, reservations []*gce_api.Reservation) ([]*balancingInfo, auto_errors.AutoscalerError) {
 	var balancingInfos []*balancingInfo
 	for _, group := range groups {
-		currentSize, err := group.TargetSize()
+		currentSize, err := group.TargetSize(context.TODO())
 		if err != nil {
 			return nil, auto_errors.NewAutoscalerErrorf(auto_errors.CloudProviderError, "failed to get node group size: %v", err)
 		}
@@ -114,7 +115,7 @@ func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovi
 			Group:       group,
 			CurrentSize: currentSize,
 			NewSize:     currentSize,
-			MaxSize:     group.MaxSize(),
+			MaxSize:     group.MaxSize(context.TODO()),
 		}
 		matchingReservations := MatchingUnusedReservations(p.provider, group, reservations, p.localSSDDiskSizeProvider)
 		balancingInfos = append(balancingInfos, &balancingInfo{
@@ -200,7 +201,7 @@ func unwrapNodeGroups(scaleUpInfos []nodegroupset.ScaleUpInfo) ([]nodegroupset.S
 			return nil, fmt.Errorf("unexpected cloudprovider.NodeGroup type, got: %s, want: *nodeGroupWrapper", reflect.TypeOf(scaleUpInfo.Group))
 		}
 
-		targetSize, err := ng.GkeMig.TargetSize()
+		targetSize, err := ng.GkeMig.TargetSize(context.TODO())
 		if err != nil {
 			return nil, err
 		}
@@ -209,7 +210,7 @@ func unwrapNodeGroups(scaleUpInfos []nodegroupset.ScaleUpInfo) ([]nodegroupset.S
 			Group:       ng.GkeMig,
 			CurrentSize: targetSize,
 			NewSize:     scaleUpInfo.NewSize,
-			MaxSize:     ng.GkeMig.MaxSize(),
+			MaxSize:     ng.GkeMig.MaxSize(context.TODO()),
 		})
 	}
 	return unwrapped, nil
@@ -228,14 +229,14 @@ func (p *ReservationBalancingProcessor) consumeUpcomingScaleUps(context *autosca
 	return adjusted
 }
 
-func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(context *autoscaling_context.AutoscalingContext, reservations []*gce_api.Reservation) map[uint64]int {
+func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscalingCtx *autoscaling_context.AutoscalingContext, reservations []*gce_api.Reservation) map[uint64]int {
 	consumedReservations := make(map[uint64]int)
-	for _, ng := range context.CloudProvider.NodeGroups() {
+	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
 		gkeMig, ok := ng.(*gke.GkeMig)
 		if !ok || !gkeMig.IsUpcoming() {
 			continue
 		}
-		size, err := ng.TargetSize()
+		size, err := ng.TargetSize(context.TODO())
 		if err != nil && size <= 0 {
 			continue
 		}
@@ -371,7 +372,7 @@ type nodeGroupWrapper struct {
 	addedNodes int
 }
 
-func (n *nodeGroupWrapper) TargetSize() (int, error) {
-	size, err := n.GkeMig.TargetSize()
+func (n *nodeGroupWrapper) TargetSize(ctx context.Context) (int, error) {
+	size, err := n.GkeMig.TargetSize(ctx)
 	return size + n.addedNodes, err
 }

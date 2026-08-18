@@ -569,7 +569,7 @@ func TestPodStateObserver(t *testing.T) {
 					case deletePodEvent:
 						err = informerClientSet.CoreV1().Pods(e.pod.Namespace).Delete(context.TODO(), e.pod.Name, metav1.DeleteOptions{})
 					case scaleUpEvent:
-						psObserver.Process(&ca_context.AutoscalingContext{}, e.scaleUp)
+						psObserver.Process(context.TODO(), &ca_context.AutoscalingContext{}, e.scaleUp)
 					case timeoutEvent:
 						psObserver.reportTimeoutPods()
 					case cleanUpEvent:
@@ -839,7 +839,7 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 					case deletePodEvent:
 						err = informerClientSet.CoreV1().Pods(e.pod.Namespace).Delete(context.TODO(), e.pod.Name, metav1.DeleteOptions{})
 					case scaleUpEvent:
-						observer.Process(&ca_context.AutoscalingContext{}, e.scaleUp)
+						observer.Process(context.TODO(), &ca_context.AutoscalingContext{}, e.scaleUp)
 					case timeoutEvent:
 						observer.reportTimeoutPods()
 					case classifiedAsSchedulable:
@@ -1146,7 +1146,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 					case deletePodEvent:
 						err = informerClientSet.CoreV1().Pods(e.pod.Namespace).Delete(context.TODO(), e.pod.Name, metav1.DeleteOptions{})
 					case scaleUpEvent:
-						observer.Process(&ca_context.AutoscalingContext{}, e.scaleUp)
+						observer.Process(context.TODO(), &ca_context.AutoscalingContext{}, e.scaleUp)
 					case timeoutEvent:
 						observer.reportTimeoutPods()
 					case classifiedAsSchedulable:

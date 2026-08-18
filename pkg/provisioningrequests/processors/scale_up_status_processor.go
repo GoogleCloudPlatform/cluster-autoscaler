@@ -15,6 +15,8 @@
 package processors
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	klog "k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -30,7 +32,7 @@ func NewProvisioningRequestScaleUpStatusProcessor() *ProvisioningRequestScaleUpS
 }
 
 // Process updates scaleupStatus to remove all injected provreq pods from PodsRemainUnschedulable
-func (a *ProvisioningRequestScaleUpStatusProcessor) Process(_ *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (a *ProvisioningRequestScaleUpStatusProcessor) Process(ctx context.Context, _ *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	scaleUpStatus.PodsRemainUnschedulable = filterProvReqPods(scaleUpStatus.PodsRemainUnschedulable)
 }
 

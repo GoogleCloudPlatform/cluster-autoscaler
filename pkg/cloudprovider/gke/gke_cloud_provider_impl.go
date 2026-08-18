@@ -201,7 +201,7 @@ func (p *gkeCloudProviderImpl) UseAutoprovisioningFeaturesForNodeGroup(nodeGroup
 }
 
 // GPULabel returns the label added to nodes with GPU resource.
-func (p *gkeCloudProviderImpl) GPULabel() string {
+func (p *gkeCloudProviderImpl) GPULabel(ctx context.Context) string {
 	return gkelabels.GPULabel
 }
 
@@ -216,8 +216,8 @@ func (p *gkeCloudProviderImpl) IsE2lessRegion() bool {
 //
 // If GPU/TPU devices are exposed using DRA - extended resource won't be present in the
 // node alloctable or capacity so we overwrite extended resource name as it won't ever be there
-func (p *gkeCloudProviderImpl) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider.GpuConfig {
-	if gpuConfig := gpu.GetNodeGPUFromCloudProvider(p, node); gpuConfig != nil {
+func (p *gkeCloudProviderImpl) GetNodeGpuConfig(ctx context.Context, node *apiv1.Node) *cloudprovider.GpuConfig {
+	if gpuConfig := gpu.GetNodeGPUFromCloudProvider(ctx, p, node); gpuConfig != nil {
 		if dynamicresources.GpuDraDriverEnabled(node) {
 			gpuConfig.DraDriverName = dynamicresources.GpuDriver
 			gpuConfig.ExtendedResourceName = ""
@@ -242,7 +242,7 @@ func (p *gkeCloudProviderImpl) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider
 // Note: this method also returns TPUs and it is used to correctly retrieve the GPU/TPU labels for scale up metrics.
 // This method is a part of the OSS CloudProvider interface, so we can't just
 // inline it or return a concrete type.
-func (p *gkeCloudProviderImpl) GetAvailableGPUTypes() map[string]struct{} {
+func (p *gkeCloudProviderImpl) GetAvailableGPUTypes(ctx context.Context) map[string]struct{} {
 	gpus := p.machineConfigProvider.GetAllGpuTypes()
 	tpus := p.machineConfigProvider.GetAllSupportedTpuTypes()
 	result := make(map[string]struct{}, len(gpus)+len(tpus))
@@ -280,7 +280,7 @@ func (p *gkeCloudProviderImpl) GetExperimentsManager() experiments.Manager {
 }
 
 // Cleanup cleans up all resources before the cloud provider is removed
-func (p *gkeCloudProviderImpl) Cleanup() error {
+func (p *gkeCloudProviderImpl) Cleanup(ctx context.Context) error {
 	if err := p.gkeManager.Cleanup(); err != nil {
 		klog.Errorf("Error during cleanup: %v", err)
 		return err
@@ -294,7 +294,7 @@ func (p *gkeCloudProviderImpl) Name() string {
 }
 
 // NodeGroups returns all node groups configured for this cloud provider.
-func (p *gkeCloudProviderImpl) NodeGroups() []cloudprovider.NodeGroup {
+func (p *gkeCloudProviderImpl) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	migs := p.gkeManager.GetGkeMigs()
 	return toCloudProviderNodeGroups(migs)
 }
@@ -377,7 +377,7 @@ func (p *gkeCloudProviderImpl) SuspendInstances(migRef gce.GceRef, instances []g
 }
 
 // NodeGroupForNode returns the node group for the given node.
-func (p *gkeCloudProviderImpl) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (p *gkeCloudProviderImpl) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	ref, err := p.instanceRefForNode(node)
 	if err != nil {
 		return nil, err
@@ -444,7 +444,7 @@ func (p *gkeCloudProviderImpl) instanceRefFromNodeNameAndNodePool(nodeName strin
 // GkeMigForNode returns the MIG a given node belongs to. If the MIG is not autoscaled (and so shouldn't be processed by
 // Cluster Autoscaler), nil is returned instead.
 func (p *gkeCloudProviderImpl) GkeMigForNode(node *apiv1.Node) (*GkeMig, error) {
-	nodeGroup, err := p.NodeGroupForNode(node)
+	nodeGroup, err := p.NodeGroupForNode(context.TODO(), node)
 	if err != nil {
 		return nil, err
 	}
@@ -459,12 +459,12 @@ func (p *gkeCloudProviderImpl) GkeMigForNode(node *apiv1.Node) (*GkeMig, error) 
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.
-func (p *gkeCloudProviderImpl) Pricing() (cloudprovider.PricingModel, ca_errors.AutoscalerError) {
+func (p *gkeCloudProviderImpl) Pricing(ctx context.Context) (cloudprovider.PricingModel, ca_errors.AutoscalerError) {
 	return p.priceModel, nil
 }
 
 // GetAvailableMachineTypes get all machine types that can be requested from the cloud provider.
-func (p *gkeCloudProviderImpl) GetAvailableMachineTypes() ([]string, error) {
+func (p *gkeCloudProviderImpl) GetAvailableMachineTypes(ctx context.Context) ([]string, error) {
 	machineTypes := p.GetAutoprovisioningDefaultFamily().AutoprovisionedMachineTypes(machinetypes.NoConstraints)
 	var typeNames []string
 	for _, machineType := range machineTypes {
@@ -550,7 +550,7 @@ func GenerateRandomId(length int) string {
 // NewNodeGroup builds a theoretical node group based on the node definition provided. The node group is not automatically
 // created on the cloud provider side. The node group is not returned by NodeGroups() until it is created.
 // TODO(b/216616990): Move NewNodeGroup out of OSS CloudProvider.
-func (p *gkeCloudProviderImpl) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string,
+func (p *gkeCloudProviderImpl) NewNodeGroup(ctx context.Context, machineType string, labels map[string]string, systemLabels map[string]string,
 	taints []apiv1.Taint, extraResources map[string]resource.Quantity,
 ) (cloudprovider.NodeGroup, error) {
 	zone, found := systemLabels[apiv1.LabelZoneFailureDomain]
@@ -787,7 +787,7 @@ func cropMachineType(machineType string) string {
 }
 
 // GetResourceLimiter returns struct containing limits (max, min) for resources (cores, memory etc.).
-func (p *gkeCloudProviderImpl) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) {
+func (p *gkeCloudProviderImpl) GetResourceLimiter(ctx context.Context) (*cloudprovider.ResourceLimiter, error) {
 	resourceLimiter, err := p.gkeManager.GetResourceLimiter(p.NodeGroupForNode)
 	if err != nil {
 		return nil, err
@@ -800,7 +800,7 @@ func (p *gkeCloudProviderImpl) GetResourceLimiter() (*cloudprovider.ResourceLimi
 
 // Refresh is called before every main loop and can be used to dynamically update cloud provider state.
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
-func (p *gkeCloudProviderImpl) Refresh() error {
+func (p *gkeCloudProviderImpl) Refresh(ctx context.Context) error {
 	p.ClearRecommendations()
 	if changed := p.machineConfigProvider.Refresh(); changed {
 		p.gkePriceInfo.RefreshGkePrices()
@@ -945,7 +945,7 @@ func (p *gkeCloudProviderImpl) SendCapacityDecision(ctx context.Context, decisio
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider.
 // The method assumes that we only check existence of underlying when the node is marked for deletion.
 // See b/380440556 for additional context.
-func (p *gkeCloudProviderImpl) HasInstance(node *apiv1.Node) (bool, error) {
+func (p *gkeCloudProviderImpl) HasInstance(ctx context.Context, node *apiv1.Node) (bool, error) {
 	// This is a quick return to not use gce cache when node is not being deleted.
 	// Gce cache refreshes all MIG instances on miss, thus impacting CA performance.
 	// For a being-deleted node we want to check underlying instance. If CA makes assumptions only based on taint,
@@ -1210,7 +1210,7 @@ func (mig *GkeMig) IsAutopilot() bool {
 
 // Version returns corresponding node version.
 func (mig *GkeMig) Version() string {
-	if mig.Autoprovisioned() {
+	if mig.Autoprovisioned(context.TODO()) {
 		if mig.spec != nil && mig.spec.NodeVersion != "" {
 			return mig.spec.NodeVersion
 		}
@@ -1295,7 +1295,7 @@ func (mig *GkeMig) DiskSize() int64 {
 }
 
 // MaxSize returns the maximum number of nodes that this node group can have. It is the minimum of maxSize, totalMaxSize (if set), and the default MIG size of 2000.
-func (mig *GkeMig) MaxSize() int {
+func (mig *GkeMig) MaxSize(ctx context.Context) int {
 	if !mig.TotalSizeLimitEnabled() {
 		return min(mig.maxSize, gceLimitOnMigSizes)
 	}
@@ -1330,7 +1330,7 @@ func (mig *GkeMig) SetMaxPodsPerNode(mppn int64) error {
 }
 
 // MinSize returns minimum size of the node group.
-func (mig *GkeMig) MinSize() int {
+func (mig *GkeMig) MinSize(ctx context.Context) int {
 	bgInfo := mig.BlueGreenInfo()
 	if bgInfo != nil && bgInfo.IsAutoScaled && bgInfo.Color == BlueMig && bgInfo.Phase == gkeclient.PhaseWaitingToDrainBluePool {
 		// This is to allow scaling down the blue pool to zero nodes during the
@@ -1382,7 +1382,7 @@ func (mig *GkeMig) LocationPolicy() LocationPolicyEnum {
 
 // TargetSize returns the current TARGET size of the node group. It is possible that the
 // number is different from the number of nodes registered in Kubernetes.
-func (mig *GkeMig) TargetSize() (int, error) {
+func (mig *GkeMig) TargetSize(ctx context.Context) (int, error) {
 	upcoming := mig.IsUpcoming()
 	if !mig.exist && !upcoming {
 		return 0, nil
@@ -1461,7 +1461,7 @@ func increaseViaFlexResizeRequests(mig *GkeMig, delta int64) error {
 }
 
 // IncreaseSize increases Mig size
-func (mig *GkeMig) IncreaseSize(delta int) error {
+func (mig *GkeMig) IncreaseSize(ctx context.Context, delta int) error {
 	if err := mig.validateSizeIncrease(delta); err != nil {
 		return err
 	}
@@ -1544,8 +1544,8 @@ func (mig *GkeMig) validateSizeIncrease(delta int) error {
 		return err
 	}
 	desiredSize := int(size) + delta
-	if desiredSize > mig.MaxSize() {
-		return fmt.Errorf("size increase too large - desired:%d max:%d", desiredSize, mig.MaxSize())
+	if desiredSize > mig.MaxSize(context.TODO()) {
+		return fmt.Errorf("size increase too large - desired:%d max:%d", desiredSize, mig.MaxSize(context.TODO()))
 	}
 	return nil
 }
@@ -1577,7 +1577,7 @@ func (mig *GkeMig) ResizeRequests() ([]resizerequestclient.ResizeRequestStatus, 
 // DecreaseTargetSize decreases the target size of the node group. This function
 // doesn't permit to delete any existing node and can be used only to reduce the
 // request for new nodes that have not been yet fulfilled. Delta should be negative.
-func (mig *GkeMig) DecreaseTargetSize(delta int) error {
+func (mig *GkeMig) DecreaseTargetSize(ctx context.Context, delta int) error {
 	if delta >= 0 {
 		return fmt.Errorf("size decrease must be negative")
 	}
@@ -1654,7 +1654,7 @@ func (mig *GkeMig) NodePoolTargetSize() (int, error) {
 
 // TODO(b/517096955): Implement AtomicIncreaseSize
 // ref: https://github.com/kubernetes/autoscaler/commit/9cdced4cfd7a4aef9bdf23d56ee430085d13b57f
-func (mig *GkeMig) AtomicIncreaseSize(delta int) error {
+func (mig *GkeMig) AtomicIncreaseSize(ctx context.Context, delta int) error {
 	return cloudprovider.ErrNotImplemented
 }
 
@@ -1669,7 +1669,7 @@ func (mig *GkeMig) otherMigsTargetSize() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("could not get target size for nodepool (%s), got error: %w", mig.NodePoolName(), err)
 	}
-	migTargetSize, err := mig.TargetSize()
+	migTargetSize, err := mig.TargetSize(context.TODO())
 	if err != nil {
 		return 0, fmt.Errorf("could not get target size for mig (%s), got error: %w", mig.Id(), err)
 	}
@@ -1694,7 +1694,7 @@ func (err InvalidAtomicResizeError) Error() string {
 
 // ForceDeleteNodes deletes nodes from this node group, without checking for
 // constraints like minimal size validation etc.
-func (mig *GkeMig) ForceDeleteNodes(nodes []*apiv1.Node) error {
+func (mig *GkeMig) ForceDeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
 	refs := make([]gce.GceRef, 0, len(nodes))
 	for _, node := range nodes {
 		belongs, err := mig.Belongs(node)
@@ -1714,18 +1714,18 @@ func (mig *GkeMig) ForceDeleteNodes(nodes []*apiv1.Node) error {
 }
 
 // DeleteNodes deletes the nodes from the group.
-func (mig *GkeMig) DeleteNodes(nodes []*apiv1.Node) error {
+func (mig *GkeMig) DeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
 	size, err := mig.gkeManager.GetMigSize(mig)
 	if err != nil {
 		return err
 	}
-	if int(size) <= mig.MinSize() {
+	if int(size) <= mig.MinSize(context.TODO()) {
 		return MinSizeReachedError{}
 	}
 	if mig.ResizeAtomically() && int(size) != len(nodes) {
 		klog.Infof("Scaling down partially healthy atomic node group with %d nodes (vs desired size %d)", len(nodes), size)
 	}
-	return mig.ForceDeleteNodes(nodes)
+	return mig.ForceDeleteNodes(context.TODO(), nodes)
 }
 
 // Id returns mig url.
@@ -1738,13 +1738,13 @@ func (mig *GkeMig) Id() string {
 }
 
 // Debug returns a debug string for the Mig.
-func (mig *GkeMig) Debug() string {
-	return fmt.Sprintf("%s (%d:%d)", mig.Id(), mig.MinSize(), mig.MaxSize())
+func (mig *GkeMig) Debug(ctx context.Context) string {
+	return fmt.Sprintf("%s (%d:%d)", mig.Id(), mig.MinSize(context.TODO()), mig.MaxSize(context.TODO()))
 }
 
 // Nodes returns a list of all nodes that belong to this node group.
-func (mig *GkeMig) Nodes() ([]cloudprovider.Instance, error) {
-	if !mig.Exist() {
+func (mig *GkeMig) Nodes(ctx context.Context) ([]cloudprovider.Instance, error) {
+	if !mig.Exist(context.TODO()) {
 		// GetMigNodes() also returns an empty list for upcoming and injected nodes.
 		// Check here to prevent a case with a race condition during instance cache refresh for upcoming MIGs that were created in the meantime.
 		return nil, nil
@@ -1762,12 +1762,12 @@ func (mig *GkeMig) Nodes() ([]cloudprovider.Instance, error) {
 
 // Exist checks if the node group really exists on the cloud provider side. Allows to tell the
 // theoretical node group from the real one.
-func (mig *GkeMig) Exist() bool {
+func (mig *GkeMig) Exist(ctx context.Context) bool {
 	return mig.exist
 }
 
 // Create is not implemented. Use AutoprovisionedCreate instead.
-func (mig *GkeMig) Create() (cloudprovider.NodeGroup, error) {
+func (mig *GkeMig) Create(ctx context.Context) (cloudprovider.NodeGroup, error) {
 	return nil, fmt.Errorf("Not implemented. Use AutoprovisionedCreate")
 }
 
@@ -1835,7 +1835,7 @@ func convertMigsToAutoprovisioning(migs []*GkeMig) []nap_interfaces.Autoprovisio
 
 // Delete deletes the node group on the cloud provider side.
 // This will be executed only for autoprovisioned node groups, once their size drops to 0.
-func (mig *GkeMig) Delete() error {
+func (mig *GkeMig) Delete(ctx context.Context) error {
 	if err := validateForDeletion(mig); err != nil {
 		return err
 	}
@@ -1860,13 +1860,13 @@ func validateForDeletion(mig *GkeMig) error {
 }
 
 // Autoprovisioned returns true if the node group is autoprovisioned.
-func (mig *GkeMig) Autoprovisioned() bool {
+func (mig *GkeMig) Autoprovisioned(ctx context.Context) bool {
 	return mig.autoprovisioned
 }
 
 // GetInstanceLimit returns the mig's instance limit. See https://cloud.google.com/compute/docs/instance-groups/add-remove-vms-in-mig#increase_the_groups_size_limit.
 func (mig *GkeMig) GetInstanceLimit() int {
-	if !mig.Exist() {
+	if !mig.Exist(context.TODO()) {
 		// MIGs are paginated by default. Controlled by ListManagedInstanceEnablePaginationExperiment
 		return gceclient.PaginatedMigInstanceLimit
 	}
@@ -1915,7 +1915,7 @@ func (mig *GkeMig) getMaxNodeProvisionTime(defaultValue time.Duration) time.Dura
 
 // GetOptions returns NodeGroupAutoscalingOptions that should be used for this particular
 // NodeGroup. Returning a nil will result in using default options.
-func (mig *GkeMig) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+func (mig *GkeMig) GetOptions(ctx context.Context, defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
 	opts := defaults
 
 	opts.MaxNodeProvisionTime = mig.getMaxNodeProvisionTime(opts.MaxNodeProvisionTime)
@@ -1958,7 +1958,7 @@ func (mig *GkeMig) TemplateNodeLabels() (map[string]string, error) {
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (mig *GkeMig) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (mig *GkeMig) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	return mig.gkeManager.GetMigTemplateNodeInfo(mig)
 }
 

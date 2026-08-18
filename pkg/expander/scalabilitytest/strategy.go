@@ -15,6 +15,8 @@
 package scalabilitytest
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -32,9 +34,9 @@ type scalabilityTestStrategy struct {
 
 // BestOption chooses an arbitrary option with the preferred instance type, falling back to originalStrategy result if
 // there are no such options.
-func (s *scalabilityTestStrategy) BestOption(options []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
+func (s *scalabilityTestStrategy) BestOption(ctx context.Context, options []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
 	// Include original strategy computation to test for any regressions.
-	originalResult := s.originalStrategy.BestOption(options, nodeInfos)
+	originalResult := s.originalStrategy.BestOption(ctx, options, nodeInfos)
 
 	// Choose an arbitrary option with the preferred instance type.
 	for _, option := range options {
@@ -59,9 +61,9 @@ func (s *scalabilityTestStrategy) BestOption(options []expander.Option, nodeInfo
 
 // BestOptions narrows down the list of expansion options to a subset which is equally good as far a given expander is concerned.
 // In case of scalability-test expander, there's only a single winning option.
-func (s *scalabilityTestStrategy) BestOptions(expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
+func (s *scalabilityTestStrategy) BestOptions(ctx context.Context, expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
 	opts := make([]expander.Option, 0, 1)
-	best := s.BestOption(expansionOptions, nodeInfos)
+	best := s.BestOption(ctx, expansionOptions, nodeInfos)
 	if best != nil {
 		opts = append(opts, *best)
 	}

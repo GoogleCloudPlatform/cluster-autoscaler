@@ -15,6 +15,7 @@
 package locationpolicy
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -29,7 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	ca_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -276,7 +277,7 @@ func TestLocationPolicyProcessor(t *testing.T) {
 			}
 
 			processor := NewProcessor(mockProcessor, provider, balancers, experiments.NewMockManager(tc.enabledExperimentFlags...), false, nil, nil)
-			scaleUpInfo, err := processor.BalanceScaleUpBetweenGroups(&context.AutoscalingContext{ProvisioningRequestScaleUpMode: tc.provisioningRequestScaleUpMode}, nodeGroups, tc.newNodes)
+			scaleUpInfo, err := processor.BalanceScaleUpBetweenGroups(context.TODO(), &ca_context.AutoscalingContext{ProvisioningRequestScaleUpMode: tc.provisioningRequestScaleUpMode}, nodeGroups, tc.newNodes)
 
 			for _, balancer := range tc.balancers {
 				balancer.AssertExpectations(t)
@@ -316,13 +317,13 @@ type nodeGroupSetProcessorMock struct {
 }
 
 // FindSimilarNodeGroups is a mocked method of the NodeGroupSetProcessor interface.
-func (m *nodeGroupSetProcessorMock) FindSimilarNodeGroups(_ *context.AutoscalingContext, _ cloudprovider.NodeGroup, _ map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, ca_errors.AutoscalerError) {
+func (m *nodeGroupSetProcessorMock) FindSimilarNodeGroups(ctx context.Context, _ *ca_context.AutoscalingContext, _ cloudprovider.NodeGroup, _ map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, ca_errors.AutoscalerError) {
 	return nil, nil
 }
 
 // BalanceScaleUpBetweenGroups is a mocked method of the NodeGroupSetProcessor interface.
-func (m *nodeGroupSetProcessorMock) BalanceScaleUpBetweenGroups(context *context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, ca_errors.AutoscalerError) {
-	args := m.Called(context, groups, newNodes)
+func (m *nodeGroupSetProcessorMock) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, ca_errors.AutoscalerError) {
+	args := m.Called(ctx, autoscalingCtx, groups, newNodes)
 	var result []nodegroupset.ScaleUpInfo
 	var err ca_errors.AutoscalerError
 

@@ -15,6 +15,7 @@
 package gkeprice
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -92,8 +93,8 @@ func NewGroupingClusterAnalyzer(cloudProvider cloudprovider.CloudProvider, nodeL
 // Analyze creates ClusterAnalysis object based on snapshot of the cluster state
 func (ca *groupingClusterAnalyzer) Analyze(nodeInfos map[string]*framework.NodeInfo) (ClusterAnalysis, error) {
 	workloadCapacity := make(map[string]Resource)
-	for _, nodeGroup := range ca.cloudProvider.NodeGroups() {
-		targetSize, err := nodeGroup.TargetSize()
+	for _, nodeGroup := range ca.cloudProvider.NodeGroups(context.TODO()) {
+		targetSize, err := nodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Failed to get target size for %v: %v", nodeGroup.Id(), err)
 			continue

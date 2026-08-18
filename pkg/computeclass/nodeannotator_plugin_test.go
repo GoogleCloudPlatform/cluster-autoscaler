@@ -15,6 +15,7 @@
 package computeclass
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -51,7 +52,7 @@ type mockAnnotationCloudProvider struct {
 	mock.Mock
 }
 
-func (m *mockAnnotationCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (m *mockAnnotationCloudProvider) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	args := m.Called(node)
 	if ngArg := args.Get(0); ngArg != nil {
 		return ngArg.(cloudprovider.NodeGroup), args.Error(1)

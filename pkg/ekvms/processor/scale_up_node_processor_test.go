@@ -853,7 +853,7 @@ func TestProcess(t *testing.T) {
 				cp := &gke.GkeCloudProviderMock{}
 				cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 				p := NewScaleUpNodeProcessor(cp, manager, calculator, metrics, nil, cccLister, nil)
-				unschedulable, err := p.Process(autoscalingCtx, tc.unschedulable)
+				unschedulable, err := p.Process(context.TODO(), autoscalingCtx, tc.unschedulable)
 				assert.NoError(t, err)
 
 				verifyResults(t, tc, snapshot, unschedulable, metrics, family)

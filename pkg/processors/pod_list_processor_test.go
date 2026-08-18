@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -33,7 +34,7 @@ type mockScaleToZeroProcessor struct {
 	called bool
 }
 
-func (m *mockScaleToZeroProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockScaleToZeroProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
 	return unschedulablePods, nil
 }
@@ -52,7 +53,7 @@ type mockDefaultPodListProcessor struct {
 	scaleToZero             *mockScaleToZeroProcessor
 }
 
-func (m *mockDefaultPodListProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockDefaultPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
 	if m.scaleToZero != nil {
 		m.scaleToZeroCalledBefore = m.scaleToZero.called
@@ -97,7 +98,7 @@ func TestScaleToZeroLateRun(t *testing.T) {
 				podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
 			}
 
-			processor.Process(&context.AutoscalingContext{}, []*v1.Pod{})
+			processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, []*v1.Pod{})
 
 			if !scaleToZero.called {
 				t.Errorf("Expected scaleToZeroProcessor to be called")
@@ -121,7 +122,7 @@ type mockDefragProcessor struct {
 	err             error
 }
 
-func (m *mockDefragProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockDefragProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
 	if !m.pickedCandidate {
 		return unschedulablePods, m.err
@@ -148,7 +149,7 @@ type mockCSNBufferConsumptionProcessor struct {
 	err          error
 }
 
-func (m *mockCSNBufferConsumptionProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockCSNBufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
 	m.receivedPods = unschedulablePods
 	if m.podsToReturn != nil {
@@ -239,7 +240,7 @@ func TestDefragAndCSNBufferConsumptionInPodListProcessor(t *testing.T) {
 				experimentsManager:            experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
 			}
 
-			res, err := processor.Process(&context.AutoscalingContext{}, initialPods)
+			res, err := processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, initialPods)
 			if (err != nil) != tc.expectErr {
 				t.Fatalf("Expected error: %v, got: %v", tc.expectErr, err)
 			}

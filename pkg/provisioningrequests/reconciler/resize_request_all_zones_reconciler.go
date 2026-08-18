@@ -72,7 +72,7 @@ func (r *resizeRequestReconciler) updateObtainabilityStrategyProvisioningRequest
 		return false, fmt.Errorf("failed to modify the Provisioning Request: %w", err)
 	}
 	if shouldUpdate {
-		_, err = r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest)
+		_, err = r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 		if err == nil && selectedRR != nil {
 			// We overwrite scale down immunity as the last step only after a successful update of the Provisioning Request.
 			// In case of failed ProvReq update, we want to avoid removing scale down immunity from some zones,

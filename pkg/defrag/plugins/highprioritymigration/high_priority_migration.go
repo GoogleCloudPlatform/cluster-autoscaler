@@ -15,6 +15,7 @@
 package highprioritymigration
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -28,7 +29,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 )
@@ -63,7 +64,7 @@ func (p *plugin) String() string {
 	return PluginName
 }
 
-func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	if !p.isListerValid() {
 		// Not crucial, since it might be expected behaviour
 		// But it might be an important log for debugging
@@ -127,7 +128,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 	return defrag.NewCandidateWithLimit(candidateNodes, defrag.Partial, p.config.MaxCandidateNodeCount)
 }
 
-func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
+func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
 	if !p.isListerValid() {
 		klog.V(2).Infof("Defrag %s: npc crd lister is nil. NPCs / CCCs might be disabled", p.String())
 		return nil
@@ -156,7 +157,7 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 
 // IsExpansionOptionValid returns true in case of any errors encountered,
 // since there's no way to validate the expansion.
-func (p *plugin) IsExpansionOptionValid(ctx *context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
+func (p *plugin) IsExpansionOptionValid(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate, option expander.Option) bool {
 	if !p.isListerValid() {
 		klog.V(2).Infof("Rejecting expansion option, npc crd lister is nil. NPCs / CCCs might be disabled")
 		return false
@@ -203,7 +204,7 @@ func (p *plugin) priorityGroupIndex(group cloudprovider.NodeGroup, crd crd.CRD) 
 	return math.MaxInt
 }
 
-func (p *plugin) BackoffDuration(_ *context.AutoscalingContext, _ *defrag.Candidate) time.Duration {
+func (p *plugin) BackoffDuration(_ *ca_context.AutoscalingContext, _ *defrag.Candidate) time.Duration {
 	return 5 * time.Minute
 }
 
@@ -225,13 +226,13 @@ func (p *plugin) isListerValid() bool {
 // A (nil, nil, nil) tuple is also sometimes returned for expected behaviours:
 // - Found nil npc crd  but didn't encounter an error - e.g. in case of implicit default ccc crd
 // - OptimizeRulePriority is set to false
-func (p *plugin) getNodeGroupAndMatchingNpcCrd(ctx *context.AutoscalingContext, nodeName string) (cloudprovider.NodeGroup, crd.CRD, error) {
+func (p *plugin) getNodeGroupAndMatchingNpcCrd(ctx *ca_context.AutoscalingContext, nodeName string) (cloudprovider.NodeGroup, crd.CRD, error) {
 	nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get node info for node %v: %w", nodeName, err)
 	}
 
-	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(nodeInfo.Node())
+	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), nodeInfo.Node())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get node group for node %v: %v", nodeName, err)
 	}

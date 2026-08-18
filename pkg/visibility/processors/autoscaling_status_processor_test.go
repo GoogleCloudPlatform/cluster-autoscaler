@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"testing"
@@ -41,7 +42,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	nodegroupchange "sigs.k8s.io/cluster-autoscaler/pkg/observers/nodegroupchange"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupconfig"
@@ -91,7 +92,7 @@ func assertResultsEventsEqual(t *testing.T, expectedEvent, event *vispb.Autoscal
 
 func TestProcessClusterStatusEvent(t *testing.T) {
 	now := time.Date(2000, 1, 1, 10, 10, 10, 0, time.UTC)
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider: testprovider.NewTestCloudProviderBuilder().Build(),
 	}
 
@@ -281,7 +282,7 @@ func TestProcessScaleUpFailures(t *testing.T) {
 	now := time.Date(2000, 1, 1, 10, 10, 10, 0, time.UTC)
 
 	csr := newMockVisibilityClusterStateRegistry()
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider: gke.NewTestAutoprovisioningCloudProviderBuilder().Build(),
 	}
 	csr.scaleUpFailures = map[string][]scaleupfailures.Record{
@@ -337,7 +338,7 @@ func TestStatusEventThrottling(t *testing.T) {
 	now := time.Date(2000, 1, 1, 10, 10, 10, 0, time.UTC)
 
 	provider := testprovider.NewTestCloudProviderBuilder().Build()
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider: provider,
 	}
 	logger := new(visibility.MockEventLogger)
@@ -350,54 +351,54 @@ func TestStatusEventThrottling(t *testing.T) {
 	provider.AddNodeGroup("ng", 1, 10, 5)
 	provider.AddNode("ng", node)
 	customResourcesProcessor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	customResourcesProcessor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	customResourcesProcessor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	csr := clusterstate.NewClusterStateRegistry(provider, nil, backoff.NewGkeBackoff(backoff.Config{CustomResourceProcessor: customResourcesProcessor}), nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{}), nil, clusterstate.WithAsyncNodeGroupStateChecker(asyncnodegroups.NewDefaultAsyncNodeGroupStateChecker()), clusterstate.WithScaleStateNotifier(nodegroupchange.NewNodeGroupChangeObserversList()))
-	err := csr.UpdateNodes([]*apiv1.Node{node}, now)
+	err := csr.UpdateNodes(context.TODO(), []*apiv1.Node{node}, now)
 	assert.NoError(t, err)
 
 	// Target size is 5, actual size is 1, this is the first call - event should be logged.
 	logger.On("LogEventWithDefaults", mock.Anything).Return(nil).Once()
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	// The sizes didn't change, this a second call but below the staleness threshold - event shouldn't be logged.
 	now = now.Add(visibility.StatusEventsStalenessThreshold - time.Second)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	// The sizes didn't change, but the call is after the staleness threshold - event should be logged.
 	logger.On("LogEventWithDefaults", mock.Anything).Return(nil).Once()
 	now = now.Add(2 * time.Second)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	// The call is before the staleness threshold, but the actual size changed from 1 to 2 - event should be logged.
 	logger.On("LogEventWithDefaults", mock.Anything).Return(nil).Once()
 	now = now.Add(visibility.StatusEventsStalenessThreshold - 2*time.Second)
-	err = csr.UpdateNodes([]*apiv1.Node{node, node}, now)
+	err = csr.UpdateNodes(context.TODO(), []*apiv1.Node{node, node}, now)
 	assert.NoError(t, err)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	// The call is before the staleness threshold, but the target size changed from 5 to 7 - event should be logged.
 	logger.On("LogEventWithDefaults", mock.Anything).Return(nil).Once()
 	provider.AddNodeGroup("ng2", 1, 10, 2)
-	err = csr.UpdateNodes([]*apiv1.Node{node, node}, now)
+	err = csr.UpdateNodes(context.TODO(), []*apiv1.Node{node, node}, now)
 	assert.NoError(t, err)
 	now = now.Add(visibility.StatusEventsStalenessThreshold - time.Second)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	// The first call is after the staleness threshold, but the call to the logger failed - so the next call should log the event even
 	// if it's before the staleness threshold.
 	logger.On("LogEventWithDefaults", mock.Anything).Return(fmt.Errorf("this is expected")).Once()
 	now = now.Add(visibility.StatusEventsStalenessThreshold + time.Second)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	logger.On("LogEventWithDefaults", mock.Anything).Return(nil).Once()
 	now = now.Add(visibility.StatusEventsStalenessThreshold - time.Second)
-	err = processor.Process(ctx, csr, now)
+	err = processor.Process(context.TODO(), ctx, csr, now)
 	assert.NoError(t, err)
 
 	logger.AssertExpectations(t)
@@ -555,8 +556,8 @@ func TestFailedScaleUpPodEvents(t *testing.T) {
 				fakeProvider.InsertNodeGroup(g)
 				fmt.Printf("Adding ng %v\n", g.Id())
 			}
-			ctx := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					Recorder: fakeRecorder,
 				},
 				CloudProvider: fakeProvider,

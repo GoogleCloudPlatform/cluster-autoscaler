@@ -15,8 +15,11 @@
 package tpu
 
 import (
+	"context"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -29,7 +32,7 @@ type TpuResource struct {
 }
 
 func getTpuFromTemplate(nodeGroup cloudprovider.NodeGroup) (TpuResource, bool, errors.AutoscalerError) {
-	template, err := nodeGroup.TemplateNodeInfo()
+	template, err := nodeGroup.TemplateNodeInfo(context.TODO())
 	if err != nil {
 		klog.Errorf("Failed to build template for getting TPU estimation for node group %v: %v", nodeGroup.Id(), err)
 		return TpuResource{}, false, errors.ToAutoscalerError(errors.CloudProviderError, err)

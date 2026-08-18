@@ -15,6 +15,7 @@
 package nodeinfosprovider
 
 import (
+	"context"
 	"reflect"
 	"time"
 
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -53,8 +54,8 @@ func NewAugmentingNodeInfoProvider(
 }
 
 // Process returns augmented nodeInfos returned by basic provider
-func (p *AugmentingNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
-	nodeInfos, err := p.provider.Process(ctx, nodes, daemonsets, taintConfig, now)
+func (p *AugmentingNodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+	nodeInfos, err := p.provider.Process(ctx, autoscalingCtx, nodes, daemonsets, taintConfig, now)
 	if err != nil {
 		return nodeInfos, err
 	}
@@ -63,14 +64,14 @@ func (p *AugmentingNodeInfoProvider) Process(ctx *context.AutoscalingContext, no
 	}
 
 	if p.nodePoolUpdatesEnabled {
-		nodeInfos = HandleNodePoolUpdates(ctx, nodeInfos, taintConfig)
+		nodeInfos = HandleNodePoolUpdates(autoscalingCtx, nodeInfos, taintConfig)
 	}
 
-	nodeInfos, err = UpdateNodeInfosWithinNodePools(ctx, nodeInfos)
+	nodeInfos, err = UpdateNodeInfosWithinNodePools(autoscalingCtx, nodeInfos)
 	if err == nil {
-		p.coreDistributionMetrics.UpdateMetrics(ctx, nodeInfos)
+		p.coreDistributionMetrics.UpdateMetrics(autoscalingCtx, nodeInfos)
 	}
-	logLeakedNodesFromUnInitializedUpcomingNodeGroups(ctx, nodes)
+	logLeakedNodesFromUnInitializedUpcomingNodeGroups(autoscalingCtx, nodes)
 	return nodeInfos, err
 }
 
@@ -87,12 +88,12 @@ func (p *AugmentingNodeInfoProvider) CleanUp() {
 // To reach this state node must be created during scale-up request or right after (<1ms).
 // Theoretically this situation may happen but in practice it should not be possible.
 // TODO(b/342321627): Remove this function when proven it's not a problem.
-func logLeakedNodesFromUnInitializedUpcomingNodeGroups(ctx *context.AutoscalingContext, nodes []*apiv1.Node) {
+func logLeakedNodesFromUnInitializedUpcomingNodeGroups(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) {
 	if !ctx.AsyncNodeGroupsEnabled {
 		return
 	}
 	for _, node := range nodes {
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 		if err != nil || nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
 			continue
 		}

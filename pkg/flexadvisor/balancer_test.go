@@ -15,6 +15,7 @@
 package flexadvisor
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -561,7 +562,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			}
 
 			balancer := NewScaleUpBalancer(fallbackBalancers, mockProvider, mockLister, experimentsManager, false)
-			got, gotErr := balancer.BalanceScaleUpBetweenGroups(nil, tc.groups, tc.newNodes)
+			got, gotErr := balancer.BalanceScaleUpBetweenGroups(context.TODO(), nil, tc.groups, tc.newNodes)
 
 			assert.Equal(t, len(tc.wantScaleUpInfos), len(got))
 			assert.ElementsMatch(t, got, tc.wantScaleUpInfos)
@@ -1040,7 +1041,7 @@ func TestBalanceScaleUpBetweenGroups_Recommendation(t *testing.T) {
 	}, nil)
 
 	balancer := NewScaleUpBalancer(nil, mockProvider, mockLister, experimentsManager, false)
-	got, err := balancer.BalanceScaleUpBetweenGroups(nil, []cloudprovider.NodeGroup{mig}, 50)
+	got, err := balancer.BalanceScaleUpBetweenGroups(context.Background(), nil, []cloudprovider.NodeGroup{mig}, 50)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(got))

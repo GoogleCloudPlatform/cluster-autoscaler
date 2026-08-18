@@ -15,6 +15,7 @@
 package initialization
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -253,18 +254,18 @@ func TestRecoverPendingScaleUps(t *testing.T) {
 				}),
 				clusterstate.WithScaleStateNotifier(nodegroupchange.NewNodeGroupChangeObserversList()),
 			)
-			context := &ca_context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				ClusterStateRegistry: clusterStateRegistry,
 			}
 
 			// UpdateNodes in the cluster state registry
-			err := clusterStateRegistry.UpdateNodes(nodes, now)
+			err := clusterStateRegistry.UpdateNodes(context.TODO(), nodes, now)
 			if err != nil {
 				t.Fatalf("clusterStateRegistry.UpdateNodes(%v, nil, %v) returned error: %v", nodes, now, err)
 			}
 
 			// Run the Recovery
-			gotFunc := RecoverPendingScaleUps(context, provider)
+			gotFunc := RecoverPendingScaleUps(autoscalingCtx, provider)
 			if gotFunc == nil {
 				t.Fatalf("RecoverPendingScaleUps() returned nil")
 			}
@@ -276,7 +277,7 @@ func TestRecoverPendingScaleUps(t *testing.T) {
 			// Compare expected scale-ups
 			for i, mig := range gkeMigs {
 				wantIsScalingUp := tt.migTemplates[i].wantIsScalingUp
-				gotIsScalingUp := clusterStateRegistry.IsNodeGroupScalingUp(mig.Id())
+				gotIsScalingUp := clusterStateRegistry.IsNodeGroupScalingUp(context.TODO(), mig.Id())
 				// TODO(b/290035119): also verify the timestamp of the scale-up
 				if gotIsScalingUp != wantIsScalingUp {
 					t.Errorf("IsNodeGroupScalingUp(%q) returned %t, but want %t", mig.Id(), gotIsScalingUp, wantIsScalingUp)

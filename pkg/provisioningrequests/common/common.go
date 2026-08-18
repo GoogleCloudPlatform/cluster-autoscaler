@@ -14,13 +14,17 @@
 
 package common
 
-import "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+import (
+	"context"
+
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+)
 
 // A GkeMig wrapper used to avoid import cycles.
 type GkeMigWrapper interface {
 	NodePoolName() string
 	Spec() *gkeclient.NodePoolSpec
-	IncreaseSize(delta int) error
+	IncreaseSize(ctx context.Context, delta int) error
 	UpdateNodePoolLabels(labels map[string]string) error
 }
 
@@ -40,7 +44,7 @@ func (mig *FakeGkeMigWrapper) NodePoolName() string {
 func (mig *FakeGkeMigWrapper) Spec() *gkeclient.NodePoolSpec {
 	return mig.PoolSpec
 }
-func (mig *FakeGkeMigWrapper) IncreaseSize(delta int) error {
+func (mig *FakeGkeMigWrapper) IncreaseSize(ctx context.Context, delta int) error {
 	return mig.IncreaseSizeError
 }
 func (mig *FakeGkeMigWrapper) UpdateNodePoolLabels(labels map[string]string) error {

@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -43,13 +44,13 @@ func NewTotalMaxSizeProcessor(p nodegroupset.NodeGroupSetProcessor) *TotalMaxSiz
 }
 
 // FindSimilarNodeGroups returns a list of NodeGroups similar to the one provided in parameter.
-func (s *TotalMaxSizeProcessor) FindSimilarNodeGroups(context *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
-	return s.NodeGroupSetProcessor.FindSimilarNodeGroups(context, nodeGroup, nodeInfosForGroups)
+func (s *TotalMaxSizeProcessor) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+	return s.NodeGroupSetProcessor.FindSimilarNodeGroups(ctx, autoscalingCtx, nodeGroup, nodeInfosForGroups)
 }
 
 // BalanceScaleUpBetweenGroups enforces the total max size limit and runs the
 // wrapped Processor.
-func (s *TotalMaxSizeProcessor) BalanceScaleUpBetweenGroups(context *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+func (s *TotalMaxSizeProcessor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 	newNodes, err := s.enforceTotalMaxSizeLimit(groups, newNodes)
 	if err != nil {
 		return nil, auto_errors.NewAutoscalerErrorf(auto_errors.InternalError, "received error while enforcing total max size: %v", err)
@@ -58,7 +59,7 @@ func (s *TotalMaxSizeProcessor) BalanceScaleUpBetweenGroups(context *autoscaling
 		return []nodegroupset.ScaleUpInfo{}, nil
 	}
 
-	return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+	return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 }
 
 func (s *TotalMaxSizeProcessor) enforceTotalMaxSizeLimit(groups []cloudprovider.NodeGroup, newNodes int) (int, error) {

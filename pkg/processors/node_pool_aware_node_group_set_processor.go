@@ -15,9 +15,11 @@
 package processors
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -36,12 +38,12 @@ func NewNodePoolAwareNodeGroupSetProcessor(nodeGroupSetProcessor nodegroupset.No
 }
 
 // FindSimilarNodeGroups returns all other nodegroups from the nodepool of the given nodegroup.
-func (p *nodePoolAwareNodeGroupSetProcessor) FindSimilarNodeGroups(context *context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
+func (p *nodePoolAwareNodeGroupSetProcessor) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, errors.AutoscalerError) {
 	result, found := p.otherNodePoolMigs(nodeGroup)
 	if found {
 		return result, nil
 	}
-	return p.nodeGroupSetProcessor.FindSimilarNodeGroups(context, nodeGroup, nodeInfosForGroups)
+	return p.nodeGroupSetProcessor.FindSimilarNodeGroups(ctx, autoscalingCtx, nodeGroup, nodeInfosForGroups)
 }
 
 // otherNodePoolMigs checks if the provided node group is a GkeMig and if so,
@@ -71,8 +73,8 @@ func (p *nodePoolAwareNodeGroupSetProcessor) otherNodePoolMigs(nodeGroup cloudpr
 	return otherMigs, true
 }
 
-func (p *nodePoolAwareNodeGroupSetProcessor) BalanceScaleUpBetweenGroups(context *context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, errors.AutoscalerError) {
-	return p.nodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+func (p *nodePoolAwareNodeGroupSetProcessor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, errors.AutoscalerError) {
+	return p.nodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 }
 
 func (p *nodePoolAwareNodeGroupSetProcessor) CleanUp() {

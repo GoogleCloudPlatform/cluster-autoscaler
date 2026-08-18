@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -24,15 +25,21 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
+
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
+
 	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
+
 	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
+
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -217,15 +224,15 @@ func TestPodListProcessor(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			clusterSnapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			autoscalingContext := &context.AutoscalingContext{
+			autoscalingContext := &ca_context.AutoscalingContext{
 				ClusterSnapshot: clusterSnapshot,
 			}
 
-			err := clusterSnapshot.SetClusterState(tc.state.nodes, tc.state.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err := clusterSnapshot.SetClusterState(context.TODO(), tc.state.nodes, tc.state.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
 
 			podListProcessor, fakeClient := newPodListProcessorForTesting(t, tc.state.capacityRequests)
-			gotUnschedulablePods, err := podListProcessor.Process(autoscalingContext, tc.state.unschedulablePods)
+			gotUnschedulablePods, err := podListProcessor.Process(context.TODO(), autoscalingContext, tc.state.unschedulablePods)
 			assert.NoError(t, err)
 
 			gotAllScheduled, err := getAllPodsFromSnapshot(clusterSnapshot)
@@ -271,7 +278,7 @@ func TestPodListProcessorSubsequentRuns(t *testing.T) {
 	cr80 := utils.BuildTestCr("cr80", "80m", "0", []cr_types.CapacityRequestConditionType{})
 	testCases := []struct {
 		caseName           string
-		autoscalingContext *context.AutoscalingContext
+		autoscalingContext *ca_context.AutoscalingContext
 		firstState         commonState
 		secondState        commonState
 		verifySameNode     map[string]bool
@@ -362,15 +369,15 @@ func TestPodListProcessorSubsequentRuns(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			clusterSnapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			autoscalingContext := &context.AutoscalingContext{
+			autoscalingContext := &ca_context.AutoscalingContext{
 				ClusterSnapshot: clusterSnapshot,
 			}
 
-			err := clusterSnapshot.SetClusterState(tc.firstState.nodes, tc.firstState.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err := clusterSnapshot.SetClusterState(context.TODO(), tc.firstState.nodes, tc.firstState.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
 
 			podListProcessor, _ := newPodListProcessorForTesting(t, tc.firstState.capacityRequests)
-			gotUnschedulablePods, err := podListProcessor.Process(autoscalingContext, tc.firstState.unschedulablePods)
+			gotUnschedulablePods, err := podListProcessor.Process(context.TODO(), autoscalingContext, tc.firstState.unschedulablePods)
 			assert.NoError(t, err)
 			gotAllScheduled, err := getAllPodsFromSnapshot(clusterSnapshot)
 			assert.NoError(t, err)
@@ -389,9 +396,9 @@ func TestPodListProcessorSubsequentRuns(t *testing.T) {
 				}
 			}
 
-			err = clusterSnapshot.SetClusterState(tc.secondState.nodes, tc.secondState.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			err = clusterSnapshot.SetClusterState(context.TODO(), tc.secondState.nodes, tc.secondState.allScheduled, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.NoError(t, err)
-			gotUnschedulablePods, err = podListProcessor.Process(autoscalingContext, tc.secondState.unschedulablePods)
+			gotUnschedulablePods, err = podListProcessor.Process(context.TODO(), autoscalingContext, tc.secondState.unschedulablePods)
 			assert.NoError(t, err)
 			gotAllScheduled, err = getAllPodsFromSnapshot(clusterSnapshot)
 			assert.NoError(t, err)
