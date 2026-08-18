@@ -180,3 +180,22 @@ func WithOwnerReplicaSet(rsName string) func(p *apiv1.Pod) {
 		tu.SetRSPodSpec(p, rsName)
 	}
 }
+
+// WithTopologySpreadConstraints adds TopologySpreadConstraints to the pod spec.
+func WithTopologySpreadConstraints(constraints ...apiv1.TopologySpreadConstraint) func(p *apiv1.Pod) {
+	return func(p *apiv1.Pod) {
+		p.Spec.TopologySpreadConstraints = append(p.Spec.TopologySpreadConstraints, constraints...)
+	}
+}
+
+// WithLabels adds labels to the pod metadata.
+func WithLabels(labels map[string]string) func(p *apiv1.Pod) {
+	return func(p *apiv1.Pod) {
+		if p.Labels == nil {
+			p.Labels = make(map[string]string)
+		}
+		for k, v := range labels {
+			p.Labels[k] = v
+		}
+	}
+}
