@@ -1948,6 +1948,16 @@ func TestAutomaticEphemeralLocalSsdCountByMachineType(t *testing.T) {
 			expectFound:   true,
 			expectedCount: 4,
 		},
+		"expect 10 local ssds in h4d-highmem-192-lssd": {
+			machineName:   "h4d-highmem-192-lssd",
+			expectFound:   true,
+			expectedCount: 10,
+		},
+		"expect 32 local ssds in h4d-megamem-192-lssd": {
+			machineName:   "h4d-megamem-192-lssd",
+			expectFound:   true,
+			expectedCount: 32,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			p := NewMachineConfigProvider(nil)
@@ -3004,6 +3014,49 @@ func TestToCustomMachineType_FamilyBackfill(t *testing.T) {
 
 			// Verify IsConfidentialNodesSupported executes safely on custom shapes without nil panics.
 			assert.Equal(t, tc.wantCvmSupport, mt.IsConfidentialNodesSupported())
+		})
+	}
+}
+
+func TestH4DMegamemMachineTypes(t *testing.T) {
+	provider := NewMachineConfigProvider(nil)
+
+	for _, tc := range []struct {
+		name             string
+		wantCPU          int64
+		wantMem          int64
+		wantExplicitOnly bool
+		wantEphemeralSsd int64
+	}{
+		{
+			name:             "h4d-megamem-192",
+			wantCPU:          192,
+			wantMem:          3024 * 1024 * 1024 * 1024,
+			wantExplicitOnly: true,
+		},
+		{
+			name:             "h4d-megamem-192-lssd",
+			wantCPU:          192,
+			wantMem:          3024 * 1024 * 1024 * 1024,
+			wantExplicitOnly: true,
+			wantEphemeralSsd: 32,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mt, err := provider.ToMachineType(tc.name)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantCPU, mt.CPU)
+			assert.Equal(t, tc.wantMem, mt.Memory)
+			assert.Equal(t, tc.wantExplicitOnly, mt.explicitReqOnly)
+
+			ssdCount, found, err := provider.AutomaticEphemeralLocalSsdCountByMachineType(tc.name)
+			assert.NoError(t, err)
+			if tc.wantEphemeralSsd > 0 {
+				assert.True(t, found)
+				assert.Equal(t, tc.wantEphemeralSsd, ssdCount)
+			} else {
+				assert.False(t, found)
+			}
 		})
 	}
 }
