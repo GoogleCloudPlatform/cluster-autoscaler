@@ -592,6 +592,22 @@ func WithAutoProvisioningEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithInterPodAffinityHostnameFastPath toggles the InterPodAffinityHostnameFastPath feature gate for integration tests.
+func WithInterPodAffinityHostnameFastPath(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InterPodAffinityHostnameFastPath = enabled
+		return o
+	}
+}
+
+// WithPredicateParallelism sets the parallelism for scheduler predicates.
+func WithPredicateParallelism(parallelism int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.PredicateParallelism = parallelism
+		return o
+	}
+}
+
 // WithHighThroughputNAPEnabled enables async node groups and sets control plane operation limits.
 func WithHighThroughputNAPEnabled(maxParallelOps, maxQueuedOps int) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

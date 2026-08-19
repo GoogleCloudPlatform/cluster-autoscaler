@@ -94,14 +94,14 @@ func (s scenario) run(tb testing.TB) {
 		// The context must be cancellable so that those don't continue running forever,
 		// otherwise they stack up in each iteration and distort benchmarking metrics.
 		ctx, cancel := context.WithCancel(context.Background())
-		infra := integration.SetupInfrastructure(ctx, tb)
-
 		var testConfig *integration.TestConfig
 		if s.given != nil {
 			testConfig = s.given()
 		} else {
 			tb.Fatalf("Test cluster config is not defined. Add WithCluster func to your scenario")
 		}
+
+		infra := integration.SetupInfrastructure(ctx, tb)
 
 		if s.when != nil {
 			s.when(infra)

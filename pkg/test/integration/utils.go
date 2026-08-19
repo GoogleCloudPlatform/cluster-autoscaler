@@ -29,11 +29,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/kubernetes/pkg/features"
+
 	mccfake "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned/fake"
 	mcv1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	osconfig "k8s.io/gke-autoscaling/cluster-autoscaler/config"
@@ -144,7 +147,6 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	gceService := fakegce.NewGceClient(t, k8s)
 	rrClient := resizerequest.NewResizeRequestClient(gceService)
 	mccClient := setupFakeMachineConfigClient()
-	fwHandle := newSimulatorHandle(ctx, t, informerFactory)
 	eventLogger := visibilityfake.NewEventLogger()
 	rlClient := fakegce.NewRecommendLocationsClient()
 
@@ -155,7 +157,6 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		UpdateInfosClient:        updateinfosclient.NewSimpleClientset(),
 		GceService:               gceService,
 		GkeService:               gkeclientfake.NewClient(gceService, k8s),
-		fwHandle:                 fwHandle,
 		EventLogger:              eventLogger,
 		CccClient:                cccfake.NewSimpleClientset(),
 		PRClientset:              provreqtest.NewFakeClientset(),
@@ -175,11 +176,18 @@ func DefaultAutoscalingBuilder(
 ) (*autoscaler.Builder, error) {
 
 	fakeOptions := config.ResolveOptions()
+
+	// Sync the InterPodAffinityHostnameFastPath feature gate
+	if err := utilfeature.DefaultMutableFeatureGate.Set(fmt.Sprintf("%s=%t", features.InterPodAffinityHostnameFastPath, fakeOptions.InterPodAffinityHostnameFastPath)); err != nil {
+		t.Fatalf("Couldn't set the InterPodAffinityHostnameFastPath feature gate: %v", err)
+	}
+	infra.Fakes.fwHandle = newSimulatorHandle(ctx, t, infra.Fakes.InformerFactory)
+
 	cluster := config.ResolveCluster()
 
 	fakeCAVersion, err := version.FromString(config.CaVersion)
 	if err != nil {
-		t.Fatalf("failed to parse CA version: %v", err)
+		t.Fatalf("Failed to parse CA version: %v", err)
 	}
 	fakeExperimentsManager := experiments.NewManager(fakeCAVersion, config.ExperimentEvaluator)
 	tracker := optstracking.NewOptionsTracker(fakeOptions, fakeExperimentsManager)
