@@ -528,6 +528,15 @@ func TestPodRequirementsMetadata(t *testing.T) {
 				gkelabels.AcceleratorNetworkProfileLabel: "auto",
 			},
 		},
+		{
+			name: "AcceleratorNetworkProfile requirement with custom profile is processed correctly",
+			req: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
+				gkelabels.AcceleratorNetworkProfileLabel: podrequirements.NewValues("my-custom-gpu-profile"),
+			}),
+			wantMetadata: Metadata{
+				gkelabels.AcceleratorNetworkProfileLabel: "my-custom-gpu-profile",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -974,6 +983,15 @@ func TestPriorityMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				gkelabels.AcceleratorNetworkProfileLabel: "auto",
+			},
+		},
+		{
+			name: "Priority for custom AcceleratorNetworkProfile",
+			priority: v1.Priority{
+				AcceleratorNetworkProfile: ptr.To("my-custom-gpu-profile"),
+			},
+			wantMetadata: Metadata{
+				gkelabels.AcceleratorNetworkProfileLabel: "my-custom-gpu-profile",
 			},
 		},
 		{
