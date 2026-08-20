@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path"
@@ -2198,5 +2199,53 @@ func TestFetchAIZones(t *testing.T) {
 				t.Errorf("autoscalingInternalGceClient.FetchAIZones() diff (-want +got): %s", diff)
 			}
 		})
+	}
+}
+
+func TestAutoscalingGceClient_CreateInstancesWithRecommendation(t *testing.T) {
+	var capturedPayload []byte
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/projects/project1/zones/zoneA/instanceGroupManagers/mig1/createInstances" {
+			capturedPayload, _ = io.ReadAll(req.Body)
+
+			operation := gce_api.Operation{
+				Name:   "op123",
+				Status: "DONE",
+			}
+			b, _ := json.Marshal(operation)
+			res.WriteHeader(http.StatusOK)
+			res.Write(b)
+			return
+		}
+		if req.URL.Path == "/projects/project1/zones/zoneA/operations/op123/wait" {
+			operation := gce_api.Operation{
+				Name:   "op123",
+				Status: "DONE",
+			}
+			b, _ := json.Marshal(operation)
+			res.WriteHeader(http.StatusOK)
+			res.Write(b)
+			return
+		}
+		res.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+
+	ids, err := client.CreateInstancesWithRecommendation(migRef, "base-name", 2, []string{"existing1"}, "my-test-recommendation")
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(ids))
+
+	var createReqMap map[string]interface{}
+	err = json.Unmarshal(capturedPayload, &createReqMap)
+	assert.NoError(t, err)
+
+	instances, ok := createReqMap["instances"].([]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, 2, len(instances))
+	if rec, ok := createReqMap["recommendation"]; ok {
+		assert.Equal(t, "my-test-recommendation", rec)
 	}
 }

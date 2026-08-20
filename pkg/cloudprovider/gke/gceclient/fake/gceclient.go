@@ -61,16 +61,17 @@ type GceClient struct {
 	nextFreeId uint64
 
 	// --- Internal state
-	machineTypes          map[string]*gcev1.MachineType                 // Key: {zone}/{machineType}
-	migs                  map[string]*gcev1.InstanceGroupManager        // Key: {zone}/{migName}
-	templates             map[string]*gcev1.InstanceTemplate            // Key: {templateName}
-	instances             map[string]map[string]gceinternal.GceInstance // Key: {zone}/{migName}, Val: {instanceName} -> Instance
-	zoneToDiskTypes       map[string][]string
-	projectToReservations map[string][]*gcev1.Reservation
-	accelerators          *gcev1.AcceleratorTypeList
-	regionToZones         map[string][]string
-	regionToAiZones       map[string][]string
-	availableCpuPlatforms map[string][]string
+	machineTypes            map[string]*gcev1.MachineType                 // Key: {zone}/{machineType}
+	migs                    map[string]*gcev1.InstanceGroupManager        // Key: {zone}/{migName}
+	templates               map[string]*gcev1.InstanceTemplate            // Key: {templateName}
+	instances               map[string]map[string]gceinternal.GceInstance // Key: {zone}/{migName}, Val: {instanceName} -> Instance
+	zoneToDiskTypes         map[string][]string
+	projectToReservations   map[string][]*gcev1.Reservation
+	accelerators            *gcev1.AcceleratorTypeList
+	regionToZones           map[string][]string
+	regionToAiZones         map[string][]string
+	availableCpuPlatforms   map[string][]string
+	recordedRecommendations map[string][]string // Key: {zone}/{migName}
 
 	// --- Behavior modifiers
 	createInstanceForMIGError  map[string]cloudprovider.InstanceErrorInfo // Key: migName
@@ -93,6 +94,7 @@ func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 		regionToZones:              make(map[string][]string),
 		regionToAiZones:            make(map[string][]string),
 		availableCpuPlatforms:      make(map[string][]string),
+		recordedRecommendations:    make(map[string][]string),
 		createInstanceForMIGError:  make(map[string]cloudprovider.InstanceErrorInfo),
 		createInstanceForZoneError: make(map[string]cloudprovider.InstanceErrorInfo),
 		fetchMachineTypeHandler:    make(map[string]func() error),
@@ -856,10 +858,24 @@ func (g *GceClient) DeleteInstances(migRef gceinternal.GceRef, instances []gcein
 	return nil
 }
 
+func (g *GceClient) CreateInstancesWithRecommendation(ref gceinternal.GceRef, templateName string, count int64, names []string, recommendation string) ([]string, error) {
+	g.Lock()
+	defer g.Unlock()
+
+	migKey := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
+	g.recordedRecommendations[migKey] = append(g.recordedRecommendations[migKey], recommendation)
+
+	return g.createInstancesLocked(ref, templateName, count, names)
+}
+
 func (g *GceClient) CreateInstances(ref gceinternal.GceRef, templateName string, count int64, names []string) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
 
+	return g.createInstancesLocked(ref, templateName, count, names)
+}
+
+func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName string, count int64, names []string) ([]string, error) {
 	migKey := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	mig, found := g.migs[migKey]
 
@@ -1212,4 +1228,16 @@ func (g *GceClient) consumeHardwareCapacityLocked(zone string, machineType strin
 	}
 	g.capacityMap[key] = cap - count
 	return nil
+}
+
+// SetRecommendationApplier sets the recommendation applier for the fake GCE client.
+func (g *GceClient) SetRecommendationApplier(applier gceclient.RecommendationApplier) {
+}
+
+// GetRecordedRecommendations returns the recommendations recorded for a given MIG.
+func (g *GceClient) GetRecordedRecommendations(ref gceinternal.GceRef) []string {
+	g.Lock()
+	defer g.Unlock()
+	migKey := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
+	return slices.Clone(g.recordedRecommendations[migKey])
 }

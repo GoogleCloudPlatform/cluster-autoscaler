@@ -813,6 +813,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		machineConfigProvider:    machinetypes.NewMachineConfigProvider(nil),
 		localSSDDiskSizeProvider: gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 		gkeMetrics:               internalmetrics.Metrics,
+		optsTracker:              optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	if regional {
 		manager.location = region
@@ -2562,6 +2563,92 @@ func TestCreateInstances(t *testing.T) {
 	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
 	err = g.CreateInstances(mig, 1)
 	assert.NoError(t, err)
+}
+
+func TestCreateInstances_WithRecommendation(t *testing.T) {
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	g.gceService = mockGceClient
+	rec := ScaleUpRecommendation{RecommendationId: "rec1", SpecKey: "spec1"}
+	g.SetRecommendation(mig.Id(), rec)
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1/rec1//spec1"}, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+}
+
+func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
+
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	mockGceClient.AutoscalingGceClient = g.gceService
+	g.gceService = mockGceClient
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Empty(t, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+}
+
+func TestCreateInstances_WithRecommendation_ZeroValueStruct(t *testing.T) {
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
+
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	mockGceClient.AutoscalingGceClient = g.gceService
+	g.gceService = mockGceClient
+	g.SetRecommendation(mig.Id(), ScaleUpRecommendation{})
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Empty(t, mockGceClient.GetRecordedRecommendations(mig.gceRef))
 }
 
 func TestCreateInstancesWithMultipleRequests(t *testing.T) {
@@ -6601,14 +6688,14 @@ func TestResumeInstances(t *testing.T) {
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
 	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := fmt.Sprintf(`{
+	listResponse := `{
         "managedInstances": [
             {
                 "name": "inst-1",
                 "instanceStatus": "RUNNING"
             }
         ]
-    }`)
+    }`
 	server.On("handle", listUrl).Return(listResponse).Once()
 
 	mig := &GkeMig{

@@ -15,6 +15,9 @@
 package gceclient
 
 import (
+	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	gce_api "google.golang.org/api/compute/v1"
@@ -22,7 +25,10 @@ import (
 )
 
 type autoscalingInternalGceClientMock struct {
+	sync.Mutex
 	gce.AutoscalingGceClient
+	recordedRecommendations                     map[string][]string
+	createInstancesWithRecommendation           func(migRef gce.GceRef, baseName string, delta int64, existingInstanceProviderIds []string, recommendation string) ([]string, error)
 	getZoneGpuCounts                            func() (map[string]map[string]int64, error)
 	fetchReservationsInProject                  func(project string) ([]*gce_api.Reservation, error)
 	fetchReservationBlocksInReservation         func(reservationRef ReservationRef) ([]*GceReservationBlock, error)
@@ -38,7 +44,17 @@ type autoscalingInternalGceClientMock struct {
 }
 
 func BuildAutoscalingInternalGceClientMock() *autoscalingInternalGceClientMock {
-	return &autoscalingInternalGceClientMock{}
+	return &autoscalingInternalGceClientMock{
+		recordedRecommendations: make(map[string][]string),
+	}
+}
+
+func (a *autoscalingInternalGceClientMock) SetRecommendationApplier(applier RecommendationApplier) {
+}
+
+func (a *autoscalingInternalGceClientMock) WithCreateInstancesWithRecommendation(f func(migRef gce.GceRef, baseName string, delta int64, existingInstanceProviderIds []string, recommendation string) ([]string, error)) *autoscalingInternalGceClientMock {
+	a.createInstancesWithRecommendation = f
+	return a
 }
 
 // WithGetZoneGpuCounts sets getZoneGpuCounts handler.
@@ -89,6 +105,27 @@ func (a *autoscalingInternalGceClientMock) WithFetchStandardZones(fetchStandardZ
 func (a *autoscalingInternalGceClientMock) WithFetchAIZones(fetchAIZones func(region string) ([]string, error)) *autoscalingInternalGceClientMock {
 	a.fetchAIZones = fetchAIZones
 	return a
+}
+
+func (a *autoscalingInternalGceClientMock) CreateInstancesWithRecommendation(migRef gce.GceRef, baseName string, delta int64, existingInstanceProviderIds []string, recommendation string) ([]string, error) {
+	a.Lock()
+	defer a.Unlock()
+
+	migKey := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
+	a.recordedRecommendations[migKey] = append(a.recordedRecommendations[migKey], recommendation)
+
+	if a.createInstancesWithRecommendation != nil {
+		return a.createInstancesWithRecommendation(migRef, baseName, delta, existingInstanceProviderIds, recommendation)
+	}
+	return []string{"mock-op-id"}, nil
+}
+
+// GetRecordedRecommendations returns the recommendations recorded for a given MIG.
+func (a *autoscalingInternalGceClientMock) GetRecordedRecommendations(migRef gce.GceRef) []string {
+	a.Lock()
+	defer a.Unlock()
+	migKey := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
+	return slices.Clone(a.recordedRecommendations[migKey])
 }
 
 func (client *autoscalingInternalGceClientMock) FetchAcceleratorTypes(zone string) (*gce_api.AcceleratorTypeList, error) {

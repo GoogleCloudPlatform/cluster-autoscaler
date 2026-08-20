@@ -335,6 +335,12 @@ func (b *Builder) WithGCEClient(client gceclient.AutoscalingInternalGceClient) *
 	return b
 }
 
+// WithRecommendationApplier allows injecting a RecommendationApplier into the GCE client.
+func (b *Builder) WithRecommendationApplier(applier gceclient.RecommendationApplier) *Builder {
+	b.gceClient.SetRecommendationApplier(applier)
+	return b
+}
+
 // WithResizableVmClient allows injecting a ResizableVmClient.
 func (b *Builder) WithResizableVmClient(client resizablevms.Client) *Builder {
 	b.resizableVmClient = client

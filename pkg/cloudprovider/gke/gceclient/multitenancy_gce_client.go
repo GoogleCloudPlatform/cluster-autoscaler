@@ -59,6 +59,14 @@ type multitenancyGCEClient struct {
 	mutex sync.Mutex
 }
 
+func (m *multitenancyGCEClient) SetRecommendationApplier(applier RecommendationApplier) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for _, client := range m.gceClients {
+		client.SetRecommendationApplier(applier)
+	}
+}
+
 var _ MultitenancyGCEClient = &multitenancyGCEClient{}
 
 // NewMultitenancyGCEClient wraps multiple AutoscalingInternalGceClient in GKE MT clusters
@@ -370,6 +378,14 @@ func (m *multitenancyGCEClient) CreateInstances(ref gce.GceRef, basename string,
 		return nil, err
 	}
 	return gceService.CreateInstances(ref, basename, delta, instanceNames)
+}
+
+func (m *multitenancyGCEClient) CreateInstancesWithRecommendation(ref gce.GceRef, basename string, delta int64, instanceNames []string, recommendation string) ([]string, error) {
+	gceService, err := m.gceService(ref.Project)
+	if err != nil {
+		return nil, err
+	}
+	return gceService.CreateInstancesWithRecommendation(ref, basename, delta, instanceNames, recommendation)
 }
 
 func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {

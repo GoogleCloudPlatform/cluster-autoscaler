@@ -1453,12 +1453,25 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 	m.cache.InvalidateMigTargetSize(mig.GceRef())
 	totalReqs := int((delta + createInstancesRequestLimit - 1) / createInstancesRequestLimit)
 	remaining := delta
+
+	var recommendationString string
+	if experiments.IsDemandFungibilityImpactTrackingEnabled(m.ExperimentsManager()) {
+		if rec, ok := m.PopRecommendation(mig.Id()); ok && rec.RecommendationId != "" && rec.SpecKey != "" {
+			recommendationString = fmt.Sprintf("1/%s//%s", rec.RecommendationId, rec.SpecKey)
+		}
+	}
+
 	for i := 0; i < totalReqs; i++ {
 		increment := min(remaining, createInstancesRequestLimit)
 		if totalReqs > 1 {
 			klog.Infof("Sending chunked GCE createInstances request. Request: %d/%d RequestSize: %v/%v MIG: %v", i+1, totalReqs, increment, delta, mig.Id())
 		}
-		newIds, err := m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
+		var newIds []string
+		if recommendationString != "" {
+			newIds, err = m.gceService.CreateInstancesWithRecommendation(mig.GceRef(), basename, increment, existingIds, recommendationString)
+		} else {
+			newIds, err = m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
+		}
 		if err != nil {
 			return err
 		}

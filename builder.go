@@ -140,5 +140,6 @@ func configureStubClients(ctx context.Context, builder *internalautoscaler.Build
 		WithEventLogger(visibility.NewNoOpEventLogger()).
 		WithResizableVmClient(resizablevms.NewNoOpClient()).
 		WithConsumableReservationsClient(consumablereservations.NewNoOpClient()).
+		WithRecommendationApplier(gceclient.NoOpRecommendationApplier{}).
 		WithGkeClient(gkeClient)
 }

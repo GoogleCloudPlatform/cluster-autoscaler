@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/rand"
 	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
@@ -63,6 +64,9 @@ var (
 type AutoscalingInternalGceClient interface {
 	gce.AutoscalingGceClient
 
+	// CreateInstancesWithRecommendation creates instances with a given scale up recommendation.
+	CreateInstancesWithRecommendation(migRef gce.GceRef, baseName string, delta int64, existingInstanceProviderIds []string, recommendation string) ([]string, error)
+
 	FetchAcceleratorTypes(zone string) (*gce_api.AcceleratorTypeList, error)
 	// FetchFutureReservationsInProject fetches list of future reservations for a project.
 	FetchFutureReservationsInProject(projectID string) ([]*GceFutureReservation, error)
@@ -86,6 +90,9 @@ type AutoscalingInternalGceClient interface {
 	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
+
+	// SetRecommendationApplier sets the recommendation applier
+	SetRecommendationApplier(applier RecommendationApplier)
 }
 
 // MigInfoProvider provides information about a mig
@@ -100,6 +107,17 @@ type MigInfoProvider interface {
 	QueuedProvisioning(migRef gce.GceRef) bool
 	// IsTpuMig returns true if the given mig is a TPU mig.
 	IsTpuMig(migRef gce.GceRef) bool
+}
+
+// RecommendationApplier is an interface for setting recommendation on the request.
+type RecommendationApplier interface {
+	ApplyRecommendation(req *gce_api.InstanceGroupManagersCreateInstancesRequest, recommendation string)
+}
+
+type NoOpRecommendationApplier struct{}
+
+func (NoOpRecommendationApplier) ApplyRecommendation(req *gce_api.InstanceGroupManagersCreateInstancesRequest, recommendation string) {
+	// Do nothing in OSS fallback.
 }
 
 const (
@@ -128,6 +146,8 @@ type autoscalingInternalGceClient struct {
 	operationPerCallTimeout        time.Duration
 	instanceActionPollingFrequency time.Duration
 	instanceActionTimeout          time.Duration
+
+	recommendationApplier RecommendationApplier
 }
 
 const (
@@ -190,6 +210,7 @@ func NewAutoscalingInternalGceClient(client *http.Client, migInfoProvider MigInf
 		httpTimeout:                    client.Timeout,
 		instanceActionPollingFrequency: instanceActionPollingFrequency,
 		instanceActionTimeout:          instanceActionTimeout,
+		recommendationApplier:          NoOpRecommendationApplier{},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -234,11 +255,72 @@ func NewCustomAutoscalingInternalGceClient(client *http.Client, migInfoProvider 
 		domainUrl:                      domainUrl,
 		instanceActionPollingFrequency: instanceActionPollingFrequency,
 		instanceActionTimeout:          instanceActionTimeout,
+		recommendationApplier:          NoOpRecommendationApplier{},
 	}
 	for _, opt := range opts {
 		opt(c)
 	}
 	return c, nil
+}
+
+// SetRecommendationApplier sets the recommendation applier.
+func (client *autoscalingInternalGceClient) SetRecommendationApplier(applier RecommendationApplier) {
+	client.recommendationApplier = applier
+}
+
+// CreateInstancesWithRecommendation duplicates the OSS implementation of CreateInstances
+// to inject the GKE-specific "Recommendation" field into the GCE API request without
+// modifying the upstream OSS struct.
+// See the OSS equivalent here: https://github.com/kubernetes/autoscaler/blob/eec9bc4dc1d26c3956ff941f786f7be52de68882/cluster-autoscaler/cloudprovider/gce/autoscaling_gce_client.go#L310-L331
+func (client *autoscalingInternalGceClient) CreateInstancesWithRecommendation(migRef gce.GceRef, baseName string, delta int64, existingInstanceProviderIds []string, recommendation string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), client.operationPerCallTimeout)
+	defer cancel()
+	req := gce_api.InstanceGroupManagersCreateInstancesRequest{}
+	client.recommendationApplier.ApplyRecommendation(&req, recommendation)
+	instanceNames := instanceIdsToNamesMap(existingInstanceProviderIds)
+	req.Instances = make([]*gce_api.PerInstanceConfig, 0, delta)
+	createdIds := make([]string, delta)
+	for i := range delta {
+		newInstanceName := generateInstanceName(baseName, instanceNames)
+		instanceNames[newInstanceName] = true
+		req.Instances = append(req.Instances, &gce_api.PerInstanceConfig{Name: newInstanceName})
+		ref := gce.GceRef{Project: migRef.Project, Zone: migRef.Zone, Name: newInstanceName}
+		createdIds[i] = ref.ToProviderId()
+	}
+
+	start := time.Now()
+	op, err := client.gceService.InstanceGroupManagers.CreateInstances(migRef.Project, migRef.Zone, migRef.Name, &req).Context(ctx).Do()
+	gke_metrics.EmitGceLatency("instance_group_managers", "create_instances", op, err, start)
+	if err != nil {
+		return nil, err
+	}
+	return createdIds, client.WaitForOperation(op.Name, op.OperationType, migRef.Project, migRef.Zone)
+}
+
+func instanceIdsToNamesMap(instanceProviderIds []string) map[string]bool {
+	instanceNames := make(map[string]bool, len(instanceProviderIds))
+	for _, inst := range instanceProviderIds {
+		ref, err := gce.GceRefFromProviderId(inst)
+		if err != nil {
+			klog.Warningf("Failed to extract instance name from %q: %v", inst, err)
+		} else {
+			inst = ref.Name
+		}
+		instanceNames[inst] = true
+	}
+	return instanceNames
+}
+
+func generateInstanceName(baseName string, existingNames map[string]bool) string {
+	for i := 0; i < 100; i++ {
+		name := fmt.Sprintf("%v-%v", baseName, rand.String(4))
+		if ok, _ := existingNames[name]; !ok {
+			return name
+		}
+	}
+	klog.Warning("Unable to create unique name for a new instance, duplicate name might occur")
+	name := fmt.Sprintf("%v-%v", baseName, rand.String(4))
+	return name
 }
 
 func (client *autoscalingInternalGceClient) FetchAcceleratorTypes(zone string) (*gce_api.AcceleratorTypeList, error) {
