@@ -319,6 +319,110 @@ func TestFlexAdvisorSpotVsOnDemand(t *testing.T) {
 	})
 }
 
+// TestFlexAdvisorPodFamily_ExtendedFallbacks verifies that when extended fallbacks are enabled
+// for general-purpose pod family, Flex Advisor generates instance configuration keys for extended fallback
+// machine families (such as C4, C4D) and Cluster Autoscaler successfully falls back between extended fallback tiers
+// according to Flex Advisor capacity guidance.
+// Covers b/544485965.
+func TestFlexAdvisorPodFamily_ExtendedFallbacks(t *testing.T) {
+	for name, tc := range map[string]struct {
+		extendedFallbacksEnabled bool
+		guidances                []fake.CapacityGuidance
+		wantScheduledOn          string
+	}{
+		"prefer_higher_tier_c4_when_available": {
+			extendedFallbacksEnabled: true,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("c4-standard-4").WithCapacity(10),
+				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+			},
+			wantScheduledOn: "pool-c4",
+		},
+		"fallback_to_c4d_when_c4_exhausted": {
+			extendedFallbacksEnabled: true,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("c4-standard-4").WithCapacity(0),
+				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+			},
+			wantScheduledOn: "pool-c4d",
+		},
+		"no_fallback_when_extended_fallbacks_disabled": {
+			extendedFallbacksEnabled: false,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("c4-standard-4").WithCapacity(10),
+				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+			},
+			wantScheduledOn: "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ccc := ccc.NewComputeClassBuilder("gp-ccc").
+				WithAutopilot(true).
+				WithPriorities(v1.Priority{
+					PodFamily: ptr.To("general-purpose"),
+				}).
+				Build()
+
+			nodePools := []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-c4").WithMachineType("c4-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
+				integration.EmptyNodePool("pool-c4d").WithMachineType("c4d-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
+			}
+
+			testConfig := integration.NewTestConfig().
+				WithNodePools(nodePools...).
+				WithCccCrds(ccc).
+				WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations("us-central1-b"),
+				).
+				WithOverrides(
+					integration.WithAutoProvisioningEnabled(),
+					integration.WithMaxMemoryTotal(140*1024*1024*1024),
+					integration.WithFlexAdvisorEnabled(),
+				)
+
+			if tc.extendedFallbacksEnabled {
+				testConfig = testConfig.WithExperiments(experiments.AutopilotE4ExtendedFallbacksMinCAVersionFlag)
+			}
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+				infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(tc.guidances...)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+				defer integration_synctest.TearDown(cancel)
+
+				pod := tu.BuildTestPod("gp-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("gp-ccc"))
+				infra.Fakes.K8s.AddPod(pod)
+
+				for i := 0; i < 3; i++ {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+					infra.Fakes.RunScheduler(ctx, t)
+					updatedPod, _ := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "gp-pod", metav1.GetOptions{})
+					if updatedPod != nil && updatedPod.Spec.NodeName != "" {
+						break
+					}
+				}
+
+				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "gp-pod", metav1.GetOptions{})
+				assert.NoError(t, err)
+				if tc.wantScheduledOn != "" {
+					assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected gp-pod to be scheduled")
+					assert.Contains(t, updatedPod.Spec.NodeName, tc.wantScheduledOn, "Expected pod to be scheduled on %s, but got %s", tc.wantScheduledOn, updatedPod.Spec.NodeName)
+					assert.Equal(t, 1, len(infra.Fakes.K8s.Nodes().Items), "Expected 1 node after loop")
+				} else {
+					assert.Empty(t, updatedPod.Spec.NodeName, "Expected gp-pod to remain unscheduled")
+					assert.Equal(t, 0, len(infra.Fakes.K8s.Nodes().Items), "Expected 0 nodes after loop")
+				}
+
+				assert.Greater(t, infra.Fakes.FlexAdvisorClient.GetFetchCapacityCalls(), 0, "Expected Flex Advisor to be queried")
+			})
+		})
+	}
+}
+
 // TestFlexAdvisorPodFamily_GeneralPurposeArm verifies that when a ComputeClass configures the
 // general-purpose-arm podFamily, Flex Advisor generates instance configuration keys for all ARM
 // machine families (E4A, N4A, C4A) and Cluster Autoscaler successfully balances / falls back according
@@ -455,7 +559,8 @@ func TestFlexAdvisorPodFamily_GeneralPurpose(t *testing.T) {
 			wantScheduledOn: "",
 		},
 		"custom_gp_families_fallback_to_n2_when_e2_exhausted": {
-			gpMachineFamilies: []string{"e2", "n2"},
+			extendedFallbacksEnabled: false,
+			gpMachineFamilies:        []string{"e2", "n2"},
 			guidances: []fake.CapacityGuidance{
 				fake.NewGuidance("e2-standard-4").WithCapacity(0),
 				fake.NewGuidance("n2-standard-4").WithCapacity(10),
