@@ -2192,6 +2192,101 @@ func TestOrganizeByMachineFamily(t *testing.T) {
 	}
 }
 
+func TestPrioritizedFamiliesForRule(t *testing.T) {
+	gpRule := rules.NewRule(rules.WithPodFamilyRule(stringPtr("general-purpose")))
+	gpCustomRule := rules.NewRule(rules.WithPodFamilyRule(stringPtr("general-purpose"), machinetypes.N2, machinetypes.E4))
+	armRule := rules.NewRule(rules.WithPodFamilyRule(stringPtr("general-purpose-arm")))
+	nonPodFamilyRule := rules.NewRule(rules.WithMachineFamilyRule(stringPtr("n1")))
+
+	testCases := []struct {
+		name         string
+		rule         rules.Rule
+		setupMock    func(*MockGKEProvider)
+		wantFamilies []machinetypes.MachineFamily
+	}{
+		{
+			name:         "nil rule returns nil",
+			rule:         nil,
+			wantFamilies: nil,
+		},
+		{
+			name:         "non-pod-family rule returns nil",
+			rule:         nonPodFamilyRule,
+			wantFamilies: nil,
+		},
+		{
+			name:         "arm pod family returns arm families",
+			rule:         armRule,
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+		},
+		{
+			name:         "general-purpose with custom families returns custom families",
+			rule:         gpCustomRule,
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.N2, machinetypes.E4},
+		},
+		{
+			name: "general-purpose with default flags (E2 only)",
+			rule: gpRule,
+			setupMock: func(m *MockGKEProvider) {
+			},
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E2},
+		},
+		{
+			name: "general-purpose with EK and E4 enabled (E4 not prioritized)",
+			rule: gpRule,
+			setupMock: func(m *MockGKEProvider) {
+				m.SetResizableVmWithinPodFamilyEnabled("ek", true)
+				m.SetResizableVmWithinPodFamilyEnabled("e4", true)
+			},
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2, machinetypes.E4},
+		},
+		{
+			name: "general-purpose with EK, E4, and E4 prioritization enabled",
+			rule: gpRule,
+			setupMock: func(m *MockGKEProvider) {
+				m.SetResizableVmWithinPodFamilyEnabled("ek", true)
+				m.SetResizableVmWithinPodFamilyEnabled("e4", true)
+				m.SetE4PrioritizationEnabledInAutopilot(true)
+			},
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+		},
+		{
+			name: "general-purpose with extended fallbacks enabled",
+			rule: gpRule,
+			setupMock: func(m *MockGKEProvider) {
+				m.SetResizableVmWithinPodFamilyEnabled("ek", true)
+				m.SetResizableVmWithinPodFamilyEnabled("e4", true)
+				m.SetExtendedFallbacksEnabled(true)
+			},
+			wantFamilies: []machinetypes.MachineFamily{
+				machinetypes.EK, machinetypes.E2, machinetypes.E4,
+				machinetypes.N4, machinetypes.N4D,
+				machinetypes.N2, machinetypes.N2D,
+				machinetypes.N1,
+				machinetypes.C4, machinetypes.C4D,
+			},
+		},
+		{
+			name:         "nil provider returns E2 for general-purpose",
+			rule:         gpRule,
+			wantFamilies: []machinetypes.MachineFamily{machinetypes.E2},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var provider PodFamilyProvider
+			if tc.setupMock != nil {
+				mock := NewMockGKEProvider(nil, machinetypes.E2)
+				tc.setupMock(mock)
+				provider = mock
+			}
+			got := PrioritizedFamiliesForRule(tc.rule, provider)
+			assert.Equal(t, tc.wantFamilies, got)
+		})
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }

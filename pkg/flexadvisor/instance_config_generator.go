@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -74,6 +75,7 @@ func (c *machineErrorCache) Set(key interface{}, val interface{}, ttl time.Durat
 
 type instanceConfigCloudProvider interface {
 	ccc.DataProvider
+	computeclass.PodFamilyProvider
 	GetGkeMigs() []*gke.GkeMig
 	ExistingMigsInNodePool(nodePoolName string) []*gke.GkeMig
 	GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily
@@ -455,18 +457,22 @@ func (g *instanceConfigGenerator) instanceConfigsForNodePools(rule rules.Rule, r
 
 func (g *instanceConfigGenerator) instanceConfigsForMachineTypeFromN1Family(rule rules.Rule, machineTypeInfo machinetypes.MachineType, machineFamily machinetypes.MachineFamily, rank int) []*api.InstanceConfig {
 	var instanceConfigs []*api.InstanceConfig
-	for _, gpuType := range machineFamily.SupportedGpuTypes() {
-		if rule.GpuRequest().Config.GpuType != "" && rule.GpuRequest().Config.GpuType != gpuType.Name() {
-			continue
-		}
-		for gpuCount, maxCpuCount := range gpuType.MaxCpuCount() {
-			if rule.GpuRequest().Count > 0 && rule.GpuRequest().PhysicalGPUCount != gpuCount {
+	// Pod family rules (e.g. general-purpose) are strictly CPU workloads and should not
+	// generate GPU configurations when falling back to N1 machine types.
+	if rule.PodFamilyName() == "" {
+		for _, gpuType := range machineFamily.SupportedGpuTypes() {
+			if rule.GpuRequest().Config.GpuType != "" && rule.GpuRequest().Config.GpuType != gpuType.Name() {
 				continue
 			}
-			if machineTypeInfo.CPU > int64(maxCpuCount) {
-				continue
+			for gpuCount, maxCpuCount := range gpuType.MaxCpuCount() {
+				if rule.GpuRequest().Count > 0 && rule.GpuRequest().PhysicalGPUCount != gpuCount {
+					continue
+				}
+				if machineTypeInfo.CPU > int64(maxCpuCount) {
+					continue
+				}
+				instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, ptr.To(gpuType.Name()), ptr.To(int(gpuCount))))
 			}
-			instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, ptr.To(gpuType.Name()), ptr.To(int(gpuCount))))
 		}
 	}
 	if rule.GpuRequest().Config.GpuType == "" {
@@ -531,10 +537,7 @@ func (g *instanceConfigGenerator) machineFamiliesForRule(rule rules.Rule) ([]mac
 		}
 		return []machinetypes.MachineFamily{machineFamily}, nil
 	} else if rule.PodFamilyName() != "" {
-		podFamilyMachineFamilies, err := rule.PodFamilyMachineFamilies()
-		if err != nil {
-			return nil, err
-		}
+		podFamilyMachineFamilies := computeclass.PrioritizedFamiliesForRule(rule, g.provider)
 		if len(podFamilyMachineFamilies) == 0 {
 			return nil, fmt.Errorf("pod family %q does not map to any machine families", rule.PodFamilyName())
 		}

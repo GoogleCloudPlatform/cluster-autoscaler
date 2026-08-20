@@ -58,14 +58,18 @@ func WithMaxInstanceConfigs(max int) generatorOption {
 }
 
 type mockInstanceConfigCloudProvider struct {
-	mu                        sync.Mutex
-	autoprovisioningLocations []string
-	gkeMigs                   []*gke.GkeMig
-	defaultMachineFamily      machinetypes.MachineFamily
-	availableByDefault        bool
-	machineTypes              map[string]set.Set[string]
-	autopilotEnabled          bool
-	getMachineTypeCallsQty    int
+	mu                                 sync.Mutex
+	autoprovisioningLocations          []string
+	gkeMigs                            []*gke.GkeMig
+	defaultMachineFamily               machinetypes.MachineFamily
+	availableByDefault                 bool
+	machineTypes                       map[string]set.Set[string]
+	autopilotEnabled                   bool
+	extendedFallbacksEnabled           bool
+	resizableVmEnabledInAutopilot      map[string]bool
+	resizableVmWithinPodFamilyEnabled  map[string]bool
+	e4PrioritizationEnabledInAutopilot bool
+	getMachineTypeCallsQty             int
 }
 
 func (m *mockInstanceConfigCloudProvider) GetAutoprovisioningLocations() []string {
@@ -131,6 +135,30 @@ func (m *mockInstanceConfigCloudProvider) IsAutopilotEnabled() bool {
 	return m.autopilotEnabled
 }
 
+func (m *mockInstanceConfigCloudProvider) IsExtendedFallbacksEnabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.extendedFallbacksEnabled
+}
+
+func (m *mockInstanceConfigCloudProvider) IsResizableVmEnabledInAutopilot(machineFamily string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resizableVmEnabledInAutopilot[machineFamily]
+}
+
+func (m *mockInstanceConfigCloudProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resizableVmWithinPodFamilyEnabled[machineFamily]
+}
+
+func (m *mockInstanceConfigCloudProvider) IsE4PrioritizationEnabledInAutopilot() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.e4PrioritizationEnabledInAutopilot
+}
+
 func (m *mockInstanceConfigCloudProvider) GetAIZones() ([]string, error) {
 	panic("not implemented")
 }
@@ -149,6 +177,12 @@ func withAutopilotEnabled(enabled bool) mockProviderOption {
 	}
 }
 
+func withExtendedFallbacksEnabled(enabled bool) mockProviderOption {
+	return func(m *mockInstanceConfigCloudProvider) {
+		m.extendedFallbacksEnabled = enabled
+	}
+}
+
 func newMockInstanceConfigCloudProvider(autoprovisioningLocations []string, gkeMigs []*gke.GkeMig, defaultMachineFamily machinetypes.MachineFamily, availableByDefault bool, machineTypes map[string]set.Set[string], opts ...mockProviderOption) *mockInstanceConfigCloudProvider {
 	m := &mockInstanceConfigCloudProvider{
 		autoprovisioningLocations: autoprovisioningLocations,
@@ -156,6 +190,10 @@ func newMockInstanceConfigCloudProvider(autoprovisioningLocations []string, gkeM
 		defaultMachineFamily:      defaultMachineFamily,
 		availableByDefault:        availableByDefault,
 		machineTypes:              machineTypes,
+		resizableVmWithinPodFamilyEnabled: map[string]bool{
+			machinetypes.E4.Name(): true,
+			machinetypes.EK.Name(): true,
+		},
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -603,6 +641,76 @@ func testInstanceConfigMap(configs []*api.InstanceConfig) map[string]*api.Instan
 		configMap[config.Signature()] = config
 	}
 	return configMap
+}
+
+func TestGenerateInstanceConfigs_PodFamily_ExtendedFallbacks(t *testing.T) {
+	optionsTracker := optstracking.EmptyFakeOptionsTracker()
+	gpCcc := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gp-ccc",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					PodFamily: ptr.To("general-purpose"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), optionsTracker)
+
+	testCases := map[string]struct {
+		extendedFallbacksEnabled bool
+		wantFamiliesPresent      []string
+		wantFamiliesAbsent       []string
+	}{
+		"extended fallbacks enabled generates keys for fallback families": {
+			extendedFallbacksEnabled: true,
+			wantFamiliesPresent:      []string{"e2", "e4", "n4", "n4d", "n2", "n2d", "n1", "c4", "c4d"},
+			wantFamiliesAbsent:       nil,
+		},
+		"extended fallbacks disabled does not generate keys for fallback families": {
+			extendedFallbacksEnabled: false,
+			wantFamiliesPresent:      []string{"e2", "e4"},
+			wantFamiliesAbsent:       []string{"n4", "n4d", "n2", "n2d", "n1", "c4", "c4d"},
+		},
+	}
+
+	for des, tc := range testCases {
+		t.Run(des, func(t *testing.T) {
+			optionsTracker := optstracking.FakeOptionsTracker(
+				options.AutoscalingOptions{},
+				gkeclient.Cluster{},
+				experiments.NewMockManager(),
+			)
+			provider := newMockInstanceConfigCloudProvider(
+				[]string{"us-west1-a", "us-west1-b"},
+				nil,
+				machinetypes.E2,
+				true,
+				nil,
+				withExtendedFallbacksEnabled(tc.extendedFallbacksEnabled),
+			)
+			g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{gpCcc}), provider, optionsTracker, WithMaxInstanceConfigs(1000))
+			generated, errs := g.generateInstanceConfigs("gp-ccc")
+			assert.Empty(t, errs)
+			assert.NotNil(t, generated)
+
+			familiesFound := make(map[string]bool)
+			for _, config := range generated.Configs {
+				family, err := provider.MachineConfigProvider().GetMachineFamilyFromMachineName(config.MachineType())
+				if assert.NoError(t, err) {
+					familiesFound[family.Name()] = true
+				}
+			}
+
+			for _, wantFamily := range tc.wantFamiliesPresent {
+				assert.True(t, familiesFound[wantFamily], "expected machine family %q to be present in generated configs", wantFamily)
+			}
+			for _, wantAbsentFamily := range tc.wantFamiliesAbsent {
+				assert.False(t, familiesFound[wantAbsentFamily], "expected machine family %q to NOT be present in generated configs", wantAbsentFamily)
+			}
+		})
+	}
 }
 
 func TestDeriveMachineConfigsFromRule(t *testing.T) {
@@ -1459,49 +1567,108 @@ func TestMatchingCrd(t *testing.T) {
 }
 
 func TestMachineFamilies(t *testing.T) {
-	mockInstanceConfigCloudProvider := &mockInstanceConfigCloudProvider{
-		defaultMachineFamily: machinetypes.E2,
+	defaultMockProvider := &mockInstanceConfigCloudProvider{
+		defaultMachineFamily:              machinetypes.E2,
+		resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
 	}
 	testCases := map[string]struct {
 		rule                rules.Rule
+		provider            instanceConfigCloudProvider
 		wantMachineFamilies []machinetypes.MachineFamily
 		wantErr             error
 	}{
 		"machine family is specified in the rule": {
-			rules.NewRule(rules.WithMachineFamilyRule(ptr.To("a2"))),
-			[]machinetypes.MachineFamily{machinetypes.A2},
-			nil,
+			rule:                rules.NewRule(rules.WithMachineFamilyRule(ptr.To("a2"))),
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.A2},
+			wantErr:             nil,
 		},
-		"machine families are specified as pod families in the rule": {
-			rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
-			[]machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
-			nil,
+		"machine families are specified as pod families in the rule with extended fallbacks disabled": {
+			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+			provider: &mockInstanceConfigCloudProvider{
+				defaultMachineFamily:              machinetypes.E2,
+				extendedFallbacksEnabled:          false,
+				resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
+			},
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			wantErr:             nil,
+		},
+		"machine families are specified as pod families in the rule with extended fallbacks enabled": {
+			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+			provider: &mockInstanceConfigCloudProvider{
+				defaultMachineFamily:              machinetypes.E2,
+				extendedFallbacksEnabled:          true,
+				resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
+			},
+			wantMachineFamilies: []machinetypes.MachineFamily{
+				machinetypes.E2, machinetypes.EK, machinetypes.E4,
+				machinetypes.N4, machinetypes.N4D,
+				machinetypes.N2, machinetypes.N2D,
+				machinetypes.N1,
+				machinetypes.C4, machinetypes.C4D,
+			},
+			wantErr: nil,
+		},
+		"machine families are specified as pod families with custom families and extended fallbacks enabled": {
+			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"), machinetypes.N2, machinetypes.E4)),
+			provider:            &mockInstanceConfigCloudProvider{defaultMachineFamily: machinetypes.E2, extendedFallbacksEnabled: true},
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.N2, machinetypes.E4},
+			wantErr:             nil,
+		},
+		"machine families are specified as pod families with E4 disabled in provider": {
+			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+			provider: &mockInstanceConfigCloudProvider{
+				defaultMachineFamily:              machinetypes.E2,
+				extendedFallbacksEnabled:          false,
+				resizableVmWithinPodFamilyEnabled: map[string]bool{"ek": true},
+			},
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			wantErr:             nil,
+		},
+		"machine families are specified as pod families with E4 prioritization in provider": {
+			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+			provider: &mockInstanceConfigCloudProvider{
+				defaultMachineFamily:               machinetypes.E2,
+				extendedFallbacksEnabled:           false,
+				resizableVmWithinPodFamilyEnabled:  map[string]bool{"e4": true, "ek": true},
+				e4PrioritizationEnabledInAutopilot: true,
+			},
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+			wantErr:             nil,
+		},
+		"machine families are specified as arm pod families in the rule": {
+			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+			wantErr:             nil,
 		},
 		"unknown pod family": {
-			rules.NewRule(rules.WithPodFamilyRule(ptr.To("unknown-pod-family"))),
-			[]machinetypes.MachineFamily{},
-			fmt.Errorf("unknown pod family"),
+			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("unknown-pod-family"))),
+			wantMachineFamilies: []machinetypes.MachineFamily{},
+			wantErr:             fmt.Errorf("pod family \"unknown-pod-family\" does not map to any machine families"),
 		},
 		"machine type": {
-			rules.NewRule(rules.WithMachineTypeRule(ptr.To("e4a-standard-2"))),
-			[]machinetypes.MachineFamily{machinetypes.E4A},
-			nil,
+			rule:                rules.NewRule(rules.WithMachineTypeRule(ptr.To("e4a-standard-2"))),
+			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E4A},
+			wantErr:             nil,
 		},
 		"gpu type": {
-			rules.NewRule(rules.WithGpuRule(&machinetypes.GpuRequest{Config: machinetypes.GpuConfig{GpuType: machinetypes.NvidiaTeslaA100.Name()}})),
-			mockInstanceConfigCloudProvider.MachineConfigProvider().AllMachineFamilies(),
-			nil,
+			rule:                rules.NewRule(rules.WithGpuRule(&machinetypes.GpuRequest{Config: machinetypes.GpuConfig{GpuType: machinetypes.NvidiaTeslaA100.Name()}})),
+			wantMachineFamilies: defaultMockProvider.MachineConfigProvider().AllMachineFamilies(),
+			wantErr:             nil,
 		},
 		"tpu type": {
-			rules.NewRule(rules.WithTpuRule("t7x", 1, "2x2x1")),
-			mockInstanceConfigCloudProvider.MachineConfigProvider().AllMachineFamilies(),
-			nil,
+			rule:                rules.NewRule(rules.WithTpuRule("t7x", 1, "2x2x1")),
+			wantMachineFamilies: defaultMockProvider.MachineConfigProvider().AllMachineFamilies(),
+			wantErr:             nil,
 		},
 	}
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
+			provider := tc.provider
+			if provider == nil {
+				provider = defaultMockProvider
+			}
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			g := NewInstanceConfigGenerator(context.Background(), nil, mockInstanceConfigCloudProvider, optionsTracker)
+			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			machineFamilies, err := g.machineFamiliesForRule(tc.rule)
 			gotNames := []string{}
 			for _, mf := range machineFamilies {
