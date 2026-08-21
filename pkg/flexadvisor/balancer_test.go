@@ -93,8 +93,8 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 
 	dwsTpuMig := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithDWS(), WithMaxRunDuration("3600"), WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x5"))
 
-	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 100}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
-	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 100}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
 
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -121,7 +121,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				return NewScaleUpBalancer(nil, provider, lister, experimentsManager, true)
 			},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(provider, "ccc-1", "", "guidance-1", map[string]int{
+				snapshot := instanceavailability.NewSnapshot(provider, "ccc-1", "", "guidance-1", "", map[string]int{
 					"us-central1-a": 91,
 					"us-central1-b": 91,
 					"us-central1-c": 91,
@@ -269,7 +269,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x1").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -289,7 +289,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -309,7 +309,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -355,7 +355,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -516,8 +516,8 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 	mig2 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-b", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 	mig3 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-c", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 
-	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 20, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
-	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", map[string]int{"us-central1-a": 1000, "us-central1-b": 5}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8})
+	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 20, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", "", map[string]int{"us-central1-a": 1000, "us-central1-b": 5}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8})
 
 	scaleUpInfo1 := nodegroupset.ScaleUpInfo{
 		Group:       mig1,

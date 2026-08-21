@@ -23,7 +23,7 @@ import (
 
 func TestMaxAvailableInstances(t *testing.T) {
 	baseZonalCounts := map[string]int{"us-central1-a": 10, "us-central1-b": 20}
-	baseSnapshot := NewSnapshot(nil, "", "", "", baseZonalCounts, nil)
+	baseSnapshot := NewSnapshot(nil, "", "", "", "", baseZonalCounts, nil)
 
 	tests := []struct {
 		name          string
@@ -66,7 +66,7 @@ func TestMaxAvailableInstances(t *testing.T) {
 
 func TestGcePreferenceScore(t *testing.T) {
 	baseZonalScores := map[string]float64{"us-central1-a": 0.9, "us-central1-b": 0.8}
-	baseSnapshot := NewSnapshot(nil, "", "", "", nil, baseZonalScores)
+	baseSnapshot := NewSnapshot(nil, "", "", "", "", nil, baseZonalScores)
 
 	tests := []struct {
 		name      string
@@ -173,7 +173,7 @@ func TestMarkUsed(t *testing.T) {
 			for k, v := range tc.initialCounts {
 				initialCountsCopy[k] = v
 			}
-			snapshot := NewSnapshot(mockProvider, flexibilityScopeKey, instanceConfigKey, guidanceId, initialCountsCopy, nil)
+			snapshot := NewSnapshot(mockProvider, flexibilityScopeKey, instanceConfigKey, guidanceId, "", initialCountsCopy, nil)
 
 			err := snapshot.MarkUsed(tc.zonalInstancesToProvision, tc.decisionId)
 
@@ -189,4 +189,10 @@ func TestMarkUsed(t *testing.T) {
 			mockProvider.AssertExpectations(t)
 		})
 	}
+}
+
+func TestSnapshotSpecKeyAndGuidanceId(t *testing.T) {
+	snapshot := NewSnapshot(nil, "scope-key", "config-key", "guidance-id-123", "spec-key-456", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 0.9})
+	assert.Equal(t, "guidance-id-123", snapshot.GuidanceId())
+	assert.Equal(t, "spec-key-456", snapshot.SpecKey())
 }

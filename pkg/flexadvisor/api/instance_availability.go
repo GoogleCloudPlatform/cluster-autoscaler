@@ -33,32 +33,36 @@ type InstanceAvailability struct {
 	zonalProvisionsSinceLastRefresh map[string]int
 	zonalGcePreferenceScore         map[string]float64
 	guidanceId                      string
-	instanceConfigKey               string
-	flexibilityScopeKey             string
-	decisionChan                    chan ProvisioningDecisionNotification
-	provider                        instanceavailability.Provider
+	// specKey is the capacity specification key in GCE Flex Advisor guidance (the raw integer key in the CapacityGuidances map, e.g. "1", "2").
+	// It is used for Demand Flexibility Impact Tracking to correlate VM provisioning back to the specific capacity recommendation.
+	specKey             string
+	instanceConfigKey   string
+	flexibilityScopeKey string
+	decisionChan        chan ProvisioningDecisionNotification
+	provider            instanceavailability.Provider
 }
 
 // String formats InstanceAvailability omitting non-thread-safe fields
 func (ia *InstanceAvailability) String() string {
-	return fmt.Sprintf("InstanceAvailability{flexibilityScopeKey: %s, instanceConfigKey: %s, guidanceId: %s, zonalInstanceCount: <non-thread-safe format>, zonalProvisionsSinceLastRefresh: <non-thread-safe format>, zonalGcePreferenceScore: <non-thread-safe format>}",
-		ia.flexibilityScopeKey, ia.instanceConfigKey, ia.guidanceId)
+	return fmt.Sprintf("InstanceAvailability{flexibilityScopeKey: %s, instanceConfigKey: %s, guidanceId: %s, specKey: %s, zonalInstanceCount: <non-thread-safe format>, zonalProvisionsSinceLastRefresh: <non-thread-safe format>, zonalGcePreferenceScore: <non-thread-safe format>}",
+		ia.flexibilityScopeKey, ia.instanceConfigKey, ia.guidanceId, ia.specKey)
 }
 
 // threadSafeFullString thread safe version of String() that includes all the fields
 func (ia *InstanceAvailability) threadSafeFullString() string {
 	ia.mutex.Lock()
 	defer ia.mutex.Unlock()
-	return fmt.Sprintf("InstanceAvailability{flexibilityScopeKey: %s, instanceConfigKey: %s, guidanceId: %s, zonalInstanceCount: %v, zonalProvisionsSinceLastRefresh: %v, zonalGcePreferenceScore: %v}",
-		ia.flexibilityScopeKey, ia.instanceConfigKey, ia.guidanceId, ia.zonalInstanceCount, ia.zonalProvisionsSinceLastRefresh, ia.zonalGcePreferenceScore)
+	return fmt.Sprintf("InstanceAvailability{flexibilityScopeKey: %s, instanceConfigKey: %s, guidanceId: %s, specKey: %s, zonalInstanceCount: %v, zonalProvisionsSinceLastRefresh: %v, zonalGcePreferenceScore: %v}",
+		ia.flexibilityScopeKey, ia.instanceConfigKey, ia.guidanceId, ia.specKey, ia.zonalInstanceCount, ia.zonalProvisionsSinceLastRefresh, ia.zonalGcePreferenceScore)
 }
 
 // NewInstanceAvailability creates a new InstanceAvailability.
-func NewInstanceAvailability(flexibilityScopeKey, instanceConfigKey, guidanceId string, zonalInstanceCount map[string]int, zonalGcePreferenceScore map[string]float64) *InstanceAvailability {
+func NewInstanceAvailability(flexibilityScopeKey, instanceConfigKey, guidanceId, specKey string, zonalInstanceCount map[string]int, zonalGcePreferenceScore map[string]float64) *InstanceAvailability {
 	return &InstanceAvailability{
 		flexibilityScopeKey:             flexibilityScopeKey,
 		instanceConfigKey:               instanceConfigKey,
 		guidanceId:                      guidanceId,
+		specKey:                         specKey,
 		zonalInstanceCount:              zonalInstanceCount,
 		zonalProvisionsSinceLastRefresh: make(map[string]int),
 		zonalGcePreferenceScore:         zonalGcePreferenceScore,
@@ -148,7 +152,7 @@ func (i *InstanceAvailability) NewSnapshot() *instanceavailability.Snapshot {
 		availableInstanceCount[zone] = count - i.zonalProvisionsSinceLastRefresh[zone]
 	}
 
-	return instanceavailability.NewSnapshot(i.provider, i.flexibilityScopeKey, i.instanceConfigKey, i.guidanceId, availableInstanceCount, i.zonalGcePreferenceScore)
+	return instanceavailability.NewSnapshot(i.provider, i.flexibilityScopeKey, i.instanceConfigKey, i.guidanceId, i.specKey, availableInstanceCount, i.zonalGcePreferenceScore)
 }
 
 // SetProvider sets instanceavailability.Provider
@@ -188,4 +192,9 @@ func (i *InstanceAvailability) FlexibilityScopeKey() string {
 // GuidanceId returns the guidance ID.
 func (i *InstanceAvailability) GuidanceId() string {
 	return i.guidanceId
+}
+
+// SpecKey returns the capacity specification key from the advisory guidance.
+func (i *InstanceAvailability) SpecKey() string {
+	return i.specKey
 }

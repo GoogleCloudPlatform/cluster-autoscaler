@@ -215,7 +215,7 @@ func setupMockSnapshot(m *instanceavailability.MockProvider, machineType string,
 	m.On("GetInstanceAvailability", mock.Anything, mock.MatchedBy(func(s string) bool {
 		return strings.Contains(s, machineType)
 	})).Return(
-		instanceavailability.NewSnapshot(m, "test-ccc", machineType, "guidance", nil, scores),
+		instanceavailability.NewSnapshot(m, "test-ccc", machineType, "guidance", "", nil, scores),
 	).Once()
 }
 

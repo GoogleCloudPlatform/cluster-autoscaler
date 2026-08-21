@@ -45,29 +45,34 @@ type Provider interface {
 }
 
 type Snapshot struct {
-	provider                Provider
-	flexibilityScopeKey     string
-	instanceConfigKey       string
-	guidanceId              string
+	provider            Provider
+	flexibilityScopeKey string
+	instanceConfigKey   string
+	guidanceId          string
+	// specKey identifies the capacity specification corresponding to this availability snapshot
+	// (e.g., the raw integer key from Flex Advisor's CapacityGuidances map).
+	// It is used for Demand Flexibility Impact Tracking to correlate VM provisioning back to the specific capacity recommendation.
+	specKey                 string
 	zonalInstanceCount      map[string]int
 	zonalGcePreferenceScore map[string]float64
 }
 
 // String returns a string representation of Snapshot.
 func (i *Snapshot) String() string {
-	return fmt.Sprintf("Snapshot{flexibilityScopeKey: %v, instanceConfigKey: %v, guidanceId: %v, zonalInstanceCount: %v, zonalGcePreferenceScore: %v}",
-		i.flexibilityScopeKey, i.instanceConfigKey, i.guidanceId, i.zonalInstanceCount, i.zonalGcePreferenceScore)
+	return fmt.Sprintf("Snapshot{flexibilityScopeKey: %v, instanceConfigKey: %v, guidanceId: %v, specKey: %v, zonalInstanceCount: %v, zonalGcePreferenceScore: %v}",
+		i.flexibilityScopeKey, i.instanceConfigKey, i.guidanceId, i.specKey, i.zonalInstanceCount, i.zonalGcePreferenceScore)
 }
 
 // NewSnapshot creates a new Snapshot
-func NewSnapshot(provider Provider, flexibilityScopeKey, instanceConfigKey, guidanceId string, zonalInstanceCount map[string]int, zonalGcePreferenceScore map[string]float64) *Snapshot {
+func NewSnapshot(provider Provider, flexibilityScopeKey, instanceConfigKey, guidanceId, specKey string, zonalInstanceCount map[string]int, zonalGcePreferenceScore map[string]float64) *Snapshot {
 	return &Snapshot{
 		provider:                provider,
 		flexibilityScopeKey:     flexibilityScopeKey,
 		instanceConfigKey:       instanceConfigKey,
+		guidanceId:              guidanceId,
+		specKey:                 specKey,
 		zonalInstanceCount:      zonalInstanceCount,
 		zonalGcePreferenceScore: zonalGcePreferenceScore,
-		guidanceId:              guidanceId,
 	}
 }
 
@@ -106,4 +111,9 @@ func (i *Snapshot) SetProvider(provider Provider) {
 // GuidanceId returns the guidanceId of the snapshot.
 func (i *Snapshot) GuidanceId() string {
 	return i.guidanceId
+}
+
+// SpecKey returns the capacity specification key associated with the snapshot.
+func (i *Snapshot) SpecKey() string {
+	return i.specKey
 }

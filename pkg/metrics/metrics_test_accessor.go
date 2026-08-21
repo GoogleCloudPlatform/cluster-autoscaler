@@ -82,3 +82,21 @@ func GetDaemonSetMutationResolutionDurationSumForTest(status, reason string) (fl
 	observer := dsMutationResolutionDuration.WithLabelValues(status, reason)
 	return testutil.GetHistogramMetricValue(observer)
 }
+
+// GetDemandFungibilityExtractedCountForTest returns the current count for a given source (only for tests).
+func GetDemandFungibilityExtractedCountForTest(source DemandFungibilitySource) (float64, error) {
+	counter := demandFungibilityExtractedTotal.WithLabelValues(string(source))
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDemandFungibilityInjectedCountForTest returns the current count for a given source (only for tests).
+func GetDemandFungibilityInjectedCountForTest(source DemandFungibilitySource) (float64, error) {
+	counter := demandFungibilityInjectedTotal.WithLabelValues(string(source))
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDemandFungibilityMissingIdCountForTest returns the current count for a given source and reason (only for tests).
+func GetDemandFungibilityMissingIdCountForTest(source DemandFungibilitySource, reason string) (float64, error) {
+	counter := demandFungibilityMissingIdTotal.WithLabelValues(string(source), reason)
+	return testutil.GetCounterMetricValue(counter)
+}

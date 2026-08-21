@@ -22,6 +22,7 @@ type TestInstanceAvailabilityBuilder struct {
 	zonalProvisionsSinceLastRefresh map[string]int
 	zonalGcePreferenceScore         map[string]float64
 	guidanceId                      string
+	specKey                         string
 	instanceConfigKey               string
 	flexibilityScopeKey             string
 	decisionChan                    chan ProvisioningDecisionNotification
@@ -46,11 +47,24 @@ func (b *TestInstanceAvailabilityBuilder) Build() *InstanceAvailability {
 		zonalProvisionsSinceLastRefresh: b.zonalProvisionsSinceLastRefresh,
 		zonalGcePreferenceScore:         b.zonalGcePreferenceScore,
 		guidanceId:                      b.guidanceId,
+		specKey:                         b.specKey,
 		instanceConfigKey:               b.instanceConfigKey,
 		flexibilityScopeKey:             b.flexibilityScopeKey,
 		decisionChan:                    b.decisionChan,
 		provider:                        b.provider,
 	}
+}
+
+// WithGuidanceId sets the guidanceId for the object to be built.
+func (b *TestInstanceAvailabilityBuilder) WithGuidanceId(guidanceId string) *TestInstanceAvailabilityBuilder {
+	b.guidanceId = guidanceId
+	return b
+}
+
+// WithSpecKey sets the specKey for the object to be built.
+func (b *TestInstanceAvailabilityBuilder) WithSpecKey(specKey string) *TestInstanceAvailabilityBuilder {
+	b.specKey = specKey
+	return b
 }
 
 // WithZonalInstanceCount sets the zonalInstanceCount map for the object to be built.

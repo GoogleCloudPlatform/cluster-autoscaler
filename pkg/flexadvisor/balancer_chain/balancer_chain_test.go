@@ -99,7 +99,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 	locationAnyMigInvalidCCC3 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-c", "ccc-doesnt-exist", gke.LocationPolicyAny, 100, 1000, nil)
 
 	getSnapshotForProvider := func(iaProvider *instanceavailability.MockProvider) *instanceavailability.Snapshot {
-		return instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+		return instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
 	}
 	getScaleUpInfos := func(mig1, mig2, mig3 *gke.GkeMig) []nodegroupset.ScaleUpInfo {
 		return []nodegroupset.ScaleUpInfo{
