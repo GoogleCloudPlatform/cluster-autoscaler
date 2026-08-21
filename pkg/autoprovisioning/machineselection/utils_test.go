@@ -26,8 +26,8 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 func TestCrdMachineFamilies(t *testing.T) {

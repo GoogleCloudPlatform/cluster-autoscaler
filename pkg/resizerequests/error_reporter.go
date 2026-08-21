@@ -21,6 +21,7 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -28,7 +29,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler/reasons"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	autoscalingcontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	nodegroupchange "sigs.k8s.io/cluster-autoscaler/pkg/observers/nodegroupchange"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"

@@ -23,11 +23,11 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 
 	gce_api_beta "google.golang.org/api/compute/v0.beta"

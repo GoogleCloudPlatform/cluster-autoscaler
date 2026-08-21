@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
@@ -46,7 +47,6 @@ import (
 	"k8s.io/kubernetes/pkg/util/taints"
 	clock "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	ca_taints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )

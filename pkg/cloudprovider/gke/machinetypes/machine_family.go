@@ -18,9 +18,9 @@ import (
 	"fmt"
 	"slices"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const (

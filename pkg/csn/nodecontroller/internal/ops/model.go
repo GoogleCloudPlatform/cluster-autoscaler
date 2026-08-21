@@ -17,8 +17,8 @@ package ops
 import (
 	"context"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/utils/set"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // OperationType represents the type of operation to be performed on a batch

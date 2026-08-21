@@ -31,11 +31,11 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	"google.golang.org/api/googleapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	gceinternal "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	fakek8s "sigs.k8s.io/cluster-autoscaler/pkg/utils/fake"
 )
 

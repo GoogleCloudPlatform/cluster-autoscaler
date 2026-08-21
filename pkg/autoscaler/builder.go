@@ -23,6 +23,7 @@ import (
 
 	"golang.org/x/oauth2"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -44,7 +45,6 @@ import (
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"sigs.k8s.io/cluster-autoscaler/pkg/builder"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"

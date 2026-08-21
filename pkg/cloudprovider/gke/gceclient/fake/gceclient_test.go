@@ -19,11 +19,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	gcev1 "google.golang.org/api/compute/v1"
+	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/utils/ptr"
-	gceinternal "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	fakek8s "sigs.k8s.io/cluster-autoscaler/pkg/utils/fake"
 )
 

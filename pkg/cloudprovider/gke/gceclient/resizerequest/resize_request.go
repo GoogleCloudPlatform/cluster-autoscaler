@@ -26,8 +26,8 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/api/googleapi"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // ResizeRequestState represents state the Resize Request is in.

@@ -25,8 +25,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/kubernetes/pkg/util/slice"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"

@@ -23,10 +23,10 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	gce_cloudprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	gce_cloudprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
