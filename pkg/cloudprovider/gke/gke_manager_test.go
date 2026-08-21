@@ -2571,7 +2571,7 @@ func TestCreateInstances_WithRecommendation(t *testing.T) {
 	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
 	addDefaultListMigsMocks(server, g.cache)
 
-	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
 	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
@@ -2598,7 +2598,7 @@ func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
 	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
 	addDefaultListMigsMocks(server, g.cache)
 
-	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
 	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
@@ -2627,7 +2627,7 @@ func TestCreateInstances_WithRecommendation_ZeroValueStruct(t *testing.T) {
 	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
 	addDefaultListMigsMocks(server, g.cache)
 
-	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.DemandFungibilityImpactTrackingEnabledFlag: true}, nil)
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
 	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
