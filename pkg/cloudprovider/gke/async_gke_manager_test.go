@@ -550,6 +550,46 @@ func TestAsyncMgr_GetMigNodesDuringAsyncNodePoolCreation(t *testing.T) {
 	assert.Equal(t, nodes, reportedInstances)
 }
 
+func TestAsyncMgr_IsMigStableDuringAsyncNodePoolDeletion(t *testing.T) {
+	ctx := newAsyncGkeManagerTestContext(t)
+	asyncGkeManager := ctx.asyncGkeManager
+	mig, _ := ctx.sampleCreatedMigWithNodePool()
+	// when there is a node belonging to an already created node pool
+	ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
+	// then mig stability is reported from underlying manager
+	stable, err := asyncGkeManager.IsMigStable(mig)
+	assert.NoError(t, err)
+	assert.True(t, stable)
+
+	// when node pool is asynchronously deleted
+	ctx.deleteNodePoolAsyncOrFail(mig)
+	// then mig is reported as not stable without querying underlying manager
+	stable, err = asyncGkeManager.IsMigStable(mig)
+	assert.NoError(t, err)
+	assert.False(t, stable)
+}
+
+func TestAsyncMgr_IsMigStableDuringAsyncNodePoolCreation(t *testing.T) {
+	ctx := newAsyncGkeManagerTestContext(t)
+	asyncGkeManager := ctx.asyncGkeManager
+	mig, nodePool := ctx.sampleMigWithNodePool()
+	// when node pool is async created
+	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+	// then upcoming node pools are reported as not stable
+	stable, err := asyncGkeManager.IsMigStable(result.MainCreatedMig)
+	assert.NoError(t, err)
+	assert.False(t, stable)
+
+	// when node pool creation finishes
+	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+	initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+	ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
+	// then mig stability is reported from underlying manager
+	stable, err = asyncGkeManager.IsMigStable(mig)
+	assert.NoError(t, err)
+	assert.True(t, stable)
+}
+
 func TestAsyncMgr_ReturnsFilteredAsyncGkeMigs(t *testing.T) {
 	ctx := newAsyncGkeManagerTestContext(t)
 	asyncGkeManager := ctx.asyncGkeManager

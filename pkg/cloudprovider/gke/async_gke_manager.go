@@ -858,6 +858,14 @@ func (m *asyncGkeManager) GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error) {
 	return m.GkeManager.GetMigNodes(mig)
 }
 
+// IsMigStable returns whether the MIG is stable or false if it is scheduled.
+func (m *asyncGkeManager) IsMigStable(mig gce.Mig) (bool, error) {
+	if scheduledMig := m.getScheduledMigLocked(mig.Id()); scheduledMig != nil {
+		return false, nil
+	}
+	return m.GkeManager.IsMigStable(mig)
+}
+
 // getScheduledMigLocked returns mig belonging to upcoming or terminating node pool or nil.
 func (m *asyncGkeManager) getScheduledMigLocked(migId string) *GkeMig {
 	m.mutex.Lock()
