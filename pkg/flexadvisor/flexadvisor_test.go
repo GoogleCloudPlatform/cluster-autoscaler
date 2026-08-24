@@ -1480,3 +1480,58 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFlexAdvisorReservationSpecificMigsProcessingEnabled(t *testing.T) {
+	testCases := []struct {
+		name        string
+		boolFlags   map[string]bool
+		stringFlags map[string]string
+		nilManager  bool
+		want        bool
+	}{
+		{
+			name:       "nil manager - defaults to true",
+			nilManager: true,
+			want:       true,
+		},
+		{
+			name: "nothing set - returns true",
+			want: true,
+		},
+		{
+			name: "FlexAdvisor::EnableReservationSpecificMigsProcessing off - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::EnableReservationSpecificMigsProcessingMinCAVersion doesn't match - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "both enabled - returns true",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag:             true,
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag: true,
+			},
+			want: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var manager experiments.Manager
+			if tc.nilManager && (tc.boolFlags != nil || tc.stringFlags != nil) {
+				t.Fatalf("Invalid usage: nilManager cannot be set along with experiments")
+			}
+			if !tc.nilManager {
+				manager = experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, tc.stringFlags)
+			}
+			got := isFlexAdvisorReservationSpecificMigsProcessingEnabled(manager)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

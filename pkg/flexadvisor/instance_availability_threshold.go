@@ -76,6 +76,10 @@ func (t *instanceAvailabilityThreshold) NodeLimit(nodeGroup cloudprovider.NodeGr
 	flexibilityScopes := make(map[string]bool)
 
 	for _, ng := range allUniqueNodeGroups(append(estimationContext.SimilarNodeGroups(), nodeGroup)) {
+		if !isFlexAdvisorReservationSpecificMigsProcessingEnabled(t.experimentsManager) && hasReservationAffinitySpecific(ng) {
+			klog.V(4).Infof("FlexAdvisor: NodeLimit not applied to nodeGroup %s because nodeGroup %s targets a specific reservation", nodeGroup.Id(), ng.Id())
+			return estimator.NodeLimitResult{Limit: 0}
+		}
 		instanceRef, err := ConstructInstanceReference(ng, t.cccLister, t.experimentsManager)
 		if err != nil {
 			return estimator.NodeLimitResult{Limit: 0}

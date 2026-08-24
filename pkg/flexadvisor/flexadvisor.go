@@ -480,3 +480,11 @@ func isFlexAdvisorDebugLogsEnabled(manager experiments.Manager) bool {
 	}
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorEnableDebugLogsFlag, false)
 }
+
+func isFlexAdvisorReservationSpecificMigsProcessingEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag, true)
+}

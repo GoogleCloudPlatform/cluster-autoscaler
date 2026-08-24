@@ -140,3 +140,11 @@ func buildInstanceConfigFromNodePoolSpec(machineType string, spec *gkeclient.Nod
 	}
 	return instanceConfig, nil
 }
+
+func hasReservationAffinitySpecific(ng cloudprovider.NodeGroup) bool {
+	gkeNodeGroup, ok := ng.(gke.NodeGroup)
+	if !ok || gkeNodeGroup.Spec() == nil || gkeNodeGroup.Spec().ReservationAffinity == nil {
+		return false
+	}
+	return gkeNodeGroup.Spec().ReservationAffinity.ConsumeReservationType == gkeclient.ReservationAffinitySpecific
+}

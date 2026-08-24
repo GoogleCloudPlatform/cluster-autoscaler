@@ -20,6 +20,7 @@ import (
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -190,6 +191,81 @@ func TestNodeLimit(t *testing.T) {
 			nodeGroup:         newTestMigWithAffinity("us-central1-c", "a4x-highgpu-4g", map[string]string{labels.ComputeClassLabel: "scope-1"}, gkeclient.ReservationAffinitySpecific, "projects/shared-project/reservations/a4x-rsv/reservationBlocks/block-1/reservationSubBlocks/sub-block-1", []*gke_api_beta.AcceleratorConfig{{AcceleratorType: "nvidia-gb200", AcceleratorCount: 4}}),
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
 			want:              18,
+		},
+		{
+			name: "nodeGroup with specific reservation affinity - does not apply limit and skips FlexAdvisor when EnableReservationSpecificMigsProcessing is disabled",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.
+					On("GetInstanceAvailability", mock.Anything, mock.Anything).
+					Maybe().
+					Panic("GetInstanceAvailability: should not be called")
+			},
+			nodeGroup: newTestMigWithAffinity(
+				"us-central1-c",
+				"a4x-highgpu-4g",
+				map[string]string{labels.ComputeClassLabel: "scope-1"},
+				gkeclient.ReservationAffinitySpecific,
+				"projects/shared-project/reservations/a4x-rsv/reservationBlocks/block-1/reservationSubBlocks/sub-block-1",
+				[]*gke_api_beta.AcceleratorConfig{{AcceleratorType: "nvidia-gb200", AcceleratorCount: 4}},
+			),
+			estimationContext: estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag: false,
+			}, nil),
+			want: 0,
+		},
+		{
+			name: "similar nodeGroup with specific reservation affinity - does not apply limit and skips FlexAdvisor when EnableReservationSpecificMigsProcessing is disabled",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", mock.Anything, mock.Anything).
+					Maybe().
+					Panic("GetInstanceAvailability: should not be called")
+			},
+			nodeGroup: newTestMig(
+				"us-central1-a",
+				"e2-standard-4",
+				map[string]string{labels.ComputeClassLabel: "scope-1"},
+				/*spot:*/ false,
+				/*flexStart:*/ false,
+				/*accelerators:*/ nil,
+				EmptyTpuType,
+				EmptyTpuTopology,
+				api.EmptyMaxRunDuration,
+			),
+			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
+				newTestMigWithAffinity(
+					"us-central1-b",
+					"e2-standard-4",
+					map[string]string{labels.ComputeClassLabel: "scope-1"},
+					gkeclient.ReservationAffinitySpecific, "projects/shared-project/reservations/rsv-1",
+					/*accelerators:*/ nil,
+				),
+			}, 0),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag: false,
+			}, nil),
+			want: 0,
+		},
+		{
+			name: "nodeGroup with specific reservation affinity - processed when EnableReservationSpecificMigsProcessing is enabled",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").
+						WithZonalInstanceCount(map[string]int{"us-central1-c": 50}).
+						Build().
+						NewSnapshot(),
+					).Once()
+			},
+			nodeGroup: newTestMigWithAffinity(
+				"us-central1-c",
+				"a4x-highgpu-4g",
+				map[string]string{labels.ComputeClassLabel: "scope-1"},
+				gkeclient.ReservationAffinitySpecific,
+				"projects/shared-project/reservations/a4x-rsv/reservationBlocks/block-1/reservationSubBlocks/sub-block-1",
+				[]*gke_api_beta.AcceleratorConfig{{AcceleratorType: "nvidia-gb200", AcceleratorCount: 4}},
+			),
+			estimationContext: estimator.NewEstimationContext(0, nil, 0),
+			want:              68,
 		},
 		{
 			name: "bin packer processing disabled globally - returns early",
