@@ -801,6 +801,7 @@ func (p *gkeCloudProviderImpl) GetResourceLimiter() (*cloudprovider.ResourceLimi
 // Refresh is called before every main loop and can be used to dynamically update cloud provider state.
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (p *gkeCloudProviderImpl) Refresh() error {
+	p.ClearRecommendations()
 	if changed := p.machineConfigProvider.Refresh(); changed {
 		p.gkePriceInfo.RefreshGkePrices()
 		p.gkeManager.RefreshLocalSSDSizes()
@@ -2372,4 +2373,19 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		gce.RegisterMetrics()
 	})
 	return provider, nil
+}
+
+// SetRecommendation delegates to GkeManager
+func (mig *GkeMig) SetRecommendation(recommendation ScaleUpRecommendation) {
+	if mig.gkeManager != nil {
+		mig.gkeManager.SetRecommendation(mig.Id(), recommendation)
+	}
+}
+
+// PopRecommendation delegates to GkeManager
+func (mig *GkeMig) PopRecommendation() (ScaleUpRecommendation, bool) {
+	if mig.gkeManager != nil {
+		return mig.gkeManager.PopRecommendation(mig.Id())
+	}
+	return ScaleUpRecommendation{}, false
 }

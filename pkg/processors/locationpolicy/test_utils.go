@@ -54,12 +54,12 @@ func newTestMig(mockManager *gke.GkeManagerMock, config testMigConfig, getInstan
 	if getInstanceTemplateErr {
 		mockManager.On("GetMigInstanceTemplate", mig).Return(nil, errors.New("mig template get error")).Once()
 	} else {
-		mockManager.On("GetMigInstanceTemplate", mig).Return(&gce_api.InstanceTemplate{SelfLink: config.templateSelfLink}, nil)
+		mockManager.On("GetMigInstanceTemplate", mig).Return(&gce_api.InstanceTemplate{SelfLink: config.templateSelfLink}, nil).Maybe()
 	}
 	if getSizeErr {
 		mockManager.On("GetMigSize", mig).Return(int64(0), errors.New("mig size get error")).Once()
 	} else {
-		mockManager.On("GetMigSize", mig).Return(int64(config.targetSize), nil)
+		mockManager.On("GetMigSize", mig).Return(int64(config.targetSize), nil).Maybe()
 	}
 
 	return mig

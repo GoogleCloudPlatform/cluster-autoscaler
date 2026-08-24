@@ -2566,6 +2566,7 @@ func TestCreateInstances(t *testing.T) {
 }
 
 func TestCreateInstances_WithRecommendation(t *testing.T) {
+	registerMetricsOnce.Do(internalmetrics.RegisterAll)
 	server := NewHttpServerMock()
 	defer server.Close()
 	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
@@ -2581,15 +2582,18 @@ func TestCreateInstances_WithRecommendation(t *testing.T) {
 	)).Once()
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
 
+	initialMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
 	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
 	g.gceService = mockGceClient
-	rec := ScaleUpRecommendation{RecommendationId: "rec1", SpecKey: "spec1"}
+	rec := ScaleUpRecommendation{RecommendationId: "rec1", SpecKey: "spec1", Source: internalmetrics.FA}
 	g.SetRecommendation(mig.Id(), rec)
 
 	err := g.CreateInstances(mig, 1)
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"1/rec1//spec1"}, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+	finalMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+	assert.Equal(t, initialMetric+1, finalMetric)
 }
 
 func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {

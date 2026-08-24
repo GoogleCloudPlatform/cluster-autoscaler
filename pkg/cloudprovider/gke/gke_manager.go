@@ -409,6 +409,7 @@ type ScaleUpRecommendation struct {
 	RecommendationId string
 	// Either raw Flex Advisor integer string or 128-bit BLAKE3 hex hash of an RLA string specification.
 	SpecKey string
+	Source  internalmetrics.DemandFungibilitySource
 }
 
 // InitializationFunc type of function to be run ran once after the first successful refresh of cluster state.
@@ -1455,9 +1456,11 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 	remaining := delta
 
 	var recommendationString string
+	var recommendationSource internalmetrics.DemandFungibilitySource
 	if experiments.IsDemandFungibilityImpactTrackingEnabled(m.ExperimentsManager()) {
-		if rec, ok := m.PopRecommendation(mig.Id()); ok && rec.RecommendationId != "" && rec.SpecKey != "" {
+		if rec, ok := m.PopRecommendation(mig.Id()); ok && rec.RecommendationId != "" {
 			recommendationString = fmt.Sprintf("1/%s//%s", rec.RecommendationId, rec.SpecKey)
+			recommendationSource = rec.Source
 		}
 	}
 
@@ -1469,6 +1472,9 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 		var newIds []string
 		if recommendationString != "" {
 			newIds, err = m.gceService.CreateInstancesWithRecommendation(mig.GceRef(), basename, increment, existingIds, recommendationString)
+			if err == nil && recommendationSource != "" {
+				internalmetrics.Metrics.RegisterDemandFungibilityInjected(recommendationSource)
+			}
 		} else {
 			newIds, err = m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
 		}

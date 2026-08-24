@@ -31,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 )
 
@@ -39,18 +40,22 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 
 	zones := []string{"us-test1-a", "us-test1-b", "us-test1-c"}
 	testCases := []struct {
-		name                string
-		disabledExperiments []string
-		getTemplateErr      bool
-		getTargetSizeErr    bool
-		migConfigs          []testMigConfig
-		newNodes            int
-		wantCall            recommendLocationsCall
-		wantScaleUpInfo     map[gce.GceRef]nodegroupset.ScaleUpInfo
-		wantErr             bool
+		name                   string
+		enabledExperiments     []string
+		disabledExperiments    []string
+		getTemplateErr         bool
+		getTargetSizeErr       bool
+		migConfigs             []testMigConfig
+		newNodes               int
+		wantCall               recommendLocationsCall
+		wantScaleUpInfo        map[gce.GceRef]nodegroupset.ScaleUpInfo
+		wantErr                bool
+		wantRecommendations    map[string]gke.ScaleUpRecommendation
+		wantPopRecommendations []string
 	}{
 		{
-			name: "single mig balancing",
+			name:               "single mig balancing",
+			enabledExperiments: []string{experiments.DemandFungibilityImpactTrackingMinCAVersionFlag},
 			migConfigs: []testMigConfig{
 				{project: "test", zone: "us-test1-a", name: "mig-1", maxSize: 10, templateSelfLink: "link-A", locationPolicy: gke.LocationPolicyAny},
 			},
@@ -66,9 +71,51 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 					"us-test1-a": 5,
 				},
 				templateSelfLink: "link-A",
+				recommendationID: "test-rla-rec-id",
+				specKey:          "test-rla-spec-key",
 			}),
 			wantScaleUpInfo: map[gce.GceRef]nodegroupset.ScaleUpInfo{
 				{Project: "test", Zone: "us-test1-a", Name: "mig-1"}: {CurrentSize: 0, NewSize: 5, MaxSize: 10},
+			},
+			wantRecommendations: map[string]gke.ScaleUpRecommendation{
+				"https://www.googleapis.com/compute/v1/projects/test/zones/us-test1-a/instanceGroups/mig-1": {
+					RecommendationId: "test-rla-rec-id",
+					SpecKey:          "test-rla-spec-key",
+					Source:           internalmetrics.RLA,
+				},
+			},
+		},
+		{
+			name:               "balancing error cleans up recommendations via pop",
+			enabledExperiments: []string{experiments.DemandFungibilityImpactTrackingMinCAVersionFlag},
+			migConfigs: []testMigConfig{
+				{project: "test", zone: "us-test1-a", name: "mig-1", targetSize: 8, maxSize: 10, templateSelfLink: "link-A", locationPolicy: gke.LocationPolicyAny},
+			},
+			newNodes: 5,
+			wantCall: newRecommendLocationCall(recommendLocationsCallConfig{
+				migName:  gce.GceRef{Project: "test", Zone: "us-test1-a", Name: "mig-1"}.Name,
+				newNodes: 5,
+				allowedZones: map[string]int64{
+					"us-test1-a": 2,
+				},
+				deniedZones: []string{"us-test1-b", "us-test1-c"},
+				recommendation: map[string]int{
+					"us-test1-a": 5,
+				},
+				templateSelfLink: "link-A",
+				recommendationID: "test-rla-rec-id",
+				specKey:          "test-rla-spec-key",
+			}),
+			wantErr: true,
+			wantRecommendations: map[string]gke.ScaleUpRecommendation{
+				"https://www.googleapis.com/compute/v1/projects/test/zones/us-test1-a/instanceGroups/mig-1": {
+					RecommendationId: "test-rla-rec-id",
+					SpecKey:          "test-rla-spec-key",
+					Source:           internalmetrics.RLA,
+				},
+			},
+			wantPopRecommendations: []string{
+				"https://www.googleapis.com/compute/v1/projects/test/zones/us-test1-a/instanceGroups/mig-1",
 			},
 		},
 		{
@@ -362,11 +409,19 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			gkeManager := &gke.GkeManagerMock{}
-			gkeManager.On("GetZonesInRegion", "us-test1").Return(zones, nil).Once()
-			gkeManager.On("RecommendLocations", mock.Anything, "us-test1", tc.wantCall.req).Return(tc.wantCall.rsp, tc.wantCall.err).Once()
-			gkeManager.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.E2)
-			gkeManager.On("IsResizeRequestErrorHandlingEnabled").Return(true)
-			gkeManager.On("ResizeRequests", mock.Anything).Return([]rrclient.ResizeRequestStatus{}, nil)
+			gkeManager.On("GetZonesInRegion", "us-test1").Return(zones, nil).Maybe()
+			gkeManager.On("RecommendLocations", mock.Anything, "us-test1", tc.wantCall.req).Return(tc.wantCall.rsp, tc.wantCall.err).Maybe()
+			gkeManager.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.E2).Maybe()
+			gkeManager.On("IsResizeRequestErrorHandlingEnabled").Return(true).Maybe()
+			gkeManager.On("ResizeRequests", mock.Anything).Return([]rrclient.ResizeRequestStatus{}, nil).Maybe()
+			gkeManager.On("ClearRecommendations").Return().Maybe()
+
+			for migId, rec := range tc.wantRecommendations {
+				gkeManager.On("SetRecommendation", migId, rec).Return().Once()
+			}
+			for _, migId := range tc.wantPopRecommendations {
+				gkeManager.On("PopRecommendation", migId).Return(gke.ScaleUpRecommendation{}, true).Once()
+			}
 
 			provider, err := gke.BuildGkeCloudProvider(gkeManager, nil, nil, true, "us-test1", nil, false, false, nil, "", nil, nil, nil, 1000)
 			if err != nil {
@@ -387,6 +442,7 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 			}
 
 			enabledExperiments := sets.New[string](experiments.RecommendLocationsFlexAddInstancesFlag)
+			enabledExperiments.Insert(tc.enabledExperiments...)
 			enabledExperiments.Delete(tc.disabledExperiments...)
 
 			balancer := NewLocationPolicyAnyBalancer(provider, experiments.NewMockManager(enabledExperiments.UnsortedList()...))
@@ -404,6 +460,8 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 			if diff := cmp.Diff(wantScaleUpInfo, scaleUpInfo, compareAllUnexportedOpt, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("Balancer.Balance() diff (-want +got):\n%s", diff)
 			}
+
+			gkeManager.AssertExpectations(t)
 		})
 	}
 }
@@ -418,6 +476,8 @@ type recommendLocationsCallConfig struct {
 	unsetTargetShape           bool
 	recommendationTypeOverride gceclient.RecommendationType
 	maxRunDuration             *time.Duration
+	recommendationID           string
+	specKey                    string
 	err                        error
 }
 
@@ -455,7 +515,9 @@ func newRecommendLocationCall(config recommendLocationsCallConfig) recommendLoca
 			MaxRunDuration:         config.maxRunDuration,
 		},
 		rsp: &gceclient.RecommendLocationsResponse{
-			Recommendation: config.recommendation,
+			Recommendation:   config.recommendation,
+			RecommendationID: config.recommendationID,
+			SpecKey:          config.specKey,
 		},
 		err: config.err,
 	}

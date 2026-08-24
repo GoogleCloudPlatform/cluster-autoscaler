@@ -122,7 +122,23 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.Autoscali
 	}
 
 	balancingInfos = distributeNewNodes(balancingInfos, newNodes)
+	trackDemand := experiments.IsDemandFungibilityImpactTrackingEnabled(b.experimentsManager)
+	if trackDemand {
+		for _, info := range balancingInfos {
+			if info.scaleUpInfo.NewSize > info.scaleUpInfo.CurrentSize {
+				gkeGroup, ok := info.scaleUpInfo.Group.(gke.NodeGroup)
+				if ok && !gkeGroup.IsUpcoming() {
+					gkeGroup.GetMig().SetRecommendation(gke.ScaleUpRecommendation{
+						RecommendationId: info.snapshot.GuidanceId(),
+						SpecKey:          info.snapshot.SpecKey(),
+						Source:           metrics.FA,
+					})
+				}
+			}
+		}
+	}
 	MarkUsed(balancingInfos)
+
 	return b.balancingInfosToScaleUpInfos(balancingInfos), nil
 }
 
