@@ -1901,7 +1901,13 @@ func TestNewCccCrd(t *testing.T) {
 						{
 							MachineFamily: &familyName,
 							Storage: &v1.Storage{
-								BootDiskStoragePools: []string{"projects/test/zones/us-central1-a/storagePools/pool-1"},
+								BootDiskStoragePools: []v1.BootDiskStoragePool{
+									{
+										Name:    "pool-1",
+										Zone:    "us-central1-a",
+										Project: "test",
+									},
+								},
 							},
 						},
 					},
@@ -1914,6 +1920,37 @@ func TestNewCccCrd(t *testing.T) {
 						rules.WithMachineFamilyRule(&familyName),
 						rules.WithStorageRule(nil, nil, nil, nil),
 						rules.WithBootDiskStoragePoolsRule([]string{"projects/test/zones/us-central1-a/storagePools/pool-1"}),
+					),
+				}),
+			),
+		},
+		{
+			name:       "CCC with BootDiskStoragePools defaulting project",
+			cccProject: "test-project",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: &familyName,
+							Storage: &v1.Storage{
+								BootDiskStoragePools: []v1.BootDiskStoragePool{
+									{
+										Name: "pool-1",
+										Zone: "us-central1-a",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithMachineFamilyRule(&familyName),
+						rules.WithStorageRule(nil, nil, nil, nil),
+						rules.WithBootDiskStoragePoolsRule([]string{"projects/test-project/zones/us-central1-a/storagePools/pool-1"}),
 					),
 				}),
 			),

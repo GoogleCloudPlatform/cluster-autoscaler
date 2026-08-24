@@ -197,6 +197,21 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 			confidentialType = pool.Config.ConfidentialNodes.ConfidentialInstanceType
 		}
 
+		diskSize := pool.Config.DiskSizeGb
+		diskType := pool.Config.DiskType
+		var bootDiskProvisionedIops int64
+		var bootDiskProvisionedThroughput int64
+		if pool.Config.BootDisk != nil {
+			if pool.Config.BootDisk.SizeGb > 0 {
+				diskSize = pool.Config.BootDisk.SizeGb
+			}
+			if pool.Config.BootDisk.DiskType != "" {
+				diskType = pool.Config.BootDisk.DiskType
+			}
+			bootDiskProvisionedIops = pool.Config.BootDisk.ProvisionedIops
+			bootDiskProvisionedThroughput = pool.Config.BootDisk.ProvisionedThroughput
+		}
+
 		if pool.Autoscaling == nil {
 			pool.Autoscaling = &gke_api_beta.NodePoolAutoscaling{}
 		}
@@ -222,42 +237,44 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 					EphemeralStorageLocalSsdConfig: pool.Config.EphemeralStorageLocalSsdConfig,
 					LocalNvmeSsdBlockConfig:        pool.Config.LocalNvmeSsdBlockConfig,
 				},
-				Labels:                      pool.Config.Labels,
-				Taints:                      convertGkeApiTaintsToApiV1Taints(pool.Config.Taints),
-				Locations:                   pool.Locations,
-				DiskSize:                    pool.Config.DiskSizeGb,
-				DiskType:                    pool.Config.DiskType,
-				DiskEncryptionKey:           pool.Config.BootDiskKmsKey,
-				MachineType:                 getMachineTypeV1Beta1(pool),
-				ImageType:                   pool.Config.ImageType,
-				SandboxType:                 sandboxType,
-				SystemArchitecture:          arch,
-				ExtendedDurationPods:        getExtendedDurationPods(pool),
-				MinCpuPlatform:              pool.Config.MinCpuPlatform,
-				ReservationAffinity:         pool.Config.ReservationAffinity,
-				Spot:                        pool.Config.Spot,
-				FlexStart:                   pool.Config.FlexStart,
-				MaxRunDurationInSeconds:     getMaxRunDurationInSeconds(pool),
-				TpuType:                     tpuType,
-				TpuTopology:                 tpuTopo,
-				TpuMultiHost:                tpuMultiHost,
-				Metadata:                    pool.Config.Metadata,
-				MaxPodsPerNode:              nodePoolMppn,
-				NetworkConfigs:              networkConfigs,
-				PodIpv4CidrBlock:            podIpv4CidrBlock,
-				SecondaryBootDisks:          pool.Config.SecondaryBootDisks,
-				StoragePools:                pool.Config.StoragePools,
-				ServiceAccount:              pool.Config.ServiceAccount,
-				LinuxNodeConfig:             linuxNodeConfig(pool.Config.LinuxNodeConfig),
-				KubeletConfig:               nodeKubeletConfig(pool.Config.KubeletConfig),
-				SelfServiceMetadata:         selfservice.NodepoolMetadata(pool),
-				UpgradeSettings:             pool.UpgradeSettings,
-				Subnetwork:                  subnet,
-				PlacementGroup:              placementGroup(pool),
-				ConfidentialNodeType:        confidentialType,
-				ConsolidationDelayInSeconds: getConsolidationDelayInSeconds(pool),
-				NodeVersion:                 getNodeVersionV1Beta1(pool),
-				ArchTaintBehavior:           getArchTaintBehavior(pool),
+				Labels:                        pool.Config.Labels,
+				Taints:                        convertGkeApiTaintsToApiV1Taints(pool.Config.Taints),
+				Locations:                     pool.Locations,
+				DiskSize:                      diskSize,
+				DiskType:                      diskType,
+				DiskEncryptionKey:             pool.Config.BootDiskKmsKey,
+				BootDiskProvisionedIops:       bootDiskProvisionedIops,
+				BootDiskProvisionedThroughput: bootDiskProvisionedThroughput,
+				MachineType:                   getMachineTypeV1Beta1(pool),
+				ImageType:                     pool.Config.ImageType,
+				SandboxType:                   sandboxType,
+				SystemArchitecture:            arch,
+				ExtendedDurationPods:          getExtendedDurationPods(pool),
+				MinCpuPlatform:                pool.Config.MinCpuPlatform,
+				ReservationAffinity:           pool.Config.ReservationAffinity,
+				Spot:                          pool.Config.Spot,
+				FlexStart:                     pool.Config.FlexStart,
+				MaxRunDurationInSeconds:       getMaxRunDurationInSeconds(pool),
+				TpuType:                       tpuType,
+				TpuTopology:                   tpuTopo,
+				TpuMultiHost:                  tpuMultiHost,
+				Metadata:                      pool.Config.Metadata,
+				MaxPodsPerNode:                nodePoolMppn,
+				NetworkConfigs:                networkConfigs,
+				PodIpv4CidrBlock:              podIpv4CidrBlock,
+				SecondaryBootDisks:            pool.Config.SecondaryBootDisks,
+				StoragePools:                  pool.Config.StoragePools,
+				ServiceAccount:                pool.Config.ServiceAccount,
+				LinuxNodeConfig:               linuxNodeConfig(pool.Config.LinuxNodeConfig),
+				KubeletConfig:                 nodeKubeletConfig(pool.Config.KubeletConfig),
+				SelfServiceMetadata:           selfservice.NodepoolMetadata(pool),
+				UpgradeSettings:               pool.UpgradeSettings,
+				Subnetwork:                    subnet,
+				PlacementGroup:                placementGroup(pool),
+				ConfidentialNodeType:          confidentialType,
+				ConsolidationDelayInSeconds:   getConsolidationDelayInSeconds(pool),
+				NodeVersion:                   getNodeVersionV1Beta1(pool),
+				ArchTaintBehavior:             getArchTaintBehavior(pool),
 			},
 			QueuedProvisioning: queuedProvisioning,
 			AutopilotManaged:   autopilotManaged,
