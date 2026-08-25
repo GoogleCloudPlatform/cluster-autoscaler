@@ -654,7 +654,12 @@ func (m *asyncGkeManager) nodePoolCleanUpAsyncAction(terminating *terminatingNod
 	// slow operation - calls GKE and waits for node pool removal operation to finish
 	reqErr := m.extendedGkeManager.DeleteNodePoolNoRefresh(terminating.mainMig())
 	if reqErr != nil {
-		klog.Infof("Failed to delete (clean-up) node pool: %s [time: %s]. It's possible that node pool was not fully created: %v", terminating.nodePoolName, terminating.sinceLastChange(), reqErr)
+		if isNotFoundError(reqErr) {
+			// Don't log full 404 error. Most cleanups fail with 404 and that's ok, as most failed node pool creations don't leave a node pool.
+			klog.Infof("Failed to delete (clean-up) node pool: %s [time: %s]. It's possible that node pool was not fully created. Error 404: Node pool not found", terminating.nodePoolName, terminating.sinceLastChange())
+		} else {
+			klog.Infof("Failed to delete (clean-up) node pool: %s [time: %s]. It's possible that node pool was not fully created: %v", terminating.nodePoolName, terminating.sinceLastChange(), reqErr)
+		}
 		terminating.setError(reqErr)
 	} else {
 		klog.Infof("GKE deleted (clean-up) node pool %s [time: %s] (migs: %v)", terminating.nodePoolName, terminating.sinceLastChange(), terminating.migIds())
