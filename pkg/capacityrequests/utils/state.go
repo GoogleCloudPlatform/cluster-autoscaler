@@ -66,7 +66,19 @@ func (s *CapacityRequestState) Update(crs []*cr_types.CapacityRequest) {
 			crPod = pod
 		} else {
 			podName := fmt.Sprintf("capacity-request-%d", rand.Int63())
-			crPod = &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: cr.Namespace, UID: cr.UID, Labels: cr.Labels}, Spec: cr.Spec.Capacity, Status: apiv1.PodStatus{}}
+			spec := cr.Spec.Capacity.DeepCopy()
+			spec.NodeName = ""
+			SanitizeNodeAffinity(spec)
+			crPod = &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      podName,
+					Namespace: cr.Namespace,
+					UID:       cr.UID,
+					Labels:    cr.Labels,
+				},
+				Spec:   *spec,
+				Status: apiv1.PodStatus{},
+			}
 			crPod.SetAnnotations(map[string]string{drain.PodSafeToEvictKey: "true", crAnnotation: "true"})
 		}
 		newPods[ObjectRef{Name: cr.Name, Namespace: cr.Namespace}] = crPod
@@ -156,4 +168,45 @@ func (s *CapacityRequestState) updateConditionIfNeeded(cr *cr_types.CapacityRequ
 // IsPodCapacityRequest tells if a pod is a capacity request.
 func IsPodCapacityRequest(pod *apiv1.Pod) bool {
 	return pod.GetAnnotations()[crAnnotation] == "true"
+}
+
+// SanitizeNodeAffinity strips single-node hostname matchFields (metadata.name)
+// from NodeAffinity requirements in the pod spec, ensuring synthesized sample pods
+// are not bound to a specific node during autoscaler simulation.
+func SanitizeNodeAffinity(spec *apiv1.PodSpec) {
+	if spec == nil || spec.Affinity == nil || spec.Affinity.NodeAffinity == nil {
+		return
+	}
+	nodeAffinity := spec.Affinity.NodeAffinity
+	if nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return
+	}
+
+	var filteredTerms []apiv1.NodeSelectorTerm
+	for _, term := range nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
+		var filteredMatchFields []apiv1.NodeSelectorRequirement
+		for _, matchField := range term.MatchFields {
+			if matchField.Key == metav1.ObjectNameField {
+				continue
+			}
+			filteredMatchFields = append(filteredMatchFields, matchField)
+		}
+		term.MatchFields = filteredMatchFields
+		if len(term.MatchFields) > 0 || len(term.MatchExpressions) > 0 {
+			filteredTerms = append(filteredTerms, term)
+		}
+	}
+
+	if len(filteredTerms) == 0 {
+		nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = nil
+		if nodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution == nil {
+			spec.Affinity.NodeAffinity = nil
+			if spec.Affinity.PodAffinity == nil && spec.Affinity.PodAntiAffinity == nil {
+				spec.Affinity = nil
+			}
+		}
+		return
+	}
+
+	nodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = filteredTerms
 }

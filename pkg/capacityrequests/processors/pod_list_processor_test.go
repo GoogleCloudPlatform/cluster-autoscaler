@@ -70,6 +70,24 @@ func TestPodListProcessor(t *testing.T) {
 	cr90 := utils.BuildTestCr("cr90", "90m", "0", []cr_types.CapacityRequestConditionType{})
 	cr80 := utils.BuildTestCr("cr80", "80m", "0", []cr_types.CapacityRequestConditionType{})
 	crWithRemovalOfp40n2 := utils.BuildTestCrWithRemoval("cr600", "500m", "0", []cr_types.CapacityRequestConditionType{}, []string{"p40n2"})
+	cr90WithDaemonSetAffinity := utils.BuildTestCr("cr90-ds", "90m", "0", []cr_types.CapacityRequestConditionType{})
+	cr90WithDaemonSetAffinity.Spec.Capacity.Affinity = &apiv1.Affinity{
+		NodeAffinity: &apiv1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+				NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+					{
+						MatchFields: []apiv1.NodeSelectorRequirement{
+							{
+								Key:      "metadata.name",
+								Operator: apiv1.NodeSelectorOpIn,
+								Values:   []string{"n2"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 
 	testCases := []struct {
 		caseName         string
@@ -176,6 +194,21 @@ func TestPodListProcessor(t *testing.T) {
 				expectedUnschedulablePods: 2, // extra one pod added to unschedulable
 			},
 			verifyPresent:    []*apiv1.Pod{utils.BuildPodFromCr(cr90), utils.BuildPodFromCr(cr80)},
+			verifyNotPresent: []*apiv1.Pod{},
+			expectedActions:  1,
+		},
+		{
+			caseName: "Capacity Request with DaemonSet hostname affinity is sanitized and scheduled on available node",
+			state: commonState{
+				nodes:                     []*apiv1.Node{n1, n2},
+				allScheduled:              []*apiv1.Pod{p40n2},
+				unschedulablePods:         []*apiv1.Pod{p400},
+				capacityRequests:          []*cr_types.CapacityRequest{cr90WithDaemonSetAffinity},
+				expectedAllScheduled:      2, // pod from CR added to scheduled (on n1)
+				expectedUnschedulablePods: 1, // no change
+				verifyNodes:               map[string]string{"cr90-ds": "n1"},
+			},
+			verifyPresent:    []*apiv1.Pod{utils.BuildPodFromCr(cr90WithDaemonSetAffinity)},
 			verifyNotPresent: []*apiv1.Pod{},
 			expectedActions:  1,
 		},
