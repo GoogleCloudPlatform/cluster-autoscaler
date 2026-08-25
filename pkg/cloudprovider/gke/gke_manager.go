@@ -41,6 +41,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -1274,6 +1275,13 @@ func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, 
 	nodePoolSpec.ClusterNetworkPath = m.networkPath
 	nodePoolSpec.ClusterSubnetworkPath = m.subnetworkPath
 	nodePoolSpec.ClusterSubnetwork = m.subnetwork
+	if mig.spec.Labels != nil {
+		// GKE client in its createNodePoolRequest uses the ClusterSubnetworkName in configuring the additional networks to exclude it from the update operation.
+		// In MT we want to exclude the tenant default network instead of the cluster default network, hence this override.
+		if tenantUID, ok := mig.spec.Labels[multitenancy.TenantUIDLabel]; ok && tenantUID != "" {
+			nodePoolSpec.ClusterSubnetwork = "gke-" + tenantUID
+		}
+	}
 	return &nodePoolSpec, nil
 }
 

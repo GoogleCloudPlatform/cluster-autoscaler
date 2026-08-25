@@ -55,6 +55,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/common"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
@@ -1380,6 +1381,26 @@ func TestNewNodePoolSpec(t *testing.T) {
 			expectedSpec: NewTestMigSpecBuilder().
 				SetMachineType(machineTypeA).
 				SetLocations([]string{zoneAIA, zoneAIB}).
+				SpecBuild(),
+		},
+		{
+			description: "tenant mig spec, expects overridden cluster subnetwork",
+			mig: NewTestGkeMigBuilder().SetGceRef(
+				gce.GceRef{
+					Project: projectId,
+					Zone:    zoneA,
+					Name:    "mig",
+				},
+			).SetSpec(
+				NewTestMigSpecBuilder().
+					SetMachineType(machineTypeA).
+					SetLabels(map[string]string{multitenancy.TenantUIDLabel: "my-tenant-123"}).
+					SpecBuild()).
+				Build(),
+			expectedSpec: NewTestMigSpecBuilder().
+				SetMachineType(machineTypeA).
+				SetLocations(autoprovLocations).
+				SetClusterSubnetwork("gke-my-tenant-123").
 				SpecBuild(),
 		},
 	}
