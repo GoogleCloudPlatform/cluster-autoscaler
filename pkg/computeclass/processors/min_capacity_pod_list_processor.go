@@ -16,11 +16,13 @@ package processors
 
 import (
 	"context"
+	"sort"
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -180,35 +182,262 @@ func buildSpecFakePods(ccName string, target int, priorityFakePodsCount int, sat
 	return pods
 }
 
+// atomicGroupInfo summarizes an atomic node group for packing.
+type atomicGroupInfo struct {
+	id         string
+	totalNodes int
+	freeNodes  int             // nodes in this group that currently host no pod
+	nodeNames  map[string]bool // node names belonging to this group
+	ccLabels   map[string]bool // ComputeClass labels present on this group's nodes
+}
+
+// filterOutSchedulableFakePods runs spec-level fake pods through the scheduling
+// simulator and returns the subset that could not be placed on existing nodes.
+// The returned pods will be injected as truly-unschedulable to drive scale-up.
+//
+// Remaining pods fall back to non-atomic nodes; leftovers are returned as truly
+// unschedulable. Atomicity is resolved once per node group (not per node).
 func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCtx *ca_context.AutoscalingContext, fakePods []*apiv1.Pod) []*apiv1.Pod {
 	if len(fakePods) == 0 {
 		return nil
 	}
 
-	res, err := p.simulator.TrySchedulePods(context.Background(), autoscalingCtx.ClusterSnapshot, fakePods, false, clustersnapshot.SchedulingOptions{
-		IsNodeAcceptable: func(nodeInfo *framework.NodeInfo) bool {
-			return true // Accept any node currently in snapshot
-		},
-	})
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
-		klog.Errorf("Failed to run FilterOutSchedulable on MinCapacity fake pods: %v", err)
-		return nil
+		klog.Errorf("MinCapacityPodListProcessor: failed to list node infos: %v", err)
+		return fakePods
 	}
 
-	scheduledMap := make(map[types.UID]bool)
-	for _, status := range res.Statuses {
-		scheduledMap[status.Pod.UID] = true
-	}
-
-	var trulyUnschedulable []*apiv1.Pod
-	for _, pod := range fakePods {
-		if !scheduledMap[pod.UID] {
-			trulyUnschedulable = append(trulyUnschedulable, pod)
+	atomicGroups, nonAtomicNodes := p.splitIntoAtomicAndNonAtomicGroups(autoscalingCtx, nodeInfos)
+	remaining := fakePods
+	if len(atomicGroups) > 0 {
+		remaining, err = p.packIntoGroups(autoscalingCtx, remaining, sortAtomicGroupsForPacking(atomicGroups))
+		if err != nil {
+			klog.Errorf("MinCapacityPodListProcessor: error while packing into atomic groups: %v", err)
+			// Fall through: still try non-atomic for whatever is left.
 		}
 	}
 
-	klog.V(4).Infof("MinCapacityPodListProcessor: Filtered out %d schedulable fake pods", len(fakePods)-len(trulyUnschedulable))
-	return trulyUnschedulable
+	remaining, err = p.packIntoNonAtomic(autoscalingCtx, remaining, nonAtomicNodes)
+	if err != nil {
+		klog.Errorf("MinCapacityPodListProcessor: error while packing into non-atomic nodes: %v", err)
+		return remaining
+	}
+
+	klog.V(2).Infof("MinCapacityPodListProcessor: packed %d fake pods, %d truly unschedulable for minimum capacity", len(fakePods)-len(remaining), len(remaining))
+	return remaining
+}
+
+// splitIntoAtomicAndNonAtomicGroups classifies every node in the snapshot into
+// either an atomic node group (ZeroOrMaxNodeScaling) or the set of non-atomic
+// node names. Atomicity is resolved once per node group (not per node), and
+// nodes whose group cannot be resolved are treated as non-atomic.
+func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscalingCtx *ca_context.AutoscalingContext, nodeInfos []*framework.NodeInfo) (atomicGroups map[string]*atomicGroupInfo, nonAtomicNodes map[string]bool) {
+	atomicGroupIDs := p.atomicNodeGroupIDs(autoscalingCtx)
+	atomicGroups = map[string]*atomicGroupInfo{}
+	nonAtomicNodes = map[string]bool{}
+	for _, ni := range nodeInfos {
+		node := ni.Node()
+		if node == nil {
+			continue
+		}
+		// Fast path: with no atomic node groups every node is non-atomic, so
+		// skip the per-node group lookup entirely.
+		if len(atomicGroupIDs) == 0 {
+			nonAtomicNodes[node.Name] = true
+			continue
+		}
+		id, isAtomic := p.classifyNode(autoscalingCtx, node, atomicGroupIDs)
+		if !isAtomic {
+			nonAtomicNodes[node.Name] = true
+			continue
+		}
+		g, ok := atomicGroups[id]
+		if !ok {
+			g = &atomicGroupInfo{id: id, nodeNames: map[string]bool{}, ccLabels: map[string]bool{}}
+			atomicGroups[id] = g
+		}
+		g.nodeNames[node.Name] = true
+		g.totalNodes++
+		if cc := p.nodeCCC(node); cc != "" {
+			g.ccLabels[cc] = true
+		}
+		if len(ni.Pods()) == 0 {
+			g.freeNodes++
+		}
+	}
+	return atomicGroups, nonAtomicNodes
+}
+
+// sortAtomicGroupsForPacking orders atomic groups deterministically for packing:
+//
+//	(1) most existing fake pods first (pack into groups already used),
+//	(2) then most free nodes (fill biggest group first),
+//	(3) then group ID for tie-break determinism.
+func sortAtomicGroupsForPacking(atomicGroups map[string]*atomicGroupInfo) []*atomicGroupInfo {
+	sortedGroups := make([]*atomicGroupInfo, 0, len(atomicGroups))
+	for _, g := range atomicGroups {
+		sortedGroups = append(sortedGroups, g)
+	}
+	sort.Slice(sortedGroups, func(i, j int) bool {
+		a, b := sortedGroups[i], sortedGroups[j]
+		apods, bpods := a.totalNodes-a.freeNodes, b.totalNodes-b.freeNodes
+		if apods != bpods {
+			return apods > bpods
+		}
+		if a.freeNodes != b.freeNodes {
+			return a.freeNodes > b.freeNodes
+		}
+		return a.id < b.id
+	})
+	return sortedGroups
+}
+
+// atomicNodeGroupIDs returns the set of node group IDs that scale atomically
+// (ZeroOrMaxNodeScaling). It resolves options once per node group rather than
+// once per node.
+func (p *MinCapacityPodListProcessor) atomicNodeGroupIDs(autoscalingCtx *ca_context.AutoscalingContext) map[string]bool {
+	ids := map[string]bool{}
+	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
+		if p.isAtomicNodeGroup(autoscalingCtx, ng) {
+			ids[ng.Id()] = true
+		}
+	}
+	return ids
+}
+
+// isAtomicNodeGroup reports whether ng scales atomically (ZeroOrMaxNodeScaling).
+// A failure to resolve the node group's options is treated as non-atomic.
+func (p *MinCapacityPodListProcessor) isAtomicNodeGroup(autoscalingCtx *ca_context.AutoscalingContext, ng cloudprovider.NodeGroup) bool {
+	opts, err := ng.GetOptions(context.TODO(), autoscalingCtx.NodeGroupDefaults)
+	if err != nil || opts == nil {
+		return false
+	}
+	return opts.ZeroOrMaxNodeScaling
+}
+
+// packIntoGroups tries to place remaining pods into atomic groups in order,
+// letting each group absorb pods (persisting placements in the snapshot).
+// Groups whose ComputeClass labels don't match any remaining pod are skipped.
+//
+// TODO(b/555154270): the deterministic concentration order (already-used, then
+// emptiest groups) is what frees whole atomic slices for scale-down, so it is
+// kept here. A cheaper follow-up is to replace the per-group scheduling
+// simulation with a count-based greedy assignment.
+func (p *MinCapacityPodListProcessor) packIntoGroups(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, groups []*atomicGroupInfo) ([]*apiv1.Pod, error) {
+	remaining := pods
+	for _, g := range groups {
+		if len(remaining) == 0 {
+			break
+		}
+		if !p.groupTargetsAnyRemainingCCC(g, remaining) {
+			continue
+		}
+		next, err := p.schedulePersisting(autoscalingCtx, remaining, func(ni *framework.NodeInfo) bool {
+			n := ni.Node()
+			if n == nil {
+				return false
+			}
+			return g.nodeNames[n.Name]
+		})
+		if err != nil {
+			return remaining, err
+		}
+		klog.V(2).Infof("MinCapacityPodListProcessor: packed %d pods into atomic group %s", len(remaining)-len(next), g.id)
+		remaining = next
+	}
+	return remaining, nil
+}
+
+// packIntoNonAtomic places remaining pods onto non-atomic nodes.
+func (p *MinCapacityPodListProcessor) packIntoNonAtomic(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, nonAtomicNodes map[string]bool) ([]*apiv1.Pod, error) {
+	if len(pods) == 0 {
+		return pods, nil
+	}
+	remaining, err := p.schedulePersisting(autoscalingCtx, pods, func(ni *framework.NodeInfo) bool {
+		n := ni.Node()
+		if n == nil {
+			return false
+		}
+		return nonAtomicNodes[n.Name]
+	})
+	if err != nil {
+		return pods, err
+	}
+	klog.V(4).Infof("MinCapacityPodListProcessor: packed %d pods into non-atomic nodes, %d remain unschedulable", len(pods)-len(remaining), len(remaining))
+	return remaining, nil
+}
+
+// schedulePersisting runs the given pods through the scheduling simulator against
+// the shared ClusterSnapshot, letting successful placements persist. It returns
+// the pods that could not be placed. On simulator error the input pods are
+// returned unchanged.
+func (p *MinCapacityPodListProcessor) schedulePersisting(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, isNodeAcceptable func(*framework.NodeInfo) bool) ([]*apiv1.Pod, error) {
+	res, err := p.simulator.TrySchedulePods(context.Background(), autoscalingCtx.ClusterSnapshot, pods, false, clustersnapshot.SchedulingOptions{
+		IsNodeAcceptable: isNodeAcceptable,
+	})
+	if err != nil {
+		return pods, err
+	}
+	placed := make(map[types.UID]bool, len(res.Statuses))
+	for _, s := range res.Statuses {
+		placed[s.Pod.UID] = true
+	}
+	var remaining []*apiv1.Pod
+	for _, pod := range pods {
+		if !placed[pod.UID] {
+			remaining = append(remaining, pod)
+		}
+	}
+	return remaining, nil
+}
+
+// cccOfPod returns the ComputeClass a fake pod targets. It resolves the name
+// through the lister (rather than reading the raw node selector) so that special
+// cases such as the default ComputeClass are handled consistently.
+func (p *MinCapacityPodListProcessor) cccOfPod(pod *apiv1.Pod) string {
+	_, name, err := p.ccLister.PodCrd(pod)
+	if err != nil {
+		klog.Warningf("MinCapacityPodListProcessor: failed to resolve ComputeClass for pod %s: %v", pod.Name, err)
+		return ""
+	}
+	return name
+}
+
+// nodeCCC returns the ComputeClass assigned to a node. It resolves the name
+// through the lister (rather than reading the raw node label) so that special
+// cases such as the default ComputeClass are handled consistently.
+func (p *MinCapacityPodListProcessor) nodeCCC(node *apiv1.Node) string {
+	_, name, err := p.ccLister.NodeCrd(node)
+	if err != nil {
+		klog.Warningf("MinCapacityPodListProcessor: failed to resolve ComputeClass for node %s: %v", node.Name, err)
+		return ""
+	}
+	return name
+}
+
+// groupTargetsAnyRemainingCCC reports whether the group has at least one node
+// whose ComputeClass matches one of the remaining fake pods. This is a cheap,
+// label-only gate: it never skips a group that could actually accept a pod, it
+// only avoids simulating groups belonging to unrelated ComputeClasses.
+func (p *MinCapacityPodListProcessor) groupTargetsAnyRemainingCCC(g *atomicGroupInfo, remaining []*apiv1.Pod) bool {
+	for _, pod := range remaining {
+		if g.ccLabels[p.cccOfPod(pod)] {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyNode resolves a node to its group ID and whether the group is atomic.
+// A node whose group cannot be resolved is treated as non-atomic.
+func (p *MinCapacityPodListProcessor) classifyNode(autoscalingCtx *ca_context.AutoscalingContext, node *apiv1.Node, atomicGroupIDs map[string]bool) (groupID string, isAtomic bool) {
+	ng, err := autoscalingCtx.CloudProvider.NodeGroupForNode(context.TODO(), node)
+	if err != nil || ng == nil {
+		return "", false
+	}
+	id := ng.Id()
+	return id, atomicGroupIDs[id]
 }
 
 // CleanUp cleans up internal status.
