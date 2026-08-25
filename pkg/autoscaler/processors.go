@@ -741,13 +741,17 @@ func setUpProcessors(
 
 	autoscalingProcessors.BinpackingLimiter = metricsbinpacking.NewBinpackingMetricsProcessor(autoscalingProcessors.BinpackingLimiter)
 	autoscalingProcessors.NodeGroupManager = apNodeGroupManager
-	autoscalingProcessors.ScaleDownSetProcessor =
-		nodes.NewCompositeScaleDownSetProcessor(
-			[]nodes.ScaleDownSetProcessor{
-				internal_processors.NewMinSizeProcessor(provider),
-				nodes.NewAtomicResizeFilteringProcessor(),
-			},
-		)
+	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
+		internal_processors.NewMinSizeProcessor(provider),
+		nodes.NewAtomicResizeFilteringProcessor(),
+	}
+	if options.EnableComputeClassMinCapacity {
+		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
+		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
+		// groups, which are exempt from the per-node TargetNodeCountQuota.
+		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(npcCrdLister, experimentsManager))
+	}
+	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(scaleDownSetProcessors)
 
 	var nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	nodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: internal_processors.IsGkeNodeInfoSimilar}
