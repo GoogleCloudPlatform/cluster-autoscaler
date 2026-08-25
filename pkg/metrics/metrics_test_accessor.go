@@ -60,6 +60,12 @@ func GetCCStatusApiPatchDurationCountForTest(code string) (uint64, error) {
 	return testutil.GetHistogramMetricCount(histogram)
 }
 
+// GetFilteredFalsePositiveSchedulablePodsEventsForTest returns the current value for a given reason (only for tests).
+func GetFilteredFalsePositiveSchedulablePodsEventsForTest(reason FilteredFalsePositiveReason) (float64, error) {
+	counter := filteredFalsePositiveSchedulablePodsEvents.WithLabelValues(string(reason))
+	return testutil.GetCounterMetricValue(counter)
+}
+
 // ResetAllForTest resets all metrics that support it, preventing cross-test
 // state contamination. It iterates the same allMetrics slice used by RegisterAll,
 // so any newly added metric is automatically handled.

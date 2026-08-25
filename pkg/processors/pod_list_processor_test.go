@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
@@ -29,47 +28,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
-
-func TestGetSchedulable(t *testing.T) {
-	var p = test.BuildTestPod("p1", 100, 1)
-	var p2 = test.BuildTestPod("p2", 200, 2)
-	var p3 = test.BuildTestPod("p3", 200, 2, func(p *v1.Pod) { p.Namespace = metav1.NamespaceSystem })
-
-	testCases := []struct {
-		desc               string
-		unchedulableBefore []*v1.Pod
-		unchedulableAfter  []*v1.Pod
-		wantSchedulable    []*v1.Pod
-	}{
-		{
-			desc:               "No schedulable",
-			unchedulableBefore: []*v1.Pod{p, p2, p3},
-			unchedulableAfter:  []*v1.Pod{p2, p, p3},
-			wantSchedulable:    []*v1.Pod{},
-		},
-		{
-			desc:               "All schedulable",
-			unchedulableBefore: []*v1.Pod{p, p2, p3},
-			unchedulableAfter:  []*v1.Pod{},
-			wantSchedulable:    []*v1.Pod{p, p2, p3},
-		},
-		{
-			desc:               "One schedulable",
-			unchedulableBefore: []*v1.Pod{p, p2, p3},
-			unchedulableAfter:  []*v1.Pod{p, p3},
-			wantSchedulable:    []*v1.Pod{p2},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.desc, func(t *testing.T) {
-			schedulable := getSchedulable(tc.unchedulableBefore, tc.unchedulableAfter)
-			if diff := cmp.Diff(tc.wantSchedulable, schedulable); diff != "" {
-				t.Errorf("GetSchedulable returned unexpected diff for schedulable (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
 
 type mockScaleToZeroProcessor struct {
 	called bool

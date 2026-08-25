@@ -86,6 +86,16 @@ const (
 	InvalidPreferenceScore FAResponseErrorReason = "invalid_preference_score"
 )
 
+// FilteredFalsePositiveReason describes the reason for a filtered false positive schedulable pod.
+type FilteredFalsePositiveReason string
+
+const (
+	// FilterOutSchedulable represents filtering based on default schedulability checks.
+	FilterOutSchedulable FilteredFalsePositiveReason = "filter_out_schedulable"
+	// TopologySpreadMutation represents filtering based on pod topology spread mutations.
+	TopologySpreadMutation FilteredFalsePositiveReason = "pts_mutation"
+)
+
 // OperationStatus says whether an operation succeeded or failed.
 type OperationStatus string
 
@@ -290,6 +300,15 @@ var (
 			Name:      "pod_schedulable_resets_total",
 			Help:      "How many times pods switched from being considered schedulable to unschedulable.",
 		},
+	)
+
+	filteredFalsePositiveSchedulablePodsEvents = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "filtered_false_positive_schedulable_pods_events",
+			Help:      "How many times a false positive prediction was made that a pod fits on an existing ready node while it remained pending for over 10 minutes.",
+		},
+		[]string{"reason"},
 	)
 
 	caVizLoggedBytes = k8smetrics.NewHistogramVec(
@@ -1135,6 +1154,7 @@ var allMetrics = []k8smetrics.Registerable{
 	reactionTimeMilliseconds,
 	longUnschedulablePodsCount,
 	podSchedulableResets,
+	filteredFalsePositiveSchedulablePodsEvents,
 	caVizLoggedBytes,
 	caVizDroppedEventTotal,
 	caVizChemistClientRequestDurationSeconds,
@@ -1838,6 +1858,11 @@ func (pm *prometheusMetrics) RegisterResizableVmReconcileNodeStateEvents(machine
 	if machineFamily == machinetypes.EK.Name() {
 		reconcileNodeStateEvents.WithLabelValues(strconv.Itoa(attemptsNum), status, strconv.FormatBool(shouldRetry)).Inc()
 	}
+}
+
+// IncreaseFilteredFalsePositiveSchedulablePodsEvents increments the metric tracking false positive schedulable pod events.
+func IncreaseFilteredFalsePositiveSchedulablePodsEvents(reason FilteredFalsePositiveReason, count int) {
+	filteredFalsePositiveSchedulablePodsEvents.WithLabelValues(string(reason)).Add(float64(count))
 }
 
 func (*prometheusMetrics) UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string) {

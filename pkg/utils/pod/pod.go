@@ -16,6 +16,7 @@ package pod
 
 import (
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	resourcehelper "k8s.io/component-helpers/resource"
 	"k8s.io/kubernetes/pkg/features"
@@ -31,4 +32,28 @@ func PodRequests(pod *v1.Pod) v1.ResourceList {
 		UseStatusResources:    inPlacePodVerticalScalingEnabled,
 		SkipPodLevelResources: !podLevelResourcesEnabled,
 	})
+}
+
+type PodKey struct {
+	UID  types.UID
+	Name string
+}
+
+// GetMissingPods returns pods that were in the before slice but are missing from the after slice.
+func GetMissingPods(before, after []*v1.Pod) []*v1.Pod {
+	schedulable := []*v1.Pod{}
+	afterKeys := make(map[PodKey]struct{}, len(after))
+
+	for _, pod := range after {
+		key := PodKey{UID: pod.UID, Name: pod.Name}
+		afterKeys[key] = struct{}{}
+	}
+
+	for _, pod := range before {
+		key := PodKey{UID: pod.UID, Name: pod.Name}
+		if _, found := afterKeys[key]; !found {
+			schedulable = append(schedulable, pod)
+		}
+	}
+	return schedulable
 }
