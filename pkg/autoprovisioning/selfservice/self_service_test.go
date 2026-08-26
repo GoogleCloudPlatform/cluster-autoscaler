@@ -491,6 +491,21 @@ func TestNodepoolMetadata(t *testing.T) {
 				gkelabels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
 			},
 		},
+		{
+			name: "Nodepool with NodeDrainConfig is processed correctly",
+			nodepool: &container.NodePool{
+				NodeDrainConfig: &container.NodeDrainConfig{
+					PdbTimeoutDuration:               "60s",
+					GraceTerminationDuration:         "120s",
+					RespectPdbDuringNodePoolDeletion: true,
+				},
+			},
+			wantMetadata: Metadata{
+				pdbTimeoutDurationMetadataKey:               "60s",
+				graceTerminationDurationMetadataKey:         "120s",
+				respectPdbDuringNodePoolDeletionMetadataKey: "true",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -882,6 +897,23 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				gkelabels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
+			},
+		},
+		{
+			name: "NodeDrainConfig in CCC is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					NodeDrainConfig: &v1.NodeDrainConfig{
+						PdbTimeoutDuration:               ptr.To("60s"),
+						GraceTerminationDuration:         ptr.To("120s"),
+						RespectPdbDuringNodePoolDeletion: ptr.To(true),
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				pdbTimeoutDurationMetadataKey:               "60s",
+				graceTerminationDurationMetadataKey:         "120s",
+				respectPdbDuringNodePoolDeletionMetadataKey: "true",
 			},
 		},
 	}
@@ -1482,6 +1514,22 @@ func TestUpdateNodepool(t *testing.T) {
 						EnableNestedVirtualization: true,
 						ForceSendFields:            []string{"OtherField", "EnableNestedVirtualization"},
 					},
+				},
+			},
+		},
+		{
+			name: "NodeDrainConfig is set correctly",
+			metadata: Metadata{
+				pdbTimeoutDurationMetadataKey:               "60s",
+				graceTerminationDurationMetadataKey:         "120s",
+				respectPdbDuringNodePoolDeletionMetadataKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				NodeDrainConfig: &container.NodeDrainConfig{
+					PdbTimeoutDuration:               "60s",
+					GraceTerminationDuration:         "120s",
+					RespectPdbDuringNodePoolDeletion: true,
+					ForceSendFields:                  []string{"PdbTimeoutDuration", "GraceTerminationDuration", "RespectPdbDuringNodePoolDeletion"},
 				},
 			},
 		},
