@@ -207,11 +207,10 @@ replace (
 //
 // Managed in the scope of the sync process
 replace (
+	k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260820090312-ce048aaf0fd3
 	k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/gke-autoscaling/cluster-autoscaler/apis => ./apis
 )
 
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
-
-replace k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260820090312-ce048aaf0fd3
