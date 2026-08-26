@@ -1466,6 +1466,9 @@ func (mig *GkeMig) IncreaseSize(delta int) error {
 		return err
 	}
 	if mig.IsMultiHostTpuMig() {
+		if mig.IsProvisionOnly() {
+			return increaseViaCreateInstances(mig, int64(delta))
+		}
 		// MultiHost tpus always use ResizeRequest, no matter the flex
 		return increaseViaResizeRequest(mig, int64(delta))
 	}
@@ -1917,7 +1920,7 @@ func (mig *GkeMig) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*con
 
 	opts.MaxNodeProvisionTime = mig.getMaxNodeProvisionTime(opts.MaxNodeProvisionTime)
 	opts.ZeroOrMaxNodeScaling = mig.ResizeAtomically()
-	opts.AllowNonAtomicScaleUpToMax = mig.IsGpuAcceleratorSlice()
+	opts.AllowNonAtomicScaleUpToMax = mig.IsGpuAcceleratorSlice() || mig.IsProvisionOnly()
 
 	warningLogQuota := klogx.NewLoggingQuota(1)
 	if unreadyTime, found := mig.gkeManager.ScaleDownUnreadyTimeOverride(mig); found {
@@ -2148,6 +2151,34 @@ func (mig *GkeMig) IsGpuAcceleratorSlice() bool {
 		return true
 	}
 
+	return false
+}
+
+// IsProvisionOnly returns whether the mig belongs to a PROVISION_ONLY dynamic slicing workload
+// policy. Such MIGs are grown incrementally through CreateInstances rather than ResizeRequest,
+// and support partial (non-atomic) scale-up to max.
+func (mig *GkeMig) IsProvisionOnly() bool {
+	if mig.spec == nil {
+		return false
+	}
+	if mig.spec.PlacementGroup.ResourcePolicy != nil {
+		return mig.spec.PlacementGroup.ResourcePolicy.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
+	}
+	if mig.spec.PlacementGroup.Policy != "" && mig.gkeManager != nil {
+		region, err := gkeutil.GetRegionFromLocation(mig.gceRef.Zone)
+		if err != nil {
+			klog.Warningf("IsProvisionOnly: cannot derive region from zone %q: %v", mig.gceRef.Zone, err)
+			return false
+		}
+		policies, err := mig.gkeManager.GetResourcePolicies(mig.gceRef.Project, region)
+		if err == nil {
+			for _, p := range policies {
+				if p.Name == mig.spec.PlacementGroup.Policy {
+					return p.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
+				}
+			}
+		}
+	}
 	return false
 }
 

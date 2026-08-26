@@ -72,6 +72,7 @@ type GceClient struct {
 	regionToAiZones         map[string][]string
 	availableCpuPlatforms   map[string][]string
 	recordedRecommendations map[string][]string // Key: {zone}/{migName}
+	resourcePolicies        []*gceclient.GceResourcePolicy
 
 	// --- Behavior modifiers
 	createInstanceForMIGError  map[string]cloudprovider.InstanceErrorInfo // Key: migName
@@ -276,6 +277,16 @@ func (g *GceClient) WithDefaultMachineTypes() *GceClient {
 	return g.withMachineTypes(names...)
 }
 
+// WithResourcePolicies injects READY GCE resource policies that the Resource
+// Policy puller will surface to the provisioning pipeline (used by accelerator
+// slices to decide provisioning mode per placement policy).
+func (g *GceClient) WithResourcePolicies(policies ...*gceclient.GceResourcePolicy) *GceClient {
+	g.Lock()
+	defer g.Unlock()
+	g.resourcePolicies = append(g.resourcePolicies, policies...)
+	return g
+}
+
 // WithDefaultZones populates the client with default zones for testing.
 func (g *GceClient) WithDefaultZones() *GceClient {
 	zones := []string{"us-central1-a", "us-central1-b", "us-central1-c"}
@@ -289,7 +300,7 @@ func (g *GceClient) WithDefaultDiskTypes() *GceClient {
 	diskTypes := make(map[string][]string)
 	for _, zList := range g.regionToZones {
 		for _, zone := range zList {
-			diskTypes[zone] = []string{"pd-standard", "pd-balanced", "pd-ssd", "boot"}
+			diskTypes[zone] = []string{"pd-standard", "pd-balanced", "pd-ssd", "boot", "hyperdisk-balanced"}
 		}
 	}
 	return g.WithDiskTypes(diskTypes)
@@ -883,19 +894,51 @@ func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName s
 		return nil, fmt.Errorf("instance group manager %s not found", migKey)
 	}
 
+	machineType, err := g.machineTypeForTemplateLocked(mig, templateName)
+	if err != nil {
+		return nil, err
+	}
+	actualCount := count
+	if cap, ok := g.capacityMap[CapacityKey{Zone: ref.Zone, MachineType: machineType}]; ok && cap < count {
+		actualCount = cap
+	}
+	if actualCount == 0 && count > 0 {
+		return nil, &googleapi.Error{
+			Code:    400,
+			Message: "ZONE_RESOURCE_POOL_EXHAUSTED",
+			Errors: []googleapi.ErrorItem{
+				{Reason: "ZONE_RESOURCE_POOL_EXHAUSTED", Message: "GCE API error: stock out"},
+			},
+		}
+	}
+
 	baseName := ref.Name
 	if mig.BaseInstanceName != "" {
 		baseName = mig.BaseInstanceName
 	}
 
 	existingNames := g.getExistingInstanceNames(migKey, names)
-	newNames := generateInstanceNames(baseName, count, existingNames)
+	newNames := generateInstanceNames(baseName, actualCount, existingNames)
 
-	err := g.resizeAtomicallyLocked(ref, templateName, newNames)
+	err = g.resizeAtomicallyLocked(ref, templateName, newNames)
 	if err != nil {
 		return nil, err
 	}
 	return newNames, nil
+}
+
+// machineTypeForTemplateLocked resolves the machine type of the template attached
+// to the given MIG. Callers must hold g's lock.
+func (g *GceClient) machineTypeForTemplateLocked(mig *gcev1.InstanceGroupManager, templateName string) (string, error) {
+	resolved, err := g.resolveTemplateName(mig, templateName)
+	if err != nil {
+		return "", err
+	}
+	template, found := g.templates[resolved]
+	if !found {
+		return "", fmt.Errorf("instance template %s not found", templateName)
+	}
+	return template.Properties.MachineType, nil
 }
 
 // ResizeAtomically creates specific instances in the fake client immediately, simulating atomic resize.
@@ -1103,7 +1146,9 @@ func (g *GceClient) FetchReservationSubBlocksInReservationBlock(reservationRef g
 }
 
 func (g *GceClient) FetchResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error) {
-	return nil, nil
+	g.Lock()
+	defer g.Unlock()
+	return g.resourcePolicies, nil
 }
 
 func (g *GceClient) FetchNetwork(projectId, name string) (*gcev1.Network, error) {

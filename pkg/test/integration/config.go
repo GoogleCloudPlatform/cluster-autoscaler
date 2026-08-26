@@ -1117,3 +1117,13 @@ func WithNodePoolAccelerators(accelerators ...*gke_api_beta.AcceleratorConfig) O
 		return np
 	}
 }
+
+// WithCompactPlacementEnabled enables or disables compact placement in the
+// autoscaler (e.g. required by dynamic slicing for the underlying
+// instance-group growth to proceed even when capacity isn't fully available).
+func WithCompactPlacementEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.CompactPlacementEnabled = enabled
+		return o
+	}
+}
