@@ -486,6 +486,14 @@ func WithFlexAdvisorEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithGeneralPurposeMachineFamilies sets the general purpose machine families option.
+func WithGeneralPurposeMachineFamilies(families ...string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.GeneralPurposeMachineFamilies = families
+		return o
+	}
+}
+
 // WithComputeClassMinCapacityEnabled enables ComputeClass minimum capacity support in CA.
 func WithComputeClassMinCapacityEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

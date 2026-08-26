@@ -23,6 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	internal_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
@@ -49,7 +50,7 @@ func NewLocationPolicyAnyBalancer(provider internal_processors.ProcessorsCloudPr
 
 // Balance returns a scale-up based on Recommend Locations API.
 // Recommend Locations API call is expected to take less than 8s.
-func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, error) {
+func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNodes int) (result []nodegroupset.ScaleUpInfo, err error) {
 	if len(gkeNodeGroups) == 0 {
 		return nil, errors.New("got empty gke.NodeGroup slice")
 	}
@@ -66,7 +67,6 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		instanceProperties = instanceTemplatePropertiesFromGkeNodeGroup(gkeNodeGroup)
 	}
 	if instanceProperties == nil {
-		var err error
 		templateLink, err = b.provider.GetMigInstanceTemplateSelfLink(gkeNodeGroup.GetMig())
 		if err != nil {
 			return nil, fmt.Errorf("could not get instance template link for gkeNodeGroup: %v", gkeNodeGroup)
@@ -83,14 +83,38 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		return nil, fmt.Errorf("while fetchin all zones got error: %v", err)
 	}
 
-	rec, err := b.consultRecommendLocations(templateLink, instanceProperties, allZones, gkeNodeGroups, newNodes)
+	resp, err := b.consultRecommendLocations(templateLink, instanceProperties, allZones, gkeNodeGroups, newNodes)
 	if err != nil {
 		return nil, fmt.Errorf("while consulting RecommendLocations got error: %v", err)
 	}
 
+	// DemandFungibilityImpactTrackingEnabled safeguard 1: populate recommendation except for upcoming/trial node groups.
+	trackDemand := experiments.IsDemandFungibilityImpactTrackingEnabled(b.experimentsManager)
+	if trackDemand {
+		defer func() {
+			if err != nil {
+				for _, g := range gkeNodeGroups {
+					g.GetMig().PopRecommendation()
+				}
+			}
+		}()
+
+		for loc, nodesResize := range resp.Recommendation {
+			if nodesResize > 0 {
+				gkeNodeGroup, ok := gkeNodeGroupsMap[loc]
+				if ok && !gkeNodeGroup.IsUpcoming() {
+					gkeNodeGroup.GetMig().SetRecommendation(gke.ScaleUpRecommendation{
+						RecommendationId: resp.RecommendationID,
+						SpecKey:          resp.SpecKey,
+						Source:           internalmetrics.RLA,
+					})
+				}
+			}
+		}
+	}
+
 	// Compute the result based on received recommendation.
-	var result []nodegroupset.ScaleUpInfo
-	for loc, nodesResize := range rec {
+	for loc, nodesResize := range resp.Recommendation {
 		if nodesResize <= 0 {
 			continue
 		}
@@ -98,8 +122,8 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		if !ok {
 			return nil, fmt.Errorf("did not found gkeNodeGroup for zone: %q", loc)
 		}
-		targetSize, err := gkeNodeGroup.TargetSize()
-		if err != nil {
+		targetSize, targetSizeErr := gkeNodeGroup.TargetSize()
+		if targetSizeErr != nil {
 			return nil, fmt.Errorf("could not get target size for gkeNodeGroup: %+v", gkeNodeGroup)
 		}
 		if targetSize+nodesResize > gkeNodeGroup.MaxSize() {
@@ -116,7 +140,7 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 	return result, nil
 }
 
-func (b *locationPolicyAnyBalancer) consultRecommendLocations(templateLink string, instanceProperties *gceclient.InstanceProperties, allZones []string, gkeNodeGroups []gke.NodeGroup, newNodes int) (map[string]int, error) {
+func (b *locationPolicyAnyBalancer) consultRecommendLocations(templateLink string, instanceProperties *gceclient.InstanceProperties, allZones []string, gkeNodeGroups []gke.NodeGroup, newNodes int) (*gceclient.RecommendLocationsResponse, error) {
 	if len(gkeNodeGroups) == 0 {
 		return nil, errors.New("received empty gke.NodeGroup slice")
 	}
@@ -180,5 +204,5 @@ func (b *locationPolicyAnyBalancer) consultRecommendLocations(templateLink strin
 	if err != nil {
 		return nil, fmt.Errorf("while calling recommendLocations got error: %+v", err)
 	}
-	return resp.Recommendation, nil
+	return resp, nil
 }

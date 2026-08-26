@@ -26,6 +26,7 @@ import (
 	"google.golang.org/api/googleapi"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -42,7 +43,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/locationpolicy"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -99,7 +99,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 	locationAnyMigInvalidCCC3 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-c", "ccc-doesnt-exist", gke.LocationPolicyAny, 100, 1000, nil)
 
 	getSnapshotForProvider := func(iaProvider *instanceavailability.MockProvider) *instanceavailability.Snapshot {
-		return instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+		return instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
 	}
 	getScaleUpInfos := func(mig1, mig2, mig3 *gke.GkeMig) []nodegroupset.ScaleUpInfo {
 		return []nodegroupset.ScaleUpInfo{

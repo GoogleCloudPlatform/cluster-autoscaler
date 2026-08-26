@@ -17,11 +17,11 @@ package gke
 import (
 	"fmt"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	node_version "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // There should be no imports as it is used standalone in e2e tests

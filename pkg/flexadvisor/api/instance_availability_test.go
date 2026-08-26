@@ -235,3 +235,13 @@ func TestNewSnapshot(t *testing.T) {
 		})
 	}
 }
+
+func TestSpecKeyAndGuidanceId(t *testing.T) {
+	ia := NewInstanceAvailability("scope-key", "config-key", "guidance-id-123", "spec-key-456", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 0.9})
+	assert.Equal(t, "guidance-id-123", ia.GuidanceId())
+	assert.Equal(t, "spec-key-456", ia.SpecKey())
+
+	snapshot := ia.NewSnapshot()
+	assert.Equal(t, "guidance-id-123", snapshot.GuidanceId())
+	assert.Equal(t, "spec-key-456", snapshot.SpecKey())
+}

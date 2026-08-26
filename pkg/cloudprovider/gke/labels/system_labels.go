@@ -19,8 +19,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 const (
@@ -307,6 +307,14 @@ const (
 	// BootDiskStoragePoolsLabelKey is for boot disk storage pools
 	// CA internal use only
 	BootDiskStoragePoolsLabelKey = "boot-disk-storage-pools-label-key"
+
+	// BootDiskProvisionedIopsLabelKey is for provisioned IOPS
+	// CA internal use only
+	BootDiskProvisionedIopsLabelKey = "boot-disk-provisioned-iops-label-key"
+
+	// BootDiskProvisionedThroughputLabelKey is for provisioned throughput
+	// CA internal use only
+	BootDiskProvisionedThroughputLabelKey = "boot-disk-provisioned-throughput-label-key"
 
 	// NodeGroupDynamicBootDiskSizeEnabledLabelKey is for node group dynamic boot disk size
 	// CA internal use only

@@ -19,9 +19,7 @@ func IsDemandFungibilityImpactTrackingEnabled(manager Manager) bool {
 	if manager == nil {
 		return false
 	}
-	isEnabled := manager.EvaluateBoolFlagOrFailsafe(DemandFungibilityImpactTrackingEnabledFlag, false)
-	if !isEnabled {
-		return false
-	}
-	return manager.EvaluateMinimumVersionFlagOrFailsafe(DemandFungibilityImpactTrackingMinCAVersionFlag, true)
+
+	return manager.EvaluateMinimumVersionFlagOrFailsafe(DemandFungibilityImpactTrackingMinCAVersionFlag, false) &&
+		manager.EvaluateBoolFlagOrFailsafe(DemandFungibilityImpactTrackingEnabledFlag, true)
 }

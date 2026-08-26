@@ -16,6 +16,7 @@ package estimator
 
 import (
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -25,7 +26,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 )
 

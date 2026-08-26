@@ -23,9 +23,9 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 
 	napprovider "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/napcloudprovider"
@@ -94,20 +94,25 @@ func (s Selector) selectMachineSpec(
 		explicitMachineTypes = append(explicitMachineTypes, reservationMachineType)
 	}
 	var bootDiskStoragePools []string
+	var bootDiskProvisionedIops, bootDiskProvisionedThroughput int64
 	if rule != nil {
 		bootDiskStoragePools = rule.BootDiskStoragePools()
+		bootDiskProvisionedIops = rule.BootDiskProvisionedIops()
+		bootDiskProvisionedThroughput = rule.BootDiskProvisionedThroughput()
 	}
 	return machinetypes.MachineSpec{
-		Families:                 families,
-		ComputeClassName:         computeClassName,
-		MinCpuPlatform:           minCpuPlatform,
-		GpuType:                  specifiedGpu,
-		TpuType:                  specifiedTpu,
-		BootDiskType:             specifiedBootDiskType,
-		BootDiskStoragePools:     bootDiskStoragePools,
-		ExplicitMachineTypes:     explicitMachineTypes,
-		ConfidentialNodesEnabled: s.CloudProvider.AreConfidentialNodesEnabled(),
-		ConfidentialNodeType:     s.CloudProvider.GetConfidentialInstanceType(),
+		Families:                      families,
+		ComputeClassName:              computeClassName,
+		MinCpuPlatform:                minCpuPlatform,
+		GpuType:                       specifiedGpu,
+		TpuType:                       specifiedTpu,
+		BootDiskType:                  specifiedBootDiskType,
+		BootDiskStoragePools:          bootDiskStoragePools,
+		BootDiskProvisionedIops:       bootDiskProvisionedIops,
+		BootDiskProvisionedThroughput: bootDiskProvisionedThroughput,
+		ExplicitMachineTypes:          explicitMachineTypes,
+		ConfidentialNodesEnabled:      s.CloudProvider.AreConfidentialNodesEnabled(),
+		ConfidentialNodeType:          s.CloudProvider.GetConfidentialInstanceType(),
 	}, selectionType, nil
 }
 
@@ -447,6 +452,9 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 		return NewBootDiskTypeIncompatibleError(machineGroupName, spec.BootDiskType)
 	}
 	if len(spec.BootDiskStoragePools) > 0 && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced) {
+		return NewBootDiskTypeIncompatibleError(machineGroupName, machinetypes.DiskTypeHyperdiskBalanced)
+	}
+	if (spec.BootDiskProvisionedIops > 0 || spec.BootDiskProvisionedThroughput > 0) && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced) {
 		return NewBootDiskTypeIncompatibleError(machineGroupName, machinetypes.DiskTypeHyperdiskBalanced)
 	}
 	// K80 has some additional restrictions on min_cpu_platform.

@@ -21,6 +21,7 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -32,12 +33,23 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/testutil"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 type MigOption func(mig *gke.GkeMig)
+
+// WithReservationAffinity returns MigOption adding ReservationAffinity.
+func WithReservationAffinity(affinityType string, affinityValues ...string) MigOption {
+	return func(mig *gke.GkeMig) {
+		mig.Spec().ReservationAffinity = &gke_api_beta.ReservationAffinity{
+			ConsumeReservationType: affinityType,
+			Values:                 affinityValues,
+		}
+	}
+}
 
 // WithMaxRunDuration returns MigOption adding MaxRunDurationRule.
 func WithMaxRunDuration(maxRunDurationSeconds string) MigOption {
@@ -93,8 +105,11 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 
 	dwsTpuMig := createMockMigs(gkeMockManager, "ct5p-hightpu-4t", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithDWS(), WithMaxRunDuration("3600"), WithTpuType("tpu-v5p-slice"), WithTpuTopology("2x2x5"))
 
-	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 100}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
-	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	specificReservationMig := createMockMigs(gkeMockManager, "e2-standard-4", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithReservationAffinity(gkeclient.ReservationAffinitySpecific, "projects/project-1/reservations/res-1"))
+	anyReservationMig := createMockMigs(gkeMockManager, "e2-standard-4", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 0, 10, nil, WithReservationAffinity(gkeclient.ReservationAffinityAny))
+
+	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 100}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", "", map[string]int{"us-central1-a": 100, "us-central1-b": 100, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
 
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -121,7 +136,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				return NewScaleUpBalancer(nil, provider, lister, experimentsManager, true)
 			},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(provider, "ccc-1", "", "guidance-1", map[string]int{
+				snapshot := instanceavailability.NewSnapshot(provider, "ccc-1", "", "guidance-1", "", map[string]int{
 					"us-central1-a": 91,
 					"us-central1-b": 91,
 					"us-central1-c": 91,
@@ -269,7 +284,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x1").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -289,7 +304,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -309,7 +324,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -355,7 +370,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes:        5,
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag},
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
 				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600").Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
@@ -398,6 +413,116 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 					CurrentSize: 100,
 					NewSize:     180,
 					MaxSize:     200,
+				},
+			},
+		},
+		{
+			name:     "Specific reservation - uses fallback balancer when EnableReservationSpecificMigsProcessing is disabled",
+			groups:   []cloudprovider.NodeGroup{specificReservationMig},
+			newNodes: 5,
+			disabledFeatures: []string{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag,
+			},
+			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := new(testutil.MockBalancer)
+				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+					{
+						Group:       specificReservationMig,
+						CurrentSize: 0,
+						NewSize:     5,
+						MaxSize:     10,
+					},
+				}, nil)
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       specificReservationMig,
+					CurrentSize: 0,
+					NewSize:     5,
+					MaxSize:     10,
+				},
+			},
+		},
+		{
+			name:     "Specific reservation among multiple node groups - uses fallback balancer when EnableReservationSpecificMigsProcessing is disabled",
+			groups:   []cloudprovider.NodeGroup{mig1, specificReservationMig},
+			newNodes: 5,
+			disabledFeatures: []string{
+				experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag,
+			},
+			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
+				mockBalancer := new(testutil.MockBalancer)
+				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{mig1, specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+					{
+						Group:       mig1,
+						CurrentSize: 100,
+						NewSize:     105,
+						MaxSize:     200,
+					},
+					{
+						Group:       specificReservationMig,
+						CurrentSize: 0,
+						NewSize:     0,
+						MaxSize:     10,
+					},
+				}, nil)
+				registerMock(&mockBalancer.Mock)
+				return mockBalancer
+			},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       mig1,
+					CurrentSize: 100,
+					NewSize:     105,
+					MaxSize:     200,
+				},
+				{
+					Group:       specificReservationMig,
+					CurrentSize: 0,
+					NewSize:     0,
+					MaxSize:     10,
+				},
+			},
+		},
+		{
+			name:     "Specific reservation - calls Flex Advisor by default",
+			groups:   []cloudprovider.NodeGroup{specificReservationMig},
+			newNodes: 5,
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot.SetProvider(provider)
+				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil)
+				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
+			},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       specificReservationMig,
+					CurrentSize: 0,
+					NewSize:     5,
+					MaxSize:     10,
+				},
+			},
+		},
+		{
+			name:     "Any reservation - calls Flex Advisor",
+			groups:   []cloudprovider.NodeGroup{anyReservationMig},
+			newNodes: 5,
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
+				snapshot.SetProvider(provider)
+				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil)
+				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
+			},
+			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{
+					Group:       anyReservationMig,
+					CurrentSize: 0,
+					NewSize:     5,
+					MaxSize:     10,
 				},
 			},
 		},
@@ -516,8 +641,8 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 	mig2 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-b", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 	mig3 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-c", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 
-	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", map[string]int{"us-central1-a": 100, "us-central1-b": 20, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
-	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", map[string]int{"us-central1-a": 1000, "us-central1-b": 5}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8})
+	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 20, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
+	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", "", map[string]int{"us-central1-a": 1000, "us-central1-b": 5}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8})
 
 	scaleUpInfo1 := nodegroupset.ScaleUpInfo{
 		Group:       mig1,
@@ -870,13 +995,57 @@ func createMockMigs(gkeMock *gke.GkeManagerMock, machineType, zone, cccName stri
 	} else {
 		gkeMock.On("GetMigSize", mig).Return(int64(migSize), nil)
 	}
-	gkeMock.On("GetGkeMigs").Return([]*gke.GkeMig{mig})
+	gkeMock.On("GetGkeMigs").Return([]*gke.GkeMig{mig}).Maybe()
 	gkeMock.On("GetMigTemplateNodeInfo", mig).Return(framework.NewTestNodeInfo(buildNodeWithLabels(map[string]string{
 		labels.ComputeClassLabel: cccName,
-	})), nil)
+	})), nil).Maybe()
 
 	for _, opt := range opts {
 		opt(mig)
 	}
 	return mig
+}
+
+func TestBalanceScaleUpBetweenGroups_Recommendation(t *testing.T) {
+	gkeMockManager := &gke.GkeManagerMock{}
+	gkeMockManager.On("IsResizeRequestErrorHandlingEnabled").Return(false).Maybe()
+
+	mig := createMockMigs(gkeMockManager, "e2-standard-4", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 100, 200, nil)
+
+	mockProvider := new(instanceavailability.MockProvider)
+	mockProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+	snapshot := instanceavailability.NewSnapshot(mockProvider, "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", "test-fa-guidance-id", "test-fa-spec-key", map[string]int{"us-central1-a": 100}, map[string]float64{"us-central1-a": 1.0})
+
+	mockProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot, nil)
+	mockProvider.On("MarkUsed", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", "test-fa-guidance-id", mock.Anything, map[string]int{"us-central1-a": 50}).Once().Return(nil)
+
+	expectedRec := gke.ScaleUpRecommendation{
+		RecommendationId: "test-fa-guidance-id",
+		SpecKey:          "test-fa-spec-key",
+		Source:           metrics.FA,
+	}
+	gkeMockManager.On("SetRecommendation", mig.Id(), expectedRec).Return().Once()
+
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ccc-1",
+		},
+	}, "", false, nil, nil)
+	mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
+
+	experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+		experiments.FlexAdvisorProcessingEnabledFlag:                true,
+		experiments.DemandFungibilityImpactTrackingMinCAVersionFlag: true,
+	}, nil)
+
+	balancer := NewScaleUpBalancer(nil, mockProvider, mockLister, experimentsManager, false)
+	got, err := balancer.BalanceScaleUpBetweenGroups(nil, []cloudprovider.NodeGroup{mig}, 50)
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(got))
+	assert.Equal(t, 150, got[0].NewSize)
+
+	mockProvider.AssertExpectations(t)
+	gkeMockManager.AssertExpectations(t)
 }

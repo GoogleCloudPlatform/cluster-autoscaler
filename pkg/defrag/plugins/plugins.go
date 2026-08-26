@@ -26,6 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/highprioritymigration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/nodepooldrain"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/recycling"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/resizablevmconsolidation"
 )
 
 var pluginBuildersByName = map[string][]config.PluginBuilder{
@@ -33,9 +34,11 @@ var pluginBuildersByName = map[string][]config.PluginBuilder{
 	daemonset.PluginName:             {daemonset.NewPlugin},
 	nodepooldrain.PluginName:         {nodepooldrain.NewPlugin},
 	highprioritymigration.PluginName: {highprioritymigration.NewPlugin},
-	ekconsolidation.PluginName:       {ekconsolidation.NewPlugin},
-	recycling.PluginName:             {recycling.NewPlugin},
-	failednodes.PluginName:           {failednodes.NewPlugin},
+	// TODO(b/548914018): Remove ekconsolidation plugin when it is no longer needed.
+	ekconsolidation.PluginName:          {ekconsolidation.NewPlugin},
+	resizablevmconsolidation.PluginName: {resizablevmconsolidation.NewPlugin},
+	recycling.PluginName:                {recycling.NewPlugin},
+	failednodes.PluginName:              {failednodes.NewPlugin},
 }
 
 func BuildPlugins(pluginNames []string, config config.PluginsConfig) ([]defrag.Plugin, error) {

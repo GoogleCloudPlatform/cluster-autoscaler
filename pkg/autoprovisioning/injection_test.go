@@ -37,10 +37,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -11498,6 +11498,34 @@ func TestBootDiskStoragePoolsIntegration_UpdateNodePoolSpecWithRequirements(t *t
 	if diff := cmp.Diff(spec.StoragePools, storagePools); diff != "" {
 		t.Errorf("Storage pools differ: %s", diff)
 	}
+}
+
+func TestBootDiskProvisionedIopsThroughputIntegration_UpdateNodePoolSpec(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("c4-standard-4").Build()
+	generator := NewBootDiskConfigGenerator(provider)
+
+	params := &nodeGroupParameters{
+		systemLabels: map[string]string{
+			apiv1.LabelZoneFailureDomain: "us-central1-a",
+		},
+	}
+	ngReq := nodeGroupRequirements{
+		bootDiskType:                  machinetypes.DiskTypeHyperdiskBalanced,
+		bootDiskProvisionedIops:       4000,
+		bootDiskProvisionedThroughput: 200,
+	}
+
+	err := generator.UpdateParameters(params, ngReq, NodeGroupOptions{})
+	assert.NoError(t, err)
+
+	spec := &gkeclient.NodePoolSpec{
+		Labels: map[string]string{},
+	}
+	err2 := generator.UpdateNodePoolSpec(spec, params.systemLabels, nil)
+	assert.NoError(t, err2)
+
+	assert.Equal(t, int64(4000), spec.BootDiskProvisionedIops)
+	assert.Equal(t, int64(200), spec.BootDiskProvisionedThroughput)
 }
 
 func TestBootDiskStoragePools_UpdateRequirements(t *testing.T) {

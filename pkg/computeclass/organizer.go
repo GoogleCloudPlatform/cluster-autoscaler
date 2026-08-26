@@ -16,6 +16,7 @@ package computeclass
 
 import (
 	"reflect"
+	"slices"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -31,12 +32,17 @@ const (
 	DoNotScaleUp  = "DoNotScaleUp"
 )
 
-// organizerCloudProvider provides the required methods from GkeCloudProvider.
-type organizerCloudProvider interface {
+// PodFamilyProvider provides provider methods needed to determine machine families for pod families.
+type PodFamilyProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	IsExtendedFallbacksEnabled() bool
 	IsE4PrioritizationEnabledInAutopilot() bool
+}
+
+// organizerCloudProvider provides the required methods from GkeCloudProvider.
+type organizerCloudProvider interface {
+	PodFamilyProvider
 	IsAutopilotEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
@@ -122,7 +128,7 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 			}
 		}
 		if len(matchingNodeGroups) > 0 {
-			if prioritizedFamilies := o.prioritizedFamiliesForRule(matchedRule); len(prioritizedFamilies) > 0 {
+			if prioritizedFamilies := PrioritizedFamiliesForRule(matchedRule, o.provider); len(prioritizedFamilies) > 0 {
 				organizedByFamilies := o.organizeByMachineFamily(matchingNodeGroups, prioritizedFamilies...)
 				organizedNodeGroups = append(organizedNodeGroups, organizedByFamilies...)
 			} else {
@@ -143,9 +149,9 @@ func (o *organizer) organizeByRules(nodeGroups []cloudprovider.NodeGroup, crd cr
 	return organizedNodeGroups
 }
 
-// prioritizedFamiliesForRule returns the ordered list of machine families that should be prioritized
+// PrioritizedFamiliesForRule returns the ordered list of machine families that should be prioritized
 // for the given rule, based on the current provider configuration.
-func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.MachineFamily {
+func PrioritizedFamiliesForRule(rule rules.Rule, provider PodFamilyProvider) []machinetypes.MachineFamily {
 	if rule == nil {
 		return nil
 	}
@@ -157,25 +163,25 @@ func (o *organizer) prioritizedFamiliesForRule(rule rules.Rule) []machinetypes.M
 			}
 		}
 		var families []machinetypes.MachineFamily
-		e4Enabled := o.provider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name()) ||
-			o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name())
-		if o.provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
+		e4Enabled := provider != nil && (provider.IsResizableVmEnabledInAutopilot(machinetypes.E4.Name()) ||
+			provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name()))
+		if provider != nil && provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
 			families = append(families, machinetypes.E4)
 		}
-		if o.provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
+		if provider != nil && provider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()) {
 			families = append(families, machinetypes.EK)
 		}
 		families = append(families, machinetypes.E2)
-		if !o.provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
+		if provider != nil && !provider.IsE4PrioritizationEnabledInAutopilot() && e4Enabled {
 			families = append(families, machinetypes.E4)
 		}
-		if o.provider.IsExtendedFallbacksEnabled() {
+		if provider != nil && provider.IsExtendedFallbacksEnabled() {
 			families = append(families, rules.ExtendedFallbacks...)
 		}
 		return families
 	case rules.GeneralPurposeArmPodFamily:
 		if families, err := rule.PodFamilyMachineFamilies(); err == nil {
-			return families
+			return slices.Clone(families)
 		}
 	}
 	return nil

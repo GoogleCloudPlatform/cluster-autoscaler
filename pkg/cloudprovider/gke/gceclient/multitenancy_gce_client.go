@@ -27,9 +27,9 @@ import (
 
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type MultitenancyGCEClient interface {
@@ -57,6 +57,14 @@ type multitenancyGCEClient struct {
 	createClientFunc func(projectID string, pc *multitenancy.ProviderConfig) (AutoscalingInternalGceClient, error)
 	// mutex is used for any mutations to gceClients or projectToProviderConfig.
 	mutex sync.Mutex
+}
+
+func (m *multitenancyGCEClient) SetRecommendationApplier(applier RecommendationApplier) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	for _, client := range m.gceClients {
+		client.SetRecommendationApplier(applier)
+	}
 }
 
 var _ MultitenancyGCEClient = &multitenancyGCEClient{}
@@ -370,6 +378,14 @@ func (m *multitenancyGCEClient) CreateInstances(ref gce.GceRef, basename string,
 		return nil, err
 	}
 	return gceService.CreateInstances(ref, basename, delta, instanceNames)
+}
+
+func (m *multitenancyGCEClient) CreateInstancesWithRecommendation(ref gce.GceRef, basename string, delta int64, instanceNames []string, recommendation string) ([]string, error) {
+	gceService, err := m.gceService(ref.Project)
+	if err != nil {
+		return nil, err
+	}
+	return gceService.CreateInstancesWithRecommendation(ref, basename, delta, instanceNames, recommendation)
 }
 
 func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {

@@ -29,6 +29,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -39,11 +41,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -409,6 +410,7 @@ type ScaleUpRecommendation struct {
 	RecommendationId string
 	// Either raw Flex Advisor integer string or 128-bit BLAKE3 hex hash of an RLA string specification.
 	SpecKey string
+	Source  internalmetrics.DemandFungibilitySource
 }
 
 // InitializationFunc type of function to be run ran once after the first successful refresh of cluster state.
@@ -1273,6 +1275,13 @@ func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, 
 	nodePoolSpec.ClusterNetworkPath = m.networkPath
 	nodePoolSpec.ClusterSubnetworkPath = m.subnetworkPath
 	nodePoolSpec.ClusterSubnetwork = m.subnetwork
+	if mig.spec.Labels != nil {
+		// GKE client in its createNodePoolRequest uses the ClusterSubnetworkName in configuring the additional networks to exclude it from the update operation.
+		// In MT we want to exclude the tenant default network instead of the cluster default network, hence this override.
+		if tenantUID, ok := mig.spec.Labels[multitenancy.TenantUIDLabel]; ok && tenantUID != "" {
+			nodePoolSpec.ClusterSubnetwork = "gke-" + tenantUID
+		}
+	}
 	return &nodePoolSpec, nil
 }
 
@@ -1453,12 +1462,30 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 	m.cache.InvalidateMigTargetSize(mig.GceRef())
 	totalReqs := int((delta + createInstancesRequestLimit - 1) / createInstancesRequestLimit)
 	remaining := delta
+
+	var recommendationString string
+	var recommendationSource internalmetrics.DemandFungibilitySource
+	if experiments.IsDemandFungibilityImpactTrackingEnabled(m.ExperimentsManager()) {
+		if rec, ok := m.PopRecommendation(mig.Id()); ok && rec.RecommendationId != "" {
+			recommendationString = fmt.Sprintf("1/%s//%s", rec.RecommendationId, rec.SpecKey)
+			recommendationSource = rec.Source
+		}
+	}
+
 	for i := 0; i < totalReqs; i++ {
 		increment := min(remaining, createInstancesRequestLimit)
 		if totalReqs > 1 {
 			klog.Infof("Sending chunked GCE createInstances request. Request: %d/%d RequestSize: %v/%v MIG: %v", i+1, totalReqs, increment, delta, mig.Id())
 		}
-		newIds, err := m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
+		var newIds []string
+		if recommendationString != "" {
+			newIds, err = m.gceService.CreateInstancesWithRecommendation(mig.GceRef(), basename, increment, existingIds, recommendationString)
+			if err == nil && recommendationSource != "" {
+				internalmetrics.Metrics.RegisterDemandFungibilityInjected(recommendationSource)
+			}
+		} else {
+			newIds, err = m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
+		}
 		if err != nil {
 			return err
 		}

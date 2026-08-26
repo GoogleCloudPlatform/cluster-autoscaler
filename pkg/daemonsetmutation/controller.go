@@ -198,9 +198,9 @@ func (c *Controller) resolveMutation(key string) error {
 	}
 	start := time.Now()
 	updatedPod, err := c.resolver.Resolve(ctx, ds.Namespace, templateCopy)
-	observeDryRunResolution(err, time.Since(start))
 
 	if err != nil {
+		observeDryRunResolution(false, err, time.Since(start))
 		klog.Warningf("[ds mutation] Failed to resolve dry-run mutation for DaemonSet %s/%s (gen: %d): %v. Falling back to original pod template.", ds.Namespace, ds.Name, ds.Generation, err)
 		// Cache nil to represent a resolution failure, which prevents retries
 		// and enforces fallback to original pod template for 5 minutes.
@@ -208,7 +208,9 @@ func (c *Controller) resolveMutation(key string) error {
 		return nil
 	}
 
-	if changed, oldReq, newReq := resourcesChanged(templateCopy, updatedPod); changed {
+	changed, oldReq, newReq := resourcesChanged(templateCopy, updatedPod)
+	observeDryRunResolution(changed, nil, time.Since(start))
+	if changed {
 		klog.V(4).Infof("[ds mutation] Successfully resolved dry-run mutation for DaemonSet %s/%s (gen: %d): resources changed. Old: %s, New: %s", ds.Namespace, ds.Name, ds.Generation, formatResourceList(oldReq), formatResourceList(newReq))
 	}
 	c.mutationCache.Set(ds.UID, ds.Generation, updatedPod)

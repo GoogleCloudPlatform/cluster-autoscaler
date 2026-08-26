@@ -35,9 +35,9 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -3089,4 +3089,43 @@ func TestIsReservationCompatible(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestGkeMig_SetAndPopRecommendation(t *testing.T) {
+	gkeManagerMock := &GkeManagerMock{}
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Name: "mig-1",
+		},
+		gkeManager: gkeManagerMock,
+	}
+
+	rec := ScaleUpRecommendation{
+		RecommendationId: "test-rec-id",
+		SpecKey:          "test-spec-key",
+	}
+
+	gkeManagerMock.On("SetRecommendation", mig.Id(), rec).Return().Once()
+	mig.SetRecommendation(rec)
+
+	gkeManagerMock.On("PopRecommendation", mig.Id()).Return(rec, true).Once()
+	got, ok := mig.PopRecommendation()
+	assert.True(t, ok)
+	assert.Equal(t, rec, got)
+
+	gkeManagerMock.AssertExpectations(t)
+}
+
+func TestRefreshClearsRecommendations(t *testing.T) {
+	gkeManagerMock := &GkeManagerMock{}
+	gkeManagerMock.On("Refresh").Return(nil).Once()
+	gkeManagerMock.On("ClearRecommendations").Return().Once()
+
+	provider, err := BuildGkeCloudProvider(gkeManagerMock, nil, nil, true, "us-central1", nil, false, false, nil, "", nil, nil, nil, 1000)
+	assert.NoError(t, err)
+
+	err = provider.Refresh()
+	assert.NoError(t, err)
+
+	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }

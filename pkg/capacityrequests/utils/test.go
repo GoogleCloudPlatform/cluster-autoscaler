@@ -149,7 +149,10 @@ func BuildTestCrWithRemoval(name, cpu, mem string, conditions []cr_types.Capacit
 // in autoscaler simulations. The pod is not identical as the real one has a random
 // component in the name.
 func BuildPodFromCr(cr *cr_types.CapacityRequest) *apiv1.Pod {
-	return &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: cr.ObjectMeta.Namespace, Name: "capacity-request-", UID: cr.UID}, Spec: cr.Spec.Capacity}
+	spec := cr.Spec.Capacity.DeepCopy()
+	spec.NodeName = ""
+	SanitizeNodeAffinity(spec)
+	return &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: cr.ObjectMeta.Namespace, Name: "capacity-request-", UID: cr.UID}, Spec: *spec}
 }
 
 // NewTestCapacityRequestState creates a CapacityRequestState for testing from

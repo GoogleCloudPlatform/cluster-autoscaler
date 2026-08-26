@@ -18,7 +18,7 @@ import (
 	"fmt"
 
 	"github.com/stretchr/testify/mock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 )
 
 // MockVmReservation returns a mock for VmReservation.

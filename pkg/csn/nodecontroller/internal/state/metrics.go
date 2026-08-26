@@ -15,6 +15,8 @@
 package state
 
 import (
+	"strconv"
+
 	k8smetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
 )
@@ -46,7 +48,7 @@ var (
 			Help: "Number of nodes in the cluster seen from the perspective of " +
 				"the CSN Node Controller",
 		},
-		[]string{"state"},
+		[]string{"state", "backed_off"},
 	)
 )
 
@@ -77,7 +79,7 @@ func newMetricsEventHandler() EventHandler {
 		case NodeCounts:
 			nodeCount.Reset()
 			for state, count := range event.Counts {
-				nodeCount.WithLabelValues(string(state)).Set(float64(count))
+				nodeCount.WithLabelValues(string(state.State), strconv.FormatBool(state.BackedOff)).Set(float64(count))
 			}
 		}
 	}

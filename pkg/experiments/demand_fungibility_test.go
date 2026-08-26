@@ -32,17 +32,15 @@ func TestIsDemandFungibilityImpactTrackingEnabled(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "eval bool flag returns false",
+			name:     "flags not configured defaults to false",
 			manager:  NewMockManager(),
 			expected: false,
 		},
 		{
-			name: "eval bool flag true, min version returns false",
+			name: "min version not met",
 			manager: NewMockManagerWithOptions(
 				version.Version{},
-				map[string]bool{
-					DemandFungibilityImpactTrackingEnabledFlag: true,
-				},
+				map[string]bool{},
 				map[string]string{
 					DemandFungibilityImpactTrackingMinCAVersionFlag: "1.20.0-gke.100",
 				},
@@ -50,12 +48,10 @@ func TestIsDemandFungibilityImpactTrackingEnabled(t *testing.T) {
 			expected: false,
 		},
 		{
-			name: "eval bool flag true, min version true",
+			name: "min version met",
 			manager: NewMockManagerWithOptions(
 				version.Version{1, 21, 0, 100},
-				map[string]bool{
-					DemandFungibilityImpactTrackingEnabledFlag: true,
-				},
+				map[string]bool{},
 				map[string]string{
 					DemandFungibilityImpactTrackingMinCAVersionFlag: "1.20.0-gke.100",
 				},
@@ -63,7 +59,7 @@ func TestIsDemandFungibilityImpactTrackingEnabled(t *testing.T) {
 			expected: true,
 		},
 		{
-			name: "eval bool flag false, min version true",
+			name: "min version met, but disabled via killswitch",
 			manager: NewMockManagerWithOptions(
 				version.Version{1, 21, 0, 100},
 				map[string]bool{
@@ -74,6 +70,11 @@ func TestIsDemandFungibilityImpactTrackingEnabled(t *testing.T) {
 				},
 			),
 			expected: false,
+		},
+		{
+			name:     "mock manager with min version flag enabled",
+			manager:  NewMockManager(DemandFungibilityImpactTrackingMinCAVersionFlag),
+			expected: true,
 		},
 	}
 

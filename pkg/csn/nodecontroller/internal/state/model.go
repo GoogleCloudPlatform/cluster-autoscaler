@@ -94,10 +94,16 @@ type NodeUntracked struct {
 
 func (NodeUntracked) isNodeEvent() {}
 
+// NodeCountsState is the key used for grouping nodes in NodeCounts events.
+type NodeCountsState struct {
+	State     csn.NodeState
+	BackedOff bool
+}
+
 // NodeCounts is emitted periodically to describe the count of nodes
 // tracked by the NodeStateManager in each state.
 type NodeCounts struct {
-	Counts map[csn.NodeState]int
+	Counts map[NodeCountsState]int
 }
 
 func (NodeCounts) isNodeEvent() {}

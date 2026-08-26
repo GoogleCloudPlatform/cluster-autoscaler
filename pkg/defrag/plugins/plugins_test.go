@@ -55,9 +55,9 @@ func TestBuildPlugins(t *testing.T) {
 			wantPlugins: []string{"high-priority-migration"},
 		},
 		{
-			name:        "ek-consolidation plugin only",
-			pluginNames: []string{"ek-consolidation"},
-			wantPlugins: []string{"ek-consolidation"},
+			name:        "resizable-vm-consolidation plugin only",
+			pluginNames: []string{"resizable-vm-consolidation"},
+			wantPlugins: []string{"resizable-vm-consolidation"},
 		},
 		{
 			name:        "failed-nodes plugin only",
@@ -66,8 +66,8 @@ func TestBuildPlugins(t *testing.T) {
 		},
 		{
 			name:        "all plugins together",
-			pluginNames: []string{"daemonset", "annotation", "nodepool-drain", "high-priority-migration", "ek-consolidation", "failed-nodes"},
-			wantPlugins: []string{"daemonset", "annotation-delete-before-create", "annotation-partial", "annotation-create-before-delete", "nodepool-drain", "high-priority-migration", "ek-consolidation", "failed-nodes"},
+			pluginNames: []string{"daemonset", "annotation", "nodepool-drain", "high-priority-migration", "resizable-vm-consolidation", "failed-nodes"},
+			wantPlugins: []string{"daemonset", "annotation-delete-before-create", "annotation-partial", "annotation-create-before-delete", "nodepool-drain", "high-priority-migration", "resizable-vm-consolidation", "failed-nodes"},
 		},
 		{
 			name:        "unknown plugin only",

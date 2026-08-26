@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 )
 
 func TestMachineConfigurationCacheUpdate(t *testing.T) {

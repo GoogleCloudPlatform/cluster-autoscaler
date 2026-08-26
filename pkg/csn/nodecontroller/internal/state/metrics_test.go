@@ -80,15 +80,17 @@ func TestNewMetricsEventHandler(t *testing.T) {
 		{
 			name: "node_counts_snapshot",
 			event: NodeCounts{
-				Counts: map[csn.NodeState]int{
-					csn.NodeStateChilling:  5,
-					csn.NodeStateSuspended: 3,
+				Counts: map[NodeCountsState]int{
+					{State: csn.NodeStateChilling, BackedOff: false}:  5,
+					{State: csn.NodeStateSuspended, BackedOff: false}: 2,
+					{State: csn.NodeStateSuspended, BackedOff: true}:  3,
 				},
 			},
 			metricVerifiers: []test.MetricVerifier{
-				value(nodeCount, 5, csn.NodeStateChilling),
-				value(nodeCount, 3, csn.NodeStateSuspended),
-				value(nodeCount, 0, csn.NodeStateConsumed),
+				value(nodeCount, 5, csn.NodeStateChilling, "false"),
+				value(nodeCount, 2, csn.NodeStateSuspended, "false"),
+				value(nodeCount, 3, csn.NodeStateSuspended, "true"),
+				value(nodeCount, 0, csn.NodeStateConsumed, "false"),
 			},
 		},
 	}

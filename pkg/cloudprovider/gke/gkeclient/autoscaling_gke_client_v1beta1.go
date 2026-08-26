@@ -33,8 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 
@@ -793,6 +793,15 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		KubeletConfig:       v1beta1NodeKubeletConfig(spec.KubeletConfig),
 		ReservationAffinity: spec.ReservationAffinity,
 	}
+	if spec.BootDiskProvisionedIops > 0 || spec.BootDiskProvisionedThroughput > 0 {
+		config.BootDisk = &gke_api_beta.BootDisk{
+			DiskType:              spec.DiskType,
+			SizeGb:                spec.DiskSize,
+			ProvisionedIops:       spec.BootDiskProvisionedIops,
+			ProvisionedThroughput: spec.BootDiskProvisionedThroughput,
+		}
+	}
+	klog.Infof("createNodePoolRequest for %s: spec.StoragePools=%+v, config.BootDisk=%+v", name, spec.StoragePools, config.BootDisk)
 	if spec.ArchTaintBehavior != "" {
 		config.TaintConfig = &gke_api_beta.TaintConfig{
 			ArchitectureTaintBehavior: spec.ArchTaintBehavior,

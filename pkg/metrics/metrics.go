@@ -86,6 +86,16 @@ const (
 	InvalidPreferenceScore FAResponseErrorReason = "invalid_preference_score"
 )
 
+// FilteredFalsePositiveReason describes the reason for a filtered false positive schedulable pod.
+type FilteredFalsePositiveReason string
+
+const (
+	// FilterOutSchedulable represents filtering based on default schedulability checks.
+	FilterOutSchedulable FilteredFalsePositiveReason = "filter_out_schedulable"
+	// TopologySpreadMutation represents filtering based on pod topology spread mutations.
+	TopologySpreadMutation FilteredFalsePositiveReason = "pts_mutation"
+)
+
 // OperationStatus says whether an operation succeeded or failed.
 type OperationStatus string
 
@@ -290,6 +300,15 @@ var (
 			Name:      "pod_schedulable_resets_total",
 			Help:      "How many times pods switched from being considered schedulable to unschedulable.",
 		},
+	)
+
+	filteredFalsePositiveSchedulablePodsEvents = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "filtered_false_positive_schedulable_pods_events",
+			Help:      "How many times a false positive prediction was made that a pod fits on an existing ready node while it remained pending for over 10 minutes.",
+		},
+		[]string{"reason"},
 	)
 
 	caVizLoggedBytes = k8smetrics.NewHistogramVec(
@@ -1100,6 +1119,25 @@ var (
 		},
 		[]string{"code"},
 	)
+
+	dsMutationResolutionsTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "daemonset_mutation_resolutions_total",
+			Help:      "Counter of background dry-run pod creation calls tagged by outcome status and reason.",
+		},
+		[]string{"status", "reason"},
+	)
+
+	dsMutationResolutionDuration = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "daemonset_mutation_resolution_duration_seconds",
+			Help:      "Duration of dry-run webhook resolutions.",
+			Buckets:   []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 20, 30},
+		},
+		[]string{"status", "reason"},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1116,6 +1154,7 @@ var allMetrics = []k8smetrics.Registerable{
 	reactionTimeMilliseconds,
 	longUnschedulablePodsCount,
 	podSchedulableResets,
+	filteredFalsePositiveSchedulablePodsEvents,
 	caVizLoggedBytes,
 	caVizDroppedEventTotal,
 	caVizChemistClientRequestDurationSeconds,
@@ -1206,6 +1245,8 @@ var allMetrics = []k8smetrics.Registerable{
 	ccStatusUpdatesTotal,
 	ccStatusApiPatchRequestsTotal,
 	ccStatusApiPatchDuration,
+	dsMutationResolutionsTotal,
+	dsMutationResolutionDuration,
 }
 
 // RegisterAll registers all metrics.
@@ -1819,6 +1860,11 @@ func (pm *prometheusMetrics) RegisterResizableVmReconcileNodeStateEvents(machine
 	}
 }
 
+// IncreaseFilteredFalsePositiveSchedulablePodsEvents increments the metric tracking false positive schedulable pod events.
+func IncreaseFilteredFalsePositiveSchedulablePodsEvents(reason FilteredFalsePositiveReason, count int) {
+	filteredFalsePositiveSchedulablePodsEvents.WithLabelValues(string(reason)).Add(float64(count))
+}
+
 func (*prometheusMetrics) UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string) {
 	// Cluster launch status changes so we don't want to track it multiple times
 	lookaheadLaunchStatus.Reset()
@@ -1960,4 +2006,10 @@ func (*prometheusMetrics) RegisterCCStatusUpdate(dropped bool) {
 func (*prometheusMetrics) ObserveCCApiPatch(duration time.Duration, code string) {
 	ccStatusApiPatchRequestsTotal.WithLabelValues(code).Inc()
 	ccStatusApiPatchDuration.WithLabelValues(code).Observe(duration.Seconds())
+}
+
+// ObserveDaemonSetMutationResolution reports duration, status, and reason for daemonset mutation resolutions.
+func (m *prometheusMetrics) ObserveDaemonSetMutationResolution(status, reason string, duration time.Duration) {
+	dsMutationResolutionsTotal.WithLabelValues(status, reason).Inc()
+	dsMutationResolutionDuration.WithLabelValues(status, reason).Observe(duration.Seconds())
 }

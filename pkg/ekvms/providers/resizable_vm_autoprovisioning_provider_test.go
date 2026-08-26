@@ -129,10 +129,12 @@ func TestNodesCount(t *testing.T) {
 	e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 
 	provider := &ResizableVmAutoprovisioningProvider{
-		machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
-		ekAutoprovisioningProvider:  ekProvider,
-		e4AutoprovisioningProvider:  e4Provider,
-		e4aAutoprovisioningProvider: e4aProvider,
+		machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+		autoprovisioningProviders: map[string]autoprovisioningProvider{
+			machinetypes.EK.Name():  ekProvider,
+			machinetypes.E4.Name():  e4Provider,
+			machinetypes.E4A.Name(): e4aProvider,
+		},
 	}
 
 	countProvider := &mockNodesCountProvider{}
@@ -218,10 +220,12 @@ func TestHasActiveResizableNodes(t *testing.T) {
 			e4aProvider, _ := newE4aAutoprovisioningProvider(tc.e4aMode, em, bpChecker, true, true, mockMetrics)
 
 			provider := &ResizableVmAutoprovisioningProvider{
-				machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
-				ekAutoprovisioningProvider:  ekProvider,
-				e4AutoprovisioningProvider:  e4Provider,
-				e4aAutoprovisioningProvider: e4aProvider,
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+				autoprovisioningProviders: map[string]autoprovisioningProvider{
+					machinetypes.EK.Name():  ekProvider,
+					machinetypes.E4.Name():  e4Provider,
+					machinetypes.E4A.Name(): e4aProvider,
+				},
 			}
 
 			countProvider := &mockNodesCountProvider{}
@@ -310,10 +314,12 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 			e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningDisabled), em, bpChecker, true, true, mockMetrics)
 
 			provider := &ResizableVmAutoprovisioningProvider{
-				machineConfigProvider:       machinetypes.NewMachineConfigProvider(nil),
-				ekAutoprovisioningProvider:  ekProvider,
-				e4AutoprovisioningProvider:  e4Provider,
-				e4aAutoprovisioningProvider: e4aProvider,
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+				autoprovisioningProviders: map[string]autoprovisioningProvider{
+					machinetypes.EK.Name():  ekProvider,
+					machinetypes.E4.Name():  e4Provider,
+					machinetypes.E4A.Name(): e4aProvider,
+				},
 			}
 			provider.Refresh()
 

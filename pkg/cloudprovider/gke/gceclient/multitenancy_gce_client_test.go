@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -32,10 +33,10 @@ import (
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 func TestAddProviderConfig(t *testing.T) {
@@ -1332,4 +1333,64 @@ func TestMTPerTenantAuthFallback(t *testing.T) {
 	// 3. Trigger client creation and API call
 	_, err = mtGCEClient.CreateInstances(gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"}, "", 0, nil)
 	assert.NoError(t, err)
+}
+
+func TestMultitenancyGceClient_CreateInstancesWithRecommendation(t *testing.T) {
+	var capturedPayload []byte
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		if req.URL.Path == "/projects/tenant-project/zones/us-central1-a/instanceGroupManagers/mig/createInstances" {
+			capturedPayload, _ = io.ReadAll(req.Body)
+
+			operation := gce_api.Operation{
+				Name:   "op123",
+				Status: "DONE",
+			}
+			b, _ := json.Marshal(operation)
+			res.WriteHeader(http.StatusOK)
+			res.Write(b)
+			return
+		}
+		if req.URL.Path == "/projects/tenant-project/zones/us-central1-a/operations/op123/wait" {
+			operation := gce_api.Operation{
+				Name:   "op123",
+				Status: "DONE",
+			}
+			b, _ := json.Marshal(operation)
+			res.WriteHeader(http.StatusOK)
+			res.Write(b)
+			return
+		}
+		res.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
+
+	providerConfig := &multitenancy.ProviderConfig{
+		Name:          "tenant-1",
+		ProjectID:     "tenant-project",
+		ProjectNumber: 1234,
+		AuthConfig:    nil, // No AuthConfig
+	}
+
+	err := mtGCEClient.AddProviderConfig(providerConfig)
+	assert.NoError(t, err)
+
+	ids, err := mtGCEClient.CreateInstancesWithRecommendation(
+		gce.GceRef{Project: "tenant-project", Zone: "us-central1-a", Name: "mig"},
+		"base-name", int64(2), []string{"existing1"}, "my-test-recommendation",
+	)
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(ids))
+
+	var createReqMap map[string]interface{}
+	err = json.Unmarshal(capturedPayload, &createReqMap)
+	assert.NoError(t, err)
+	if rec, ok := createReqMap["recommendation"]; ok {
+		assert.Equal(t, "my-test-recommendation", rec)
+	}
+
+	instances, ok := createReqMap["instances"].([]interface{})
+	assert.True(t, ok)
+	assert.Equal(t, 2, len(instances))
 }

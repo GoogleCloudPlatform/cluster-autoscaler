@@ -18,10 +18,10 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"

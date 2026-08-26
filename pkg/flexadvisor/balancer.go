@@ -95,6 +95,14 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.Autoscali
 		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, Flex start scale ups are not supported by Flex Advisor")
 		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
 	}
+	if !isFlexAdvisorReservationSpecificMigsProcessingEnabled(b.experimentsManager) {
+		for _, ng := range groups {
+			if hasReservationAffinitySpecific(ng) {
+				klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, node group %s targets a specific reservation", ng.Id())
+				return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+			}
+		}
+	}
 
 	// For Location policy ANY we still rely on RLA.
 	// If RLA based balancing failed we re-attempt with Flex Advisor.
@@ -122,7 +130,23 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(context *context.Autoscali
 	}
 
 	balancingInfos = distributeNewNodes(balancingInfos, newNodes)
+	trackDemand := experiments.IsDemandFungibilityImpactTrackingEnabled(b.experimentsManager)
+	if trackDemand {
+		for _, info := range balancingInfos {
+			if info.scaleUpInfo.NewSize > info.scaleUpInfo.CurrentSize {
+				gkeGroup, ok := info.scaleUpInfo.Group.(gke.NodeGroup)
+				if ok && !gkeGroup.IsUpcoming() {
+					gkeGroup.GetMig().SetRecommendation(gke.ScaleUpRecommendation{
+						RecommendationId: info.snapshot.GuidanceId(),
+						SpecKey:          info.snapshot.SpecKey(),
+						Source:           metrics.FA,
+					})
+				}
+			}
+		}
+	}
 	MarkUsed(balancingInfos)
+
 	return b.balancingInfosToScaleUpInfos(balancingInfos), nil
 }
 

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials/oauth"
 	"gopkg.in/gcfg.v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	provider_gce "k8s.io/cloud-provider-gcp/providers/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -36,7 +37,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 )
 
 type crdConditionCheck interface {

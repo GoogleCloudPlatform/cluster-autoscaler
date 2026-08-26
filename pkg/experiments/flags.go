@@ -178,6 +178,9 @@ const FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag = "FlexAdvisorGener
 const FlexAdvisorScaleUpLimiterTrackerEnabledFlag = "FlexAdvisorScaleUpLimiterTracker::Enabled"
 const FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag = "FlexAdvisorScaleUpLimiterTracker::MinCAVersion"
 
+const FlexAdvisorEnableReservationSpecificMigsProcessingFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessing"
+const FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessingMinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"

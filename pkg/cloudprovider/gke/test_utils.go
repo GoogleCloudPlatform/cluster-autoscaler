@@ -27,8 +27,8 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
@@ -290,6 +290,7 @@ type TestMigSpecBuilder struct {
 	TpuTopology         string
 	TpuMultiHost        bool
 	FlexStart           bool
+	ClusterSubnetwork   string
 }
 
 // NewTestMigSpecBuilder returns new instance of the TestGkeMigBuilder.
@@ -359,6 +360,11 @@ func (s *TestMigSpecBuilder) SetFlexStart(flexStart bool) *TestMigSpecBuilder {
 	return s
 }
 
+func (s *TestMigSpecBuilder) SetClusterSubnetwork(subnet string) *TestMigSpecBuilder {
+	s.ClusterSubnetwork = subnet
+	return s
+}
+
 // SpecBuild creates an instance of NodePoolSpec to be used in tests.
 func (s *TestMigSpecBuilder) SpecBuild() *gkeclient.NodePoolSpec {
 	return &gkeclient.NodePoolSpec{
@@ -371,6 +377,7 @@ func (s *TestMigSpecBuilder) SpecBuild() *gkeclient.NodePoolSpec {
 		TpuTopology:         s.TpuTopology,
 		TpuMultiHost:        s.TpuMultiHost,
 		FlexStart:           s.FlexStart,
+		ClusterSubnetwork:   s.ClusterSubnetwork,
 	}
 }
 

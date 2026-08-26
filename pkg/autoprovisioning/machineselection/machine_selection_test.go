@@ -20,13 +20,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 
 	"k8s.io/utils/ptr"
 )
@@ -1400,6 +1400,28 @@ func TestLimitMachineSpec(t *testing.T) {
 				Families:             []machinetypes.MachineFamily{machinetypes.E2},
 				MinCpuPlatform:       machinetypes.AnyPlatform,
 				BootDiskStoragePools: []string{"projects/test-project/zones/us-central1-a/storagePools/test-pool"},
+			},
+			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "e2"`, machinetypes.DiskTypeHyperdiskBalanced),
+		},
+		"supported family with BootDiskProvisionedIops and BootDiskProvisionedThroughput": {
+			spec: machinetypes.MachineSpec{
+				Families:                      []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:                machinetypes.AnyPlatform,
+				BootDiskProvisionedIops:       4000,
+				BootDiskProvisionedThroughput: 200,
+			},
+			expectedSpec: machinetypes.MachineSpec{
+				Families:                      []machinetypes.MachineFamily{machinetypes.C3D},
+				MinCpuPlatform:                machinetypes.AnyPlatform,
+				BootDiskProvisionedIops:       4000,
+				BootDiskProvisionedThroughput: 200,
+			},
+		},
+		"error if machine family does not support hyperdisk-balanced for BootDiskProvisionedIops": {
+			spec: machinetypes.MachineSpec{
+				Families:                []machinetypes.MachineFamily{machinetypes.E2},
+				MinCpuPlatform:          machinetypes.AnyPlatform,
+				BootDiskProvisionedIops: 4000,
 			},
 			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "e2"`, machinetypes.DiskTypeHyperdiskBalanced),
 		},

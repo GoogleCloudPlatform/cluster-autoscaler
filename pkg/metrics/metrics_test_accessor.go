@@ -60,6 +60,12 @@ func GetCCStatusApiPatchDurationCountForTest(code string) (uint64, error) {
 	return testutil.GetHistogramMetricCount(histogram)
 }
 
+// GetFilteredFalsePositiveSchedulablePodsEventsForTest returns the current value for a given reason (only for tests).
+func GetFilteredFalsePositiveSchedulablePodsEventsForTest(reason FilteredFalsePositiveReason) (float64, error) {
+	counter := filteredFalsePositiveSchedulablePodsEvents.WithLabelValues(string(reason))
+	return testutil.GetCounterMetricValue(counter)
+}
+
 // ResetAllForTest resets all metrics that support it, preventing cross-test
 // state contamination. It iterates the same allMetrics slice used by RegisterAll,
 // so any newly added metric is automatically handled.
@@ -69,4 +75,34 @@ func ResetAllForTest() {
 			r.Reset()
 		}
 	}
+}
+
+// GetDaemonSetMutationResolutionsCountForTest returns the current count for a given status and reason (only for tests).
+func GetDaemonSetMutationResolutionsCountForTest(status, reason string) (float64, error) {
+	counter := dsMutationResolutionsTotal.WithLabelValues(status, reason)
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDaemonSetMutationResolutionDurationSumForTest returns the sum of observed durations for a status and reason (only for tests).
+func GetDaemonSetMutationResolutionDurationSumForTest(status, reason string) (float64, error) {
+	observer := dsMutationResolutionDuration.WithLabelValues(status, reason)
+	return testutil.GetHistogramMetricValue(observer)
+}
+
+// GetDemandFungibilityExtractedCountForTest returns the current count for a given source (only for tests).
+func GetDemandFungibilityExtractedCountForTest(source DemandFungibilitySource) (float64, error) {
+	counter := demandFungibilityExtractedTotal.WithLabelValues(string(source))
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDemandFungibilityInjectedCountForTest returns the current count for a given source (only for tests).
+func GetDemandFungibilityInjectedCountForTest(source DemandFungibilitySource) (float64, error) {
+	counter := demandFungibilityInjectedTotal.WithLabelValues(string(source))
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetDemandFungibilityMissingIdCountForTest returns the current count for a given source and reason (only for tests).
+func GetDemandFungibilityMissingIdCountForTest(source DemandFungibilitySource, reason string) (float64, error) {
+	counter := demandFungibilityMissingIdTotal.WithLabelValues(string(source), reason)
+	return testutil.GetCounterMetricValue(counter)
 }

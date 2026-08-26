@@ -22,16 +22,18 @@ import (
 
 // MachineSpec combines information about machine family and min-cpu-platform.
 type MachineSpec struct {
-	Families                 []MachineFamily
-	MinCpuPlatform           CpuPlatform
-	GpuType                  string
-	TpuType                  string
-	BootDiskType             string
-	BootDiskStoragePools     []string
-	ComputeClassName         string
-	ExplicitMachineTypes     []string
-	ConfidentialNodesEnabled bool
-	ConfidentialNodeType     string
+	Families                      []MachineFamily
+	MinCpuPlatform                CpuPlatform
+	GpuType                       string
+	TpuType                       string
+	BootDiskType                  string
+	BootDiskStoragePools          []string
+	BootDiskProvisionedIops       int64
+	BootDiskProvisionedThroughput int64
+	ComputeClassName              string
+	ExplicitMachineTypes          []string
+	ConfidentialNodesEnabled      bool
+	ConfidentialNodeType          string
 }
 
 // String returns a human-readable description of the spec.

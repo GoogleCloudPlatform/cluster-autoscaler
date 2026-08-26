@@ -18,8 +18,8 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	node_version "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 var (

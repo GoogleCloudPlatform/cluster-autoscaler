@@ -486,3 +486,39 @@ func TestCCStatusMetrics(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(1), dur200Count)
 }
+
+func TestDemandFungibilityMetrics(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	pm := &prometheusMetrics{}
+
+	pm.RegisterDemandFungibilityExtracted(FA)
+	pm.RegisterDemandFungibilityExtracted(RLA)
+	pm.RegisterDemandFungibilityInjected(FA)
+	pm.RegisterDemandFungibilityInjected(RLA)
+	pm.RegisterDemandFungibilityMissingId(FA, "MissingGuidanceId")
+	pm.RegisterDemandFungibilityMissingId(RLA, "MissingRecommendationId")
+
+	val, err := testutil.GetCounterMetricValue(demandFungibilityExtractedTotal.WithLabelValues(string(FA)))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	val, err = testutil.GetCounterMetricValue(demandFungibilityExtractedTotal.WithLabelValues(string(RLA)))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	val, err = testutil.GetCounterMetricValue(demandFungibilityInjectedTotal.WithLabelValues(string(FA)))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	val, err = testutil.GetCounterMetricValue(demandFungibilityInjectedTotal.WithLabelValues(string(RLA)))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	val, err = testutil.GetCounterMetricValue(demandFungibilityMissingIdTotal.WithLabelValues(string(FA), "MissingGuidanceId"))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+
+	val, err = testutil.GetCounterMetricValue(demandFungibilityMissingIdTotal.WithLabelValues(string(RLA), "MissingRecommendationId"))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), val)
+}

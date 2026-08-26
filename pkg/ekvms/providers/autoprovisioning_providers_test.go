@@ -297,22 +297,26 @@ func TestResizingEnabled(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ekAutoprovisioningProvider := &ekAutoprovisioningProvider{
+				status: LaunchStatus{
+					phase:  tc.ekLaunchPhase,
+					source: "",
+				},
+				autopilotEnabled: tc.autopilotEnabled,
+			}
+			e4aAutoprovisioningProvider := &e4aAutoprovisioningProvider{
+				status: LaunchStatus{
+					phase:  tc.e4aLaunchPhase,
+					source: "",
+				},
+				autopilotEnabled:      tc.autopilotEnabled,
+				enabledOnManagedNodes: tc.e4aOnManagedNodes,
+			}
 			p := &ResizableVmAutoprovisioningProvider{
 				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
-				ekAutoprovisioningProvider: &ekAutoprovisioningProvider{
-					status: LaunchStatus{
-						phase:  tc.ekLaunchPhase,
-						source: "",
-					},
-					autopilotEnabled: tc.autopilotEnabled,
-				},
-				e4aAutoprovisioningProvider: &e4aAutoprovisioningProvider{
-					status: LaunchStatus{
-						phase:  tc.e4aLaunchPhase,
-						source: "",
-					},
-					autopilotEnabled:      tc.autopilotEnabled,
-					enabledOnManagedNodes: tc.e4aOnManagedNodes,
+				autoprovisioningProviders: map[string]autoprovisioningProvider{
+					machinetypes.EK.Name():  ekAutoprovisioningProvider,
+					machinetypes.E4A.Name(): e4aAutoprovisioningProvider,
 				},
 			}
 

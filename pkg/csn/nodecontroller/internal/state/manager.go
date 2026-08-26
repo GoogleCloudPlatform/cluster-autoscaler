@@ -442,10 +442,10 @@ func (m *NodeStateManager) stopTrackingNodes(nodeNames ...string) {
 
 func (m *NodeStateManager) emitNodeCounts() {
 	m.nodeMutex.RLock()
-	counts := make(map[csn.NodeState]int)
+	counts := make(map[NodeCountsState]int)
 	for _, tn := range m.trackedNodes {
 		if tn != nil {
-			counts[tn.State]++
+			counts[NodeCountsState{State: tn.State, BackedOff: tn.IsBackedOff}]++
 		}
 	}
 	m.nodeMutex.RUnlock()

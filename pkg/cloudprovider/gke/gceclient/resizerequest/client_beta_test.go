@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	test_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 

@@ -20,9 +20,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 var (
@@ -54,12 +54,12 @@ func newTestMig(mockManager *gke.GkeManagerMock, config testMigConfig, getInstan
 	if getInstanceTemplateErr {
 		mockManager.On("GetMigInstanceTemplate", mig).Return(nil, errors.New("mig template get error")).Once()
 	} else {
-		mockManager.On("GetMigInstanceTemplate", mig).Return(&gce_api.InstanceTemplate{SelfLink: config.templateSelfLink}, nil)
+		mockManager.On("GetMigInstanceTemplate", mig).Return(&gce_api.InstanceTemplate{SelfLink: config.templateSelfLink}, nil).Maybe()
 	}
 	if getSizeErr {
 		mockManager.On("GetMigSize", mig).Return(int64(0), errors.New("mig size get error")).Once()
 	} else {
-		mockManager.On("GetMigSize", mig).Return(int64(config.targetSize), nil)
+		mockManager.On("GetMigSize", mig).Return(int64(config.targetSize), nil).Maybe()
 	}
 
 	return mig

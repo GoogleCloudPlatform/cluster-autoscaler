@@ -15,7 +15,6 @@
 package processors
 
 import (
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/podlistprocessor"
 	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
@@ -43,6 +42,8 @@ import (
 	klog "k8s.io/klog/v2"
 
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/safeguard"
+	podutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 
 	apiv1 "k8s.io/api/core/v1"
 )
@@ -74,7 +75,7 @@ type GkeInternalPodListProcessor struct {
 	enforceFakePodsLimitProcessor  *podinjection.EnforceInjectedPodsLimitProcessor
 	lookaheadPodsInjection         *lookaheadbuffer_processor.LookaheadPodInjectionProcessor
 	podStateObserver               *podstate.PodStateObserver
-	podTopologySpreadProcessor     *podtopologyspread.Processor
+	podTopologySpreadProcessor     *safeguard.SafeguardedPodListProcessor
 	flexAdvisorPodListProcessor    *flexadvisor.PodListProcessor
 	cbPodInjectionProcessor        *cbprocessors.CapacityBufferPodListProcessor
 	csnNodeReconcilationProcessor  *csn_processors.NodeReconcilationProcessor
@@ -114,8 +115,13 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	em experiments.Manager,
 ) *GkeInternalPodListProcessor {
 	p := &GkeInternalPodListProcessor{
-		crProcessor:                    crProcessor,
-		defaultPodListerProcessor:      podlistprocessor.NewDefaultPodListProcessor(pr_pods.DoNotScheduleOnDWS),
+		crProcessor: crProcessor,
+		// FilterOutSchedulable (FOS) safeguard: FOS drops pods that it predicts will fit on existing ready nodes.
+		// However, if there is a discrepancy between CA's simulator and kube-scheduler (e.g., due to version differences),
+		// CA might incorrectly predict a pod fits while kube-scheduler disagrees. In this case, FOS repeatedly drops
+		// the pod, preventing scale-up, and the pod remains stuck pending. The safeguard detects this stuck state
+		// and reports metrics (reason="filter_out_schedulable").
+		defaultPodListerProcessor:      newSafeguardedDefaultPodListProcessor(pr_pods.DoNotScheduleOnDWS, metrics.FilterOutSchedulable, false),
 		prProcessor:                    prProcessor,
 		ekvmsProcessor:                 ekvmsProcessor,
 		podStatusAggregator:            podStatusAggregator,
@@ -125,7 +131,6 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		ossProvReqPodsInjector:         ossProvReqPodsInjector,
 		enforceFakePodsLimitProcessor:  enforceFakePodsLimitProcessor,
 		lookaheadPodsInjection:         lookaheadPodsInjection,
-		podTopologySpreadProcessor:     podTopologySpreadProcessor,
 		flexAdvisorPodListProcessor:    flexAdvisorPodListProcessor,
 		cbPodInjectionProcessor:        cbPodInjectionProcessor,
 		csnNodeReconcilationProcessor:  csnNodeReconcilationProcessor,
@@ -137,6 +142,15 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		storageNodeAffinityProcessor:   storageNodeAffinityProcessor,
 		experimentsManager:             em,
 	}
+
+	if podTopologySpreadProcessor != nil {
+		// Pod Topology Spread (PTS) safeguard: PTS mutates pods by assigning a NodeSelector for a target domain.
+		// If this assignment does not align with the actual scheduler behavior (pod with such node selector is
+		// schedulable while the one with PTS is not), the pod might remain unschedulable. If the pod is dropped by PTS
+		// as schedulable but remains stuck pending, the safeguard tracks the false positive and reports metrics (reason="pts_mutation").
+		p.podTopologySpreadProcessor = safeguard.NewSafeguardedPodListProcessor(podTopologySpreadProcessor, metrics.TopologySpreadMutation, false)
+	}
+
 	if defragProcessor != nil {
 		p.defragProcessor = defragProcessor
 	}
@@ -144,6 +158,22 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		p.csnBufferConsumptionProcessor = csnBufferConsumptionProcessor
 	}
 	return p
+}
+
+// newSafeguardedDefaultPodListProcessor returns the default chain of PodListProcessors,
+// where FilterOutSchedulablePodListProcessor is wrapped with SafeguardedPodListProcessor.
+func newSafeguardedDefaultPodListProcessor(nodeFilter func(*framework.NodeInfo) bool, reason metrics.FilteredFalsePositiveReason, restore bool) *pods.CombinedPodListProcessor {
+	return pods.NewCombinedPodListProcessor([]pods.PodListProcessor{
+		podlistprocessor.NewClearTPURequestsPodListProcessor(),
+		podlistprocessor.NewFilterOutExpendablePodListProcessor(),
+		podlistprocessor.NewCurrentlyDrainedNodesPodListProcessor(),
+		safeguard.NewSafeguardedPodListProcessor(
+			podlistprocessor.NewFilterOutSchedulablePodListProcessor(nodeFilter),
+			reason,
+			restore,
+		),
+		podlistprocessor.NewFilterOutDaemonSetPodListProcessor(),
+	})
 }
 
 // Process calls all gke internal PodListProcessors.
@@ -396,7 +426,7 @@ func (p *GkeInternalPodListProcessor) processAndObserve(processor pods.PodListPr
 	}
 
 	if p.podStateObserver != nil || p.cbFakePodStateObserver != nil {
-		schedulablePods := getSchedulable(unschedulablePods, withoutSchedulable)
+		schedulablePods := podutil.GetMissingPods(unschedulablePods, withoutSchedulable)
 		if p.podStateObserver != nil {
 			p.podStateObserver.ObserveReaction(schedulablePods, reactionType)
 		}
@@ -459,27 +489,4 @@ func (p *GkeInternalPodListProcessor) CleanUp() {
 	if p.podShardingProcessor != nil {
 		p.podShardingProcessor.CleanUp()
 	}
-}
-
-type podKey struct {
-	UID  types.UID
-	Name string
-}
-
-func getSchedulable(unschedulableBefore, unschedulableAfter []*apiv1.Pod) []*apiv1.Pod {
-	schedulable := []*apiv1.Pod{}
-	afterKeys := make(map[podKey]struct{}, len(unschedulableAfter))
-
-	for _, pod := range unschedulableAfter {
-		key := podKey{UID: pod.UID, Name: pod.Name}
-		afterKeys[key] = struct{}{}
-	}
-
-	for _, pod := range unschedulableBefore {
-		key := podKey{UID: pod.UID, Name: pod.Name}
-		if _, found := afterKeys[key]; !found {
-			schedulable = append(schedulable, pod)
-		}
-	}
-	return schedulable
 }

@@ -17,8 +17,8 @@ package machinetypes
 import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // DEPRECATION NOTICE: This configuration will become obsolete after the
@@ -2039,6 +2039,15 @@ var (
 				withAutomaticEphemeralLocalSsdCount(10).
 				withInstancePriceOverride(10.030586).
 				withPreemptibleInstancePriceOverride(5.776885),
+			NewMachineTypeInfo("h4d-megamem-192", 192, 3024).
+				withExplicitReqOnly(),
+			// TODO(b/538222593): Add price overrides once Ohara pricing is available.
+			// While explicit-only during Preview, missing pricing does not affect NAP selection.
+			// However, price overrides must be added before lifting the explicit-only restriction
+			// so it is properly accounted for in the Performance compute class.
+			NewMachineTypeInfo("h4d-megamem-192-lssd", 192, 3024).
+				withAutomaticEphemeralLocalSsdCount(32).
+				withExplicitReqOnly(),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
 		supportCompactPlacement:  true,

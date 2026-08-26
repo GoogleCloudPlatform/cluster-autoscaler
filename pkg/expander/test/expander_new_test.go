@@ -24,11 +24,11 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	gkepriceexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/impostor"
 	testoptions "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/testutils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"

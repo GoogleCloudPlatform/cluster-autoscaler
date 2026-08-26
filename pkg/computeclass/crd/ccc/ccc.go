@@ -253,6 +253,12 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 			p.Storage.LocalSSDCount,
 		)
 		ruleOpts = append(ruleOpts, storageOpt)
+		if p.Storage.BootDiskProvisionedIops != nil {
+			ruleOpts = append(ruleOpts, rules.WithBootDiskProvisionedIopsRule(*p.Storage.BootDiskProvisionedIops))
+		}
+		if p.Storage.BootDiskProvisionedThroughput != nil {
+			ruleOpts = append(ruleOpts, rules.WithBootDiskProvisionedThroughputRule(*p.Storage.BootDiskProvisionedThroughput))
+		}
 		ruleOpts = checkSecondaryBootDiskRules(p, ccc, ruleOpts)
 		if len(p.Storage.BootDiskStoragePools) > 0 {
 			ruleOpts = append(ruleOpts, rules.WithBootDiskStoragePoolsRule(p.Storage.BootDiskStoragePools))

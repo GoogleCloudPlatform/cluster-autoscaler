@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	client_testing "k8s.io/client-go/testing"
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
@@ -146,4 +147,289 @@ func TestSetResources(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSanitizeNodeAffinity(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    *apiv1.PodSpec
+		expected *apiv1.PodSpec
+	}{
+		{
+			name:     "nil spec",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "spec with nil affinity",
+			input:    &apiv1.PodSpec{},
+			expected: &apiv1.PodSpec{},
+		},
+		{
+			name: "spec with nil node affinity",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					PodAntiAffinity: &apiv1.PodAntiAffinity{},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					PodAntiAffinity: &apiv1.PodAntiAffinity{},
+				},
+			},
+		},
+		{
+			name: "spec with single-node hostname affinity only",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchFields: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      metav1.ObjectNameField,
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"gke-cluster-node-1234"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: nil,
+			},
+		},
+		{
+			name: "spec with single-node hostname affinity and pod affinity",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchFields: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      metav1.ObjectNameField,
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"node-1"},
+										},
+									},
+								},
+							},
+						},
+					},
+					PodAffinity: &apiv1.PodAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
+							{TopologyKey: "kubernetes.io/hostname"},
+						},
+					},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					PodAffinity: &apiv1.PodAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
+							{TopologyKey: "kubernetes.io/hostname"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "spec with single-node hostname affinity and preferred node affinity",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchFields: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      metav1.ObjectNameField,
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"node-1"},
+										},
+									},
+								},
+							},
+						},
+						PreferredDuringSchedulingIgnoredDuringExecution: []apiv1.PreferredSchedulingTerm{
+							{
+								Weight: 10,
+								Preference: apiv1.NodeSelectorTerm{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "topology.kubernetes.io/zone",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"us-central1-a"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						PreferredDuringSchedulingIgnoredDuringExecution: []apiv1.PreferredSchedulingTerm{
+							{
+								Weight: 10,
+								Preference: apiv1.NodeSelectorTerm{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "topology.kubernetes.io/zone",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"us-central1-a"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "mixed term with hostname matchField and zone matchExpression",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "topology.kubernetes.io/zone",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"us-central1-a"},
+										},
+									},
+									MatchFields: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      metav1.ObjectNameField,
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"node-1"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "topology.kubernetes.io/zone",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"us-central1-a"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "multi-term selector: one hostname term and one label expression term",
+			input: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchFields: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      metav1.ObjectNameField,
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"node-1"},
+										},
+									},
+								},
+								{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "cloud.google.com/gke-nodepool",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"pool-1"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: &apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+								{
+									MatchExpressions: []apiv1.NodeSelectorRequirement{
+										{
+											Key:      "cloud.google.com/gke-nodepool",
+											Operator: apiv1.NodeSelectorOpIn,
+											Values:   []string{"pool-1"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			SanitizeNodeAffinity(tc.input)
+			assert.Equal(t, tc.expected, tc.input)
+		})
+	}
+}
+
+func TestCapacityRequestState_Update_SanitizesNodeAffinity(t *testing.T) {
+	cr := BuildTestCr("cr-daemonset", "500m", "1Gi", nil)
+	cr.Spec.Capacity.NodeName = "node-1"
+	cr.Spec.Capacity.Affinity = &apiv1.Affinity{
+		NodeAffinity: &apiv1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+				NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+					{
+						MatchFields: []apiv1.NodeSelectorRequirement{
+							{
+								Key:      metav1.ObjectNameField,
+								Operator: apiv1.NodeSelectorOpIn,
+								Values:   []string{"node-1"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	fakeClient := cr_fake.NewSimpleClientset(cr)
+	crState := NewCapacityRequestState(fakeClient)
+	crState.Update([]*cr_types.CapacityRequest{cr})
+
+	pod, found := crState.CapacityRequestToPod(cr)
+	assert.True(t, found, "Expected to find synthesized pod for CR")
+	assert.Empty(t, pod.Spec.NodeName, "Expected NodeName to be cleared")
+	assert.Nil(t, pod.Spec.Affinity, "Expected single-node hostname affinity to be sanitized")
 }

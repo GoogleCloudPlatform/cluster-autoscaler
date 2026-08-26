@@ -114,6 +114,14 @@ func (b *ComputeClassBuilder) WithNapDisabled() *ComputeClassBuilder {
 	return b.WithNodePoolAutoCreation(false)
 }
 
+// WithAutopilot sets the Autopilot field.
+func (b *ComputeClassBuilder) WithAutopilot(enabled bool) *ComputeClassBuilder {
+	b.cc.Spec.Autopilot = &v1.Autopilot{
+		Enabled: enabled,
+	}
+	return b
+}
+
 // WithPriorities sets the priorities.
 func (b *ComputeClassBuilder) WithPriorities(priorities ...v1.Priority) *ComputeClassBuilder {
 	b.cc.Spec.Priorities = priorities

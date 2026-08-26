@@ -41,15 +41,19 @@ type StorageRule interface {
 	TotalLSSDCount() int64
 	SecondaryBootDisks() []*gke_api_beta.SecondaryBootDisk
 	BootDiskStoragePools() []string
+	BootDiskProvisionedIops() int64
+	BootDiskProvisionedThroughput() int64
 }
 
 type storageRule struct {
-	bootDiskType              *string
-	bootDiskSize              *int
-	bootDiskKMSKey            *string
-	ephemeralStorageLSSDCount *int
-	secondaryBootDisks        []*gke_api_beta.SecondaryBootDisk
-	bootDiskStoragePools      []string
+	bootDiskType                  *string
+	bootDiskSize                  *int
+	bootDiskKMSKey                *string
+	ephemeralStorageLSSDCount     *int
+	secondaryBootDisks            []*gke_api_beta.SecondaryBootDisk
+	bootDiskStoragePools          []string
+	bootDiskProvisionedIops       *int64
+	bootDiskProvisionedThroughput *int64
 }
 
 // Matches returns true if the nodegroup is within one of the nodepools.
@@ -65,7 +69,9 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		r.bootDiskKMSKey == nil &&
 		r.ephemeralStorageLSSDCount == nil &&
 		len(r.secondaryBootDisks) == 0 &&
-		len(r.bootDiskStoragePools) == 0 {
+		len(r.bootDiskStoragePools) == 0 &&
+		r.bootDiskProvisionedIops == nil &&
+		r.bootDiskProvisionedThroughput == nil {
 		return true
 	}
 
@@ -84,6 +90,12 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		return false
 	}
 	if r.ephemeralStorageLSSDCount != nil && migEphemeralStorageLSSDCount(mig) != int64(*r.ephemeralStorageLSSDCount) {
+		return false
+	}
+	if r.bootDiskProvisionedIops != nil && mig.Spec().BootDiskProvisionedIops != *r.bootDiskProvisionedIops {
+		return false
+	}
+	if r.bootDiskProvisionedThroughput != nil && mig.Spec().BootDiskProvisionedThroughput != *r.bootDiskProvisionedThroughput {
 		return false
 	}
 
@@ -175,6 +187,22 @@ func (r *storageRule) BootDiskStoragePools() []string {
 	return r.bootDiskStoragePools
 }
 
+// BootDiskProvisionedIops returns provisioned IOPS of rule.
+func (r *storageRule) BootDiskProvisionedIops() int64 {
+	if r.bootDiskProvisionedIops == nil {
+		return 0
+	}
+	return *r.bootDiskProvisionedIops
+}
+
+// BootDiskProvisionedThroughput returns provisioned throughput of rule.
+func (r *storageRule) BootDiskProvisionedThroughput() int64 {
+	if r.bootDiskProvisionedThroughput == nil {
+		return 0
+	}
+	return *r.bootDiskProvisionedThroughput
+}
+
 // WithStorageRule returns RuleOption setting basic StorageRule.
 func WithStorageRule(bootDiskType *string, bootDiskSize *int, bootDiskKMSKey *string, ephemeralStorageLSSDCount *int) RuleOption {
 	return func(r *rule) {
@@ -182,6 +210,20 @@ func WithStorageRule(bootDiskType *string, bootDiskSize *int, bootDiskKMSKey *st
 		r.storageRule.bootDiskSize = bootDiskSize
 		r.storageRule.bootDiskKMSKey = bootDiskKMSKey
 		r.storageRule.ephemeralStorageLSSDCount = ephemeralStorageLSSDCount
+	}
+}
+
+// WithBootDiskProvisionedIopsRule returns RuleOption setting BootDiskProvisionedIops.
+func WithBootDiskProvisionedIopsRule(iops int64) RuleOption {
+	return func(r *rule) {
+		r.storageRule.bootDiskProvisionedIops = &iops
+	}
+}
+
+// WithBootDiskProvisionedThroughputRule returns RuleOption setting BootDiskProvisionedThroughput.
+func WithBootDiskProvisionedThroughputRule(throughput int64) RuleOption {
+	return func(r *rule) {
+		r.storageRule.bootDiskProvisionedThroughput = &throughput
 	}
 }
 

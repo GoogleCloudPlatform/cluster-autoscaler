@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	testingclock "k8s.io/utils/clock/testing"
 	"k8s.io/utils/set"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 func TestBackoffManager_AddFailedNodes(t *testing.T) {

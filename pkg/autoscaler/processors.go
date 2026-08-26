@@ -32,6 +32,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -55,7 +56,6 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/binpacking"
@@ -657,7 +657,7 @@ func setUpProcessors(
 	autoscalingProcessors.PodListProcessor =
 		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconcilationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, storageNodeAffinityProcessor, experimentsManager)
 
-	metricsFilterProcessor := metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter)
+	autoscalingProcessors.ScaleStateNotifier.Register(metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter))
 
 	autoscalingProcessors.ActionableClusterProcessor = internal_processors.NewGkeEmptyClusterProcessor()
 
@@ -685,7 +685,7 @@ func setUpProcessors(
 		mutationController.Start()
 	}
 
-	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, metricsFilterProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
+	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
 
 	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, npcCrdLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor

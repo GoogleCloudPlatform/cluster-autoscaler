@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
@@ -54,6 +55,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/common"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
@@ -61,7 +63,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 	autoscalererrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -813,6 +814,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		machineConfigProvider:    machinetypes.NewMachineConfigProvider(nil),
 		localSSDDiskSizeProvider: gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 		gkeMetrics:               internalmetrics.Metrics,
+		optsTracker:              optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	if regional {
 		manager.location = region
@@ -1379,6 +1381,26 @@ func TestNewNodePoolSpec(t *testing.T) {
 			expectedSpec: NewTestMigSpecBuilder().
 				SetMachineType(machineTypeA).
 				SetLocations([]string{zoneAIA, zoneAIB}).
+				SpecBuild(),
+		},
+		{
+			description: "tenant mig spec, expects overridden cluster subnetwork",
+			mig: NewTestGkeMigBuilder().SetGceRef(
+				gce.GceRef{
+					Project: projectId,
+					Zone:    zoneA,
+					Name:    "mig",
+				},
+			).SetSpec(
+				NewTestMigSpecBuilder().
+					SetMachineType(machineTypeA).
+					SetLabels(map[string]string{multitenancy.TenantUIDLabel: "my-tenant-123"}).
+					SpecBuild()).
+				Build(),
+			expectedSpec: NewTestMigSpecBuilder().
+				SetMachineType(machineTypeA).
+				SetLocations(autoprovLocations).
+				SetClusterSubnetwork("gke-my-tenant-123").
 				SpecBuild(),
 		},
 	}
@@ -2562,6 +2584,96 @@ func TestCreateInstances(t *testing.T) {
 	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
 	err = g.CreateInstances(mig, 1)
 	assert.NoError(t, err)
+}
+
+func TestCreateInstances_WithRecommendation(t *testing.T) {
+	registerMetricsOnce.Do(internalmetrics.RegisterAll)
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	initialMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	g.gceService = mockGceClient
+	rec := ScaleUpRecommendation{RecommendationId: "rec1", SpecKey: "spec1", Source: internalmetrics.FA}
+	g.SetRecommendation(mig.Id(), rec)
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1/rec1//spec1"}, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+	finalMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+	assert.Equal(t, initialMetric+1, finalMetric)
+}
+
+func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
+
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	mockGceClient.AutoscalingGceClient = g.gceService
+	g.gceService = mockGceClient
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Empty(t, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+}
+
+func TestCreateInstances_WithRecommendation_ZeroValueStruct(t *testing.T) {
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
+	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
+
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	mockGceClient.AutoscalingGceClient = g.gceService
+	g.gceService = mockGceClient
+	g.SetRecommendation(mig.Id(), ScaleUpRecommendation{})
+
+	err := g.CreateInstances(mig, 1)
+
+	assert.NoError(t, err)
+	assert.Empty(t, mockGceClient.GetRecordedRecommendations(mig.gceRef))
 }
 
 func TestCreateInstancesWithMultipleRequests(t *testing.T) {
@@ -6601,14 +6713,14 @@ func TestResumeInstances(t *testing.T) {
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
 	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := fmt.Sprintf(`{
+	listResponse := `{
         "managedInstances": [
             {
                 "name": "inst-1",
                 "instanceStatus": "RUNNING"
             }
         ]
-    }`)
+    }`
 	server.On("handle", listUrl).Return(listResponse).Once()
 
 	mig := &GkeMig{

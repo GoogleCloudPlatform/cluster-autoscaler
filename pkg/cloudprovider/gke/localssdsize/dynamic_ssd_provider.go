@@ -17,9 +17,9 @@ package localssdsize
 import (
 	"sync"
 
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 )
 
 // DynamicLocalSSDDiskSizeProvider is an implementation of `localssdsize.LocalSSDSizeProvider`

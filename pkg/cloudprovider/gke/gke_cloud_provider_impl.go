@@ -28,6 +28,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	nap_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/napcloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
@@ -66,7 +67,6 @@ import (
 	prpods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -801,6 +801,7 @@ func (p *gkeCloudProviderImpl) GetResourceLimiter() (*cloudprovider.ResourceLimi
 // Refresh is called before every main loop and can be used to dynamically update cloud provider state.
 // In particular the list of node groups returned by NodeGroups can change as a result of CloudProvider.Refresh().
 func (p *gkeCloudProviderImpl) Refresh() error {
+	p.ClearRecommendations()
 	if changed := p.machineConfigProvider.Refresh(); changed {
 		p.gkePriceInfo.RefreshGkePrices()
 		p.gkeManager.RefreshLocalSSDSizes()
@@ -2372,4 +2373,19 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		gce.RegisterMetrics()
 	})
 	return provider, nil
+}
+
+// SetRecommendation delegates to GkeManager
+func (mig *GkeMig) SetRecommendation(recommendation ScaleUpRecommendation) {
+	if mig.gkeManager != nil {
+		mig.gkeManager.SetRecommendation(mig.Id(), recommendation)
+	}
+}
+
+// PopRecommendation delegates to GkeManager
+func (mig *GkeMig) PopRecommendation() (ScaleUpRecommendation, bool) {
+	if mig.gkeManager != nil {
+		return mig.gkeManager.PopRecommendation(mig.Id())
+	}
+	return ScaleUpRecommendation{}, false
 }
