@@ -236,6 +236,8 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
 
+				primeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+
 				podCount := tc.podCount
 				if podCount == 0 {
 					podCount = 1

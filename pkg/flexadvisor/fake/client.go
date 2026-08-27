@@ -103,6 +103,7 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 		availability := flexadvisorapi.NewTestInstanceAvailabilityBuilder(flexibilityScopeKey, key).
 			WithZonalInstanceCount(zonalCapacity).
 			WithZonalGcePreferenceScore(zonalScore).
+			WithGuidanceId("fake-guidance-id-" + key).
 			Build()
 		results[key] = availability
 	}

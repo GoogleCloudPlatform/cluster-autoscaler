@@ -167,9 +167,15 @@ func WithFlexStart() func(p *apiv1.Pod) {
 }
 
 func WithProvisioningMode(mode instanceavailability.ProvisioningMode) func(*apiv1.Pod) {
-	return func(*apiv1.Pod) {
+	return func(p *apiv1.Pod) {
 		if mode == instanceavailability.FlexStart {
-			WithFlexStart()
+			WithFlexStart()(p)
+		} else if mode == instanceavailability.Spot {
+			if p.Spec.NodeSelector == nil {
+				p.Spec.NodeSelector = make(map[string]string)
+			}
+			p.Spec.NodeSelector["cloud.google.com/gke-provisioning"] = "spot"
+			p.Spec.NodeSelector["cloud.google.com/gke-spot"] = "true"
 		}
 	}
 }
