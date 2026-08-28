@@ -45,9 +45,10 @@ const (
 	scheduleAnywayProcessWindow = 5 * time.Minute
 )
 
-type labelKeyValue struct {
-	key   string
-	value string
+type namespacedLabelKeyValue struct {
+	namespace string
+	key       string
+	value     string
 }
 
 // Processor is a PodListProcessor that enforces pod topology spread constraints for ComputeClass.
@@ -132,11 +133,11 @@ func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePod
 	}
 	allPods = append(allPods, unschedulablePods...)
 
-	// Indexing pods by label keys to enable optimizations.
-	allPodsByLabel := indexPodsByLabel(allPods)
+	// Indexing pods by namespace and label keys to enable optimizations.
+	allPodsByNamespaceAndLabel := indexPodsByNamespaceAndLabel(allPods)
 
 	loggingQuota := logging.PTSPodAssignmentLoggingQuota()
-	matchedPodsCache := make(map[string][]*apiv1.Pod)
+	matchedPodsCache := make(map[matchedPodsCacheKey][]*apiv1.Pod)
 	for _, config := range configs {
 		pod := config.pod
 		pts := config.constraint
@@ -152,10 +153,7 @@ func (p *Processor) Process(ctx *ca_context.AutoscalingContext, unschedulablePod
 			continue
 		}
 
-		matchingPods := getMatchingPodsWithCache(allPodsByLabel, matchedPodsCache, allPods, pts, pod)
-		// Scheduler scopes PTS per namespace, for each pod we need to calculate only pods from the same namespace.
-		// TODO(b/513145089): We should take this into consideration when building the cache, not only filter at the end.
-		matchingPods = filterPodsByNamespace(matchingPods, pod.Namespace)
+		matchingPods := getMatchingPodsWithCache(allPodsByNamespaceAndLabel, matchedPodsCache, allPods, pts, pod)
 		matchedPodsCountPerDomain := make(map[string]int, len(domains))
 		for _, matchedPod := range matchingPods {
 			node := podsToNodes[matchedPod]
@@ -333,29 +331,37 @@ func replacePods(pods []*apiv1.Pod, replacedPods map[types.UID]*apiv1.Pod) []*ap
 	return pods
 }
 
-func getCacheKey(sel *metav1.LabelSelector) string {
-	return sel.String() // Deterministic implementation.
+type matchedPodsCacheKey struct {
+	namespace     string
+	labelSelector string
 }
 
-func getMatchingPodsWithCache(allPodsByLabel map[labelKeyValue][]*apiv1.Pod, matchedPodsCache map[string][]*apiv1.Pod, allPods []*apiv1.Pod, pts *apiv1.TopologySpreadConstraint, pod *apiv1.Pod) []*apiv1.Pod {
+func getCacheKey(namespace string, sel *metav1.LabelSelector) matchedPodsCacheKey {
+	return matchedPodsCacheKey{
+		namespace:     namespace,
+		labelSelector: sel.String(),
+	}
+}
+
+func getMatchingPodsWithCache(allPodsByNamespaceAndLabel map[namespacedLabelKeyValue][]*apiv1.Pod, matchedPodsCache map[matchedPodsCacheKey][]*apiv1.Pod, allPods []*apiv1.Pod, pts *apiv1.TopologySpreadConstraint, pod *apiv1.Pod) []*apiv1.Pod {
 	if pts.LabelSelector == nil {
-		return allPods
+		return filterPodsByNamespace(allPods, pod.Namespace)
 	}
 
 	labelSelector := getNormalizedLabelSelector(pts, pod)
 
-	cacheKey := getCacheKey(labelSelector)
+	cacheKey := getCacheKey(pod.Namespace, labelSelector)
 	if matched, found := matchedPodsCache[cacheKey]; found {
 		return matched
 	}
 
-	matchedPods := getMatchingPods(allPodsByLabel, allPods, labelSelector)
+	matchedPods := getMatchingPods(allPodsByNamespaceAndLabel, allPods, labelSelector, pod.Namespace)
 	matchedPodsCache[cacheKey] = matchedPods
 	return matchedPods
 }
 
-func getMatchingPods(allPodsByLabel map[labelKeyValue][]*apiv1.Pod, allPods []*apiv1.Pod, labelSelector *metav1.LabelSelector) []*apiv1.Pod {
-	matched := getMatchingPodsForRequiredLabels(allPodsByLabel, allPods, labelSelector.MatchLabels)
+func getMatchingPods(allPodsByNamespaceAndLabel map[namespacedLabelKeyValue][]*apiv1.Pod, allPods []*apiv1.Pod, labelSelector *metav1.LabelSelector, namespace string) []*apiv1.Pod {
+	matched := getMatchingPodsForRequiredLabels(allPodsByNamespaceAndLabel, allPods, labelSelector.MatchLabels, namespace)
 	if labelSelector == nil || len(labelSelector.MatchExpressions) == 0 {
 		return matched
 	}
@@ -415,17 +421,17 @@ func getNormalizedLabelSelector(pts *apiv1.TopologySpreadConstraint, pod *apiv1.
 }
 
 // getMatchingPodsForRequiredLabels returns a list of pods that match the given required pod labels.
-func getMatchingPodsForRequiredLabels(allPodsByLabel map[labelKeyValue][]*apiv1.Pod, allPods []*apiv1.Pod, requiredPodLabels map[string]string) []*apiv1.Pod {
+func getMatchingPodsForRequiredLabels(allPodsByNamespaceAndLabel map[namespacedLabelKeyValue][]*apiv1.Pod, allPods []*apiv1.Pod, requiredPodLabels map[string]string, namespace string) []*apiv1.Pod {
 	if len(requiredPodLabels) == 0 {
-		return allPods
+		return filterPodsByNamespace(allPods, namespace)
 	}
 
 	rulesNum := len(requiredPodLabels)
 
 	matchedRulesCountPerPod := make(map[*apiv1.Pod]int)
 	for k, v := range requiredPodLabels {
-		label := labelKeyValue{key: k, value: v}
-		for _, pod := range allPodsByLabel[label] {
+		label := namespacedLabelKeyValue{namespace: namespace, key: k, value: v}
+		for _, pod := range allPodsByNamespaceAndLabel[label] {
 			matchedRulesCountPerPod[pod]++
 		}
 	}
@@ -468,15 +474,15 @@ func allScheduledPods(ctx *ca_context.AutoscalingContext) ([]*apiv1.Pod, map[*ap
 	return pods, podsToNodes, nil
 }
 
-func indexPodsByLabel(pods []*apiv1.Pod) map[labelKeyValue][]*apiv1.Pod {
-	podsByLabel := make(map[labelKeyValue][]*apiv1.Pod)
+func indexPodsByNamespaceAndLabel(pods []*apiv1.Pod) map[namespacedLabelKeyValue][]*apiv1.Pod {
+	podsByNamespaceAndLabel := make(map[namespacedLabelKeyValue][]*apiv1.Pod)
 	for _, pod := range pods {
 		for k, v := range pod.Labels {
-			label := labelKeyValue{key: k, value: v}
-			podsByLabel[label] = append(podsByLabel[label], pod)
+			label := namespacedLabelKeyValue{namespace: pod.Namespace, key: k, value: v}
+			podsByNamespaceAndLabel[label] = append(podsByNamespaceAndLabel[label], pod)
 		}
 	}
-	return podsByLabel
+	return podsByNamespaceAndLabel
 }
 
 func nodeNotBeingRemoved(node *apiv1.Node) bool {
