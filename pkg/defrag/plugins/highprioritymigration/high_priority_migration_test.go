@@ -21,12 +21,9 @@ import (
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -49,7 +46,6 @@ import (
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -69,7 +65,7 @@ func initTestCase(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []
 	cp := testCloudProvider.NewTestCloudProviderBuilder().Build()
 	var allNodes []*apiv1.Node
 	for _, ng := range nodeGroups {
-		mig := testutil.CreateMig(ng, makeMockGkeManager())
+		mig := testutil.CreateMig(ng, testutil.MakeMockGkeManager())
 		cp.InsertNodeGroup(mig)
 		for _, node := range ng.Nodes {
 			cp.AddNode(mig.Id(), node)
@@ -964,7 +960,7 @@ func TestHighPriorityMigrationIsExpansionValid(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 
 			expansionOption := expander.Option{
-				NodeGroup: testutil.CreateMig(tc.expandedNodeGroup, makeMockGkeManager()),
+				NodeGroup: testutil.CreateMig(tc.expandedNodeGroup, testutil.MakeMockGkeManager()),
 				NodeCount: len(tc.expandedNodeGroup.Nodes),
 			}
 			crdLabel := testCrdLabel
@@ -1043,12 +1039,12 @@ func newCccWithPriorityScore(name string) crd.CRD {
 func NewMockHighPriorityMigrationPlugin(config config.PluginsConfig) *plugin {
 	p := NewPlugin(config)
 	pImpl, _ := p.(*plugin)
-	pImpl.randomGenerator = rand.New(&mockRandSource{})
+	pImpl.randomGenerator = rand.New(&testutil.MockRandSource{})
 	return pImpl
 }
 
 func buildPlugin(lister npc_lister.Lister) *plugin {
-	provider := mockPluginProvider{}
+	provider := testutil.MockPluginProvider{}
 	provider.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.E2)
 	provider.On("IsAutopilotEnabled").Return(false)
 	config := config.New(config.Options{
@@ -1058,31 +1054,4 @@ func buildPlugin(lister npc_lister.Lister) *plugin {
 		Autopilot:             false,
 	})
 	return NewMockHighPriorityMigrationPlugin(config)
-}
-
-type mockRandSource struct{}
-
-func (mrs *mockRandSource) Int63() int64 {
-	return 0
-}
-func (mrs *mockRandSource) Seed(seed int64) {}
-
-func makeMockGkeManager() gke.GkeManager {
-	gkeManager := &gke.GkeManagerMock{}
-	gkeManager.On("GetMigTemplateNodeInfo", mock.Anything).Return(framework.NewTestNodeInfo(&apiv1.Node{}), nil)
-	return gkeManager
-}
-
-type mockPluginProvider struct {
-	mock.Mock
-}
-
-func (m *mockPluginProvider) GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily {
-	args := m.Called()
-	return args.Get(0).(machinetypes.MachineFamily)
-}
-
-func (m *mockPluginProvider) IsAutopilotEnabled() bool {
-	args := m.Called()
-	return args.Get(0).(bool)
 }

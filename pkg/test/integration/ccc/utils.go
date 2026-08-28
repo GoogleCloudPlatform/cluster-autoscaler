@@ -179,6 +179,15 @@ func (b *ComputeClassBuilder) WithActiveMigration(optimizeRulePriority bool) *Co
 	return b
 }
 
+// WithConfigDrift sets the ConfigDrift in ActiveMigration.
+func (b *ComputeClassBuilder) WithConfigDrift(configDrift bool) *ComputeClassBuilder {
+	if b.cc.Spec.ActiveMigration == nil {
+		b.cc.Spec.ActiveMigration = &v1.ActiveMigration{}
+	}
+	b.cc.Spec.ActiveMigration.ConfigDrift = &configDrift
+	return b
+}
+
 // WithLabels sets the Labels field.
 func (b *ComputeClassBuilder) WithLabels(labels map[string]string) *ComputeClassBuilder {
 	b.cc.Labels = labels

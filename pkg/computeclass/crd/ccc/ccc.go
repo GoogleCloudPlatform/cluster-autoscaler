@@ -557,6 +557,14 @@ func (ccc *cccCrd) OptimizeRulePriority() bool {
 	return ccc.Spec.ActiveMigration.OptimizeRulePriority
 }
 
+// ConfigDrift checks if config drift active migration is enabled for CCC.
+func (ccc *cccCrd) ConfigDrift() bool {
+	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ConfigDrift == nil {
+		return false
+	}
+	return *ccc.Spec.ActiveMigration.ConfigDrift
+}
+
 // ArchitectureTaintBehavior returns the architecture taint behavior for CCC.
 func (ccc *cccCrd) ArchitectureTaintBehavior() string {
 	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.NodePoolConfig == nil || ccc.Spec.NodePoolConfig.TaintConfig == nil {

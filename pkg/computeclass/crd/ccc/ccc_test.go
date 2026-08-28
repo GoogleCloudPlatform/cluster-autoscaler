@@ -184,6 +184,34 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
+			name: "ccc config drift enabled",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ConfigDrift: ptr.To(true),
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithConfigDrift(true),
+			),
+		},
+		{
+			name: "ccc config drift disabled",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ConfigDrift: ptr.To(false),
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithConfigDrift(false),
+			),
+		},
+		{
 			name: "ccc mppn set",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{

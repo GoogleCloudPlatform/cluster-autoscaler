@@ -43,6 +43,7 @@ type testCrd struct {
 	imageType                     string
 	optimizeRulePriority          bool
 	ensureAllDaemonSetPodsRunning bool
+	configDrift                   bool
 	dynamicMaxPodsPerNodeEnabled  bool
 	dynamicBootDiskSizeEnabled    bool
 	tpuDriverMode                 TpuDriverMode
@@ -136,6 +137,10 @@ func (t *testCrd) OptimizeRulePriority() bool {
 
 func (t *testCrd) EnsureAllDaemonSetPodsRunning() bool {
 	return t.ensureAllDaemonSetPodsRunning
+}
+
+func (t *testCrd) ConfigDrift() bool {
+	return t.configDrift
 }
 
 func (t *testCrd) Conditions() []metav1.Condition {
@@ -295,6 +300,12 @@ func WithEnsureAllDaemonSetPodsRunning() TestCrdOption {
 	}
 }
 
+func WithConfigDrift(configDrift bool) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.configDrift = configDrift
+	}
+}
+
 func WithConditions(conditions []metav1.Condition) TestCrdOption {
 	return func(crd *testCrd) {
 		crd.conditions = conditions
@@ -396,6 +407,7 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.ImageType(), c2.ImageType())
 	assert.Equal(t, c1.NodeVersion(), c2.NodeVersion())
 	assert.Equal(t, c1.OptimizeRulePriority(), c2.OptimizeRulePriority())
+	assert.Equal(t, c1.ConfigDrift(), c2.ConfigDrift())
 	assert.Equal(t, c1.Conditions(), c2.Conditions())
 	assert.Equal(t, c1.DynamicMaxPodsPerNodeEnabled(), c2.DynamicMaxPodsPerNodeEnabled())
 	assert.Equal(t, c1.DynamicBootDiskSizeEnabled(), c2.DynamicBootDiskSizeEnabled())
