@@ -360,7 +360,8 @@ func (p *ScaleUpNodeProcessor) updateUnschedulableLAPodsMetrics(unscheduledLAPod
 	}
 }
 
-// Preprocess updates clustersnapshot. It sets the balloon pod size based on the resizable VM Nodes allocatable and desired sizes.
+// Preprocess updates clustersnapshot. It sets the balloon pod size based on the resizable VM Nodes allocatable and desired sizes,
+// and removes the balloon pod resize taint from all nodes in the snapshot.
 func (p *ScaleUpNodeProcessor) Preprocess(ctx *ca_context.AutoscalingContext) error {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
 	if !isAnyResizingEnabled(p.resizableVmManager, resizableFamilies) {
@@ -373,24 +374,28 @@ func (p *ScaleUpNodeProcessor) Preprocess(ctx *ca_context.AutoscalingContext) er
 		sizeMap[nodeName] = resizableNode.DesiredSize
 	}
 
-	if len(sizeMap) == 0 {
-		return nil
-	}
-
 	ctx.ClusterSnapshot.Fork()
-	if err := AdjustBalloonPodsSize(ctx.ClusterSnapshot, sizeMap, p.sizeCalculator); err != nil {
-		ctx.ClusterSnapshot.Revert()
-		return err
+	if len(sizeMap) > 0 {
+		if err := AdjustBalloonPodsSize(ctx.ClusterSnapshot, sizeMap, p.sizeCalculator); err != nil {
+			ctx.ClusterSnapshot.Revert()
+			return err
+		}
 	}
 	if err := p.injectDefaultBalloonPods(ctx, sizeMap); err != nil {
 		ctx.ClusterSnapshot.Revert()
 		return err
 	}
 
-	for nodeName := range resizableSnapshot {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			klog.Warningf("Retrieving node info for node %q failed: %v", nodeName, err)
+	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	if err != nil {
+		ctx.ClusterSnapshot.Revert()
+		return fmt.Errorf("retrieving node infos failed: %v", err)
+	}
+	for _, nodeInfo := range nodeInfos {
+		if nodeInfo == nil || nodeInfo.Node() == nil {
+			continue
+		}
+		if !taints.TaintExists(nodeInfo.Node().Spec.Taints, ekvmtypes.BPResizeTaint) {
 			continue
 		}
 		updatedNode, updated, err := taints.RemoveTaint(nodeInfo.Node(), ekvmtypes.BPResizeTaint)

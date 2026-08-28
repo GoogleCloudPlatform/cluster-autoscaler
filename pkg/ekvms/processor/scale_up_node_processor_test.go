@@ -1783,27 +1783,73 @@ func TestPreprocess(t *testing.T) {
 }
 
 func TestPreprocessRemovesBPResizeTaint(t *testing.T) {
-	node := test.BuildTestNode("node1", 1000, 100*size.MiB)
-	node, _, err := taints.AddOrUpdateTaint(node, ekvmtypes.BPResizeTaint)
-	assert.NoError(t, err)
-	snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
-	err = snapshot.AddNodeInfo(framework.NewTestNodeInfo(node))
-	assert.NoError(t, err)
-	autoscalingCtx := &autoscalingctx.AutoscalingContext{
-		ClusterSnapshot: snapshot,
+	testCases := []struct {
+		desc                   string
+		trackedResizableNodes  operationtracker.ResizableNodesSnapshot
+		newlyCreatedNodeTaints []*v1.Taint
+	}{
+		{
+			desc:                   "no active resizes in cluster, newly created EK node with BPResizeTaint",
+			trackedResizableNodes:  operationtracker.ResizableNodesSnapshot{},
+			newlyCreatedNodeTaints: []*v1.Taint{ekvmtypes.BPResizeTaint},
+		},
+		{
+			desc: "active resize on existing node, newly created EK node also present with BPResizeTaint",
+			trackedResizableNodes: operationtracker.ResizableNodesSnapshot{
+				"existing-resizing-node": {},
+			},
+			newlyCreatedNodeTaints: []*v1.Taint{ekvmtypes.BPResizeTaint},
+		},
 	}
-	m := newManagerMock()
-	m.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(operationtracker.ResizableNodesSnapshot{"node1": {}})
-	m.On("IsResizingEnabled", mock.Anything).Return(
-		true)
-	cp := &gke.GkeCloudProviderMock{}
-	cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-	p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
-	err = p.Preprocess(autoscalingCtx)
-	assert.NoError(t, err)
-	nodeInfo, err := autoscalingCtx.ClusterSnapshot.GetNodeInfo(node.Name)
-	assert.NoError(t, err)
-	assert.False(t, taints.TaintExists(nodeInfo.Node().Spec.Taints, ekvmtypes.BPResizeTaint))
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
+
+			// Add existing node undergoing resize if specified
+			for nodeName := range tc.trackedResizableNodes {
+				resizingNode := ekvms_test.EkNode8(nodeName, 8000, 32*size.GiB)
+				resizingNode, _, err := taints.AddOrUpdateTaint(resizingNode, ekvmtypes.BPResizeTaint)
+				assert.NoError(t, err)
+				assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(resizingNode)))
+			}
+
+			// Add newly created EK node that just registered and has BPResizeTaint
+			newNode := ekvms_test.EkNode8("new-ek-node", 8000, 32*size.GiB)
+			for _, taint := range tc.newlyCreatedNodeTaints {
+				var err error
+				newNode, _, err = taints.AddOrUpdateTaint(newNode, taint)
+				assert.NoError(t, err)
+			}
+			assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(newNode)))
+
+			ctx := &autoscalingctx.AutoscalingContext{
+				ClusterSnapshot: snapshot,
+			}
+			m := newManagerMock()
+			m.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.trackedResizableNodes)
+			m.On("IsResizingEnabled", mock.Anything).Return(true)
+
+			cp := &gke.GkeCloudProviderMock{}
+			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
+			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
+
+			err := p.Preprocess(ctx)
+			assert.NoError(t, err)
+
+			for nodeName := range tc.trackedResizableNodes {
+				nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+				assert.NoError(t, err)
+				assert.False(t, taints.TaintExists(nodeInfo.Node().Spec.Taints, ekvmtypes.BPResizeTaint),
+					"BPResizeTaint should be removed from tracked resizable node in cluster snapshot")
+			}
+
+			nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(newNode.Name)
+			assert.NoError(t, err)
+			assert.False(t, taints.TaintExists(nodeInfo.Node().Spec.Taints, ekvmtypes.BPResizeTaint),
+				"BPResizeTaint should be removed from newly created EK node in cluster snapshot so it can be scheduled on during simulation")
+		})
+	}
 }
 
 func TestPreprocessInjectsDefaultBalloonPods(t *testing.T) {
