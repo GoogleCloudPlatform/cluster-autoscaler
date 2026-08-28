@@ -2353,6 +2353,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		MultiNetworkSupportEnabled:        opts.MultiNetworkSupportEnabled,
 		bootDiskConfigEnabled:             opts.BootDiskSelectorEnabled,
 		WIImagePullMinVersion:             opts.WIImagePullMinVersion,
+		DisableWIImagePullForRiptide:      opts.DisableWIImagePullForRiptide,
 		bulkGceMigInstancesListingEnabled: opts.GCEOptions.BulkMigInstancesListingEnabled,
 		allowlistedSystemLabelsMatcher:    allowlistedSystemLabelsMatcher,
 		cpMaxParallelOps:                  opts.CpMaxParallelOps,

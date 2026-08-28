@@ -167,7 +167,6 @@ type Cluster struct {
 	ConfidentialInstanceType         string
 	NodeLocalDNSEnabled              bool
 	WorkloadIdentityEnabled          bool
-	WorkloadIdentityProviderSet      bool
 	HighThroughputLoggingEnabled     bool
 	CreateTime                       time.Time
 	IsClusterUsingPSCInfrastructure  bool

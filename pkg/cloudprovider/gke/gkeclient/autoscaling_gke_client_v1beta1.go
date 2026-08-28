@@ -289,7 +289,6 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 	confidentialNodesEnabled := IsConfidentialNodesEnabled(clusterResponse.ConfidentialNodes)
 	nodeLocalDNSEnabled := (clusterResponse.AddonsConfig != nil && clusterResponse.AddonsConfig.DnsCacheConfig != nil && clusterResponse.AddonsConfig.DnsCacheConfig.Enabled) || (clusterResponse.EnableKubernetesAlpha)
 	workloadIdentityEnabled := clusterResponse.WorkloadIdentityConfig != nil && clusterResponse.WorkloadIdentityConfig.WorkloadPool != ""
-	workloadIdentityProviderSet := clusterResponse.WorkloadIdentityConfig != nil && clusterResponse.WorkloadIdentityConfig.IdentityProvider != ""
 	isClusterUsingPSCInfrastructure := clusterResponse.PrivateClusterConfig != nil && clusterResponse.PrivateClusterConfig.PrivateEndpoint != ""
 	isClusterUsingPSCInfrastructure = isClusterUsingPSCInfrastructure || clusterResponse.ControlPlaneEndpointsConfig == nil || clusterResponse.ControlPlaneEndpointsConfig.IpEndpointsConfig == nil || !clusterResponse.ControlPlaneEndpointsConfig.IpEndpointsConfig.Enabled
 	enablePrivateNodes := clusterResponse.PrivateClusterConfig != nil && clusterResponse.PrivateClusterConfig.EnablePrivateNodes
@@ -338,7 +337,6 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 		ConfidentialInstanceType:         getConfidentialInstanceType(clusterResponse.ConfidentialNodes),
 		NodeLocalDNSEnabled:              nodeLocalDNSEnabled,
 		WorkloadIdentityEnabled:          workloadIdentityEnabled,
-		WorkloadIdentityProviderSet:      workloadIdentityProviderSet,
 		HighThroughputLoggingEnabled:     isHighThroughputLoggingEnabled(clusterResponse),
 		CreateTime:                       createTime,
 		IsClusterUsingPSCInfrastructure:  isClusterUsingPSCInfrastructure,

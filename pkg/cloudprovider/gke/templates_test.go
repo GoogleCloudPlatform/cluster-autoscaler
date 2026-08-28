@@ -754,6 +754,8 @@ func TestConditionalLabels(t *testing.T) {
 		isConfidentialNode           bool
 		machineSerenityLabelsEnabled bool
 		nodeVersion                  string
+		gcfsEnabled                  bool
+		selfServiceMetadata          map[string]string
 	}
 	testCases := []testCase{
 		{
@@ -879,11 +881,11 @@ func TestConditionalLabels(t *testing.T) {
 			localSSDCount: 4,
 		},
 		{
-			scenario: "1.37 node, WorkloadIdentityProviderSet true, regardless of MetadataServerEnabled",
+			scenario: "1.37 node, WorkloadIdentityEnabled true, regardless of MetadataServerEnabled",
 			daemonSetConditions: &DaemonSetConditions{
-				MetadataServerEnabled:       false,
-				WorkloadIdentityProviderSet: true,
-				WIImagePullMinVersion:       ver137,
+				MetadataServerEnabled:   false,
+				WorkloadIdentityEnabled: true,
+				WIImagePullMinVersion:   ver137,
 			},
 			nodeVersion: "v1.37.0-gke.100",
 			containLabels: map[string]string{
@@ -894,11 +896,11 @@ func TestConditionalLabels(t *testing.T) {
 			},
 		},
 		{
-			scenario: "1.37 node, WorkloadIdentityProviderSet false",
+			scenario: "1.37 node, WorkloadIdentityEnabled false (no WorkloadPool set)",
 			daemonSetConditions: &DaemonSetConditions{
-				MetadataServerEnabled:       true,
-				WorkloadIdentityProviderSet: false,
-				WIImagePullMinVersion:       ver137,
+				MetadataServerEnabled:   true,
+				WorkloadIdentityEnabled: false,
+				WIImagePullMinVersion:   ver137,
 			},
 			nodeVersion: "v1.37.0-gke.100",
 			containLabels: map[string]string{
@@ -915,6 +917,89 @@ func TestConditionalLabels(t *testing.T) {
 				WIImagePullMinVersion: ver137,
 			},
 			nodeVersion: "1.35.0-gke.0",
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, cluster-default Riptide ON, DisableWIImagePullForRiptide",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			gcfsEnabled: true,
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, CCC per-pool Riptide ON, DisableWIImagePullForRiptide",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         false,
+			selfServiceMetadata: map[string]string{"image-streaming": "true"},
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, CCC explicitly disables Riptide on Riptide cluster",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         true,
+			selfServiceMetadata: map[string]string{"image-streaming": "false"},
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, Riptide ON but DisableWIImagePullForRiptide OFF",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: false,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			gcfsEnabled: true,
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "< 1.37 node, WI enabled, version check takes precedence over Riptide flag",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: false,
+			},
+			nodeVersion: "1.35.0-gke.0",
+			gcfsEnabled: false,
 			containLabels: map[string]string{
 				"iam.gke.io/gke-metadata-server-enabled": "true",
 			},
@@ -988,7 +1073,10 @@ func TestConditionalLabels(t *testing.T) {
 			}
 			gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(operatingSystem, gce.OperatingSystemDistributionDefault, ""), mig.Version(), mig.IsConfidentialNode())
 			ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
-			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 800000000, nil, tc.daemonSetConditions, false, &GkeReserved{}, ssdDiskSizeProvider, tc.defaultMaxPodsPerNode)
+			if tc.selfServiceMetadata != nil {
+				mig.spec.SelfServiceMetadata = tc.selfServiceMetadata
+			}
+			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 800000000, nil, tc.daemonSetConditions, tc.gcfsEnabled, &GkeReserved{}, ssdDiskSizeProvider, tc.defaultMaxPodsPerNode)
 			assert.NoError(t, err)
 			for kc, vc := range tc.containLabels {
 				assert.Equal(t, vc, node.Labels[kc], "Expected value doesn't exist on node")
