@@ -42,7 +42,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
 	fakegce "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
-	fakerl "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
 	resizerequest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest/fake"
 	gkeclientfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/fake"
@@ -121,17 +120,18 @@ type FakeSet struct {
 	// InformerFactory is the shared informer factory.
 	InformerFactory informers.SharedInformerFactory
 
-	UpdateInfosClient   *updateinfosclient.Clientset
-	GceService          *fakegce.GceClient
-	GkeService          *gkeclientfake.Client
-	fwHandle            *framework.Handle
-	FlexAdvisorClient   fakeflexadvisor.FakeFlexAdvisorClient
-	EventLogger         *visibilityfake.EventLogger
-	CccClient           *cccfake.Clientset
-	PRClientset         *provreqtest.FakeClientset
-	ProvReqClient       *provreqclient.ProvisioningRequestClient
-	ResizeRequestClient *resizerequest.ResizeRequestClient
-	MccClient           *mccfake.Clientset
+	UpdateInfosClient        *updateinfosclient.Clientset
+	GceService               *fakegce.GceClient
+	GkeService               *gkeclientfake.Client
+	fwHandle                 *framework.Handle
+	FlexAdvisorClient        fakeflexadvisor.FakeFlexAdvisorClient
+	EventLogger              *visibilityfake.EventLogger
+	CccClient                *cccfake.Clientset
+	PRClientset              *provreqtest.FakeClientset
+	ProvReqClient            *provreqclient.ProvisioningRequestClient
+	ResizeRequestClient      *resizerequest.ResizeRequestClient
+	MccClient                *mccfake.Clientset
+	RecommendLocationsClient *fakegce.RecommendLocationsClient
 }
 
 // NewFakeSet initializes a coordinated set of fakes.
@@ -146,20 +146,22 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	mccClient := setupFakeMachineConfigClient()
 	fwHandle := newSimulatorHandle(ctx, t, informerFactory)
 	eventLogger := visibilityfake.NewEventLogger()
+	rlClient := fakegce.NewRecommendLocationsClient()
 
 	return &FakeSet{
-		KubeClient:          kubeClient,
-		K8s:                 k8s,
-		InformerFactory:     informerFactory,
-		UpdateInfosClient:   updateinfosclient.NewSimpleClientset(),
-		GceService:          gceService,
-		GkeService:          gkeclientfake.NewClient(gceService, k8s),
-		fwHandle:            fwHandle,
-		EventLogger:         eventLogger,
-		CccClient:           cccfake.NewSimpleClientset(),
-		PRClientset:         provreqtest.NewFakeClientset(),
-		ResizeRequestClient: rrClient,
-		MccClient:           mccClient,
+		KubeClient:               kubeClient,
+		K8s:                      k8s,
+		InformerFactory:          informerFactory,
+		UpdateInfosClient:        updateinfosclient.NewSimpleClientset(),
+		GceService:               gceService,
+		GkeService:               gkeclientfake.NewClient(gceService, k8s),
+		fwHandle:                 fwHandle,
+		EventLogger:              eventLogger,
+		CccClient:                cccfake.NewSimpleClientset(),
+		PRClientset:              provreqtest.NewFakeClientset(),
+		ResizeRequestClient:      rrClient,
+		MccClient:                mccClient,
+		RecommendLocationsClient: rlClient,
 	}
 }
 
@@ -181,6 +183,8 @@ func DefaultAutoscalingBuilder(
 	}
 	fakeExperimentsManager := experiments.NewManager(fakeCAVersion, config.ExperimentEvaluator)
 	tracker := optstracking.NewOptionsTracker(fakeOptions, fakeExperimentsManager)
+	infra.Fakes.RecommendLocationsClient.WithExperimentsManager(fakeExperimentsManager)
+	infra.Fakes.FlexAdvisorClient.WithExperimentsManager(fakeExperimentsManager)
 
 	fakeToken := &oauth2.Token{AccessToken: "fake-test-token"}
 	fakeTokenSource := oauth2.StaticTokenSource(fakeToken)
@@ -295,7 +299,7 @@ func DefaultAutoscalingBuilder(
 		WithResizableVmClient(resizablevms.NewNoOpClient()).
 		WithConsumableReservationsClient(consumablereservations.NewNoOpClient()).
 		WithProvReqCache(fakePrCache).
-		WithRecommendLocationsClient(&fakerl.RecommendLocationsClient{}).
+		WithRecommendLocationsClient(infra.Fakes.RecommendLocationsClient).
 		WithAtomicResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexAdvisorClient(&infra.Fakes.FlexAdvisorClient).

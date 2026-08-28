@@ -20,7 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	flexadvisorapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
 const (
@@ -35,6 +37,7 @@ type FakeFlexAdvisorClient struct {
 	fetchCapacityCalls int32
 	capacityGuidances  []CapacityGuidance
 	delay              time.Duration
+	experimentsManager experiments.Manager
 }
 
 func (c *FakeFlexAdvisorClient) FetchCapacityGuidance(ctx context.Context, flexibilityScopeKey string, instanceConfigs map[string]*flexadvisorapi.InstanceConfig) (map[string]*flexadvisorapi.InstanceAvailability, error) {
@@ -73,6 +76,9 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 			zones = config.Zones().UnsortedList()
 		}
 
+		var guidanceId string
+		var specKey string
+
 		for _, zone := range zones {
 			var matched *CapacityGuidance
 			for _, guidance := range c.capacityGuidances {
@@ -91,6 +97,12 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 				}
 				zonalCapacity[zone] = matched.InstanceCount
 				zonalScore[zone] = matched.GcePreferenceScore
+				if matched.GuidanceId != "" {
+					guidanceId = matched.GuidanceId
+				}
+				if matched.SpecKey != "" {
+					specKey = matched.SpecKey
+				}
 			} else {
 				zonalCapacity[zone] = DefaultZonalCapacity
 				zonalScore[zone] = DefaultZonalScore
@@ -100,14 +112,32 @@ func (c *FakeFlexAdvisorClient) fetchCapacityGuidance(flexibilityScopeKey string
 		if len(zonalCapacity) == 0 {
 			continue
 		}
-		availability := flexadvisorapi.NewTestInstanceAvailabilityBuilder(flexibilityScopeKey, key).
+		builder := flexadvisorapi.NewTestInstanceAvailabilityBuilder(flexibilityScopeKey, key).
 			WithZonalInstanceCount(zonalCapacity).
-			WithZonalGcePreferenceScore(zonalScore).
-			WithGuidanceId("fake-guidance-id-" + key).
-			Build()
+			WithZonalGcePreferenceScore(zonalScore)
+		if guidanceId != "" {
+			builder = builder.WithGuidanceId(guidanceId)
+			if c.experimentsManager != nil && experiments.IsDemandFungibilityImpactTrackingEnabled(c.experimentsManager) {
+				metrics.Metrics.RegisterDemandFungibilityExtracted(metrics.FA)
+			}
+		} else if c.experimentsManager != nil && experiments.IsDemandFungibilityImpactTrackingEnabled(c.experimentsManager) {
+			metrics.Metrics.RegisterDemandFungibilityMissingId(metrics.FA, "MissingGuidanceId")
+		}
+		if specKey != "" {
+			builder = builder.WithSpecKey(specKey)
+		}
+		availability := builder.Build()
 		results[key] = availability
 	}
 	return results, nil
+}
+
+// WithExperimentsManager sets the experiments manager for the fake client.
+func (c *FakeFlexAdvisorClient) WithExperimentsManager(em experiments.Manager) *FakeFlexAdvisorClient {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.experimentsManager = em
+	return c
 }
 
 func (c *FakeFlexAdvisorClient) SendCapacityDecision(ctx context.Context, decision flexadvisorapi.ProvisioningDecisionNotification) error {

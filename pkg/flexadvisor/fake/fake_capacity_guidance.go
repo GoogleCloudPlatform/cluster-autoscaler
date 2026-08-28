@@ -38,6 +38,8 @@ type CapacityGuidance struct {
 	GcePreferenceScore float64
 	Error              error
 	Omit               bool
+	GuidanceId         string
+	SpecKey            string
 }
 
 func (g CapacityGuidance) matches(realConfig *flexadvisorapi.InstanceConfig, zone string) bool {
@@ -141,5 +143,17 @@ func (g CapacityGuidance) WithError(err error) CapacityGuidance {
 // WithOmit sets whether this guidance should be omitted.
 func (g CapacityGuidance) WithOmit(omit bool) CapacityGuidance {
 	g.Omit = omit
+	return g
+}
+
+// WithGuidanceId sets the guidanceId (recommendation ID) in the fake response.
+func (g CapacityGuidance) WithGuidanceId(id string) CapacityGuidance {
+	g.GuidanceId = id
+	return g
+}
+
+// WithSpecKey sets the specKey in the fake response.
+func (g CapacityGuidance) WithSpecKey(key string) CapacityGuidance {
+	g.SpecKey = key
 	return g
 }
