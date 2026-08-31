@@ -1175,6 +1175,13 @@ var (
 				withAutomaticEphemeralLocalSsdCount(32).
 				withInstancePriceOverride(23.827377).
 				withPreemptibleInstancePriceOverride(9.505804),
+			// Users must explicitly request metal shape to use it.
+			NewMachineTypeInfo("c4d-highcpu-384-metal", 384, 720).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4d-standard-384-metal", 384, 1488).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4d-highmem-384-metal", 384, 3024).
+				withExplicitReqOnly(),
 		),
 		supportedCpuPlatforms:        CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
 		supportCompactPlacement:      true,
