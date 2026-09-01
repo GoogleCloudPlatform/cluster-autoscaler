@@ -93,6 +93,9 @@ func ExtractOsDistributionFromImageType(image string) gce.OperatingSystemDistrib
 		return gce.OperatingSystemDistributionCOS
 	case "ubuntu_containerd":
 		return gce.OperatingSystemDistributionUbuntu
+	case "custom_containerd":
+		// Custom containerd images default to COS-style operating system distribution.
+		return gce.OperatingSystemDistributionCOS
 	case string(gce.OperatingSystemDistributionWindowsLTSC):
 		return gce.OperatingSystemDistributionWindowsLTSC
 	case string(gce.OperatingSystemDistributionWindowsSAC):

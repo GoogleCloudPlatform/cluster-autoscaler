@@ -37,6 +37,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
@@ -4347,25 +4348,38 @@ func TestImageDefaulting(t *testing.T) {
 	tcs := []struct {
 		desc     string
 		manager  *gkeManagerImpl
+		mig      *GkeMig
 		expected string
 	}{
 		{
 			desc:     "no autopilot",
 			manager:  newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil),
+			mig:      &GkeMig{},
 			expected: "cos_containerd",
 		}, {
 			desc:     "autopilot",
 			manager:  newTestGkeManager(t, "", napEnabled, false, true, nil, false, nil),
+			mig:      &GkeMig{},
 			expected: "cos_containerd",
 		}, {
 			desc:     "cos_containerd from NAP AutoprovisioningDefaults",
 			manager:  managerWithImageType,
+			mig:      &GkeMig{},
 			expected: managerWithImageType.autoprovisioningNodePoolDefaults.ImageType,
+		}, {
+			desc:    "custom_containerd from mig spec",
+			manager: newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil),
+			mig: &GkeMig{
+				spec: &gkeclient.NodePoolSpec{
+					ImageType: "custom_containerd",
+				},
+			},
+			expected: "custom_containerd",
 		},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.desc, func(t *testing.T) {
-			imageType := tc.manager.GetImageTypeForNap(&GkeMig{})
+			imageType := tc.manager.GetImageTypeForNap(tc.mig)
 			assert.Equal(t, imageType, tc.expected)
 		})
 	}
@@ -4424,6 +4438,36 @@ func TestOsDistributionForMig(t *testing.T) {
 				gkeManager: managerWithUbuntu,
 				spec: &gkeclient.NodePoolSpec{
 					ImageType: "windows3.1_containerd",
+				},
+			},
+		},
+		{
+			desc:     "mig spec with custom_containerd and default (COS) custom image, should result in os=cos",
+			manager:  manager,
+			expected: gce.OperatingSystemDistributionCOS,
+			mig: &GkeMig{
+				gkeManager: manager,
+				spec: &gkeclient.NodePoolSpec{
+					ImageType: "custom_containerd",
+					SelfServiceMetadata: map[string]string{
+						selfservice.CustomImageNameMetadataKey:    "my-custom-image",
+						selfservice.CustomImageProjectMetadataKey: "my-gcp-project",
+					},
+				},
+			},
+		},
+		{
+			desc:     "mig spec with custom_containerd and Ubuntu custom image, should result in os=ubuntu",
+			manager:  manager,
+			expected: gce.OperatingSystemDistributionUbuntu,
+			mig: &GkeMig{
+				gkeManager: manager,
+				spec: &gkeclient.NodePoolSpec{
+					ImageType: "custom_containerd",
+					SelfServiceMetadata: map[string]string{
+						selfservice.CustomImageNameMetadataKey:    "my-custom-ubuntu-image",
+						selfservice.CustomImageProjectMetadataKey: "my-gcp-project",
+					},
 				},
 			},
 		},

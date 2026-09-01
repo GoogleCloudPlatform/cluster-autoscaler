@@ -492,6 +492,23 @@ func TestNodepoolMetadata(t *testing.T) {
 			},
 		},
 		{
+			name: "Nodepool with custom containerd image is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ImageType: "custom_containerd",
+					NodeImageConfig: &container.CustomImageConfig{
+						Image:        "my-custom-image",
+						ImageProject: "my-custom-project",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				CustomImageTypeMetadataKey:    "custom_containerd",
+				CustomImageNameMetadataKey:    "my-custom-image",
+				CustomImageProjectMetadataKey: "my-custom-project",
+			},
+		},
+		{
 			name: "Nodepool with NodeDrainConfig is processed correctly",
 			nodepool: &container.NodePool{
 				NodeDrainConfig: &container.NodeDrainConfig{
@@ -897,6 +914,23 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				gkelabels.MaintenanceExclusionLabelKey: "UNTIL_END_OF_SUPPORT",
+			},
+		},
+		{
+			name: "CustomImage feature with custom_containerd is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					ImageType: "custom_containerd",
+					CustomImageConfig: &v1.CustomImageConfig{
+						ImageName:      "my-custom-image",
+						ImageProjectId: "my-gcp-project",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				CustomImageTypeMetadataKey:    "custom_containerd",
+				CustomImageNameMetadataKey:    "my-custom-image",
+				CustomImageProjectMetadataKey: "my-gcp-project",
 			},
 		},
 		{
@@ -1513,6 +1547,23 @@ func TestUpdateNodepool(t *testing.T) {
 					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
 						EnableNestedVirtualization: true,
 						ForceSendFields:            []string{"OtherField", "EnableNestedVirtualization"},
+					},
+				},
+			},
+		},
+		{
+			name: "CustomImage metadata is processed correctly during NodePool creation",
+			metadata: Metadata{
+				CustomImageTypeMetadataKey:    "custom_containerd",
+				CustomImageNameMetadataKey:    "my-custom-image",
+				CustomImageProjectMetadataKey: "my-gcp-project",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ImageType: "custom_containerd",
+					NodeImageConfig: &container.CustomImageConfig{
+						Image:        "my-custom-image",
+						ImageProject: "my-gcp-project",
 					},
 				},
 			},

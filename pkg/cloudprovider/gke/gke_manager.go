@@ -32,6 +32,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
@@ -1334,7 +1335,7 @@ func (m *gkeManagerImpl) IsUpcoming(mig *GkeMig) bool {
 func (m *gkeManagerImpl) GetImageTypeForNap(mig *GkeMig) string {
 	if mig.spec != nil {
 		itype := strings.ToLower(mig.spec.ImageType)
-		if itype == string(gce.OperatingSystemImageCOSContainerd) || itype == string(gce.OperatingSystemImageUbuntuContainerd) {
+		if itype == string(gce.OperatingSystemImageCOSContainerd) || itype == string(gce.OperatingSystemImageUbuntuContainerd) || itype == "custom_containerd" {
 			return itype
 		} else if itype != "" {
 			klog.Warningf("Invalid ImageType for a mig: %v, using default image type.", itype)
@@ -1358,6 +1359,14 @@ func (m *gkeManagerImpl) GetOsDistributionForNap(mig *GkeMig) gce.OperatingSyste
 		return gce.OperatingSystemDistributionCOS
 	case string(gce.OperatingSystemImageUbuntuContainerd):
 		return gce.OperatingSystemDistributionUbuntu
+	case "custom_containerd":
+		if mig != nil && mig.spec != nil && mig.spec.SelfServiceMetadata != nil {
+			imageName := strings.ToLower(mig.spec.SelfServiceMetadata[selfservice.CustomImageNameMetadataKey])
+			if strings.Contains(imageName, "ubuntu") {
+				return gce.OperatingSystemDistributionUbuntu
+			}
+		}
+		return gce.OperatingSystemDistributionCOS
 	default:
 		klog.Errorf("Unknown OperatingSystemDistribution for %s, using default OS Distribution", imageType)
 		return defaultOsDistribution

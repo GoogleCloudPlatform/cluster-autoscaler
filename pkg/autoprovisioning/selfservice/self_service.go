@@ -54,6 +54,7 @@ func InitSelfService(cp CloudProvider) {
 		newMaintenanceExclusion(),
 		newNodeDrainConfig(),
 		newNestedVirtualization(experimentsManager),
+		newCustomImage(),
 	}
 }
 
