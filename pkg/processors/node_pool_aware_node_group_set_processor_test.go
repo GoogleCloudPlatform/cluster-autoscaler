@@ -106,7 +106,7 @@ func TestFallbackToInnerProcessor(t *testing.T) {
 			processor := NewNodePoolAwareNodeGroupSetProcessor(innerProcessor)
 
 			// Expect a fallback call to inner processor
-			innerProcessor.On("FindSimilarNodeGroups", ctx, test.input, mock.Anything).Return([]cloudprovider.NodeGroup{}, nil).Once()
+			innerProcessor.On("FindSimilarNodeGroups", mock.Anything, ctx, test.input, mock.Anything).Return([]cloudprovider.NodeGroup{}, nil).Once()
 			gotNgs, err := processor.FindSimilarNodeGroups(context.TODO(), ctx, test.input, buildTestNodeInfosForMigs([]*gke.GkeMig{migWithNilSimilarGroups1, migWithNilSimilarGroups2}...))
 
 			assert.NoError(t, err)

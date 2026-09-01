@@ -60,8 +60,8 @@ func NewStorageNodeAffinityPodListProcessor(pvcLister corelisters.PersistentVolu
 
 // Process injects storage nodeSelector labels into in-memory copies of unschedulable pods.
 func (p *StorageNodeAffinityPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	if ctx == nil {
-		klog.V(5).Infof("StorageNodeAffinityPodListProcessor.Process skipped (ctx is nil)")
+	if autoscalingCtx == nil {
+		klog.V(5).Infof("StorageNodeAffinityPodListProcessor.Process skipped (autoscalingCtx is nil)")
 		return unschedulablePods, nil
 	}
 	if p == nil || p.pvcLister == nil {

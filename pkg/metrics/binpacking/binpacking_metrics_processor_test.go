@@ -123,7 +123,7 @@ func TestBinpackingMetricsProcessor(t *testing.T) {
 					processor.MarkProcessed(ctx, nodeGroupName)
 				case stopBinpacking:
 					options := []expander.Option{{Debug: fmt.Sprintf("options-%d", i)}}
-					mockLimiter.On("StopBinpacking", ctx, options).Return(op.opResult).Once()
+					mockLimiter.On("StopBinpacking", mock.Anything, ctx, options).Return(op.opResult).Once()
 					assert.Equal(t, op.opResult, processor.StopBinpacking(context.TODO(), ctx, options))
 				case finalizeBinpacking:
 					mockMetrics.On("ObserveBinpackingNodeGroupTotal", op.opStats.total).Once()

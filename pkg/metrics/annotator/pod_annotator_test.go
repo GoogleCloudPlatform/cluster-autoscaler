@@ -429,7 +429,7 @@ func TestPodAnnotator_RealStateVerification(t *testing.T) {
 				PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: simulatedPod}},
 			}
 
-			annotator.Process(ctx, suStatus)
+			annotator.Process(t.Context(), ctx, suStatus)
 
 			// Wait a bit for the async annotator loop to process
 			testCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

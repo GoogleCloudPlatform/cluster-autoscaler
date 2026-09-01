@@ -265,7 +265,7 @@ func TestLocationPolicyProcessor(t *testing.T) {
 			}
 
 			mockProcessor := &nodeGroupSetProcessorMock{}
-			mockProcessor.On("BalanceScaleUpBetweenGroups", mock.Anything, nodeGroups, tc.newNodes).Return(defaultResponse, nil).Once()
+			mockProcessor.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, nodeGroups, tc.newNodes).Return(defaultResponse, nil).Once()
 
 			balancers := make(map[gke.LocationPolicyEnum]Balancer)
 			for policy, balancer := range tc.balancers {

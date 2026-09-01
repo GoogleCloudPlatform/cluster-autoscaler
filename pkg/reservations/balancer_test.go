@@ -131,7 +131,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 100,
 			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("fallbackBalancer: should not be called")
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("fallbackBalancer: should not be called")
 				registerMock(&mockBalancer.Mock)
 				return mockBalancer
 			},
@@ -151,7 +151,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 1000,
 			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything).Once().Return(
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(
 					func(autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
 						// use OSS balancer which should distribute remaining nodes
 						ossBalancer := &nodegroupset.BalancingNodeGroupSetProcessor{}

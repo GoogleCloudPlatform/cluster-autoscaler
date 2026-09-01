@@ -126,7 +126,7 @@ func TestNodeInfoProvider_Process(t *testing.T) {
 			nodeInfos := map[string]*framework.NodeInfo{"node-1": nodeInfo}
 
 			mockBaseProvider := &mockTemplateNodeInfoProvider{}
-			mockBaseProvider.On("Process", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nodeInfos, nil)
+			mockBaseProvider.On("Process", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nodeInfos, nil)
 
 			mockCloudProvider := &gke.GkeCloudProviderMock{}
 			if tc.nodeInCsnMig {
