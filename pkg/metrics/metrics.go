@@ -1138,6 +1138,15 @@ var (
 		},
 		[]string{"status", "reason"},
 	)
+
+	componentFlagOverrides = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: "component_overrides",
+			Name:      "flag_overrides_count",
+			Help:      "Number of flag overrides actively changing component behavior or unrecognized.",
+		},
+		[]string{"status"},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1247,6 +1256,13 @@ var allMetrics = []k8smetrics.Registerable{
 	ccStatusApiPatchDuration,
 	dsMutationResolutionsTotal,
 	dsMutationResolutionDuration,
+	componentFlagOverrides,
+}
+
+// UpdateComponentFlagOverrides sets the component overrides flag overrides metric.
+func UpdateComponentFlagOverrides(active, unrecognized int) {
+	componentFlagOverrides.WithLabelValues("active").Set(float64(active))
+	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(unrecognized))
 }
 
 // RegisterAll registers all metrics.

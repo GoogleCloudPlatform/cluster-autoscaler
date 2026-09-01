@@ -186,6 +186,8 @@ func main() {
 	leaderElection := defaultLeaderElectionConfiguration()
 	leaderElection.LeaderElect = true
 	componentopts.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
+
+	cli.ProcessFlagOverrides()
 	kube_flag.InitFlags()
 
 	ossOptions, err := ossFlags.Options()
