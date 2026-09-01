@@ -3103,12 +3103,69 @@ var (
 		supportHugepageSize1g: true,
 		defaultDiskType:       DiskTypeHyperdiskBalanced,
 	})
+
+	// Z4M represents z4m machine family
+	Z4M = RegisterMachineFamily(MachineFamily{
+		name:               "z4m",
+		systemArchitecture: gce.Amd64,
+		pricingInfo: MachineFamilyPricingInfo{
+			CpuPricePerHour:         0.032578,
+			MemoryPricePerHourPerGb: 0.3,
+			PreemptibleDiscount:     0.0130312 / 0.032578,
+		},
+		autoprovisionedMachineTypes: onboardMachineType(
+			NewMachineTypeInfo("z4m-highmem-16", 16, 122).
+				withAutomaticEphemeralLocalSsdCount(1).
+				withInstancePriceOverride(39.422618).
+				withPreemptibleInstancePriceOverride(15.454413),
+			NewMachineTypeInfo("z4m-highmem-32", 32, 244).
+				withAutomaticEphemeralLocalSsdCount(2).
+				withInstancePriceOverride(78.845236).
+				withPreemptibleInstancePriceOverride(30.908826),
+			NewMachineTypeInfo("z4m-highmem-48", 48, 366).
+				withAutomaticEphemeralLocalSsdCount(3).
+				withInstancePriceOverride(118.267854).
+				withPreemptibleInstancePriceOverride(46.363240),
+			NewMachineTypeInfo("z4m-highmem-96", 96, 744).
+				withAutomaticEphemeralLocalSsdCount(6).
+				withInstancePriceOverride(240.135707).
+				withPreemptibleInstancePriceOverride(94.166479),
+			NewMachineTypeInfo("z4m-highmem-192", 192, 1488).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(480.271414).
+				withPreemptibleInstancePriceOverride(188.332958),
+			NewMachineTypeInfo("z4m-highmem-192-cd", 192, 1488).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(480.271414).
+				withPreemptibleInstancePriceOverride(188.332958),
+		),
+		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: IntelEmeraldRapids, upperBound: IntelEmeraldRapids},
+		supportCompactPlacement:  true,
+		maxCompactPlacementNodes: 150,
+		supportConfidentialNodes: false,
+		supportedBootDiskTypes: map[string]bool{
+			DiskTypeHyperdiskBalanced:                 true,
+			DiskTypeHyperdiskBalancedHighAvailability: true,
+			DiskTypeHyperdiskThroughput:               true,
+			DiskTypeHyperdiskMl:                       true,
+		},
+		supportedAttachDiskTypes: map[string]ConfidentialMode{
+			DiskTypeHyperdiskBalanced:                 NonConfidentialOnlyMode,
+			DiskTypeHyperdiskBalancedHighAvailability: NonConfidentialOnlyMode,
+			DiskTypeHyperdiskExtreme:                  NonConfidentialOnlyMode,
+			DiskTypeHyperdiskMl:                       NonConfidentialOnlyMode,
+			DiskTypeHyperdiskThroughput:               NonConfidentialOnlyMode,
+		},
+		supportHugepageSize1g: true,
+		defaultDiskType:       DiskTypeHyperdiskBalanced,
+	})
 )
 
 // LocalSSDDiskSizes are mappings between machine type/family to the local disk sizes in GiB
 var LocalSSDDiskSizes = map[string]uint64{
 	Z3.Name():                    3000,
 	Z4D.Name():                   3500,
+	Z4M.Name():                   14000,
 	A4X.Name():                   3000,
 	"c4-standard-288-lssd-metal": 3000,
 	"c4-highmem-288-lssd-metal":  3000,
