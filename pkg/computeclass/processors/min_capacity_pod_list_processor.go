@@ -32,8 +32,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 const MinCapacityPodListProcessorName = "cc-min-capacity-pod-list-processor"
@@ -338,7 +340,7 @@ func (p *MinCapacityPodListProcessor) packIntoGroups(autoscalingCtx *ca_context.
 			if n == nil {
 				return false
 			}
-			return g.nodeNames[n.Name]
+			return g.nodeNames[n.Name] && isNodeNotBeingDeleted(n)
 		})
 		if err != nil {
 			return remaining, err
@@ -359,7 +361,7 @@ func (p *MinCapacityPodListProcessor) packIntoNonAtomic(autoscalingCtx *ca_conte
 		if n == nil {
 			return false
 		}
-		return nonAtomicNodes[n.Name]
+		return nonAtomicNodes[n.Name] && isNodeNotBeingDeleted(n)
 	})
 	if err != nil {
 		return pods, err
@@ -498,7 +500,7 @@ func computeSaturatedNodeCounts(nodeInfos []*framework.NodeInfo) (map[string]map
 
 	for _, ni := range nodeInfos {
 		node := ni.Node()
-		if node == nil {
+		if !isNodeNotBeingDeleted(node) {
 			continue
 		}
 		ccName := node.Labels[labels.ComputeClassLabel]
@@ -549,4 +551,17 @@ func isNodeSaturated(nodeInfo *framework.NodeInfo) bool {
 	limit := allocatablePods.Value()
 	numPods := int64(len(nodeInfo.Pods()))
 	return numPods >= limit
+}
+
+// isNodeNotBeingDeleted returns true if a node is acceptable for min capacity fake pods.
+// Nodes that are being deleted or prepared for deletion (e.g. by defrag hard taint or CA scale-down) are not acceptable.
+func isNodeNotBeingDeleted(node *apiv1.Node) bool {
+	if node == nil || node.DeletionTimestamp != nil {
+		return false
+	}
+	if taints.HasToBeDeletedTaint(node) ||
+		taints.HasTaint(node, defrag.HardTaint) {
+		return false
+	}
+	return true
 }
