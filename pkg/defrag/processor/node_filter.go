@@ -23,6 +23,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
@@ -52,16 +53,18 @@ type defragNodeFilterFactory struct {
 	drainabilityRules       rules.Rules
 	clock                   clock.PassiveClock
 	minQuotasTrackerFactory *resourcequotas.TrackerFactory
+	ccLister                lister.Lister
 }
 
 // newDefragNodeFilterFactory returns a new instance of defragNodeFilterFactory
-func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, minQuotasTrackerFactory *resourcequotas.TrackerFactory) *defragNodeFilterFactory {
+func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, minQuotasTrackerFactory *resourcequotas.TrackerFactory, ccLister lister.Lister) *defragNodeFilterFactory {
 	return &defragNodeFilterFactory{
 		scaleDownNodeProcessor:  scaleDownNodeProcessor,
 		deleteOptions:           deleteOptions,
 		drainabilityRules:       drainabilityRules,
 		clock:                   clock.RealClock{},
 		minQuotasTrackerFactory: minQuotasTrackerFactory,
+		ccLister:                ccLister,
 	}
 }
 
@@ -83,6 +86,8 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.Autoscalin
 	if err != nil {
 		return nil, fmt.Errorf("failed to create min quotas tracker: %w", err)
 	}
+	disruptionTracker := NewMaxNodeDisruptionTracker(ctx, f.ccLister, allNodes)
+
 	return &defragNodeFilter{
 		scaleDownNodeProcessor:   f.scaleDownNodeProcessor,
 		deleteOptions:            f.deleteOptions,
@@ -91,6 +96,7 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.Autoscalin
 		scaleDownCandidatesCache: cache,
 		nodeGroupSize:            utils.GetNodeGroupSizeMap(context.TODO(), ctx.CloudProvider),
 		minQuotasTracker:         tracker,
+		disruptionTracker:        disruptionTracker,
 	}, nil
 }
 
@@ -127,6 +133,7 @@ type defragNodeFilter struct {
 
 	scaleDownCandidatesCache sets.Set[string]
 	minQuotasTracker         *resourcequotas.Tracker
+	disruptionTracker        *MaxNodeDisruptionTracker
 }
 
 // newValidCandidateNodes returns nodes that could be considered for defrag candidates.
@@ -355,6 +362,23 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.Autoscali
 		f.nodeGroupSize[nodeGroupId]--
 	}
 	return result
+}
+
+// filterNodesViolatingMaxDisruption filters scale-down candidates that would violate
+// their ComputeClass's MaxNodeDisruption limit.
+func (f *defragNodeFilter) filterNodesViolatingMaxDisruption(ctx *ca_context.AutoscalingContext, nodes []string) []string {
+	if f.disruptionTracker != nil {
+		return f.disruptionTracker.FilterNodesViolatingMaxDisruption(ctx, nodes)
+	}
+	return nodes
+}
+
+// reserveMaxDisruptionBudget reserves disruption budget for an existing candidate
+// that has not yet scaled down, without modifying candidate.Nodes.
+func (f *defragNodeFilter) reserveMaxDisruptionBudget(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate, isNodeScaleDownStarted func(string) bool) {
+	if f.disruptionTracker != nil {
+		f.disruptionTracker.ReserveMaxDisruptionBudget(ctx, candidate, isNodeScaleDownStarted)
+	}
 }
 
 func addTaint(nodeInfo *framework.NodeInfo, taint apiv1.Taint) {

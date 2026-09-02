@@ -151,7 +151,7 @@ func TestNewValidCandidateNodes(t *testing.T) {
 				allCandidateNodes[node] = true
 			}
 
-			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, options.NodeDeleteOptions{}, rules.Default(options.NodeDeleteOptions{}), newTestTrackerFactory(nil))
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, options.NodeDeleteOptions{}, rules.Default(options.NodeDeleteOptions{}), newTestTrackerFactory(nil), nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -285,7 +285,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 			}
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil), nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 			nodeFilter.filterInvalidCandidateNodes(ctx, pdbTracker, tc.candidate)
@@ -336,7 +336,7 @@ func TestFilterDeletedCandidateNodes(t *testing.T) {
 			}
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil), nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 			nodeFilter.filterDeletedCandidateNodes(ctx, tc.candidate)
@@ -432,7 +432,7 @@ func TestIsCandidateNodeValid(t *testing.T) {
 			assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(tc.node, tc.pods...)))
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
+			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil), nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -537,7 +537,7 @@ func TestHasBlockingPods(t *testing.T) {
 			assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(tc.node, tc.pods...)))
 
 			deleteOpts := options.NodeDeleteOptions{}
-			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
+			factory := newDefragNodeFilterFactory(tc.processor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil), nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -727,7 +727,7 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 
 			trackerFactory := newTestTrackerFactory(nil)
 
-			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
+			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory, nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -791,7 +791,7 @@ func TestFilterNodesViolatingMinQuotas(t *testing.T) {
 
 			trackerFactory := newTestTrackerFactory([]resourcequotas.Quota{quota})
 
-			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
+			factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory, nil)
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 
@@ -835,7 +835,7 @@ func TestFilterNodesViolatingMinQuotas_MultipleCandidates(t *testing.T) {
 
 	trackerFactory := newTestTrackerFactory([]resourcequotas.Quota{quota})
 
-	factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory)
+	factory := newDefragNodeFilterFactory(processor, deleteOpts, rules.Default(deleteOpts), trackerFactory, nil)
 	nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 	assert.NoError(t, err)
 
