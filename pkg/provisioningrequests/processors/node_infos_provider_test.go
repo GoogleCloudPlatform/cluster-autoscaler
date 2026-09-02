@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
@@ -134,14 +135,14 @@ func TestShortLivedUpgradeNodeInfoProvider(t *testing.T) {
 
 			podLister := kube_util.NewTestPodLister([]*v1.Pod{})
 			registry := kube_util.NewListerRegistry(nil, nil, podLister, nil, nil, nil, nil, nil, nil)
-			ctx := context.AutoscalingContext{
+			ctx := ca_context.AutoscalingContext{
 				CloudProvider: cloudProvider,
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: registry,
 				},
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(context.TODO(), nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 			provReqNodeInfoProvider := NewShortLivedUpgradeNodeInfoProvider(defaultProvider)
 
 			var wantNode *v1.Node
@@ -152,7 +153,7 @@ func TestShortLivedUpgradeNodeInfoProvider(t *testing.T) {
 				wantNode = tc.node
 			}
 
-			nodeInfos, err := provReqNodeInfoProvider.Process(&ctx, nodes, []*appsv1.DaemonSet{}, taints.TaintConfig{}, time.Now())
+			nodeInfos, err := provReqNodeInfoProvider.Process(context.TODO(), &ctx, nodes, []*appsv1.DaemonSet{}, taints.TaintConfig{}, time.Now())
 			assert.NoError(t, err)
 			mock.AssertExpectationsForObjects(t, gkeManager)
 			assert.Len(t, nodeInfos, 1)

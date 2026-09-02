@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,7 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -283,7 +284,7 @@ func TestCrdNodeGroupListProcessor(t *testing.T) {
 			for _, ng := range tc.nodegroups {
 				gkeManager.On("GetMigTemplateNodeInfo", ng).Return(framework.NewTestNodeInfo(&node), nil)
 			}
-			actual, _, _ := processor.Process(nil, tc.nodegroups, nil, nil)
+			actual, _, _ := processor.Process(context.TODO(), nil, tc.nodegroups, nil, nil)
 			assert.ElementsMatch(t, actual, tc.wantNodegroups)
 
 			mockMetricsObserver.AssertNotCalled(t, "ObserveInvalidNpcScaleUpOrder")
@@ -447,7 +448,7 @@ func TestCRDBipackingLimiter(t *testing.T) {
 			for _, id := range tc.processedNodeGroups {
 				processor.MarkProcessed(nil, id)
 			}
-			res := processor.StopBinpacking(nil, tc.expansionOptions)
+			res := processor.StopBinpacking(context.TODO(), nil, tc.expansionOptions)
 			assert.Equal(t, res, tc.stopBinpacking)
 
 			mockMetricsObserver.AssertNotCalled(t, "ObserveInvalidNpcScaleUpOrder")
@@ -593,14 +594,14 @@ func TestProcessorE2E(t *testing.T) {
 	mockProvider := computeclass.NewMockGKEProvider(nil, machinetypes.N1)
 	processor := NewNodeGroupListProcessor(mockLister, nodegroupListProcessor, mockMetricsObserver, mockProvider)
 
-	actual, _, _ := processor.Process(nil, nodeGroups, nil, nil)
+	actual, _, _ := processor.Process(context.TODO(), nil, nodeGroups, nil, nil)
 	assert.ElementsMatch(t, actual, wantNodeGroups)
 
 	expansionOptionCount := []int{0, 0, 1, 1, 2}
 	wantStopBinpacking := []bool{false, false, false, true, true}
 	for i, ng := range wantNodeGroups {
 		processor.MarkProcessed(nil, ng.Id())
-		res := processor.StopBinpacking(nil, createMockExpansionOptions(expansionOptionCount[i]))
+		res := processor.StopBinpacking(context.TODO(), nil, createMockExpansionOptions(expansionOptionCount[i]))
 		assert.Equal(t, wantStopBinpacking[i], res)
 	}
 
@@ -699,7 +700,7 @@ func TestInvalidNpcScaleUpOrder(t *testing.T) {
 			}
 
 			// Process and order nodegroups
-			_, _, _ = processor.Process(nil, append(skippedNodegroups, processedNodegroups...), nil, nil)
+			_, _, _ = processor.Process(context.TODO(), nil, append(skippedNodegroups, processedNodegroups...), nil, nil)
 
 			// Skip some nodepools
 			for _, ng := range skippedNodegroups {
@@ -708,7 +709,7 @@ func TestInvalidNpcScaleUpOrder(t *testing.T) {
 			// Mark nodegroups in provided order
 			for _, ng := range processedNodegroups {
 				processor.MarkProcessed(nil, ng.Id())
-				processor.StopBinpacking(nil, nil)
+				processor.StopBinpacking(context.TODO(), nil, nil)
 			}
 
 			// Check the errors were handled as expected
@@ -784,7 +785,7 @@ func TestInvalidNpcScaleUpOrderGroupedRules(t *testing.T) {
 			}
 
 			// Process and order nodegroups
-			_, _, _ = processor.Process(nil, append(skippedNodegroups, processedNodegroups...), nil, nil)
+			_, _, _ = processor.Process(context.TODO(), nil, append(skippedNodegroups, processedNodegroups...), nil, nil)
 
 			// Skip some nodepools
 			for _, ng := range skippedNodegroups {
@@ -793,7 +794,7 @@ func TestInvalidNpcScaleUpOrderGroupedRules(t *testing.T) {
 			// Mark nodegroups in provided order
 			for _, ng := range processedNodegroups {
 				processor.MarkProcessed(nil, ng.Id())
-				processor.StopBinpacking(nil, nil)
+				processor.StopBinpacking(context.TODO(), nil, nil)
 			}
 
 			// Check the errors were handled as expected
@@ -854,14 +855,14 @@ func TestProcessorE2EGroupedRules(t *testing.T) {
 	mockProvider := computeclass.NewMockGKEProvider(nil, machinetypes.N1)
 	processor := NewNodeGroupListProcessor(mockLister, nodegroupListProcessor, mockMetricsObserver, mockProvider)
 
-	actual, _, _ := processor.Process(nil, nodeGroups, nil, nil)
+	actual, _, _ := processor.Process(context.TODO(), nil, nodeGroups, nil, nil)
 	assert.ElementsMatch(t, actual, wantNodeGroups)
 
 	expansionOptionCount := []int{0, 0, 1, 1, 2}
 	wantStopBinpacking := []bool{false, false, false, true, true}
 	for i, ng := range wantNodeGroups {
 		processor.MarkProcessed(nil, ng.Id())
-		res := processor.StopBinpacking(nil, createMockExpansionOptions(expansionOptionCount[i]))
+		res := processor.StopBinpacking(context.TODO(), nil, createMockExpansionOptions(expansionOptionCount[i]))
 		assert.Equal(t, wantStopBinpacking[i], res)
 	}
 
@@ -885,7 +886,7 @@ func newMockNodeGroupListProcessor() *mockNodeGroupListProcessor {
 	return &mockNodeGroupListProcessor{}
 }
 
-func (p *mockNodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *mockNodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	return nodeGroups, nodeInfos, nil
 }
 

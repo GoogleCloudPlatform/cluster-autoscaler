@@ -99,6 +99,7 @@ type InternalOptions struct {
 	AllowlistedSystemLabelPatterns               string
 	BootDiskSelectorEnabled                      bool
 	WIImagePullMinVersion                        *version.Version
+	DisableWIImagePullForRiptide                 bool
 	CpMaxParallelOps                             int
 	CpMaxQueuedOps                               int
 	MultitenancyEnabled                          bool

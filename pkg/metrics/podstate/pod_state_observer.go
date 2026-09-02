@@ -33,7 +33,7 @@ import (
 	"k8s.io/klog/v2"
 	podv1 "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/utils/clock"
-	ctx "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	coreutils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
@@ -144,7 +144,7 @@ func (o *PodStateObserver) Run(ctx context.Context) {
 }
 
 // Process analyses the scale up status and emits appropriate visibility events.
-func (o *PodStateObserver) Process(context *ctx.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (o *PodStateObserver) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	o.ObserveReaction(scaleUpStatus.PodsTriggeredScaleUp, metrics.ScaleUp)
 
 	pods := make([]*v1.Pod, len(scaleUpStatus.PodsRemainUnschedulable))

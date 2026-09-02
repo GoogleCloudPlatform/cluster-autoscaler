@@ -15,6 +15,8 @@
 package extendeddurationpods
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleblocking"
@@ -55,7 +57,7 @@ func (b BlockedMigsSource) BlockedMigs() scaleblocking.BlockedMigs {
 // shouldBlockScalingUp returns whether a given MIG should have scaling blocked because of an ongoing EDP upgrade
 // we should block scale up of mig which are yet to upgrade.
 func shouldBlockScalingUp(mig *gke.GkeMig, clusterVersion string) (shouldBlockScaleUp bool) {
-	if mig == nil || mig.GetNodeConfig() == nil || mig.Spec() == nil || !mig.Exist() {
+	if mig == nil || mig.GetNodeConfig() == nil || mig.Spec() == nil || !mig.Exist(context.TODO()) {
 		return false
 	}
 	if mig.Spec().ExtendedDurationPods == "" {

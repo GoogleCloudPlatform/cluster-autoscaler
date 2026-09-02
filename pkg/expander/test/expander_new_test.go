@@ -15,6 +15,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -1227,7 +1228,7 @@ func TestLargeScaleUpRequest(t *testing.T) {
 
 			nodeGroups, nodeInfos, err := cluster.Autoscaler().GetNodeGroupsForScaleUp(pods)
 			assert.NoError(t, err)
-			context := cluster.Autoscaler().GetContext()
+			autoscalingCtx := cluster.Autoscaler().GetContext()
 			expansionOptions := make([]expander.Option, 0)
 
 			for _, nodeGroup := range nodeGroups {
@@ -1238,26 +1239,26 @@ func TestLargeScaleUpRequest(t *testing.T) {
 					NodeGroup: nodeGroup,
 				}
 
-				context.ClusterSnapshot.Fork()
+				autoscalingCtx.ClusterSnapshot.Fork()
 
 				nodeIndex := 1
-				newNodeInfo, err := simulator.SanitizedNodeInfo(nodeInfo, fmt.Sprintf("e-%d", nodeIndex))
+				newNodeInfo, err := simulator.SanitizedNodeInfo(context.TODO(), nodeInfo, fmt.Sprintf("e-%d", nodeIndex))
 				assert.NoError(t, err)
-				err = context.ClusterSnapshot.AddNodeInfo(newNodeInfo)
+				err = autoscalingCtx.ClusterSnapshot.AddNodeInfo(newNodeInfo)
 				assert.NoError(t, err)
 				var scheduledPods []*apiv1.Pod
 				ignore := false
 
 				for _, pod := range pods {
-					if schedErr := context.ClusterSnapshot.CheckPredicates(pod, newNodeInfo.Node().Name); schedErr != nil {
+					if schedErr := autoscalingCtx.ClusterSnapshot.CheckPredicates(pod, newNodeInfo.Node().Name); schedErr != nil {
 						nodeIndex += 1
-						newNodeInfo, err = simulator.SanitizedNodeInfo(nodeInfo, fmt.Sprintf("e-%d", nodeIndex))
+						newNodeInfo, err = simulator.SanitizedNodeInfo(context.TODO(), nodeInfo, fmt.Sprintf("e-%d", nodeIndex))
 						assert.NoError(t, err)
-						err = context.ClusterSnapshot.AddNodeInfo(newNodeInfo)
+						err = autoscalingCtx.ClusterSnapshot.AddNodeInfo(newNodeInfo)
 						assert.NoError(t, err)
 					}
 
-					if err = context.ClusterSnapshot.SchedulePod(pod, newNodeInfo.Node().Name); err != nil {
+					if err = autoscalingCtx.ClusterSnapshot.SchedulePod(pod, newNodeInfo.Node().Name); err != nil {
 						ignore = true
 						break
 					}
@@ -1265,7 +1266,7 @@ func TestLargeScaleUpRequest(t *testing.T) {
 					scheduledPods = append(scheduledPods, pod)
 				}
 
-				context.ClusterSnapshot.Revert()
+				autoscalingCtx.ClusterSnapshot.Revert()
 
 				if ignore {
 					continue
@@ -1278,7 +1279,7 @@ func TestLargeScaleUpRequest(t *testing.T) {
 				}
 			}
 
-			bestOption := strategy.BestOption(expansionOptions, nodeInfos)
+			bestOption := strategy.BestOption(context.TODO(), expansionOptions, nodeInfos)
 			assert.NotNil(t, bestOption)
 			preferredCpuCount := getPreferredCpuCount(t, analyzer, *bestOption, nodeInfos)
 			optionName := getBestOptionGroupName(bestOption)

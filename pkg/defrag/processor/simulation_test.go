@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -454,7 +455,7 @@ func TestSchedulePods(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			assert.NoError(t, snapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, snapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
 			simulator := newSimulator(simulatorOptions{})
 			schedulablePods, unschedulablePods, err := simulator.schedulePods(snapshot, tc.pendingPods, tc.allCandidateNodes, tc.upcomingNodes)
@@ -792,7 +793,7 @@ func TestSimulateNodeRemovals(t *testing.T) {
 				allCandidateNodes[n] = true
 			}
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
-			if err := snapshot.SetClusterState(tc.nodes, tc.pods, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()); err != nil {
+			if err := snapshot.SetClusterState(context.TODO(), tc.nodes, tc.pods, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()); err != nil {
 				t.Fatalf("failed to set cluster state: %v", err)
 			}
 			ctx := &cacontext.AutoscalingContext{
@@ -879,8 +880,8 @@ func (m *mockSnapshotStore) DeviceClassResolver() schedulerframework.DeviceClass
 	return m.s.DeviceClassResolver()
 }
 
-func (m *mockSnapshotStore) SetClusterState(nodes []*apiv1.Node, scheduledPods []*apiv1.Pod, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) error {
-	return m.s.SetClusterState(nodes, scheduledPods, draSnapshot, csiSnapshot)
+func (m *mockSnapshotStore) SetClusterState(ctx context.Context, nodes []*apiv1.Node, scheduledPods []*apiv1.Pod, draSnapshot *drasnapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) error {
+	return m.s.SetClusterState(ctx, nodes, scheduledPods, draSnapshot, csiSnapshot)
 }
 
 func (m *mockSnapshotStore) DraSnapshot() *drasnapshot.Snapshot {
@@ -899,8 +900,8 @@ func (m *mockSnapshotStore) StoreNodeInfo(nodeInfo *framework.NodeInfo) error {
 	return m.s.StoreNodeInfo(nodeInfo)
 }
 
-func (m *mockSnapshotStore) RemoveNodeInfo(nodeName string) error {
-	return m.s.RemoveNodeInfo(nodeName)
+func (m *mockSnapshotStore) RemoveNodeInfo(ctx context.Context, nodeName string) error {
+	return m.s.RemoveNodeInfo(ctx, nodeName)
 }
 
 func (m *mockSnapshotStore) StorePodInfo(podInfo *framework.PodInfo, nodeName string) error {

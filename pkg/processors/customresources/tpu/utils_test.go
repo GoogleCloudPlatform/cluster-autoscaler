@@ -15,6 +15,7 @@
 package tpu
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -96,7 +97,7 @@ func TestGetTpuFromTemplate(t *testing.T) {
 			provider := testprovider.NewTestCloudProviderBuilder().WithMachineTemplates(machineTemplates).Build()
 			provider.AddNodeGroup("tng", 1, 10, 1)
 			provider.AddNode("tng", template)
-			ng1, _ := provider.NodeGroupForNode(template)
+			ng1, _ := provider.NodeGroupForNode(context.TODO(), template)
 
 			tr, found, err := getTpuFromTemplate(ng1)
 

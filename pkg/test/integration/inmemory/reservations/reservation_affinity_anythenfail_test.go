@@ -298,8 +298,8 @@ func assertNodeGroupLocationAndTargetSize(t *testing.T, autoscaler *core.StaticA
 	t.Helper()
 	var scaledUpGroup cloudprovider.NodeGroup
 	var actualTargetSize int
-	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
-		targetSize, err := ng.TargetSize()
+	for _, ng := range autoscaler.CloudProvider.NodeGroups(context.TODO()) {
+		targetSize, err := ng.TargetSize(context.TODO())
 		assert.NoError(t, err)
 		if targetSize > 0 {
 			if scaledUpGroup != nil {
@@ -327,8 +327,8 @@ func assertReservationInUseCount(t *testing.T, infra *integration.TestInfrastruc
 }
 
 func assertNoScaleUps(t *testing.T, autoscaler *core.StaticAutoscaler) {
-	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
-		targetSize, err := ng.TargetSize()
+	for _, ng := range autoscaler.CloudProvider.NodeGroups(context.TODO()) {
+		targetSize, err := ng.TargetSize(context.TODO())
 		assert.NoError(t, err)
 		assert.Equal(t, 0, targetSize, "Expected node group %s to not scale up", ng.Id())
 	}
@@ -337,12 +337,12 @@ func assertNoScaleUps(t *testing.T, autoscaler *core.StaticAutoscaler) {
 func assertBackoffForMigInZone(t *testing.T, autoscaler *core.StaticAutoscaler, zone string) {
 	var mig cloudprovider.NodeGroup
 	now := time.Now()
-	for _, ng := range autoscaler.CloudProvider.NodeGroups() {
+	for _, ng := range autoscaler.CloudProvider.NodeGroups(context.TODO()) {
 		gkeMig, _ := ng.(*gke.GkeMig)
 		if gkeMig.GceRef().Zone == zone {
 			mig = ng
 		}
 	}
 	assert.NotNil(t, mig, "Expected to find a mig in zone %s", zone)
-	assert.True(t, autoscaler.ClusterStateRegistry.BackoffStatusForNodeGroup(mig, now).IsBackedOff, "Expected mig %s in zone %s to be backed off at time %v", mig.Id(), zone, now)
+	assert.True(t, autoscaler.ClusterStateRegistry.BackoffStatusForNodeGroup(context.TODO(), mig, now).IsBackedOff, "Expected mig %s in zone %s to be backed off at time %v", mig.Id(), zone, now)
 }

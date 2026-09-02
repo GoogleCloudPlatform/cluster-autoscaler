@@ -15,6 +15,7 @@
 package ccc
 
 import (
+	"context"
 	"reflect"
 	"time"
 
@@ -39,7 +40,8 @@ func NewNodeGroupChangePerCCCMetricsProducer(cccProvider cccProvider) *NodeGroup
 }
 
 // RegisterScaleUp calls RegisterScaleUp for each observer.
-func (p *NodeGroupChangePerCccMetricsProducer) RegisterScaleUp(nodeGroup cloudprovider.NodeGroup,
+func (p *NodeGroupChangePerCccMetricsProducer) RegisterScaleUp(ctx context.Context,
+	nodeGroup cloudprovider.NodeGroup,
 	delta int, currentTime time.Time) {
 	cccName := p.getCrdNameForNodeGroup(nodeGroup)
 	Metrics.RegisterScaleUp(cccName, delta)
@@ -51,7 +53,7 @@ func (p *NodeGroupChangePerCccMetricsProducer) RegisterScaleDown(nodeGroup cloud
 }
 
 // RegisterFailedScaleUp emits the failed scale up metric.
-func (p *NodeGroupChangePerCccMetricsProducer) RegisterFailedScaleUp(nodeGroup cloudprovider.NodeGroup,
+func (p *NodeGroupChangePerCccMetricsProducer) RegisterFailedScaleUp(ctx context.Context, nodeGroup cloudprovider.NodeGroup,
 	delta int, errorInfo cloudprovider.InstanceErrorInfo, currentTime time.Time) {
 	cccName := p.getCrdNameForNodeGroup(nodeGroup)
 	Metrics.RegisterFailedScaleUp(cccName, string(errorInfo.ErrorCode))

@@ -1637,6 +1637,41 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "CCC self service NodeDrainConfig specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: map[string]string{
+					"NodeDrainConfigPdbTimeoutDuration":               "60s",
+					"NodeDrainConfigGraceTerminationDuration":         "120s",
+					"NodeDrainConfigRespectPdbDuringNodePoolDeletion": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config:        &gke_api_beta.NodeConfig{},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					NodeDrainConfig: &gke_api_beta.NodeDrainConfig{
+						PdbTimeoutDuration:               "60s",
+						GraceTerminationDuration:         "120s",
+						RespectPdbDuringNodePoolDeletion: true,
+						ForceSendFields:                  []string{"PdbTimeoutDuration", "GraceTerminationDuration", "RespectPdbDuringNodePoolDeletion"},
+					},
+				},
+			},
+		},
+		{
 			name: "Defaults specified",
 			spec: &NodePoolSpec{
 				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
@@ -1946,6 +1981,41 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
 							EnableNestedVirtualization: false,
 							ForceSendFields:            []string{"EnableNestedVirtualization"},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service custom image specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"gke.custom-image-type":    "custom_containerd",
+					"gke.custom-image-name":    "my-custom-image",
+					"gke.custom-image-project": "my-gcp-project",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ImageType: "custom_containerd",
+						NodeImageConfig: &gke_api_beta.CustomImageConfig{
+							Image:        "my-custom-image",
+							ImageProject: "my-gcp-project",
 						},
 					},
 					Name:          nodePoolName,
@@ -5035,6 +5105,70 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 			wantSelfServiceMetadata: map[string]string{
 				"AdvancedMachineFeaturesEnableNestedVirtualization": "false",
 				labels.GvnicLabelKey: "true",
+			},
+		},
+		{
+			name: "custom image settings are present on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "custom-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "imageType": "custom_containerd",
+					  "nodeImageConfig": {
+						"image": "my-custom-image",
+						"imageProject": "my-custom-project"
+					  }
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				selfservice.CustomImageTypeMetadataKey:    "custom_containerd",
+				selfservice.CustomImageNameMetadataKey:    "my-custom-image",
+				selfservice.CustomImageProjectMetadataKey: "my-custom-project",
+				labels.GvnicLabelKey:                      "true",
+			},
+		},
+		{
+			name: "CCC self service NodeDrainConfig on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "default-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t"
+					},
+					"nodeDrainConfig": {
+					  "graceTerminationDuration": "43200s",
+					  "pdbTimeoutDuration": "86400s",
+					  "respectPdbDuringNodePoolDeletion": true
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"NodeDrainConfigPdbTimeoutDuration":               "86400s",
+				"NodeDrainConfigGraceTerminationDuration":         "43200s",
+				"NodeDrainConfigRespectPdbDuringNodePoolDeletion": "true",
+				labels.GvnicLabelKey:                              "true",
 			},
 		},
 	}

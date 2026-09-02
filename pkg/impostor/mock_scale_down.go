@@ -15,28 +15,33 @@
 package impostor
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/actuation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+
 	ca_processors "sigs.k8s.io/cluster-autoscaler/pkg/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 // NewScaleDown returns new instance of ScaleDown.
-func NewScaleDown(ctx *context.AutoscalingContext, planner scaledown.Planner, actuator scaledown.Actuator, processors *ca_processors.AutoscalingProcessors) *ScaleDown {
+func NewScaleDown(ctx *ca_context.AutoscalingContext, planner scaledown.Planner, actuator scaledown.Actuator, processors *ca_processors.AutoscalingProcessors) *ScaleDown {
 	return &ScaleDown{
 		scaleDownPlanner:   planner,
 		scaleDownActuator:  actuator,
@@ -49,7 +54,7 @@ func NewScaleDown(ctx *context.AutoscalingContext, planner scaledown.Planner, ac
 
 // ScaleDown is a structure used to  hold utils relevant for scale down.
 type ScaleDown struct {
-	*context.AutoscalingContext
+	*ca_context.AutoscalingContext
 	lastScaleUpTime         time.Time
 	lastScaleDownDeleteTime time.Time
 	lastScaleDownFailTime   time.Time
@@ -80,7 +85,7 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 
 	unneededStart := time.Now()
 	// Initialize cluster state to ClusterSnapshot
-	if err := sd.ClusterSnapshot.SetClusterState(allNodes, scheduledPods, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()); typedErr != nil {
+	if err := sd.ClusterSnapshot.SetClusterState(context.TODO(), allNodes, scheduledPods, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()); typedErr != nil {
 		return errors.ToAutoscalerError(errors.InternalError, fmt.Errorf("ClusterSnapshot.SetClusterState: %v", err))
 	}
 	// Initialize remaining PDBs
@@ -105,7 +110,7 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 	} else {
 		var err errors.AutoscalerError
 		scaleDownCandidates, err = sd.processors.ScaleDownNodeProcessor.GetScaleDownCandidates(
-			autoscalingContext, allNodes)
+			context.TODO(), autoscalingContext, allNodes)
 		if err != nil {
 			klog.Error(err)
 			return err
@@ -117,16 +122,16 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 		}
 	}
 	actuationStatus := sd.scaleDownActuator.CheckStatus()
-	if typedErr := sd.scaleDownPlanner.UpdateClusterState(podDestinations, scaleDownCandidates, actuationStatus, currentTime); typedErr != nil {
+	if typedErr := sd.scaleDownPlanner.UpdateClusterState(context.TODO(), podDestinations, scaleDownCandidates, actuationStatus, currentTime); typedErr != nil {
 		scaleDownStatus.Result = status.ScaleDownError
 		klog.Errorf("Failed to scale down: %v", typedErr)
 		return typedErr
 	}
 
 	unneededNodes := sd.scaleDownPlanner.UnneededNodes()
-	sd.processors.ScaleDownCandidatesNotifier.Update(unneededNodes, currentTime)
+	sd.processors.ScaleDownCandidatesNotifier.Update(context.TODO(), unneededNodes, currentTime)
 
-	metrics.UpdateDurationFromStart(metrics.FindUnneeded, unneededStart)
+	metrics.UpdateDurationFromStart(context.TODO(), metrics.FindUnneeded, unneededStart)
 
 	scaleDownInCooldown := sd.processorCallbacks.disableScaleDownForLoop ||
 		sd.lastScaleUpTime.Add(sd.ScaleDownDelayAfterAdd).After(currentTime) ||
@@ -150,7 +155,7 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 		var removedNodeGroups []cloudprovider.NodeGroup
 		if len(drained) == 0 {
 			var err error
-			removedNodeGroups, err = sd.processors.NodeGroupManager.RemoveUnneededNodeGroups(autoscalingContext)
+			removedNodeGroups, err = sd.processors.NodeGroupManager.RemoveUnneededNodeGroups(context.TODO(), autoscalingContext)
 			if err != nil {
 				klog.Errorf("Error while removing unneeded node groups: %v", err)
 			}
@@ -158,9 +163,9 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 
 		scaleDownStart := time.Now()
 		metrics.UpdateLastTime(metrics.ScaleDown, scaleDownStart)
-		empty, needDrain := sd.scaleDownPlanner.NodesToDelete(scaleDownStart)
+		empty, needDrain := sd.scaleDownPlanner.NodesToDelete(context.TODO(), scaleDownStart)
 
-		scaleDownResult, scaledDownNodes, typedErr := sd.scaleDownActuator.StartDeletion(empty, needDrain)
+		scaleDownResult, scaledDownNodes, typedErr := sd.scaleDownActuator.StartDeletion(context.TODO(), empty, needDrain)
 		nodeDeleteResults, nodeDeleteResultsAsOf := sd.scaleDownActuator.DeletionResults()
 		sd.scaleDownActuator.ClearResultsNotNewerThan(scaleDownStatus.NodeDeleteResultsAsOf)
 		scaleDownStatus := &status.ScaleDownStatus{
@@ -171,7 +176,7 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 			RemovedNodeGroups:     removedNodeGroups,
 		}
 
-		metrics.UpdateDurationFromStart(metrics.ScaleDown, scaleDownStart)
+		metrics.UpdateDurationFromStart(context.TODO(), metrics.ScaleDown, scaleDownStart)
 		metrics.UpdateUnremovableNodesCount(countsByReason(sd.scaleDownPlanner.UnremovableNodes()))
 
 		if scaleDownStatus.Result == status.ScaleDownNodeDeleteStarted {
@@ -183,12 +188,12 @@ func (sd *ScaleDown) Run(currentTime time.Time) error {
 			taintableUnneededNodes := sd.scaleDownPlanner.UnneededNodes()
 			taintableNodes := retrieveNodes(taintableUnneededNodes)
 			untaintableNodes := subtractNodes(allNodes, taintableNodes)
-			actuation.UpdateSoftDeletionTaints(sd.AutoscalingContext, taintableNodes, untaintableNodes)
+			actuation.UpdateSoftDeletionTaints(context.TODO(), sd.AutoscalingContext, taintableNodes, untaintableNodes)
 		}
 
 		if sd.processors != nil && sd.processors.ScaleDownStatusProcessor != nil {
-			scaleDownStatus.SetUnremovableNodesInfo(sd.scaleDownPlanner.UnremovableNodes(), sd.scaleDownPlanner.NodeUtilizationMap(), sd.CloudProvider)
-			sd.processors.ScaleDownStatusProcessor.Process(autoscalingContext, scaleDownStatus)
+			scaleDownStatus.SetUnremovableNodesInfo(context.TODO(), sd.scaleDownPlanner.UnremovableNodes(), sd.scaleDownPlanner.NodeUtilizationMap(), sd.CloudProvider)
+			sd.processors.ScaleDownStatusProcessor.Process(context.TODO(), autoscalingContext, scaleDownStatus)
 		}
 
 		if typedErr != nil {
@@ -217,8 +222,8 @@ func (sd *ScaleDown) obtainNodeLists(cp cloudprovider.CloudProvider) ([]*apiv1.N
 	// Treat those nodes as unready until GPU actually becomes available and let
 	// our normal handling for booting up nodes deal with this.
 	// TODO: Update to use proper mocked Snapshot
-	allNodes, readyNodes = sd.processors.CustomResourcesProcessor.FilterOutNodesWithUnreadyResources(sd.AutoscalingContext, allNodes, readyNodes, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
-	allNodes, readyNodes = taints.FilterOutNodesWithStartupTaints(sd.taintConfig, allNodes, readyNodes)
+	allNodes, readyNodes = sd.processors.CustomResourcesProcessor.FilterOutNodesWithUnreadyResources(context.TODO(), sd.AutoscalingContext, allNodes, readyNodes, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+	allNodes, readyNodes = taints.FilterOutNodesWithStartupTaints(context.TODO(), sd.taintConfig, allNodes, readyNodes)
 	return allNodes, readyNodes, nil
 }
 
@@ -229,7 +234,7 @@ type staticAutoscalerProcessorCallbacks struct {
 }
 
 func (callbacks *staticAutoscalerProcessorCallbacks) ResetUnneededNodes() {
-	callbacks.scaleDownPlanner.CleanUpUnneededNodes()
+	callbacks.scaleDownPlanner.CleanUpUnneededNodes(context.TODO())
 }
 
 func newStaticAutoscalerProcessorCallbacks() *staticAutoscalerProcessorCallbacks {

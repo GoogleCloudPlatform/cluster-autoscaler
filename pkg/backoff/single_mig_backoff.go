@@ -16,6 +16,7 @@ package backoff
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -79,7 +80,7 @@ func (b *singleMigBackoff) RemoveStaleBackoffData(ct time.Time) {
 }
 
 func gkeMigBackoffKey(nodeGroup cloudprovider.NodeGroup) string {
-	if nodeGroup.Exist() {
+	if nodeGroup.Exist(context.TODO()) {
 		return nodeGroup.Id()
 	}
 	mig, ok := nodeGroup.(*gke.GkeMig)

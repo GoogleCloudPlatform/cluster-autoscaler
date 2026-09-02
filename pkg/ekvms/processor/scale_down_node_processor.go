@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"math"
@@ -33,7 +34,7 @@ import (
 	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
@@ -83,13 +84,13 @@ func NewScaleDownNodeProcessor(mcp *machinetypes.MachineConfigProvider, resizabl
 	}
 }
 
-func (p *ScaleDownNodeProcessor) GetScaleDownCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
-	sourceCandidates, _, _ := p.process(ctx, nodes, false)
+func (p *ScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+	sourceCandidates, _, _ := p.process(ctx, autoscalingCtx, nodes, false)
 	return sourceCandidates, nil
 }
 
-func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
-	_, targetCandidates, _ := p.process(ctx, nodes, true)
+func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+	_, targetCandidates, _ := p.process(context.TODO(), ctx, nodes, true)
 	return targetCandidates, nil
 }
 
@@ -97,13 +98,13 @@ func (p *ScaleDownNodeProcessor) CleanUp() {}
 
 // process executes the scaledown logic: determines for each node if it should be a source/candidate
 // for scaledown, or if it should be downsized.
-func (p *ScaleDownNodeProcessor) process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, emitLookaheadMetrics bool) (sourceCandidates, targetCandidates []*apiv1.Node, newDesiredSizes map[string]size.Allocatable) {
+func (p *ScaleDownNodeProcessor) process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, emitLookaheadMetrics bool) (sourceCandidates, targetCandidates []*apiv1.Node, newDesiredSizes map[string]size.Allocatable) {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
 	if !isAnyResizingEnabled(p.resizableVmManager, resizableFamilies) {
 		return nodes, nodes, nil
 	}
 
-	defer metrics.UpdateDurationFromStart(processResizableVmDownsizes, time.Now())
+	defer metrics.UpdateDurationFromStart(ctx, processResizableVmDownsizes, time.Now())
 
 	var filterMode operationtracker.SnapshotFilterMode
 	if p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.EkDownsizeNonResizableFlag, false) {
@@ -113,19 +114,19 @@ func (p *ScaleDownNodeProcessor) process(ctx *context.AutoscalingContext, nodes 
 	}
 	resizableSnapshot := p.resizableVmManager.FilteredNodesSnapshot(false, filterMode)
 	downsizeConfigs := p.downsizeConfigProvider.Provide()
-	p.updateRequestedResources(ctx, downsizeConfigs, nodes, resizableSnapshot)
+	p.updateRequestedResources(autoscalingCtx, downsizeConfigs, nodes, resizableSnapshot)
 
-	sourceCandidates, targetCandidates, newDesiredSizes = p.classifyNodes(ctx.ClusterSnapshot, downsizeConfigs, nodes, resizableSnapshot)
-	p.adjustBalloonPods(ctx, newDesiredSizes)
+	sourceCandidates, targetCandidates, newDesiredSizes = p.classifyNodes(autoscalingCtx.ClusterSnapshot, downsizeConfigs, nodes, resizableSnapshot)
+	p.adjustBalloonPods(autoscalingCtx, newDesiredSizes)
 
 	if emitLookaheadMetrics {
-		p.emitLookaheadMetrics(ctx)
+		p.emitLookaheadMetrics(autoscalingCtx)
 	}
 
 	return
 }
 
-func (p *ScaleDownNodeProcessor) emitLookaheadMetrics(ctx *context.AutoscalingContext) {
+func (p *ScaleDownNodeProcessor) emitLookaheadMetrics(ctx *ca_context.AutoscalingContext) {
 	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		klog.Infof("Getting node infos from cluster snapshot failed (some metrics won't be emitted): %v", err)
@@ -171,7 +172,7 @@ func (p *ScaleDownNodeProcessor) emitLookaheadMetrics(ctx *context.AutoscalingCo
 // updateRequestedResources updates requestedResourcesMaxWindows with current values for resizable nodes.
 // Creates new max windows for new resizable nodes, and deletes max windows for nodes that are not tracked
 // by resizable VM manager.
-func (p *ScaleDownNodeProcessor) updateRequestedResources(ctx *context.AutoscalingContext, downsizeConfigs map[string]*processor_proto.DownsizeConfig, nodes []*apiv1.Node, resizableSnapshot operationtracker.ResizableNodesSnapshot) {
+func (p *ScaleDownNodeProcessor) updateRequestedResources(ctx *ca_context.AutoscalingContext, downsizeConfigs map[string]*processor_proto.DownsizeConfig, nodes []*apiv1.Node, resizableSnapshot operationtracker.ResizableNodesSnapshot) {
 	for name := range p.requestedResourcesMaxWindows {
 		if _, exists := resizableSnapshot[name]; !exists {
 			// Node becoming unresizable resets its downsizing state.
@@ -252,7 +253,7 @@ func (p *ScaleDownNodeProcessor) classifyNodes(nodeInfos nodeInfoLister, downsiz
 	return
 }
 
-func (p *ScaleDownNodeProcessor) adjustBalloonPods(ctx *context.AutoscalingContext, newDesiredSizes map[string]size.Allocatable) {
+func (p *ScaleDownNodeProcessor) adjustBalloonPods(ctx *ca_context.AutoscalingContext, newDesiredSizes map[string]size.Allocatable) {
 	ctx.ClusterSnapshot.Fork()
 	err := AdjustBalloonPodsSize(ctx.ClusterSnapshot, newDesiredSizes, nil)
 	if err != nil {

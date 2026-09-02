@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -23,6 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
@@ -32,7 +34,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
@@ -166,7 +167,7 @@ func TestMultitenantScaleToZeroProcessor(t *testing.T) {
 				err := snapshot.AddNodeInfo(ni)
 				assert.NoError(t, err)
 			}
-			context := &context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 
@@ -190,7 +191,7 @@ func TestMultitenantScaleToZeroProcessor(t *testing.T) {
 				assert.Equal(t, drainability.UndefinedOutcome, drainStatus.Outcome)
 			}
 
-			newUnschedulable, err := proc.Process(context, tc.unschedulablePods)
+			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
 			assert.NoError(t, err)
 			if tc.wantUnschedulablePods != nil {
 				assert.Equal(t, newUnschedulable, tc.wantUnschedulablePods)

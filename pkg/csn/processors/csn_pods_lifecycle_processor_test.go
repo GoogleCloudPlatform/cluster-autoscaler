@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -42,7 +43,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
@@ -56,7 +57,7 @@ type mockCapacityBufferPodListProcessor struct {
 	err          error
 }
 
-func (p *mockCapacityBufferPodListProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *mockCapacityBufferPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	return p.podsToCreate, p.err
 }
 
@@ -644,11 +645,11 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				err := clusterSnapshot.AddNodeInfo(nodeInfo)
 				assert.NoError(t, err)
 			}
-			autoscalingContext := &context.AutoscalingContext{
+			autoscalingContext := &ca_context.AutoscalingContext{
 				ClusterSnapshot:      clusterSnapshot,
 				ClusterStateRegistry: clusterstate.NewClusterStateRegistry(nil, nil, nil, nil, nil),
 			}
-			remainingPods, err := processor.Process(autoscalingContext, tc.unschedulablePods)
+			remainingPods, err := processor.Process(context.TODO(), autoscalingContext, tc.unschedulablePods)
 
 			if tc.expectErr {
 				assert.Error(t, err)
@@ -894,11 +895,11 @@ func TestCSNPodsLifecycleProcess_PackingOnUnassignedNodes(t *testing.T) {
 		err := clusterSnapshot.AddNodeInfo(nodeInfo)
 		assert.NoError(t, err)
 	}
-	autoscalingContext := &context.AutoscalingContext{
+	autoscalingContext := &ca_context.AutoscalingContext{
 		ClusterSnapshot:      clusterSnapshot,
 		ClusterStateRegistry: clusterstate.NewClusterStateRegistry(nil, nil, nil, nil, nil),
 	}
-	remainingPods, err := processor.Process(autoscalingContext, nil)
+	remainingPods, err := processor.Process(context.TODO(), autoscalingContext, nil)
 	assert.NoError(t, err)
 	assert.Empty(t, remainingPods)
 
@@ -956,7 +957,7 @@ func TestCSNPodsLifecycleProcessor_Observer(t *testing.T) {
 	err := clusterSnapshot.AddNodeInfo(framework.NewNodeInfo(node1, nil))
 	assert.NoError(t, err)
 
-	autoscalingContext := &context.AutoscalingContext{
+	autoscalingContext := &ca_context.AutoscalingContext{
 		ClusterSnapshot:      clusterSnapshot,
 		ClusterStateRegistry: clusterstate.NewClusterStateRegistry(nil, nil, nil, nil, nil),
 	}
@@ -965,7 +966,7 @@ func TestCSNPodsLifecycleProcessor_Observer(t *testing.T) {
 	// Since it is immediately schedulable in our setup, it should be called during Process.
 	mockObserver.On("ObserveCapacityBufferFakePodReactionTime", mock.Anything, false, false, false, metrics.NoActionNeeded, capacitybuffers.ColdProvisioningStrategy, mock.Anything).Return()
 
-	_, err = processor.Process(autoscalingContext, nil)
+	_, err = processor.Process(context.TODO(), autoscalingContext, nil)
 	assert.NoError(t, err)
 
 	mockObserver.AssertExpectations(t)

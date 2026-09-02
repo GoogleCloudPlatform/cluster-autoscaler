@@ -15,13 +15,14 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -69,8 +70,8 @@ func newScaleToZeroPodListProcessorWithNodeFilter(metricsFilter filter.MetricsFi
 // daemonset or system pods. If this is true and has been true for the duration
 // of grace period it filters out non-ds pods both from list of unschedulable
 // pods and ClusterSnapshot.
-func (p *ScaleToZeroPodListProcessor) Process(context *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	nodeInfos, err := context.ClusterSnapshot.ListNodeInfos()
+func (p *ScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		// This is the safe direction to fail (if in doubt don't take
 		// any action).
@@ -95,7 +96,7 @@ func (p *ScaleToZeroPodListProcessor) Process(context *context.AutoscalingContex
 	if p.alreadyAtZero(nodeInfos) || p.allNodesQuickRemoveCandidates(nodeInfos) || p.emptySince.Add(p.gracePeriod).Before(time.Now()) {
 		p.metricsFilter.ObserveScaleToZero(unschedulablePods, nodeInfos, p.ignoreNodeFn, true)
 		klog.Info("Filtering out system pods to allow cluster scale-to-0")
-		err := p.filterOutSystemPods(context.ClusterSnapshot)
+		err := p.filterOutSystemPods(autoscalingCtx.ClusterSnapshot)
 		if err != nil {
 			return []*apiv1.Pod{}, errors.ToAutoscalerError(errors.InternalError, err).AddPrefix("Failed when filtering system pods for clusters scale-to-0")
 		}

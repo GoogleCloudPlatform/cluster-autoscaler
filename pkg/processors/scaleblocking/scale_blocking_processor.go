@@ -15,6 +15,7 @@
 package scaleblocking
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -22,7 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
@@ -99,25 +100,25 @@ func NewProcessor(cloudProvider CloudProvider, sources []BlockedMigsSource) *Pro
 }
 
 // FilterNoScaleUpNodeGroups removes blocked MIGs from being considered as candidates in scale-up.
-func (p *Processor) FilterNoScaleUpNodeGroups(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) []cloudprovider.NodeGroup {
+func (p *Processor) FilterNoScaleUpNodeGroups(ctx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) []cloudprovider.NodeGroup {
 	blockedMigs := p.getBlockedMigs(ctx.ProcessorCallbacks)
 	return p.filterNodeGroups(nodeGroups, blockedMigs.NoScaleUpMigs)
 }
 
 // FilterNoScaleDownNodeGroups removes blocked MIGs from being considered as candidates for node-pool deletion.
-func (p *Processor) FilterNoScaleDownNodeGroups(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) []cloudprovider.NodeGroup {
+func (p *Processor) FilterNoScaleDownNodeGroups(ctx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup) []cloudprovider.NodeGroup {
 	blockedMigs := p.getBlockedMigs(ctx.ProcessorCallbacks)
 	return p.filterNodeGroups(nodeGroups, blockedMigs.NoScaleDownMigs)
 }
 
 // GetPodDestinationCandidates is a no-op, this processor needs to define it to implement ScaleDownNodeProcessor.
-func (p *Processor) GetPodDestinationCandidates(_ *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *Processor) GetPodDestinationCandidates(_ *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return nodes, nil
 }
 
 // GetScaleDownCandidates removes nodes belonging to blocked MIGs from being considered as candidates for scale-down.
-func (p *Processor) GetScaleDownCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
-	blockedMigs := p.getBlockedMigs(ctx.ProcessorCallbacks)
+func (p *Processor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+	blockedMigs := p.getBlockedMigs(autoscalingCtx.ProcessorCallbacks)
 	var filteredNodes []*apiv1.Node
 	for _, node := range nodes {
 		mig, err := p.cloudProvider.GkeMigForNode(node)

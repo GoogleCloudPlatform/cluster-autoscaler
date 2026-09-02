@@ -15,32 +15,39 @@
 package highprioritymigration
 
 import (
+	"context"
 	"math/rand"
 	"testing"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
+
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/testutil"
 	"k8s.io/utils/ptr"
+
 	testCloudProvider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -51,7 +58,7 @@ const (
 	testCrdLabel          = "test-crd"
 )
 
-func initTestCase(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []crd.CRD, defaultCrd bool, defaultCrdName string, crdLabel string) (*context.AutoscalingContext, defrag.Plugin) {
+func initTestCase(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []crd.CRD, defaultCrd bool, defaultCrdName string, crdLabel string) (*ca_context.AutoscalingContext, defrag.Plugin) {
 
 	crdLister := npc_lister.NewMockCrdLister(crds)
 	crdLister.SetCrdLabel(crdLabel)
@@ -71,8 +78,8 @@ func initTestCase(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []
 	}
 
 	cs := testsnapshot.NewTestSnapshotOrDie(t)
-	assert.NoError(t, cs.SetClusterState(allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
-	ctx := &context.AutoscalingContext{
+	assert.NoError(t, cs.SetClusterState(context.TODO(), allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+	ctx := &ca_context.AutoscalingContext{
 		ClusterSnapshot: cs,
 		CloudProvider:   cp,
 	}

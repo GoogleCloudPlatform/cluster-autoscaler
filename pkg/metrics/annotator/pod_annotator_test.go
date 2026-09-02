@@ -29,6 +29,7 @@ import (
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 )
 
 func TestPodAnnotations(t *testing.T) {
@@ -188,7 +189,7 @@ func TestPodAnnotations(t *testing.T) {
 
 			for _, suStatus := range tc.scaleUpStatuses {
 				clock.now = suStatus.time
-				annotator.Process(&ca_context.AutoscalingContext{}, suStatus.status)
+				annotator.Process(context.TODO(), &ca_context.AutoscalingContext{}, suStatus.status)
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 				defer cancel()
 				annotator.annotatorLoop(ctx)
@@ -219,12 +220,12 @@ func TestPodsCleared(t *testing.T) {
 	tst2 := tst1.Add(31 * time.Minute)
 	clock := fakeClock{now: tst1}
 	annotator, _ := setUpAnnotator(pods, pods, ttl, &clock)
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}, {Pod: pods[1]}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}, {Pod: pods[1]}}})
 	if l := len(annotator.unhelpablePods); l != 2 {
 		t.Errorf("Incorrect number of elements in unhelpablepods map; got: %d, want: %d.", l, 2)
 	}
 	clock.now = tst2
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pods[0]}}})
 	if l := len(annotator.unhelpablePods); l != 1 {
 		t.Errorf("Incorrect number of elements in unhelpablepods map; got: %d, want: %d.", l, 1)
 	}
@@ -237,17 +238,17 @@ func TestDuplicatesAreNotEmitted(t *testing.T) {
 	tst2 := tst1.Add(40 * time.Minute)
 	clock := fakeClock{now: tst1}
 	annotator, _ := setUpAnnotator(pods, pods, defaultPodTTL, &clock)
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
 	if l := len(annotator.podsToAnnotate); l != 1 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 1)
 	}
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}}})
 	// no element was removed, so we don't expect any new elements in the queue
 	if l := len(annotator.podsToAnnotate); l != 1 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 1)
 	}
 	clock.now = tst2
-	annotator.Process(nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{}})
+	annotator.Process(context.TODO(), nil, &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{}})
 	// pod has new unhelpable until - should be added to queue
 	if l := len(annotator.podsToAnnotate); l != 2 {
 		t.Errorf("Incorrect number of elements in pods to annotate queue; got: %d, want: %d.", l, 2)
@@ -337,6 +338,114 @@ func TestIsUnhelpablePod(t *testing.T) {
 			actual := IsUnhelpablePod(tc.pod)
 			if actual != tc.expected {
 				t.Errorf("IsUnhelpablePod() = %v, expected %v", actual, tc.expected)
+			}
+		})
+	}
+}
+
+// fakePodLister implements PodLister interface for testing.
+type fakePodLister struct {
+	kube_util.PodLister
+	pods []*corev1.Pod
+}
+
+func (f *fakePodLister) List() ([]*corev1.Pod, error) {
+	return f.pods, nil
+}
+
+// fakeListerRegistry implements ListerRegistry for testing.
+type fakeListerRegistry struct {
+	kube_util.ListerRegistry
+	podLister *fakePodLister
+}
+
+func (f *fakeListerRegistry) AllPodLister() kube_util.PodLister {
+	return f.podLister
+}
+
+func TestPodAnnotator_RealStateVerification(t *testing.T) {
+	podName := "pod1"
+	podNamespace := "ns1"
+
+	// Simulated unschedulable pod (what defrag would inject)
+	simulatedPod := createPod(podName, podNamespace)
+	simulatedPod.UID = "uid-1"
+
+	tcs := map[string]struct {
+		realPodInCache *corev1.Pod
+		shouldAnnotate bool
+	}{
+		"pod not in cache (fallback to annotate)": {
+			realPodInCache: nil,
+			shouldAnnotate: true,
+		},
+		"pod in cache but recreated (different UID)": {
+			realPodInCache: func() *corev1.Pod {
+				p := createPod(podName, podNamespace)
+				p.UID = "uid-2" // Different UID
+				return p
+			}(),
+			shouldAnnotate: false,
+		},
+		"pod in cache and already scheduled": {
+			realPodInCache: func() *corev1.Pod {
+				p := createPod(podName, podNamespace)
+				p.UID = "uid-1"               // Same UID
+				p.Spec.NodeName = "some-node" // Scheduled
+				return p
+			}(),
+			shouldAnnotate: false,
+		},
+		"pod in cache, same UID, not scheduled": {
+			realPodInCache: func() *corev1.Pod {
+				p := createPod(podName, podNamespace)
+				p.UID = "uid-1"      // Same UID
+				p.Spec.NodeName = "" // Not scheduled
+				return p
+			}(),
+			shouldAnnotate: true,
+		},
+	}
+
+	for desc, tc := range tcs {
+		t.Run(desc, func(t *testing.T) {
+			clock := &fakeClock{now: time.Now()}
+			annotator, kubeClient := setUpAnnotator([]*corev1.Pod{simulatedPod}, []*corev1.Pod{}, defaultPodTTL, clock)
+
+			// Setup fake lister registry
+			var cachedPods []*corev1.Pod
+			if tc.realPodInCache != nil {
+				cachedPods = append(cachedPods, tc.realPodInCache)
+			}
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
+					ListerRegistry: &fakeListerRegistry{
+						podLister: &fakePodLister{pods: cachedPods},
+					},
+				},
+			}
+
+			suStatus := &status.ScaleUpStatus{
+				PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: simulatedPod}},
+			}
+
+			annotator.Process(t.Context(), ctx, suStatus)
+
+			// Wait a bit for the async annotator loop to process
+			testCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			annotator.annotatorLoop(testCtx)
+
+			// Check if pod was annotated
+			updatedPod, _ := kubeClient.CoreV1().Pods(podNamespace).Get(context.Background(), podName, metav1.GetOptions{})
+
+			hasAnnotation := false
+			if updatedPod != nil && updatedPod.Annotations != nil {
+				_, hasAnnotation = updatedPod.Annotations[unhelpableSinceAnnotation]
+			}
+
+			if hasAnnotation != tc.shouldAnnotate {
+				t.Errorf("Expected annotation: %v, got: %v", tc.shouldAnnotate, hasAnnotation)
 			}
 		})
 	}

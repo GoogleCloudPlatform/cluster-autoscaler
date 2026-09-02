@@ -15,6 +15,7 @@
 package metrics_processors
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"testing"
@@ -32,7 +33,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	provreq_pods "sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
@@ -97,16 +98,16 @@ func setUpProcessor(autoscalerStart time.Time) (*PodStatusAggregator, *testObser
 	return aggregator, observer, processor, f
 }
 
-func setUpContext(scheduledPods []*apiv1.Pod) *context.AutoscalingContext {
+func setUpContext(scheduledPods []*apiv1.Pod) *ca_context.AutoscalingContext {
 	// This is a quickfix, ideally given pods should be already recognized as 'scheduled'.
 	for _, pod := range scheduledPods {
 		pod.Spec.NodeName = "test-node"
 	}
 	lister := kubeutil.NewTestPodLister(scheduledPods)
-	context := &context.AutoscalingContext{}
+	autoscalingCtx := &ca_context.AutoscalingContext{}
 	listerRegistry := kubeutil.NewListerRegistry(nil, nil, lister, nil, nil, nil, nil, nil, nil)
-	context.ListerRegistry = listerRegistry
-	return context
+	autoscalingCtx.ListerRegistry = listerRegistry
+	return autoscalingCtx
 }
 
 func makePendingPod(uid string, pendingSince time.Time) *apiv1.Pod {
@@ -150,18 +151,18 @@ func TestLongUnschedulable(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{longUnschedulable}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.Process(context, scaleUpStatus)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatus)
 	assert.Equal(t, 1, observer.longUnschedulable)
 
 	// Make sure running again doesn't increase the metric
-	processor.Process(context, scaleUpStatus)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatus)
 	assert.Equal(t, 1, observer.longUnschedulable)
 
 	// Make sure removing a pod decreases the metric
 	aggregator.Unschedulable = []*apiv1.Pod{}
-	processor.Process(context, scaleUpStatus)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatus)
 	assert.Equal(t, 0, observer.longUnschedulable)
 }
 
@@ -174,9 +175,9 @@ func TestNoLongUnschedulableAfterRestart(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{longUnschedulable}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.Process(context, scaleUpStatus)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatus)
 	// We only count pod as unschedulable since CA restart, which was too recent
 	// to have longUnschedulable pods
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -199,14 +200,14 @@ func TestNoLongUnschedulableIfCantBeHelped(t *testing.T) {
 	scaleUpStatusAfterUnrelatedScaleUp := &status.ScaleUpStatus{
 		Result: status.ScaleUpSuccessful,
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.Process(context, scaleUpStatusUnhelpable)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatusUnhelpable)
 	// Pod is pending, but CA can't help it
 	// Not our fault, no faul
 	assert.Equal(t, 0, observer.longUnschedulable)
 
-	processor.Process(context, scaleUpStatusAfterUnrelatedScaleUp)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatusAfterUnrelatedScaleUp)
 	// Pod is still pending and it's not explicitly reported as unhelpable.
 	// The pod may still be unhelpable if we're in an ongoing backoff-retry
 	// loop due to stockout or hitting GCE quota.
@@ -214,10 +215,10 @@ func TestNoLongUnschedulableIfCantBeHelped(t *testing.T) {
 	assert.Equal(t, 0, observer.longUnschedulable)
 
 	later := now.Add(unhelpableGracePeriod + time.Minute)
-	processor.Process(context, scaleUpStatusAfterUnrelatedScaleUp)
+	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatusAfterUnrelatedScaleUp)
 	// Ok, the pod hasn't been reported as unhelpable for a while.
 	// We should report it as longUnschedulable again.
-	processor.processImpl(context, scaleUpStatusAfterUnrelatedScaleUp, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatusAfterUnrelatedScaleUp, later)
 	assert.Equal(t, 1, observer.longUnschedulable)
 }
 
@@ -232,10 +233,10 @@ func TestPodScheduled(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{pod}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 	// Poddy is spotted!
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -245,8 +246,8 @@ func TestPodScheduled(t *testing.T) {
 	later := now.Add(2 * time.Minute)
 	schedulePod(pod, later)
 	aggregator.Unschedulable = []*apiv1.Pod{}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, scaleUpStatus, later.Add(1*time.Minute))
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, scaleUpStatus, later.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -265,10 +266,10 @@ func TestPodScheduledAfterBeingSchedulable(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{pod}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 	// Poddy is spotted!
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -276,7 +277,7 @@ func TestPodScheduledAfterBeingSchedulable(t *testing.T) {
 
 	// Poddy is now schedulable
 	later := now.Add(2 * time.Minute)
-	processor.processImpl(context, scaleUpStatus, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -289,8 +290,8 @@ func TestPodScheduledAfterBeingSchedulable(t *testing.T) {
 	// What a slacker. Good that our processor should handle that just fine.
 	// So we won't do this:
 	// aggregator.Unschedulable = []*apiv1.Pod{}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, scaleUpStatus, evenLater.Add(1*time.Minute))
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, scaleUpStatus, evenLater.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -310,10 +311,10 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{pod}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 	// Poddy is spotted!
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -321,7 +322,7 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 
 	// Poddy is now schedulable
 	later := now.Add(2 * time.Minute)
-	processor.processImpl(context, scaleUpStatus, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -329,7 +330,7 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 
 	// And unschedulable again
 	later = later.Add(2 * time.Minute)
-	processor.processImpl(context, scaleUpStatus, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -339,8 +340,8 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 	evenLater := later.Add(2 * time.Minute)
 	schedulePod(pod, evenLater)
 	aggregator.Unschedulable = []*apiv1.Pod{}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, scaleUpStatus, evenLater.Add(1*time.Minute))
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, scaleUpStatus, evenLater.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -367,10 +368,10 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 			{Pod: pod},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 	// Poddy is spotted! The wolf must be nearby, autoscaler really can't help.
-	processor.processImpl(context, scaryScaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaryScaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -378,7 +379,7 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 
 	// The wolf is still there.
 	later := now.Add(2 * time.Minute)
-	processor.processImpl(context, scaryScaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaryScaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -387,7 +388,7 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 	// Finally! The wolf is gone.
 	happyScaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	later = later.Add(2 * time.Minute)
-	processor.processImpl(context, happyScaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, happyScaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -397,8 +398,8 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 	evenLater := later.Add(time.Minute)
 	schedulePod(pod, evenLater)
 	aggregator.Unschedulable = []*apiv1.Pod{}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, happyScaleUpStatus, evenLater.Add(time.Minute))
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, happyScaleUpStatus, evenLater.Add(time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -430,9 +431,9 @@ func TestUnschedulableDurationWithPodFilterableIssues(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -444,8 +445,8 @@ func TestUnschedulableDurationWithPodFilterableIssues(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, later)
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -475,9 +476,9 @@ func TestForgetOldPods(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -489,8 +490,8 @@ func TestForgetOldPods(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, later)
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -529,9 +530,9 @@ func TestUnschedulableDurationWithPreemptionVmRequired(t *testing.T) {
 					},
 				},
 			}
-			context := setUpContext([]*apiv1.Pod{})
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-			processor.processImpl(context, scaleUpStatus, now)
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 			assert.Equal(t, 0, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -541,8 +542,8 @@ func TestUnschedulableDurationWithPreemptionVmRequired(t *testing.T) {
 			newStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
-			context = setUpContext([]*apiv1.Pod{pod})
-			processor.processImpl(context, newStatus, later)
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+			processor.processImpl(autoscalingCtx, newStatus, later)
 			assert.Equal(t, 0, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -574,9 +575,9 @@ func TestPodStockoutIssuesOnlyOneNodeGroupStockout(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -588,8 +589,8 @@ func TestPodStockoutIssuesOnlyOneNodeGroupStockout(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, later)
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -618,8 +619,8 @@ func TestPodIsConsumingProvisioningRequest(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context := setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, now)
+	autoscalingCtx := setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -650,8 +651,8 @@ func TestPodIsUsingDeviceAllocationMode(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context := setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, now)
+	autoscalingCtx := setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 1, len(observer.schedulingDurations))
 	assert.Equal(t, 1, len(observer.unschedulableDurations))
@@ -730,8 +731,8 @@ func TestPodIsNotProcessedByScheduler(t *testing.T) {
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
-			context := setUpContext([]*apiv1.Pod{})
-			processor.processImpl(context, scaleUpStatus, now)
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 			assert.Equal(t, tc.initialLongUnschedulable, observer.longUnschedulable)
 			assert.Equal(t, tc.initialSchedulingDurationsLength, len(observer.schedulingDurations))
 			assert.Equal(t, tc.initialUnschedulingDurations, observer.unschedulableDurations)
@@ -744,7 +745,7 @@ func TestPodIsNotProcessedByScheduler(t *testing.T) {
 					Reason:             apiv1.PodReasonUnschedulable,
 					LastTransitionTime: metav1.NewTime(tc.processedAt),
 				})
-				processor.processImpl(context, scaleUpStatus, tc.processedAt)
+				processor.processImpl(autoscalingCtx, scaleUpStatus, tc.processedAt)
 				assert.Equal(t, tc.processedLongUnschedulable, observer.longUnschedulable)
 				assert.Equal(t, tc.processedSchedulingDurationsLength, len(observer.schedulingDurations))
 				assert.Equal(t, tc.processedUnschedulingDurations, observer.unschedulableDurations)
@@ -753,8 +754,8 @@ func TestPodIsNotProcessedByScheduler(t *testing.T) {
 			// Pod got scheduled later
 			aggregator.Unschedulable = []*apiv1.Pod{}
 			schedulePod(pod, tc.scheduledAt)
-			context = setUpContext([]*apiv1.Pod{pod})
-			processor.processImpl(context, scaleUpStatus, tc.scheduledAt)
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+			processor.processImpl(autoscalingCtx, scaleUpStatus, tc.scheduledAt)
 			assert.Equal(t, tc.laterLongUnschedulable, observer.longUnschedulable)
 			assert.Equal(t, tc.laterSchedulingDurationsLength, len(observer.schedulingDurations))
 			assert.Equal(t, tc.laterUnschedulingDurations, observer.unschedulableDurations)
@@ -787,9 +788,9 @@ func TestGPUPodMetric(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -799,8 +800,8 @@ func TestGPUPodMetric(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context = setUpContext([]*apiv1.Pod{gpuPod})
-	processor.processImpl(context, newStatus, later)
+	autoscalingCtx = setUpContext([]*apiv1.Pod{gpuPod})
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 1, len(observer.schedulingDurations["false"]))
@@ -835,9 +836,9 @@ func TestLongUnschedulableWithFilterableIssues(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -849,7 +850,7 @@ func TestLongUnschedulableWithFilterableIssues(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	processor.processImpl(context, newStatus, later)
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -937,9 +938,9 @@ func TestPodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -953,8 +954,8 @@ func TestPodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
 	}
-	context = setUpContext([]*apiv1.Pod{pod})
-	processor.processImpl(context, newStatus, later)
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 1, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1010,9 +1011,9 @@ func TestLongUnschedulableWithDSPods(t *testing.T) {
 					},
 				},
 			}
-			context := setUpContext([]*apiv1.Pod{})
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-			processor.processImpl(context, scaleUpStatus, now)
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 			assert.Equal(t, tc.expectedPodViolations, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1022,8 +1023,8 @@ func TestLongUnschedulableWithDSPods(t *testing.T) {
 			newStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
-			context = setUpContext([]*apiv1.Pod{pod})
-			processor.processImpl(context, newStatus, later)
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+			processor.processImpl(autoscalingCtx, newStatus, later)
 			assert.Equal(t, 0, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, tc.expectedPodViolations, len(observer.schedulingDurations["false"]))
@@ -1089,9 +1090,9 @@ func TestLongUnschedulableWithDifferentSchedulers(t *testing.T) {
 					},
 				},
 			}
-			context := setUpContext([]*apiv1.Pod{})
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-			processor.processImpl(context, scaleUpStatus, now)
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 			assert.Equal(t, tc.expectedPodViolations, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1101,8 +1102,8 @@ func TestLongUnschedulableWithDifferentSchedulers(t *testing.T) {
 			newStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
-			context = setUpContext([]*apiv1.Pod{pod})
-			processor.processImpl(context, newStatus, later)
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
+			processor.processImpl(autoscalingCtx, newStatus, later)
 			assert.Equal(t, 0, observer.longUnschedulable)
 			assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 			assert.Equal(t, tc.expectedPodViolations, len(observer.schedulingDurations["false"]))
@@ -1134,9 +1135,9 @@ func TestLongUnschedulablePodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1151,7 +1152,7 @@ func TestLongUnschedulablePodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 		Result: status.ScaleUpNotTried,
 	}
 
-	processor.processImpl(context, newStatus, later)
+	processor.processImpl(autoscalingCtx, newStatus, later)
 	assert.Equal(t, 1, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1196,9 +1197,9 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 			},
 		},
 	}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-	processor.processImpl(context, scaleUpStatus1, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus1, now)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1206,7 +1207,7 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 
 	later := now.Add(10 * time.Minute)
 
-	processor.processImpl(context, scaleUpStatus2, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatus2, later)
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 0, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1220,9 +1221,9 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 	}
 
 	aggregator.Unschedulable = []*apiv1.Pod{pod2}
-	context = setUpContext([]*apiv1.Pod{pod1})
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod1})
 
-	processor.processImpl(context, newStatus, later.Add(time.Minute))
+	processor.processImpl(autoscalingCtx, newStatus, later.Add(time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 1, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1237,10 +1238,10 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 	}}, observer.unSchedDurationLabels)
 
 	// Ng3 now has a stockout and then gets scheduled, causing new metrics for p2
-	context = setUpContext([]*apiv1.Pod{pod1, pod2})
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod1, pod2})
 	aggregator.Unschedulable = []*apiv1.Pod{}
 	filter.ObserveNodeGroupStockOut("ng3")
-	processor.processImpl(context, newStatus, later.Add(2*time.Minute))
+	processor.processImpl(autoscalingCtx, newStatus, later.Add(2*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
 	assert.Equal(t, 2, len(observer.schedulingDurations["true"]))
 	assert.Equal(t, 0, len(observer.schedulingDurations["false"]))
@@ -1383,10 +1384,10 @@ func TestPodSchedulingDurationPerAllocationMode(t *testing.T) {
 					},
 				},
 			}
-			context := setUpContext([]*apiv1.Pod{})
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 			// First process call handles unschedulable pod
-			processor.processImpl(context, scaleUpStatus, now)
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 			assert.Equal(t, 0, len(observer.schedulingDurationsPerAllocationMode))
 
 			// Schedule the pod and process again
@@ -1395,9 +1396,9 @@ func TestPodSchedulingDurationPerAllocationMode(t *testing.T) {
 				Result: status.ScaleUpNotTried,
 			}
 			schedulePod(pod, later)
-			context = setUpContext([]*apiv1.Pod{pod})
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 
-			processor.processImpl(context, newStatus, later)
+			processor.processImpl(autoscalingCtx, newStatus, later)
 
 			assert.Equal(t, 1, len(observer.schedulingDurationsPerAllocationMode))
 			assert.Equal(t, 1, len(observer.schedulingDurationsPerAllocationMode[tc.allocationMode.String()]))
@@ -1436,18 +1437,18 @@ func TestPodScheduled_CCC(t *testing.T) {
 					},
 				},
 			}
-			context := setUpContext([]*apiv1.Pod{})
+			autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
-			processor.processImpl(context, scaleUpStatus, now)
+			processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 
 			later := now.Add(2 * time.Minute)
 			newStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
 			schedulePod(pod, later)
-			context = setUpContext([]*apiv1.Pod{pod})
+			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 
-			processor.processImpl(context, newStatus, later)
+			processor.processImpl(autoscalingCtx, newStatus, later)
 
 			assert.Equal(t, 1, len(observer.schedulingDurationsPerCcc))
 			assert.Equal(t, 1, len(observer.schedulingDurationsPerCcc[tc.returnedCCC]))
@@ -1464,10 +1465,10 @@ func TestPodScheduled_NegativeDurationCappedAtZero(t *testing.T) {
 	aggregator.Unschedulable = []*apiv1.Pod{pod}
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
-	context := setUpContext([]*apiv1.Pod{})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{})
 
 	// 1. Pod is spotted as pending
-	processor.processImpl(context, scaleUpStatus, now)
+	processor.processImpl(autoscalingCtx, scaleUpStatus, now)
 	assert.Equal(t, 0, len(observer.unschedulableDurations))
 
 	// 2. Pod is scheduled in reality in the past (e.g., before unschedulableSince)
@@ -1486,11 +1487,11 @@ func TestPodScheduled_NegativeDurationCappedAtZero(t *testing.T) {
 	}
 
 	// But context lister returns it as scheduled!
-	context = setUpContext([]*apiv1.Pod{pod})
+	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 
 	aggregator.Unschedulable = []*apiv1.Pod{} // It's scheduled, so not in unschedulable aggregator anymore.
 
-	processor.processImpl(context, scaleUpStatusUnhelpable, later)
+	processor.processImpl(autoscalingCtx, scaleUpStatusUnhelpable, later)
 
 	// Verify that both durations are capped at 0 instead of being negative.
 	assert.Len(t, observer.unschedulableDurations, 1)

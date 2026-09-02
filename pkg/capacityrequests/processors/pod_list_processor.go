@@ -15,11 +15,13 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	cr_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/listers/internal.autoscaling.gke.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
@@ -50,14 +52,14 @@ type simplePodRef struct {
 // Checks the list of Capacity Requests that are currently active and modifies the
 // pod lists accordingly; adds pods representing capacity requests and removes
 // pods that are to be replaced.
-func (p *CapacityRequestPodListProcessor) Process(context *context.AutoscalingContext,
+func (p *CapacityRequestPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
 	crs, err := p.crLister.List(labels.Everything())
 	if err != nil {
 		return unschedulablePods, err
 	}
-	gkeDebuggingSnapshot, ok := context.DebuggingSnapshotter.(*gkedebuggingsnapshot.GkeDebuggingSnapshotter)
+	gkeDebuggingSnapshot, ok := autoscalingCtx.DebuggingSnapshotter.(*gkedebuggingsnapshot.GkeDebuggingSnapshotter)
 	if ok {
 		gkeDebuggingSnapshot.SetCapacityRequest(crs)
 	}
@@ -80,7 +82,7 @@ func (p *CapacityRequestPodListProcessor) Process(context *context.AutoscalingCo
 		}
 	}
 
-	nodeInfos, err := context.ClusterSnapshot.ListNodeInfos()
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +99,7 @@ func (p *CapacityRequestPodListProcessor) Process(context *context.AutoscalingCo
 			if podsToFilter[simplePodRef{name: pod.Name, namespace: pod.Namespace}] {
 				nodeName := pod.Spec.NodeName
 				if nodeName != "" {
-					if err := context.ClusterSnapshot.ForceRemovePod(pod.Namespace, pod.Name, nodeName); err != nil {
+					if err := autoscalingCtx.ClusterSnapshot.ForceRemovePod(pod.Namespace, pod.Name, nodeName); err != nil {
 						return nil, err
 					}
 				} else {
@@ -110,7 +112,7 @@ func (p *CapacityRequestPodListProcessor) Process(context *context.AutoscalingCo
 			}
 		}
 	}
-	unschedulablePods = p.handleSchedulableCapacityRequests(context, unschedulablePods)
+	unschedulablePods = p.handleSchedulableCapacityRequests(autoscalingCtx, unschedulablePods)
 	return unschedulablePods, nil
 }
 
@@ -129,7 +131,7 @@ func filterPods(podList []*apiv1.Pod, podsToFilter map[simplePodRef]bool) []*api
 // scheduled in the cluster and marks them as scheduled in the cluster if
 // possible.
 func (p *CapacityRequestPodListProcessor) handleSchedulableCapacityRequests(
-	context *context.AutoscalingContext,
+	context *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) []*apiv1.Pod {
 	unschedulablePods = p.markScheduledStillSchedulableCRs(context, unschedulablePods)
 	return p.markScheduledSchedulableCRs(context, unschedulablePods)
@@ -139,7 +141,7 @@ func (p *CapacityRequestPodListProcessor) handleSchedulableCapacityRequests(
 // assigned to a node before can still be scheduled on same nodes and if so,
 // marks them as scheduled on the same node.
 func (p *CapacityRequestPodListProcessor) markScheduledStillSchedulableCRs(
-	context *context.AutoscalingContext,
+	context *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) []*apiv1.Pod {
 	newUnschedulable := []*apiv1.Pod{}
 	for _, pod := range unschedulablePods {
@@ -174,7 +176,7 @@ func (p *CapacityRequestPodListProcessor) markScheduledStillSchedulableCRs(
 // in the unschedulable pods list and if so marks them as scheduled on a node
 // that they fit on.
 func (p *CapacityRequestPodListProcessor) markScheduledSchedulableCRs(
-	context *context.AutoscalingContext,
+	context *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) []*apiv1.Pod {
 	newUnschedulable := []*apiv1.Pod{}
 	for _, pod := range unschedulablePods {

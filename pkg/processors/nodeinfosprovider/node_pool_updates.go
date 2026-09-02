@@ -15,6 +15,7 @@
 package nodeinfosprovider
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -22,7 +23,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
@@ -41,17 +42,17 @@ const (
 // nodes are processed sequentially, which means that they may not accurately represent MIG at
 // all times. To handle that we simulate a 3-way merge algorithm used for labels and taints updates,
 // with old settings maintained in the nodes annotations and templates being the new source of truth.
-func HandleNodePoolUpdates(ctx *context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo, taintConfig taints.TaintConfig) map[string]*framework.NodeInfo {
+func HandleNodePoolUpdates(ctx *ca_context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo, taintConfig taints.TaintConfig) map[string]*framework.NodeInfo {
 	gkeCloudProvider, ok := ctx.CloudProvider.(processors.ProcessorsCloudProvider)
 	if !ok {
 		klog.Errorf("Unexpected cloudprovider.CloudProvider type, got: %s, want: ProcessorsCloudProvider", reflect.TypeOf(ctx.CloudProvider))
 		return nodeInfos
 	}
 
-	nodeGroups := gkeCloudProvider.NodeGroups()
+	nodeGroups := gkeCloudProvider.NodeGroups(context.TODO())
 	for _, nodeGroup := range nodeGroups {
 		originalTemplate, found := nodeInfos[nodeGroup.Id()]
-		if !nodeGroup.Exist() || !found || !isNodeInfoReal(originalTemplate) {
+		if !nodeGroup.Exist(context.TODO()) || !found || !isNodeInfoReal(originalTemplate) {
 			continue
 		}
 
@@ -88,7 +89,7 @@ func HandleNodePoolUpdates(ctx *context.AutoscalingContext, nodeInfos map[string
 		// Sanitize the template node info again in case some taints need to be filtered out after updateTaints() above.
 		// forceDaemonSets is set to false because the forcing should've already been done on originalTemplate - no need
 		// to do it again.
-		sanitizedTemplate, err := simulator.SanitizedTemplateNodeInfoFromNodeInfo(originalTemplate, mig.Id(), nil, false, taintConfig)
+		sanitizedTemplate, err := simulator.SanitizedTemplateNodeInfoFromNodeInfo(context.TODO(), originalTemplate, mig.Id(), nil, false, taintConfig)
 		if err != nil {
 			klog.Errorf("Error occurred while sanitizing NodeInfo for node group %v: %v", nodeGroup.Id(), err)
 		}

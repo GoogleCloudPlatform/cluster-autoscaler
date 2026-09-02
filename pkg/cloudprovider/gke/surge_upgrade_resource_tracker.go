@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -30,7 +31,7 @@ import (
 )
 
 // NodeGroupFromNode gets the nodegroup that node belongs to.
-type NodeGroupFromNode func(node *apiv1.Node) (cloudprovider.NodeGroup, error)
+type NodeGroupFromNode func(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error)
 
 // SurgeUpgradeResourceTracker tracks the resources consumed by surge nodes during
 // an upgrade
@@ -158,14 +159,14 @@ func calculateCustomResourcesForNodes(processor customresources.CustomResourcesP
 	nodes []*apiv1.Node, ngFromNode NodeGroupFromNode) (map[string]int64, error) {
 	resources := map[string]int64{}
 	for _, node := range nodes {
-		ng, err := ngFromNode(node)
+		ng, err := ngFromNode(context.TODO(), node)
 		if err != nil {
 			klog.Warningf("couldn't get node group from node; skipping node %s"+
 				" for surge resource calculation; %v", node.Name, err)
 			continue
 		}
 
-		resourceTargets, err := processor.GetNodeResourceTargets(nil, node, ng)
+		resourceTargets, err := processor.GetNodeResourceTargets(context.TODO(), nil, node, ng)
 		if err != nil {
 			// Can happen in cases where gpu is committed to a node from a
 			// non autoscaled node group which is:

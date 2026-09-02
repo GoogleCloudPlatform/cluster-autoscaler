@@ -15,11 +15,12 @@
 package scaledown
 
 import (
+	"context"
 	"reflect"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
@@ -30,7 +31,7 @@ type GkeInternalAutoscalingScaleDownNodeProcessor struct {
 }
 
 // GetPodDestinationCandidates calls various GKE AutoscalingScaleDownNodeProcessors
-func (p *GkeInternalAutoscalingScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *GkeInternalAutoscalingScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	var err errors.AutoscalerError
 	for _, processor := range p.processors {
 		nodes, err = processor.GetPodDestinationCandidates(ctx, nodes)
@@ -43,10 +44,10 @@ func (p *GkeInternalAutoscalingScaleDownNodeProcessor) GetPodDestinationCandidat
 }
 
 // GetScaleDownCandidates calls various GKE AutoscalingScaleDownNodeProcessors
-func (p *GkeInternalAutoscalingScaleDownNodeProcessor) GetScaleDownCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (p *GkeInternalAutoscalingScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	var err errors.AutoscalerError
 	for _, processor := range p.processors {
-		nodes, err = processor.GetScaleDownCandidates(ctx, nodes)
+		nodes, err = processor.GetScaleDownCandidates(ctx, autoscalingCtx, nodes)
 		if err != nil {
 			klog.Errorf("Processor %v: GetScaleDownCandidates failed with error: %v", reflect.TypeOf(processor), err)
 			break

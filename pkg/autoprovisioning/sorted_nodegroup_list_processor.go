@@ -15,11 +15,12 @@
 package autoprovisioning
 
 import (
+	"context"
 	"sort"
 
 	apiv1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -35,11 +36,12 @@ type sortedNodeGroupListProcessor struct {
 }
 
 // Process returns a list of sorted node groups along with node infos.
-func (p *sortedNodeGroupListProcessor) Process(context *context.AutoscalingContext,
+func (p *sortedNodeGroupListProcessor) Process(ctx context.Context,
+	autoscalingCtx *ca_context.AutoscalingContext,
 	nodeGroups []cloudprovider.NodeGroup,
 	nodeInfos map[string]*framework.NodeInfo,
 	unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
-	nodeGroups, infos, err := p.listProcessor.Process(context, nodeGroups, nodeInfos, unschedulablePods)
+	nodeGroups, infos, err := p.listProcessor.Process(ctx, autoscalingCtx, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -57,7 +59,7 @@ func sortNodeGroupsByAllocCPU(ngs []cloudprovider.NodeGroup) []cloudprovider.Nod
 	nodeGroupIdToAllocCPUMap := map[string]int64{}
 	for _, ng := range ngs {
 		ngAllocCPU := int64(0)
-		template, err := ng.TemplateNodeInfo()
+		template, err := ng.TemplateNodeInfo(context.TODO())
 		if err == nil {
 			ngAllocCPU = template.GetAllocatable().GetMilliCPU()
 		}

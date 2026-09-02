@@ -228,6 +228,10 @@ func TestSelectMachineSpec(t *testing.T) {
 			machineFamily:    "z4d",
 			expectedFamilies: []machinetypes.MachineFamily{machinetypes.Z4D},
 		},
+		"machine family overrides default family for z4m": {
+			machineFamily:    "z4m",
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.Z4M},
+		},
 		"unknown machine family results in an explicit error": {
 			machineFamily: "not-supported",
 			expectedErr:   NewMachineFamilyUnknownError("not-supported"),
@@ -296,6 +300,13 @@ func TestSelectMachineSpec(t *testing.T) {
 			machineFamily:            "z4d",
 			autopilotEnabled:         true,
 			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.Z4D},
+			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
+		},
+		"slice of hardware compute class specifies valid z4m machine family": {
+			podClass:                 machinetypes.PerformanceClass.Name(),
+			machineFamily:            "z4m",
+			autopilotEnabled:         true,
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.Z4M},
 			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
 		},
 		"slice of hardware compute class with Arm specified": {

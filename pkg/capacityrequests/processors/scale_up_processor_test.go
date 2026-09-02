@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -22,7 +23,7 @@ import (
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_fake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/client/clientset/versioned/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -31,7 +32,7 @@ import (
 )
 
 func TestScaleUpProcessor(t *testing.T) {
-	autoscalingContext := &context.AutoscalingContext{ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t)}
+	autoscalingContext := &ca_context.AutoscalingContext{ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t)}
 	p1 := BuildTestPod("p1", 40, 0)
 	p2 := BuildTestPod("p2", 400, 0)
 	cr1 := utils.BuildTestCr("cr1", "600m", "0", []cr_types.CapacityRequestConditionType{})
@@ -40,7 +41,7 @@ func TestScaleUpProcessor(t *testing.T) {
 
 	testCases := []struct {
 		caseName               string
-		context                *context.AutoscalingContext
+		context                *ca_context.AutoscalingContext
 		scaleUpStatus          *status.ScaleUpStatus
 		CRsTrigerredScaleUp    []*cr_types.CapacityRequest
 		CRsRemainUnschedulable []*cr_types.CapacityRequest
@@ -96,7 +97,7 @@ func TestScaleUpProcessor(t *testing.T) {
 			tc.scaleUpStatus.PodsAwaitEvaluation = utils.AppendCRPods(t, tc.scaleUpStatus.PodsAwaitEvaluation, crState, tc.CRsAwaitEvaluation)
 
 			p := NewCapacityRequestScaleUpProcessor(crState)
-			p.Process(tc.context, tc.scaleUpStatus)
+			p.Process(context.TODO(), tc.context, tc.scaleUpStatus)
 			actions := fakeClient.Actions()
 			assert.Equal(t, len(tc.expectedConditions), len(actions), "Unexpected number of actions.")
 			for _, a := range actions {

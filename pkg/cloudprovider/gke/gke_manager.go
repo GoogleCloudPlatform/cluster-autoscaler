@@ -32,6 +32,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/interfaces"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
@@ -399,8 +400,9 @@ type gkeConfigurationCache struct {
 type DaemonSetConditions struct {
 	NodeLocalDNSEnabled          bool
 	MetadataServerEnabled        bool
-	WorkloadIdentityProviderSet  bool
+	WorkloadIdentityEnabled      bool
 	WIImagePullMinVersion        *version.Version
+	DisableWIImagePullForRiptide bool
 	HighThroughputLoggingEnabled bool
 	NetdEnabled                  bool
 	IpMasqAgentEnabled           bool
@@ -543,6 +545,7 @@ type GkeManagerOptions struct {
 	MultiNetworkSupportEnabled        bool
 	MultitenancyEnabled               bool
 	WIImagePullMinVersion             *version.Version
+	DisableWIImagePullForRiptide      bool
 	bootDiskConfigEnabled             bool
 	napDefaultMachineTypeFamily       string
 	bulkGceMigInstancesListingEnabled bool
@@ -648,7 +651,7 @@ func CreateGkeManager(
 	}
 
 	go wait.Until(func() {
-		if err := manager.migInfoProvider.RegenerateMigInstancesCache(); err != nil {
+		if err := manager.migInfoProvider.RegenerateMigInstancesCache(context.TODO()); err != nil {
 			klog.Errorf("Error while regenerating Mig cache: %v", err)
 		}
 	}, time.Hour, ctx.Done())
@@ -866,7 +869,7 @@ func (m *gkeManagerImpl) GetNumberOfSurgeNodesInMig(mig *GkeMig) int {
 	if m.surgeUpgradeResourceTracker == nil {
 		return 0
 	}
-	if !mig.Exist() {
+	if !mig.Exist(context.TODO()) {
 		return 0
 	}
 
@@ -973,7 +976,7 @@ func (m *gkeManagerImpl) DeleteNodePoolNoRefresh(toBeRemoved *GkeMig) error {
 		return err
 	}
 
-	if !toBeRemoved.Autoprovisioned() {
+	if !toBeRemoved.Autoprovisioned(context.TODO()) {
 		return fmt.Errorf("only autoprovisioned node pools can be deleted")
 	}
 	// TODO: handle multi-zonal node pools.
@@ -994,7 +997,7 @@ func (m *gkeManagerImpl) DeleteNodePoolAsync(toBeRemoved *GkeMig, finalizer inte
 func (m *gkeManagerImpl) GetMigsTargetSize(migRefs []gce.GceRef) (int64, error) {
 	var migsTargetSize int64
 	for _, migRef := range migRefs {
-		migSize, err := m.migInfoProvider.GetMigTargetSize(migRef)
+		migSize, err := m.migInfoProvider.GetMigTargetSize(context.TODO(), migRef)
 		if err != nil {
 			return 0, fmt.Errorf("Could not get mig size for mig (%s), got error: %v", migRef.String(), err)
 		}
@@ -1332,7 +1335,7 @@ func (m *gkeManagerImpl) IsUpcoming(mig *GkeMig) bool {
 func (m *gkeManagerImpl) GetImageTypeForNap(mig *GkeMig) string {
 	if mig.spec != nil {
 		itype := strings.ToLower(mig.spec.ImageType)
-		if itype == string(gce.OperatingSystemImageCOSContainerd) || itype == string(gce.OperatingSystemImageUbuntuContainerd) {
+		if itype == string(gce.OperatingSystemImageCOSContainerd) || itype == string(gce.OperatingSystemImageUbuntuContainerd) || itype == "custom_containerd" {
 			return itype
 		} else if itype != "" {
 			klog.Warningf("Invalid ImageType for a mig: %v, using default image type.", itype)
@@ -1356,6 +1359,14 @@ func (m *gkeManagerImpl) GetOsDistributionForNap(mig *GkeMig) gce.OperatingSyste
 		return gce.OperatingSystemDistributionCOS
 	case string(gce.OperatingSystemImageUbuntuContainerd):
 		return gce.OperatingSystemDistributionUbuntu
+	case "custom_containerd":
+		if mig != nil && mig.spec != nil && mig.spec.SelfServiceMetadata != nil {
+			imageName := strings.ToLower(mig.spec.SelfServiceMetadata[selfservice.CustomImageNameMetadataKey])
+			if strings.Contains(imageName, "ubuntu") {
+				return gce.OperatingSystemDistributionUbuntu
+			}
+		}
+		return gce.OperatingSystemDistributionCOS
 	default:
 		klog.Errorf("Unknown OperatingSystemDistribution for %s, using default OS Distribution", imageType)
 		return defaultOsDistribution
@@ -1422,17 +1433,17 @@ func (m *gkeManagerImpl) UseAutoprovisioningFeaturesForNodeGroup(nodeGroup cloud
 
 // GetMigSize gets MIG size.
 func (m *gkeManagerImpl) GetMigSize(mig gce.Mig) (int64, error) {
-	if !mig.Exist() {
+	if !mig.Exist(context.TODO()) {
 		return 0, nil
 	}
-	return m.migInfoProvider.GetMigTargetSize(mig.GceRef())
+	return m.migInfoProvider.GetMigTargetSize(context.TODO(), mig.GceRef())
 }
 
 // SetMigSize sets MIG size.
 func (m *gkeManagerImpl) SetMigSize(mig gce.Mig, size int64) error {
 	klog.V(0).Infof("Setting mig with id=%s size to %d", mig.Id(), size)
-	m.cache.InvalidateMigTargetSize(mig.GceRef())
-	err := m.gceService.ResizeMig(mig.GceRef(), size)
+	m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
+	err := m.gceService.ResizeMig(context.TODO(), mig.GceRef(), size)
 	if err != nil {
 		return err
 	}
@@ -1455,11 +1466,11 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 	for _, ins := range instances {
 		existingIds = append(existingIds, ins.Id)
 	}
-	basename, err := m.migInfoProvider.GetMigBasename(mig.GceRef())
+	basename, err := m.migInfoProvider.GetMigBasename(context.TODO(), mig.GceRef())
 	if err != nil {
 		return fmt.Errorf("can't create instances in %s: failed to fetch basename: %v", mig.GceRef(), err)
 	}
-	m.cache.InvalidateMigTargetSize(mig.GceRef())
+	m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
 	totalReqs := int((delta + createInstancesRequestLimit - 1) / createInstancesRequestLimit)
 	remaining := delta
 
@@ -1484,7 +1495,7 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 				internalmetrics.Metrics.RegisterDemandFungibilityInjected(recommendationSource)
 			}
 		} else {
-			newIds, err = m.gceService.CreateInstances(mig.GceRef(), basename, increment, existingIds)
+			newIds, err = m.gceService.CreateInstances(context.TODO(), mig.GceRef(), basename, increment, existingIds)
 		}
 		if err != nil {
 			return err
@@ -1498,7 +1509,7 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 // CreateFlexResizeRequests handles DWS Flex scale up by creating Resize Requests requesting single VMs
 func (m *gkeManagerImpl) CreateFlexResizeRequests(mig gce.Mig, delta int64) error {
 	ctx := context.Background()
-	m.cache.InvalidateMigTargetSize(mig.GceRef())
+	m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
 
 	gkeMig, ok := mig.(*GkeMig)
 	if !ok {
@@ -1567,7 +1578,7 @@ func (m *gkeManagerImpl) CreateQueuedInstances(pr prpods.ProvReqID, mig *GkeMig,
 		Zone:               mig.GceRef().Zone,
 		Delta:              delta,
 		MigName:            mig.GceRef().Name,
-		MigAutoProvisioned: mig.Autoprovisioned(),
+		MigAutoProvisioned: mig.Autoprovisioned(context.TODO()),
 		NodePoolName:       mig.NodePoolName(),
 		AcceleratorType:    mig.Accelerators(),
 
@@ -1584,13 +1595,13 @@ func (m *gkeManagerImpl) CreateQueuedInstances(pr prpods.ProvReqID, mig *GkeMig,
 	if bulkProvisioning {
 		err := m.provisioningRequestManager.CreateQueuedBulkInstances(mig, spec)
 		if err == nil {
-			m.cache.InvalidateMigTargetSize(mig.GceRef())
+			m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
 		}
 		return err
 	}
 	err := m.provisioningRequestManager.CreateResizeRequest(spec, shouldUpdateProvReqDetails)
 	if err == nil {
-		m.cache.InvalidateMigTargetSize(mig.GceRef())
+		m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
 	}
 	return err
 }
@@ -1622,7 +1633,7 @@ func (m *gkeManagerImpl) CreateResizeRequest(mig gce.Mig, delta int64) error {
 		klog.Errorf("Create %v Resize Request failed: %v", mode, err)
 		return err
 	}
-	m.cache.InvalidateMigTargetSize(mig.GceRef())
+	m.cache.InvalidateMigTargetSize(context.TODO(), mig.GceRef())
 	return nil
 }
 
@@ -1701,8 +1712,8 @@ func (m *gkeManagerImpl) DeleteInstances(instances []gce.GceRef) error {
 		// in the MIG, we can just set the target size to 0 instead.
 		return m.SetMigSize(commonMig, 0)
 	}
-	m.cache.InvalidateMigTargetSize(commonMig.GceRef())
-	return m.gceService.DeleteInstances(commonMig.GceRef(), instances)
+	m.cache.InvalidateMigTargetSize(context.TODO(), commonMig.GceRef())
+	return m.gceService.DeleteInstances(context.TODO(), commonMig.GceRef(), instances)
 }
 
 func (m *gkeManagerImpl) GetGkeMigs() []*GkeMig {
@@ -1723,12 +1734,12 @@ func (m *gkeManagerImpl) GetAllNodePoolNames() sets.Set[string] {
 
 // GetMigForInstance returns MIG to which the given instance belongs.
 func (m *gkeManagerImpl) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
-	return m.migInfoProvider.GetMigForInstance(instance)
+	return m.migInfoProvider.GetMigForInstance(context.TODO(), instance)
 }
 
 // GetMigNodes returns instances that belong to a MIG.
 func (m *gkeManagerImpl) GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error) {
-	return m.migInfoProvider.GetMigInstances(mig.GceRef())
+	return m.migInfoProvider.GetMigInstances(context.TODO(), mig.GceRef())
 }
 
 // GetLocation returns cluster's location.
@@ -1810,7 +1821,7 @@ func (m *gkeManagerImpl) GetZonesInRegion(region string) ([]string, error) {
 		return zones, nil
 	}
 
-	zones, err := m.gceService.FetchZones(region)
+	zones, err := m.gceService.FetchZones(context.TODO(), region)
 	if err != nil {
 		return nil, err
 	}
@@ -1871,12 +1882,12 @@ func (m *gkeManagerImpl) GetResourcePolicies(projectId, region string) ([]*gcecl
 
 // GetMigInstanceTemplate returns instance template for a given mig.
 func (m *gkeManagerImpl) GetMigInstanceTemplate(mig *GkeMig) (*gce_api.InstanceTemplate, error) {
-	return m.migInfoProvider.GetMigInstanceTemplate(mig.GceRef())
+	return m.migInfoProvider.GetMigInstanceTemplate(context.TODO(), mig.GceRef())
 }
 
 // GetMigKubeEnv returns kube-env for a given mig.
 func (m *gkeManagerImpl) GetMigKubeEnv(mig *GkeMig) (gce.KubeEnv, error) {
-	return m.migInfoProvider.GetMigKubeEnv(mig.GceRef())
+	return m.migInfoProvider.GetMigKubeEnv(context.TODO(), mig.GceRef())
 }
 
 // RefreshForce triggers complete refresh of cluster cached resources.
@@ -1891,12 +1902,12 @@ func (m *gkeManagerImpl) Refresh() error {
 
 // refresh invalidates cache and refreshes GKE and GCE resources.
 func (m *gkeManagerImpl) refresh(force bool) error {
-	m.cache.InvalidateAllMigInstances()
+	m.cache.InvalidateAllMigInstances(context.TODO())
 	m.refreshShortLivedUpgradeInProgress()
-	m.cache.InvalidateAllMigTargetSizes()
+	m.cache.InvalidateAllMigTargetSizes(context.TODO())
 	m.cache.InvalidateAllMigBasenames()
 	m.cache.InvalidateAllListManagedInstancesResults()
-	m.cache.InvalidateAllMigInstanceTemplateNames()
+	m.cache.InvalidateAllMigInstanceTemplateNames(context.TODO())
 	m.InvalidateNodesScaleDownAllowedCache()
 	m.cache.InvalidateCapacityCheckWaitTimes()
 
@@ -1929,7 +1940,7 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 
 		// Once GCE MIGs list got updated drop instance templates for no longer tracked instance groups
 		migs := m.migLister.GetMigs()
-		m.cache.DropInstanceTemplatesForMissingMigs(migs)
+		m.cache.DropInstanceTemplatesForMissingMigs(context.TODO(), migs)
 	}
 	// ProvisioningRequest Manager depends on MIG status it should be refreshed after the main loop
 	if m.provisioningRequestManager != nil {
@@ -2005,8 +2016,9 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 		NetdEnabled:                  cluster.NetdEnabled(),
 		NodeLocalDNSEnabled:          cluster.NodeLocalDNSEnabled,
 		MetadataServerEnabled:        cluster.MetadataServerEnabled(),
-		WorkloadIdentityProviderSet:  cluster.WorkloadIdentityProviderSet,
+		WorkloadIdentityEnabled:      cluster.WorkloadIdentityEnabled,
 		WIImagePullMinVersion:        m.managerOptions.WIImagePullMinVersion,
+		DisableWIImagePullForRiptide: m.managerOptions.DisableWIImagePullForRiptide,
 		HighThroughputLoggingEnabled: cluster.HighThroughputLoggingEnabled,
 		IpMasqAgentEnabled:           m.managerOptions.AutopilotEnabled && cluster.DataplaneV2Enabled,
 	}
@@ -2083,13 +2095,13 @@ func (m *gkeManagerImpl) refreshShortLivedUpgradeInProgress() {
 			mig.shortLivedUpgradeInProgress = false
 
 			migRef := mig.GceRef()
-			migInstanceTemplate, err := m.migInfoProvider.GetMigInstanceTemplateName(migRef)
+			migInstanceTemplate, err := m.migInfoProvider.GetMigInstanceTemplateName(context.TODO(), migRef)
 			if err != nil {
 				klog.Errorf("[refreshShortLivedUpgradeInProgress] GetMigInstanceTemplate failed for %v with err=%v", migRef, err)
 				return nil
 			}
 
-			instances, err := m.migInfoProvider.GetMigInstances(migRef)
+			instances, err := m.migInfoProvider.GetMigInstances(context.TODO(), migRef)
 			if err != nil {
 				klog.Errorf("[refreshShortLivedUpgradeInProgress] GetMigInstances failed for %v with err=%v", migRef, err)
 				return nil
@@ -2287,9 +2299,9 @@ func (m *gkeManagerImpl) fetchAutoprovisionedMigTemplateNode(mig *GkeMig) (*apiv
 func (m *gkeManagerImpl) GetMigTemplateNodeInfo(mig *GkeMig) (*framework.NodeInfo, error) {
 	var node *apiv1.Node
 	var err error
-	if mig.Exist() {
+	if mig.Exist(context.TODO()) {
 		node, err = m.fetchExistingMigTemplateNode(mig)
-	} else if mig.Autoprovisioned() {
+	} else if mig.Autoprovisioned(context.TODO()) {
 		node, err = m.fetchAutoprovisionedMigTemplateNode(mig)
 	} else {
 		return nil, fmt.Errorf("unable to get node info for %s", mig.GceRef().String())
@@ -2317,7 +2329,7 @@ func (m *gkeManagerImpl) nodeTemplateFromInstanceTemplate(mig *GkeMig, template 
 		return nil, err
 	}
 
-	gceMachineType, err := m.migInfoProvider.GetMigMachineType(mig.GceRef())
+	gceMachineType, err := m.migInfoProvider.GetMigMachineType(context.TODO(), mig.GceRef())
 	if err != nil {
 		return nil, err
 	}
@@ -2339,12 +2351,12 @@ func (m *gkeManagerImpl) nodeTemplateFromInstanceTemplate(mig *GkeMig, template 
 		return nil, err
 	}
 	pods := getMaxPodsForNodeForTemplate(mig, m.managerOptions.AutopilotEnabled, m.managerOptions.AutopilotHigherMaxPodsPerNode, gceMachineType.CPU)
-	gceMigOsInfo, err := m.templates.MigOsInfo(mig.Id(), kubeEnv)
+	gceMigOsInfo, err := m.templates.MigOsInfo(context.TODO(), mig.Id(), kubeEnv)
 	if err != nil {
 		return nil, err
 	}
 	gkeMigOsInfo := NewGkeMigOsInfo(gceMigOsInfo, mig.Version(), mig.IsConfidentialNode())
-	node, err := m.templates.BuildNodeFromTemplate(mig, gkeMigOsInfo, template, kubeEnv, cpu, gceMachineType.Memory, pods, m.reserved, m.localSSDDiskSizeProvider)
+	node, err := m.templates.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, cpu, gceMachineType.Memory, pods, m.reserved, m.localSSDDiskSizeProvider)
 	if err != nil {
 		return node, err
 	}
@@ -2573,7 +2585,7 @@ func (m *gkeManagerImpl) GetMachineType(machineName string, zone string) (gce.Ma
 	}
 
 	// Cache miss: fetch from GCE API.
-	rawMachine, err := m.gceService.FetchMachineType(zone, machineName)
+	rawMachine, err := m.gceService.FetchMachineType(context.TODO(), zone, machineName)
 	if err != nil {
 		// Cache the error (if cacheable) to prevent GCE API spam on subsequent calls.
 		if ttl, cached := m.cache.AddMachineTypeError(machineName, zone, err); cached {
@@ -2808,7 +2820,7 @@ func (m *gkeManagerImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
 		return nil
 	}
 
-	instances, err := m.migInfoProvider.GetMigInstances(mig.GceRef())
+	instances, err := m.migInfoProvider.GetMigInstances(context.TODO(), mig.GceRef())
 	if err != nil {
 		klog.Errorf("[InstanceByRef] GetMigInstances failed for %v with err: %v", mig.GceRef(), err)
 		return nil
@@ -3040,7 +3052,7 @@ func (m *gkeManagerImpl) NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.NodeP
 
 // GetBasenameForMig returns basename for this existing MIG
 func (m *gkeManagerImpl) GetBasenameForMig(mig *GkeMig) (string, error) {
-	return m.migInfoProvider.GetMigBasename(mig.gceRef)
+	return m.migInfoProvider.GetMigBasename(context.TODO(), mig.gceRef)
 }
 
 // MachineConfigProvider returns the MachineConfigProvider.

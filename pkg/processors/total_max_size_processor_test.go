@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sort"
@@ -136,7 +137,7 @@ func TestTotalMaxSizeProcessorBalanceScaleUpBetweenGroups(t *testing.T) {
 			})
 			groups, _ := fillMigTemplates(gkeManager, tt.args.migTemplates, tt.args.getMigsTargetSizeError)
 
-			got, err := s.BalanceScaleUpBetweenGroups(nil, groups, tt.args.newNodes)
+			got, err := s.BalanceScaleUpBetweenGroups(context.TODO(), nil, groups, tt.args.newNodes)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("NodeGroupSetProcessor.BalanceScaleUpBetweenGroups() error = %v, wantErr %v", err, tt.wantErr)
 			} else if tt.wantErr {
@@ -162,7 +163,7 @@ func TestTotalMaxSizeProcessorBlueGreeScaleUp(t *testing.T) {
 	s := NewTotalMaxSizeProcessor(&nodegroupset.BalancingNodeGroupSetProcessor{
 		Comparator: IsGkeNodeInfoSimilar,
 	})
-	gotBlue, err := s.BalanceScaleUpBetweenGroups(nil, blueMigs, 9)
+	gotBlue, err := s.BalanceScaleUpBetweenGroups(context.TODO(), nil, blueMigs, 9)
 	if err != nil {
 		t.Fatalf("NodeGroupSetProcessor.BalanceScaleUpBetweenGroups() error = %v", err)
 	}
@@ -171,7 +172,7 @@ func TestTotalMaxSizeProcessorBlueGreeScaleUp(t *testing.T) {
 		t.Errorf("NodeGroupSetProcessor.BalanceScaleUpBetweenGroups() gotBlue = %+v, wantBlue %+v", gotBlue, wantBlue)
 	}
 
-	gotGreen, err := s.BalanceScaleUpBetweenGroups(nil, greenMigs, 9)
+	gotGreen, err := s.BalanceScaleUpBetweenGroups(context.TODO(), nil, greenMigs, 9)
 	if err != nil {
 		t.Fatalf("NodeGroupSetProcessor.BalanceScaleUpBetweenGroups() error = %v", err)
 	}

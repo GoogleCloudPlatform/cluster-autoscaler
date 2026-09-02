@@ -15,6 +15,7 @@
 package gkedebuggingsnapshot
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -23,7 +24,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	v1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	cr_v1 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -72,11 +75,11 @@ func TestBasicSnapshotRequest(t *testing.T) {
 	}()
 
 	for !snapshotter.IsDataCollectionAllowed() {
-		snapshotter.StartDataCollection()
+		snapshotter.StartDataCollection(context.TODO())
 	}
-	snapshotter.SetClusterNodes(nodeGroups)
+	snapshotter.SetClusterNodes(context.TODO(), nodeGroups)
 	snapshotter.SetCapacityRequest(capacityRequest)
-	snapshotter.Flush()
+	snapshotter.Flush(context.TODO())
 
 	wg.Wait()
 	resp := w.Result()
@@ -99,9 +102,9 @@ func TestFlushWithoutData(t *testing.T) {
 	}()
 
 	for !snapshotter.IsDataCollectionAllowed() {
-		snapshotter.StartDataCollection()
+		snapshotter.StartDataCollection(context.TODO())
 	}
-	snapshotter.Flush()
+	snapshotter.Flush(context.TODO())
 
 	wg.Wait()
 	resp := w.Result()
@@ -124,7 +127,7 @@ func TestRequestTerminationOnShutdown(t *testing.T) {
 	}()
 
 	for !snapshotter.IsDataCollectionAllowed() {
-		snapshotter.StartDataCollection()
+		snapshotter.StartDataCollection(context.TODO())
 	}
 
 	go snapshotter.Cleanup()
@@ -148,7 +151,7 @@ func TestRejectParallelRequest(t *testing.T) {
 	}()
 
 	for !snapshotter.IsDataCollectionAllowed() {
-		snapshotter.StartDataCollection()
+		snapshotter.StartDataCollection(context.TODO())
 	}
 
 	w1 := httptest.NewRecorder()
@@ -156,8 +159,8 @@ func TestRejectParallelRequest(t *testing.T) {
 	snapshotter.ResponseHandler(w1, req1)
 	assert.Equal(t, http.StatusTooManyRequests, w1.Code)
 
-	snapshotter.SetClusterNodes(nil)
-	snapshotter.Flush()
+	snapshotter.SetClusterNodes(context.TODO(), nil)
+	snapshotter.Flush(context.TODO())
 	wg.Wait()
 
 	assert.Equal(t, http.StatusOK, w.Code)

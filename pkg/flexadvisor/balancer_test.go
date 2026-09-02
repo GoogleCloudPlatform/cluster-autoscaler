@@ -15,6 +15,7 @@
 package flexadvisor
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -231,7 +232,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
 				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{tpuMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{tpuMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       tpuMig,
 						CurrentSize: 0,
@@ -258,7 +259,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			enabledFeatures: []string{experiments.FlexAdvisorTPUEnabledFlag},
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{tpuMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{tpuMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       tpuMig,
 						CurrentSize: 0,
@@ -344,7 +345,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 5,
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{dwsMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{dwsMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       dwsMig,
 						CurrentSize: 0,
@@ -395,7 +396,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{mig1}, 80).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{mig1}, 80).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       mig1,
 						CurrentSize: 100,
@@ -426,7 +427,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
 				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       specificReservationMig,
 						CurrentSize: 0,
@@ -456,7 +457,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
 				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, []cloudprovider.NodeGroup{mig1, specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
+				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{mig1, specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       mig1,
 						CurrentSize: 100,
@@ -561,7 +562,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			}
 
 			balancer := NewScaleUpBalancer(fallbackBalancers, mockProvider, mockLister, experimentsManager, false)
-			got, gotErr := balancer.BalanceScaleUpBetweenGroups(nil, tc.groups, tc.newNodes)
+			got, gotErr := balancer.BalanceScaleUpBetweenGroups(context.TODO(), nil, tc.groups, tc.newNodes)
 
 			assert.Equal(t, len(tc.wantScaleUpInfos), len(got))
 			assert.ElementsMatch(t, got, tc.wantScaleUpInfos)
@@ -1040,7 +1041,7 @@ func TestBalanceScaleUpBetweenGroups_Recommendation(t *testing.T) {
 	}, nil)
 
 	balancer := NewScaleUpBalancer(nil, mockProvider, mockLister, experimentsManager, false)
-	got, err := balancer.BalanceScaleUpBetweenGroups(nil, []cloudprovider.NodeGroup{mig}, 50)
+	got, err := balancer.BalanceScaleUpBetweenGroups(context.Background(), nil, []cloudprovider.NodeGroup{mig}, 50)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(got))

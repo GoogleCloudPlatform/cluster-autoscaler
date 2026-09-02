@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 func TestAutoscalingStatusHistoryProcessor(t *testing.T) {
@@ -316,9 +317,9 @@ func TestAutoscalingStatusHistoryProcessor(t *testing.T) {
 			}
 
 			mockProvider := &mockCloudProviderForTargetSize{nodeGroups: nodeGroups}
-			ctx := &context.AutoscalingContext{CloudProvider: mockProvider}
+			ctx := &ca_context.AutoscalingContext{CloudProvider: mockProvider}
 
-			processor.process(ctx, mockCsr, now)
+			processor.process(context.TODO(), ctx, mockCsr, now)
 
 			// Track current state of each CRD's rules
 			currentStatusState := make(map[npc_status.CRDId]map[string]crd.ScalingEventsHistory)
@@ -413,7 +414,7 @@ type mockCloudProviderForTargetSize struct {
 	nodeGroups []cloudprovider.NodeGroup
 }
 
-func (m *mockCloudProviderForTargetSize) NodeGroups() []cloudprovider.NodeGroup {
+func (m *mockCloudProviderForTargetSize) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	return m.nodeGroups
 }
 
@@ -427,7 +428,7 @@ func (m *mockNodeGroupForTargetSize) Id() string {
 	return m.id
 }
 
-func (m *mockNodeGroupForTargetSize) TargetSize() (int, error) {
+func (m *mockNodeGroupForTargetSize) TargetSize(ctx context.Context) (int, error) {
 	return m.targetSize, nil
 }
 
@@ -497,9 +498,9 @@ func TestAutoscalingStatusHistoryProcessor_Conditions(t *testing.T) {
 			// Mock CloudProvider to return target size
 			nodeGroups := []cloudprovider.NodeGroup{&mockNodeGroupForTargetSize{id: "nodepool-1", targetSize: 2}}
 			mockProvider := &mockCloudProviderForTargetSize{nodeGroups: nodeGroups}
-			ctx := &context.AutoscalingContext{CloudProvider: mockProvider}
+			ctx := &ca_context.AutoscalingContext{CloudProvider: mockProvider}
 
-			processor.process(ctx, mockCsr, now)
+			processor.process(context.TODO(), ctx, mockCsr, now)
 
 			select {
 			case msg := <-updatesCh:

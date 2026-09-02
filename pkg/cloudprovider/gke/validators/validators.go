@@ -15,6 +15,7 @@
 package validators
 
 import (
+	"context"
 	"math/rand"
 	"net/http"
 	"sync"
@@ -39,7 +40,7 @@ type MachineConfigValidator interface {
 }
 
 type machineTypeFetcher interface {
-	FetchMachineType(zone, machineType string) (*gceapi.MachineType, error)
+	FetchMachineType(ctx context.Context, zone, machineType string) (*gceapi.MachineType, error)
 	FetchMachineTypes(zone string) ([]*gceapi.MachineType, error)
 }
 
@@ -348,7 +349,7 @@ func (mcv *cachedMachineConfigValidator) fetchCustomMachineTypes(customTypes map
 func (mcv *cachedMachineConfigValidator) validateCustomMachineType(machineType, zone string) (bool, error) {
 	// Sending request to GCE API to check if custom machine type is valid.
 	klog.V(2).Infof("Synchronously updating cache for custom machine type %s in zone %s", machineType, zone)
-	_, err := mcv.machineFetcher.FetchMachineType(zone, machineType)
+	_, err := mcv.machineFetcher.FetchMachineType(context.TODO(), zone, machineType)
 
 	// Custom machine type is valid for the zone.
 	if err == nil {

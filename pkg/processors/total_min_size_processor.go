@@ -15,12 +15,13 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 )
@@ -53,7 +54,7 @@ func NewMinSizeProcessor(cloudProvider CloudProvider) *TotalMinSizeProcessor {
 }
 
 // FilterUnremovableNodes filters candidates that their removal will cause node group size going below min size.
-func (p *TotalMinSizeProcessor) FilterUnremovableNodes(ctx *context.AutoscalingContext, scaleDownCtx *nodes.ScaleDownContext, candidates []simulator.NodeToBeRemoved) ([]simulator.NodeToBeRemoved, []simulator.UnremovableNode) {
+func (p *TotalMinSizeProcessor) FilterUnremovableNodes(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleDownCtx *nodes.ScaleDownContext, candidates []simulator.NodeToBeRemoved) ([]simulator.NodeToBeRemoved, []simulator.UnremovableNode) {
 	nodepoolMetadataMap := map[string]nodepoolMetadata{}
 	nodesToBeRemoved := []simulator.NodeToBeRemoved{}
 	unremovableNodes := []simulator.UnremovableNode{}
@@ -77,7 +78,7 @@ func (p *TotalMinSizeProcessor) FilterUnremovableNodes(ctx *context.AutoscalingC
 				klog.Errorf("Couldn't get size of the nodepool (%s), received error: %v, overwriting nodePoolSize to totalMinSize (%d)", getNodePoolKey(mig), err, totalMinSize)
 				nodePoolSize = totalMinSize
 			}
-			numberOfNodesBeingDeleted := getNodesBeingDeletedInNodeGroup(ctx, scaleDownCtx, c.Node)
+			numberOfNodesBeingDeleted := getNodesBeingDeletedInNodeGroup(autoscalingCtx, scaleDownCtx, c.Node)
 
 			actualNodePoolSize := nodePoolSize - numberOfNodesBeingDeleted
 
@@ -106,9 +107,9 @@ func (p *TotalMinSizeProcessor) FilterUnremovableNodes(ctx *context.AutoscalingC
 // CleanUp is called at CA termination
 func (p *TotalMinSizeProcessor) CleanUp() {}
 
-func getNodesBeingDeletedInNodeGroup(ctx *context.AutoscalingContext, scaleDownCtx *nodes.ScaleDownContext, node *apiv1.Node) int {
+func getNodesBeingDeletedInNodeGroup(ctx *ca_context.AutoscalingContext, scaleDownCtx *nodes.ScaleDownContext, node *apiv1.Node) int {
 	numberOfNodesBeingDeletedDefaultValue := 0
-	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 
 	if err != nil {
 		return numberOfNodesBeingDeletedDefaultValue

@@ -15,13 +15,17 @@
 package reconciler
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
+
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 )
@@ -100,7 +104,7 @@ func (r *provisioningRequestFinalizer) reconcileProvisionedAndBookingExpiredProv
 				klog.Errorf("Error while modifying Provisioning Request %s/%s during setting state to %q: %v", pr.Namespace, pr.Name, st.targetState, err)
 				continue
 			}
-			if _, err = r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+			if _, err = r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 				klog.Errorf("Error while updating Provisioning Request %s/%s during setting state to %q: %v", pr.Namespace, pr.Name, st.targetState, err)
 				continue
 			}
@@ -124,7 +128,7 @@ func (r *provisioningRequestFinalizer) cleanUpOldTerminalProvReqs(provisioningRe
 				continue
 			}
 
-			err := r.prClient.DeleteProvisioningRequest(pr.ProvisioningRequest)
+			err := r.prClient.DeleteProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 			if err != nil {
 				klog.Warningf("Couldn't delete old %s Provisioning Request %s/%s: %v", provReqState, pr.Namespace, pr.Name, err)
 				continue

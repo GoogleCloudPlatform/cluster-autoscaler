@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -24,11 +25,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/utils/set"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -72,8 +74,8 @@ func NewNodeReconciliationProcessor(nodeController csnNodeController, cloudProvi
 	}
 }
 
-func (p *NodeReconcilationProcessor) Preprocess(ctx *context.AutoscalingContext) error {
-	defer metrics.UpdateDurationFromStart(nodeReconciliationMetricLabel, time.Now())
+func (p *NodeReconcilationProcessor) Preprocess(ctx *ca_context.AutoscalingContext) error {
+	defer metrics.UpdateDurationFromStart(context.TODO(), nodeReconciliationMetricLabel, time.Now())
 
 	snapshot := ctx.ClusterSnapshot
 	snapshot.Fork()

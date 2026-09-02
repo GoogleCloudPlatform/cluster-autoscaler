@@ -16,6 +16,7 @@ package autoprovisioning
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +45,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -4075,7 +4076,7 @@ func (m *AutoprovisioningNodeGroupManager) injectNodeGroups(ctx *injectionContex
 			continue
 		}
 
-		nodeGroup, err := m.cloudProvider.NewNodeGroup(params.machineType, params.labels, params.systemLabels, params.taints, params.extraResources)
+		nodeGroup, err := m.cloudProvider.NewNodeGroup(context.TODO(), params.machineType, params.labels, params.systemLabels, params.taints, params.extraResources)
 		if err != nil {
 			// NewNodeGroup is expected to fail if a certain configuration is not available in GKE (e.g. a specific GPU in a zone
 			// where the GPU is not available), and we currently don't have a way to distinguish this case. So it's not necessarily
@@ -4084,7 +4085,7 @@ func (m *AutoprovisioningNodeGroupManager) injectNodeGroups(ctx *injectionContex
 			ctx.status.AddDisregardedNodeGroup(opts, UnableToBuildNodeGroup)
 			continue
 		}
-		nodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(nodeGroup, ctx.daemonSets, ctx.taintConfig)
+		nodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(context.TODO(), nodeGroup, ctx.daemonSets, ctx.taintConfig)
 		if err != nil {
 			klog.Errorf("NAP: not injecting %s - couldn't build node info, this shouldn't happen (err: %v)", opts.String(), err)
 			ctx.status.AddDisregardedNodeGroup(opts, InternalError)
@@ -4284,7 +4285,7 @@ func (m *AutoprovisioningNodeGroupManager) updateAndValidateRequirements(ngReq *
 }
 
 // prepareInjectionContext prepares and gathers all common data and components required for injecting new node groups.
-func (m *AutoprovisioningNodeGroupManager) prepareInjectionContext(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, status *ProcessingStatus) (*injectionContext, error) {
+func (m *AutoprovisioningNodeGroupManager) prepareInjectionContext(ctx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, status *ProcessingStatus) (*injectionContext, error) {
 	var zones []string
 	noReservations := m.reservationsPuller == nil || len(m.reservationsPuller.GetReservations()) == 0
 	applyReducedZoneSetOptimisation := podsharding.AreUnschedulablePodsZoneAgnostic(ctx) && noReservations
@@ -4306,7 +4307,7 @@ func (m *AutoprovisioningNodeGroupManager) prepareInjectionContext(ctx *context.
 		return nil, fmt.Errorf("no node locations found")
 	}
 
-	resourceLimiter, errCP := m.cloudProvider.GetResourceLimiter()
+	resourceLimiter, errCP := m.cloudProvider.GetResourceLimiter(context.TODO())
 	if errCP != nil {
 		status.SetResult(ResourceLimiterNotAvailable)
 		return nil, errCP

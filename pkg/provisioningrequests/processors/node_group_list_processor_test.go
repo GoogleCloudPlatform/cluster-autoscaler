@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -24,7 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -137,10 +138,10 @@ func TestFilterQueuedNodeGroupListProcessorProcess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := NewFilterQueuedNodeGroupListProcessor(&mockNodeGroupListProcessor{})
-			gotNodeGroups, _, err := p.Process(nil, tt.nodeGroups, nil, tt.unschedulablePods)
+			gotNodeGroups, _, err := p.Process(context.TODO(), nil, tt.nodeGroups, nil, tt.unschedulablePods)
 			assert.Nil(t, err)
 			if !reflect.DeepEqual(gotNodeGroups, tt.wantNodeGroups) {
-				t.Errorf("filterQueuedNodeGroupListProcessor.Process() got = %v, want %v", gotNodeGroups, tt.wantNodeGroups)
+				t.Errorf("filterQueuedNodeGroupListProcessor.Process(context.TODO(), ) got = %v, want %v", gotNodeGroups, tt.wantNodeGroups)
 			}
 		})
 	}
@@ -159,7 +160,7 @@ func buildMig(nodePoolName string, queuedProvisioning bool) *gke.GkeMig {
 type mockNodeGroupListProcessor struct {
 }
 
-func (p *mockNodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *mockNodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	return nodeGroups, nodeInfos, nil
 }
 

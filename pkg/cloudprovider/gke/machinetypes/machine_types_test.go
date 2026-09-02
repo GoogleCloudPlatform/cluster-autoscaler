@@ -2471,7 +2471,7 @@ func TestIsHugepageSize1gSupported(t *testing.T) {
 		expected bool
 	}{
 		"supported": {
-			families: []MachineFamily{A3, A4, A4X, C2D, C3, C3D, C4, CT5L, CT5LP, CT6E, G4, H3, M2, M3, Z3, Z4D, TPU7X}, // C3A, CT5E supports 1G hugepages but not supported by CA;
+			families: []MachineFamily{A3, A4, A4X, C2D, C3, C3D, C4, CT5L, CT5LP, CT6E, G4, H3, M2, M3, Z3, Z4D, Z4M, TPU7X}, // C3A, CT5E supports 1G hugepages but not supported by CA;
 			expected: true,
 		},
 		"unsupported": {
@@ -2601,7 +2601,7 @@ func TestDwsDisablementForMachineFamily(t *testing.T) {
 			expected: true,
 		},
 		"supported": {
-			families: []MachineFamily{A3, A4, A4X, C2, C2D, C3, C3D, C4, CT5P, CT5LP, CT6E, E4, E2, H3, M2, M3, N2, Z3, Z4D, TPU7X}, // All other machine families than in "unsupported" above
+			families: []MachineFamily{A3, A4, A4X, C2, C2D, C3, C3D, C4, CT5P, CT5LP, CT6E, E4, E2, H3, M2, M3, N2, Z3, Z4D, Z4M, TPU7X}, // All other machine families than in "unsupported" above
 			expected: false,
 		},
 	} {
@@ -2893,6 +2893,7 @@ func TestKnownMachineFamilies(t *testing.T) {
 		"tpu7x": true,
 		"z3":    true,
 		"z4d":   true,
+		"z4m":   true,
 	}
 
 	mcp := NewMachineConfigProvider(nil)

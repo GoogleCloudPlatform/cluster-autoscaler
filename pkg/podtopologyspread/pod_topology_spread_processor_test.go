@@ -15,6 +15,7 @@
 package podtopologyspread
 
 import (
+	"context"
 	"maps"
 	"slices"
 	"testing"
@@ -29,7 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	clockutils "k8s.io/utils/clock/testing"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
@@ -1268,12 +1269,12 @@ func TestProcess(t *testing.T) {
 					t.Fatalf("failed to add node info: %v", err)
 				}
 			}
-			autoscalingContext := &context.AutoscalingContext{
+			autoscalingContext := &ca_context.AutoscalingContext{
 				ClusterSnapshot: clusterSnapshot,
 			}
 
 			p.Preprocess(unschedulablePods)
-			unschedulablePods, err := p.Process(autoscalingContext, unschedulablePods)
+			unschedulablePods, err := p.Process(context.Background(), autoscalingContext, unschedulablePods)
 
 			if err != nil {
 				t.Fatalf("failed to process pods: %v", err)

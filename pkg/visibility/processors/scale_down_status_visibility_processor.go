@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -24,7 +25,7 @@ import (
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	statusprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
@@ -67,9 +68,9 @@ func NewScaleDownStatusVisibilityProcessor(logger visibility.EventLogger, opts v
 }
 
 // Process analyses the scale down status and emits appropriate visibility events.
-func (p *ScaleDownStatusVisibilityProcessor) Process(context *context.AutoscalingContext, originalScaleDownStatus *scaledownstatus.ScaleDownStatus) {
+func (p *ScaleDownStatusVisibilityProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, originalScaleDownStatus *scaledownstatus.ScaleDownStatus) {
 	startTime := time.Now()
-	defer metrics.UpdateDurationFromStart(internalmetrics.CaVizScaleDown, startTime)
+	defer metrics.UpdateDurationFromStart(context.TODO(), internalmetrics.CaVizScaleDown, startTime)
 
 	scaleDownStatus, err := vistypes.ConvertScaleDownStatus(originalScaleDownStatus)
 	if err != nil {

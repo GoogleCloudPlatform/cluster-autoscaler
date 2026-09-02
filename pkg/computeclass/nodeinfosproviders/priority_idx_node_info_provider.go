@@ -15,6 +15,7 @@
 package nodeinfosproviders
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -56,8 +57,8 @@ func NewPriorityIdxNodeInfoProvider(nodeInfoProvider nodeinfosprovider.TemplateN
 }
 
 // Process returns augmented nodeInfos with priority index label.
-func (p *PriorityIdxNodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
-	nodeInfos, err := p.nodeInfoProvider.Process(ctx, nodes, daemonsets, taintConfig, now)
+func (p *PriorityIdxNodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+	nodeInfos, err := p.nodeInfoProvider.Process(ctx, autoscalingCtx, nodes, daemonsets, taintConfig, now)
 	if err != nil {
 		return nodeInfos, err
 	}
@@ -73,7 +74,7 @@ func (p *PriorityIdxNodeInfoProvider) Process(ctx *context.AutoscalingContext, n
 		templateNode := nodeInfo.Node()
 
 		// Get node group for node
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(templateNode)
+		nodeGroup, err := autoscalingCtx.CloudProvider.NodeGroupForNode(ctx, templateNode)
 		if err != nil {
 			klogx.V(4).UpTo(p.nodeGroupQuota).Infof("PriorityIdxNodeInfoProvider: Failed to get node group for template node %s: %v", templateNode.Name, err)
 			continue

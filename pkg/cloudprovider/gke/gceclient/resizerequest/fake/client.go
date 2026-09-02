@@ -67,13 +67,13 @@ func (r *ResizeRequestClient) CreateResizeRequest(ctx context.Context, migRef gc
 		return fmt.Errorf("ResizeRequestClient not fully initialized with GceClient")
 	}
 
-	tName, err := r.gceClient.FetchMigTemplateName(migRef)
+	tName, err := r.gceClient.FetchMigTemplateName(context.TODO(), migRef)
 	if err != nil {
 		return fmt.Errorf("could not fetch template name for mig %s: %v", migRef.Name, err)
 	}
 	templateName := path.Base(tName.Name)
 
-	_, err = r.gceClient.FetchMigTemplate(migRef, templateName, tName.Regional)
+	_, err = r.gceClient.FetchMigTemplate(context.TODO(), migRef, templateName, tName.Regional)
 	if err != nil {
 		return fmt.Errorf("instance Template %s not found: %v", templateName, err)
 	}

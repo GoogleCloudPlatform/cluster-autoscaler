@@ -15,10 +15,12 @@
 package processors
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 )
 
@@ -48,7 +50,7 @@ func NewCrdScaleDownStatusProcessor(lister lister.Lister, provider crdScaleDownS
 }
 
 // Process processes the state of the cluster after a scale-down
-func (p *crdScaleDownStatusProcessor) Process(_ *context.AutoscalingContext, scaleDownStatus *status.ScaleDownStatus) {
+func (p *crdScaleDownStatusProcessor) Process(ctx context.Context, _ *ca_context.AutoscalingContext, scaleDownStatus *status.ScaleDownStatus) {
 	if scaleDownStatus == nil || scaleDownStatus.Result != status.ScaleDownNodeDeleteStarted {
 		return
 	}

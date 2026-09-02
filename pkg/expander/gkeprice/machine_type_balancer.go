@@ -15,6 +15,8 @@
 package gkeprice
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
@@ -67,13 +69,13 @@ func (b *computeClassBalancer) MachineTypeBalancingFactor(machineType string, no
 
 func (b *computeClassBalancer) computeFactor(machineFamily machinetypes.MachineFamily, computeClass machinetypes.PredefinedComputeClass, nodeInfos map[string]*framework.NodeInfo) float64 {
 	cpuCount := make(map[string]int64)
-	for _, nodeGroup := range b.provider.NodeGroups() {
+	for _, nodeGroup := range b.provider.NodeGroups(context.TODO()) {
 		machineFamilyName, err := gke.GetMachineFamilyFromNodeGroup(nodeGroup)
 		if err != nil {
 			klog.Errorf("Failed to get machine family name for %v", nodeGroup.Id())
 			return 1
 		}
-		targetSize, err := nodeGroup.TargetSize()
+		targetSize, err := nodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Failed to get target size for %v", nodeGroup.Id())
 			return 1

@@ -15,6 +15,7 @@
 package locationpolicy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -66,23 +67,23 @@ func NewProcessor(p nodegroupset.NodeGroupSetProcessor, provider internal_proces
 }
 
 // FindSimilarNodeGroups returns a list of NodeGroups similar to the one provided in parameter.
-func (s *Processor) FindSimilarNodeGroups(context *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
-	return s.NodeGroupSetProcessor.FindSimilarNodeGroups(context, nodeGroup, nodeInfosForGroups)
+func (s *Processor) FindSimilarNodeGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, nodeGroup cloudprovider.NodeGroup, nodeInfosForGroups map[string]*framework.NodeInfo) ([]cloudprovider.NodeGroup, auto_errors.AutoscalerError) {
+	return s.NodeGroupSetProcessor.FindSimilarNodeGroups(ctx, autoscalingCtx, nodeGroup, nodeInfosForGroups)
 }
 
 // BalanceScaleUpBetweenGroups splits the scale-up between the node groups.
 // When the processor is enabled the location_policy is taken into account.
 // In case of any errors the processor fallbacks to the balancing logic.
-func (s *Processor) BalanceScaleUpBetweenGroups(context *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
-	if len(groups) < 2 && !context.ProvisioningRequestScaleUpMode {
+func (s *Processor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+	if len(groups) < 2 && !autoscalingCtx.ProvisioningRequestScaleUpMode {
 		klog.V(2).Infof("Falling back to balancing logic, less than 2 node groups to balance")
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	gkeNodeGroup, err := getGkeNodeGroups(groups)
 	if err != nil {
 		klog.Warningf("Falling back to balancing logic, due to an error for casting groups to *gke.NodeGroup: %v", err)
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	// Since all gkeNodeGroup should have the same nodepool we just pick value from the first one.
@@ -92,15 +93,15 @@ func (s *Processor) BalanceScaleUpBetweenGroups(context *autoscaling_context.Aut
 	capacity, err := getGkeNodeGroupsCapacity(gkeNodeGroup)
 	if err != nil {
 		klog.Warningf("Falling back to balancing logic, due to an error for groups node capacity: %v", err)
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 	if newNodes >= capacity {
 		klog.V(2).Infof("Requested scale-up (%v) is greater or equal to node group set capacity, using balancing logic", newNodes)
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 	if locationPolicy == gke.LocationPolicyAny && gkeNodeGroup[0].IsTpuMig() && gkeNodeGroup[0].FlexStartNonQueued() && s.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.RecommendLocationsDisabledForTPUFlag, false) {
 		klog.V(2).Infof("Falling back to balancing logic, RLA disabled for TPU FSNQ")
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	balancer, found := s.balancers[locationPolicy]
@@ -108,16 +109,16 @@ func (s *Processor) BalanceScaleUpBetweenGroups(context *autoscaling_context.Aut
 		// The default location policy is BALANCED and it doesn't have a dedicated balancer object. Falling back is perfectly fine in that case.
 		// This case can even occur for healthy scale ups
 		klog.Infof("Balancer not found for location policy: %s", locationPolicy)
-		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+		return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
 	scaleUpInfos, err := balancer.Balance(gkeNodeGroup, newNodes)
 	if err != nil {
-		if context.ProvisioningRequestScaleUpMode && locationPolicy == gke.LocationPolicyAny && noCapacityErr(err) {
+		if autoscalingCtx.ProvisioningRequestScaleUpMode && locationPolicy == gke.LocationPolicyAny && noCapacityErr(err) {
 			return nil, auto_errors.NewAutoscalerErrorf(auto_errors.CloudProviderError, "failed to find capacity: %v", err)
 		} else {
 			klog.Infof("Falling back to balancing logic, due to an error for location policy %s: %v", locationPolicy, err)
-			return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(context, groups, newNodes)
+			return s.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 		}
 	}
 	// TODO(b/504971103): move notifying logic directly to location_policy_any_balancer.go, so directly to RLA service.
@@ -150,12 +151,12 @@ func getGkeNodeGroups(groups []cloudprovider.NodeGroup) ([]gke.NodeGroup, error)
 func getGkeNodeGroupsCapacity(gkeNodeGroups []gke.NodeGroup) (int, error) {
 	capacity := 0
 	for _, group := range gkeNodeGroups {
-		targetSize, err := group.TargetSize()
+		targetSize, err := group.TargetSize(context.TODO())
 		if err != nil {
 			return 0, err
 		}
-		if group.MaxSize() > targetSize {
-			capacity += group.MaxSize() - targetSize
+		if group.MaxSize(context.TODO()) > targetSize {
+			capacity += group.MaxSize(context.TODO()) - targetSize
 		}
 	}
 	return capacity, nil

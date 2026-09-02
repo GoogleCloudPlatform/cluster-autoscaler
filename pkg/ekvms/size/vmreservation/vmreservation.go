@@ -15,6 +15,8 @@
 package vmreservation
 
 import (
+	"context"
+
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 )
@@ -38,7 +40,7 @@ func New(reserved *gke.GkeReserved, defaultReservedResourcesV2Enabled bool) VmRe
 }
 
 func (r *reservation) CalculateKernelReserved(osInfo gce.MigOsInfo, physicalMemory int64) int64 {
-	return r.reserved.CalculateKernelReserved(osInfo, physicalMemory)
+	return r.reserved.CalculateKernelReserved(context.TODO(), osInfo, physicalMemory)
 }
 
 func (r *reservation) PredictKubeReservedCpuMillicores(physicalCpuMillicores int64, machineType string, maxPodsPerNode int64, version string, osDistribution gce.OperatingSystemDistribution) int64 {

@@ -15,12 +15,13 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
 	kube "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -72,13 +73,13 @@ func (sup *SurgeUpgradeScaleDownNodeProcessor) filterSurgeNodes(nodes []*apiv1.N
 
 // GetPodDestinationCandidates returns nodes that potentially could harbor the pods that would become
 // unscheduled after a scale down.
-func (sup *SurgeUpgradeScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *context.AutoscalingContext,
+func (sup *SurgeUpgradeScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext,
 	nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return sup.filterSurgeNodes(nodes, "pod destination node candidates")
 }
 
 // GetScaleDownCandidates returns nodes that potentially could be scaled down.
-func (sup *SurgeUpgradeScaleDownNodeProcessor) GetScaleDownCandidates(ctx *context.AutoscalingContext,
+func (sup *SurgeUpgradeScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext,
 	nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return sup.filterSurgeNodes(nodes, "scale down node candidates")
 }

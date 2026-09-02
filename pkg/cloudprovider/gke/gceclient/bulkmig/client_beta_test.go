@@ -318,7 +318,7 @@ const migServerError = `{
 type mockGceMigCache struct {
 }
 
-func (g *mockGceMigCache) InvalidateMigTargetSize(ref gce.GceRef) {
+func (g *mockGceMigCache) InvalidateMigTargetSize(ctx context.Context, ref gce.GceRef) {
 }
 
 func (g *mockGceMigCache) SetMigTargetSize(ref gce.GceRef, i int64) {

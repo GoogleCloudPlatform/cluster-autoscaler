@@ -260,9 +260,7 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 			ruleOpts = append(ruleOpts, rules.WithBootDiskProvisionedThroughputRule(*p.Storage.BootDiskProvisionedThroughput))
 		}
 		ruleOpts = checkSecondaryBootDiskRules(p, ccc, ruleOpts)
-		if len(p.Storage.BootDiskStoragePools) > 0 {
-			ruleOpts = append(ruleOpts, rules.WithBootDiskStoragePoolsRule(p.Storage.BootDiskStoragePools))
-		}
+		ruleOpts = checkBootDiskStoragePoolsRules(p, ccc, ruleOpts)
 	}
 
 	if p.Location != nil {
@@ -435,6 +433,23 @@ func checkSecondaryBootDiskRules(priority v1.Priority, ccc *cccCrd, ruleOpts []r
 
 		ruleOpts = append(ruleOpts, secondaryBootDiskOpt)
 	}
+	return ruleOpts
+}
+
+func checkBootDiskStoragePoolsRules(priority v1.Priority, ccc *cccCrd, ruleOpts []rules.RuleOption) []rules.RuleOption {
+	if len(priority.Storage.BootDiskStoragePools) == 0 {
+		return ruleOpts
+	}
+	storagePools := make([]string, 0, len(priority.Storage.BootDiskStoragePools))
+	for _, pool := range priority.Storage.BootDiskStoragePools {
+		project := pool.Project
+		if project == "" {
+			project = ccc.projectId
+		}
+		storagePoolURI := fmt.Sprintf("projects/%s/zones/%s/storagePools/%s", project, pool.Zone, pool.Name)
+		storagePools = append(storagePools, storagePoolURI)
+	}
+	ruleOpts = append(ruleOpts, rules.WithBootDiskStoragePoolsRule(storagePools))
 	return ruleOpts
 }
 

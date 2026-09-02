@@ -15,6 +15,8 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
@@ -60,7 +62,7 @@ func (p *InternalEventingScaleUpStatusProcessor) EnableProvReqProcessing() {
 // Process processes the state of the cluster after a scale-up by emitting
 // relevant events for pods, capacity requests, and provisioning requests depending on their post
 // scale-up status.
-func (p *InternalEventingScaleUpStatusProcessor) Process(context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (p *InternalEventingScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	consideredNodeGroupsMap := nodeGroupListToMapById(scaleUpStatus.ConsideredNodeGroups)
 	if scaleUpStatus.Result != status.ScaleUpSuccessful {
 		processedPRs := sets.New[types.UID]()
@@ -71,7 +73,7 @@ func (p *InternalEventingScaleUpStatusProcessor) Process(context *context.Autosc
 					if processedPRs.Has(prRef.UID) {
 						continue
 					}
-					recordNotTriggeredScaleUpEvent(prRef, prType, context, status.ReasonsMessage(scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
+					recordNotTriggeredScaleUpEvent(prRef, prType, autoscalingCtx, status.ReasonsMessage(context.TODO(), scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
 					processedPRs.Insert(prRef.UID)
 					continue
 				}
@@ -79,12 +81,12 @@ func (p *InternalEventingScaleUpStatusProcessor) Process(context *context.Autosc
 
 			if p.processCapacityReq {
 				if cr, found := p.crState.PodToCapacityRequest(noScaleUpInfo.Pod); found {
-					recordNotTriggeredScaleUpEvent(cr, crType, context, status.ReasonsMessage(scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
+					recordNotTriggeredScaleUpEvent(cr, crType, autoscalingCtx, status.ReasonsMessage(context.TODO(), scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
 					continue
 				}
 			}
 
-			recordNotTriggeredScaleUpEvent(noScaleUpInfo.Pod, podType, context, status.ReasonsMessage(scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
+			recordNotTriggeredScaleUpEvent(noScaleUpInfo.Pod, podType, autoscalingCtx, status.ReasonsMessage(context.TODO(), scaleUpStatus.Result, noScaleUpInfo, consideredNodeGroupsMap))
 		}
 	}
 
@@ -93,12 +95,12 @@ func (p *InternalEventingScaleUpStatusProcessor) Process(context *context.Autosc
 
 			if p.processCapacityReq {
 				if cr, found := p.crState.PodToCapacityRequest(pod); found {
-					recordTriggeredScaleUpEvent(cr, crType, context, scaleUpStatus)
+					recordTriggeredScaleUpEvent(cr, crType, autoscalingCtx, scaleUpStatus)
 					continue
 				}
 			}
 
-			recordTriggeredScaleUpEvent(pod, podType, context, scaleUpStatus)
+			recordTriggeredScaleUpEvent(pod, podType, autoscalingCtx, scaleUpStatus)
 		}
 	}
 }
@@ -107,12 +109,12 @@ func (p *InternalEventingScaleUpStatusProcessor) Process(context *context.Autosc
 func (p *InternalEventingScaleUpStatusProcessor) CleanUp() {
 }
 
-func recordNotTriggeredScaleUpEvent(obj runtime.Object, objectType string, context *context.AutoscalingContext, reasons string) {
+func recordNotTriggeredScaleUpEvent(obj runtime.Object, objectType string, context *ca_context.AutoscalingContext, reasons string) {
 	context.Recorder.Eventf(obj, apiv1.EventTypeNormal, "NotTriggerScaleUp",
 		"%v didn't trigger scale-up: %s", objectType, reasons)
 }
 
-func recordTriggeredScaleUpEvent(obj runtime.Object, objectType string, context *context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func recordTriggeredScaleUpEvent(obj runtime.Object, objectType string, context *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	context.Recorder.Eventf(obj, apiv1.EventTypeNormal, "TriggeredScaleUp",
 		"%v triggered scale-up: %v", objectType, scaleUpStatus.ScaleUpInfos)
 }

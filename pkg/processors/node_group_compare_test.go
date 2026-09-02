@@ -15,12 +15,13 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -60,7 +61,7 @@ func TestIsGkeNodeInfoSimilar(t *testing.T) {
 
 func TestFindSimilarNodeGroupsGkeBasic(t *testing.T) {
 	processor := &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: IsGkeNodeInfoSimilar}
-	context := &context.AutoscalingContext{}
+	autoscalingCtx := &ca_context.AutoscalingContext{}
 
 	n1 := BuildTestNode("n1", 1000, 1000)
 	n2 := BuildTestNode("n2", 1000, 1000)
@@ -81,27 +82,27 @@ func TestFindSimilarNodeGroupsGkeBasic(t *testing.T) {
 		"ng1": ni1, "ng2": ni2, "ng3": ni3,
 	}
 
-	ng1, _ := provider.NodeGroupForNode(n1)
-	ng2, _ := provider.NodeGroupForNode(n2)
-	ng3, _ := provider.NodeGroupForNode(n3)
-	context.CloudProvider = provider
+	ng1, _ := provider.NodeGroupForNode(context.TODO(), n1)
+	ng2, _ := provider.NodeGroupForNode(context.TODO(), n2)
+	ng3, _ := provider.NodeGroupForNode(context.TODO(), n3)
+	autoscalingCtx.CloudProvider = provider
 
-	similar, err := processor.FindSimilarNodeGroups(context, ng1, nodeInfosForGroups)
+	similar, err := processor.FindSimilarNodeGroups(context.TODO(), autoscalingCtx, ng1, nodeInfosForGroups)
 	assert.NoError(t, err)
 	assert.Equal(t, similar, []cloudprovider.NodeGroup{ng2})
 
-	similar, err = processor.FindSimilarNodeGroups(context, ng2, nodeInfosForGroups)
+	similar, err = processor.FindSimilarNodeGroups(context.TODO(), autoscalingCtx, ng2, nodeInfosForGroups)
 	assert.NoError(t, err)
 	assert.Equal(t, similar, []cloudprovider.NodeGroup{ng1})
 
-	similar, err = processor.FindSimilarNodeGroups(context, ng3, nodeInfosForGroups)
+	similar, err = processor.FindSimilarNodeGroups(context.TODO(), autoscalingCtx, ng3, nodeInfosForGroups)
 	assert.NoError(t, err)
 	assert.Equal(t, similar, []cloudprovider.NodeGroup{})
 }
 
 func TestFindSimilarNodeGroupsGkeByLabel(t *testing.T) {
 	processor := &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: IsGkeNodeInfoSimilar}
-	context := &context.AutoscalingContext{}
+	autoscalingCtx := &ca_context.AutoscalingContext{}
 
 	n1 := BuildTestNode("n1", 1000, 1000)
 	n2 := BuildTestNode("n2", 2000, 2000)
@@ -119,19 +120,19 @@ func TestFindSimilarNodeGroupsGkeByLabel(t *testing.T) {
 		"ng1": ni1, "ng2": ni2,
 	}
 
-	ng1, _ := provider.NodeGroupForNode(n1)
-	ng2, _ := provider.NodeGroupForNode(n2)
-	context.CloudProvider = provider
+	ng1, _ := provider.NodeGroupForNode(context.TODO(), n1)
+	ng2, _ := provider.NodeGroupForNode(context.TODO(), n2)
+	autoscalingCtx.CloudProvider = provider
 
 	// Groups with different cpu and mem are not similar
-	similar, err := processor.FindSimilarNodeGroups(context, ng1, nodeInfosForGroups)
+	similar, err := processor.FindSimilarNodeGroups(context.TODO(), autoscalingCtx, ng1, nodeInfosForGroups)
 	assert.NoError(t, err)
 	assert.Equal(t, similar, []cloudprovider.NodeGroup{})
 
 	// Unless we give them nodepool label
 	n1.ObjectMeta.Labels["cloud.google.com/gke-nodepool"] = "blah"
 	n2.ObjectMeta.Labels["cloud.google.com/gke-nodepool"] = "blah"
-	similar, err = processor.FindSimilarNodeGroups(context, ng1, nodeInfosForGroups)
+	similar, err = processor.FindSimilarNodeGroups(context.TODO(), autoscalingCtx, ng1, nodeInfosForGroups)
 	assert.NoError(t, err)
 	assert.Equal(t, similar, []cloudprovider.NodeGroup{ng2})
 }

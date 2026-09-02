@@ -15,6 +15,7 @@
 package tpu
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -35,7 +36,7 @@ func TestFilterOutNodesWithUnreadyResources(t *testing.T) {
 	withoutTpuAsUnready := kubernetes.GetUnreadyNodeCopy(withoutTpu, kubernetes.ResourceUnready)
 
 	p := TpuCustomResourcesProcessor{}
-	gotAll, gotReady := p.FilterOutNodesWithUnreadyResources(&context.AutoscalingContext{}, []*v1.Node{ready, unready, withoutTpu}, []*v1.Node{ready, withoutTpu}, drasnapshot.NewEmptySnapshot())
+	gotAll, gotReady := p.FilterOutNodesWithUnreadyResources(context.TODO(), &ca_context.AutoscalingContext{}, []*v1.Node{ready, unready, withoutTpu}, []*v1.Node{ready, withoutTpu}, drasnapshot.NewEmptySnapshot())
 
 	assert.ElementsMatch(t, gotAll, []*v1.Node{ready, unready, withoutTpuAsUnready})
 	assert.ElementsMatch(t, gotReady, []*v1.Node{ready})
@@ -48,7 +49,7 @@ func TestFilterOutDRANodesWithUnreadyResources(t *testing.T) {
 	node.Labels[gkelabels.DraTpuNodeLabel] = "true"
 
 	p := TpuCustomResourcesProcessor{}
-	gotAll, gotReady := p.FilterOutNodesWithUnreadyResources(&context.AutoscalingContext{}, []*v1.Node{node}, []*v1.Node{node}, drasnapshot.NewEmptySnapshot())
+	gotAll, gotReady := p.FilterOutNodesWithUnreadyResources(context.TODO(), &ca_context.AutoscalingContext{}, []*v1.Node{node}, []*v1.Node{node}, drasnapshot.NewEmptySnapshot())
 
 	assert.ElementsMatch(t, gotAll, []*v1.Node{node})
 	assert.ElementsMatch(t, gotReady, []*v1.Node{node})
@@ -62,7 +63,7 @@ func TestGetNodeResourceTargetsIgnoresDRANodes(t *testing.T) {
 	node.Status.Allocatable[tpu.ResourceGoogleTPU] = *resource.NewQuantity(4, resource.DecimalSI)
 
 	p := TpuCustomResourcesProcessor{}
-	targets, err := p.GetNodeResourceTargets(&context.AutoscalingContext{}, node, nil)
+	targets, err := p.GetNodeResourceTargets(&ca_context.AutoscalingContext{}, node, nil)
 
 	assert.NoError(t, err)
 	assert.Empty(t, targets)

@@ -125,11 +125,11 @@ func TestBalancedLocationPolicyZoneBUnavailable(t *testing.T) {
 				assert.Equal(t, tc.expectedNodes, len(infra.Fakes.K8s.Nodes().Items), "Expected %d nodes in the cluster", tc.expectedNodes)
 
 				// Assertions: MIGs target sizes
-				migA, err := infra.Fakes.GceService.FetchMig(gceRefForTest("pool-balanced", ZoneA))
+				migA, err := infra.Fakes.GceService.FetchMig(context.TODO(), gceRefForTest("pool-balanced", ZoneA))
 				assert.NoError(t, err)
 				assert.Equal(t, tc.wantMigATargetSize, migA.TargetSize, "Expected ZoneA MIG to scale up to %d", tc.wantMigATargetSize)
 
-				migB, err := infra.Fakes.GceService.FetchMig(gceRefForTest("pool-balanced", ZoneB))
+				migB, err := infra.Fakes.GceService.FetchMig(context.TODO(), gceRefForTest("pool-balanced", ZoneB))
 				assert.NoError(t, err)
 				assert.Equal(t, tc.wantMigBTargetSize, migB.TargetSize, "Expected ZoneB MIG to scale up to %d", tc.wantMigBTargetSize)
 			})

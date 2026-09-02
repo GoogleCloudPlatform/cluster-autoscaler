@@ -15,6 +15,8 @@
 package gkeprice
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
@@ -72,11 +74,11 @@ func (pcr *progressiveGroupCountReducer) BaseGroupCreationPenalty() float64 {
 	// Make multizonal cluster behave similarly to single zonal
 	var nodeGroups []cloudprovider.NodeGroup
 
-	for _, ng := range pcr.provider.NodeGroups() {
+	for _, ng := range pcr.provider.NodeGroups(context.TODO()) {
 		// we want to skip non-autoprovisioned nodepools for autopilot cluster
 		// This will essentially exclude snowflake and quickstart nodepools primarily.
 		// context: b/291550261#comment6
-		if pcr.provider.IsAutopilotEnabled() && !ng.Autoprovisioned() {
+		if pcr.provider.IsAutopilotEnabled() && !ng.Autoprovisioned(context.TODO()) {
 			continue
 		}
 		nodeGroups = append(nodeGroups, ng)

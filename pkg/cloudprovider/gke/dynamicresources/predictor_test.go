@@ -15,23 +15,29 @@
 package dynamicresources
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
+
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	resourceapi "k8s.io/api/resource/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/utils/ptr"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -188,7 +194,7 @@ func TestResourcePredictorResourceSlicesForNode(t *testing.T) {
 
 			predictor := NewResourcePredictor()
 			predictor.SetCloudProvider(&fakeProvider{})
-			predictor.FilterOutNodesWithUnreadyResources(nil, nil, nil, draSnapshot)
+			predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, draSnapshot)
 			resourceSlices, err := predictor.ResourceSlicesForNode(nodePoolSpec, test.templateNode)
 			assert.NoError(t, err)
 			assert.EqualValues(t, len(resourceSlices), test.wantResourceSlicesCount)
@@ -220,12 +226,12 @@ func TestResourcePredictorCustomResourcesProcessorMethods(t *testing.T) {
 	predictor := NewResourcePredictor()
 
 	// Assert that FilterOutNodesWithUnreadyResources() doesn't change the provided Node lists.
-	gotAllNodes, gotReadyNodes := predictor.FilterOutNodesWithUnreadyResources(nil, allNodes, readyNodes, drasnapshot.NewSnapshot(nil, nil, nil, nil))
+	gotAllNodes, gotReadyNodes := predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, allNodes, readyNodes, drasnapshot.NewSnapshot(nil, nil, nil, nil))
 	assert.Equal(t, allNodes, gotAllNodes)
 	assert.Equal(t, readyNodes, gotReadyNodes)
 
 	// Assert that GetNodeResourceTargets() doesn't return anything.
-	targets, err := predictor.GetNodeResourceTargets(nil, readyNode1, nil)
+	targets, err := predictor.GetNodeResourceTargets(context.TODO(), nil, readyNode1, nil)
 	assert.NoError(t, err)
 	assert.Nil(t, targets)
 }
@@ -365,20 +371,20 @@ func TestResourcePredictorConcurrency(t *testing.T) {
 	// and fails the test if that doesn't happen within the timeout.
 	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
 
-	// This predictor.FilterOutNodesWithUnreadyResources() call should update the DeviceClasses, and predictor should
+	// This predictor.FilterOutNodesWithUnreadyResources(...) call should update the DeviceClasses, and predictor should
 	// start returning both the GPU and the ComputeDomain slices.
-	predictor.FilterOutNodesWithUnreadyResources(nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
+	predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
 	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)
 
 	// Update the device classes, the new ones don't have the ComputeDomain ones - predictor should stop predicting ComputeDomain again.
-	predictor.FilterOutNodesWithUnreadyResources(nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, otherDeviceClasses))
+	predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, otherDeviceClasses))
 	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
 
 	// Simulate calling FilterOutNodesWithUnreadyResources() repeatedly to triple-check there aren't any race conditions between
 	// reading and writing (a single write could technically align between reads and not break, this should be much less
 	// probable with both sides being repeated).
 	for range multipleConsecutiveWritesToTest {
-		predictor.FilterOutNodesWithUnreadyResources(nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
+		predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
 	}
 	// ComputeDomain devices should be predicted again after the previous FilterOutNodesWithUnreadyResources() call.
 	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)

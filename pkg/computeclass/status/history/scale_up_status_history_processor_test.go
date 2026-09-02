@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -362,7 +363,7 @@ func TestScaleUpStatusHistoryProcessor(t *testing.T) {
 			}
 			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, nil, nil, manager)
 
-			processor.Process(nil, tc.scaleUpStatus)
+			processor.Process(context.TODO(), nil, tc.scaleUpStatus)
 
 			unfinished := sharedData.getUnfinishedNodeGroups()
 
@@ -605,7 +606,7 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, updatesCh, nil, mockManager)
 			processor.now = func() time.Time { return now }
 
-			processor.Process(nil, scaleUpStatus)
+			processor.Process(context.TODO(), nil, scaleUpStatus)
 
 			select {
 			case msg := <-updatesCh:
@@ -854,7 +855,7 @@ func TestScaleUpStatusHistoryProcessor_ProcessMinCapacity(t *testing.T) {
 				mockObserver.On("OnScaleUpDecision", want.ccName, want.ruleIdx, mock.AnythingOfType("time.Time")).Return()
 			}
 
-			processor.Process(nil, tc.scaleUpStatus)
+			processor.Process(context.TODO(), nil, tc.scaleUpStatus)
 
 			mockObserver.AssertExpectations(t)
 			if len(tc.wantDecisions) == 0 {

@@ -2546,7 +2546,7 @@ func TestFilterExpansionOptions(t *testing.T) {
 			})
 			tc.wantCandidateInfo.candidate = &defrag.Candidate{Plugin: plugin}
 			processor.pickedCandidateInfo = tc.wantCandidateInfo
-			assert.ElementsMatch(t, tc.wantOptions, processor.BestOptions(tc.options, nil))
+			assert.ElementsMatch(t, tc.wantOptions, processor.BestOptions(context.TODO(), tc.options, nil))
 			assert.Equal(t, tc.wantCandidateInfo, processor.pickedCandidateInfo)
 		})
 	}
@@ -2692,7 +2692,7 @@ func TestCleanPickedCandidate(t *testing.T) {
 				CloudProvider:       provider,
 			}
 
-			pods, err := processor.Process(ctx, unschedulablePods)
+			pods, err := processor.Process(context.TODO(), ctx, unschedulablePods)
 			assert.Equal(t, pods, unschedulablePods)
 			assert.NoError(t, err)
 
@@ -2856,7 +2856,7 @@ func TestProcessReturnedPods(t *testing.T) {
 			}
 
 			unschedulablePods := []*apiv1.Pod{test.BuildTestPod("p3", 100, 100)}
-			returnedPods, err := processor.Process(ctx, unschedulablePods)
+			returnedPods, err := processor.Process(context.TODO(), ctx, unschedulablePods)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantPickedCandidate, processor.DefragPickedCandidate())
 

@@ -15,11 +15,14 @@
 package metrics_processors
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -96,7 +99,7 @@ func TestMetricsFilterScaleUpProcessor_RegisterFailedScaleUp(t *testing.T) {
 			testTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 			metricsFilter.ObserveScaleUp([]*apiv1.Pod{pod1, pod2}, []string{ng.Id()}, testTime)
 
-			processor.RegisterFailedScaleUp(ng, 1, cloudprovider.InstanceErrorInfo{
+			processor.RegisterFailedScaleUp(context.TODO(), ng, 1, cloudprovider.InstanceErrorInfo{
 				ErrorCode: tc.errorCode,
 			}, testTime)
 
@@ -116,7 +119,7 @@ func TestMetricsFilterScaleUpProcessor_RegisterFailedScaleUp_NilNodeGroup(t *tes
 	testTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	assert.NotPanics(t, func() {
-		processor.RegisterFailedScaleUp(nil, 1, cloudprovider.InstanceErrorInfo{
+		processor.RegisterFailedScaleUp(context.TODO(), nil, 1, cloudprovider.InstanceErrorInfo{
 			ErrorCode: gce.ErrorCodeQuotaExceeded,
 		}, testTime)
 	})
@@ -129,7 +132,7 @@ func TestMetricsFilterScaleUpProcessor_NoOpMethods(t *testing.T) {
 	testTime := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
 	assert.NotPanics(t, func() {
-		processor.RegisterScaleUp(ng, 1, testTime)
+		processor.RegisterScaleUp(context.TODO(), ng, 1, testTime)
 		processor.RegisterScaleDown(ng, "node1", testTime, testTime)
 		processor.RegisterFailedScaleDown(ng, "reason", testTime)
 	})

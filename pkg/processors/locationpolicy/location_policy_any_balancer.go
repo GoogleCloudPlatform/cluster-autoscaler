@@ -56,7 +56,7 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 	}
 
 	startTime := time.Now()
-	defer metrics.UpdateDurationFromStart(recommendLocationsBalanceKey, startTime)
+	defer metrics.UpdateDurationFromStart(context.TODO(), recommendLocationsBalanceKey, startTime)
 
 	// Each gkeNodeGroup has an equivalent instance template, so we pick the first one.
 	gkeNodeGroup := gkeNodeGroups[0]
@@ -122,19 +122,19 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		if !ok {
 			return nil, fmt.Errorf("did not found gkeNodeGroup for zone: %q", loc)
 		}
-		targetSize, targetSizeErr := gkeNodeGroup.TargetSize()
+		targetSize, targetSizeErr := gkeNodeGroup.TargetSize(context.TODO())
 		if targetSizeErr != nil {
 			return nil, fmt.Errorf("could not get target size for gkeNodeGroup: %+v", gkeNodeGroup)
 		}
-		if targetSize+nodesResize > gkeNodeGroup.MaxSize() {
-			return nil, fmt.Errorf("error in RecLoc API as new size: %d is bigger than max size: %d for gkeNodeGroup: %+v", targetSize+nodesResize, gkeNodeGroup.MaxSize(), gkeNodeGroup)
+		if targetSize+nodesResize > gkeNodeGroup.MaxSize(context.TODO()) {
+			return nil, fmt.Errorf("error in RecLoc API as new size: %d is bigger than max size: %d for gkeNodeGroup: %+v", targetSize+nodesResize, gkeNodeGroup.MaxSize(context.TODO()), gkeNodeGroup)
 		}
 
 		result = append(result, nodegroupset.ScaleUpInfo{
 			Group:       gkeNodeGroup,
 			CurrentSize: targetSize,
 			NewSize:     targetSize + nodesResize,
-			MaxSize:     gkeNodeGroup.MaxSize(),
+			MaxSize:     gkeNodeGroup.MaxSize(context.TODO()),
 		})
 	}
 	return result, nil
@@ -156,11 +156,11 @@ func (b *locationPolicyAnyBalancer) consultRecommendLocations(templateLink strin
 		}
 	}
 	for _, gkeNodeGroup := range gkeNodeGroups {
-		targetSize, err := gkeNodeGroup.TargetSize()
+		targetSize, err := gkeNodeGroup.TargetSize(context.TODO())
 		if err != nil {
 			return nil, fmt.Errorf("could not get target size for gkeNodeGroup: %+v", gkeNodeGroup)
 		}
-		maxScaleUpSize := int64(gkeNodeGroup.MaxSize() - targetSize)
+		maxScaleUpSize := int64(gkeNodeGroup.MaxSize(context.TODO()) - targetSize)
 		if maxScaleUpSize > 0 {
 			locationSettings[gkeNodeGroup.GceRef().Zone] = gceclient.ZoneSetting{
 				ZonePreference: gceclient.ZonePreferenceAllow,

@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -117,7 +118,7 @@ func TestNodeGroupListProcessor(t *testing.T) {
 				csnNg.Id():    framework.NewTestNodeInfo(csnNode),
 			}
 
-			actualGroups, _, err := processor.Process(&context.AutoscalingContext{}, tc.nodeGroups, nodeInfos, tc.unschedulablePods)
+			actualGroups, _, err := processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, tc.nodeGroups, nodeInfos, tc.unschedulablePods)
 			if tc.err {
 				assert.Error(t, err)
 			} else {
@@ -142,7 +143,7 @@ type mockNodeGroupListProcessor struct {
 	wasCleanUpCalled bool
 }
 
-func (p *mockNodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *mockNodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	if p.err {
 		return nil, nil, assert.AnError
 	}

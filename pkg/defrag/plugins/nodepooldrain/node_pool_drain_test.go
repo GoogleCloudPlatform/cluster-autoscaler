@@ -15,6 +15,7 @@
 package nodepooldrain
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,10 +23,13 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
+
 	testCloudProvider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -119,9 +123,9 @@ func TestNodePoolDrainNewCandidate(t *testing.T) {
 				}
 			}
 			cs := testsnapshot.NewTestSnapshotOrDie(t)
-			assert.NoError(t, cs.SetClusterState(allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, cs.SetClusterState(context.TODO(), allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: cs,
 				CloudProvider:   cp,
 			}
@@ -226,9 +230,9 @@ func TestNodePoolDrainValidCandidateNodes(t *testing.T) {
 			}
 
 			cs := testsnapshot.NewTestSnapshotOrDie(t)
-			assert.NoError(t, cs.SetClusterState(allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, cs.SetClusterState(context.TODO(), allNodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: cs,
 				CloudProvider:   cp,
 			}

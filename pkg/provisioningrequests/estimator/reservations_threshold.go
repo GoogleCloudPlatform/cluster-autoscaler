@@ -15,6 +15,8 @@
 package estimator
 
 import (
+	"context"
+
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -70,7 +72,7 @@ type CloudProvider interface {
 //   - ANY_THEN_FAIL: Similar to ANY, but if available reservations reach 0,
 //     the limiter returns -1, strictly blocking any fallback to on-demand
 //     capacity.
-func (t *reservationsThreshold) NodeLimit(nodeGroup cloudprovider.NodeGroup, context estimator.EstimationContext) estimator.NodeLimitResult {
+func (t *reservationsThreshold) NodeLimit(ctx context.Context, nodeGroup cloudprovider.NodeGroup, context estimator.EstimationContext) estimator.NodeLimitResult {
 	allReservations := t.reservationsPuller.GetReservations()
 	nodeLimit := t.unusedReservationsCount(nodeGroup, allReservations)
 	// Define threshold using reservations just for the current node group if similar node groups data is not available
@@ -92,11 +94,11 @@ func (t *reservationsThreshold) unusedReservationsCount(nodeGroup cloudprovider.
 		return 0
 	}
 
-	nodeGroupTargetSize, err := nodeGroup.TargetSize()
+	nodeGroupTargetSize, err := nodeGroup.TargetSize(context.TODO())
 	if err != nil {
 		return 0
 	}
-	availableCapacity := nodeGroup.MaxSize() - nodeGroupTargetSize
+	availableCapacity := nodeGroup.MaxSize(context.TODO()) - nodeGroupTargetSize
 	if availableCapacity <= 0 {
 		return 0
 	}
@@ -126,7 +128,7 @@ func NewReservationsThreshold(puller *gceclient.ReservationsPuller, localSSDDisk
 func (t *reservationsThreshold) nodeLimitForAnyReservationThenFailAffinityNodeGroup(nodeGroup cloudprovider.NodeGroup, nodeLimit int) int {
 	mig, ok := nodeGroup.(*gke.GkeMig)
 	if !ok {
-		klog.Errorf("Nodegroup - %v cannot be converted to MIG", nodeGroup.Debug())
+		klog.Errorf("Nodegroup - %v cannot be converted to MIG", nodeGroup.Debug(context.TODO()))
 		return nodeLimit
 	}
 

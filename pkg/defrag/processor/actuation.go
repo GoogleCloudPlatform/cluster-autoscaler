@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -22,7 +23,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+
 	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -56,7 +58,7 @@ func newDefragActuator(opts actuatorOptions) *defragActuator {
 // startScaleDown starts scale-down of the Candidate, returns scaled down nodes
 // returns error if the scale-down fails
 func (a *defragActuator) startScaleDown(
-	ctx *context.AutoscalingContext,
+	ctx *ca_context.AutoscalingContext,
 	candidate *defrag.Candidate,
 	candidateCreationTime time.Time,
 ) ([]string, error) {
@@ -66,7 +68,7 @@ func (a *defragActuator) startScaleDown(
 }
 
 func (a *defragActuator) startScaleDownNodes(
-	ctx *context.AutoscalingContext,
+	ctx *ca_context.AutoscalingContext,
 	candidate *defrag.Candidate,
 	candidateCreationTime time.Time,
 	nodeNames []string,
@@ -87,7 +89,7 @@ func (a *defragActuator) startScaleDownNodes(
 	var scaledDownNodes []*scaledownstatus.ScaleDownNode
 	var typedErr errors.AutoscalerError
 
-	scaleDownResult, scaledDownNodes, typedErr = ctx.ScaleDownActuator.StartDeletion(nil, nodes)
+	scaleDownResult, scaledDownNodes, typedErr = ctx.ScaleDownActuator.StartDeletion(context.TODO(), nil, nodes)
 
 	if typedErr != nil {
 		return []string{}, typedErr
@@ -99,7 +101,7 @@ func (a *defragActuator) startScaleDownNodes(
 				Result:          scaleDownResult,
 				ScaledDownNodes: scaledDownNodes,
 			}
-			a.scaleDownStatusProcessor.Process(ctx, scaleDownStatus)
+			a.scaleDownStatusProcessor.Process(context.TODO(), ctx, scaleDownStatus)
 		}
 	}
 

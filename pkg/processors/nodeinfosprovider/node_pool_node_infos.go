@@ -15,6 +15,7 @@
 package nodeinfosprovider
 
 import (
+	"context"
 	"reflect"
 	"sort"
 
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
@@ -32,16 +33,16 @@ import (
 // relevant information from nodeInfos generated from real nodes from the same node pool.
 // This can help solve problems with scaling a node group from 0 if there are some non-0
 // node groups in the same node pool.
-func UpdateNodeInfosWithinNodePools(ctx *context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+func UpdateNodeInfosWithinNodePools(ctx *ca_context.AutoscalingContext, nodeInfos map[string]*framework.NodeInfo) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
 	gkeCloudProvider, ok := ctx.CloudProvider.(processors.ProcessorsCloudProvider)
 	if !ok {
 		klog.Errorf("Unexpected cloudprovider.CloudProvider type, got: %s, want: ProcessorsCloudProvider", reflect.TypeOf(ctx.CloudProvider))
 		return nodeInfos, nil
 	}
 
-	nodeGroups := gkeCloudProvider.NodeGroups()
+	nodeGroups := gkeCloudProvider.NodeGroups(context.TODO())
 	for _, nodeGroup := range nodeGroups {
-		if !nodeGroup.Exist() {
+		if !nodeGroup.Exist(context.TODO()) {
 			continue
 		}
 
@@ -80,7 +81,7 @@ func getNodePoolNodeGroups(nodePoolName string, nodeGroups []cloudprovider.NodeG
 	var result []*gke.GkeMig
 
 	for _, nodeGroup := range nodeGroups {
-		if !nodeGroup.Exist() {
+		if !nodeGroup.Exist(context.TODO()) {
 			continue
 		}
 
@@ -112,7 +113,7 @@ func getCandidateNodeInfoForNodePool(provider processors.ProcessorsCloudProvider
 	}
 
 	for _, otherMig := range candidateMigs {
-		if !otherMig.Exist() || !areTemplatesSimilar(provider, mig, otherMig) {
+		if !otherMig.Exist(context.TODO()) || !areTemplatesSimilar(provider, mig, otherMig) {
 			continue
 		}
 

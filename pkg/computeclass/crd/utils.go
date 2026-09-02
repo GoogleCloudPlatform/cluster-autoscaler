@@ -15,6 +15,7 @@
 package crd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -26,7 +27,7 @@ import (
 
 type gkeNodeGroup interface {
 	Spec() *gkeclient.NodePoolSpec
-	TemplateNodeInfo() (*framework.NodeInfo, error)
+	TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error)
 	TemplateNodeLabels() (map[string]string, error)
 }
 
@@ -121,7 +122,7 @@ func NodeGroupCrdTaints(nodeGroup cloudprovider.NodeGroup, crdLabel string) ([]v
 
 // templateNodeFromMig returns template node for the given nodeGroup.
 func templateNodeFromMig(mig gkeNodeGroup) (*v1.Node, error) {
-	nodeInfo, err := mig.TemplateNodeInfo()
+	nodeInfo, err := mig.TemplateNodeInfo(context.TODO())
 	if err != nil {
 		return nil, err
 	}

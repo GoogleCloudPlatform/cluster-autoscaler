@@ -51,7 +51,7 @@ func (f *FakeSet) RunScheduler(ctx context.Context, t *testing.T) {
 		t.Fatalf("Failed to collect cluster state: %v", err)
 	}
 
-	if err := snapshot.SetClusterState(nodes, scheduledPods, nil, nil); err != nil {
+	if err := snapshot.SetClusterState(context.TODO(), nodes, scheduledPods, nil, nil); err != nil {
 		t.Fatalf("Failed to set cluster state: %v", err)
 	}
 

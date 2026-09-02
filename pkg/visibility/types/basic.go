@@ -15,6 +15,7 @@
 package types
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 
@@ -174,7 +175,7 @@ func ConvertGkeMig(nodeGroup cloudprovider.NodeGroup) (*GkeMig, error) {
 		Name:         mig.GceRef().Name,
 		NodePoolName: mig.NodePoolName(),
 		Zone:         mig.GceRef().Zone,
-		Exists:       mig.Exist(),
+		Exists:       mig.Exist(context.TODO()),
 		Spec:         mig.Spec(),
 	}, nil
 }

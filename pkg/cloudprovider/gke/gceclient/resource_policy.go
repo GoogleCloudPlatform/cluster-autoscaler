@@ -40,10 +40,16 @@ type PlacementPolicy struct {
 	SliceCount              int64
 }
 
+// AcceleratorTopologyModeProvisionOnly indicates a dynamic slicing workload
+// policy where MIGs are grown incrementally through CreateInstances rather
+// than ResizeRequest, supporting partial (non-atomic) scale-up to max.
+const AcceleratorTopologyModeProvisionOnly = "PROVISION_ONLY"
+
 type WorkloadPolicy struct {
-	AcceleratorTopology string
-	MaxTopologyDistance string
-	Type                string
+	AcceleratorTopology     string
+	AcceleratorTopologyMode string
+	MaxTopologyDistance     string
+	Type                    string
 }
 
 func toGceResourcePolicy(item *gce_api_beta.ResourcePolicy) (*GceResourcePolicy, error) {
@@ -78,9 +84,10 @@ func toPlacementPolicy(p *gce_api_beta.ResourcePolicyGroupPlacementPolicy) Place
 func toWorkloadPolicy(wp *gce_api_beta.ResourcePolicyWorkloadPolicy) WorkloadPolicy {
 	if wp != nil {
 		return WorkloadPolicy{
-			AcceleratorTopology: wp.AcceleratorTopology,
-			MaxTopologyDistance: wp.MaxTopologyDistance,
-			Type:                wp.Type,
+			AcceleratorTopology:     wp.AcceleratorTopology,
+			AcceleratorTopologyMode: wp.AcceleratorTopologyMode,
+			MaxTopologyDistance:     wp.MaxTopologyDistance,
+			Type:                    wp.Type,
 		}
 	}
 	return WorkloadPolicy{}

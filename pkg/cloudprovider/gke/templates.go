@@ -15,23 +15,28 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+
 	labelUtils "sigs.k8s.io/cluster-autoscaler/pkg/utils/labels"
 )
 
@@ -86,7 +91,14 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 	if err != nil {
 		return nil, err
 	}
-	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os(), mig.Version())
+	// Determine per-MIG riptide state: check CCC self-service override, fallback to cluster default.
+	riptideEnabled := gcfsEnabled
+	if mig.Spec().SelfServiceMetadata != nil {
+		if val, ok := mig.Spec().SelfServiceMetadata[gkelabels.ImageStreamingLabelKey]; ok {
+			riptideEnabled = (val == "true")
+		}
+	}
+	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os(), mig.Version(), riptideEnabled)
 	for k, v := range gkeDaemonSetLabels {
 		labels[k] = v
 	}
@@ -100,7 +112,7 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		extendedResources[HugepageSize2mResourceName] = *resource.NewQuantity(hugepage2m, resource.DecimalSI)
 	}
 
-	capacity, err := t.BuildCapacity(migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, ephemeralLocalSsdCount, pods, reserved, extendedResources)
+	capacity, err := t.BuildCapacity(context.TODO(), migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, ephemeralLocalSsdCount, pods, reserved, extendedResources)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +158,7 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		}
 	}
 	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, gcfsEnabled, ephemeralLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)
-	evictionHard := gce.ParseEvictionHardOrGetDefault(nil)
+	evictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 
 	node.Status = apiv1.NodeStatus{
 		Capacity:    capacity,
@@ -247,16 +259,16 @@ func buildLabelsForAutoprovisionedMig(mig *GkeMig, nodeName string, os gce.Opera
 	return labels, nil
 }
 
-func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem, nodeVersion string) map[string]string {
+func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem, nodeVersion string, riptideEnabled bool) map[string]string {
 	labels := make(map[string]string)
 	if conditions.MetadataServerEnabled {
 		labels["iam.gke.io/gke-metadata-server-enabled"] = "true"
 	}
 
-	if conditions.WIImagePullMinVersion != nil {
+	if conditions.WIImagePullMinVersion != nil && !(conditions.DisableWIImagePullForRiptide && riptideEnabled) {
 		nv, err := version.FromString(nodeVersion)
 		if err == nil {
-			if !nv.LessThan(*conditions.WIImagePullMinVersion) && conditions.WorkloadIdentityProviderSet {
+			if !nv.LessThan(*conditions.WIImagePullMinVersion) && conditions.WorkloadIdentityEnabled {
 				labels["iam.gke.io/workload-identity-image-pull-enabled"] = "true"
 			}
 		}

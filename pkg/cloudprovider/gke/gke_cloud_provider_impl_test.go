@@ -82,7 +82,7 @@ func TestNodeGroups(t *testing.T) {
 	}
 	mig := []*GkeMig{{gceRef: gce.GceRef{Name: "ng1"}}}
 	gkeManagerMock.On("GetGkeMigs").Return(mig).Once()
-	result := gke.NodeGroups()
+	result := gke.NodeGroups(context.TODO())
 	assert.Equal(t, []cloudprovider.NodeGroup{mig[0]}, result)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }
@@ -257,7 +257,7 @@ func TestNodeGroupForNode(t *testing.T) {
 				node.ObjectMeta.Labels[gkelabels.GkeNodePoolLabel] = test.gkeNodePoolLabel
 			}
 
-			nodeGroup, err := gke.NodeGroupForNode(node)
+			nodeGroup, err := gke.NodeGroupForNode(context.TODO(), node)
 
 			if test.expectedError {
 				assert.Error(t, err)
@@ -281,7 +281,7 @@ func TestGetResourceLimiter(t *testing.T) {
 
 	// Return default.
 	gkeManagerMock.On("GetResourceLimiter").Return((*cloudprovider.ResourceLimiter)(nil), nil).Once()
-	returnedResourceLimiter, err := gke.GetResourceLimiter()
+	returnedResourceLimiter, err := gke.GetResourceLimiter(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, resourceLimiter, returnedResourceLimiter)
 
@@ -290,13 +290,13 @@ func TestGetResourceLimiter(t *testing.T) {
 		map[string]int64{cloudprovider.ResourceNameCores: 2, cloudprovider.ResourceNameMemory: 20000000},
 		map[string]int64{cloudprovider.ResourceNameCores: 5, cloudprovider.ResourceNameMemory: 200000000})
 	gkeManagerMock.On("GetResourceLimiter").Return(resourceLimiterGKE, nil).Once()
-	returnedResourceLimiterGKE, err := gke.GetResourceLimiter()
+	returnedResourceLimiterGKE, err := gke.GetResourceLimiter(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, returnedResourceLimiterGKE, resourceLimiterGKE)
 
 	// Error in GceManager.
 	gkeManagerMock.On("GetResourceLimiter").Return((*cloudprovider.ResourceLimiter)(nil), fmt.Errorf("Some error")).Once()
-	_, err = gke.GetResourceLimiter()
+	_, err = gke.GetResourceLimiter(context.TODO())
 	assert.Error(t, err)
 }
 
@@ -347,22 +347,22 @@ func TestMig(t *testing.T) {
 	gkeManagerMock.On("GetDefaultNodePoolDiskType").Return("pd-balanced")
 
 	systemLabels := map[string]string{apiv1.LabelZoneFailureDomain: "us-central1-b"}
-	nodeGroup, err := gke.NewNodeGroup("n1-standard-1", nil, systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), "n1-standard-1", nil, systemLabels, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, nodeGroup)
 	mig1 := reflect.ValueOf(nodeGroup).Interface().(*GkeMig)
-	assert.Equal(t, true, mig1.Autoprovisioned())
+	assert.Equal(t, true, mig1.Autoprovisioned(context.TODO()))
 	mig1.exist = true
 	assert.True(t, strings.HasPrefix(mig1.Id(), "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/instanceGroups/"+nodeAutoprovisioningPrefix+"-n1-standard-1"))
-	assert.Equal(t, true, mig1.Autoprovisioned())
-	assert.Equal(t, 0, mig1.MinSize())
-	assert.Equal(t, napMaxNodes, mig1.MaxSize())
+	assert.Equal(t, true, mig1.Autoprovisioned(context.TODO()))
+	assert.Equal(t, 0, mig1.MinSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, mig1.MaxSize(context.TODO()))
 	assert.Equal(t, false, mig1.TotalSizeLimitEnabled())
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test TargetSize.
 	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(2), nil).Once()
-	targetSize, err := mig1.TargetSize()
+	targetSize, err := mig1.TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 2, targetSize)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
@@ -370,18 +370,18 @@ func TestMig(t *testing.T) {
 	// Test IncreaseSize.
 	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(2), nil).Once()
 	gkeManagerMock.On("CreateInstances", mock.AnythingOfType("*gke.GkeMig"), int64(1)).Return(nil).Once()
-	err = mig1.IncreaseSize(1)
+	err = mig1.IncreaseSize(context.TODO(), 1)
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test IncreaseSize - fail on wrong size.
-	err = mig1.IncreaseSize(0)
+	err = mig1.IncreaseSize(context.TODO(), 0)
 	assert.Error(t, err)
 	assert.Equal(t, "size increase must be positive", err.Error())
 
 	// Test IncreaseSize - fail on too big delta.
 	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(2), nil).Once()
-	err = mig1.IncreaseSize(napMaxNodes)
+	err = mig1.IncreaseSize(context.TODO(), napMaxNodes)
 	assert.Error(t, err)
 	assert.Equal(t, "size increase too large - desired:2002 max:2000", err.Error())
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
@@ -402,12 +402,12 @@ func TestMig(t *testing.T) {
 			},
 		}, nil).Once()
 	gkeManagerMock.On("SetMigSize", mock.AnythingOfType("*gke.GkeMig"), int64(2)).Return(nil).Once()
-	err = mig1.DecreaseTargetSize(-1)
+	err = mig1.DecreaseTargetSize(context.TODO(), -1)
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test DecreaseTargetSize - fail on positive delta.
-	err = mig1.DecreaseTargetSize(1)
+	err = mig1.DecreaseTargetSize(context.TODO(), 1)
 	assert.Error(t, err)
 	assert.Equal(t, "size decrease must be negative", err.Error())
 
@@ -427,7 +427,7 @@ func TestMig(t *testing.T) {
 			},
 		}, nil).Once()
 
-	err = mig1.DecreaseTargetSize(-2)
+	err = mig1.DecreaseTargetSize(context.TODO(), -2)
 	assert.Error(t, err)
 	assert.Equal(t, "attempt to delete existing nodes targetSize:3 delta:-2 existingNodes: 2", err.Error())
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
@@ -475,13 +475,13 @@ func TestMig(t *testing.T) {
 	gkeManagerMock.On("GetMigForInstance", n1ref).Return(mig1, nil).Once()
 	gkeManagerMock.On("GetMigForInstance", n2ref).Return(mig1, nil).Once()
 	gkeManagerMock.On("DeleteInstances", []gce.GceRef{n1ref, n2ref}).Return(nil).Once()
-	err = mig1.DeleteNodes([]*apiv1.Node{n1, n2})
+	err = mig1.DeleteNodes(context.TODO(), []*apiv1.Node{n1, n2})
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test DeleteNodes - fail on reaching min size.
 	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(0), nil).Once()
-	err = mig1.DeleteNodes([]*apiv1.Node{n1, n2})
+	err = mig1.DeleteNodes(context.TODO(), []*apiv1.Node{n1, n2})
 	assert.Error(t, err)
 	assert.Equal(t, "min size reached, nodes will not be deleted", err.Error())
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
@@ -490,7 +490,7 @@ func TestMig(t *testing.T) {
 	gkeManagerMock.On("GetMigForInstance", n1ref).Return(mig1, nil).Once()
 	gkeManagerMock.On("GetMigForInstance", n2ref).Return(mig1, nil).Once()
 	gkeManagerMock.On("DeleteInstances", []gce.GceRef{n1ref, n2ref}).Return(nil).Once()
-	err = mig1.ForceDeleteNodes([]*apiv1.Node{n1, n2})
+	err = mig1.ForceDeleteNodes(context.TODO(), []*apiv1.Node{n1, n2})
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
@@ -513,14 +513,14 @@ func TestMig(t *testing.T) {
 	gkeManagerMock.On("GetMigForInstance", mock.AnythingOfType("gce.GceRef")).Return(atomicResizeMig, nil).Once()
 	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(2), nil).Once()
 	gkeManagerMock.On("DeleteInstances", []gce.GceRef{n1ref}).Return(nil).Once()
-	err = atomicResizeMig.DeleteNodes([]*apiv1.Node{n1})
+	err = atomicResizeMig.DeleteNodes(context.TODO(), []*apiv1.Node{n1})
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test ForceDeleteNodes - don't fail on non-atomic delete.
 	gkeManagerMock.On("GetMigForInstance", n1ref).Return(mig1, nil).Once()
 	gkeManagerMock.On("DeleteInstances", []gce.GceRef{n1ref}).Return(nil).Once()
-	err = mig1.ForceDeleteNodes([]*apiv1.Node{n1})
+	err = mig1.ForceDeleteNodes(context.TODO(), []*apiv1.Node{n1})
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
@@ -538,7 +538,7 @@ func TestMig(t *testing.T) {
 				},
 			},
 		}, nil).Once()
-	nodes, err := mig1.Nodes()
+	nodes, err := mig1.Nodes(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, cloudprovider.Instance{Id: "gce://project1/us-central1-b/gke-cluster-1-default-pool-f7607aac-9j4g"}, nodes[0])
 	assert.Equal(t, cloudprovider.Instance{Id: "gce://project1/us-central1-b/gke-cluster-1-default-pool-f7607aac-dck1"}, nodes[1])
@@ -553,7 +553,7 @@ func TestMig(t *testing.T) {
 
 	gkeManagerMock.On("DeleteNodePool", mock.AnythingOfType("*gke.GkeMig")).Return(nil).Once()
 	mig1.exist = true
-	err = mig1.Delete()
+	err = mig1.Delete(context.TODO())
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
@@ -570,7 +570,7 @@ func TestMig(t *testing.T) {
 
 	// Test TemplateNodeInfo.
 	gkeManagerMock.On("GetMigTemplateNodeInfo", mock.AnythingOfType("*gke.GkeMig")).Return(framework.NewTestNodeInfo(&apiv1.Node{}, cloudprovider.BuildKubeProxy(mig2.Id())), nil).Once()
-	templateNodeInfo, err := mig2.TemplateNodeInfo()
+	templateNodeInfo, err := mig2.TemplateNodeInfo(context.TODO())
 	assert.NoError(t, err)
 	assert.NotNil(t, templateNodeInfo)
 	assert.NotNil(t, templateNodeInfo.Node())
@@ -689,7 +689,7 @@ func TestIncreaseSize(t *testing.T) {
 			gkeManagerMock.On("GetMigSize", mig).Return(int64(0), nil)
 			gkeManagerMock.On(tc.wantCall, mig, delta).Return(nil).Once()
 
-			err := mig.IncreaseSize(int(delta))
+			err := mig.IncreaseSize(context.TODO(), int(delta))
 
 			assert.NoError(t, err)
 			mock.AssertExpectationsForObjects(t, gkeManagerMock)
@@ -847,7 +847,7 @@ func TestMigTargetSize(t *testing.T) {
 			}
 			gkeManagerMock.On("ResizeRequests", mock.AnythingOfType("*gke.GkeMig")).Return(mockRRs, nil)
 
-			gotSize, err := mig.TargetSize()
+			gotSize, err := mig.TargetSize(context.TODO())
 			assert.NoError(t, err)
 			assert.Equal(t, tc.expectedSize, gotSize)
 		})
@@ -979,7 +979,7 @@ func TestMaxSize(t *testing.T) {
 		AddMigsToNodePool("default-pool", migs...)
 
 		// Check the result of MaxSize() on the main MIG.
-		assert.Equal(t, testCase.wantMaxSize, mig.MaxSize())
+		assert.Equal(t, testCase.wantMaxSize, mig.MaxSize(context.TODO()))
 		mock.AssertExpectationsForObjects(t, gkeManagerMock)
 		t.Logf("\n\n\n\n\nPASSED %v\n\n\n\n\n", testName)
 	}
@@ -1039,13 +1039,13 @@ func TestTotalMigSize(t *testing.T) {
 	gkeManagerMock.On("GetMigSize", migs[2]).Return(int64(2), nil).Times(3)
 	gkeManagerMock.On("GetMigsTargetSize", mock.AnythingOfType("[]gce.GceRef")).Return(int64(12), nil).Times(6)
 
-	targetSize0, err := migs[0].TargetSize()
+	targetSize0, err := migs[0].TargetSize(context.TODO())
 	assert.Equal(t, nil, err)
 	assert.Equal(t, 4, targetSize0)
-	targetSize1, err := migs[1].TargetSize()
+	targetSize1, err := migs[1].TargetSize(context.TODO())
 	assert.Equal(t, nil, err)
 	assert.Equal(t, 6, targetSize1)
-	targetSize2, err := migs[2].TargetSize()
+	targetSize2, err := migs[2].TargetSize(context.TODO())
 	assert.Equal(t, nil, err)
 	assert.Equal(t, 2, targetSize2)
 
@@ -1059,12 +1059,12 @@ func TestTotalMigSize(t *testing.T) {
 	assert.Equal(t, 3, migs[1].TotalMinSize())
 	assert.Equal(t, 3, migs[2].TotalMinSize())
 
-	assert.Equal(t, 0, migs[0].MinSize())
-	assert.Equal(t, 1, migs[1].MinSize())
-	assert.Equal(t, 0, migs[2].MinSize())
-	assert.Equal(t, 992, migs[0].MaxSize())
-	assert.Equal(t, 994, migs[1].MaxSize())
-	assert.Equal(t, 990, migs[2].MaxSize())
+	assert.Equal(t, 0, migs[0].MinSize(context.TODO()))
+	assert.Equal(t, 1, migs[1].MinSize(context.TODO()))
+	assert.Equal(t, 0, migs[2].MinSize(context.TODO()))
+	assert.Equal(t, 992, migs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 994, migs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 990, migs[2].MaxSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test scenario where total size is greater than total max size by 300.
@@ -1072,19 +1072,19 @@ func TestTotalMigSize(t *testing.T) {
 	gkeManagerMock.On("GetMigSize", migs[1]).Return(int64(500), nil).Once()
 	gkeManagerMock.On("GetMigSize", migs[2]).Return(int64(600), nil).Once()
 	gkeManagerMock.On("GetMigsTargetSize", mock.AnythingOfType("[]gce.GceRef")).Return(int64(1300), nil).Times(3)
-	assert.Equal(t, 0, migs[0].MaxSize())
-	assert.Equal(t, 200, migs[1].MaxSize())
-	assert.Equal(t, 300, migs[2].MaxSize())
+	assert.Equal(t, 0, migs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 200, migs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 300, migs[2].MaxSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test GetMigsTargetSize errors scenario.
 	gkeManagerMock.On("GetMigsTargetSize", mock.AnythingOfType("[]gce.GceRef")).Return(int64(0), errors.New("test error 4")).Times(6)
-	assert.Equal(t, 0, migs[0].MaxSize())
-	assert.Equal(t, 0, migs[1].MaxSize())
-	assert.Equal(t, 0, migs[2].MaxSize())
-	assert.Equal(t, napMaxNodes, migs[0].MinSize())
-	assert.Equal(t, napMaxNodes, migs[1].MinSize())
-	assert.Equal(t, napMaxNodes, migs[2].MinSize())
+	assert.Equal(t, 0, migs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 0, migs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 0, migs[2].MaxSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[0].MinSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[1].MinSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[2].MinSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 
 	// Test GetMigSize errors scenario.
@@ -1092,12 +1092,12 @@ func TestTotalMigSize(t *testing.T) {
 	gkeManagerMock.On("GetMigSize", migs[1]).Return(int64(0), errors.New("test error 2")).Twice()
 	gkeManagerMock.On("GetMigSize", migs[2]).Return(int64(0), errors.New("test error 3")).Twice()
 	gkeManagerMock.On("GetMigsTargetSize", mock.AnythingOfType("[]gce.GceRef")).Return(int64(42), nil).Times(6)
-	assert.Equal(t, 0, migs[0].MaxSize())
-	assert.Equal(t, 0, migs[1].MaxSize())
-	assert.Equal(t, 0, migs[2].MaxSize())
-	assert.Equal(t, napMaxNodes, migs[0].MinSize())
-	assert.Equal(t, napMaxNodes, migs[1].MinSize())
-	assert.Equal(t, napMaxNodes, migs[2].MinSize())
+	assert.Equal(t, 0, migs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 0, migs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 0, migs[2].MaxSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[0].MinSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[1].MinSize(context.TODO()))
+	assert.Equal(t, napMaxNodes, migs[2].MinSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }
 
@@ -1189,16 +1189,16 @@ func TestTotalMigSizeRegularBlueGreen(t *testing.T) {
 	gkeManagerMock.On("GetMigSize", blueGreenMigs[3]).Return(int64(9), nil).Times(3)
 	gkeManagerMock.On("GetMigsTargetSize", greenMigsGceRefs).Return(int64(12), nil).Times(4)
 
-	targetSize0, err := blueGreenMigs[0].TargetSize()
+	targetSize0, err := blueGreenMigs[0].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 4, targetSize0)
-	targetSize1, err := blueGreenMigs[1].TargetSize()
+	targetSize1, err := blueGreenMigs[1].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 6, targetSize1)
-	targetSize2, err := blueGreenMigs[2].TargetSize()
+	targetSize2, err := blueGreenMigs[2].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 3, targetSize2)
-	targetSize3, err := blueGreenMigs[3].TargetSize()
+	targetSize3, err := blueGreenMigs[3].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 9, targetSize3)
 
@@ -1215,14 +1215,14 @@ func TestTotalMigSizeRegularBlueGreen(t *testing.T) {
 	assert.Equal(t, 3, blueGreenMigs[2].TotalMinSize())
 	assert.Equal(t, 3, blueGreenMigs[3].TotalMinSize())
 
-	assert.Equal(t, 0, blueGreenMigs[0].MinSize())
-	assert.Equal(t, 1, blueGreenMigs[1].MinSize())
-	assert.Equal(t, 0, blueGreenMigs[2].MinSize())
-	assert.Equal(t, 0, blueGreenMigs[3].MinSize())
-	assert.Equal(t, 994, blueGreenMigs[0].MaxSize())
-	assert.Equal(t, 996, blueGreenMigs[1].MaxSize())
-	assert.Equal(t, 991, blueGreenMigs[2].MaxSize())
-	assert.Equal(t, 997, blueGreenMigs[3].MaxSize())
+	assert.Equal(t, 0, blueGreenMigs[0].MinSize(context.TODO()))
+	assert.Equal(t, 1, blueGreenMigs[1].MinSize(context.TODO()))
+	assert.Equal(t, 0, blueGreenMigs[2].MinSize(context.TODO()))
+	assert.Equal(t, 0, blueGreenMigs[3].MinSize(context.TODO()))
+	assert.Equal(t, 994, blueGreenMigs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 996, blueGreenMigs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 991, blueGreenMigs[2].MaxSize(context.TODO()))
+	assert.Equal(t, 997, blueGreenMigs[3].MaxSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }
 
@@ -1318,16 +1318,16 @@ func TestTotalMigSizeAutoscaledBlueGreen(t *testing.T) {
 	gkeManagerMock.On("GetMigSize", blueGreenMigs[3]).Return(int64(9), nil).Times(3)
 	gkeManagerMock.On("GetMigsTargetSize", greenMigsGceRefs).Return(int64(12), nil).Times(4)
 
-	targetSize0, err := blueGreenMigs[0].TargetSize()
+	targetSize0, err := blueGreenMigs[0].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 4, targetSize0)
-	targetSize1, err := blueGreenMigs[1].TargetSize()
+	targetSize1, err := blueGreenMigs[1].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 6, targetSize1)
-	targetSize2, err := blueGreenMigs[2].TargetSize()
+	targetSize2, err := blueGreenMigs[2].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 3, targetSize2)
-	targetSize3, err := blueGreenMigs[3].TargetSize()
+	targetSize3, err := blueGreenMigs[3].TargetSize(context.TODO())
 	assert.NoError(t, err)
 	assert.Equal(t, 9, targetSize3)
 
@@ -1344,14 +1344,14 @@ func TestTotalMigSizeAutoscaledBlueGreen(t *testing.T) {
 	assert.Equal(t, 3, blueGreenMigs[2].TotalMinSize())
 	assert.Equal(t, 3, blueGreenMigs[3].TotalMinSize())
 
-	assert.Equal(t, 0, blueGreenMigs[0].MinSize())
-	assert.Equal(t, 1, blueGreenMigs[1].MinSize())
-	assert.Equal(t, 0, blueGreenMigs[2].MinSize())
-	assert.Equal(t, 0, blueGreenMigs[3].MinSize())
-	assert.Equal(t, 994, blueGreenMigs[0].MaxSize())
-	assert.Equal(t, 996, blueGreenMigs[1].MaxSize())
-	assert.Equal(t, 991, blueGreenMigs[2].MaxSize())
-	assert.Equal(t, 997, blueGreenMigs[3].MaxSize())
+	assert.Equal(t, 0, blueGreenMigs[0].MinSize(context.TODO()))
+	assert.Equal(t, 1, blueGreenMigs[1].MinSize(context.TODO()))
+	assert.Equal(t, 0, blueGreenMigs[2].MinSize(context.TODO()))
+	assert.Equal(t, 0, blueGreenMigs[3].MinSize(context.TODO()))
+	assert.Equal(t, 994, blueGreenMigs[0].MaxSize(context.TODO()))
+	assert.Equal(t, 996, blueGreenMigs[1].MaxSize(context.TODO()))
+	assert.Equal(t, 991, blueGreenMigs[2].MaxSize(context.TODO()))
+	assert.Equal(t, 997, blueGreenMigs[3].MaxSize(context.TODO()))
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
 }
 
@@ -1398,7 +1398,7 @@ func TestNewNodeNameWithCompactPlacement(t *testing.T) {
 		gkelabels.PlacementGroupLabel: "placement-id",
 	}
 
-	nodeGroup, err := gke.NewNodeGroup(machineType, nil, systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, nil, systemLabels, nil, nil)
 	assert.NoError(t, err)
 	mig := nodeGroup.(*GkeMig)
 	assert.Equal(t, "placement-id", mig.NodePoolName())
@@ -1444,7 +1444,7 @@ func TestNewNodeLocationPolicyDefaultsToAnyForSpot(t *testing.T) {
 		gkelabels.PlacementGroupLabel: "placement-id",
 	}
 
-	nodeGroup, err := gke.NewNodeGroup(machineType, nil, systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, nil, systemLabels, nil, nil)
 	assert.NoError(t, err)
 	mig := nodeGroup.(*GkeMig)
 	assert.Equal(t, LocationPolicyAny, mig.locationPolicy)
@@ -1490,7 +1490,7 @@ func TestNewNodeLocationPolicyUsesSelfService(t *testing.T) {
 		gkelabels.LocationPolicyLabelKey: "ANY",
 	}
 
-	nodeGroup, err := gke.NewNodeGroup(machineType, nil, systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, nil, systemLabels, nil, nil)
 	assert.NoError(t, err)
 	mig := nodeGroup.(*GkeMig)
 	assert.Equal(t, LocationPolicyAny, mig.locationPolicy)
@@ -1578,7 +1578,7 @@ func TestNodePoolNameWithAutopilotForNewNodeGroup(t *testing.T) {
 		apiv1.LabelZoneFailureDomain: zone,
 	}
 
-	nodeGroup, err := gke.NewNodeGroup(machineType, make(map[string]string), systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, make(map[string]string), systemLabels, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, nodeGroup)
 	mig1 := reflect.ValueOf(nodeGroup).Interface().(*GkeMig)
@@ -1643,7 +1643,7 @@ func TestReservationAffinityDefaulting(t *testing.T) {
 				systemLabels[gkelabels.ManagedNodeLabel] = "true"
 			}
 
-			nodeGroup, err := gke.NewNodeGroup(machineType, make(map[string]string), systemLabels, nil, nil)
+			nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, make(map[string]string), systemLabels, nil, nil)
 			assert.NoError(t, err)
 			assert.NotNil(t, nodeGroup)
 			mig := reflect.ValueOf(nodeGroup).Interface().(*GkeMig)
@@ -1681,7 +1681,7 @@ func TestNodePoolNameForNewNodeGroup(t *testing.T) {
 		apiv1.LabelZoneFailureDomain: zone,
 	}
 
-	nodeGroup, err := gke.NewNodeGroup(machineType, make(map[string]string), systemLabels, nil, nil)
+	nodeGroup, err := gke.NewNodeGroup(context.TODO(), machineType, make(map[string]string), systemLabels, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, nodeGroup)
 	mig1 := reflect.ValueOf(nodeGroup).Interface().(*GkeMig)
@@ -1767,13 +1767,13 @@ func TestGetNodeGpuConfig(t *testing.T) {
 			resourceName:     gpu.ResourceNvidiaGPU,
 			acceleratorLabel: gkelabels.GPULabel,
 			acceleratorType:  machinetypes.NvidiaTeslaK80.Name(),
-			expectedConfig:   &cloudprovider.GpuConfig{Label: gke.GPULabel(), Type: machinetypes.NvidiaTeslaK80.Name(), ExtendedResourceName: gpu.ResourceNvidiaGPU},
+			expectedConfig:   &cloudprovider.GpuConfig{Label: gke.GPULabel(context.TODO()), Type: machinetypes.NvidiaTeslaK80.Name(), ExtendedResourceName: gpu.ResourceNvidiaGPU},
 		},
 		"Node with GPU accelerator via DRA": {
 			acceleratorLabel: gkelabels.GPULabel,
 			acceleratorType:  machinetypes.NvidiaTeslaK80.Name(),
 			draLabel:         gkelabels.DraGpuNodeLabel,
-			expectedConfig:   &cloudprovider.GpuConfig{Label: gke.GPULabel(), Type: machinetypes.NvidiaTeslaK80.Name(), DraDriverName: dynamicresources.GpuDriver},
+			expectedConfig:   &cloudprovider.GpuConfig{Label: gke.GPULabel(context.TODO()), Type: machinetypes.NvidiaTeslaK80.Name(), DraDriverName: dynamicresources.GpuDriver},
 		},
 		"Node with TPU accelerator": {
 			resourceName:     tpu.ResourceGoogleTPU,
@@ -1800,7 +1800,7 @@ func TestGetNodeGpuConfig(t *testing.T) {
 			if tc.draLabel != "" {
 				node.Labels[tc.draLabel] = "true"
 			}
-			gotConfig := gke.GetNodeGpuConfig(node)
+			gotConfig := gke.GetNodeGpuConfig(context.TODO(), node)
 			assert.Equal(t, tc.expectedConfig, gotConfig)
 		})
 	}
@@ -2231,7 +2231,7 @@ func TestGkeMigGetOptions(t *testing.T) {
 
 			tt.mig.gkeManager = &gkeManagerMock
 
-			got, err := tt.mig.GetOptions(defaults)
+			got, err := tt.mig.GetOptions(context.TODO(), defaults)
 			assert.NoError(t, err)
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("GkeMig.GetOptions() options diff (-want +got): %s", diff)
@@ -2589,7 +2589,7 @@ func TestHasInstance(t *testing.T) {
 				gkeManager: gkeManagerMock,
 			}
 
-			got, err := gke.HasInstance(tc.node)
+			got, err := gke.HasInstance(context.TODO(), tc.node)
 			assert.Equal(t, tc.want, got)
 			assert.Equal(t, tc.wantErr, err)
 			gkeManagerMock.AssertExpectations(t)
@@ -2713,7 +2713,7 @@ func TestAcceleratorSliceNodeGroupMaxSize(t *testing.T) {
 				},
 				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
 			}
-			nodeGroup, err := gke.NewNodeGroup(tc.machineType, make(map[string]string), systemLabels, nil, nil)
+			nodeGroup, err := gke.NewNodeGroup(context.TODO(), tc.machineType, make(map[string]string), systemLabels, nil, nil)
 			assert.NoError(t, err)
 			assert.NotNil(t, nodeGroup)
 
@@ -3124,7 +3124,7 @@ func TestRefreshClearsRecommendations(t *testing.T) {
 	provider, err := BuildGkeCloudProvider(gkeManagerMock, nil, nil, true, "us-central1", nil, false, false, nil, "", nil, nil, nil, 1000)
 	assert.NoError(t, err)
 
-	err = provider.Refresh()
+	err = provider.Refresh(context.Background())
 	assert.NoError(t, err)
 
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)

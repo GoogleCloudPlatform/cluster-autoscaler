@@ -15,6 +15,7 @@
 package ccc
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -77,10 +79,10 @@ func TestRegisterScaleUp(t *testing.T) {
 	ng1 := gke.NewTestGkeMigBuilder().
 		SetSpec(gke.NewTestMigSpecBuilder().SetLabels(map[string]string{gkelabels.ComputeClassLabel: "high-cpu"}).SpecBuild()).
 		Build()
-	p.RegisterScaleUp(ng1, 3, now)
+	p.RegisterScaleUp(context.TODO(), ng1, 3, now)
 
 	ng2 := gke.NewTestGkeMigBuilder().Build()
-	p.RegisterScaleUp(ng2, 2, now)
+	p.RegisterScaleUp(context.TODO(), ng2, 2, now)
 
 	want := `# HELP cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc [ALPHA] Number of node provisioning attempts per CCC.
 # TYPE cluster_autoscaler_cluster_node_provisioning_attempts_count_per_ccc counter
@@ -101,12 +103,12 @@ func TestRegisterFailedScaleUp(t *testing.T) {
 	ng1 := gke.NewTestGkeMigBuilder().
 		SetSpec(gke.NewTestMigSpecBuilder().SetLabels(map[string]string{gkelabels.ComputeClassLabel: "high-cpu"}).SpecBuild()).
 		Build()
-	p.RegisterFailedScaleUp(ng1, 3, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeQuotaExceeded}, now)
+	p.RegisterFailedScaleUp(context.TODO(), ng1, 3, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeQuotaExceeded}, now)
 
 	ng2 := gke.NewTestGkeMigBuilder().Build()
-	p.RegisterFailedScaleUp(ng2, 2, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorReservationNotFound}, now)
+	p.RegisterFailedScaleUp(context.TODO(), ng2, 2, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorReservationNotFound}, now)
 
-	p.RegisterFailedScaleUp(ng1, 1, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeResourcePoolExhausted}, now)
+	p.RegisterFailedScaleUp(context.TODO(), ng1, 1, cloudprovider.InstanceErrorInfo{ErrorCode: gce.ErrorCodeResourcePoolExhausted}, now)
 
 	want := `# HELP cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc [ALPHA] Number of node provisioning failures per CCC.
 # TYPE cluster_autoscaler_cluster_node_provisioning_failed_attempts_count_per_ccc counter

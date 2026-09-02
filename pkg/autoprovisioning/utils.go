@@ -15,6 +15,7 @@
 package autoprovisioning
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -61,7 +62,7 @@ func getResourceBasedBackoff(compositeBackoff gke_backoff.CompositeBackoff) *gke
 func autoprovisionedNodeGroupsCount(nodeGroups []cloudprovider.NodeGroup) int {
 	result := 0
 	for _, group := range nodeGroups {
-		if group.Autoprovisioned() {
+		if group.Autoprovisioned(context.TODO()) {
 			result++
 		}
 	}
@@ -71,7 +72,7 @@ func autoprovisionedNodeGroupsCount(nodeGroups []cloudprovider.NodeGroup) int {
 func virtualNodeInfos(nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo) map[string]*framework.NodeInfo {
 	var virtualNodeInfos = make(map[string]*framework.NodeInfo)
 	for _, nodeG := range nodeGroups {
-		if !nodeG.Exist() {
+		if !nodeG.Exist(context.TODO()) {
 			nodeI := nodeInfos[nodeG.Id()]
 			virtualNodeInfos[nodeG.Id()] = nodeI
 		}

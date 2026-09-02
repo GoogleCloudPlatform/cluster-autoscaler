@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -32,7 +33,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
@@ -84,10 +85,10 @@ func NewCSNPodsLifecycleProcessor(nodeController csnNodeController, csnPodInject
 	}
 }
 
-func (p *CSNPodsLifecycleProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	defer metrics.UpdateDurationFromStart(csnPodsLifecycleMetricLabel, time.Now())
+func (p *CSNPodsLifecycleProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	defer metrics.UpdateDurationFromStart(context.TODO(), csnPodsLifecycleMetricLabel, time.Now())
 
-	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return nil, fmt.Errorf("error getting node infos: %v", err)
 	}
@@ -101,7 +102,7 @@ func (p *CSNPodsLifecycleProcessor) Process(ctx *context.AutoscalingContext, uns
 	}
 
 	// TODO(b/474324313): Investigate of a better way of using this processor (e.g. do refactoring there), note that it is OSS code.
-	csnPods, err := p.csnPodInjectionProcessor.Process(ctx, nil)
+	csnPods, err := p.csnPodInjectionProcessor.Process(context.TODO(), autoscalingCtx, nil)
 	if err != nil {
 		klog.Errorf("%s error creating CSN pods: %v", csnPodsLifecycleLogPrefix, err)
 		return nil, nil
@@ -132,7 +133,7 @@ func (p *CSNPodsLifecycleProcessor) Process(ctx *context.AutoscalingContext, uns
 		p.cbFakePodStateObserver.ObserveInjectedPods(csnPods)
 	}
 
-	snapshot := ctx.ClusterSnapshot
+	snapshot := autoscalingCtx.ClusterSnapshot
 	snapshot.Fork()
 
 	p.preventSchedulingOnOutdatedNodes(snapshot, bufferIdToBuffer)

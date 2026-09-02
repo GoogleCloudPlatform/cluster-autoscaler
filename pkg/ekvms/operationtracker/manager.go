@@ -16,6 +16,7 @@ package operationtracker
 
 import (
 	"context"
+
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -56,7 +57,7 @@ type Manager interface {
 
 // CloudProvider is the subset of GkeCloudProvider needed for resizable VM manager.
 type CloudProvider interface {
-	NodeGroupForNode(node *v1.Node) (cloudprovider.NodeGroup, error)
+	NodeGroupForNode(ctx context.Context, node *v1.Node) (cloudprovider.NodeGroup, error)
 	ResizingEnabled(machineFamily string) bool
 	GetNodesScaleDownAllowedFromCache([]string) map[string]bool
 	UpdateNodesScaleDownAllowedCache(map[string]bool)

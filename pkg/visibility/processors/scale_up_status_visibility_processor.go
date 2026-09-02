@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
@@ -57,9 +58,9 @@ func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts vis
 }
 
 // Process analyses the scale up status and emits appropriate visibility events.
-func (p *ScaleUpStatusVisibilityProcessor) Process(context *context.AutoscalingContext, originalScaleUpStatus *status.ScaleUpStatus) {
+func (p *ScaleUpStatusVisibilityProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, originalScaleUpStatus *status.ScaleUpStatus) {
 	startTime := time.Now()
-	defer metrics.UpdateDurationFromStart(internalmetrics.CaVizScaleUp, startTime)
+	defer metrics.UpdateDurationFromStart(ctx, internalmetrics.CaVizScaleUp, startTime)
 	if p.scaleUpLimiterTracker != nil {
 		defer p.scaleUpLimiterTracker.Reset()
 	}
@@ -69,8 +70,8 @@ func (p *ScaleUpStatusVisibilityProcessor) Process(context *context.AutoscalingC
 		klog.Error(err.Error())
 		return
 	}
-	p.emitScaleUpEvent(context, scaleUpStatus, originalScaleUpStatus)
-	p.emitNoScaleUpEvent(context, scaleUpStatus)
+	p.emitScaleUpEvent(autoscalingCtx, scaleUpStatus, originalScaleUpStatus)
+	p.emitNoScaleUpEvent(autoscalingCtx, scaleUpStatus)
 }
 
 // CleanUp closes the internal logger.
@@ -86,7 +87,7 @@ func (p *ScaleUpStatusVisibilityProcessor) CleanUp() {
 	}
 }
 
-func (p *ScaleUpStatusVisibilityProcessor) emitNoScaleUpEvent(context *context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus) {
+func (p *ScaleUpStatusVisibilityProcessor) emitNoScaleUpEvent(context *ca_context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus) {
 	if !p.opts.EmitNoScaleUpEvents {
 		return
 	}
@@ -102,7 +103,7 @@ func (p *ScaleUpStatusVisibilityProcessor) emitNoScaleUpEvent(context *context.A
 	eventSentCallback(time.Now())
 }
 
-func (p *ScaleUpStatusVisibilityProcessor) processNoScaleUpEvent(context *context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus, now time.Time) (event *vispb.AutoscalerEvent, eventSentCallback func(time.Time)) {
+func (p *ScaleUpStatusVisibilityProcessor) processNoScaleUpEvent(context *ca_context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus, now time.Time) (event *vispb.AutoscalerEvent, eventSentCallback func(time.Time)) {
 	napStatus := vistypes.GetNapStatus(context)
 
 	unreportedReasons := p.noScaleUp.GetNewReasons(scaleUpStatus, napStatus, now)
@@ -168,7 +169,7 @@ func (p *ScaleUpStatusVisibilityProcessor) processNoScaleUpEvent(context *contex
 	}}, eventSentCallback
 }
 
-func (p *ScaleUpStatusVisibilityProcessor) emitScaleUpEvent(context *context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus, originalScaleUpStatus *status.ScaleUpStatus) {
+func (p *ScaleUpStatusVisibilityProcessor) emitScaleUpEvent(context *ca_context.AutoscalingContext, scaleUpStatus *vistypes.ScaleUpStatus, originalScaleUpStatus *status.ScaleUpStatus) {
 	if len(scaleUpStatus.PodsTriggeredScaleUp) == 0 {
 		// We are doing silent proactive scale-ups.
 		// The implementation shouldn't be visible to customers, thus we remove fake pods and events that were triggered only by them.

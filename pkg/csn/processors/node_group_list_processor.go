@@ -15,12 +15,14 @@
 package processors
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -44,9 +46,9 @@ func NewNodeGroupListProcessor(NodeGroupListProcessor nodegroups.NodeGroupListPr
 }
 
 // Process updates node groups to not trigger scale-up for non-CSN pods in CSN nodegroups.
-func (p *nodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *nodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	preventCSNScaleUpForNonCSNPods := p.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesPreventCSNScaleUpForNonCSNPodsFlag)
-	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(ctx, nodeGroups, nodeInfos, unschedulablePods)
+	nodeGroups, nodeInfos, err := p.nodeGroupListProcessor.Process(context.TODO(), autoscalingCtx, nodeGroups, nodeInfos, unschedulablePods)
 	if err != nil || !preventCSNScaleUpForNonCSNPods {
 		return nodeGroups, nodeInfos, err
 	}

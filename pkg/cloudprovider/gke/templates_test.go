@@ -15,6 +15,7 @@
 package gke
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -141,14 +142,14 @@ func TestBuildNodeFromTemplateSetsResources(t *testing.T) {
 			var node *apiv1.Node
 			kubeEnv, err := gce.ExtractKubeEnv(template)
 			if err == nil {
-				node, err = tb.BuildNodeFromTemplate(mig, gkeMigOsInfo, template, kubeEnv, tc.physicalCpu, tc.physicalMemory, tc.pods, &gce.GceReserved{}, localssdsize.NewSimpleLocalSSDProvider())
+				node, err = tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, tc.physicalCpu, tc.physicalMemory, tc.pods, &gce.GceReserved{}, localssdsize.NewSimpleLocalSSDProvider())
 			}
-			evictionHard := gce.ParseEvictionHardOrGetDefault(nil)
+			evictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 			if tc.expectedErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				capacity, err := tb.BuildCapacity(gkeMigOsInfo, tc.physicalCpu, tc.physicalMemory, tc.accelerators, -1, -1, tc.pods, &gce.GceReserved{}, nil)
+				capacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, tc.physicalCpu, tc.physicalMemory, tc.accelerators, -1, -1, tc.pods, &gce.GceReserved{}, nil)
 				assert.NoError(t, err)
 				assertEqualResourceLists(t, "Capacity", capacity, node.Status.Capacity)
 				if !tc.kubeReserved {
@@ -273,7 +274,7 @@ func TestBuildAllocatableFromKubeEnv(t *testing.T) {
 		kubeEnv, err := gce.ParseKubeEnv("instance-template", tc.kubeEnvValue)
 		assert.NoError(t, err)
 		tb := GkeTemplateBuilder{}
-		allocatable, err := tb.BuildAllocatableFromKubeEnv(capacity, kubeEnv, gce.ParseEvictionHardOrGetDefault(nil))
+		allocatable, err := tb.BuildAllocatableFromKubeEnv(context.TODO(), capacity, kubeEnv, gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
 		if tc.expectedErr {
 			assert.Error(t, err)
 		} else {
@@ -410,7 +411,7 @@ func TestParseEvictionHard(t *testing.T) {
 			gce.MemoryEvictionHardTag:           tc.memory,
 			gce.EphemeralStorageEvictionHardTag: tc.ephemeralStorage,
 		}
-		actualOutput := gce.ParseEvictionHardOrGetDefault(test)
+		actualOutput := gce.ParseEvictionHardOrGetDefault(context.TODO(), test)
 		assert.EqualValues(t, tc.memoryExpected, actualOutput.MemoryEvictionQuantity, "TestParseEviction Failed Memory. %v expected does not match %v actual.", tc.memoryExpected, actualOutput.MemoryEvictionQuantity)
 		assert.EqualValues(t, tc.ephemeralStorageRatioExpected, actualOutput.EphemeralStorageEvictionRatio, "TestParseEviction Failed Ephemeral Storage. %v expected does not match %v actual.", tc.memoryExpected, actualOutput.EphemeralStorageEvictionRatio)
 	}
@@ -686,7 +687,7 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 				assert.Equal(t, "2", val)
 			}
 
-			capacity, err := tb.BuildCapacity(gkeMigOsInfo, tc.cpu, tc.memory, nil, ephemeralGiB*GiB, localSsdCount, nil, &GkeReserved{}, nil)
+			capacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, tc.cpu, tc.memory, nil, ephemeralGiB*GiB, localSsdCount, nil, &GkeReserved{}, nil)
 			if tpuRequest, found := tc.extraResources[tpu.ResourceGoogleTPU]; found {
 				capacity[tpu.ResourceGoogleTPU] = tpuRequest.DeepCopy()
 			}
@@ -707,7 +708,7 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 			}
 
 			assert.NoError(t, err)
-			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(nil))
+			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
 			assertEqualResourceLists(t, "Allocatable", expectedAllocatable, node.Status.Allocatable)
 		})
 	}
@@ -754,6 +755,8 @@ func TestConditionalLabels(t *testing.T) {
 		isConfidentialNode           bool
 		machineSerenityLabelsEnabled bool
 		nodeVersion                  string
+		gcfsEnabled                  bool
+		selfServiceMetadata          map[string]string
 	}
 	testCases := []testCase{
 		{
@@ -879,11 +882,11 @@ func TestConditionalLabels(t *testing.T) {
 			localSSDCount: 4,
 		},
 		{
-			scenario: "1.37 node, WorkloadIdentityProviderSet true, regardless of MetadataServerEnabled",
+			scenario: "1.37 node, WorkloadIdentityEnabled true, regardless of MetadataServerEnabled",
 			daemonSetConditions: &DaemonSetConditions{
-				MetadataServerEnabled:       false,
-				WorkloadIdentityProviderSet: true,
-				WIImagePullMinVersion:       ver137,
+				MetadataServerEnabled:   false,
+				WorkloadIdentityEnabled: true,
+				WIImagePullMinVersion:   ver137,
 			},
 			nodeVersion: "v1.37.0-gke.100",
 			containLabels: map[string]string{
@@ -894,11 +897,11 @@ func TestConditionalLabels(t *testing.T) {
 			},
 		},
 		{
-			scenario: "1.37 node, WorkloadIdentityProviderSet false",
+			scenario: "1.37 node, WorkloadIdentityEnabled false (no WorkloadPool set)",
 			daemonSetConditions: &DaemonSetConditions{
-				MetadataServerEnabled:       true,
-				WorkloadIdentityProviderSet: false,
-				WIImagePullMinVersion:       ver137,
+				MetadataServerEnabled:   true,
+				WorkloadIdentityEnabled: false,
+				WIImagePullMinVersion:   ver137,
 			},
 			nodeVersion: "v1.37.0-gke.100",
 			containLabels: map[string]string{
@@ -915,6 +918,89 @@ func TestConditionalLabels(t *testing.T) {
 				WIImagePullMinVersion: ver137,
 			},
 			nodeVersion: "1.35.0-gke.0",
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, cluster-default Riptide ON, DisableWIImagePullForRiptide",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			gcfsEnabled: true,
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, CCC per-pool Riptide ON, DisableWIImagePullForRiptide",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         false,
+			selfServiceMetadata: map[string]string{"image-streaming": "true"},
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, CCC explicitly disables Riptide on Riptide cluster",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         true,
+			selfServiceMetadata: map[string]string{"image-streaming": "false"},
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, Riptide ON but DisableWIImagePullForRiptide OFF",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: false,
+			},
+			nodeVersion: "v1.37.0-gke.100",
+			gcfsEnabled: true,
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "< 1.37 node, WI enabled, version check takes precedence over Riptide flag",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: false,
+			},
+			nodeVersion: "1.35.0-gke.0",
+			gcfsEnabled: false,
 			containLabels: map[string]string{
 				"iam.gke.io/gke-metadata-server-enabled": "true",
 			},
@@ -988,7 +1074,10 @@ func TestConditionalLabels(t *testing.T) {
 			}
 			gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(operatingSystem, gce.OperatingSystemDistributionDefault, ""), mig.Version(), mig.IsConfidentialNode())
 			ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
-			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 800000000, nil, tc.daemonSetConditions, false, &GkeReserved{}, ssdDiskSizeProvider, tc.defaultMaxPodsPerNode)
+			if tc.selfServiceMetadata != nil {
+				mig.spec.SelfServiceMetadata = tc.selfServiceMetadata
+			}
+			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 800000000, nil, tc.daemonSetConditions, tc.gcfsEnabled, &GkeReserved{}, ssdDiskSizeProvider, tc.defaultMaxPodsPerNode)
 			assert.NoError(t, err)
 			for kc, vc := range tc.containLabels {
 				assert.Equal(t, vc, node.Labels[kc], "Expected value doesn't exist on node")

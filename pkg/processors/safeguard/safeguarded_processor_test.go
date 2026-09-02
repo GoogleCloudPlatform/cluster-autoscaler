@@ -15,6 +15,7 @@
 package safeguard
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	podutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
@@ -70,7 +71,7 @@ func TestProcessor(t *testing.T) {
 	podMinCapFakeOldScheduled.CreationTimestamp = metav1.Time{Time: longPendingTime}
 	podMinCapFakeOldScheduled.Annotations = map[string]string{cc_processors.MinCapacityFakePodAnnotation: "true"}
 
-	context := &context.AutoscalingContext{
+	autoscalingCtx := &ca_context.AutoscalingContext{
 		AutoscalingOptions: config.AutoscalingOptions{
 			ExpendablePodsPriorityCutoff: 0,
 		},
@@ -87,7 +88,7 @@ func TestProcessor(t *testing.T) {
 	podInfoMinCapFakeOldScheduled := framework.NewPodInfo(podMinCapFakeOldScheduled, nil)
 	nodeInfo := framework.NewNodeInfo(node, nil, podInfoOldScheduled, podInfoYoungScheduled, podInfoFakeOldScheduled, podInfoCbFakeOldScheduled, podInfoPrFakeOldScheduled, podInfoMinCapFakeOldScheduled)
 
-	context.ClusterSnapshot = &mockClusterSnapshot{
+	autoscalingCtx.ClusterSnapshot = &mockClusterSnapshot{
 		nodeInfos: []*framework.NodeInfo{nodeInfo},
 	}
 
@@ -209,7 +210,7 @@ func TestProcessor(t *testing.T) {
 				{UID: podOldUnscheduled.UID, Name: podOldUnscheduled.Name}: now,
 			}
 
-			got, err := processor.Process(context, tc.before)
+			got, err := processor.Process(context.Background(), autoscalingCtx, tc.before)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -235,7 +236,7 @@ type mockStaticPodListProcessor struct {
 	after []*v1.Pod
 }
 
-func (m *mockStaticPodListProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockStaticPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	return m.after, nil
 }
 

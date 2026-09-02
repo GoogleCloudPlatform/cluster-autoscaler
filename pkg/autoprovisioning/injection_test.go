@@ -15,6 +15,7 @@
 package autoprovisioning
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"sort"
@@ -12707,7 +12708,7 @@ func TestInjectNodeGroups(t *testing.T) {
 			if tc.wantInjectedPerPriorityIdx != nil {
 				gotInjectedPerPriorityIdx := map[string]int{}
 				for _, ng := range ctx.injectedNodeGroups {
-					if nodeInfo, err := ng.TemplateNodeInfo(); err == nil {
+					if nodeInfo, err := ng.TemplateNodeInfo(context.TODO()); err == nil {
 						priorityIdx := nodeInfo.Node().Labels[gkelabels.ComputeClassPriorityIdxLabel]
 						if priorityIdx != "" {
 							gotInjectedPerPriorityIdx[priorityIdx]++

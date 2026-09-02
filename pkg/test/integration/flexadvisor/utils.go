@@ -15,7 +15,17 @@
 package flexadvisor
 
 import (
+	"context"
+	"testing"
+	"time"
+
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
+	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
 const (
@@ -37,4 +47,19 @@ func stockOutError() cloudprovider.InstanceErrorInfo {
 		ErrorCode:    "ZONE_RESOURCE_POOL_EXHAUSTED",
 		ErrorMessage: "GCE API error: stock out",
 	}
+}
+
+// primeFlexAdvisorCache primes FlexAdvisor cache by adding a temporary pod that triggers registration but cannot schedule.
+func primeFlexAdvisorCache(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, infra *integration.TestInfrastructure, cccName string) {
+	t.Helper()
+	tmpPod := tu.BuildTestPod("temporary-pod", 100, 100, pod.WithCCC(cccName), tu.MarkUnschedulable())
+	// Add an invalid node selector to ensure it doesn't match any node group.
+	tmpPod.Spec.NodeSelector["invalid-selector"] = "true"
+	infra.Fakes.K8s.AddPod(tmpPod)
+
+	// Run one cycle to trigger registration and background fetch.
+	integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+	// Delete temporary pod.
+	infra.Fakes.K8s.DeletePod(tmpPod.Namespace, tmpPod.Name)
 }

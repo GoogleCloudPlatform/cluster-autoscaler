@@ -15,6 +15,7 @@
 package fake
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -63,7 +64,7 @@ func buildNodeFromTemplate(
 
 	builder := &gce.GceTemplateBuilder{}
 
-	migOsInfo, err := builder.MigOsInfo(nodeName, ke)
+	migOsInfo, err := builder.MigOsInfo(context.TODO(), nodeName, ke)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +77,7 @@ func buildNodeFromTemplate(
 
 	memoryBytes := mt.MemoryMb * 1024 * 1024
 
-	node, err := builder.BuildNodeFromTemplate(fMig, migOsInfo, template, ke, mt.GuestCpus, memoryBytes, nil, reserved, localSSDSizeProvider)
+	node, err := builder.BuildNodeFromTemplate(context.TODO(), fMig, migOsInfo, template, ke, mt.GuestCpus, memoryBytes, nil, reserved, localSSDSizeProvider)
 	if err != nil {
 		return nil, err
 	}

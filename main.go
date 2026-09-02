@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 	kube_flag "k8s.io/component-base/cli/flag"
 	componentbaseconfig "k8s.io/component-base/config"
@@ -58,6 +59,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/features"
 	schedulermetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 )
 
@@ -121,6 +123,7 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 	err = mgr.Add(manager.RunnableFunc(func(ctx ctx.Context) error {
 		loopStart := time.Now()
 		lastRun := time.Now()
+		iteration := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -131,13 +134,14 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 			default:
 				trigger.Wait(lastRun)
 				lastRun = time.Now()
-				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun)
+				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun, iteration)
 				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
 				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
 					// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.
 					klog.Fatalf("Cluster Autoscaler configuration changed, restarting to pick up a new configuration.")
 				}
 			}
+			iteration++
 		}
 	}))
 	if err != nil {
@@ -177,12 +181,15 @@ func main() {
 	// This overwrites the default value
 	klog.EnableContextualLogging(false)
 	ctrl.SetLogger(klog.NewKlogr())
+	featureGate := utilfeature.DefaultMutableFeatureGate
 
 	ossFlags := flags.AutoscalingFlags{}
 	ossFlags.AddFlags(pflag.CommandLine)
 	leaderElection := defaultLeaderElectionConfiguration()
 	leaderElection.LeaderElect = true
 	componentopts.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
+
+	cli.ProcessFlagOverrides()
 	kube_flag.InitFlags()
 
 	ossOptions, err := ossFlags.Options()
@@ -198,6 +205,12 @@ func main() {
 	experimentsManager := optstracking.InitExperimentsManager(optionsFromFlags)
 	optsTracker := optstracking.NewOptionsTracker(optionsFromFlags, experimentsManager)
 	options := optsTracker.Options()
+
+	if options.InterPodAffinityHostnameFastPath != featureGate.Enabled(features.InterPodAffinityHostnameFastPath) {
+		if err := featureGate.SetFromMap(map[string]bool{string(features.InterPodAffinityHostnameFastPath): options.InterPodAffinityHostnameFastPath}); err != nil {
+			klog.Fatalf("Couldn't set the InterPodAffinityHostnameFastPath feature gate to %v: %v", options.InterPodAffinityHostnameFastPath, err)
+		}
+	}
 
 	healthCheck := metrics.NewHealthCheck(options.MaxInactivityTime, options.MaxFailingTime, options.MaxStartupTime)
 

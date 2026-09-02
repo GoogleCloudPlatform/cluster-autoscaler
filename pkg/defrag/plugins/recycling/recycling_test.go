@@ -15,6 +15,7 @@
 package recycling
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -22,13 +23,17 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
+
 	clockutils "k8s.io/utils/clock/testing"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
+
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -111,10 +116,10 @@ func TestNewCandidate(t *testing.T) {
 		},
 	} {
 		t.Run(desc, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
 			var nodeNames []string
 			for _, node := range tc.nodes {
@@ -207,10 +212,10 @@ func TestValidCandidateNodes(t *testing.T) {
 		},
 	} {
 		t.Run(desc, func(t *testing.T) {
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
+			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
 			plugin := newPluginWithFakeClock(timeNow)
 			assert.Equal(t, tc.wantValidCandidateNodes, plugin.ValidCandidateNodes(ctx, tc.candidate.Nodes))

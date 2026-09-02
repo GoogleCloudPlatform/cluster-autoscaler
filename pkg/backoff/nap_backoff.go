@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -50,7 +51,7 @@ func (b *napBackoff) Backoff(_ cloudprovider.NodeGroup, _ *framework.NodeInfo, e
 
 // BackoffStatus returns whether the execution is backed off for the given node group and error info when the node group is backed off.
 func (b *napBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, _ *framework.NodeInfo, currentTime time.Time) base_backoff.Status {
-	if nodeGroup.Exist() || currentTime.After(b.expBackoff.BackoffUntil()) {
+	if nodeGroup.Exist(context.TODO()) || currentTime.After(b.expBackoff.BackoffUntil()) {
 		return base_backoff.Status{IsBackedOff: false}
 	}
 	return base_backoff.Status{IsBackedOff: true, ErrorInfo: b.expBackoff.ErrorInfo()}

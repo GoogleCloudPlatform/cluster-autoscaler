@@ -15,8 +15,10 @@
 package extendeddurationpods
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
@@ -27,7 +29,7 @@ type ScaleDownProcessor struct {
 
 // GetPodDestinationCandidates filters out all nodes containing labels.ExtendedDurationPodsLabel label
 // and Kubernetes version of the node less than Kubernetes version of the master node
-func (d *ScaleDownProcessor) GetPodDestinationCandidates(context *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (d *ScaleDownProcessor) GetPodDestinationCandidates(context *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	filteredNodes := []*apiv1.Node{}
 	nodesToFilterOut := UpgradeEligibleEdpNodes(context)
 	nodesToFilterOutSet := make(map[string]bool)
@@ -45,11 +47,11 @@ func (d *ScaleDownProcessor) GetPodDestinationCandidates(context *context.Autosc
 // GetScaleDownCandidates filters out nodes where pods with the EDP node selector are scheduled. These could either be pods with safe-to-evict=false,
 // or pods with terminationGracePeriodSeconds>600 - we want to block scale-down for both kinds. We'd get the blocking for free with safe-to-evict=false,
 // but it's easiest to just look at the node selector and cut both kinds from the candidates here. More details: go/extended-duration-pod-design.
-func (d *ScaleDownProcessor) GetScaleDownCandidates(ctx *context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+func (d *ScaleDownProcessor) GetScaleDownCandidates(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	var possibleCandidates = make([]*apiv1.Node, 0, len(nodes))
 
 	for _, node := range nodes {
-		if nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(node.Name); err == nil && nodeInfo != nil {
+		if nodeInfo, err := autoscalingCtx.ClusterSnapshot.GetNodeInfo(node.Name); err == nil && nodeInfo != nil {
 			if !hasEdpScheduled(nodeInfo) {
 				possibleCandidates = append(possibleCandidates, node)
 			}

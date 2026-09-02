@@ -15,6 +15,7 @@
 package edp
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,12 +104,12 @@ func TestEdpExpander(t *testing.T) {
 	provider.AddNode(testMigP1.Id(), np1)
 	provider.AddNode(testMigP2.Id(), np2)
 
-	ng1, _ := provider.NodeGroupForNode(n1)
-	ng2, _ := provider.NodeGroupForNode(n2)
-	ng3, _ := provider.NodeGroupForNode(n3)
-	ng4, _ := provider.NodeGroupForNode(n4)
-	ngp1, _ := provider.NodeGroupForNode(np1)
-	ngp2, _ := provider.NodeGroupForNode(np2)
+	ng1, _ := provider.NodeGroupForNode(context.TODO(), n1)
+	ng2, _ := provider.NodeGroupForNode(context.TODO(), n2)
+	ng3, _ := provider.NodeGroupForNode(context.TODO(), n3)
+	ng4, _ := provider.NodeGroupForNode(context.TODO(), n4)
+	ngp1, _ := provider.NodeGroupForNode(context.TODO(), np1)
+	ngp2, _ := provider.NodeGroupForNode(context.TODO(), np2)
 
 	ni1 := framework.NewTestNodeInfo(n1)
 	ni2 := framework.NewTestNodeInfo(n2)
@@ -300,7 +301,7 @@ func TestEdpExpander(t *testing.T) {
 			wantOptions = append(wantOptions, tc.inputOptions[wantIndex])
 		}
 		t.Run(tn, func(t *testing.T) {
-			assert.ElementsMatch(t, NewEdpFilter(provider).BestOptions(tc.inputOptions, nodeInfosForGroups), wantOptions)
+			assert.ElementsMatch(t, NewEdpFilter(provider).BestOptions(context.TODO(), tc.inputOptions, nodeInfosForGroups), wantOptions)
 		})
 	}
 }

@@ -15,6 +15,7 @@
 package resizerequests
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -218,7 +219,7 @@ func TestReportResizeRequestsErrors(t *testing.T) {
 				clusterstate.WithScaleStateNotifier(observersList),
 			)
 
-			context := &ca_context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				ClusterStateRegistry:   clusterStateRegistry,
 				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{Recorder: recorder, LogRecorder: fakeLogRecorder},
 			}
@@ -233,15 +234,15 @@ func TestReportResizeRequestsErrors(t *testing.T) {
 			gkeManagerMock.On("DeleteResizeRequest", mock.AnythingOfType("resizerequestclient.ResizeRequestStatus")).Return(nil)
 			provider.On("GetGkeMigs").Return([]*gke.GkeMig{mig})
 			// Register only the latest resize request
-			clusterStateRegistry.RegisterScaleUp(mig, int(tc.resizeRequests[0].ResizeBy), time.Now())
+			clusterStateRegistry.RegisterScaleUp(context.TODO(), mig, int(tc.resizeRequests[0].ResizeBy), time.Now())
 
 			enabledExperimentFlags := []string{}
 			if tc.multihostTpuCapacityCheckWaitTimeExpEnabled {
 				enabledExperimentFlags = []string{experiments.CapacityCheckWaitTimeSecondsMultiHostTpuEnabledFlag}
 			}
 			errorReporter := NewErrorReporter(experiments.NewMockManager(enabledExperimentFlags...))
-			errorReporter.Init(context, provider, observersList)
-			errorReporter.Refresh()
+			errorReporter.Init(autoscalingCtx, provider, observersList)
+			errorReporter.Refresh(context.TODO())
 			assert.Equal(t, tc.expectedFailedEventCount, len(recorder.Events))
 		})
 	}
@@ -650,7 +651,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 			nodeGroupConfigProcessor := nodegroupconfig.NewDefaultNodeGroupConfigProcessor(config.NodeGroupAutoscalingOptions{MaxNodeProvisionTime: 15 * time.Minute})
 			provider := &gke.GkeCloudProviderMock{}
 			observersList := nodegroupchange.NewNodeGroupChangeObserversList()
-			ni, _ := mig.TemplateNodeInfo()
+			ni, _ := mig.TemplateNodeInfo(context.TODO())
 			csr := clusterstate.NewNotifiedClusterStateRegistry(
 				provider,
 				fakeLogRecorder,
@@ -663,7 +664,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 				clusterstate.WithScaleStateNotifier(observersList),
 			)
 
-			context := &ca_context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				ClusterStateRegistry:   csr,
 				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{Recorder: recorder, LogRecorder: fakeLogRecorder},
 			}
@@ -692,7 +693,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 				enabledExperimentFlags = []string{}
 			}
 			errorReporter := NewErrorReporter(experiments.NewMockManager(enabledExperimentFlags...))
-			errorReporter.Init(context, provider, observersList)
+			errorReporter.Init(autoscalingCtx, provider, observersList)
 			errorReporter.now = testTime
 
 			if !tc.scaleUpAlreadyFinished {
@@ -700,7 +701,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 				// so it needs some scale up to actually already be in progress, thus
 				// Register a scale up initial size and UpdateNodes in the cluster state registry
 				errorReporter.migHadEmptyResizeRequestsList[mig.GceRef()] = true
-				csr.RegisterScaleUp(mig, calcInitialScaleUpSize(tc.failedResizeRequestsCreations, tc.resizeRequests, tc.isAlreadyReported), testTime().Add(-3*time.Minute-10*time.Second))
+				csr.RegisterScaleUp(context.TODO(), mig, calcInitialScaleUpSize(tc.failedResizeRequestsCreations, tc.resizeRequests, tc.isAlreadyReported), testTime().Add(-3*time.Minute-10*time.Second))
 			} else {
 				// Scale up has already finished so we don't register it, instead: on last ErrorReporter.Refresh we saw existing Resize Requests, so we set `migHadResizeRequestsOnLastListCall`
 				// to clean up remaining Resize Requests
@@ -708,7 +709,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 			}
 
 			// Trigger the tested Refresh method
-			errorReporter.Refresh()
+			errorReporter.Refresh(context.TODO())
 			close(recorder.Events)
 
 			// Verify results
@@ -740,7 +741,7 @@ func TestHandleFailedResizeRequestScaleUps(t *testing.T) {
 			assert.ElementsMatch(t, wantEvents, gotEvents)
 
 			// Check backoff
-			backoffStatus := csr.BackoffStatusForNodeGroup(mig, testTime())
+			backoffStatus := csr.BackoffStatusForNodeGroup(context.TODO(), mig, testTime())
 			assert.Equal(t, tc.wantAnyBackoffErrInfo != nil, backoffStatus.IsBackedOff)
 			if tc.wantAnyBackoffErrInfo != nil {
 				assert.Contains(t, tc.wantAnyBackoffErrInfo, backoffStatus.ErrorInfo)

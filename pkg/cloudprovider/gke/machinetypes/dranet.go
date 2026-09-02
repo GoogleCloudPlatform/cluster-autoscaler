@@ -68,6 +68,19 @@ func NewDranetConfigProvider() DranetConfigProvider {
 		// TPU7 & TPU7X
 		"tpu7-standard-4t":  tpu7StandardNicAttributes,
 		"tpu7x-standard-4t": tpu7xStandardNicAttributes,
+		// Z4M
+		"z4m-highmem-16":           z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-16-cd":        z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-32":           z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-32-cd":        z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-48":           z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-48-cd":        z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-96":           z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-96-cd":        z4mSubshapeHighmemNicAttributes,
+		"z4m-highmem-192":          z4mFullshapeHighmemNicAttributes,
+		"z4m-highmem-192-cd":       z4mFullshapeHighmemNicAttributes,
+		"z4m-highmem-192-metal":    z4mFullshapeHighmemNicAttributes,
+		"z4m-highmem-192-metal-cd": z4mFullshapeHighmemNicAttributes,
 	}
 
 	return DranetConfigProvider{configs: defaultConfig}
@@ -443,6 +456,73 @@ var (
 					},
 					dranet.GceAttrNetworkName: func(nicIdx int) resourceapi.DeviceAttribute {
 						return StringAttrValue(fmt.Sprintf("additional-network-default-%v", nicIdx))
+					},
+				},
+			},
+		},
+	}
+	// z4m-highmem subshapes (16, 32, 48, 96 vCPUs)
+	z4mSubshapeHighmemNicAttributes = MultiNicConfig{
+		NicGroups: []NicGroupConfig{
+			{
+				NicCount: 1,
+				StaticAttributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					dranet.AttrMTU:             IntAttrValue(8896),
+					dranet.AttrPCIVendor:       StringAttrValue("Intel Corporation"),
+					dranet.AttrEBPF:            BoolAttrValue(false),
+					dranet.AttrRDMA:            BoolAttrValue(true),
+					dranet.AttrTCFilterNames:   StringAttrValue(""),
+					dranet.AttrTCXProgramNames: StringAttrValue(""),
+				},
+				DynamicAttributes: map[resourceapi.QualifiedName]dynamicDeviceAttribute{
+					dranet.AttrInterfaceName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("irdma%d", nicIdx))
+					},
+					dranet.GceAttrNetworkName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("additional-network-rdma-%v", nicIdx))
+					},
+				},
+			},
+		},
+	}
+	// z4m-highmem fullshapes (192 vCPU VM and Bare Metal)
+	z4mFullshapeHighmemNicAttributes = MultiNicConfig{
+		NicGroups: []NicGroupConfig{
+			{
+				NicCount: 1,
+				StaticAttributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					dranet.AttrMTU:             IntAttrValue(1460),
+					dranet.AttrPCIVendor:       StringAttrValue("Intel Corporation"),
+					dranet.AttrEBPF:            BoolAttrValue(false),
+					dranet.AttrRDMA:            BoolAttrValue(false),
+					dranet.AttrTCFilterNames:   StringAttrValue(""),
+					dranet.AttrTCXProgramNames: StringAttrValue(""),
+				},
+				DynamicAttributes: map[resourceapi.QualifiedName]dynamicDeviceAttribute{
+					dranet.AttrInterfaceName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("eth%d", nicIdx+1))
+					},
+					dranet.GceAttrNetworkName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("additional-network-default-%v", nicIdx))
+					},
+				},
+			},
+			{
+				NicCount: 2,
+				StaticAttributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					dranet.AttrMTU:             IntAttrValue(8896),
+					dranet.AttrPCIVendor:       StringAttrValue("Intel Corporation"),
+					dranet.AttrEBPF:            BoolAttrValue(false),
+					dranet.AttrRDMA:            BoolAttrValue(true),
+					dranet.AttrTCFilterNames:   StringAttrValue(""),
+					dranet.AttrTCXProgramNames: StringAttrValue(""),
+				},
+				DynamicAttributes: map[resourceapi.QualifiedName]dynamicDeviceAttribute{
+					dranet.AttrInterfaceName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("irdma%d", nicIdx))
+					},
+					dranet.GceAttrNetworkName: func(nicIdx int) resourceapi.DeviceAttribute {
+						return StringAttrValue(fmt.Sprintf("additional-network-rdma-%v", nicIdx))
 					},
 				},
 			},

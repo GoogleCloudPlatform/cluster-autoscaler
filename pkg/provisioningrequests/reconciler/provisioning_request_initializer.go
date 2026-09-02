@@ -15,13 +15,17 @@
 package reconciler
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/provreqstate"
+
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
 )
@@ -70,7 +74,7 @@ func (r *provisioningRequestInitializer) initializeProvisioningRequests(uninitia
 			klog.Errorf("error initializing Provisioning Request %s/%s: %v", pr.Namespace, pr.Name, err)
 			continue
 		}
-		if _, err := r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+		if _, err := r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 			klog.Errorf("error while updating Provisioning Request %s/%s: %v", pr.Namespace, pr.Name, err)
 		}
 		initializedPRs++
@@ -100,6 +104,6 @@ func (r *provisioningRequestInitializer) updateProvReqToFailedDueToMissingPodTem
 			return fmt.Errorf("failed to fail the Provisioning Request: %w", err)
 		}
 	}
-	_, err = r.prClient.UpdateProvisioningRequest(provReq.ProvisioningRequest)
+	_, err = r.prClient.UpdateProvisioningRequest(context.TODO(), provReq.ProvisioningRequest)
 	return err
 }

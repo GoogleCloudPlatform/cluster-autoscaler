@@ -965,7 +965,7 @@ func TestFetchMigInstances(t *testing.T) {
 				server.On("handle", "/projects/myprojid/zones/myzone/instanceGroupManagers/listManagedInstances", token).Return(string(b)).Times(1)
 			}
 
-			got, err := gceInternalService.FetchMigInstances(ref)
+			got, err := gceInternalService.FetchMigInstances(context.TODO(), ref)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("autoscalingInternalGceClient.FetchMigInstances() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -1003,7 +1003,7 @@ func TestAutoscalingClientTimeouts(t *testing.T) {
 		},
 		"FetchMigInstances_HttpTimeout": {
 			clientFunc: func(client *autoscalingInternalGceClient) error {
-				_, err := client.FetchMigInstances(gce.GceRef{})
+				_, err := client.FetchMigInstances(context.TODO(), gce.GceRef{})
 				return err
 			},
 			httpTimeout: zeroDuration,

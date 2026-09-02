@@ -15,9 +15,11 @@
 package processors
 
 import (
+	"context"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
@@ -35,7 +37,7 @@ func NewCapacityRequestScaleUpProcessor(crStatus *utils.CapacityRequestState) *C
 }
 
 // Process processes scale up status by setting appropriate status on Capacity Requests.
-func (p *CapacityRequestScaleUpProcessor) Process(context *context.AutoscalingContext, status *status.ScaleUpStatus) {
+func (p *CapacityRequestScaleUpProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleUpStatus) {
 	for _, noScaleUpInfo := range status.PodsRemainUnschedulable {
 		if cr, found := p.crStatus.PodToCapacityRequest(noScaleUpInfo.Pod); found {
 			if err := p.crStatus.SetResourcesUnattainable(cr); err != nil {

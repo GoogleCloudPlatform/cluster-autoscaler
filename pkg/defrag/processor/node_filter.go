@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -24,7 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/actuation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
@@ -63,7 +64,7 @@ func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProces
 }
 
 // NewDefragNodeFilter creates a new defragNodeFilter with a refreshed cache.
-func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *context.AutoscalingContext) (*defragNodeFilter, error) {
+func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.AutoscalingContext) (*defragNodeFilter, error) {
 	cache, err := f.buildScaleDownCandidatesCache(ctx)
 	if err != nil {
 		return nil, err
@@ -76,7 +77,7 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *context.AutoscalingCo
 	for _, nodeInfo := range nodeInfos {
 		allNodes = append(allNodes, nodeInfo.Node())
 	}
-	tracker, err := f.minQuotasTrackerFactory.NewMinQuotasTracker(ctx, allNodes)
+	tracker, err := f.minQuotasTrackerFactory.NewMinQuotasTracker(context.TODO(), ctx, allNodes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create min quotas tracker: %w", err)
 	}
@@ -86,12 +87,12 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *context.AutoscalingCo
 		drainabilityRules:        f.drainabilityRules,
 		clock:                    f.clock,
 		scaleDownCandidatesCache: cache,
-		nodeGroupSize:            utils.GetNodeGroupSizeMap(ctx.CloudProvider),
+		nodeGroupSize:            utils.GetNodeGroupSizeMap(context.TODO(), ctx.CloudProvider),
 		minQuotasTracker:         tracker,
 	}, nil
 }
 
-func (f *defragNodeFilterFactory) buildScaleDownCandidatesCache(ctx *context.AutoscalingContext) (sets.Set[string], error) {
+func (f *defragNodeFilterFactory) buildScaleDownCandidatesCache(ctx *ca_context.AutoscalingContext) (sets.Set[string], error) {
 	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return nil, fmt.Errorf("failed to list node infos: %w", err)
@@ -100,7 +101,7 @@ func (f *defragNodeFilterFactory) buildScaleDownCandidatesCache(ctx *context.Aut
 	for i, nodeInfo := range nodeInfos {
 		scaleDownCandidates[i] = nodeInfo.Node()
 	}
-	scaleDownCandidates, err = f.scaleDownNodeProcessor.GetScaleDownCandidates(ctx, scaleDownCandidates)
+	scaleDownCandidates, err = f.scaleDownNodeProcessor.GetScaleDownCandidates(context.TODO(), ctx, scaleDownCandidates)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get scale down candidates: %w", err)
 	}
@@ -129,7 +130,7 @@ type defragNodeFilter struct {
 // newValidCandidateNodes returns nodes that could be considered for defrag candidates.
 // allNodes contains all nodes that are valid according to the defrag framework.
 // nodesWithoutBlockingPods additionally removes nodes with blocking pods.
-func (f *defragNodeFilter) newValidCandidateNodes(ctx *context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, allCandidateNodes map[string]bool) ([]string, error) {
+func (f *defragNodeFilter) newValidCandidateNodes(ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, allCandidateNodes map[string]bool) ([]string, error) {
 	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		return nil, err
@@ -150,7 +151,7 @@ func (f *defragNodeFilter) newValidCandidateNodes(ctx *context.AutoscalingContex
 }
 
 // filterInvalidCandidateNodes removes candidate nodes that are no longer valid
-func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, candidate *defrag.Candidate) {
+func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, candidate *defrag.Candidate) {
 	var nodeNames []string
 	for _, nodeName := range candidate.Nodes {
 		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
@@ -173,7 +174,7 @@ func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *context.AutoscalingC
 }
 
 // isCandidateNodeValid checks if a node is valid candidate node for defrag
-func (f *defragNodeFilter) isCandidateNodeValid(ctx *context.AutoscalingContext, nodeInfo *framework.NodeInfo) bool {
+func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingContext, nodeInfo *framework.NodeInfo) bool {
 	nodeName := nodeInfo.Node().Name
 
 	if eligibility.HasNoScaleDownAnnotation(nodeInfo.Node()) {
@@ -202,7 +203,7 @@ func (f *defragNodeFilter) isCandidateNodeValid(ctx *context.AutoscalingContext,
 	return true
 }
 
-func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker) bool {
+func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker) bool {
 	// nodeInfo is tainted here to distinguish the interaction of defrag from scale down
 	// when considering for the BspDrainability rule which drains Blocking System Pods
 	taint := apiv1.Taint{
@@ -212,7 +213,7 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *co
 	}
 	addTaint(nodeInfo, taint)
 	defer removeTaint(nodeInfo, taint)
-	podMoveInfo, err := simulator.GetPodsToMove(nodeInfo, f.deleteOptions, f.drainabilityRules, ctx.ListerRegistry, pdbTracker, f.clock.Now())
+	podMoveInfo, err := simulator.GetPodsToMove(context.TODO(), nodeInfo, f.deleteOptions, f.drainabilityRules, ctx.ListerRegistry, pdbTracker, f.clock.Now())
 	if err != nil {
 		klog.V(4).Infof("Defrag: blocking pod error: %v", err)
 		return true
@@ -231,7 +232,7 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *co
 // filterNodesViolatingMinQuotas filters scale-down candidates that would violate
 // resource quotas (including node group min size and ComputeClass target node count).
 // It tracks the cumulative effect of removals using the shared minQuotasTracker.
-func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *context.AutoscalingContext, nodes []string) ([]string, error) {
+func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *ca_context.AutoscalingContext, nodes []string) ([]string, error) {
 	var result []string
 	for _, nodeName := range nodes {
 		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
@@ -243,7 +244,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *context.Autoscalin
 		}
 		node := nodeInfo.Node()
 
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 		if err != nil {
 			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
 			continue
@@ -253,7 +254,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *context.Autoscalin
 			continue
 		}
 
-		consumeResult, err := f.minQuotasTracker.ConsumeQuota(ctx, nodeGroup, node, 1)
+		consumeResult, err := f.minQuotasTracker.ConsumeQuota(context.TODO(), ctx, nodeGroup, node, 1)
 		if err != nil {
 			klog.Errorf("Defrag: failed to consume quota for node %s: %v", node.Name, err)
 			continue
@@ -272,7 +273,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *context.Autoscalin
 // their Node Group's MinSize constraint. It tracks the cumulative effect of
 // removals within the list to ensure safety for multiple nodes in the same group.
 // filterNodesViolatingMinSize uses/updates the same nodeGroupSize within the same Defrag process.
-func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *context.AutoscalingContext, nodes []string) []string {
+func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.AutoscalingContext, nodes []string) []string {
 	var result []string
 	for _, nodeName := range nodes {
 		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
@@ -284,7 +285,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *context.AutoscalingC
 		}
 		node := nodeInfo.Node()
 
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(node)
+		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 		if err != nil {
 			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
 			continue
@@ -300,7 +301,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *context.AutoscalingC
 			klog.Errorf("Error while checking node group size for %s: group size not found", nodeGroup.Id())
 			continue
 		}
-		minSize := nodeGroup.MinSize()
+		minSize := nodeGroup.MinSize(context.TODO())
 		deletionsInProgress := ctx.ScaleDownActuator.CheckStatus().DeletionsCount(nodeGroupId)
 		if size-deletionsInProgress <= minSize {
 			klog.V(1).Infof("Skipping %s - node group min size reached (current: %d, deletionsInProgress: %d, min: %d), accounting for previous nodes", node.Name, size, deletionsInProgress, minSize)

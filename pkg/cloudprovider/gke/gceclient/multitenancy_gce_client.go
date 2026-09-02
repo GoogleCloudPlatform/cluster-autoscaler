@@ -170,12 +170,12 @@ func (m *multitenancyGCEClient) FetchAcceleratorTypes(zone string) (*gce_api.Acc
 	return clusterProjectGceService.FetchAcceleratorTypes(zone)
 }
 
-func (m *multitenancyGCEClient) FetchMachineType(zone, machineType string) (*gce_api.MachineType, error) {
+func (m *multitenancyGCEClient) FetchMachineType(ctx context.Context, zone, machineType string) (*gce_api.MachineType, error) {
 	clusterProjectGceService, err := m.clusterProjectGCEService()
 	if err != nil {
 		return nil, err
 	}
-	return clusterProjectGceService.FetchMachineType(zone, machineType)
+	return clusterProjectGceService.FetchMachineType(ctx, zone, machineType)
 }
 
 func (m *multitenancyGCEClient) FetchMachineTypes(zone string) ([]*gce_api.MachineType, error) {
@@ -205,67 +205,67 @@ func (m *multitenancyGCEClient) FetchAllMigs(zone string) ([]*gce_api.InstanceGr
 }
 
 // TODO(b/385784728): Update call stack to fetch for all projects or create new function in client for it.
-func (m *multitenancyGCEClient) FetchAllInstances(project, zone string, filter string) ([]gce.GceInstance, error) {
+func (m *multitenancyGCEClient) FetchAllInstances(ctx context.Context, project, zone string, filter string) ([]gce.GceInstance, error) {
 	gceService, err := m.gceService(project)
 	if err != nil {
 		return nil, err
 	}
-	return gceService.FetchAllInstances(project, zone, filter)
+	return gceService.FetchAllInstances(ctx, project, zone, filter)
 }
 
-func (m *multitenancyGCEClient) FetchMigTargetSize(ref gce.GceRef) (int64, error) {
+func (m *multitenancyGCEClient) FetchMigTargetSize(ctx context.Context, ref gce.GceRef) (int64, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return 0, err
 	}
-	return gceService.FetchMigTargetSize(ref)
+	return gceService.FetchMigTargetSize(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) FetchMigBasename(ref gce.GceRef) (string, error) {
+func (m *multitenancyGCEClient) FetchMigBasename(ctx context.Context, ref gce.GceRef) (string, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return "", err
 	}
-	return gceService.FetchMigBasename(ref)
+	return gceService.FetchMigBasename(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) FetchMigInstances(ref gce.GceRef) ([]gce.GceInstance, error) {
+func (m *multitenancyGCEClient) FetchMigInstances(ctx context.Context, ref gce.GceRef) ([]gce.GceInstance, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return nil, err
 	}
-	return gceService.FetchMigInstances(ref)
+	return gceService.FetchMigInstances(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) FetchMig(ref gce.GceRef) (*gce_api.InstanceGroupManager, error) {
+func (m *multitenancyGCEClient) FetchMig(ctx context.Context, ref gce.GceRef) (*gce_api.InstanceGroupManager, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return nil, err
 	}
-	return gceService.FetchMig(ref)
+	return gceService.FetchMig(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) FetchMigTemplateName(ref gce.GceRef) (gce.InstanceTemplateName, error) {
+func (m *multitenancyGCEClient) FetchMigTemplateName(ctx context.Context, ref gce.GceRef) (gce.InstanceTemplateName, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return gce.InstanceTemplateName{}, err
 	}
-	return gceService.FetchMigTemplateName(ref)
+	return gceService.FetchMigTemplateName(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) FetchMigTemplate(ref gce.GceRef, templateName string, regional bool) (*gce_api.InstanceTemplate, error) {
+func (m *multitenancyGCEClient) FetchMigTemplate(ctx context.Context, ref gce.GceRef, templateName string, regional bool) (*gce_api.InstanceTemplate, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return nil, err
 	}
-	return gceService.FetchMigTemplate(ref, templateName, regional)
+	return gceService.FetchMigTemplate(ctx, ref, templateName, regional)
 }
 
 // TODO(b/385776258): Parallelize the GCE API calls across projects.
-func (m *multitenancyGCEClient) FetchMigsWithName(zone string, filter *regexp.Regexp) ([]string, error) {
+func (m *multitenancyGCEClient) FetchMigsWithName(ctx context.Context, zone string, filter *regexp.Regexp) ([]string, error) {
 	var foundMigs []string
 	for projectID, gceService := range m.gceClients {
-		migs, err := gceService.FetchMigsWithName(zone, filter)
+		migs, err := gceService.FetchMigsWithName(ctx, zone, filter)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch all MIGs with filter for project %s: %v", projectID, err)
 		}
@@ -274,12 +274,12 @@ func (m *multitenancyGCEClient) FetchMigsWithName(zone string, filter *regexp.Re
 	return foundMigs, nil
 }
 
-func (m *multitenancyGCEClient) FetchZones(region string) ([]string, error) {
+func (m *multitenancyGCEClient) FetchZones(ctx context.Context, region string) ([]string, error) {
 	clusterProjectGceService, err := m.clusterProjectGCEService()
 	if err != nil {
 		return nil, err
 	}
-	return clusterProjectGceService.FetchZones(region)
+	return clusterProjectGceService.FetchZones(ctx, region)
 }
 
 // TODO(b/385776259): Evaluate aggregating information across all tenant projects.
@@ -348,36 +348,36 @@ func (m *multitenancyGCEClient) FetchResourcePolicies(projectId, region string) 
 	return gceService.FetchResourcePolicies(projectId, region)
 }
 
-func (m *multitenancyGCEClient) FetchListManagedInstancesResults(ref gce.GceRef) (string, error) {
+func (m *multitenancyGCEClient) FetchListManagedInstancesResults(ctx context.Context, ref gce.GceRef) (string, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return "", err
 	}
-	return gceService.FetchListManagedInstancesResults(ref)
+	return gceService.FetchListManagedInstancesResults(ctx, ref)
 }
 
-func (m *multitenancyGCEClient) ResizeMig(ref gce.GceRef, size int64) error {
+func (m *multitenancyGCEClient) ResizeMig(ctx context.Context, ref gce.GceRef, size int64) error {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return err
 	}
-	return gceService.ResizeMig(ref, size)
+	return gceService.ResizeMig(ctx, ref, size)
 }
 
-func (m *multitenancyGCEClient) DeleteInstances(ref gce.GceRef, instances []gce.GceRef) error {
+func (m *multitenancyGCEClient) DeleteInstances(ctx context.Context, ref gce.GceRef, instances []gce.GceRef) error {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return err
 	}
-	return gceService.DeleteInstances(ref, instances)
+	return gceService.DeleteInstances(ctx, ref, instances)
 }
 
-func (m *multitenancyGCEClient) CreateInstances(ref gce.GceRef, basename string, delta int64, instanceNames []string) ([]string, error) {
+func (m *multitenancyGCEClient) CreateInstances(ctx context.Context, ref gce.GceRef, basename string, delta int64, instanceNames []string) ([]string, error) {
 	gceService, err := m.gceService(ref.Project)
 	if err != nil {
 		return nil, err
 	}
-	return gceService.CreateInstances(ref, basename, delta, instanceNames)
+	return gceService.CreateInstances(ctx, ref, basename, delta, instanceNames)
 }
 
 func (m *multitenancyGCEClient) CreateInstancesWithRecommendation(ref gce.GceRef, basename string, delta int64, instanceNames []string, recommendation string) ([]string, error) {
@@ -404,12 +404,12 @@ func (m *multitenancyGCEClient) SuspendInstances(migRef gce.GceRef, instances []
 	return gceClient.SuspendInstances(migRef, instances, forceSuspend)
 }
 
-func (m *multitenancyGCEClient) WaitForOperation(operationName, operationType, project, zone string) error {
+func (m *multitenancyGCEClient) WaitForOperation(ctx context.Context, operationName, operationType, project, zone string) error {
 	gceService, err := m.gceService(project)
 	if err != nil {
 		return err
 	}
-	return gceService.WaitForOperation(operationName, operationType, project, zone)
+	return gceService.WaitForOperation(ctx, operationName, operationType, project, zone)
 }
 
 func (m *multitenancyGCEClient) FetchNetwork(projectId, name string) (*gce_api.Network, error) {

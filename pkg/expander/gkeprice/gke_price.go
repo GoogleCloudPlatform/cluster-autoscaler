@@ -15,6 +15,7 @@
 package gkeprice
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"math/rand"
@@ -139,7 +140,7 @@ func NewStrategy(
 	localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker,
 ) (*gkePriceBased, errors.AutoscalerError) {
-	pricingModel, err := cloudProvider.Pricing()
+	pricingModel, err := cloudProvider.Pricing(context.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +172,7 @@ func NewStrategy(
 }
 
 // BestOption selects option based on cost and preferred node type.
-func (p *gkePriceBased) BestOption(expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
+func (p *gkePriceBased) BestOption(ctx context.Context, expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) *expander.Option {
 	var bestOption *expander.Option
 	bestOptionScore := 0.0
 	bestOptionUnfitness := math.MaxFloat64
@@ -192,7 +193,7 @@ func (p *gkePriceBased) BestOption(expansionOptions []expander.Option, nodeInfos
 		// continuing without analysis.
 	}
 
-	stabilizationPrice, err := p.pricingModel.PodPrice(priceStabilizationPod, now, then)
+	stabilizationPrice, err := p.pricingModel.PodPrice(context.TODO(), priceStabilizationPod, now, then)
 	if err != nil {
 		klog.Errorf("Failed to get price for stabilization pod: %v", err)
 		// continuing without stabilization.
@@ -227,7 +228,7 @@ nextoption:
 
 		totalPodPrice := 0.0
 		for _, pod := range option.Pods {
-			podPrice, err := p.pricingModel.PodPrice(pod, now, then)
+			podPrice, err := p.pricingModel.PodPrice(context.TODO(), pod, now, then)
 			if err != nil {
 				klog.Warningf("Failed to calculate pod price for %s/%s: %v", pod.Namespace, pod.Name, err)
 				continue nextoption
@@ -279,7 +280,7 @@ nextoption:
 		optionScore := supressedUnfitness * priceSubScore
 
 		groupCountPenalty := 1.0
-		if !option.NodeGroup.Exist() && !p.upcomingChecker.IsUpcoming(option.NodeGroup) {
+		if !option.NodeGroup.Exist(context.TODO()) && !p.upcomingChecker.IsUpcoming(option.NodeGroup) {
 			if relaxedNodeGroupPenaltyEnabled {
 				groupCountPenalty = p.groupCountReducer.BaseGroupCreationPenalty()
 			} else {
@@ -325,9 +326,9 @@ nextoption:
 
 // BestOptions narrows down the list of expansion options to a subset which is equally good as far a given expander is concerned.
 // In case of gke-price expander, there's only a single winning option.
-func (p *gkePriceBased) BestOptions(expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
+func (p *gkePriceBased) BestOptions(ctx context.Context, expansionOptions []expander.Option, nodeInfos map[string]*framework.NodeInfo) []expander.Option {
 	opts := make([]expander.Option, 0, 1)
-	best := p.BestOption(expansionOptions, nodeInfos)
+	best := p.BestOption(ctx, expansionOptions, nodeInfos)
 	if best != nil {
 		opts = append(opts, *best)
 	}
@@ -404,7 +405,7 @@ func buildPod(name string, millicpu, mem, ephStr int64) *apiv1.Pod {
 }
 
 func (p *gkePriceBased) totalNodePrice(option expander.Option, node *apiv1.Node, gceReservations []*gce_api.Reservation, minAddedNodeCount int, now time.Time, then time.Time) (float64, int64, error) {
-	nodePrice, err := p.pricingModel.NodePrice(node, now, then)
+	nodePrice, err := p.pricingModel.NodePrice(context.TODO(), node, now, then)
 	if err != nil {
 		return 0.0, 0, err
 	}
@@ -478,7 +479,7 @@ func (p *gkePriceBased) reclaimablePrice(nodePoolHasGpu bool, clusterAnalysis Cl
 		return 0
 	}
 
-	reclaimablePrice, err := p.pricingModel.PodPrice(reclaimableResourcesPod, now, then)
+	reclaimablePrice, err := p.pricingModel.PodPrice(context.TODO(), reclaimableResourcesPod, now, then)
 	if err != nil {
 		klog.Errorf("Failed to calculate reclaimable price, skipping: %v", err)
 	}

@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"math"
@@ -30,7 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -70,10 +71,10 @@ func NewBufferConsumptionProcessor(nodeController csnNodeController, experiments
 	}
 }
 
-func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	defer metrics.UpdateDurationFromStart(bufferConsumptionMetricLabel, p.clock.Now())
+func (p *BufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	defer metrics.UpdateDurationFromStart(ctx, bufferConsumptionMetricLabel, p.clock.Now())
 
-	snapshot := ctx.ClusterSnapshot
+	snapshot := autoscalingCtx.ClusterSnapshot
 	snapshot.Fork()
 
 	// We shoudn't attempt to schedule unhelpable pods to improve performance as otherwise they will keep wasting a lot of processing slowing down CA loop in every loop,
@@ -92,7 +93,7 @@ func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, un
 	now := p.clock.Now()
 	threshold := p.podAgeFallbackThreshold()
 	podAgeFallbackEnabled := p.isPodAgeFallbackEnabled()
-	nodesOfScheduledPods, err := p.consumeCSNBuffers(ctx, helpablePods, now, threshold, podAgeFallbackEnabled)
+	nodesOfScheduledPods, err := p.consumeCSNBuffers(autoscalingCtx, helpablePods, now, threshold, podAgeFallbackEnabled)
 	if err != nil {
 		snapshot.Revert()
 		klog.Errorf("%s error while consuming CSN buffers: %v", bufferConsumptionLogPrefix, err)
@@ -125,7 +126,7 @@ func (p *BufferConsumptionProcessor) Process(ctx *context.AutoscalingContext, un
 func (p *BufferConsumptionProcessor) CleanUp() {}
 
 // Note: consumeCSNBuffers assumes that it is already under a forked snapshot.
-func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod, now time.Time, threshold time.Duration, podAgeFallbackEnabled bool) (nodesOfScheduledPods map[*apiv1.Pod]string, err error) {
+func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, now time.Time, threshold time.Duration, podAgeFallbackEnabled bool) (nodesOfScheduledPods map[*apiv1.Pod]string, err error) {
 	snapshot := ctx.ClusterSnapshot
 
 	classifiedNodes, err := classifyNodes(snapshot)
@@ -343,7 +344,7 @@ func classifyNodes(snapshot clustersnapshot.ClusterSnapshot) (*classifiedNodes, 
 }
 
 // consumedNodes returns all nodes that are already consumed by checking if any of them has pods that block suspension.
-func (p *BufferConsumptionProcessor) consumedNodes(nodeInfos *classifiedNodes, kubeClients context.AutoscalingKubeClients) (map[string]bool, error) {
+func (p *BufferConsumptionProcessor) consumedNodes(nodeInfos *classifiedNodes, kubeClients ca_context.AutoscalingKubeClients) (map[string]bool, error) {
 	alreadyConsumedNodes, err := p.consumedNodesThroughSnapshot(nodeInfos.chilling)
 	if err != nil {
 		return nil, fmt.Errorf("error getting consumed nodes through snapshot: %v", err)
@@ -377,8 +378,8 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughSnapshot(chillingNodeIn
 
 // consumedNodesThroughInformers returns nodes that should be consumed based on the current state of pods in the cluster.
 // This is used to mitigate race conditions between CA loop and scheduler (since scheduler can schedule pods on them).
-func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *classifiedNodes, kubeClients context.AutoscalingKubeClients) (map[string]bool, error) {
-	defer metrics.UpdateDurationFromStart(schedulingThroughInformersMetricLabel, p.clock.Now())
+func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *classifiedNodes, kubeClients ca_context.AutoscalingKubeClients) (map[string]bool, error) {
+	defer metrics.UpdateDurationFromStart(context.TODO(), schedulingThroughInformersMetricLabel, p.clock.Now())
 
 	loggingQuota := logging.CSNPodLoggingQuota()
 

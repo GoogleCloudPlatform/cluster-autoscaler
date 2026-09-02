@@ -227,8 +227,8 @@ func TestFleetEfficiency(t *testing.T) {
 		},
 		"FlexStart workloads, fleet efficiency - use fleet efficiency": {
 			nodePools: []*gke_api_beta.NodePool{
-				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
-				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-low-preference").WithOptions(integration.WithFlexStartNodePool).WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithOptions(integration.WithFlexStartNodePool).WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
 			},
 			fakeGuidances: []fake.CapacityGuidance{
 				fake.NewGuidance("e2-standard-4").WithScore(0.2),
@@ -238,6 +238,13 @@ func TestFleetEfficiency(t *testing.T) {
 				OnDemand:  &lowestCost,
 				Spot:      &lowestCost,
 				FlexStart: &fleetEfficiency,
+			},
+			experimentFlags: map[string]bool{
+				experiments.FlexAdvisorDWSEnabledFlag: true,
+			},
+			stringExperimentFlags: map[string]string{
+				experiments.FlexStartNonQueuedEnabledFlag:  "0.0.0",
+				experiments.FlexAdvisorDWSMinCAVersionFlag: "0.0.0",
 			},
 			provisioningMode: instanceavailability.FlexStart,
 			expectedNodePool: "pool-high-preference",
@@ -259,7 +266,6 @@ func TestFleetEfficiency(t *testing.T) {
 			reservations: []*compute.Reservation{
 				reservations.BuildMultipleMachineReservation("e2-standard-4", ZoneB, 0, 1),
 			},
-			provisioningMode: instanceavailability.FlexStart,
 			expectedNodePool: "pool-low-preference",
 		},
 		"multiple options with same fleet efficiency - tie break with lowest cost": {
@@ -330,6 +336,8 @@ func TestFleetEfficiency(t *testing.T) {
 				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
+
+				primeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
 
 				infra.Fakes.K8s.AddPod(tu.BuildTestPod("fe-pod", 3000, 12000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable(), pod.WithProvisioningMode(tc.provisioningMode)))
 

@@ -15,19 +15,21 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates/emptycandidates"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates/previouscandidates"
@@ -132,7 +134,7 @@ func BenchmarkScaleDownSorting(b *testing.B) {
 	}
 
 	sortingProcessor := scaledowncandidates.NewScaleDownCandidatesSortingProcessor(scaleDownComparers)
-	ctx := &context.AutoscalingContext{
+	ctx := &ca_context.AutoscalingContext{
 		CloudProvider:   cp,
 		ClusterSnapshot: snapshot,
 	}
@@ -144,7 +146,7 @@ func BenchmarkScaleDownSorting(b *testing.B) {
 		nodesCopy := make([]*apiv1.Node, len(allNodes))
 		copy(nodesCopy, allNodes)
 
-		_, err := sortingProcessor.GetScaleDownCandidates(ctx, nodesCopy)
+		_, err := sortingProcessor.GetScaleDownCandidates(context.TODO(), ctx, nodesCopy)
 		assert.NoError(b, err)
 	}
 }

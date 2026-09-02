@@ -17,6 +17,7 @@ limitations under the License.
 package resourcequota
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -46,7 +47,7 @@ func NewTargetNodeCountProvider(ccLister cc_lister.Lister, excludeTopLevel bool,
 }
 
 // Quotas generates TargetNodeCountQuotas for valid non-negative targets in all ComputeClass CRDs.
-func (p *TargetNodeCountProvider) Quotas() ([]resourcequotas.Quota, error) {
+func (p *TargetNodeCountProvider) Quotas(ctx context.Context) ([]resourcequotas.Quota, error) {
 	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
 		return nil, nil
 	}

@@ -15,6 +15,7 @@
 package backoff
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -126,7 +127,7 @@ func GetNodeResources(processor customresources.CustomResourcesProcessor,
 		})
 	}
 
-	resourceTargets, err := processor.GetNodeResourceTargets(nil, nodeInfo.Node(), nodeGroup)
+	resourceTargets, err := processor.GetNodeResourceTargets(context.TODO(), nil, nodeInfo.Node(), nodeGroup)
 	for _, resourceTarget := range resourceTargets {
 		if err == nil && resourceTarget.ResourceCount > 0 {
 			resources = append(resources, NodeResource{

@@ -15,6 +15,7 @@
 package resizerequests
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"slices"
@@ -42,8 +43,8 @@ var defaultError = cloudprovider.InstanceErrorInfo{
 
 type GkeCloudProvider interface {
 	GetGkeMigs() []*gke.GkeMig
-	GetAvailableGPUTypes() map[string]struct{}
-	GetNodeGpuConfig(*apiv1.Node) *cloudprovider.GpuConfig
+	GetAvailableGPUTypes(context.Context) map[string]struct{}
+	GetNodeGpuConfig(context.Context, *apiv1.Node) *cloudprovider.GpuConfig
 }
 
 type ErrorReporter struct {
@@ -88,7 +89,7 @@ func isErrorReportable(mig *gke.GkeMig) bool {
 	}
 }
 
-func (r *ErrorReporter) Refresh() {
+func (r *ErrorReporter) Refresh(ctx context.Context) {
 	// Disclaimer: When `FlexStartNonQueuedEnabledFlag` experiment is disabled and thus we won't `handleFailedFlexStartScaleUps`,
 	// we rely on `flexStartMaxNodeProvisionTime` fallback:
 	// the VM placeholders will be marked as `longUnregistered` and deleted,
@@ -164,8 +165,8 @@ func (r *ErrorReporter) reportResizeRequestsErrors(mig *gke.GkeMig) {
 		errorInfo.ErrorMessage)
 
 	currentTime := r.now()
-	r.ctx.ClusterStateRegistry.RegisterScaleUp(mig, -int(latestFailedResizeRequest.ResizeBy), currentTime)
-	r.scaleStateNotifier.RegisterFailedScaleUp(mig, int(latestFailedResizeRequest.ResizeBy), *errorInfo, currentTime)
+	r.ctx.ClusterStateRegistry.RegisterScaleUp(context.TODO(), mig, -int(latestFailedResizeRequest.ResizeBy), currentTime)
+	r.scaleStateNotifier.RegisterFailedScaleUp(context.TODO(), mig, int(latestFailedResizeRequest.ResizeBy), *errorInfo, currentTime)
 	if err := mig.AdvanceResizeRequestCleanUp(*latestFailedResizeRequest); err != nil {
 		klog.Errorf("Error while deleting resize request for mig %q: %v", mig.Id(), err)
 	}
@@ -215,7 +216,7 @@ func (r *ErrorReporter) processPartiallyFailedRequestCreates(mig *gke.GkeMig, cu
 		instanceErrorInfo := getInstanceErrorInfoOrDefault(rrErrorInfo)
 		if !backoffTriggered && shouldBackoff {
 			backoffTriggered = true
-			r.scaleStateNotifier.RegisterFailedScaleUp(mig, count, *instanceErrorInfo, currentTime)
+			r.scaleStateNotifier.RegisterFailedScaleUp(context.TODO(), mig, count, *instanceErrorInfo, currentTime)
 		}
 	}
 
@@ -229,7 +230,7 @@ func (r *ErrorReporter) processPartiallyFailedRequestCreates(mig *gke.GkeMig, cu
 
 	// Correct the scale up size
 	if failedRRCreationsCount > 0 {
-		r.ctx.ClusterStateRegistry.RegisterScaleUp(mig, -failedRRCreationsCount, currentTime)
+		r.ctx.ClusterStateRegistry.RegisterScaleUp(context.TODO(), mig, -failedRRCreationsCount, currentTime)
 	}
 	return backoffTriggered
 }
@@ -272,10 +273,10 @@ func (r *ErrorReporter) processExistingRequests(mig *gke.GkeMig, backoffTriggere
 		// Backoff with the chosen mainErrorEntry reason if there was no backoff added yet by creation errors
 		if !backoffTriggered {
 			instanceErrorInfo := getInstanceErrorInfoOrDefault(mainErr)
-			r.scaleStateNotifier.RegisterFailedScaleUp(mig, errCnt, *instanceErrorInfo, currentTime)
+			r.scaleStateNotifier.RegisterFailedScaleUp(context.TODO(), mig, errCnt, *instanceErrorInfo, currentTime)
 		}
 		// Correct the scale up size
-		r.ctx.ClusterStateRegistry.RegisterScaleUp(mig, -errCnt, currentTime)
+		r.ctx.ClusterStateRegistry.RegisterScaleUp(context.TODO(), mig, -errCnt, currentTime)
 	}
 
 	updateReportStates(mig, rrsPerCategory)
@@ -361,7 +362,7 @@ func getResizeRequestErrorInfo(mig *gke.GkeMig, resizeRequest *resizerequestclie
 
 	if errorInfo == nil {
 		klog.Warningf("Resize Request %q is in failed state but it has no errors. This should never happen.", resizeRequest.Name)
-		size, err := mig.TargetSize()
+		size, err := mig.TargetSize(context.TODO())
 		if err != nil {
 			klog.Errorf("Cannot get target size of mig %v: %v", mig.Id(), err)
 		}

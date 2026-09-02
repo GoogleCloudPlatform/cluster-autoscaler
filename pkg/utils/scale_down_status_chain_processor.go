@@ -15,7 +15,9 @@
 package utils
 
 import (
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"context"
+
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	processors "sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
@@ -26,9 +28,9 @@ type ScaleDownStatusChainProcessor struct {
 }
 
 // Process executes Process for all of the internal processors.
-func (p *ScaleDownStatusChainProcessor) Process(context *context.AutoscalingContext, status *status.ScaleDownStatus) {
+func (p *ScaleDownStatusChainProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, status *status.ScaleDownStatus) {
 	for _, proc := range p.Processors {
-		proc.Process(context, status)
+		proc.Process(ctx, autoscalingCtx, status)
 	}
 }
 

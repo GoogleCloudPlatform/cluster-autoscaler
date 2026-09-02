@@ -15,6 +15,7 @@
 package capacitybuffer
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -163,7 +164,7 @@ func (f *FakePodStateObserver) ObserveSchedulablePods(pods []*v1.Pod) {
 // Process processes the scale-up status (implementation of ScaleUpStatusProcessor)
 // It can be called multiple times during CA loop. It is safe to be called outside CA loop (and from other goroutines).
 // This function can report the metric if all buffer's pods have been processed within the CA loop.
-func (f *FakePodStateObserver) Process(context *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+func (f *FakePodStateObserver) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 

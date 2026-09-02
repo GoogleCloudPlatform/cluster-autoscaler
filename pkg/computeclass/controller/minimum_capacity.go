@@ -130,7 +130,7 @@ func (c *minCapacityController) reconcile(now time.Time) error {
 		nodeGroupRuleCache := make(map[string]int)
 
 		for _, node := range realNodes {
-			nodeGroup, err := c.cloudProvider.NodeGroupForNode(node)
+			nodeGroup, err := c.cloudProvider.NodeGroupForNode(context.TODO(), node)
 			if err != nil {
 				klog.Warningf("%s: Failed to get node group for node %s: %v", minimumCapacityControllerName, node.Name, err)
 				continue

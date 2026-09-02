@@ -15,6 +15,7 @@
 package provreqcache
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -28,7 +29,7 @@ import (
 const maxNAPWaitTime = 15 * time.Minute
 
 type provreqClient interface {
-	ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error)
+	ProvisioningRequests(context.Context) ([]*provreqwrapper.ProvisioningRequest, error)
 }
 
 // QueuedProvisioningCache caches Provisioning Requests. It implements a LoopStartObserver interface to allow fetching ProvReqs
@@ -66,7 +67,7 @@ func NewQueuedProvisioningCache(c provreqClient) *QueuedProvisioningCache {
 }
 
 // Refresh refreshes the QueuedProvisioningCache.
-func (c *QueuedProvisioningCache) Refresh() {
+func (c *QueuedProvisioningCache) Refresh(ctx context.Context) {
 	c.m.Lock()
 	defer c.m.Unlock()
 	prs, err := provreqstate.ProvisioningRequestsInState(c.client, provreqstate.PendingState)

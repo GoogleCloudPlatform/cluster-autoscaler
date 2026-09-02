@@ -240,7 +240,7 @@ func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableRes
 		return nil, fmt.Errorf("couldn't get region from location %s: %v", location, err)
 	}
 
-	zones, err := gceClient.FetchZones(region)
+	zones, err := gceClient.FetchZones(context.TODO(), region)
 	if err != nil {
 		klog.Errorf("Couldn't get zones from region %s: %v", region, err)
 		return nil, fmt.Errorf("couldn't get zones from region %s: %v", region, err)

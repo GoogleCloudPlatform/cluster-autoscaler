@@ -52,7 +52,9 @@ func InitSelfService(cp CloudProvider) {
 		newWorkloadMetadata(),
 		newInstanceMetadata(),
 		newMaintenanceExclusion(),
+		newNodeDrainConfig(),
 		newNestedVirtualization(experimentsManager),
+		newCustomImage(),
 	}
 }
 

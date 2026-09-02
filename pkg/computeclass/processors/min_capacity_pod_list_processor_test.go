@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -302,7 +303,7 @@ func (m *minCapacityMockNodeGroup) Id() string {
 	return m.id
 }
 
-func (m *minCapacityMockNodeGroup) TargetSize() (int, error) {
+func (m *minCapacityMockNodeGroup) TargetSize(ctx context.Context) (int, error) {
 	return m.targetSize, nil
 }
 
@@ -312,7 +313,7 @@ func (m *minCapacityMockNodeGroup) Spec() *gkeclient.NodePoolSpec {
 	}
 }
 
-func (m *minCapacityMockNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (m *minCapacityMockNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	return nil, nil
 }
 
@@ -349,7 +350,7 @@ type minCapacityMockCloudProvider struct {
 	nodeGroups []cloudprovider.NodeGroup
 }
 
-func (m *minCapacityMockCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
+func (m *minCapacityMockCloudProvider) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	return m.nodeGroups
 }
 

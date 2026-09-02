@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -24,12 +25,12 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	pod_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
@@ -410,7 +411,7 @@ func TestScaleToZeroProcessor(t *testing.T) {
 				err := snapshot.AddNodeInfo(ni)
 				assert.NoError(t, err)
 			}
-			context := &context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 
@@ -418,7 +419,7 @@ func TestScaleToZeroProcessor(t *testing.T) {
 			proc := NewScaleToZeroPodListProcessor(metricsFilter, 5*time.Minute, systempods.NewClassifier([]string{metav1.NamespaceSystem}))
 			proc.emptySince = time.Now().Add(-1 * tc.emptyFor)
 
-			newUnschedulable, err := proc.Process(context, tc.unschedulablePods)
+			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
 			assert.NoError(t, err)
 
 			metricsFilteredPods := metricsFilter.FilterOutPods(tc.unschedulablePods)
@@ -436,7 +437,7 @@ func TestScaleToZeroProcessor(t *testing.T) {
 				assert.ElementsMatch(t, tc.unschedulablePods, newUnschedulable)
 				assert.ElementsMatch(t, tc.unschedulablePods, metricsFilteredPods)
 			}
-			validateSnapshotState(t, tc.nodeInfos, context.ClusterSnapshot, tc.expectSystemPodsFiltered)
+			validateSnapshotState(t, tc.nodeInfos, autoscalingCtx.ClusterSnapshot, tc.expectSystemPodsFiltered)
 
 			for _, nodeInfo := range tc.nodeInfos {
 				drainabilityStatus := proc.Drainable(nil, nil, nodeInfo)

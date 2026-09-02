@@ -15,6 +15,7 @@
 package controller
 
 import (
+	"context"
 	"time"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
@@ -76,7 +77,7 @@ type minCapacityMockCloudProvider struct {
 	nodeGroupForNodeFunc func(node *apiv1.Node) (cloudprovider.NodeGroup, error)
 }
 
-func (m *minCapacityMockCloudProvider) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (m *minCapacityMockCloudProvider) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	if m.nodeGroupForNodeFunc != nil {
 		return m.nodeGroupForNodeFunc(node)
 	}

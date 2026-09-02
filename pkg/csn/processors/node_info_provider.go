@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -22,7 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodeinfosprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -48,9 +49,9 @@ func NewNodeInfoProvider(provider nodeinfosprovider.TemplateNodeInfoProvider, cp
 	}
 }
 
-func (p *NodeInfoProvider) Process(ctx *context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
+func (p *NodeInfoProvider) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node, daemonsets []*appsv1.DaemonSet, taintConfig taints.TaintConfig, now time.Time) (map[string]*framework.NodeInfo, errors.AutoscalerError) {
 	experimentEnabled := p.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesProcessTemplateNodeInfosFlag)
-	nodeInfos, err := p.provider.Process(ctx, nodes, daemonsets, taintConfig, now)
+	nodeInfos, err := p.provider.Process(ctx, autoscalingCtx, nodes, daemonsets, taintConfig, now)
 	if err != nil || !experimentEnabled {
 		return nodeInfos, err
 	}

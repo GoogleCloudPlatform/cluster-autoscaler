@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -328,7 +329,7 @@ func TestNodeGroupListProcessor(t *testing.T) {
 				nodeInfos[ng.Id()] = framework.NewTestNodeInfo(node, tc.existingPods[ng.Id()]...)
 			}
 
-			actual, _, _ := processor.Process(nil, tc.nodegroups, nodeInfos, nil)
+			actual, _, _ := processor.Process(context.TODO(), nil, tc.nodegroups, nodeInfos, nil)
 
 			// Extract balloon pods from node infos.
 			balloonPods := map[string]*v1.Pod{}
@@ -375,7 +376,7 @@ func newMockNodeGroupListProcessor() *mockNodeGroupListProcessor {
 	return &mockNodeGroupListProcessor{}
 }
 
-func (p *mockNodeGroupListProcessor) Process(ctx *context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
+func (p *mockNodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	return nodeGroups, nodeInfos, nil
 }
 

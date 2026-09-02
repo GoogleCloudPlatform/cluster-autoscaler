@@ -105,7 +105,7 @@ func BuildTestGcpNode(nodeName, machineType string, gpusCount int64, maxPodPerNo
 	}
 	millicpu := sizeInfo.millicpu
 	mem := int64(sizeInfo.mem)
-	evictionHard := gceprovider.ParseEvictionHardOrGetDefault(nil)
+	evictionHard := gceprovider.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 
 	node.Status.Capacity[apiv1.ResourcePods] = *resource.NewQuantity(maxPodPerNodeCount, resource.DecimalSI)
 	node.Status.Allocatable[apiv1.ResourcePods] = *resource.NewQuantity(maxPodPerNodeCount-daemonSetPods, resource.DecimalSI)
@@ -117,7 +117,7 @@ func BuildTestGcpNode(nodeName, machineType string, gpusCount int64, maxPodPerNo
 
 	r := gceprovider.GceReserved{}
 	migOsInfo := gceprovider.NewMigOsInfo(gceprovider.OperatingSystemLinux, gceprovider.OperatingSystemDistributionDefault, gceprovider.DefaultArch)
-	capacityMemory := mem - r.CalculateKernelReserved(migOsInfo, mem)
+	capacityMemory := mem - r.CalculateKernelReserved(context.TODO(), migOsInfo, mem)
 	node.Status.Capacity[apiv1.ResourceMemory] = *resource.NewQuantity(capacityMemory, resource.DecimalSI)
 	allocatableMemory := capacityMemory - gke.PredictKubeReservedMemory(mem, false, "", gceprovider.OperatingSystemDistributionDefault, gkelabels.DefaultMaxPodsPerNode, false) - gceprovider.GetKubeletEvictionHardForMemory(evictionHard)
 	allocatableMemory -= daemonSetMemory
@@ -186,12 +186,12 @@ func NewMockCloudProvider(kubeClient kube_client.Interface, scaleDownUtilThresho
 }
 
 // GPULabel returns the label added to nodes with GPU resource.
-func (mcp *MockCloudProvider) GPULabel() string {
+func (mcp *MockCloudProvider) GPULabel(ctx context.Context) string {
 	return gkelabels.GPULabel
 }
 
 // GetAvailableGPUTypes return all available GPU types cloud provider supports
-func (mcp *MockCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
+func (mcp *MockCloudProvider) GetAvailableGPUTypes(ctx context.Context) map[string]struct{} {
 	result := make(map[string]struct{})
 	machineConfigProvider := machinetypes.NewMachineConfigProvider(nil)
 	for _, gpuType := range machineConfigProvider.GetAllGpuTypes() {
@@ -202,7 +202,7 @@ func (mcp *MockCloudProvider) GetAvailableGPUTypes() map[string]struct{} {
 
 // NewNodeGroup builds a theoretical node group based on the node definition provided. The node group is not automatically
 // created on the cloud provider side. The node group is not returned by NodeGroups() until it is created.
-func (mcp *MockCloudProvider) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string,
+func (mcp *MockCloudProvider) NewNodeGroup(ctx context.Context, machineType string, labels map[string]string, systemLabels map[string]string,
 	taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
 
 	nodePoolName := fmt.Sprintf("nap-%s-%s", machineType, gke.GenerateRandomId(8))
@@ -318,23 +318,23 @@ func (mng *MockNodeGroup) Annotations() map[string]string {
 }
 
 // Create creates the node group on the cloud provider side.
-func (mng *MockNodeGroup) Create() (cloudprovider.NodeGroup, error) {
-	if mng.Exist() {
+func (mng *MockNodeGroup) Create(ctx context.Context) (cloudprovider.NodeGroup, error) {
+	if mng.Exist(context.TODO()) {
 		return nil, fmt.Errorf("group already exist")
 	}
-	newNodeGroup := mng.cloudProvider.AddAutoprovisionedNodeGroup(mng.Id(), mng.MinSize(), mng.MaxSize(), 0, mng.machineType)
+	newNodeGroup := mng.cloudProvider.AddAutoprovisionedNodeGroup(mng.Id(), mng.MinSize(context.TODO()), mng.MaxSize(context.TODO()), 0, mng.machineType)
 	return newNodeGroup, nil
 }
 
 // Delete deletes the node group on the cloud provider side.
 // This will be executed only for autoprovisioned node groups, once their size drops to 0.
-func (mng *MockNodeGroup) Delete() error {
+func (mng *MockNodeGroup) Delete(ctx context.Context) error {
 	mng.cloudProvider.DeleteNodeGroup(mng.Id())
 	return nil
 }
 
 // TemplateNodeInfo returns a node template for this node group.
-func (mng *MockNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (mng *MockNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	if mng.cloudProvider.machineTemplates == nil {
 		return nil, cloudprovider.ErrNotImplemented
 	}
@@ -366,7 +366,7 @@ func (mng *MockNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
 }
 
 // DeleteNodes deletes provided mockNodes from node group.
-func (mng *MockNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
+func (mng *MockNodeGroup) DeleteNodes(ctx context.Context, nodes []*apiv1.Node) error {
 	for _, node := range nodes {
 		if err := mng.kubeClient.CoreV1().Nodes().Delete(context.Background(), node.Name, metav1.DeleteOptions{}); err != nil {
 			return err
@@ -377,7 +377,7 @@ func (mng *MockNodeGroup) DeleteNodes(nodes []*apiv1.Node) error {
 
 // TODO(b/517096955): Implement AtomicIncreaseSize
 // ref: https://github.com/kubernetes/autoscaler/commit/9cdced4cfd7a4aef9bdf23d56ee430085d13b57f
-func (mng *MockNodeGroup) AtomicIncreaseSize(delta int) error {
+func (mng *MockNodeGroup) AtomicIncreaseSize(ctx context.Context, delta int) error {
 	return cloudprovider.ErrNotImplemented
 }
 

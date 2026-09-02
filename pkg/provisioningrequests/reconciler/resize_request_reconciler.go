@@ -57,10 +57,10 @@ const (
 )
 
 type provreqClient interface {
-	UpdateProvisioningRequest(*prv1.ProvisioningRequest) (*prv1.ProvisioningRequest, error)
-	DeleteProvisioningRequest(*prv1.ProvisioningRequest) error
-	ProvisioningRequests() ([]*provreqwrapper.ProvisioningRequest, error)
-	ProvisioningRequest(string, string) (*provreqwrapper.ProvisioningRequest, error)
+	UpdateProvisioningRequest(context.Context, *prv1.ProvisioningRequest) (*prv1.ProvisioningRequest, error)
+	DeleteProvisioningRequest(context.Context, *prv1.ProvisioningRequest) error
+	ProvisioningRequests(context.Context) ([]*provreqwrapper.ProvisioningRequest, error)
+	ProvisioningRequest(context.Context, string, string) (*provreqwrapper.ProvisioningRequest, error)
 }
 
 // resizeRequestReconciler reconciles Provisioning Requests with their corresponding Resize Requests.
@@ -409,7 +409,7 @@ func (r *resizeRequestReconciler) failProvisioningRequestsMissingResizeRequests(
 			klog.Errorf("Error while modifying Provisioning Request %s/%s missing Resize Request: %v", pr.Namespace, pr.Name, err)
 			continue
 		}
-		if _, err := r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+		if _, err := r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 			klog.Errorf("Error while updating Provisioning Request %s/%s missing Resize Request: %v", pr.Namespace, pr.Name, err)
 			continue
 		}
@@ -437,7 +437,7 @@ func (r *resizeRequestReconciler) deleteInvalidResizeRequestsAndFailInvalidProvR
 				klog.Errorf("Error while modifying Provisioning Request %s/%s during reconciling with Resize Request %s: %v", pr.Namespace, pr.Name, rrName, err)
 				continue
 			}
-			if _, err := r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest); err != nil {
+			if _, err := r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest); err != nil {
 				klog.Errorf("Error while updating Provisioning Request %s/%s during reconciling with Resize Request %s: %v", pr.Namespace, pr.Name, rrName, err)
 				continue
 			}
@@ -549,7 +549,7 @@ func (r *resizeRequestReconciler) updateProvisioningRequestInAcceptedState(resiz
 	if err != nil {
 		return false, fmt.Errorf("failed to modify the Provisioning Request: %w", err)
 	}
-	_, err = r.prClient.UpdateProvisioningRequest(pr.ProvisioningRequest)
+	_, err = r.prClient.UpdateProvisioningRequest(context.TODO(), pr.ProvisioningRequest)
 	// Since we've updated the state, reset the `firstUnsuccessfulReconciliationMap` entry
 	delete(r.firstUnsuccessfulReconciliationMap, pods.GetProvReqID(pr))
 	return true, err

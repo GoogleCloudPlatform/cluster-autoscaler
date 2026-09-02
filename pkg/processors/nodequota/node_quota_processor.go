@@ -15,12 +15,13 @@
 package nodequota
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 // NodeQuotaProcessor updates MaxNodesTotal to match GKE node quota at the end of each autoscaler loop.
@@ -31,11 +32,11 @@ type NodeQuotaProcessor struct {
 }
 
 // Process sets context.MaxNodesTotal to latest available node quota value.
-func (p *NodeQuotaProcessor) Process(context *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+func (p *NodeQuotaProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
 	quota := p.qw.GetNodeQuota()
-	if quota != context.MaxNodesTotal {
-		klog.V(2).Infof("Updating MaxNodesTotal to match nodequota. Previous value = %v, new value = %v", context.MaxNodesTotal, quota)
-		context.MaxNodesTotal = quota
+	if quota != autoscalingCtx.MaxNodesTotal {
+		klog.V(2).Infof("Updating MaxNodesTotal to match nodequota. Previous value = %v, new value = %v", autoscalingCtx.MaxNodesTotal, quota)
+		autoscalingCtx.MaxNodesTotal = quota
 	}
 	return nil
 }

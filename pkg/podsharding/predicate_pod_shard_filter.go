@@ -15,6 +15,7 @@
 package podsharding
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -23,11 +24,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/napcloudprovider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
@@ -58,14 +60,14 @@ func NewPredicatePodShardFilter(npcLister npc_lister.Lister, csnEnabled bool) *P
 }
 
 // FilterPods filters pod list against PodShard
-func (p *PredicatePodShardFilter) FilterPods(context *context.AutoscalingContext, selectedPodShard *PodShard, allPodShards []*PodShard, pods []*apiv1.Pod) (PodFilteringResult, error) {
-	cloudProvider, ok := context.CloudProvider.(PredicatePodShardingCloudProvider)
+func (p *PredicatePodShardFilter) FilterPods(autoscalingCtx *ca_context.AutoscalingContext, selectedPodShard *PodShard, allPodShards []*PodShard, pods []*apiv1.Pod) (PodFilteringResult, error) {
+	cloudProvider, ok := autoscalingCtx.CloudProvider.(PredicatePodShardingCloudProvider)
 	if !ok {
-		klog.Fatalf("Could not cast context.CloudProvider to PredicatePodShardingCloudProvider")
+		klog.Fatalf("Could not cast autoscalingCtx.CloudProvider to PredicatePodShardingCloudProvider")
 	}
-	autoprovisioningCloudProvider, ok := context.CloudProvider.(napcloudprovider.AutoprovisioningCloudProvider)
+	autoprovisioningCloudProvider, ok := autoscalingCtx.CloudProvider.(napcloudprovider.AutoprovisioningCloudProvider)
 	if !ok {
-		klog.Fatalf("Could not cast context.CloudProvider to AutoprovisioningCloudProvider")
+		klog.Fatalf("Could not cast autoscalingCtx.CloudProvider to AutoprovisioningCloudProvider")
 	}
 	machineSelector := machineselection.Selector{CloudProvider: autoprovisioningCloudProvider}
 
@@ -104,10 +106,10 @@ func (p *PredicatePodShardFilter) FilterPods(context *context.AutoscalingContext
 	if len(extensionNodeInfos) > 0 {
 		firstLocation := true
 		for _, extensionNodeInfo := range extensionNodeInfos {
-			context.ClusterSnapshot.Fork()
+			autoscalingCtx.ClusterSnapshot.Fork()
 
-			if err := context.ClusterSnapshot.AddNodeInfo(extensionNodeInfo); err != nil {
-				context.ClusterSnapshot.Revert()
+			if err := autoscalingCtx.ClusterSnapshot.AddNodeInfo(extensionNodeInfo); err != nil {
+				autoscalingCtx.ClusterSnapshot.Revert()
 				return PodFilteringResult{}, err
 			}
 
@@ -124,7 +126,7 @@ func (p *PredicatePodShardFilter) FilterPods(context *context.AutoscalingContext
 				signature := shard.Signature()
 				for podUid := range shard.PodUids {
 					pod := podsByUid[podUid]
-					predicateErr := context.ClusterSnapshot.CheckPredicates(pod, extensionNodeInfo.Node().Name)
+					predicateErr := autoscalingCtx.ClusterSnapshot.CheckPredicates(pod, extensionNodeInfo.Node().Name)
 					podMatchesPredicates := predicateErr == nil
 					// TODO(b/132594875): Consider using PredicateMeta
 
@@ -143,7 +145,7 @@ func (p *PredicatePodShardFilter) FilterPods(context *context.AutoscalingContext
 				}
 			}
 			firstLocation = false
-			context.ClusterSnapshot.Revert()
+			autoscalingCtx.ClusterSnapshot.Revert()
 		}
 	}
 
@@ -221,12 +223,12 @@ func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider Pr
 
 		descriptor.SystemLabels[apiv1.LabelZoneFailureDomain] = location
 
-		nodeGroup, err := cloudProvider.NewNodeGroup(expansionMachineTypeName, descriptor.Labels, descriptor.SystemLabels, descriptor.Taints, descriptor.ExtraResources)
+		nodeGroup, err := cloudProvider.NewNodeGroup(context.TODO(), expansionMachineTypeName, descriptor.Labels, descriptor.SystemLabels, descriptor.Taints, descriptor.ExtraResources)
 		if err != nil {
 			klog.Infof("Could not build extension nodeInfo for shard %v, machine type %v, location=%v; error on NewNodeGroup(); %v", shard.Signature(), expansionMachineTypeName, location, err)
 			continue
 		}
-		nodeInfo, err := nodeGroup.TemplateNodeInfo()
+		nodeInfo, err := nodeGroup.TemplateNodeInfo(context.TODO())
 		if err != nil {
 			klog.Warningf("Could not build extension nodeInfo for shard %v, machine type %v, location=%v; error on TemplateNodeInfo(); %v", shard.Signature(), expansionMachineTypeName, location, err)
 			continue

@@ -15,6 +15,7 @@
 package customresources
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -31,7 +32,7 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
@@ -96,7 +97,7 @@ func (p *Processor) GetDraResourcePredictor() *gke_dra.ResourcePredictor {
 }
 
 // SetContext sets context for the processor to use when the provided one is nil
-func (p *Processor) SetContext(context *context.AutoscalingContext) {
+func (p *Processor) SetContext(context *ca_context.AutoscalingContext) {
 	p.gpuPartitioningProcessor.SetContext(context)
 }
 
@@ -117,7 +118,7 @@ func (p *Processor) compareNodesWithNodeTemplates(nodes []*apiv1.Node) error {
 			continue
 		}
 
-		nodeGroup, err := p.gpuPartitioningProcessor.context.CloudProvider.NodeGroupForNode(node)
+		nodeGroup, err := p.gpuPartitioningProcessor.autoscalingCtx.CloudProvider.NodeGroupForNode(context.TODO(), node)
 		if err != nil {
 			finalErr.Append(fmt.Errorf("Couldn't find NodeGroup for node: %s, error: %v;", node.Name, err))
 			continue
@@ -142,7 +143,7 @@ func (p *Processor) compareNodesWithNodeTemplates(nodes []*apiv1.Node) error {
 		if err != nil {
 			finalErr.Append(err)
 		}
-		if mig.Autoprovisioned() {
+		if mig.Autoprovisioned(context.TODO()) {
 			key := nodetemplate.BuildKeyForNAP(mig.Spec(), osDistribution, node.Status.NodeInfo.KubeletVersion[1:], mig.GceRef().Zone)
 			err = p.compareAndUpdateTheMetric(node, key, mig.MachineType(), osDistribution)
 			if err != nil {
@@ -194,21 +195,21 @@ func (p *Processor) updateWorstAllocatableEstimation(diff map[string]float64, no
 }
 
 // FilterOutNodesWithUnreadyResources filters out nodes that are unready based on custom resources (GPU, TPU) or GKE Labels being unready.
-func (p *Processor) FilterOutNodesWithUnreadyResources(context *context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, snapshot *snapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+func (p *Processor) FilterOutNodesWithUnreadyResources(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, snapshot *snapshot.Snapshot, csiSnapshot *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
 	newAllNodes, newReadyNodes := allNodes, readyNodes
 
-	if context.DynamicResourceAllocationEnabled {
+	if autoscalingCtx.DynamicResourceAllocationEnabled {
 		// draResourcePredictor.FilterOutNodesWithUnreadyResources() doesn't modify the Node lists, it just precomputes internal state based on the DRA snapshot.
 		// This internal state is then used in GkeMig.TemplateNodeInfo(), so this processor should be called as early as possible in the chain.
-		newAllNodes, newReadyNodes = p.draResourcePredictor.FilterOutNodesWithUnreadyResources(context, newAllNodes, newReadyNodes, snapshot)
+		newAllNodes, newReadyNodes = p.draResourcePredictor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot)
 	}
 
-	newAllNodes, newReadyNodes = p.gpuPartitioningProcessor.FilterOutNodesWithUnreadyResources(context, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
-	newAllNodes, newReadyNodes = p.tpuProcessor.FilterOutNodesWithUnreadyResources(context, newAllNodes, newReadyNodes, snapshot)
+	newAllNodes, newReadyNodes = p.gpuPartitioningProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
+	newAllNodes, newReadyNodes = p.tpuProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot)
 	newAllNodes, newReadyNodes = p.labelsProcessor.FilterOutNodesWithMissingLabels(newAllNodes, newReadyNodes)
 
-	if context.DynamicResourceAllocationEnabled {
-		newAllNodes, newReadyNodes = p.draCustomResourcesProcessor.FilterOutNodesWithUnreadyResources(context, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
+	if autoscalingCtx.DynamicResourceAllocationEnabled {
+		newAllNodes, newReadyNodes = p.draCustomResourcesProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
 	}
 
 	p.cleanProcessedNodesIfNodeRemoved(allNodes)
@@ -236,21 +237,21 @@ func (p *Processor) cleanProcessedNodesIfNodeRemoved(allNodes []*apiv1.Node) {
 
 // GetNodeResourceTargets returns mapping of resource names to their targets.
 // This includes resources which are not yet ready to use and visible in kubernetes.
-func (p *Processor) GetNodeResourceTargets(context *context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+func (p *Processor) GetNodeResourceTargets(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
 	var resourceTargets []customresources.CustomResourceTarget
-	gpuResourceTargets, err := p.gpuPartitioningProcessor.GetNodeResourceTargets(context, node, nodeGroup)
+	gpuResourceTargets, err := p.gpuPartitioningProcessor.GetNodeResourceTargets(ctx, autoscalingCtx, node, nodeGroup)
 	if err != nil {
 		return gpuResourceTargets, err
 	}
 	resourceTargets = append(resourceTargets, gpuResourceTargets...)
 
-	tpuResourceTargets, err := p.tpuProcessor.GetNodeResourceTargets(context, node, nodeGroup)
+	tpuResourceTargets, err := p.tpuProcessor.GetNodeResourceTargets(autoscalingCtx, node, nodeGroup)
 	if err != nil {
 		return tpuResourceTargets, err
 	}
 	resourceTargets = append(resourceTargets, tpuResourceTargets...)
 
-	draResourceTargets, err := p.draCustomResourcesProcessor.GetNodeResourceTargets(context, node, nodeGroup)
+	draResourceTargets, err := p.draCustomResourcesProcessor.GetNodeResourceTargets(ctx, autoscalingCtx, node, nodeGroup)
 	if err != nil {
 		return draResourceTargets, err
 	}

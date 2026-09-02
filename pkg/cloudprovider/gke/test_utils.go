@@ -885,7 +885,7 @@ func (cp *TestAutoprovisioningCloudProvider) GetDefaultEnablePrivateNodes() bool
 }
 
 // GPULabel returns the label added to nodes with GPU resource.
-func (cp *TestAutoprovisioningCloudProvider) GPULabel() string {
+func (cp *TestAutoprovisioningCloudProvider) GPULabel(ctx context.Context) string {
 	return gce.GPULabel
 }
 
@@ -953,7 +953,7 @@ func (cp *TestAutoprovisioningCloudProvider) GetAutoprovisioningDefaultFamily() 
 	if cp.autoprovisioningDefaultFamily != nil {
 		return *cp.autoprovisioningDefaultFamily
 	}
-	machineTypeNames, _ := cp.GetAvailableMachineTypes()
+	machineTypeNames, _ := cp.GetAvailableMachineTypes(context.TODO())
 	var machineTypes []machinetypes.MachineType
 	for i, machineTypeName := range machineTypeNames {
 		machineTypes = append(machineTypes, machinetypes.NewMachineTypeInfo(machineTypeName, int64(i), float64(i)))
@@ -996,8 +996,8 @@ func (cp *TestAutoprovisioningCloudProvider) NewTestGkeNodeGroup(nodePoolName, i
 }
 
 // NewNodeGroup creates regular TestNodeGroup
-func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
-	nodeGroup, err := cp.TestCloudProvider.NewNodeGroup(machineType, labels, systemLabels, taints, extraResources)
+func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(ctx context.Context, machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
+	nodeGroup, err := cp.TestCloudProvider.NewNodeGroup(context.TODO(), machineType, labels, systemLabels, taints, extraResources)
 	if err != nil {
 		return nil, err
 	}
@@ -1157,7 +1157,7 @@ func (mig *TestGkeNodeGroup) IsStable() (bool, error) {
 
 // AutoprovisionedCreate creates the node group on the cloud provider side.
 func (mig *TestGkeNodeGroup) AutoprovisionedCreate() (nap_interfaces.CreateNodePoolResult, error) {
-	createdNodeGroup, err := mig.Create()
+	createdNodeGroup, err := mig.Create(context.TODO())
 	if err != nil {
 		return nap_interfaces.CreateNodePoolResult{}, err
 	}
@@ -1179,7 +1179,7 @@ func (mig *TestGkeNodeGroup) CreateAsync(updater interfaces.AsyncNodeGroupUpdate
 
 // DeleteAsync immediately deleted the node group on the cloud provider side and invoked the finalizer.
 func (mig *TestGkeNodeGroup) DeleteAsync(finalizer interfaces.AsyncNodeGroupFinalizer) error {
-	err := mig.Delete()
+	err := mig.Delete(context.TODO())
 	result := interfaces.AsyncDeleteNodePoolResult{
 		Migs:  []interfaces.AutoprovisionedNodeGroup{mig},
 		Error: err,
@@ -1199,8 +1199,8 @@ func (mig *TestGkeNodeGroup) MachineConfigProvider() *machinetypes.MachineConfig
 
 // TemplateNodeInfo creates a template node info for the node group. Uses predefined templates if they are defined,
 // and auto-generates based on the machine type and other TestGkeNodeGroup info if they aren't.
-func (mig *TestGkeNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
-	nodeInfo, err := mig.TestNodeGroup.TemplateNodeInfo()
+func (mig *TestGkeNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
+	nodeInfo, err := mig.TestNodeGroup.TemplateNodeInfo(context.TODO())
 	// ErrNotImplemented is returned if TestNodeGroup doesn't have any explicit node info templates defined.
 	if err != cloudprovider.ErrNotImplemented {
 		return nodeInfo, err
@@ -1313,7 +1313,7 @@ func (m *GkeCloudProviderMock) Name() string {
 }
 
 // NodeGroups returns all node groups configured for this cloud provider.
-func (m *GkeCloudProviderMock) NodeGroups() []cloudprovider.NodeGroup {
+func (m *GkeCloudProviderMock) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	args := m.Called()
 	return args.Get(0).([]cloudprovider.NodeGroup)
 }
@@ -1325,7 +1325,7 @@ func (m *GkeCloudProviderMock) InjectedNodeGroups() []cloudprovider.NodeGroup {
 }
 
 // NodeGroupForNode returns the node group for the given node.
-func (m *GkeCloudProviderMock) NodeGroupForNode(node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+func (m *GkeCloudProviderMock) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	args := m.Called(node)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1334,19 +1334,19 @@ func (m *GkeCloudProviderMock) NodeGroupForNode(node *apiv1.Node) (cloudprovider
 }
 
 // Pricing returns pricing model for this cloud provider or error if not available.
-func (m *GkeCloudProviderMock) Pricing() (cloudprovider.PricingModel, errors.AutoscalerError) {
+func (m *GkeCloudProviderMock) Pricing(ctx context.Context) (cloudprovider.PricingModel, errors.AutoscalerError) {
 	args := m.Called()
 	return args.Get(0).(cloudprovider.PricingModel), args.Get(1).(errors.AutoscalerError)
 }
 
 // HasInstance returns whether a given node has a corresponding instance in this cloud provider
-func (m *GkeCloudProviderMock) HasInstance(node *apiv1.Node) (bool, error) {
+func (m *GkeCloudProviderMock) HasInstance(ctx context.Context, node *apiv1.Node) (bool, error) {
 	args := m.Called(node)
 	return args.Get(0).(bool), args.Error(1)
 }
 
 // GetAvailableMachineTypes get all machine types that can be requested from the cloud provider.
-func (m *GkeCloudProviderMock) GetAvailableMachineTypes() ([]string, error) {
+func (m *GkeCloudProviderMock) GetAvailableMachineTypes(ctx context.Context) ([]string, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1355,7 +1355,7 @@ func (m *GkeCloudProviderMock) GetAvailableMachineTypes() ([]string, error) {
 }
 
 // NewNodeGroup builds a theoretical node group based on the node definition provided.
-func (m *GkeCloudProviderMock) NewNodeGroup(machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
+func (m *GkeCloudProviderMock) NewNodeGroup(ctx context.Context, machineType string, labels map[string]string, systemLabels map[string]string, taints []apiv1.Taint, extraResources map[string]resource.Quantity) (cloudprovider.NodeGroup, error) {
 	args := m.Called(machineType, labels, systemLabels, taints, extraResources)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1364,7 +1364,7 @@ func (m *GkeCloudProviderMock) NewNodeGroup(machineType string, labels map[strin
 }
 
 // GetResourceLimiter returns struct containing limits (max, min) for resources (cores, memory etc.).
-func (m *GkeCloudProviderMock) GetResourceLimiter() (*cloudprovider.ResourceLimiter, error) {
+func (m *GkeCloudProviderMock) GetResourceLimiter(ctx context.Context) (*cloudprovider.ResourceLimiter, error) {
 	args := m.Called()
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
@@ -1373,13 +1373,13 @@ func (m *GkeCloudProviderMock) GetResourceLimiter() (*cloudprovider.ResourceLimi
 }
 
 // GPULabel returns the label added to nodes with GPU resource.
-func (m *GkeCloudProviderMock) GPULabel() string {
+func (m *GkeCloudProviderMock) GPULabel(ctx context.Context) string {
 	args := m.Called()
 	return args.Get(0).(string)
 }
 
 // GetAvailableGPUTypes return all available GPU types cloud provider supports
-func (m *GkeCloudProviderMock) GetAvailableGPUTypes() map[string]struct{} {
+func (m *GkeCloudProviderMock) GetAvailableGPUTypes(ctx context.Context) map[string]struct{} {
 	args := m.Called()
 	return args.Get(0).(map[string]struct{})
 }
@@ -1406,19 +1406,19 @@ func (m *GkeCloudProviderMock) GetResourcePolicies(projectId string) ([]*gceclie
 	return args.Get(0).([]*gceclient.GceResourcePolicy), args.Error(1)
 }
 
-func (m *GkeCloudProviderMock) GetNodeGpuConfig(node *apiv1.Node) *cloudprovider.GpuConfig {
+func (m *GkeCloudProviderMock) GetNodeGpuConfig(ctx context.Context, node *apiv1.Node) *cloudprovider.GpuConfig {
 	args := m.Called(node)
 	return args.Get(0).(*cloudprovider.GpuConfig)
 }
 
 // Cleanup cleans up all resources before the cloud provider is removed
-func (m *GkeCloudProviderMock) Cleanup() error {
+func (m *GkeCloudProviderMock) Cleanup(ctx context.Context) error {
 	args := m.Called()
 	return args.Error(0)
 }
 
 // Refresh is called before every main loop and can be used to dynamically update cloud provider state.
-func (m *GkeCloudProviderMock) Refresh() error {
+func (m *GkeCloudProviderMock) Refresh(ctx context.Context) error {
 	args := m.Called()
 	return args.Error(0)
 }
@@ -3052,11 +3052,11 @@ func (g *MockGceCache) RegenerateInstancesCache() error {
 }
 
 // InvalidateMigInstances clears the mig instances cache
-func (g *MockGceCache) InvalidateMigInstances(ref gce.GceRef) {
+func (g *MockGceCache) InvalidateMigInstances(ctx context.Context, ref gce.GceRef) {
 }
 
 // InvalidateMigTargetSize clears the target size cache
-func (g *MockGceCache) InvalidateMigTargetSize(ref gce.GceRef) {
+func (g *MockGceCache) InvalidateMigTargetSize(ctx context.Context, ref gce.GceRef) {
 }
 
 // SetMigTargetSize sets targetSize for a GceRef
@@ -3099,7 +3099,7 @@ func (g *MockGceCache) GetMigBasename(gce.GceRef) (string, bool) {
 }
 
 // InvalidateAllMigInstances clears the instances cache
-func (g *MockGceCache) InvalidateAllMigInstances() {
+func (g *MockGceCache) InvalidateAllMigInstances(ctx context.Context) {
 }
 
 // InvalidateAllMigBasenames clears the basename cache
@@ -3107,11 +3107,11 @@ func (g *MockGceCache) InvalidateAllMigBasenames() {
 }
 
 // InvalidateAllMigTargetSizes clears the target size cache
-func (g *MockGceCache) InvalidateAllMigTargetSizes() {
+func (g *MockGceCache) InvalidateAllMigTargetSizes(ctx context.Context) {
 }
 
 // InvalidateAllMigInstanceTemplateNames clears the instance template name cache
-func (g *MockGceCache) InvalidateAllMigInstanceTemplateNames() {
+func (g *MockGceCache) InvalidateAllMigInstanceTemplateNames(ctx context.Context) {
 }
 
 // GetMachine retrieves machine type from cache under lock.
@@ -3120,12 +3120,12 @@ func (g *MockGceCache) GetMachine(s string, s2 string) (gce.MachineType, bool) {
 }
 
 // RegisterMig will register the Mig
-func (g *MockGceCache) RegisterMig(newMig gce.Mig) bool {
+func (g *MockGceCache) RegisterMig(ctx context.Context, newMig gce.Mig) bool {
 	return true
 }
 
 // UnregisterMig will un-register the Mig
-func (g *MockGceCache) UnregisterMig(toBeRemoved gce.Mig) bool {
+func (g *MockGceCache) UnregisterMig(ctx context.Context, toBeRemoved gce.Mig) bool {
 	return true
 }
 
@@ -3149,7 +3149,8 @@ func (g *MockGceCache) InvalidateAllListManagedInstancesResults() {
 
 // DropInstanceTemplatesForMissingMigs clears the instance template
 // cache intended MIGs which are no longer present in the cluster
-func (g *MockGceCache) DropInstanceTemplatesForMissingMigs(currentMigs []gce.Mig) {}
+func (g *MockGceCache) DropInstanceTemplatesForMissingMigs(ctx context.Context, currentMigs []gce.Mig) {
+}
 
 // MockCustomResourceProcessor mocks internal custom resource processor.
 type MockCustomResourceProcessor struct {
@@ -3168,12 +3169,12 @@ func (p *MockCustomResourceProcessor) SetContext(context *autoscaling_context.Au
 
 // FilterOutNodesWithUnreadyResources removes nodes that should have a custom resource, but don't have
 // it in allocatable from ready nodes list and updates their status to unready on all nodes list.
-func (p *MockCustomResourceProcessor) FilterOutNodesWithUnreadyResources(context *autoscaling_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, _ *drasnapshot.Snapshot, _ *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
+func (p *MockCustomResourceProcessor) FilterOutNodesWithUnreadyResources(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, allNodes, readyNodes []*apiv1.Node, _ *drasnapshot.Snapshot, _ *csisnapshot.Snapshot) ([]*apiv1.Node, []*apiv1.Node) {
 	return allNodes, readyNodes
 }
 
 // GetNodeResourceTargets returns mapping of resource names to their targets.
-func (p *MockCustomResourceProcessor) GetNodeResourceTargets(context *autoscaling_context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
+func (p *MockCustomResourceProcessor) GetNodeResourceTargets(ctx context.Context, autoscalingCtx *autoscaling_context.AutoscalingContext, node *apiv1.Node, nodeGroup cloudprovider.NodeGroup) ([]customresources.CustomResourceTarget, errors.AutoscalerError) {
 	return []customresources.CustomResourceTarget{}, nil
 }
 

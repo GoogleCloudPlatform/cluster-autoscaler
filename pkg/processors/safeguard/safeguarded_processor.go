@@ -15,6 +15,7 @@
 package safeguard
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	podutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
@@ -80,13 +81,13 @@ func NewSafeguardedPodListProcessor(processor pods.PodListProcessor, reason metr
 }
 
 // Process passes pods to the underlying processor and restores dropped pods if needed.
-func (p *SafeguardedPodListProcessor) Process(ctx *context.AutoscalingContext, beforePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *SafeguardedPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, beforePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	now := time.Now()
 
 	p.refreshLastSeenForTrackedPods(beforePods, now)
 	p.cleanupExpiredPods(now)
 
-	afterPods, err := p.processor.Process(ctx, beforePods)
+	afterPods, err := p.processor.Process(ctx, autoscalingCtx, beforePods)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +97,7 @@ func (p *SafeguardedPodListProcessor) Process(ctx *context.AutoscalingContext, b
 		return afterPods, nil
 	}
 
-	scheduledOnReadyNode, err := getPodsScheduledOnReadyNodes(ctx.ClusterSnapshot)
+	scheduledOnReadyNode, err := getPodsScheduledOnReadyNodes(autoscalingCtx.ClusterSnapshot)
 	if err != nil {
 		klog.Warningf("Failed to list NodeInfos from ClusterSnapshot: %v", err)
 	}

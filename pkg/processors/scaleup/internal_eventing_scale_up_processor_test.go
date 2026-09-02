@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ import (
 	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/provreqwrapper"
@@ -139,8 +140,8 @@ func TestEventingScaleUpStatusProcessor(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.caseName, func(t *testing.T) {
 			fakeRecorder := kube_record.NewFakeRecorder(10)
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					Recorder: fakeRecorder,
 				},
 			}
@@ -159,7 +160,7 @@ func TestEventingScaleUpStatusProcessor(t *testing.T) {
 			p := NewInternalEventingScaleUpStatusProcessor()
 			p.EnableCapacityReqProcessing(crState)
 			p.EnableProvReqProcessing()
-			p.Process(context, tc.scaleUpStatus)
+			p.Process(context.TODO(), autoscalingCtx, tc.scaleUpStatus)
 
 			triggered := 0
 			noTriggered := 0

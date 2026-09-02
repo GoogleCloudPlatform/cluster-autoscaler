@@ -15,6 +15,7 @@
 package customresources
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -63,7 +64,7 @@ func TestGpuPartitioningCustomResourcesProcessor_FilterOutNodesWithUnreadyResour
 	provider.On("GetNodeGpuConfig", unreadyNode).Return(emptyGpuConfig)
 	provider.On("GetNodeGpuConfig", gpuDraNodeWithoutResource).Return(&cloudprovider.GpuConfig{Label: "cloud.google.com/gke-accelerator", Type: "nvidia-tesla-k80", DraDriverName: "gpu.nvidia.com"})
 	provider.On("GPULabel").Return("cloud.google.com/gke-accelerator")
-	ctx := &context.AutoscalingContext{CloudProvider: provider}
+	ctx := &ca_context.AutoscalingContext{CloudProvider: provider}
 
 	testCases := map[string]struct {
 		allNodes   []*apiv1.Node
@@ -108,7 +109,7 @@ func TestGpuPartitioningCustomResourcesProcessor_FilterOutNodesWithUnreadyResour
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			gotAll, gotReady := processor.FilterOutNodesWithUnreadyResources(ctx, tc.allNodes, tc.readyNodes, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
+			gotAll, gotReady := processor.FilterOutNodesWithUnreadyResources(context.TODO(), ctx, tc.allNodes, tc.readyNodes, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
 			assert.ElementsMatch(t, tc.wantAll, gotAll)
 			assert.ElementsMatch(t, tc.wantReady, gotReady)
 		})

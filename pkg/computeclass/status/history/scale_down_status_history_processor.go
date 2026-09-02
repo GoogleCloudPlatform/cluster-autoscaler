@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 )
 
@@ -62,7 +63,7 @@ func NewScaleDownStatusHistoryProcessor(lister lister.Lister, provider machineCo
 }
 
 // Process analyses the scale down status and updates ConsolidatedNodesCount.
-func (p *ScaleDownStatusHistoryProcessor) Process(context *context.AutoscalingContext, scaleDownStatus *scaledownstatus.ScaleDownStatus) {
+func (p *ScaleDownStatusHistoryProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleDownStatus *scaledownstatus.ScaleDownStatus) {
 	if scaleDownStatus == nil || p.updatesCh == nil {
 		return
 	}

@@ -15,10 +15,12 @@
 package podsharding
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	klog "k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -36,7 +38,7 @@ type PodShardingProcessor struct {
 }
 
 // GetSelectedPodShard returns selected pod shard.
-func GetSelectedPodShard(context *context.AutoscalingContext) *PodShard {
+func GetSelectedPodShard(context *ca_context.AutoscalingContext) *PodShard {
 	value, found := context.ProcessorCallbacks.GetExtraValue(selectPodShardContextKey)
 	if !found {
 		return nil
@@ -50,7 +52,7 @@ func GetSelectedPodShard(context *context.AutoscalingContext) *PodShard {
 }
 
 // AreUnschedulablePodsZoneAgnostic returns if unschedulable pods are zone agnostic
-func AreUnschedulablePodsZoneAgnostic(context *context.AutoscalingContext) bool {
+func AreUnschedulablePodsZoneAgnostic(context *ca_context.AutoscalingContext) bool {
 	value, found := context.ProcessorCallbacks.GetExtraValue(unschedulablePodsZoneAgnosticContextKey)
 	if !found {
 		return false
@@ -77,7 +79,7 @@ func NewPodShardingProcessor(
 
 // Process executes pod sharding logic for passed unschedulablePods. Pods are sharded and one of the shards is selected.
 // The allScheduledPods slice is returned not changed.
-func (p *PodShardingProcessor) Process(context *context.AutoscalingContext,
+func (p *PodShardingProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
 	if len(unschedulablePods) == 0 {
@@ -94,15 +96,15 @@ func (p *PodShardingProcessor) Process(context *context.AutoscalingContext,
 		return []*apiv1.Pod{}, errors.NewAutoscalerError(errors.InternalError, "No shard selected")
 	}
 
-	filteringResult, err := p.podShardFilter.FilterPods(context, podShard, podShards, unschedulablePods)
+	filteringResult, err := p.podShardFilter.FilterPods(autoscalingCtx, podShard, podShards, unschedulablePods)
 	if err != nil {
 		return []*apiv1.Pod{}, errors.ToAutoscalerError(errors.InternalError, err)
 	}
 	klog.Infof("Selected pods shard %v; NodeGroupDescriptor=%#v; shardPodsCount=%v; extendedPodsCount=%v; zoneAgnostic=%v",
 		podShard.Signature(), podShard.NodeGroupDescriptor, len(podShard.PodUids), len(filteringResult.Pods), filteringResult.ZoneAgnostic)
 
-	context.ProcessorCallbacks.SetExtraValue(selectPodShardContextKey, podShard)
-	context.ProcessorCallbacks.SetExtraValue(unschedulablePodsZoneAgnosticContextKey, filteringResult.ZoneAgnostic)
+	autoscalingCtx.ProcessorCallbacks.SetExtraValue(selectPodShardContextKey, podShard)
+	autoscalingCtx.ProcessorCallbacks.SetExtraValue(unschedulablePodsZoneAgnosticContextKey, filteringResult.ZoneAgnostic)
 
 	return filteringResult.Pods, nil
 }

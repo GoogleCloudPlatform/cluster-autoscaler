@@ -15,6 +15,8 @@
 package autoprovisioning
 
 import (
+	"context"
+
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -254,12 +256,12 @@ func (m *AutoprovisioningNodeGroupManager) validateSchedulingPredicates(ctx *inj
 				otherErrors = append(otherErrors, err)
 				continue
 			}
-			nodeGroup, err := m.cloudProvider.NewNodeGroup(ngParams.machineType, ngParams.labels, ngParams.systemLabels, ngParams.taints, ngParams.extraResources)
+			nodeGroup, err := m.cloudProvider.NewNodeGroup(context.TODO(), ngParams.machineType, ngParams.labels, ngParams.systemLabels, ngParams.taints, ngParams.extraResources)
 			if err != nil {
 				otherErrors = append(otherErrors, err)
 				continue
 			}
-			nodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(nodeGroup, ctx.daemonSets, ctx.taintConfig)
+			nodeInfo, err := simulator.SanitizedTemplateNodeInfoFromNodeGroup(context.TODO(), nodeGroup, ctx.daemonSets, ctx.taintConfig)
 			if err != nil {
 				otherErrors = append(otherErrors, err)
 				continue

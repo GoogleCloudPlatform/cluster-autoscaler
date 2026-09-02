@@ -15,6 +15,7 @@
 package processor
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	v1 "k8s.io/api/core/v1"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -34,18 +36,23 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
+
 	processor_proto "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor/proto"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
+
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/apis/nodemanagement.gke.io/v1alpha1"
+
 	update_infos_mock "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/listers/nodemanagement.gke.io/v1alpha1/mock"
+
 	clock "k8s.io/utils/clock/testing"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -1525,12 +1532,12 @@ func TestScaleDownProcess(t *testing.T) {
 			nodeGroup := gke.NewTestGkeMigBuilder().SetSpec(migSpec).Build()
 			cloudProvider := &gke.GkeCloudProviderMock{}
 			cloudProvider.On("NodeGroupForNode", mock.AnythingOfType("*v1.Node")).Return(nodeGroup, nil)
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				CloudProvider:   cloudProvider,
 			}
 
-			sourceCandidates, targetCandidates, newDesiredSizes := scaleDownProcessor.process(ctx, candidateNodes, false)
+			sourceCandidates, targetCandidates, newDesiredSizes := scaleDownProcessor.process(context.TODO(), ctx, candidateNodes, false)
 
 			sourceCandidateNames := []string{}
 			for _, node := range sourceCandidates {
@@ -1789,7 +1796,7 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 			nodeGroup := gke.NewTestGkeMigBuilder().SetSpec(migSpec).Build()
 			cloudProvider := &gke.GkeCloudProviderMock{}
 			cloudProvider.On("NodeGroupForNode", mock.AnythingOfType("*v1.Node")).Return(nodeGroup, nil)
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 				CloudProvider:   cloudProvider,
 			}
@@ -1813,7 +1820,7 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 					scaleDownProcessor.resizableVmManager.InvalidateNodesScaleDownAllowedCache()
 				}
 
-				sourceCandidates, targetCandidates, newDesiredSizes := scaleDownProcessor.process(ctx, candidateNodes, false)
+				sourceCandidates, targetCandidates, newDesiredSizes := scaleDownProcessor.process(context.TODO(), ctx, candidateNodes, false)
 				if step.expectDownsize {
 					assert.Equal(t, []*v1.Node{}, sourceCandidates)
 					assert.Equal(t, []*v1.Node{}, targetCandidates)
@@ -2002,7 +2009,7 @@ func TestEmitMetrics(t *testing.T) {
 				assert.NoError(t, err)
 			}
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 
@@ -2188,7 +2195,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				clock:                        clock.NewFakeClock(testStartTime),
 			}
 
-			ctx := &context.AutoscalingContext{
+			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
 

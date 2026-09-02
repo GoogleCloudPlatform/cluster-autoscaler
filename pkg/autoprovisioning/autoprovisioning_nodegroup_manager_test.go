@@ -15,7 +15,7 @@
 package autoprovisioning
 
 import (
-	ctx "context"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -39,7 +39,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/utils"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
@@ -98,7 +98,7 @@ func TestProcessNodeGroupList(t *testing.T) {
 			provider.AddNodeGroup("ng1", 1, 5, 3)
 
 			processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-			processor.SetContext(&context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
+			processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
 			computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 			em := experiments.NewMockManager()
 
@@ -119,20 +119,20 @@ func TestProcessNodeGroupList(t *testing.T) {
 			})
 			assert.NoError(t, err)
 
-			context := &context.AutoscalingContext{
+			autoscalingCtx := &ca_context.AutoscalingContext{
 				CloudProvider:      provider,
 				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
 				ClusterSnapshot:    testsnapshot.NewTestSnapshotOrDie(t),
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
 				DebuggingSnapshotter: debuggingSnapshotter,
 			}
-			nodeGroups := provider.NodeGroups()
+			nodeGroups := provider.NodeGroups(context.TODO())
 			nodeInfos := map[string]*framework.NodeInfo{
 				"ng1": ni1,
 			}
-			nodeGroups, nodeInfos, err = manager.Process(context, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
+			nodeGroups, nodeInfos, err = manager.Process(context.TODO(), autoscalingCtx, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
 
 			assert.NoError(t, err)
 			assert.Equal(t, 2, len(nodeGroups))
@@ -158,7 +158,7 @@ func TestProcessNodeGroupListTooMany(t *testing.T) {
 
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
@@ -175,17 +175,17 @@ func TestProcessNodeGroupListTooMany(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 	assert.NoError(t, err)
 
-	context := &context.AutoscalingContext{
+	autoscalingCtx := &ca_context.AutoscalingContext{
 		CloudProvider:      provider,
 		ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
 		DebuggingSnapshotter: debuggingSnapshotter,
 	}
-	nodeGroups := provider.NodeGroups()
+	nodeGroups := provider.NodeGroups(context.TODO())
 	nodeInfos := map[string]*framework.NodeInfo{"X1": xi1}
-	nodeGroups, nodeInfos, err = manager.Process(context, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err = manager.Process(context.TODO(), autoscalingCtx, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nodeGroups))
@@ -214,7 +214,7 @@ func TestProcessNodeGroupListWithDaemonSetMutation(t *testing.T) {
 	provider.AddNodeGroup("ng1", 1, 5, 3)
 
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider, DebuggingSnapshotter: debuggingSnapshotter})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
 
@@ -233,7 +233,7 @@ func TestProcessNodeGroupListWithDaemonSetMutation(t *testing.T) {
 	cache.Set("ds-uid", 1, mutatedPodTemplate)
 
 	informerFactory := informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0)
-	ctrl := daemonsetmutation.NewController(ctx.Background(), cache, nil, informerFactory)
+	ctrl := daemonsetmutation.NewController(context.Background(), cache, nil, informerFactory)
 	injector := daemonsetmutation.NewInjector(cache, ctrl)
 
 	opts := AutoprovisioningNodeGroupManagerOptions{
@@ -272,20 +272,20 @@ func TestProcessNodeGroupListWithDaemonSetMutation(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{ds})
 	assert.NoError(t, err)
 
-	asCtx := &context.AutoscalingContext{
+	asCtx := &ca_context.AutoscalingContext{
 		CloudProvider:      provider,
 		ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
 		ClusterSnapshot:    testsnapshot.NewTestSnapshotOrDie(t),
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
 		DebuggingSnapshotter: debuggingSnapshotter,
 	}
-	nodeGroups := provider.NodeGroups()
+	nodeGroups := provider.NodeGroups(context.TODO())
 	nodeInfos := map[string]*framework.NodeInfo{
 		"ng1": ni1,
 	}
-	nodeGroups, nodeInfos, err = manager.Process(asCtx, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err = manager.Process(context.TODO(), asCtx, nodeGroups, nodeInfos, []*apiv1.Pod{p1})
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nodeGroups))
@@ -317,10 +317,10 @@ func TestCreateNodeGroup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("Sync/%s", tc.name), func(t *testing.T) {
-			manager, provider, context := createNodeGroupTestContext(tc.createNodeGroupErr)
-			nodeGroup, err := provider.NewNodeGroup("T1", nil, nil, nil, nil)
+			manager, provider, autoscalingCtx := createNodeGroupTestContext(tc.createNodeGroupErr)
+			nodeGroup, err := provider.NewNodeGroup(context.TODO(), "T1", nil, nil, nil, nil)
 			assert.NoError(t, err)
-			_, err = manager.CreateNodeGroup(context, nodeGroup)
+			_, err = manager.CreateNodeGroup(autoscalingCtx, nodeGroup)
 			if tc.wantError {
 				if err == nil {
 					klog.Errorf("%s: Got no error, want error", tc.name)
@@ -329,18 +329,18 @@ func TestCreateNodeGroup(t *testing.T) {
 				if err != nil {
 					klog.Errorf("%s: Unexpected error %v", tc.name, err)
 				}
-				if len(provider.NodeGroups()) != 1 {
-					klog.Errorf("%s: Unexpected number of node groups %d, want 1", tc.name, len(provider.NodeGroups()))
+				if len(provider.NodeGroups(context.TODO())) != 1 {
+					klog.Errorf("%s: Unexpected number of node groups %d, want 1", tc.name, len(provider.NodeGroups(context.TODO())))
 				}
 			}
 		})
 		t.Run(fmt.Sprintf("Async/%s", tc.name), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				manager, provider, context := createNodeGroupTestContext(tc.createNodeGroupErr)
-				nodeGroup, err := provider.NewNodeGroup("T1", nil, nil, nil, nil)
+				manager, provider, autoscalingCtx := createNodeGroupTestContext(tc.createNodeGroupErr)
+				nodeGroup, err := provider.NewNodeGroup(context.TODO(), "T1", nil, nil, nil, nil)
 				assert.NoError(t, err)
 				initializer := newAsyncNodeGroupInitializer(t)
-				_, err = manager.CreateNodeGroupAsync(context, nodeGroup, initializer)
+				_, err = manager.CreateNodeGroupAsync(autoscalingCtx, nodeGroup, initializer)
 				synctest.Wait()
 				asyncResult := initializer.AwaitResultOrFail()
 				if tc.wantError {
@@ -357,8 +357,8 @@ func TestCreateNodeGroup(t *testing.T) {
 					if asyncResult.Error != nil {
 						klog.Errorf("%s: Unexpected async error %v", tc.name, err)
 					}
-					if len(provider.NodeGroups()) != 1 {
-						klog.Errorf("%s: Unexpected number of node groups %d, want 1", tc.name, len(provider.NodeGroups()))
+					if len(provider.NodeGroups(context.TODO())) != 1 {
+						klog.Errorf("%s: Unexpected number of node groups %d, want 1", tc.name, len(provider.NodeGroups(context.TODO())))
 					}
 				}
 			})
@@ -366,7 +366,7 @@ func TestCreateNodeGroup(t *testing.T) {
 	}
 }
 
-func createNodeGroupTestContext(createNodeGroupErr error) (*AutoprovisioningNodeGroupManager, *gke.TestAutoprovisioningCloudProvider, *context.AutoscalingContext) {
+func createNodeGroupTestContext(createNodeGroupErr error) (*AutoprovisioningNodeGroupManager, *gke.TestAutoprovisioningCloudProvider, *ca_context.AutoscalingContext) {
 	fakeClient := &fake.Clientset{}
 	fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", kube_record.NewFakeRecorder(5), false, "test-configmap")
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
@@ -374,7 +374,7 @@ func createNodeGroupTestContext(createNodeGroupErr error) (*AutoprovisioningNode
 		WithAutoprovisioningEnabled(true).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
@@ -386,14 +386,14 @@ func createNodeGroupTestContext(createNodeGroupErr error) (*AutoprovisioningNode
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
 
-	context := &context.AutoscalingContext{
+	autoscalingCtx := &ca_context.AutoscalingContext{
 		CloudProvider: provider,
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			LogRecorder: fakeLogRecorder,
 		},
 		ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
 	}
-	return manager, provider, context
+	return manager, provider, autoscalingCtx
 }
 
 func TestBackoffNodeGroup(t *testing.T) {
@@ -434,8 +434,8 @@ func TestBackoffNodeGroup(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
 	assert.NoError(t, err)
-	context := &context.AutoscalingContext{
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			LogRecorder:    fakeLogRecorder,
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
@@ -444,13 +444,13 @@ func TestBackoffNodeGroup(t *testing.T) {
 		DebuggingSnapshotter: debuggingSnapshotter,
 	}
 
-	nodeGroups, nodeInfos, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nodeGroups))
 	assert.Equal(t, 2, len(nodeInfos))
-	_, err = manager.CreateNodeGroup(context, nodeGroups[0])
+	_, err = manager.CreateNodeGroup(autoscalingCtx, nodeGroups[0])
 	assert.Error(t, err)
-	nodeGroups, nodeInfos, err = manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err = manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(nodeGroups))
 	assert.Equal(t, 1, len(nodeInfos))
@@ -474,7 +474,7 @@ func TestAddDeletedNodeGroup(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
@@ -493,8 +493,8 @@ func TestAddDeletedNodeGroup(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 	assert.NoError(t, err)
 
-	context := &context.AutoscalingContext{
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			LogRecorder:    fakeLogRecorder,
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
@@ -503,13 +503,13 @@ func TestAddDeletedNodeGroup(t *testing.T) {
 		DebuggingSnapshotter: debuggingSnapshotter,
 	}
 
-	nodeGroups, nodeInfos, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nodeGroups))
 	assert.Equal(t, 2, len(nodeInfos))
-	_, err = manager.CreateNodeGroup(context, nodeGroups[0])
+	_, err = manager.CreateNodeGroup(autoscalingCtx, nodeGroups[0])
 	assert.NoError(t, err)
-	nodeGroups, nodeInfos, err = manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err = manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(nodeGroups))
 	assert.Equal(t, 2, len(nodeInfos))
@@ -545,7 +545,7 @@ func TestA100GPU(t *testing.T) {
 				Build()
 
 			processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-			processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+			processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 			debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
 			computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 			em := experiments.NewMockManager()
@@ -564,8 +564,8 @@ func TestA100GPU(t *testing.T) {
 			dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 			assert.NoError(t, err)
 
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder:    fakeLogRecorder,
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
@@ -575,7 +575,7 @@ func TestA100GPU(t *testing.T) {
 				ClusterSnapshot:      testsnapshot.NewTestSnapshotOrDie(t),
 			}
 
-			nodeGroups, nodeInfos, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+			nodeGroups, nodeInfos, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 			assert.NoError(t, err)
 			wantMachineTypes := machinetypes.A2.AutoprovisionedMachineTypes(machinetypes.Constraints{CpuPlatform: machinetypes.AnyPlatform, GpuType: gpuType})
 			assert.Equal(t, len(wantMachineTypes), len(nodeGroups))
@@ -585,7 +585,7 @@ func TestA100GPU(t *testing.T) {
 			}
 			for _, nodeGroup := range nodeGroups {
 				assert.True(t, strings.Contains(nodeGroup.Id(), "a2-"))
-				_, err = manager.CreateNodeGroup(context, nodeGroup)
+				_, err = manager.CreateNodeGroup(autoscalingCtx, nodeGroup)
 				assert.NoError(t, err)
 			}
 		})
@@ -658,8 +658,8 @@ func TestGpuPartitioning(t *testing.T) {
 			dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 			assert.NoError(t, err)
 
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder:    fakeLogRecorder,
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
@@ -668,9 +668,9 @@ func TestGpuPartitioning(t *testing.T) {
 				DebuggingSnapshotter: debuggingSnapshotter,
 				ClusterSnapshot:      testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			processor.SetContext(context)
+			processor.SetContext(autoscalingCtx)
 
-			nodeGroups, _, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+			nodeGroups, _, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 			assert.NoError(t, err)
 			wantMachineTypes := machinetypes.A2.AutoprovisionedMachineTypes(machinetypes.Constraints{CpuPlatform: machinetypes.AnyPlatform, GpuType: tc.gpuType})
 			assert.Equal(t, len(wantMachineTypes), len(nodeGroups))
@@ -741,8 +741,8 @@ func TestTPUv4(t *testing.T) {
 			dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 			assert.NoError(t, err)
 
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder:    fakeLogRecorder,
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
@@ -751,9 +751,9 @@ func TestTPUv4(t *testing.T) {
 				DebuggingSnapshotter: debuggingSnapshotter,
 				ClusterSnapshot:      testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			processor.SetContext(context)
+			processor.SetContext(autoscalingCtx)
 
-			nodeGroups, nodeInfos, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+			nodeGroups, nodeInfos, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.expectedMachineTypes), len(nodeGroups))
 			assert.Equal(t, len(tc.expectedMachineTypes), len(nodeInfos))
@@ -766,7 +766,7 @@ func TestTPUv4(t *testing.T) {
 			}
 			for _, nodeGroup := range nodeGroups {
 				assert.True(t, strings.Contains(nodeGroup.Id(), "ct4p-") || strings.Contains(nodeGroup.Id(), "ct4l-"))
-				_, err = manager.CreateNodeGroup(context, nodeGroup)
+				_, err = manager.CreateNodeGroup(autoscalingCtx, nodeGroup)
 				assert.NoError(t, err)
 			}
 		})
@@ -796,7 +796,7 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
@@ -814,8 +814,8 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 	assert.NoError(t, err)
 
-	context := &context.AutoscalingContext{
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			LogRecorder:    fakeLogRecorder,
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
@@ -824,7 +824,7 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 		DebuggingSnapshotter: debuggingSnapshotter,
 	}
 
-	nodeGroups, nodeInfos, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
+	nodeGroups, nodeInfos, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p1})
 	assert.NoError(t, err)
 	wantMachineTypes := machinetypes.N2D.AutoprovisionedMachineTypes(machinetypes.NoConstraints)
 	assert.Equal(t, len(wantMachineTypes), len(nodeGroups))
@@ -834,7 +834,7 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 	}
 	for _, ng := range nodeGroups {
 		assert.Contains(t, ng.Id(), "n2d-")
-		_, err = manager.CreateNodeGroup(context, ng)
+		_, err = manager.CreateNodeGroup(autoscalingCtx, ng)
 		assert.NoError(t, err)
 	}
 }
@@ -861,7 +861,7 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
@@ -882,8 +882,8 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 	dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 	assert.NoError(t, err)
 
-	ctx := &context.AutoscalingContext{
-		AutoscalingKubeClients: context.AutoscalingKubeClients{
+	ctx := &ca_context.AutoscalingContext{
+		AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 			LogRecorder:    fakeLogRecorder,
 			ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 		},
@@ -934,13 +934,13 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			nodeGroups, _, err := manager.Process(ctx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{tc.pod})
+			nodeGroups, _, err := manager.Process(context.TODO(), ctx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{tc.pod})
 			assert.NoError(t, err)
 			assert.Equal(t, tc.expectedNodeGroups, len(nodeGroups))
 			foundNodeGroupsWithLabel := make(map[int]bool)
 			foundNodeGroupsWithoutLabel := make(map[int]bool)
 			for _, ng := range nodeGroups {
-				templateNode, err := ng.TemplateNodeInfo()
+				templateNode, err := ng.TemplateNodeInfo(context.TODO())
 				assert.NoError(t, err)
 				assert.NotNil(t, templateNode.Node())
 				// Check if this node group satisfies one of the wanted node groups with labels.
@@ -1001,7 +1001,7 @@ func TestCSNPod(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-	processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 	for tn, tc := range map[string]struct {
 		pod                      *apiv1.Pod
@@ -1047,8 +1047,8 @@ func TestCSNPod(t *testing.T) {
 			dsLister, err := kube_util.NewTestDaemonSetLister([]*appsv1.DaemonSet{})
 			assert.NoError(t, err)
 
-			ctx := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			ctx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder:    fakeLogRecorder,
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
@@ -1056,11 +1056,11 @@ func TestCSNPod(t *testing.T) {
 				ProcessorCallbacks:   callbacks.NewTestProcessorCallbacks(),
 				DebuggingSnapshotter: debuggingSnapshotter,
 			}
-			nodeGroups, _, err := manager.Process(ctx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{tc.pod})
+			nodeGroups, _, err := manager.Process(context.TODO(), ctx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{tc.pod})
 			assert.NoError(t, err)
 
 			for _, ng := range nodeGroups {
-				templateNodeInfo, err := ng.TemplateNodeInfo()
+				templateNodeInfo, err := ng.TemplateNodeInfo(context.TODO())
 				assert.NoError(t, err)
 				node := templateNodeInfo.Node()
 				assert.NotNil(t, node, "Node shouldn't be nil")
@@ -1189,8 +1189,8 @@ func TestInjectedLocations(t *testing.T) {
 
 			pc := callbacks.NewTestProcessorCallbacks()
 			pc.SetExtraValue("unschedulable-pods-zone-agnostic.podsharding.gke-autoscaler", tc.zoneAgnosticShard)
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder:    fakeLogRecorder,
 					ListerRegistry: kube_util.NewListerRegistry(nil, nil, nil, nil, dsLister, nil, nil, nil, nil),
 				},
@@ -1199,9 +1199,9 @@ func TestInjectedLocations(t *testing.T) {
 				DebuggingSnapshotter: debuggingSnapshotter,
 				ClusterSnapshot:      testsnapshot.NewTestSnapshotOrDie(t),
 			}
-			processor.SetContext(context)
+			processor.SetContext(autoscalingCtx)
 
-			nodeGroups, _, err := manager.Process(context, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p})
+			nodeGroups, _, err := manager.Process(context.TODO(), autoscalingCtx, []cloudprovider.NodeGroup{}, map[string]*framework.NodeInfo{}, []*apiv1.Pod{p})
 			assert.NoError(t, err)
 			assert.ElementsMatch(t, tc.wantInjectedZones, getInjectedZones(t, nodeGroups))
 		})
@@ -1418,7 +1418,7 @@ func TestRemoveUnneededNodeGroups(t *testing.T) {
 			}
 			// Set up autoprovisioning manager.
 			processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
-			processor.SetContext(&context.AutoscalingContext{CloudProvider: provider})
+			processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 			computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 			em := experiments.NewMockManager()
 			opts := AutoprovisioningNodeGroupManagerOptions{
@@ -1430,18 +1430,18 @@ func TestRemoveUnneededNodeGroups(t *testing.T) {
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
-			// Set up fake context.
+			// Set up fake autoscalingCtx.
 			fakeClient := &fake.Clientset{}
-			fakeRecorder := kube_util.CreateEventRecorder(ctx.TODO(), fakeClient, false)
+			fakeRecorder := kube_util.CreateEventRecorder(context.TODO(), fakeClient, false)
 			fakeLogRecorder, _ := utils.NewStatusMapRecorder(fakeClient, "kube-system", fakeRecorder, false, "test-configmap")
-			context := &context.AutoscalingContext{
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{
 					LogRecorder: fakeLogRecorder,
 				},
 				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
 			}
 
-			removedNodeGroups, err := manager.RemoveUnneededNodeGroups(context)
+			removedNodeGroups, err := manager.RemoveUnneededNodeGroups(context.TODO(), autoscalingCtx)
 
 			removedNodeGroupIds := make([]string, len(removedNodeGroups))
 			for i, nodeGroup := range removedNodeGroups {

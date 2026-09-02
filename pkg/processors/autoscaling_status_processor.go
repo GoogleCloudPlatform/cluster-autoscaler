@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"context"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
@@ -25,7 +26,7 @@ import (
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
 // GkeInternalAutoscalingStatusProcessor is an AutoscalingStatusProcessor used in gke internal CA.
@@ -39,16 +40,16 @@ type GkeInternalAutoscalingStatusProcessor struct {
 }
 
 // Process calls various GKE AutoscalingStatusProcessors
-func (p *GkeInternalAutoscalingStatusProcessor) Process(context *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
 	var err error
 	if p.quotaProcessor != nil {
-		err = p.quotaProcessor.Process(context, csr, now)
+		err = p.quotaProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if err != nil {
 			klog.Errorf("Node quota processor failed with error: %v", err)
 		}
 	}
 	if p.vizProcessor != nil {
-		vizErr := p.vizProcessor.Process(context, csr, now)
+		vizErr := p.vizProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if vizErr != nil {
 			klog.Errorf("Visibility status processor failed with error: %v", vizErr)
 			// if at least one error is not nil return error;
@@ -58,7 +59,7 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(context *context.Autosca
 		}
 	}
 	if p.edpUpgradeNodeTaintingProcessor != nil {
-		edpErr := p.edpUpgradeNodeTaintingProcessor.Process(context, csr, now)
+		edpErr := p.edpUpgradeNodeTaintingProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if edpErr != nil {
 			klog.Errorf("Edp Upgrade node taint processor failed with error: %v", edpErr)
 			// same as above. log the error and override the last error.
@@ -66,7 +67,7 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(context *context.Autosca
 		}
 	}
 	if p.edpMetrics != nil {
-		edpErr := p.edpMetrics.Process(context, csr, now)
+		edpErr := p.edpMetrics.Process(context.TODO(), autoscalingCtx, csr, now)
 		if edpErr != nil {
 			klog.Errorf("Edp Metrics failed with error: %v", edpErr)
 			// same as above. log the error and override the last error.
@@ -74,14 +75,14 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(context *context.Autosca
 		}
 	}
 	if p.observabilityProcessor != nil {
-		processorErr := p.observabilityProcessor.Process(context, csr, now)
+		processorErr := p.observabilityProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if processorErr != nil {
 			klog.Errorf("Observability processor failed: %v", processorErr)
 			err = processorErr
 		}
 	}
 	if p.autoscalingHistoryProcessor != nil {
-		historyErr := p.autoscalingHistoryProcessor.Process(context, csr, now)
+		historyErr := p.autoscalingHistoryProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if historyErr != nil {
 			klog.Errorf("Autoscaling history processor failed with error: %v", historyErr)
 			err = historyErr

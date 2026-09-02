@@ -15,6 +15,7 @@
 package podtopologyspread
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -341,37 +342,41 @@ type mockNodeGroup struct {
 	templateNode *apiv1.Node
 }
 
-func (m *mockNodeGroup) Id() string                               { return m.id }
-func (m *mockNodeGroup) MinSize() int                             { return 0 }
-func (m *mockNodeGroup) MaxSize() int                             { return 10 }
-func (m *mockNodeGroup) TargetSize() (int, error)                 { return 0, nil }
-func (m *mockNodeGroup) IncreaseSize(delta int) error             { return nil }
-func (m *mockNodeGroup) DecreaseTargetSize(delta int) error       { return nil }
-func (m *mockNodeGroup) DeleteNodes([]*apiv1.Node) error          { return nil }
-func (m *mockNodeGroup) DecreaseSize(delta int) error             { return nil }
-func (m *mockNodeGroup) Nodes() ([]cloudprovider.Instance, error) { return nil, nil }
-func (m *mockNodeGroup) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (m *mockNodeGroup) Id() string                                                  { return m.id }
+func (m *mockNodeGroup) MinSize(ctx context.Context) int                             { return 0 }
+func (m *mockNodeGroup) MaxSize(ctx context.Context) int                             { return 10 }
+func (m *mockNodeGroup) TargetSize(ctx context.Context) (int, error)                 { return 0, nil }
+func (m *mockNodeGroup) IncreaseSize(ctx context.Context, delta int) error           { return nil }
+func (m *mockNodeGroup) DecreaseTargetSize(ctx context.Context, delta int) error     { return nil }
+func (m *mockNodeGroup) DeleteNodes(context.Context, []*apiv1.Node) error            { return nil }
+func (m *mockNodeGroup) DecreaseSize(delta int) error                                { return nil }
+func (m *mockNodeGroup) Nodes(ctx context.Context) ([]cloudprovider.Instance, error) { return nil, nil }
+func (m *mockNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	if m.templateNode == nil {
 		return nil, cloudprovider.ErrNotImplemented
 	}
 	return framework.NewTestNodeInfo(m.templateNode), nil
 }
-func (m *mockNodeGroup) Exist() bool                              { return true }
-func (m *mockNodeGroup) Create() (cloudprovider.NodeGroup, error) { return nil, nil }
-func (m *mockNodeGroup) Delete() error                            { return nil }
-func (m *mockNodeGroup) Autoprovisioned() bool                    { return false }
-func (m *mockNodeGroup) GetOptions(defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+func (m *mockNodeGroup) Exist(ctx context.Context) bool                              { return true }
+func (m *mockNodeGroup) Create(ctx context.Context) (cloudprovider.NodeGroup, error) { return nil, nil }
+func (m *mockNodeGroup) Delete(ctx context.Context) error                            { return nil }
+func (m *mockNodeGroup) Autoprovisioned(ctx context.Context) bool                    { return false }
+func (m *mockNodeGroup) GetOptions(ctx context.Context, defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
 	return nil, cloudprovider.ErrNotImplemented
 }
-func (m *mockNodeGroup) AtomicIncreaseSize(delta int) error   { return cloudprovider.ErrNotImplemented }
-func (m *mockNodeGroup) ForceDeleteNodes([]*apiv1.Node) error { return cloudprovider.ErrNotImplemented }
-func (m *mockNodeGroup) Debug() string                        { return "" }
+func (m *mockNodeGroup) AtomicIncreaseSize(ctx context.Context, delta int) error {
+	return cloudprovider.ErrNotImplemented
+}
+func (m *mockNodeGroup) ForceDeleteNodes(context.Context, []*apiv1.Node) error {
+	return cloudprovider.ErrNotImplemented
+}
+func (m *mockNodeGroup) Debug(ctx context.Context) string { return "" }
 
 type mockCloudProvider struct {
 	cloudprovider.CloudProvider
 	nodeGroups []cloudprovider.NodeGroup
 }
 
-func (m *mockCloudProvider) NodeGroups() []cloudprovider.NodeGroup {
+func (m *mockCloudProvider) NodeGroups(ctx context.Context) []cloudprovider.NodeGroup {
 	return m.nodeGroups
 }

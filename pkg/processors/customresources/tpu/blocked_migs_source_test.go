@@ -15,6 +15,7 @@
 package tpu
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -69,14 +70,14 @@ func (m testMig) Status() string {
 	return m.status
 }
 
-func (m testMig) TemplateNodeInfo() (*framework.NodeInfo, error) {
+func (m testMig) TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error) {
 	if m.template != nil {
 		return m.template, nil
 	}
 	return nil, fmt.Errorf("no node template in mig %v", m.id)
 }
 
-func (m testMig) IsStable() (bool, error) {
+func (m testMig) IsStable(ctx context.Context) (bool, error) {
 	return true, nil
 }
 

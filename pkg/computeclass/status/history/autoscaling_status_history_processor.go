@@ -15,6 +15,7 @@
 package history
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -60,14 +61,14 @@ func NewAutoscalingStatusHistoryProcessor(sharedData *scaleUpData, updatesCh cha
 }
 
 // Process evaluates unfinished scaleups and updates provisioned nodes counts if target size is reached.
-func (p *AutoscalingStatusHistoryProcessor) Process(context *context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+func (p *AutoscalingStatusHistoryProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
 	if !computeclass.IsComputeClassEnhancedObservabilityEnabled(p.experimentsManager) {
 		return nil
 	}
-	return p.process(context, csr, now)
+	return p.process(ctx, autoscalingCtx, csr, now)
 }
 
-func (p *AutoscalingStatusHistoryProcessor) process(context *context.AutoscalingContext, csr historyClusterStateRegistry, now time.Time) error {
+func (p *AutoscalingStatusHistoryProcessor) process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr historyClusterStateRegistry, now time.Time) error {
 	if p.updatesCh == nil {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (p *AutoscalingStatusHistoryProcessor) process(context *context.Autoscaling
 				// Determine the actual size reached. If the scale-up was marked as failed, we fetch the current
 				// size from the registry. Otherwise, we assume success and use the expected target size.
 				if isFailed {
-					currentSize = getNodeGroupTargetSize(context, nodeGroupId)
+					currentSize = getNodeGroupTargetSize(autoscalingCtx, nodeGroupId)
 				} else {
 					currentSize = delta.targetSize
 				}
@@ -185,10 +186,10 @@ func (p *AutoscalingStatusHistoryProcessor) process(context *context.Autoscaling
 	return nil
 }
 
-func getNodeGroupTargetSize(context *context.AutoscalingContext, nodeGroupId string) int {
-	for _, ng := range context.CloudProvider.NodeGroups() {
+func getNodeGroupTargetSize(autoscalingCtx *ca_context.AutoscalingContext, nodeGroupId string) int {
+	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
 		if ng.Id() == nodeGroupId {
-			targetSize, err := ng.TargetSize()
+			targetSize, err := ng.TargetSize(context.TODO())
 			if err != nil {
 				klog.Warningf("Failed to get TargetSize for node group %s: %v", nodeGroupId, err)
 				return 0
