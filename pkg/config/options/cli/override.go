@@ -31,48 +31,31 @@ type flagOverrideResult struct {
 	args              []string
 	activeCount       int
 	unrecognizedCount int
+	redundantCount    int
 }
 
 // ProcessFlagOverrides identifies any flags prefixed with --override_,
 // removes their standard counterparts from os.Args according to the rules, and appends the new flags.
 func ProcessFlagOverrides() {
-	definedFlags := make(map[string]bool)
+	definedFlags := make(map[string]string)
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
-		definedFlags[f.Name] = true
+		definedFlags[f.Name] = f.DefValue
 	})
 	flag.CommandLine.VisitAll(func(f *flag.Flag) {
-		definedFlags[f.Name] = true
+		definedFlags[f.Name] = f.DefValue
 	})
-	result := processFlagOverrides(os.Args, definedFlags)
+	result := resolveFlags(os.Args, definedFlags)
 	os.Args = result.args
-	metrics.UpdateComponentFlagOverrides(result.activeCount, result.unrecognizedCount)
+	metrics.UpdateComponentFlagOverrides(result.activeCount, result.unrecognizedCount, result.redundantCount)
 }
 
-func parseFlagOverrides(args []string) map[string]bool {
-	flagOverrides := make(map[string]bool)
+func resolveFlags(args []string, definedFlags map[string]string) flagOverrideResult {
+	overrideVals, cliVals := collectFlagValues(args)
+	redundantFlags := findRedundantFlags(overrideVals, cliVals, definedFlags)
 
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			continue
-		}
-		flagName := strings.TrimLeft(arg, "-")
-
-		if strings.HasPrefix(flagName, overridePrefix) {
-			flagName = strings.TrimPrefix(flagName, overridePrefix)
-			if idx := strings.Index(flagName, "="); idx != -1 {
-				flagName = flagName[:idx]
-				flagOverrides[flagName] = true
-			}
-		}
-	}
-	return flagOverrides
-}
-
-func processFlagOverrides(args []string, definedFlags map[string]bool) flagOverrideResult {
-	flagOverrides := parseFlagOverrides(args)
 	var newArgs []string
 	skipNext := false
-	var activeCount, unrecognizedCount int
+	var activeCount, unrecognizedCount, redundantCount int
 
 	for i := 0; i < len(args); i++ {
 		if skipNext {
@@ -97,28 +80,6 @@ func processFlagOverrides(args []string, definedFlags map[string]bool) flagOverr
 			hasValue = true
 		}
 
-		// Handle override_
-		if strings.HasPrefix(flagName, overridePrefix) {
-			if !hasValue {
-				klog.Warningf("[flag_override] Skipping flag override without value: --%s", flagName)
-				continue
-			}
-
-			baseFlagName := strings.TrimPrefix(flagName, overridePrefix)
-
-			if definedFlags[baseFlagName] {
-				activeCount++
-				klog.Infof("[flag_override] Setting flag: --%s=%q", baseFlagName, value)
-				newArg := "--" + baseFlagName + "=" + value
-				newArgs = append(newArgs, newArg)
-			} else {
-				unrecognizedCount++
-				klog.Warningf("[flag_override] Skipping unrecognized flag override: --%s=%q", baseFlagName, value)
-			}
-			continue
-		}
-
-		// Handle base flags
 		valueFromNext := false
 		if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 			value = args[i+1]
@@ -126,7 +87,40 @@ func processFlagOverrides(args []string, definedFlags map[string]bool) flagOverr
 			valueFromNext = true
 		}
 
-		if flagOverrides[flagName] {
+		// Handle override_
+		if strings.HasPrefix(flagName, overridePrefix) {
+			if !hasValue {
+				klog.Warningf("[flag_override] Skipping flag override without value: --%s", flagName)
+				continue
+			}
+			if valueFromNext {
+				skipNext = true
+			}
+
+			baseFlagName := strings.TrimPrefix(flagName, overridePrefix)
+			_, isDefined := definedFlags[baseFlagName]
+			if isDefined {
+				if redundantFlags[baseFlagName] {
+					redundantCount++
+					if len(cliVals[baseFlagName]) > 0 {
+						klog.Infof("[flag_override] Skipping redundant flag override (matches CLI): --%s=%q", baseFlagName, value)
+					} else {
+						klog.Infof("[flag_override] Skipping redundant flag override (matches default): --%s=%q", baseFlagName, value)
+					}
+				} else {
+					activeCount++
+					klog.Infof("[flag_override] Setting flag: --%s=%q", baseFlagName, value)
+					newArg := "--" + baseFlagName + "=" + value
+					newArgs = append(newArgs, newArg)
+				}
+			} else {
+				unrecognizedCount++
+				klog.Warningf("[flag_override] Skipping unrecognized flag override: --%s=%q", baseFlagName, value)
+			}
+			continue
+		}
+
+		if _, ok := overrideVals[flagName]; ok && !redundantFlags[flagName] {
 			klog.Infof("[flag_override] Dropping flag: --%s=%q", flagName, value)
 			if valueFromNext {
 				skipNext = true
@@ -135,15 +129,99 @@ func processFlagOverrides(args []string, definedFlags map[string]bool) flagOverr
 		}
 
 		newArgs = append(newArgs, arg)
+		if valueFromNext {
+			newArgs = append(newArgs, args[i+1])
+			skipNext = true
+		}
 	}
 
-	if activeCount > 0 {
-		klog.Infof("[flag_override] Applied flag overrides: %d", activeCount)
+	if activeCount > 0 || redundantCount > 0 || unrecognizedCount > 0 {
+		klog.Infof("[flag_override] Applied flag overrides: %d (redundant: %d, unrecognized: %d)", activeCount, redundantCount, unrecognizedCount)
 	}
 
 	return flagOverrideResult{
 		args:              newArgs,
 		activeCount:       activeCount,
 		unrecognizedCount: unrecognizedCount,
+		redundantCount:    redundantCount,
 	}
+}
+
+func collectFlagValues(args []string) (map[string][]string, map[string][]string) {
+	overrideVals := make(map[string][]string)
+	cliVals := make(map[string][]string)
+	skipNext := false
+	for i := 0; i < len(args); i++ {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+
+		flagName := strings.TrimLeft(arg, "-")
+		var value string
+		hasValue := false
+		if idx := strings.Index(flagName, "="); idx != -1 {
+			value = flagName[idx+1:]
+			flagName = flagName[:idx]
+			hasValue = true
+		}
+
+		valueFromNext := false
+		if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			value = args[i+1]
+			hasValue = true
+			valueFromNext = true
+		}
+
+		if strings.HasPrefix(flagName, overridePrefix) {
+			if hasValue {
+				baseName := strings.TrimPrefix(flagName, overridePrefix)
+				overrideVals[baseName] = append(overrideVals[baseName], value)
+				if valueFromNext {
+					skipNext = true
+				}
+			}
+			continue
+		}
+
+		cliVals[flagName] = append(cliVals[flagName], value)
+		if valueFromNext {
+			skipNext = true
+		}
+	}
+	return overrideVals, cliVals
+}
+
+func findRedundantFlags(overrideVals, cliVals map[string][]string, definedFlags map[string]string) map[string]bool {
+	redundantFlags := make(map[string]bool)
+	for baseName, oVals := range overrideVals {
+		defVal, isDefined := definedFlags[baseName]
+		if !isDefined {
+			continue
+		}
+
+		rVals := cliVals[baseName]
+		if len(rVals) == 0 {
+			rVals = []string{defVal}
+		}
+
+		if len(oVals) == len(rVals) {
+			same := true
+			for i := range oVals {
+				if oVals[i] != rVals[i] {
+					same = false
+					break
+				}
+			}
+			if same {
+				redundantFlags[baseName] = true
+			}
+		}
+	}
+	return redundantFlags
 }

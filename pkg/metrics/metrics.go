@@ -1260,9 +1260,10 @@ var allMetrics = []k8smetrics.Registerable{
 }
 
 // UpdateComponentFlagOverrides sets the component overrides flag overrides metric.
-func UpdateComponentFlagOverrides(active, unrecognized int) {
+func UpdateComponentFlagOverrides(active, unrecognized, redundant int) {
 	componentFlagOverrides.WithLabelValues("active").Set(float64(active))
 	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(unrecognized))
+	componentFlagOverrides.WithLabelValues("redundant").Set(float64(redundant))
 }
 
 // RegisterAll registers all metrics.
