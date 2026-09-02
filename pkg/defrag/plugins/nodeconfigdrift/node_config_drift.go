@@ -18,10 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"reflect"
 	"time"
 
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
@@ -58,14 +59,40 @@ func (p *plugin) String() string {
 	return PluginName
 }
 
+type candidateNodeGroupInfo struct {
+	nodes    []string
+	mode     defrag.Mode
+	isAtomic bool
+	limit    int
+}
+
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	if !p.isListerValid() {
 		klog.V(2).Infof("Not creating candidate, npc crd lister is nil. NPCs / CCCs might be disabled")
 		return nil
 	}
 
-	driftedNodeGroups := make(map[string][]string)
-	var driftedNodeGroupNames []string
+	candidateNodeGroups, groupKeys, driftedNodesCount := p.candidateNodeGroups(ctx, nodeNames)
+	p.latestUnfitNodesCount = driftedNodesCount
+
+	if len(groupKeys) == 0 {
+		return nil
+	}
+
+	randIdx := rand.Intn(len(groupKeys))
+	selectedGroup := candidateNodeGroups[groupKeys[randIdx]]
+
+	if selectedGroup.isAtomic {
+		// For atomic groups, return the full group without applying the node limit
+		return defrag.NewAtomicCandidate(selectedGroup.nodes, selectedGroup.mode)
+	}
+
+	return defrag.NewCandidateWithLimit(selectedGroup.nodes, selectedGroup.mode, selectedGroup.isAtomic, selectedGroup.limit)
+}
+
+func (p *plugin) candidateNodeGroups(ctx *ca_context.AutoscalingContext, nodeNames []string) (map[string]*candidateNodeGroupInfo, []string, int) {
+	candidateNodeGroups := make(map[string]*candidateNodeGroupInfo)
+	var candidateNodeGroupKeys []string
 	isDriftedByNodeGroup := make(map[string]bool)
 	driftedNodesCount := 0
 
@@ -84,28 +111,80 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 		if !evaluated {
 			isDrifted = p.evaluateNodeGroupDrift(nodeGroup)
 			isDriftedByNodeGroup[nodeGroupId] = isDrifted
-			if isDrifted {
-				driftedNodeGroupNames = append(driftedNodeGroupNames, nodeGroupId)
-			}
 		}
 
 		if isDrifted {
-			driftedNodeGroups[nodeGroupId] = append(driftedNodeGroups[nodeGroupId], nodeName)
+			groupKey, mode, isAtomic := p.getAtomicGroupKey(ctx, nodeName, nodeGroup)
+			if groupKey == "" {
+				continue
+			}
+			group, exists := candidateNodeGroups[groupKey]
+			if !exists {
+				candidateNodeGroupKeys = append(candidateNodeGroupKeys, groupKey)
+				group = &candidateNodeGroupInfo{
+					mode:     mode,
+					isAtomic: isAtomic,
+					limit:    p.candidateLimit(nodeGroup),
+				}
+				candidateNodeGroups[groupKey] = group
+			}
+			group.nodes = append(group.nodes, nodeName)
 			driftedNodesCount++
 		}
 	}
 
-	p.latestUnfitNodesCount = driftedNodesCount
+	return candidateNodeGroups, candidateNodeGroupKeys, driftedNodesCount
+}
 
-	if len(driftedNodeGroupNames) == 0 {
-		return nil
+func (p *plugin) candidateLimit(nodeGroup cloudprovider.NodeGroup) int {
+	limit := p.config.MaxCandidateNodeCount
+	if crd, _, err := p.config.NPCLister.NodeGroupCrd(nodeGroup); err == nil && crd != nil && crd.MaxNodeDisruption() != nil {
+		maxDis := int(*crd.MaxNodeDisruption())
+		if maxDis > 0 && maxDis < limit {
+			limit = maxDis
+		} else if maxDis <= 0 {
+			limit = 0 // 0 means unlimited for NewCandidateWithLimit
+		}
+	}
+	return limit
+}
+
+func (p *plugin) getAtomicGroupKey(ctx *ca_context.AutoscalingContext, nodeName string, nodeGroup cloudprovider.NodeGroup) (string, defrag.Mode, bool) {
+	crd, _, err := p.config.NPCLister.NodeGroupCrd(nodeGroup)
+	if err != nil || crd == nil {
+		return nodeGroup.Id(), defrag.CreateBeforeDelete, false
 	}
 
-	randIdx := rand.Intn(len(driftedNodeGroupNames))
-	selectedGroup := driftedNodeGroupNames[randIdx]
-	candidateNodes := driftedNodeGroups[selectedGroup]
+	labels := crd.AtomicGroupLabels()
+	strategy := crd.MigrationStrategy()
 
-	return defrag.NewPartialCandidateWithLimit(candidateNodes, defrag.CreateBeforeDelete, p.config.MaxCandidateNodeCount)
+	if len(labels) == 0 {
+		if strategy == string(v1.MigrationStrategyDeleteBeforeCreate) {
+			return nodeGroup.Id(), defrag.DeleteBeforeCreate, false
+		}
+		if strategy == string(v1.MigrationStrategyCreateBeforeDelete) {
+			return nodeGroup.Id(), defrag.CreateBeforeDelete, false
+		}
+		return nodeGroup.Id(), defrag.CreateBeforeDelete, false
+	}
+
+	mode := defrag.CreateBeforeDelete
+	if strategy == string(v1.MigrationStrategyDeleteBeforeCreate) {
+		mode = defrag.DeleteBeforeCreate
+	}
+
+	nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+	if err != nil || nodeInfo == nil || nodeInfo.Node() == nil {
+		return "", mode, false
+	}
+
+	key := nodeGroup.Id()
+	node := nodeInfo.Node()
+	for _, label := range labels {
+		val := node.Labels[label]
+		key += fmt.Sprintf(";;%s=%s", label, val)
+	}
+	return key, mode, true
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {

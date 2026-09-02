@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/testutil"
+	"k8s.io/utils/ptr"
 	testCloudProvider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -920,4 +922,248 @@ func newTestCrd(name string, configDrift bool, scaleUpAnyway bool, userLabels ma
 		opts = append(opts, crd.WithRules(priorityRules))
 	}
 	return crd.NewTestCrd(opts...)
+}
+
+func TestNodeConfigDriftNewCandidateAtomicGroupingAndLimits(t *testing.T) {
+	n2Family := "n2"
+	priorityRules := []rules.Rule{
+		rules.NewMachineSpecRule(&n2Family, nil, nil, nil),
+	}
+
+	testCases := []struct {
+		name                      string
+		crd                       crd.CRD
+		setupNodes                func() []*apiv1.Node
+		wantCandidateLen          int
+		wantMode                  defrag.Mode
+		wantIsAtomic              bool
+		wantAllNodes              bool
+		wantPartitionCheck        bool
+		wantLatestUnfitNodesCount int
+	}{
+		{
+			name: "Atomic: AtomicGroupLabels without strategy defaults to CreateBeforeDelete and retains all nodes",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-atomic-no-strat"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithAtomicGroupLabels([]string{"tier"}),
+			),
+			setupNodes: func() []*apiv1.Node {
+				nodes := []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+				for _, n := range nodes {
+					n.Labels = map[string]string{"tier": "frontend"}
+				}
+				return nodes
+			},
+			wantCandidateLen:          6,
+			wantMode:                  defrag.CreateBeforeDelete,
+			wantIsAtomic:              true,
+			wantAllNodes:              true,
+			wantLatestUnfitNodesCount: 6,
+		},
+		{
+			name: "Atomic: AtomicGroupLabels with DeleteBeforeCreate strategy",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-atomic-delete-before-create"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithAtomicGroupLabels([]string{"tier"}),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyDeleteBeforeCreate)),
+			),
+			setupNodes: func() []*apiv1.Node {
+				nodes := []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+				for _, n := range nodes {
+					n.Labels = map[string]string{"tier": "frontend"}
+				}
+				return nodes
+			},
+			wantCandidateLen:          6,
+			wantMode:                  defrag.DeleteBeforeCreate,
+			wantIsAtomic:              true,
+			wantAllNodes:              true,
+			wantLatestUnfitNodesCount: 6,
+		},
+		{
+			name: "Non-atomic: Strategy DeleteBeforeCreate without AtomicGroupLabels",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-delete-before-create-no-labels"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyDeleteBeforeCreate)),
+			),
+			setupNodes: func() []*apiv1.Node {
+				return []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+				}
+			},
+			wantCandidateLen:          3,
+			wantMode:                  defrag.DeleteBeforeCreate,
+			wantIsAtomic:              false,
+			wantAllNodes:              true,
+			wantLatestUnfitNodesCount: 3,
+		},
+		{
+			name: "Atomic: Partitioned by label values",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-atomic-partitions"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithAtomicGroupLabels([]string{"tier"}),
+			),
+			setupNodes: func() []*apiv1.Node {
+				nodes := []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+				nodes[0].Labels = map[string]string{"tier": "frontend"}
+				nodes[1].Labels = map[string]string{"tier": "frontend"}
+				nodes[2].Labels = map[string]string{"tier": "frontend"}
+				nodes[3].Labels = map[string]string{"tier": "backend"}
+				nodes[4].Labels = map[string]string{"tier": "backend"}
+				nodes[5].Labels = map[string]string{"tier": "backend"}
+				return nodes
+			},
+			wantCandidateLen:          3,
+			wantMode:                  defrag.CreateBeforeDelete,
+			wantIsAtomic:              true,
+			wantPartitionCheck:        true,
+			wantLatestUnfitNodesCount: 6,
+		},
+		{
+			name: "Non-atomic: MaxNodeDisruption limits candidate size below maxCandidateNodeCount",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-max-disruption"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithMaxNodeDisruption(ptr.To(int32(2))),
+			),
+			setupNodes: func() []*apiv1.Node {
+				return []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+			},
+			wantCandidateLen:          2,
+			wantMode:                  defrag.CreateBeforeDelete,
+			wantLatestUnfitNodesCount: 6,
+		},
+		{
+			name: "Non-atomic: MaxNodeDisruption set to 0 means unlimited candidate size",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-disruption-zero"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithMaxNodeDisruption(ptr.To(int32(0))),
+			),
+			setupNodes: func() []*apiv1.Node {
+				return []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+			},
+			wantCandidateLen:          6,
+			wantMode:                  defrag.CreateBeforeDelete,
+			wantAllNodes:              true,
+			wantLatestUnfitNodesCount: 6,
+		},
+		{
+			name: "Non-atomic: MaxNodeDisruption greater than maxCandidateNodeCount is capped by maxCandidateNodeCount",
+			crd: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName("ccc-max-disruption-high"),
+				crd.WithConfigDrift(true),
+				crd.WithRules(priorityRules),
+				crd.WithMaxNodeDisruption(ptr.To(int32(10))),
+			),
+			setupNodes: func() []*apiv1.Node {
+				return []*apiv1.Node{
+					test.BuildTestNode("n1", 1000, 10),
+					test.BuildTestNode("n2", 1000, 10),
+					test.BuildTestNode("n3", 1000, 10),
+					test.BuildTestNode("n4", 1000, 10),
+					test.BuildTestNode("n5", 1000, 10),
+					test.BuildTestNode("n6", 1000, 10),
+				}
+			},
+			wantCandidateLen:          5,
+			wantMode:                  defrag.CreateBeforeDelete,
+			wantLatestUnfitNodesCount: 6,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := tc.setupNodes()
+			nodeNames := make([]string, len(nodes))
+			for i, n := range nodes {
+				nodeNames[i] = n.Name
+			}
+			nodeGroups := []testutil.ExtendedNodeGroup{
+				{
+					Name:  "group1",
+					Nodes: nodes,
+					Spec: &gkeclient.NodePoolSpec{
+						Labels: map[string]string{
+							testCrdLabel: tc.crd.Name(),
+						},
+						MachineType: "e2-standard-4",
+					},
+				},
+			}
+
+			ctx, p := initTestCase(t, nodeGroups, []crd.CRD{tc.crd}, testCrdLabel)
+			candidate := p.NewCandidate(ctx, nodeNames)
+
+			assert.NotNil(t, candidate)
+			assert.Equal(t, tc.wantMode, candidate.Mode)
+			assert.Equal(t, tc.wantIsAtomic, candidate.IsAtomic)
+			assert.Len(t, candidate.Nodes, tc.wantCandidateLen)
+			if tc.wantAllNodes {
+				assert.ElementsMatch(t, nodeNames, candidate.Nodes)
+			}
+			if tc.wantPartitionCheck {
+				frontend := []string{"n1", "n2", "n3"}
+				backend := []string{"n4", "n5", "n6"}
+				isFrontend := assert.ObjectsAreEqual(frontend, candidate.Nodes)
+				isBackend := assert.ObjectsAreEqual(backend, candidate.Nodes)
+				assert.True(t, isFrontend || isBackend, "Expected candidate nodes to belong to a single partition, got: %v", candidate.Nodes)
+			}
+			assert.Equal(t, tc.wantLatestUnfitNodesCount, p.LatestUnfitNodesCount())
+		})
+	}
 }

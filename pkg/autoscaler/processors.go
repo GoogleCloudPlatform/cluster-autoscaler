@@ -295,7 +295,7 @@ func setUpProcessors(
 	capacitybufferPodsRegistry *fakepods.Registry,
 	clusterScaleToZeroProcessor internal_processors.ScaleToZeroProcessor,
 	ossProvReqInjector *provreq.ProvisioningRequestPodsInjector,
-	npcCrdLister npc_lister.Lister,
+	ccLister npc_lister.Lister,
 	deleteOptions options.NodeDeleteOptions,
 	drainabilityRules rules.Rules,
 	autoscalingKubeClients *context.AutoscalingKubeClients,
@@ -367,7 +367,7 @@ func setUpProcessors(
 		} else {
 			fakePodsResolver = fakepods.NewDefaultingResolver()
 		}
-		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, npcCrdLister, options.AutopilotEnabled, options.CSNEnabled)
+		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled)
 	}
 
 	if options.CapacitybufferPodInjectionEnabled && cbReady {
@@ -428,7 +428,7 @@ func setUpProcessors(
 
 	podSharder := podsharding.NewGkePodSharder(provider, options.CSNEnabled, allowlistedSystemLabelsMatcher)
 	podShardSelector := podsharding.NewLruPodShardSelector()
-	podShardFilter := podsharding.NewPredicatePodShardFilter(npcCrdLister, options.CSNEnabled)
+	podShardFilter := podsharding.NewPredicatePodShardFilter(ccLister, options.CSNEnabled)
 	podShardingProcessor := podsharding.NewPodShardingProcessor(podSharder, podShardSelector, podShardFilter)
 
 	snowflakeBlockedMigsSource := nodesnowflake.NewBlockedMigsSource(provider, snowflakeWatcher)
@@ -476,7 +476,7 @@ func setUpProcessors(
 		sdCandidatesSorting,
 	}
 
-	npcCrdComparer := npc_processors.NewCrdScaleDownSortingProcessor(npcCrdLister, provider)
+	npcCrdComparer := npc_processors.NewCrdScaleDownSortingProcessor(ccLister, provider)
 	scaleDownComparers = append(scaleDownComparers, npcCrdComparer)
 
 	var ekvmsProcessor *ekvms_processor.ScaleUpNodeProcessor
@@ -496,7 +496,7 @@ func setUpProcessors(
 
 		// Scale Up and Scale Down processors will be added by default but will be executed only if resize is enabled
 		npcCrdBackoff := gke_backoff.GetNpcCrdBackoff(backoff)
-		ekvmsProcessor = ekvms_processor.NewScaleUpNodeProcessor(provider, resizableVmManager, resizeCalculator, internalmetrics.Metrics, npcCrdBackoff, npcCrdLister, resizableVmCustomThresholdsProvider)
+		ekvmsProcessor = ekvms_processor.NewScaleUpNodeProcessor(provider, resizableVmManager, resizeCalculator, internalmetrics.Metrics, npcCrdBackoff, ccLister, resizableVmCustomThresholdsProvider)
 
 		downsizeConfigFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkDownsizeConfig,
@@ -560,7 +560,7 @@ func setUpProcessors(
 		}
 		pluginsConfig := defrag_plugins_config.New(defrag_plugins_config.Options{
 			MaxCandidateNodeCount: options.DefragCandidateNodeLimit,
-			NPCLister:             npcCrdLister,
+			NPCLister:             ccLister,
 			Provider:              provider,
 			Autopilot:             options.AutopilotEnabled,
 			ResizableVmManager:    resizableVmManager,
@@ -580,6 +580,7 @@ func setUpProcessors(
 			ExperimentsManager:       experimentsManager,
 			FairnessEnforcer:         sharedFairnessManager.CreateEnforcer(defrag_processor.DefragProcessorName),
 			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
+			CcLister:                 ccLister,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -604,11 +605,11 @@ func setUpProcessors(
 		enforceFakePodsLimitProcessor = podinjection.NewEnforceInjectedPodsLimitProcessor(options.PodInjectionLimit)
 	}
 	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
-	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(laPodProvider, lookaheadBufferStrategyProvider, lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion), systemPodsClassifier, npcCrdLister, resizeCalculator, internalmetrics.Metrics)
+	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(laPodProvider, lookaheadBufferStrategyProvider, lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion), systemPodsClassifier, ccLister, resizeCalculator, internalmetrics.Metrics)
 
-	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, npcCrdLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff)
+	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {
-		autoscalingProcessors.ScaleStateNotifier.Register(metricsccc.NewNodeGroupChangePerCCCMetricsProducer(npcCrdLister))
+		autoscalingProcessors.ScaleStateNotifier.Register(metricsccc.NewNodeGroupChangePerCCCMetricsProducer(ccLister))
 	}
 	if err != nil {
 		return nil, err
@@ -616,7 +617,7 @@ func setUpProcessors(
 	go psObserver.Run(context)
 
 	ptsDomainDiscoveries := []podtopologyspread.PTSDomainDiscovery{
-		podtopologyspread.NewCCCDomainDiscovery(experimentsManager, npcCrdLister),
+		podtopologyspread.NewCCCDomainDiscovery(experimentsManager, ccLister),
 		podtopologyspread.NewZonalDomainDiscovery(experimentsManager, provider),
 		// Node Based DD should be the last processor as it is supposed to work only for the PTS domains for which we do not have a dedicated processor.
 		podtopologyspread.NewNodeBasedDomainDiscovery(experimentsManager, clusterSnapshot, provider),
@@ -642,12 +643,12 @@ func setUpProcessors(
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
 	if options.GCEFlexAdvisorEnabled {
-		flexAdvisorPodListProcessor = flexadvisor.NewPodListProcessor(instanceAvailabilityProvider, npcCrdLister, experimentsManager)
+		flexAdvisorPodListProcessor = flexadvisor.NewPodListProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)
 	}
 
 	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
 	if options.EnableComputeClassMinCapacity {
-		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(npcCrdLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager)
+		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager)
 	}
 
 	pvcLister := informerFactory.Core().V1().PersistentVolumeClaims().Lister()
@@ -666,14 +667,14 @@ func setUpProcessors(
 	var crdResourcesReportingProcessor *npc_status.CrdResourceReportingProcessor
 	if options.EnhancedCrdStatusReporting && updatesCh != nil {
 		sharedScaleUpData := history.NewScaleUpData()
-		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(npcCrdLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
-		crdResourcesReportingProcessor = npc_status.NewCrdResourceReportingProcessor(npcCrdLister, updatesCh, computeclass.NewMatcher(npcCrdLister, provider), experimentsManager)
+		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(ccLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
+		crdResourcesReportingProcessor = npc_status.NewCrdResourceReportingProcessor(ccLister, updatesCh, computeclass.NewMatcher(ccLister, provider), experimentsManager)
 		if err := scaleUpProcessorChain.AddProcessor(crdHistoryProcessor); err != nil {
 			return nil, err
 		}
 		crdStatusHistoryProcessor = history.NewAutoscalingStatusHistoryProcessor(sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
 
-		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(npcCrdLister, provider, updatesCh, experimentsManager)
+		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(ccLister, provider, updatesCh, experimentsManager)
 		scaleDownProcessorChain.AddProcessor(crdScaleDownHistoryProcessor)
 	}
 
@@ -688,7 +689,7 @@ func setUpProcessors(
 
 	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
 
-	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, npcCrdLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
+	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, ccLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor
 
 	// autoprovisioning.NewSortedNodeGroupListProcessor sorts node groups descending by allocatable CPU.
@@ -721,19 +722,19 @@ func setUpProcessors(
 	autoscalingProcessors.NodeGroupListProcessor = pr_processor
 
 	// This processor filters node groups by shard homogeneity before sorting/bucketing.
-	shardProcessor := npc_processors.NewShardAwareNodeGroupListProcessor(autoscalingProcessors.NodeGroupListProcessor, npcCrdLister)
+	shardProcessor := npc_processors.NewShardAwareNodeGroupListProcessor(autoscalingProcessors.NodeGroupListProcessor, ccLister)
 	autoscalingProcessors.NodeGroupListProcessor = shardProcessor
 
 	// This processor sorts node groups, a critical step prior to scale-up. To maintain
 	// processing order, it's initialized as the final NodeGroupListProcessor.
-	npcProcessor := npc_processors.NewNodeGroupListProcessor(npcCrdLister, autoscalingProcessors.NodeGroupListProcessor, internalmetrics.Metrics, provider)
+	npcProcessor := npc_processors.NewNodeGroupListProcessor(ccLister, autoscalingProcessors.NodeGroupListProcessor, internalmetrics.Metrics, provider)
 	autoscalingProcessors.NodeGroupListProcessor = npcProcessor
 	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter([]binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor})
-	npcCrdScaleUpStatusProcessor := npc_processors.NewCrdScaleUpStatusProcessor(npcCrdLister, provider, internalmetrics.Metrics)
+	npcCrdScaleUpStatusProcessor := npc_processors.NewCrdScaleUpStatusProcessor(ccLister, provider, internalmetrics.Metrics)
 	if err := scaleUpProcessorChain.AddProcessor(npcCrdScaleUpStatusProcessor); err != nil {
 		return nil, err
 	}
-	npcCrdScaleDownStatusProcessor := npc_processors.NewCrdScaleDownStatusProcessor(npcCrdLister, provider, internalmetrics.Metrics)
+	npcCrdScaleDownStatusProcessor := npc_processors.NewCrdScaleDownStatusProcessor(ccLister, provider, internalmetrics.Metrics)
 	scaleDownProcessorChain.AddProcessor(npcCrdScaleDownStatusProcessor)
 
 	if options.AsyncNodeGroupsEnabled {
@@ -750,7 +751,7 @@ func setUpProcessors(
 		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
 		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
 		// groups, which are exempt from the per-node TargetNodeCountQuota.
-		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(npcCrdLister, experimentsManager))
+		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(ccLister, experimentsManager))
 	}
 	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(scaleDownSetProcessors)
 
@@ -760,9 +761,9 @@ func setUpProcessors(
 	locationPolicyBalancers := make(map[gke.LocationPolicyEnum]locationpolicy.Balancer)
 	locationPolicyBalancers[gke.LocationPolicyAny] = locationpolicy.NewLocationPolicyAnyBalancer(provider, experimentsManager)
 	if options.GCEFlexAdvisorEnabled {
-		nodeGroupSetProcessor = flexadvisor.NewScaleUpBalancer(nodeGroupSetProcessor, instanceAvailabilityProvider, npcCrdLister, experimentsManager, true)
-		nodeGroupSetProcessor = locationpolicy.NewProcessor(nodeGroupSetProcessor, provider, locationPolicyBalancers, experimentsManager, true, instanceAvailabilityProvider, npcCrdLister)
-		nodeGroupSetProcessor = flexadvisor.NewScaleUpBalancer(nodeGroupSetProcessor, instanceAvailabilityProvider, npcCrdLister, experimentsManager, false)
+		nodeGroupSetProcessor = flexadvisor.NewScaleUpBalancer(nodeGroupSetProcessor, instanceAvailabilityProvider, ccLister, experimentsManager, true)
+		nodeGroupSetProcessor = locationpolicy.NewProcessor(nodeGroupSetProcessor, provider, locationPolicyBalancers, experimentsManager, true, instanceAvailabilityProvider, ccLister)
+		nodeGroupSetProcessor = flexadvisor.NewScaleUpBalancer(nodeGroupSetProcessor, instanceAvailabilityProvider, ccLister, experimentsManager, false)
 	} else {
 		nodeGroupSetProcessor = locationpolicy.NewProcessor(nodeGroupSetProcessor, provider, locationPolicyBalancers, experimentsManager, false, nil, nil)
 	}
@@ -775,7 +776,7 @@ func setUpProcessors(
 
 	if options.EnableComputeClassMinCapacity {
 		autoscalingProcessors.TemplateNodeInfoProvider = npc_nodeinfosproviders.NewPriorityIdxNodeInfoProvider(
-			autoscalingProcessors.TemplateNodeInfoProvider, computeclass.NewMatcher(npcCrdLister, provider), npcCrdLister, experimentsManager,
+			autoscalingProcessors.TemplateNodeInfoProvider, computeclass.NewMatcher(ccLister, provider), ccLister, experimentsManager,
 		)
 	}
 
@@ -786,7 +787,7 @@ func setUpProcessors(
 	)
 
 	podAnnotator := annotator.NewPodAnnotator(kubeClient, podStatusAggregator)
-	if err := scaleUpProcessorChain.AddProcessor(metrics_processors.NewScaleUpStatusMetricsProcessor(podStatusAggregator, metricsFilter, npcCrdLister)); err != nil {
+	if err := scaleUpProcessorChain.AddProcessor(metrics_processors.NewScaleUpStatusMetricsProcessor(podStatusAggregator, metricsFilter, ccLister)); err != nil {
 		return nil, err
 	}
 	if err := scaleUpProcessorChain.AddProcessor(podAnnotator); err != nil {
@@ -800,7 +801,7 @@ func setUpProcessors(
 	podAnnotator.Start(context, 1)
 
 	nodeAnnotator := nodeannotator.NewNodeAnnotator(kubeClient, autoscalingKubeClients.AllNodeLister(), nodeannotator.Config{})
-	cccNodeAnnotationPlugin := computeclass.NewCCCNodeAnnotatorPlugin(npcCrdLister, provider)
+	cccNodeAnnotationPlugin := computeclass.NewCCCNodeAnnotatorPlugin(ccLister, provider)
 	nodeAnnotator.RegisterPlugin(cccNodeAnnotationPlugin)
 	if err := nodeAnnotator.Start(context); err != nil {
 		return nil, err

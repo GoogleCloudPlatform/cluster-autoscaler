@@ -188,6 +188,42 @@ func (b *ComputeClassBuilder) WithConfigDrift(configDrift bool) *ComputeClassBui
 	return b
 }
 
+// WithMaxNodeDisruption sets the MaxNodeDisruption in ActiveMigration.ReconciliationPolicy.
+func (b *ComputeClassBuilder) WithMaxNodeDisruption(maxNodeDisruption int32) *ComputeClassBuilder {
+	if b.cc.Spec.ActiveMigration == nil {
+		b.cc.Spec.ActiveMigration = &v1.ActiveMigration{}
+	}
+	if b.cc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		b.cc.Spec.ActiveMigration.ReconciliationPolicy = &v1.ReconciliationPolicy{}
+	}
+	b.cc.Spec.ActiveMigration.ReconciliationPolicy.MaxNodeDisruption = &maxNodeDisruption
+	return b
+}
+
+// WithAtomicGroupLabels sets the AtomicGroupLabels in ActiveMigration.ReconciliationPolicy.
+func (b *ComputeClassBuilder) WithAtomicGroupLabels(labels ...string) *ComputeClassBuilder {
+	if b.cc.Spec.ActiveMigration == nil {
+		b.cc.Spec.ActiveMigration = &v1.ActiveMigration{}
+	}
+	if b.cc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		b.cc.Spec.ActiveMigration.ReconciliationPolicy = &v1.ReconciliationPolicy{}
+	}
+	b.cc.Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels = labels
+	return b
+}
+
+// WithMigrationStrategy sets the Strategy in ActiveMigration.ReconciliationPolicy.
+func (b *ComputeClassBuilder) WithMigrationStrategy(strategy v1.MigrationStrategy) *ComputeClassBuilder {
+	if b.cc.Spec.ActiveMigration == nil {
+		b.cc.Spec.ActiveMigration = &v1.ActiveMigration{}
+	}
+	if b.cc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		b.cc.Spec.ActiveMigration.ReconciliationPolicy = &v1.ReconciliationPolicy{}
+	}
+	b.cc.Spec.ActiveMigration.ReconciliationPolicy.Strategy = strategy
+	return b
+}
+
 // WithLabels sets the Labels field.
 func (b *ComputeClassBuilder) WithLabels(labels map[string]string) *ComputeClassBuilder {
 	b.cc.Labels = labels
