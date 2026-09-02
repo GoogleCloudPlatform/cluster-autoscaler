@@ -58,6 +58,9 @@ type CRD interface {
 	OptimizeRulePriority() bool
 	EnsureAllDaemonSetPodsRunning() bool
 	ConfigDrift() bool
+	MaxNodeDisruption() *int32
+	AtomicGroupLabels() []string
+	MigrationStrategy() string
 	TpuDriverMode() TpuDriverMode
 	ArchitectureTaintBehavior() string
 

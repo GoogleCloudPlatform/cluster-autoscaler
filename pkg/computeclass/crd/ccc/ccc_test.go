@@ -212,6 +212,98 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
+			name: "ccc max node disruption set",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							MaxNodeDisruption: ptr.To(int32(3)),
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMaxNodeDisruption(ptr.To(int32(3))),
+			),
+		},
+		{
+			name: "ccc max node disruption nil",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							MaxNodeDisruption: nil,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
+			name: "ccc atomic group labels set",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							AtomicGroupLabels: []string{"tier", "topology.kubernetes.io/zone"},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithAtomicGroupLabels([]string{"tier", "topology.kubernetes.io/zone"}),
+			),
+		},
+		{
+			name: "ccc migration strategy set to delete before create",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							Strategy: v1.MigrationStrategyDeleteBeforeCreate,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyDeleteBeforeCreate)),
+			),
+		},
+		{
+			name: "ccc migration strategy set to create before delete",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							Strategy: v1.MigrationStrategyCreateBeforeDelete,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyCreateBeforeDelete)),
+			),
+		},
+		{
+			name: "ccc reconciliation policy nil",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: nil,
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
 			name: "ccc mppn set",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
@@ -3082,4 +3174,28 @@ func TestConfigHash(t *testing.T) {
 
 	assert.Equal(t, hashP1, crdInternalChange.ConfigHash(rulesInternalChange[0]))
 	assert.Equal(t, hashP2, crdInternalChange.ConfigHash(rulesInternalChange[1]))
+}
+
+func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
+	labels := []string{"label1", "label2"}
+	c := &v1.ComputeClass{
+		Spec: v1.ComputeClassSpec{
+			ActiveMigration: &v1.ActiveMigration{
+				ReconciliationPolicy: &v1.ReconciliationPolicy{
+					AtomicGroupLabels: labels,
+				},
+			},
+		},
+	}
+	ccc := NewCccCrd(c, "", false, nil, nil)
+
+	// Get the labels slice from the method.
+	returnedLabels := ccc.AtomicGroupLabels()
+	assert.Equal(t, labels, returnedLabels)
+
+	// Mutate the returned slice.
+	returnedLabels[0] = "mutated-label"
+
+	// Ensure the original slice within the struct is untouched.
+	assert.Equal(t, "label1", ccc.(*cccCrd).Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels[0], "The original slice was mutated, defensive copy is missing!")
 }

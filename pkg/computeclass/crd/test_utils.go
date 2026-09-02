@@ -62,6 +62,9 @@ type testCrd struct {
 	configHash                string
 	targetNodeCount           *int
 	architectureTaintBehavior string
+	maxNodeDisruption         *int32
+	atomicGroupLabels         []string
+	migrationStrategy         string
 }
 
 func (t *testCrd) ArchitectureTaintBehavior() string {
@@ -141,6 +144,18 @@ func (t *testCrd) EnsureAllDaemonSetPodsRunning() bool {
 
 func (t *testCrd) ConfigDrift() bool {
 	return t.configDrift
+}
+
+func (t *testCrd) MaxNodeDisruption() *int32 {
+	return t.maxNodeDisruption
+}
+
+func (t *testCrd) AtomicGroupLabels() []string {
+	return t.atomicGroupLabels
+}
+
+func (t *testCrd) MigrationStrategy() string {
+	return t.migrationStrategy
 }
 
 func (t *testCrd) Conditions() []metav1.Condition {
@@ -387,6 +402,24 @@ func WithArchitectureTaintBehavior(behavior string) TestCrdOption {
 	}
 }
 
+func WithMaxNodeDisruption(maxNodeDisruption *int32) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.maxNodeDisruption = maxNodeDisruption
+	}
+}
+
+func WithAtomicGroupLabels(labels []string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.atomicGroupLabels = labels
+	}
+}
+
+func WithMigrationStrategy(strategy string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.migrationStrategy = strategy
+	}
+}
+
 func NewTestCrd(options ...TestCrdOption) CRD {
 	crd := &testCrd{}
 	for _, o := range options {
@@ -417,6 +450,9 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.ResourceManagerTags(), c2.ResourceManagerTags())
 	assert.Equal(t, c1.TargetNodeCount(), c2.TargetNodeCount())
 	assert.Equal(t, c1.ArchitectureTaintBehavior(), c2.ArchitectureTaintBehavior())
+	assert.Equal(t, c1.MaxNodeDisruption(), c2.MaxNodeDisruption())
+	assert.Equal(t, c1.AtomicGroupLabels(), c2.AtomicGroupLabels())
+	assert.Equal(t, c1.MigrationStrategy(), c2.MigrationStrategy())
 }
 
 func TestDefaultDataProvider() *testDataProvider {
