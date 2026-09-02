@@ -1141,7 +1141,7 @@ var (
 
 	componentFlagOverrides = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
-			Namespace: "component_overrides",
+			Namespace: caNamespace,
 			Name:      "flag_overrides_count",
 			Help:      "Number of flag overrides actively changing component behavior or unrecognized.",
 		},
