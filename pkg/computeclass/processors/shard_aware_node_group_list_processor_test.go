@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -33,7 +34,7 @@ import (
 )
 
 func TestShardAwareNodeGroupListProcessor(t *testing.T) {
-	testCrdLabel := "test-crd-label"
+	testCrdLabel := labels.ComputeClassLabel
 	defaultMachineType := "n1-standard-1"
 
 	gkeManager := &gke.GkeManagerMock{}
@@ -810,6 +811,102 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					SetGceRefName("ccc-pool").
 					SetSpec(&gkeclient.NodePoolSpec{
 						Labels:      map[string]string{testCrdLabel: "ccc-object-1"},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
+		{
+			name: "Keep custom manual pool if homogeneous batch has no compute-class selector but has matching tolerations and labels",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("custom-pool").
+					SetGceRefName("custom-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{
+							testCrdLabel:   "my-custom-class",
+							"custom-label": "custom-value",
+						},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "my-custom-class",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
+						MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{
+				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+					crd.WithCrdType(ccc.CrdType),
+					crd.WithName("my-custom-class"),
+					crd.WithRules([]rules.Rule{rules.NewRule(rules.WithNodePoolsRule([]string{"custom-pool"}))}),
+					crd.WithAutoprovisioningEnabled()),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-custom-1",
+					},
+					Spec: apiv1.PodSpec{
+						NodeSelector: map[string]string{"custom-label": "custom-value"},
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "my-custom-class",
+								Effect:   apiv1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-custom-2",
+					},
+					Spec: apiv1.PodSpec{
+						NodeSelector: map[string]string{"custom-label": "custom-value"},
+						Tolerations: []apiv1.Toleration{
+							{
+								Key:      testCrdLabel,
+								Operator: apiv1.TolerationOpEqual,
+								Value:    "my-custom-class",
+								Effect:   apiv1.TaintEffectNoSchedule,
+							},
+						},
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("standard-pool").
+					SetGceRefName("standard-pool").
+					SetSpec(&gkeclient.NodePoolSpec{MachineType: defaultMachineType}).
+					SetGkeManager(gkeManager).
+					Build(),
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("custom-pool").
+					SetGceRefName("custom-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels: map[string]string{
+							testCrdLabel:   "my-custom-class",
+							"custom-label": "custom-value",
+						},
+						Taints: []apiv1.Taint{
+							{
+								Key:    testCrdLabel,
+								Value:  "my-custom-class",
+								Effect: apiv1.TaintEffectNoSchedule,
+							},
+						},
 						MachineType: defaultMachineType}).
 					SetGkeManager(gkeManager).
 					Build(),

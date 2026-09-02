@@ -34,22 +34,11 @@ import (
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
-func newCCCNodePool(poolName, cccName string, options ...integration.Option[*gke_api_beta.NodePool]) *gke_api_beta.NodePool {
-	opt := []integration.Option[*gke_api_beta.NodePool]{integration.WithNodePoolName(poolName),
-		integration.WithNodePoolMachineType("n1-standard-2"),
-		integration.WithNodePoolSize(0),
-		integration.WithNodePoolMaxNodeCount(10),
-		integration.WithNodePoolLabels(map[string]string{
-			labels.ComputeClassLabel: cccName,
-		}),
-		integration.WithNodePoolTaints(&gke_api_beta.NodeTaint{
-			Key:    labels.ComputeClassLabel,
-			Value:  cccName,
-			Effect: "NO_SCHEDULE",
-		}),
-	}
-	opt = append(opt, options...)
-	return integration.DefaultNodePool(opt...)
+func newCCCNodePool(poolName, cccName string) integration.NodePoolBuilder {
+	return integration.EmptyNodePool(poolName).
+		WithCCCLabel(cccName).
+		WithCCCTaint(cccName).
+		WithMax(10)
 }
 
 // TestCCCSchedulingWithoutNodeSelector verifies workload scheduling behaviors for Custom ComputeClasses
@@ -64,20 +53,18 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
 		Build()
 
-	cccNodePool := newCCCNodePool("ccc-pool-1", cccName,
-		integration.WithNodePoolLabels(map[string]string{
-			"role": "role-1",
-		}))
-	cccNodePool2 := newCCCNodePool("ccc-pool-2", missingCCC)
+	cccNodePool := newCCCNodePool("ccc-pool-1", cccName).
+		WithLabel("role", "role-1").
+		Build()
+	cccNodePool2 := newCCCNodePool("ccc-pool-2", missingCCC).Build()
 	nonCCCNodePool := integration.EmptyNodePool("non-ccc-pool").
-		WithMachineType("n1-standard-2").
 		WithMax(10).
 		Build()
 
 	testCases := []struct {
 		name                         string
 		pod                          *apiv1.Pod
-		extraPools                   []*gke_api_beta.NodePool
+		extraPool                    *gke_api_beta.NodePool
 		expectPodScheduledOnNodePool string
 	}{
 		{
@@ -111,8 +98,8 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 			expectPodScheduledOnNodePool: cccNodePool.Name,
 		},
 		{
-			// we expect CA to NOT schedule
-			name: "Workload without CCC node-selector and toleration, but with non-CCC node-selector",
+			// we expect CA to schedule
+			name: "Workload without CCC node-selector, but with non-CCC node-selector and broad CCC toleration",
 			pod: tu.BuildTestPod("pod", 1000, 1000,
 				tu.MarkUnschedulable(),
 				pod.WithNodeSelector(map[string]string{
@@ -173,7 +160,7 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 				}),
 			),
 			expectPodScheduledOnNodePool: cccNodePool2.Name,
-			extraPools:                   []*gke_api_beta.NodePool{cccNodePool2},
+			extraPool:                    cccNodePool2,
 		},
 		{
 			// we expect CA to schedule
@@ -244,7 +231,7 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 				p.Namespace = "kube-system"
 				return p
 			}(),
-			extraPools:                   []*gke_api_beta.NodePool{nonCCCNodePool},
+			extraPool:                    nonCCCNodePool,
 			expectPodScheduledOnNodePool: nonCCCNodePool.Name,
 		},
 	}
@@ -252,7 +239,9 @@ func TestCCCSchedulingWithoutNodeSelector(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			nodePools := []*gke_api_beta.NodePool{cccNodePool}
-			nodePools = append(nodePools, tc.extraPools...)
+			if tc.extraPool != nil {
+				nodePools = append(nodePools, tc.extraPool)
+			}
 
 			testConfig := integration.NewTestConfig().
 				WithNodePools(nodePools...).
@@ -303,21 +292,16 @@ func TestCCCNodePoolPreferNoSchedule(t *testing.T) {
 		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
 		Build()
 
-	cccNodePool := integration.DefaultNodePool(
-		integration.WithNodePoolName("ccc-pool-1"),
-		integration.WithNodePoolMachineType("n1-standard-2"),
-		integration.WithNodePoolSize(0),
-		integration.WithNodePoolMaxNodeCount(10),
-		integration.WithNodePoolLabels(map[string]string{
-			labels.ComputeClassLabel: cccName,
-			"role":                   "role-1",
-		}),
-		integration.WithNodePoolTaints(&gke_api_beta.NodeTaint{
+	cccNodePool := integration.EmptyNodePool("ccc-pool-1").
+		WithCCCLabel(cccName).
+		WithLabel("role", "role-1").
+		WithTaints(&gke_api_beta.NodeTaint{
 			Key:    labels.ComputeClassLabel,
 			Value:  cccName,
 			Effect: "PREFER_NO_SCHEDULE",
-		}),
-	)
+		}).
+		WithMax(10).
+		Build()
 	testConfig := integration.NewTestConfig().
 		WithNodePools(cccNodePool).
 		WithCccCrds(computeClass)
@@ -353,15 +337,10 @@ func TestCCCNodePoolNoTaint(t *testing.T) {
 		WithPriorities(v1.Priority{Nodepools: []string{"ccc-pool-1"}}).
 		Build()
 
-	cccNodePool := integration.DefaultNodePool(
-		integration.WithNodePoolName("ccc-pool-1"),
-		integration.WithNodePoolMachineType("n1-standard-2"),
-		integration.WithNodePoolSize(0),
-		integration.WithNodePoolMaxNodeCount(10),
-		integration.WithNodePoolLabels(map[string]string{
-			labels.ComputeClassLabel: cccName,
-		}),
-	)
+	cccNodePool := integration.EmptyNodePool("ccc-pool-1").
+		WithCCCLabel(cccName).
+		WithMax(10).
+		Build()
 	testConfig := integration.NewTestConfig().
 		WithNodePools(cccNodePool).
 		WithCccCrds(computeClass)
@@ -381,4 +360,129 @@ func TestCCCNodePoolNoTaint(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", pod.Name)
 	})
+}
+
+// TestCCCDefaultFallbackWithCustomToleration verifies scheduling behavior when Default Compute Class is enabled
+// and a workload tolerates a custom Compute Class without explicitly requesting it via compute-class nodeSelector.
+// - When no default node pool exists, it falls back to the custom Compute Class node pool.
+// - When a default node pool exists but does not match the workload's nodeSelector, it falls back to the custom Compute Class node pool.
+// - When a matching default node pool exists, it schedules on the default node pool instead of the custom Compute Class node pool.
+func TestCCCDefaultFallbackWithCustomToleration(t *testing.T) {
+	const customCCCName = "my-custom-class"
+
+	testCases := []struct {
+		name             string
+		defaultCC        *v1.ComputeClass
+		defaultPool      *gke_api_beta.NodePool
+		podNodeSelector  map[string]string
+		podTolerations   []apiv1.Toleration
+		expectedPoolName string
+	}{
+		{
+			name: "without default node pools",
+			defaultCC: ccc.NewComputeClassBuilder("default").
+				WithNapEnabled().
+				WithWhenUnsatisfiable("ScaleUpAnyway").
+				Build(),
+			defaultPool:     nil,
+			podNodeSelector: map[string]string{"role": "custom-role"},
+			podTolerations: []apiv1.Toleration{
+				{
+					Key:      labels.ComputeClassLabel,
+					Value:    customCCCName,
+					Operator: apiv1.TolerationOpEqual,
+					Effect:   apiv1.TaintEffectNoSchedule,
+				},
+			},
+			expectedPoolName: "custom-pool",
+		},
+		{
+			name: "with non-matching (missing custom label) default node pool",
+			defaultCC: ccc.NewComputeClassBuilder("default").
+				WithNapEnabled().
+				WithWhenUnsatisfiable("ScaleUpAnyway").
+				WithPriorities(v1.Priority{Nodepools: []string{"default-pool"}}).
+				Build(),
+			defaultPool:     newCCCNodePool("default-pool", "default").Build(),
+			podNodeSelector: map[string]string{"role": "custom-role"},
+			podTolerations: []apiv1.Toleration{
+				{
+					Key:      labels.ComputeClassLabel,
+					Value:    customCCCName,
+					Operator: apiv1.TolerationOpEqual,
+					Effect:   apiv1.TaintEffectNoSchedule,
+				},
+			},
+			expectedPoolName: "custom-pool",
+		},
+		{
+			name: "with matching default node pool",
+			defaultCC: ccc.NewComputeClassBuilder("default").
+				WithNapEnabled().
+				WithWhenUnsatisfiable("ScaleUpAnyway").
+				WithPriorities(v1.Priority{Nodepools: []string{"default-pool"}}).
+				Build(),
+			defaultPool:      integration.EmptyNodePool("default-pool").WithMax(10).Build(),
+			podNodeSelector:  nil,
+			podTolerations:   nil,
+			expectedPoolName: "default-pool",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			customComputeClass := ccc.NewComputeClassBuilder(customCCCName).
+				WithNapEnabled().
+				WithWhenUnsatisfiable("ScaleUpAnyway").
+				WithPriorities(v1.Priority{Nodepools: []string{"custom-pool"}}).
+				Build()
+
+			customNodePool := newCCCNodePool("custom-pool", customCCCName).
+				WithLabel("role", "custom-role").
+				Build()
+
+			podOptions := []func(*apiv1.Pod){
+				tu.MarkUnschedulable(),
+			}
+			if len(tc.podTolerations) > 0 {
+				podOptions = append(podOptions, pod.WithTolerations(tc.podTolerations...))
+			}
+			if len(tc.podNodeSelector) > 0 {
+				podOptions = append(podOptions, pod.WithNodeSelector(tc.podNodeSelector))
+			}
+
+			testPod := tu.BuildTestPod("pod-test", 1000, 1000, podOptions...)
+
+			var nodePools []*gke_api_beta.NodePool
+			if tc.defaultPool != nil {
+				nodePools = append(nodePools, tc.defaultPool)
+			}
+			nodePools = append(nodePools, customNodePool)
+
+			testConfig := integration.NewTestConfig().
+				WithNodePools(nodePools...).
+				WithCccCrds(tc.defaultCC, customComputeClass).
+				WithDefaultComputeClassEnabled()
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+				defer integration_synctest.TearDown(cancel)
+
+				infra.Fakes.K8s.AddPod(testPod)
+
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				infra.Fakes.RunScheduler(ctx, t)
+
+				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods(testPod.Namespace).Get(ctx, testPod.Name, metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled", testPod.Name)
+				node, err := infra.Fakes.KubeClient.CoreV1().Nodes().Get(ctx, updatedPod.Spec.NodeName, metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.Contains(t, node.Name, tc.expectedPoolName)
+			})
+		})
+	}
 }

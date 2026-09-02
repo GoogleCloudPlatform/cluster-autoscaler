@@ -19,9 +19,11 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -117,10 +119,16 @@ func (p *shardAwareNodeGroupListProcessor) cccNodeGroupMatchesPod(ng cloudprovid
 	return false
 }
 
+// getPodCccName returns the explicit compute-class selector for a pod, or "" if none exists.
+// We inspect pod requirements directly instead of using the lister pipeline (p.lister.PodCrd)
+// to prevent pods without an explicit selector from resolving to "default" when Default Compute Class
+// is enabled. This preserves the expected behavior (b/542146049, b/528305042) where fallback workloads
+// with matching custom labels and tolerations are not over-pruned upfront and can schedule on custom node pools.
 func (p *shardAwareNodeGroupListProcessor) getPodCccName(pod *apiv1.Pod) string {
-	c, name, err := p.lister.PodCrd(pod)
-	if err != nil || c == nil || c.CrdType() != ccc.CrdType {
-		return ""
+	req := podrequirements.GetRequirements(pod)
+	name, found := req.LabelReq.GetSingleValue(gkelabels.ComputeClassLabel)
+	if !found {
+		return "" // No explicit selector
 	}
 	return name
 }

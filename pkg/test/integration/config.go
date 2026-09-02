@@ -316,6 +316,11 @@ func (c *TestConfig) WithMachineConfigEnabled() *TestConfig {
 	return c
 }
 
+// WithDefaultComputeClassEnabled enables Default Compute Class on the cluster configuration.
+func (c *TestConfig) WithDefaultComputeClassEnabled() *TestConfig {
+	return c.WithClusterOverrides(WithClusterDefaultComputeClassEnabled())
+}
+
 // WithReservations replaces the entire map of reservations.
 func (c *TestConfig) WithReservations(reservations map[string][]*compute.Reservation) *TestConfig {
 	c.Reservations = reservations
@@ -721,6 +726,17 @@ func WithClusterAutoProvisioningEnabled() Option[*gke_api_beta.Cluster] {
 			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
 		}
 		c.Autoscaling.EnableNodeAutoprovisioning = true
+		return c
+	}
+}
+
+// WithClusterDefaultComputeClassEnabled enables Default Compute Class on the internal cluster configuration.
+func WithClusterDefaultComputeClassEnabled() Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		if c.Autoscaling == nil {
+			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
+		}
+		c.Autoscaling.DefaultComputeClassConfig = &gke_api_beta.DefaultComputeClassConfig{Enabled: true}
 		return c
 	}
 }
