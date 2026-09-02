@@ -17,7 +17,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/googlecloudplatform/compute-class-api v0.0.0-20260828091331-611bb697ddcf
+	github.com/googlecloudplatform/compute-class-api v0.0.0-20260901140059-d5133d806dfe
 	github.com/prometheus/client_golang v1.24.1
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/pflag v1.0.10
