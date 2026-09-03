@@ -1,0 +1,299 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cluster-autoscaler.fullname" . }}
+  labels:
+    {{- include "cluster-autoscaler.labels" . | nindent 4 }}
+  {{- with .Values.rbac.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+  # leader election
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    resourceNames:
+      - cluster-autoscaler
+    verbs:
+      - get
+      - update
+      - patch
+      - delete
+  # accessing & modifying cluster state (nodes & pods)
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - nodes/status
+    verbs:
+      - update
+      - patch
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+      - create
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods/eviction
+    verbs:
+      - create
+  # read-only access to cluster state
+  - apiGroups:
+      - ""
+    resources:
+      - services
+      - replicationcontrollers
+      - persistentvolumes
+      - persistentvolumeclaims
+      - resourcequotas
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - daemonsets
+      - replicasets
+      - deployments
+      - statefulsets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - storage.k8s.io
+    resources:
+      - storageclasses
+      - csinodes
+      - csistoragecapacities
+      - csidrivers
+      - volumeattachments
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - nodemanagement.gke.io
+    resources:
+      - updateinfos
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - autoscaling.gke.io
+    resources:
+      - nodeprovisioningconfigs
+      - nodeprovisioningconfigs/status
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - cloud.google.com
+    resources:
+      - computeclasses
+      - computeclasses/status
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+      - patch
+  - apiGroups:
+      - cloud.google.com
+    resources:
+      - machineconfigs
+      - machineconfigs/status
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - resource.k8s.io
+    resources:
+      - resourceclaims
+      - resourceslices
+      - deviceclasses
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - podtemplates
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+      - update
+      - patch
+  # scale subresource access for the buffer controller
+  - apiGroups:
+      - "*"
+    resources:
+      - "*/scale"
+    verbs:
+      - get
+  # misc access
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - update
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - cluster-autoscaler-status
+    verbs:
+      - get
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - networking.gke.io
+    resources:
+      - gkenetworkparamsets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - cloud.gke.io
+    resources:
+      - providerconfigs
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - autoscaling.x-k8s.io
+    resources:
+      - capacitybuffers
+      - capacitybuffers/status
+    verbs:
+      - get
+      - watch
+      - list
+      - patch
+      - create
+      - delete
+      - update
+  - apiGroups:
+      - autoscaling.x-k8s.io
+    resources:
+      - capacityquotas
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - autoscaling.x-k8s.io
+    resources:
+      - capacityquotas/status
+    verbs:
+      - update
+      - patch
+  - apiGroups:
+      - autoscaling.x-k8s.io
+      - provisioning.x-k8s.io
+    resources:
+      - provisioningrequests
+      - provisioningrequests/status
+    verbs:
+      - get
+      - list
+      - watch
+      - patch
+      - update
+      - delete
+      - deletecollection
+  {{- with .Values.rbac.additionalRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}

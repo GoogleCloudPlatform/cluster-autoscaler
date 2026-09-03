@@ -1,0 +1,56 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.service.create -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cluster-autoscaler.fullname" . }}
+  labels:
+    {{- include "cluster-autoscaler.labels" . | nindent 4 }}
+    {{- with .Values.service.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if .Values.service.clusterIP }}
+  clusterIP: {{ .Values.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.service.externalIPs }}
+  externalIPs:
+    {{- toYaml .Values.service.externalIPs | nindent 4 }}
+  {{- end }}
+  {{- if .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  {{- if .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml .Values.service.loadBalancerSourceRanges | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.server.portName }}
+      protocol: TCP
+      name: {{ .Values.server.portName }}
+  selector:
+    {{- if .Values.service.selector }}
+    {{- toYaml .Values.service.selector | nindent 4 }}
+    {{- else }}
+    {{- include "cluster-autoscaler.selectorLabels" . | nindent 4 }}
+    {{- end }}
+{{- end }}
