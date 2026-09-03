@@ -78,7 +78,7 @@ func (info *candidateInfo) String() string {
 // reorganizeNodes reorganizes candidate by pushing removable nodes to the front,
 // so they will be processed first in the next iteration.
 func (info *candidateInfo) reorganizeNodes() {
-	if info.candidate.Mode != defrag.Partial {
+	if info.candidate.IsAtomic {
 		return
 	}
 	var removableNodes, unremovableNodes []string
@@ -219,13 +219,22 @@ func (p *Processor) cleanUpCandidates(filter *defragNodeFilter) error {
 	var candidateInfos []*candidateInfo
 	for _, info := range p.candidateInfos {
 		isScaledDown := p.actuator.isScaleDownFullyStarted(info.candidate)
+		filter.filterDeletedCandidateNodes(p.ctx, info.candidate)
+		survivingCount := len(info.candidate.Nodes)
+
 		filter.filterInvalidCandidateNodes(p.ctx, p.pdbTracker, info.candidate)
+
 		nodes, err := filter.filterNodesViolatingMinQuotas(p.ctx, info.candidate.Nodes)
 		if err != nil {
 			klog.Errorf("Defrag: failed to filter nodes violating min quotas for candidate %v: %v", info, err)
 			return err
 		}
 		info.candidate.Nodes = filter.filterNodesViolatingMinSize(p.ctx, nodes)
+
+		if info.candidate.IsAtomic && len(info.candidate.Nodes) < survivingCount {
+			klog.V(1).Infof("Atomic candidate %v lost nodes, invalidating candidate", info)
+			info.candidate.Nodes = nil
+		}
 
 		if shouldRemove, reason := p.shouldRemoveCandidate(info); shouldRemove {
 			if reason == noValidNodes && isScaledDown {
@@ -322,7 +331,7 @@ func (p *Processor) processCandidates(filter *defragNodeFilter) ([]*apiv1.Pod, e
 
 // processCandidate processes a single defrag Candidate and returns its unschedulable pods if any exist
 func (p *Processor) processCandidate(info *candidateInfo, allCandidatesNodes map[string]bool) ([]*apiv1.Pod, error) {
-	if info.candidate.Mode == defrag.Partial {
+	if !info.candidate.IsAtomic {
 		return p.processCandidatePartial(info, allCandidatesNodes)
 	} else {
 		return p.processCandidateAtomic(info, allCandidatesNodes)
@@ -356,7 +365,7 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 			info.defragPossibleMap[node] = p.clock.Now()
 		}
 		defragPossibleTime := info.defragPossibleMap[node]
-		if p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
+		if info.candidate.Mode == defrag.DeleteBeforeCreate || p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
 			nodesToScaleDown = append(nodesToScaleDown, node)
 		}
 	}
@@ -461,8 +470,11 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 		metrics.Metrics.SetDefragUnfitNodes(plugin.String(), unfitNodesCount+len(backedOffNodes))
 		metrics.Metrics.ObserveDefragStaleness(plugin.String())
 		if candidate != nil {
-			if !p.partialEnabled() && candidate.Mode == defrag.Partial {
+			// When partial defrag is disabled, fallback non-atomic candidates to standard
+			// single-node atomic CreateBeforeDelete candidates so they are handled via processCandidateAtomic.
+			if !p.partialEnabled() && !candidate.IsAtomic {
 				candidate.Mode = defrag.CreateBeforeDelete
+				candidate.IsAtomic = true
 				if len(candidate.Nodes) > 0 {
 					candidate.Nodes = []string{candidate.Nodes[0]}
 				}

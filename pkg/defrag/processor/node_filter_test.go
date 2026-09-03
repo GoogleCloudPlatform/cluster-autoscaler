@@ -191,7 +191,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 	}{
 		{
 			name:      "candidate without nodes",
-			candidate: &defrag.Candidate{},
+			candidate: &defrag.Candidate{IsAtomic: true},
 		},
 		{
 			name: "candidate with valid nodes",
@@ -204,7 +204,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 					setPodLabel(test.SetRSPodSpec(test.BuildScheduledTestPod("p2", 100, 1, "n2"), "rs"), "pdb-remaining"),
 				},
 			},
-			candidate: &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate: &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantNodes: []string{"n1", "n2", "n3"},
 		},
 		{
@@ -221,7 +221,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 				},
 				buildReadyNode("m1", 1000, 1): {},
 			},
-			candidate: &defrag.Candidate{Nodes: []string{"n1", "n2", "n3", "n4", "n5", "m1"}},
+			candidate: &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3", "n4", "n5", "m1"}},
 		},
 		{
 			name: "candidate with various nodes",
@@ -244,7 +244,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 				},
 				buildReadyNode("m1", 1000, 1): {},
 			},
-			candidate: &defrag.Candidate{Nodes: []string{"n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "m1"}},
+			candidate: &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3", "n4", "n5", "n6", "n7", "n8", "m1"}},
 			wantNodes: []string{"n1", "n2", "n3"},
 		},
 		{
@@ -258,7 +258,7 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 					setPodLabel(test.SetRSPodSpec(test.BuildScheduledTestPod("p2", 100, 1, "n2"), "rs"), "pdb-remaining"),
 				},
 			},
-			candidate: &defrag.Candidate{
+			candidate: &defrag.Candidate{IsAtomic: true,
 				Nodes: []string{"n1", "n2", "n3"},
 				Plugin: &fakePlugin{
 					validFilter: func(nodeName string) bool {
@@ -289,6 +289,57 @@ func TestFilterInvalidCandidateNodes(t *testing.T) {
 			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
 			assert.NoError(t, err)
 			nodeFilter.filterInvalidCandidateNodes(ctx, pdbTracker, tc.candidate)
+			assert.Equal(t, tc.wantNodes, tc.candidate.Nodes)
+		})
+	}
+}
+
+func TestFilterDeletedCandidateNodes(t *testing.T) {
+	onlyNXNodesProcessor := &mockScaleDownNodeProcessor{
+		candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+	}
+
+	testCases := []struct {
+		name          string
+		nodesWithPods map[*apiv1.Node][]*apiv1.Pod
+		candidate     *defrag.Candidate
+		wantNodes     []string
+	}{
+		{
+			name:      "candidate without nodes",
+			candidate: &defrag.Candidate{IsAtomic: true},
+		},
+		{
+			name: "candidate with existing, deleted, and terminating nodes",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1):             {},
+				buildDuringDeletionNode("n2", 1000, 1):    {},
+				buildReadyNode("n3", 1000, 1):             {},
+				buildUnschedulableNode("n5", 1000, 1):     {},
+				buildDeletionTimestampNode("n6", 1000, 1): {},
+			},
+			candidate: &defrag.Candidate{
+				Nodes: []string{"n1", "n2", "n3", "n4", "n5", "n6"},
+			},
+			wantNodes: []string{"n1", "n3"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &ca_context.AutoscalingContext{
+				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+				CloudProvider:   testprovider.NewTestCloudProviderBuilder().Build(),
+			}
+			for node, pods := range tc.nodesWithPods {
+				assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(node, pods...)))
+			}
+
+			deleteOpts := options.NodeDeleteOptions{}
+			factory := newDefragNodeFilterFactory(onlyNXNodesProcessor, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil))
+			nodeFilter, err := factory.NewDefragNodeFilter(ctx)
+			assert.NoError(t, err)
+			nodeFilter.filterDeletedCandidateNodes(ctx, tc.candidate)
 			assert.Equal(t, tc.wantNodes, tc.candidate.Nodes)
 		})
 	}
@@ -524,14 +575,14 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			// ng1 size: 5, min: 3
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng1_nodes[3].Name, ng1_nodes[4].Name},
 					},
 				},
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng1_nodes[3].Name},
 					},
 				},
@@ -542,14 +593,14 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			// ng1 size: 5, min: 3 | ng2 size: 3, min: 2
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng2_nodes[1].Name, ng1_nodes[3].Name, ng2_nodes[2].Name, ng1_nodes[4].Name},
 					},
 				},
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng2_nodes[1].Name, ng1_nodes[3].Name},
 					},
 				},
@@ -562,44 +613,44 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			// because f.nodeGroupSize is modified in-place and shared.
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng2_nodes[1].Name, ng1_nodes[3].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng2_nodes[2].Name, ng3_nodes[1].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[4].Name, ng3_nodes[2].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng4_nodes[0].Name},
 					},
 				},
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng2_nodes[1].Name, ng1_nodes[3].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng3_nodes[1].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng3_nodes[2].Name},
 					},
 				},
 				{
-					candidate: &defrag.Candidate{},
+					candidate: &defrag.Candidate{IsAtomic: true},
 				},
 			},
 		},
@@ -608,7 +659,7 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			// ng1 size: 5, min: 3 | ng2 size: 3, min: 2
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng2_nodes[1].Name, ng1_nodes[3].Name},
 					},
 				},
@@ -621,7 +672,7 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng1_nodes[3].Name},
 					},
 				},
@@ -631,14 +682,14 @@ func TestFilterNodesViolatingMinSize(t *testing.T) {
 			name: "node group not found",
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng_nonexistent.Name, ng1_nodes[3].Name},
 					},
 				},
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: true,
 						Nodes: []string{ng1_nodes[2].Name, ng1_nodes[3].Name},
 					},
 				},
@@ -850,6 +901,19 @@ func buildDuringDeletionNode(name string, cpu, mem int64) *apiv1.Node {
 		Value:  fmt.Sprint(time.Now().Unix()),
 		Effect: apiv1.TaintEffectNoSchedule,
 	})
+	return node
+}
+
+func buildUnschedulableNode(name string, cpu, mem int64) *apiv1.Node {
+	node := buildReadyNode(name, cpu, mem)
+	node.Spec.Unschedulable = true
+	return node
+}
+
+func buildDeletionTimestampNode(name string, cpu, mem int64) *apiv1.Node {
+	node := buildReadyNode(name, cpu, mem)
+	now := metav1.Now()
+	node.DeletionTimestamp = &now
 	return node
 }
 

@@ -71,13 +71,16 @@ type Candidate struct {
 	Nodes []string
 	// Mode is a mode of scale-down of this candidate
 	Mode Mode
+	// IsAtomic controls whether the defrag should be aborted if any node fails filtering
+	IsAtomic bool
 }
 
 func NewCandidate(nodes []string, mode Mode) *Candidate {
 	return &Candidate{
-		id:    rand.Intn(10000),
-		Nodes: nodes,
-		Mode:  mode,
+		id:       rand.Intn(10000),
+		Nodes:    nodes,
+		Mode:     mode,
+		IsAtomic: mode != Partial,
 	}
 }
 

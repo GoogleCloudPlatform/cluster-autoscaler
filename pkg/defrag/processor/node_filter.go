@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -39,6 +40,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 // defragNodeFilterFactory is a factory for defragNodeFilter.
@@ -150,6 +152,48 @@ func (f *defragNodeFilter) newValidCandidateNodes(ctx *ca_context.AutoscalingCon
 	return nodeNames, nil
 }
 
+// isNodeOngoingDeletion returns true if the node is in the process of deletion.
+func (f *defragNodeFilter) isNodeOngoingDeletion(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
+	if node.DeletionTimestamp != nil {
+		return true
+	}
+	if actuation.IsNodeBeingDeleted(node, f.clock.Now()) || taints.HasToBeDeletedTaint(node) {
+		return true
+	}
+	if node.Spec.Unschedulable {
+		return true
+	}
+	if ctx.ScaleDownActuator != nil && !reflect.ValueOf(ctx.ScaleDownActuator).IsNil() {
+		status := ctx.ScaleDownActuator.CheckStatus()
+		if status != nil && !reflect.ValueOf(status).IsNil() {
+			empty, drained := status.DeletionsInProgress()
+			if slices.Contains(empty, node.Name) || slices.Contains(drained, node.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// filterDeletedCandidateNodes removes candidate nodes that are no longer present in the cluster or are being deleted
+func (f *defragNodeFilter) filterDeletedCandidateNodes(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate) {
+	var nodeNames []string
+	for _, nodeName := range candidate.Nodes {
+		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+		if err != nil {
+			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
+				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
+			}
+			continue
+		}
+		if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
+			continue
+		}
+		nodeNames = append(nodeNames, nodeName)
+	}
+	candidate.Nodes = nodeNames
+}
+
 // filterInvalidCandidateNodes removes candidate nodes that are no longer valid
 func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, candidate *defrag.Candidate) {
 	var nodeNames []string
@@ -181,7 +225,7 @@ func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingConte
 		klog.V(4).Infof("Defrag: node %s has no-scale-down annotation", nodeName)
 		return false
 	}
-	if actuation.IsNodeBeingDeleted(nodeInfo.Node(), f.clock.Now()) {
+	if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
 		klog.V(4).Infof("Defrag: node %s is being deleted", nodeName)
 		return false
 	}
