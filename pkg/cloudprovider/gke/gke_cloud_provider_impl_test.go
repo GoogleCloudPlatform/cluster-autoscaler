@@ -2974,14 +2974,6 @@ func TestIsReservationCompatible(t *testing.T) {
 			want:                   true,
 		},
 		{
-			name:                   "No specific reservation required, Any-then-fail affinity",
-			affinityType:           gkeclient.ReservationAffinityAnyThenFail,
-			affinityName:           "",
-			reservationName:        "res-1",
-			specificReservationReq: false,
-			want:                   true,
-		},
-		{
 			name:                   "Specific reservation required, Any affinity",
 			affinityType:           gkeclient.ReservationAffinityAny,
 			affinityName:           "",
@@ -2990,8 +2982,16 @@ func TestIsReservationCompatible(t *testing.T) {
 			want:                   false,
 		},
 		{
+			name:                   "No specific reservation required, Any-then-fail affinity",
+			affinityType:           gkeclient.ReservationAffinityAnyThenFail,
+			affinityName:           "",
+			reservationName:        "res-1",
+			specificReservationReq: false,
+			want:                   true,
+		},
+		{
 			name:                   "Specific reservation required, Any-then-fail affinity",
-			affinityType:           gkeclient.ReservationAffinityAny,
+			affinityType:           gkeclient.ReservationAffinityAnyThenFail,
 			affinityName:           "",
 			reservationName:        "res-1",
 			specificReservationReq: true,

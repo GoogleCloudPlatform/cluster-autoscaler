@@ -2240,8 +2240,8 @@ func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) bool {
 	}
 	// Check if specific reservation is not required.
 	if !rsv.SpecificReservationRequired &&
-		migReservationAffinityType == gkeclient.ReservationAffinityAny ||
-		migReservationAffinityType == gkeclient.ReservationAffinityAnyThenFail {
+		(migReservationAffinityType == gkeclient.ReservationAffinityAny ||
+			migReservationAffinityType == gkeclient.ReservationAffinityAnyThenFail) {
 		return true
 	}
 	// Check if specific reservation is required.
