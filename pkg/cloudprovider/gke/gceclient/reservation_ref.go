@@ -116,3 +116,14 @@ func GetReservationZone(rsv *gce_api.Reservation) string {
 	rsvZone := temp[len(temp)-1]
 	return rsvZone
 }
+
+// GetShortSelfLink cuts https://www.googleapis.com/compute/[compute API version]/projects/ prefix from the self link
+func GetShortSelfLink(rsv *gce_api.Reservation) string {
+	// Expected form https://www.googleapis.com/compute/[compute API version]/projects/[Project]/zones/[Zone]/reservations/[Reservation]
+	splitSelfLink := strings.Split(rsv.SelfLink, "/projects/")
+	// fallback to original SelfLink if couldn't split the link
+	if len(splitSelfLink) != 2 {
+		return rsv.SelfLink
+	}
+	return fmt.Sprintf("/projects/%s", splitSelfLink[1])
+}

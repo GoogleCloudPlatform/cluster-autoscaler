@@ -504,10 +504,14 @@ func (p *ReservationsPuller) consumablePullerLoop(ctx context.Context) {
 	if len(filteredReservations) > 0 {
 		p.lastConsumableReservationSeen = time.Now()
 	}
+	debugLinks := make([]string, len(filteredReservations))
+	for i, r := range filteredReservations {
+		debugLinks[i] = GetShortSelfLink(r)
+	}
 	p.mutex.Lock()
 	p.consumableReservations = filteredReservations
 	p.mutex.Unlock()
-	klog.V(4).Infof("ConsumableReservationPuller.Pull: projectID='%s' allReservations=%d, duration=%v", p.localProjectId, len(filteredReservations), time.Since(startTime))
+	klog.V(4).Infof("ConsumableReservationPuller.Pull: projectID='%s' allReservationsCount=%d, duration=%v, foundReservations: %v", p.localProjectId, len(filteredReservations), time.Since(startTime), debugLinks)
 }
 
 func (p *ReservationsPuller) sleepConsumablePuller() {
