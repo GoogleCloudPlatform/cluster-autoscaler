@@ -269,6 +269,64 @@ func TestNodeGroupForNode(t *testing.T) {
 	}
 }
 
+func TestInstanceRefFromUpcomingNodeName(t *testing.T) {
+	tests := []struct {
+		name     string
+		nodeName string
+		want     gce.GceRef
+		wantErr  bool
+	}{
+		{
+			name:     "standard GCP endpoint",
+			nodeName: "template-node-for-https://www.googleapis.com/compute/v1/projects/project-123/zones/us-central1-c/instanceGroups/gke-nap-e2-standard-47c9e542-grp-9186834877642524930-upcoming-0",
+			want: gce.GceRef{
+				Project: "project-123",
+				Zone:    "us-central1-c",
+				Name:    "gke-nap-e2-standard-47c9e542-grp-9186834877642524930-upcoming-0",
+			},
+		},
+		{
+			// Custom compute endpoint: non-googleapis host, an extra empty
+			// path segment ("v1//projects"), and a colon-scoped project. See
+			// b/515414613.
+			name:     "custom compute endpoint",
+			nodeName: "template-node-for-https://compute.example.com/compute/v1//projects/example-domain:example-project/zones/custom-zone1-a/instanceGroups/nap-5vlced1z-temporary-mig-1jry8axn-async-0-2247475045707682410-upcoming-0",
+			want: gce.GceRef{
+				Project: "example-domain:example-project",
+				Zone:    "custom-zone1-a",
+				Name:    "nap-5vlced1z-temporary-mig-1jry8axn-async-0-2247475045707682410-upcoming-0",
+			},
+		},
+		{
+			name:     "missing prefix",
+			nodeName: "https://www.googleapis.com/compute/v1/projects/project-123/zones/us-central1-c/instanceGroups/some-node",
+			wantErr:  true,
+		},
+		{
+			name:     "trailing junk after node name",
+			nodeName: "template-node-for-https://www.googleapis.com/compute/v1/projects/project-123/zones/us-central1-c/instanceGroups/some-node/INVALID",
+			wantErr:  true,
+		},
+		{
+			name:     "missing instanceGroups segment",
+			nodeName: "template-node-for-https://www.googleapis.com/compute/v1/projects/project-123/zones/us-central1-c/some-node",
+			wantErr:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := instanceRefFromUpcomingNodeName(test.nodeName)
+			if test.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
 func TestGetResourceLimiter(t *testing.T) {
 	gkeManagerMock := &GkeManagerMock{}
 	resourceLimiter := cloudprovider.NewResourceLimiter(

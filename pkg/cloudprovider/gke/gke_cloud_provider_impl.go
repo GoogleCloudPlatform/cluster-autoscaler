@@ -410,15 +410,34 @@ func (p *gkeCloudProviderImpl) instanceRefForNode(node *apiv1.Node) (gce.GceRef,
 }
 
 func instanceRefFromUpcomingNodeName(nodeName string) (gce.GceRef, error) {
-	expectedPrefix := "template-node-for-https://www.googleapis.com/compute/"
-	if len(nodeName) <= len(expectedPrefix) || !strings.HasPrefix(nodeName, expectedPrefix) || strings.Count(nodeName[len(expectedPrefix):], "/") != 6 {
-		return gce.GceRef{}, fmt.Errorf("wrong upcoming node name: expected format %s<version>/projects/<project>/zones/<zone>/instanceGroups/<node-name>, got %v", expectedPrefix, nodeName)
+	const nodeNamePrefix = "template-node-for-"
+	formatErr := fmt.Errorf("wrong upcoming node name: expected format %s<compute-endpoint>/projects/<project>/zones/<zone>/instanceGroups/<node-name>, got %v", nodeNamePrefix, nodeName)
+	if !strings.HasPrefix(nodeName, nodeNamePrefix) {
+		return gce.GceRef{}, formatErr
 	}
-	splitted := strings.Split(nodeName[len(expectedPrefix):], "/")
+	// The suffix is the MIG self-link. Its host and API version vary by compute
+	// endpoint: custom or staging endpoints can use a host other than
+	// www.googleapis.com and can include an empty path segment
+	// (".../compute/v1//projects/..."). The self-link always ends with the
+	// fixed structure projects/<project>/zones/<zone>/instanceGroups/<name>, so
+	// parse by counting back from the end. This ignores the varying host/version
+	// prefix (and any empty segments) without risking a false match on a
+	// "projects"/"zones" keyword appearing earlier in the URL path.
+	segments := strings.Split(nodeName[len(nodeNamePrefix):], "/")
+	n := len(segments)
+	if n < 6 || segments[n-6] != "projects" || segments[n-4] != "zones" || segments[n-2] != "instanceGroups" {
+		return gce.GceRef{}, formatErr
+	}
+	project := segments[n-5]
+	zone := segments[n-3]
+	name := segments[n-1]
+	if project == "" || zone == "" || name == "" {
+		return gce.GceRef{}, formatErr
+	}
 	return gce.GceRef{
-		Project: splitted[2],
-		Zone:    splitted[4],
-		Name:    splitted[6],
+		Project: project,
+		Zone:    zone,
+		Name:    name,
 	}, nil
 }
 

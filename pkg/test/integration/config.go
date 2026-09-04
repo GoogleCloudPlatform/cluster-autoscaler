@@ -618,6 +618,17 @@ func WithHighThroughputNAPEnabled(maxParallelOps, maxQueuedOps int) Option[*conf
 	}
 }
 
+// WithGceEndpoint overrides the compute endpoint used by the autoscaler. This is
+// the only special ingredient needed to set up the sovereign-endpoint scenario:
+// NAP-created MIG URLs (and therefore synthesized "upcoming" node names) embed
+// this host.
+func WithGceEndpoint(endpoint string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.GceEndpoint = endpoint
+		return o
+	}
+}
+
 // WithDraEnabled enables DRA support.
 func WithDraEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
