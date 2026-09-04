@@ -1571,7 +1571,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewPreemeptionOptionGenerator(true),
 		NewConsolidationDelayGenerator(nil),
 		NewExtendedDurationPodGenerator(provider),
-		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true, nil),
+		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true, true, nil),
 		NewSelfServiceGenerator(),
 		NewPodIsolationLabelGenerator(provider),
 		NewPodCapacityLabelGenerator(provider),

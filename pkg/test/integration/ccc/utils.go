@@ -98,6 +98,12 @@ func (b *ComputeClassBuilder) WithNodePoolAutoCreation(enabled bool) *ComputeCla
 	return b
 }
 
+// WithNodePoolConfig sets the NodePoolConfig field.
+func (b *ComputeClassBuilder) WithNodePoolConfig(config *v1.NodePoolConfig) *ComputeClassBuilder {
+	b.cc.Spec.NodePoolConfig = config
+	return b
+}
+
 // WithWhenUnsatisfiable sets the WhenUnsatisfiable field.
 func (b *ComputeClassBuilder) WithWhenUnsatisfiable(when string) *ComputeClassBuilder {
 	b.cc.Spec.WhenUnsatisfiable = when

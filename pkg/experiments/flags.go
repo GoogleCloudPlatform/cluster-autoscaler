@@ -74,6 +74,9 @@ const ComputeClassMinCapacityMinCAVersionFlag = "ComputeClassMinCapacity::MinCAV
 const ComputeClassEnhancedObservabilityEnabledFlag = "ComputeClassEnhancedObservability::Enabled"
 const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedObservability::MinCAVersion"
 
+const ComputeClassConfigHashEnabledFlag = "ComputeClassConfigHash::Enabled"
+const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVersion"
+
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"

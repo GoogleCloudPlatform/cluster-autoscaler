@@ -502,6 +502,14 @@ func WithComputeClassMinCapacityEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
+func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EnableComputeClassConfigHash = true
+		return o
+	}
+}
+
 // WithEnhancedCrdStatusReportingEnabled enables EnhancedCrdStatusReporting in CA.
 func WithEnhancedCrdStatusReportingEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

@@ -110,3 +110,61 @@ func TestIsComputeClassEnhancedObservabilityEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsComputeClassConfigHashEnabled(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		manager  experiments.Manager
+		expected bool
+	}{
+		{
+			name:     "nil manager",
+			manager:  nil,
+			expected: false,
+		},
+		{
+			name: "flags not configured (defaults to true)",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{},
+				map[string]string{},
+			),
+			expected: true,
+		},
+		{
+			name: "flags configured true",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				map[string]bool{experiments.ComputeClassConfigHashEnabledFlag: true},
+				map[string]string{experiments.ComputeClassConfigHashMinCAVersionFlag: "1.0.0"},
+			),
+			expected: true,
+		},
+		{
+			name: "enabled flag false",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				map[string]bool{experiments.ComputeClassConfigHashEnabledFlag: false},
+				map[string]string{experiments.ComputeClassConfigHashMinCAVersionFlag: "1.0.0"},
+			),
+			expected: false,
+		},
+		{
+			name: "cluster version too old",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 28, 0, 0},
+				map[string]bool{experiments.ComputeClassConfigHashEnabledFlag: true},
+				map[string]string{experiments.ComputeClassConfigHashMinCAVersionFlag: "1.29.0"},
+			),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, IsComputeClassConfigHashEnabled(tc.manager))
+		})
+	}
+}

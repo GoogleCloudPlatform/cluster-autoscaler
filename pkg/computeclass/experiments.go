@@ -33,3 +33,12 @@ func IsComputeClassEnhancedObservabilityEnabled(manager experiments.Manager) boo
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassEnhancedObservabilityEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag, true)
 }
+
+// IsComputeClassConfigHashEnabled returns true if the ComputeClass config hashing feature is enabled.
+func IsComputeClassConfigHashEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassConfigHashEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassConfigHashMinCAVersionFlag, true)
+}

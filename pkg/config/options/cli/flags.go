@@ -135,6 +135,7 @@ var (
 	resolveInstanceRefUsingNodePoolLabel = flag.Bool("resolve-instanceref-using-nodepool-label", true, "If true, will attempt to find nodegroup for node by matching node's cloud.google.com/gke-nodepool label if ProviderID is empty. See go/gke-ca-nil-providerid-logs for details.")
 	zoneTypesEnabled                     = flag.Bool("enable-zone-types", false, "Enables automatic AI zones selection via CCC zoneTypes field, see go/gke-auto-ai-zones for details.")
 	enableComputeClassMinCapacity        = flag.Bool("enable-compute-class-min-capacity", false, "Enables Compute Class minimum capacity support.")
+	enableComputeClassConfigHash         = flag.Bool("enable-compute-class-config-hash", false, "Enables Compute Class configuration hashing.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
 
@@ -371,6 +372,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ScaleUpPerCccMetricsEnabled:                  *scaleUpPerCccMetricsEnabled,
 		ZoneTypesEnabled:                             *zoneTypesEnabled,
 		EnableComputeClassMinCapacity:                *enableComputeClassMinCapacity,
+		EnableComputeClassConfigHash:                 *enableComputeClassConfigHash,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,
 		NodeWatchFieldSelector:                       *nodeWatchFieldSelector,

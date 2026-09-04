@@ -243,6 +243,7 @@ func initAutoprovisioningProcessors(
 			AsyncNodeGroupsDeletionEnabled: options.AsyncNodeGroupsEnabled,
 			EnableUserAnyZoneSelection:     options.EnableUserAnyZoneSelection,
 			EnableComputeClassMinCapacity:  options.EnableComputeClassMinCapacity,
+			EnableComputeClassConfigHash:   options.EnableComputeClassConfigHash,
 		},
 		OptionsTracker: optionsTracker,
 	}
