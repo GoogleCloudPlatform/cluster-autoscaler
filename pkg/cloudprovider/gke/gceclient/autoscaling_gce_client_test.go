@@ -2249,3 +2249,53 @@ func TestAutoscalingGceClient_CreateInstancesWithRecommendation(t *testing.T) {
 		assert.Equal(t, "my-test-recommendation", rec)
 	}
 }
+
+func TestFetchMigInstancesBeta_Filter(t *testing.T) {
+	tests := []struct {
+		name   string
+		filter string
+	}{
+		{
+			name:   "no filter",
+			filter: "",
+		},
+		{
+			name:   "with currentAction filter",
+			filter: "currentAction = RESUMING",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedFilter string
+			var hasFilter bool
+			server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == "/projects/project1/zones/zoneA/instanceGroupManagers/mig1/listManagedInstances" {
+					capturedFilter = req.URL.Query().Get("filter")
+					hasFilter = req.URL.Query().Has("filter")
+					lmiResponse := &gce_api_beta.InstanceGroupManagersListManagedInstancesResponse{
+						ManagedInstances: []*gce_api_beta.ManagedInstance{
+							{Name: "inst1", CurrentAction: "NONE"},
+							{Name: "inst2", CurrentAction: "RESUMING"},
+						},
+					}
+					b, err := json.Marshal(lmiResponse)
+					assert.NoError(t, err)
+					res.WriteHeader(http.StatusOK)
+					res.Write(b)
+					return
+				}
+				res.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
+			migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+
+			_, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, tt.filter)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.filter, capturedFilter)
+			assert.Equal(t, tt.filter != "", hasFilter)
+		})
+	}
+}
