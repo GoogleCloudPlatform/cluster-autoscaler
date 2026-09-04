@@ -277,6 +277,50 @@ func initCapacityBufferMetricsProcessor(experimentsManager experiments.Manager, 
 	return nil
 }
 
+// buildScaleDownSetProcessors returns the scale-down set processors in the order
+// they must run. They are composed by a nodes.CompositeScaleDownSetProcessor,
+// which applies them in slice order and only ever moves nodes from removable to
+// unremovable (a node dropped by one processor is never reconsidered).
+//
+// ORDERING INVARIANT: every per-node processor must run before
+// nodes.AtomicResizeFilteringProcessor, and only whole-group processors may run
+// after it.
+//
+// Concretely:
+//   - BlockingLabelsFilteringProcessor (per-node) runs before the atomic filter,
+//     so blocking a single slice-bound node protects the whole cube downstream.
+//   - AtomicMinCapacityProcessor (whole-group) runs after the atomic filter, so it
+//     only ever sees complete groups; it accepts/rejects whole groups and thus
+//     preserves atomicity.
+//
+// This invariant is guarded by TestBuildScaleDownSetProcessorsOrdering.
+func buildScaleDownSetProcessors(
+	provider GkeCloudProvider,
+	options *internalopts.AutoscalingOptions,
+	npcCrdLister npc_lister.Lister,
+	experimentsManager experiments.Manager,
+) []nodes.ScaleDownSetProcessor {
+	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
+		internal_processors.NewMinSizeProcessor(provider),
+	}
+	if len(options.ScaleDownBlockingNodeLabels) > 0 {
+		// Runs before AtomicResizeFilteringProcessor: removing a blocked node (e.g. one
+		// bound to a TPU dynamic-slicing Slice) from an atomic group's candidates makes
+		// the atomic processor keep the whole cube (the remaining nodes no longer match
+		// the group size and are marked AtomicScaleDownFailed). This protects partial
+		// cubes without BlockingLabelsFilteringProcessor having to group nodes itself.
+		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewBlockingLabelsFilteringProcessor(options.ScaleDownBlockingNodeLabels))
+	}
+	scaleDownSetProcessors = append(scaleDownSetProcessors, nodes.NewAtomicResizeFilteringProcessor())
+	if options.EnableComputeClassMinCapacity {
+		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
+		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
+		// groups, which are exempt from the per-node TargetNodeCountQuota.
+		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(npcCrdLister, experimentsManager))
+	}
+	return scaleDownSetProcessors
+}
+
 func setUpProcessors(
 	context ctx.Context,
 	caVersion version.Version,
@@ -648,7 +692,7 @@ func setUpProcessors(
 
 	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
 	if options.EnableComputeClassMinCapacity {
-		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager)
+		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, options.ScaleDownBlockingNodeLabels)
 	}
 
 	pvcLister := informerFactory.Core().V1().PersistentVolumeClaims().Lister()
@@ -743,17 +787,8 @@ func setUpProcessors(
 
 	autoscalingProcessors.BinpackingLimiter = metricsbinpacking.NewBinpackingMetricsProcessor(autoscalingProcessors.BinpackingLimiter)
 	autoscalingProcessors.NodeGroupManager = apNodeGroupManager
-	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
-		internal_processors.NewMinSizeProcessor(provider),
-		nodes.NewAtomicResizeFilteringProcessor(),
-	}
-	if options.EnableComputeClassMinCapacity {
-		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
-		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
-		// groups, which are exempt from the per-node TargetNodeCountQuota.
-		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(ccLister, experimentsManager))
-	}
-	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(scaleDownSetProcessors)
+	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(
+		buildScaleDownSetProcessors(provider, options, ccLister, experimentsManager))
 
 	var nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	nodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: internal_processors.IsGkeNodeInfoSimilar}

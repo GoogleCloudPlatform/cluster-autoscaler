@@ -176,6 +176,12 @@ const (
 	TPULabel = "cloud.google.com/gke-tpu-accelerator"
 	// TPUTopologyLabel is the label specifying the topology of multi-host tpu podslice.
 	TPUTopologyLabel = "cloud.google.com/gke-tpu-topology"
+	// TPUSliceLabel is added by the Slice Controller to nodes currently bound to a
+	// TPU dynamic-slicing Slice. Cluster Autoscaler treats nodes carrying this
+	// label (non-empty) as ineligible for scale-down, so it never drains a cube
+	// that is in use by a Slice. The label is removed before the hardware is
+	// released, making it a safe scale-down gate.
+	TPUSliceLabel = "cloud.google.com/gke-tpu-slice"
 	// TpuV3DeviceValue represents the 'tpu-v3-device' TPU type
 	TpuV3DeviceValue = "tpu-v3-device"
 	// TpuV3SliceValue represents the 'tpu-v3-podslice' TPU type.

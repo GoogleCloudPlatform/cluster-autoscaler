@@ -136,6 +136,7 @@ var (
 	zoneTypesEnabled                     = flag.Bool("enable-zone-types", false, "Enables automatic AI zones selection via CCC zoneTypes field, see go/gke-auto-ai-zones for details.")
 	enableComputeClassMinCapacity        = flag.Bool("enable-compute-class-min-capacity", false, "Enables Compute Class minimum capacity support.")
 	enableComputeClassConfigHash         = flag.Bool("enable-compute-class-config-hash", false, "Enables Compute Class configuration hashing.")
+	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
 
@@ -273,6 +274,16 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		}
 	}
 
+	var parsedScaleDownBlockingNodeLabels []string
+	if *scaleDownBlockingNodeLabels != "" {
+		for _, l := range strings.Split(*scaleDownBlockingNodeLabels, ",") {
+			trimmed := strings.TrimSpace(l)
+			if trimmed != "" {
+				parsedScaleDownBlockingNodeLabels = append(parsedScaleDownBlockingNodeLabels, trimmed)
+			}
+		}
+	}
+
 	switch options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy) {
 	// Empty string allowed because the flag is optional (in which case defaults are derived from experiment flag ClusterDefaultAllocationStrategyFlag).
 	case options.ClusterDefaultAllocationStrategyLowestCost, options.ClusterDefaultAllocationStrategyFleetEfficiency, "":
@@ -373,6 +384,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ZoneTypesEnabled:                             *zoneTypesEnabled,
 		EnableComputeClassMinCapacity:                *enableComputeClassMinCapacity,
 		EnableComputeClassConfigHash:                 *enableComputeClassConfigHash,
+		ScaleDownBlockingNodeLabels:                  parsedScaleDownBlockingNodeLabels,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,
 		NodeWatchFieldSelector:                       *nodeWatchFieldSelector,
