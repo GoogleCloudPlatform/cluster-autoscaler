@@ -17,6 +17,7 @@ package operationtracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -201,6 +202,8 @@ type resizeMetrics interface {
 	RegisterResizableVmFixerEvents(machineFamily, fixType, status, source string)
 	RegisterResizableVmReconcileNodeStateEvents(machineFamily string, attemptsNum int, status string, retry bool)
 	RegisterVmResizeOperation(machineFamily, direction, reason string, status metrics.OperationStatus)
+	RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action metrics.IpprAction)
+	ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action metrics.IpprAction, duration time.Duration)
 }
 
 // operationTracker executes and tracks all resizable VM resize and fix operations.
@@ -787,7 +790,7 @@ func (o *operationTracker) upsize(operation ResizeOperation) error {
 	desiredAllocatable := o.sizeCalculator.ToAllocatable(node, operation.DesiredSize)
 
 	// Upsize shrinks the balloon pod, so it can run outside the taint window without risking over-commit.
-	if o.tryResizeBalloonPodInPlace(node, desiredAllocatable) {
+	if o.tryResizeBalloonPodInPlace(node, desiredAllocatable, machineFamily, Upsize) {
 		return nil
 	}
 
@@ -843,7 +846,7 @@ func (o *operationTracker) downsize(operation ResizeOperation) error {
 			ek_errors.StartingState)
 	}
 	// Downsize grows the balloon pod to reclaim capacity, so it runs inside the taint window.
-	if !o.tryResizeBalloonPodInPlace(taintedNode, desiredSizeAllocatable) {
+	if !o.tryResizeBalloonPodInPlace(taintedNode, desiredSizeAllocatable, machineFamily, Downsize) {
 		if err := o.balloonPodResizer.resizeBalloonPod(taintedNode, desiredSizeAllocatable); err != nil {
 			return ek_errors.NewBalloonPodResizeError(machineFamily, err, ek_errors.StartingState)
 		}
@@ -881,14 +884,29 @@ func (o *operationTracker) isIpprEnabled() bool {
 func (o *operationTracker) tryResizeBalloonPodInPlace(
 	node *v1.Node,
 	desiredAllocatable size.Allocatable,
+	machineFamily string,
+	direction ResizeDirection,
 ) bool {
 	if !o.isIpprEnabled() {
 		return false
 	}
-	if err := o.balloonPodResizer.resizeBalloonPodInPlace(node, desiredAllocatable); err != nil {
+	o.metrics.RegisterBalloonPodIpprEvent(machineFamily, string(direction), string(metrics.IpprFallbackReasonNone), metrics.IpprActionAttempt)
+	// Time the attempt whether or not it works. The counters say how often
+	// in-place resize succeeds, but only the duration shows resizes piling up
+	// against the Kubelet acknowledgement timeout, which is the degradation
+	// mode that makes resizes slow long before it makes them fail.
+	start := o.clock.Now()
+	err := o.balloonPodResizer.resizeBalloonPodInPlace(node, desiredAllocatable)
+	elapsed := o.clock.Since(start)
+	if err != nil {
 		klog.Warningf("In-place resize failed for node %q, falling back to recreation: %v", node.Name, err)
+		fallbackReason := getIpprFallbackReason(err)
+		o.metrics.RegisterBalloonPodIpprEvent(machineFamily, string(direction), fallbackReason, metrics.IpprActionFallback)
+		o.metrics.ObserveBalloonPodIpprResizeDuration(machineFamily, string(direction), metrics.IpprActionFallback, elapsed)
 		return false
 	}
+	o.metrics.RegisterBalloonPodIpprEvent(machineFamily, string(direction), string(metrics.IpprFallbackReasonNone), metrics.IpprActionSuccess)
+	o.metrics.ObserveBalloonPodIpprResizeDuration(machineFamily, string(direction), metrics.IpprActionSuccess, elapsed)
 	return true
 }
 
@@ -998,4 +1016,26 @@ func (o *operationTracker) IsNodeInProcess(nodeName string) bool {
 
 func (o *operationTracker) IsNodeResizingOrPending(nodeName string) bool {
 	return o.opQueue.IsNodeResizingOrPending(nodeName)
+}
+
+// getIpprFallbackReason maps an in-place resize failure to the reason label
+// reported on the fallback event. Cases are ordered most specific first,
+// because a patch failure wraps both its sentinel and the underlying cause.
+func getIpprFallbackReason(err error) string {
+	switch {
+	case errors.Is(err, ek_errors.IncompatibleQoSError):
+		return string(metrics.IpprFallbackReasonIncompatibleQoS)
+	case errors.Is(err, ek_errors.ConcurrentResizeError):
+		return string(metrics.IpprFallbackReasonConcurrentResize)
+	case errors.Is(err, ek_errors.ResizeTimeoutError):
+		return string(metrics.IpprFallbackReasonTimeout)
+	case errors.Is(err, ek_errors.ResizeRejectedError):
+		return string(metrics.IpprFallbackReasonRejected)
+	case errors.Is(err, ek_errors.ResizePatchError):
+		return string(metrics.IpprFallbackReasonPatchError)
+	case errors.Is(err, ek_errors.NoActiveBalloonPodError):
+		return string(metrics.IpprFallbackReasonNoActivePod)
+	default:
+		return string(metrics.IpprFallbackReasonOther)
+	}
 }

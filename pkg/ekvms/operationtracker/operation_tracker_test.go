@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -923,6 +924,8 @@ func newTestOperationTrackerHarness(
 	mockResizer := &mockBalloonPodResizer{}
 	metrics := &mockMetrics{}
 	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 
 	// Guarantee mock assertions execute on test completion even if an assertion aborts early
 	t.Cleanup(func() {
@@ -1212,6 +1215,370 @@ func TestDownsizeIppr(t *testing.T) {
 	}
 }
 
+type testFixtures struct {
+	node    *v1.Node
+	resizer *mockBalloonPodResizer
+	metrics *recordingIpprMetrics
+}
+
+const ipprMetricsTestFamily = "e4a"
+
+// ipprEventKey identifies a single balloon pod IPPR counter series.
+type ipprEventKey struct {
+	machineFamily string
+	direction     string
+	reason        string
+	action        metrics.IpprAction
+}
+
+// ipprDurationKey identifies a single balloon pod IPPR duration series.
+type ipprDurationKey struct {
+	machineFamily string
+	direction     string
+	action        metrics.IpprAction
+}
+
+func ipprAttempt(direction string) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(metrics.IpprFallbackReasonNone), metrics.IpprActionAttempt}
+}
+
+func ipprSuccess(direction string) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(metrics.IpprFallbackReasonNone), metrics.IpprActionSuccess}
+}
+
+func ipprFallback(direction string, reason metrics.IpprFallbackReason) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(reason), metrics.IpprActionFallback}
+}
+
+func ipprDuration(direction string, action metrics.IpprAction) ipprDurationKey {
+	return ipprDurationKey{ipprMetricsTestFamily, direction, action}
+}
+
+// ipprFallbackEvents is the series an attempt that falls back to recreation produces.
+func ipprFallbackEvents(direction string, reason metrics.IpprFallbackReason) map[ipprEventKey]int {
+	return map[ipprEventKey]int{
+		ipprAttempt(direction):          1,
+		ipprFallback(direction, reason): 1,
+	}
+}
+
+// ipprFallbackDurations is the duration series an attempt that falls back to recreation produces.
+func ipprFallbackDurations(direction string) map[ipprDurationKey]int {
+	return map[ipprDurationKey]int{ipprDuration(direction, metrics.IpprActionFallback): 1}
+}
+
+// recordingIpprMetrics counts the balloon pod IPPR metric writes so that tests
+// can assert the series that came out, rather than pinning the order in which
+// the implementation happens to emit them.
+type recordingIpprMetrics struct {
+	*mockMetrics
+
+	mu        sync.Mutex
+	events    map[ipprEventKey]int
+	durations map[ipprDurationKey]int
+}
+
+func newRecordingIpprMetrics() *recordingIpprMetrics {
+	return &recordingIpprMetrics{
+		mockMetrics: &mockMetrics{},
+		events:      map[ipprEventKey]int{},
+		durations:   map[ipprDurationKey]int{},
+	}
+}
+
+func (m *recordingIpprMetrics) RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action metrics.IpprAction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events[ipprEventKey{machineFamily, direction, reason, action}]++
+}
+
+func (m *recordingIpprMetrics) ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action metrics.IpprAction, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.durations[ipprDurationKey{machineFamily, direction, action}]++
+}
+
+func (m *recordingIpprMetrics) recordedEvents() map[ipprEventKey]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.events)
+}
+
+func (m *recordingIpprMetrics) recordedDurations() map[ipprDurationKey]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.durations)
+}
+
+// ipprMetricsTestCase runs one resize and asserts the metric series it produced.
+type ipprMetricsTestCase struct {
+	desc          string
+	ipprEnabled   bool
+	setupResizer  func(f *testFixtures)
+	wantEvents    map[ipprEventKey]int
+	wantDurations map[ipprDurationKey]int
+	wantErr       string
+}
+
+func runIpprMetricsTest(t *testing.T, tc ipprMetricsTestCase, resize func(tracker *operationTracker, nodeName string) error) {
+	t.Helper()
+
+	node := buildMetricsTestNode("node1", ipprMetricsTestFamily)
+	tracker, f := setupTestTracker(t, node, ipprMetricsTestFamily, tc.ipprEnabled)
+	tc.setupResizer(f)
+
+	err := resize(tracker, node.Name)
+	if tc.wantErr != "" {
+		assert.ErrorContains(t, err, tc.wantErr)
+	} else {
+		assert.NoError(t, err)
+	}
+
+	wantEvents := tc.wantEvents
+	if wantEvents == nil {
+		wantEvents = map[ipprEventKey]int{}
+	}
+	wantDurations := tc.wantDurations
+	if wantDurations == nil {
+		wantDurations = map[ipprDurationKey]int{}
+	}
+	assert.Equal(t, wantEvents, f.metrics.recordedEvents())
+	assert.Equal(t, wantDurations, f.metrics.recordedDurations())
+}
+
+// upsizeFallbackResizer makes the in-place resize fail with ipprErr so upsize
+// falls back to recreation, which in turn fails with recreateErr when set.
+func upsizeFallbackResizer(ipprErr, recreateErr error) func(f *testFixtures) {
+	return func(f *testFixtures) {
+		f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(ipprErr).Once()
+		f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+		f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(recreateErr).Once()
+		if recreateErr == nil {
+			f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+		}
+	}
+}
+
+// downsizeFallbackResizer is upsizeFallbackResizer for downsize, where the
+// taint is applied before the in-place resize rather than after it.
+func downsizeFallbackResizer(ipprErr, recreateErr error) func(f *testFixtures) {
+	return func(f *testFixtures) {
+		f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+		f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(ipprErr).Once()
+		f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(recreateErr).Once()
+		if recreateErr == nil {
+			f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+		}
+	}
+}
+
+func TestBalloonPodIpprMetrics_Upsize(t *testing.T) {
+	t.Parallel()
+
+	const direction = "upsize"
+
+	testCases := []ipprMetricsTestCase{
+		{
+			desc:        "success records attempt and success with reason none",
+			ipprEnabled: true,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(nil).Once()
+			},
+			wantEvents: map[ipprEventKey]int{
+				ipprAttempt(direction): 1,
+				ipprSuccess(direction): 1,
+			},
+			wantDurations: map[ipprDurationKey]int{
+				ipprDuration(direction, metrics.IpprActionSuccess): 1,
+			},
+		},
+		{
+			desc:          "timeout fallback records reason timeout",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "incompatible QoS fallback records reason incompatible_qos",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.IncompatibleQoSError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonIncompatibleQoS),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "concurrent resize fallback records reason concurrent_resize",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ConcurrentResizeError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonConcurrentResize),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "unexpected error falls back with generic reason",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(errors.New("unexpected socket closure"), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonOther),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "fallback recreation failure still records fallback event",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), errors.New("recreation failed")),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+			wantErr:       "recreation failed",
+		},
+		{
+			desc:        "IPPR disabled records no metrics and uses recreation",
+			ipprEnabled: false,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			runIpprMetricsTest(t, tc, func(tracker *operationTracker, nodeName string) error {
+				return tracker.upsize(ResizeOperation{
+					NodeName:     nodeName,
+					StartingSize: newSize(2000, 2048*giBToKiB),
+					DesiredSize:  newSize(4000, 4096*giBToKiB),
+				})
+			})
+		})
+	}
+}
+
+func TestBalloonPodIpprMetrics_Downsize(t *testing.T) {
+	t.Parallel()
+
+	const direction = "downsize"
+
+	testCases := []ipprMetricsTestCase{
+		{
+			desc:        "success records attempt and success with reason none",
+			ipprEnabled: true,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+			wantEvents: map[ipprEventKey]int{
+				ipprAttempt(direction): 1,
+				ipprSuccess(direction): 1,
+			},
+			wantDurations: map[ipprDurationKey]int{
+				ipprDuration(direction, metrics.IpprActionSuccess): 1,
+			},
+		},
+		{
+			desc:          "rejected fallback records reason rejected",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeRejectedError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonRejected),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "patch error fallback records reason patch_error",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizePatchError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonPatchError),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "no active pod fallback records reason no_active_pod",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.NoActiveBalloonPodError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonNoActivePod),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "fallback recreation failure still records fallback event",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), errors.New("recreation failed")),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+			wantErr:       "recreation failed",
+		},
+		{
+			desc:        "IPPR disabled records no metrics and uses recreation",
+			ipprEnabled: false,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			runIpprMetricsTest(t, tc, func(tracker *operationTracker, nodeName string) error {
+				return tracker.downsize(ResizeOperation{
+					NodeName:     nodeName,
+					StartingSize: newSize(4000, 4096*giBToKiB),
+					DesiredSize:  newSize(2000, 2048*giBToKiB),
+				})
+			})
+		})
+	}
+}
+
+func buildMetricsTestNode(name, family string) *v1.Node {
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	node := test.WithAllocatable(test.BuildTestNode(name, nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+	node.Spec.ProviderID = "gce://project1/us-central1-b/" + name
+	node.SetLabels(map[string]string{
+		v1.LabelInstanceTypeStable: fmt.Sprintf("%s-standard-32", family),
+	})
+	return node
+}
+
+func setupTestTracker(t *testing.T, node *v1.Node, family string, ipprEnabled bool) (*operationTracker, *testFixtures) {
+	t.Helper()
+
+	testClock := clock.NewFakeClock(testStartTime)
+	sizeCalc := calculator_test.New()
+	nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
+	nodeStateManager.setNode(node.Name, ResizableNode{Node: node.DeepCopy(), MachineFamily: family})
+
+	cloudProvider := &mockCloudProvider{}
+	cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	mockM := newRecordingIpprMetrics()
+	mockM.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+	mockResizer := &mockBalloonPodResizer{}
+
+	t.Cleanup(func() {
+		mockM.AssertExpectations(t)
+		mockResizer.AssertExpectations(t)
+		cloudProvider.AssertExpectations(t)
+	})
+
+	fakeClient := fake.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+
+	tracker := newOperationTracker(fakeClient, informerFactory, cloudProvider, nodeStateManager, mockM, sizeCalc, 1, false, fixerInterval, testClock, newTestOptionsTracker(ipprEnabled))
+	tracker.balloonPodResizer = mockResizer
+
+	fixtures := &testFixtures{
+		node:    node,
+		resizer: mockResizer,
+		metrics: mockM,
+	}
+
+	return tracker, fixtures
+}
+
 func TestUpsize_NonExistingNode(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
@@ -1355,6 +1722,8 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 					cloudProvider.On("GetCurrentResizableVmState", mock.Anything).Return(tc.resizableVmState, nil)
 					metrics := &mockMetrics{}
 					metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+					metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+					metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 					metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					metrics.On("RegisterResizableVmReconcileNodeStateEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					testClock := clock.NewFakeClock(testStartTime)
@@ -1569,6 +1938,8 @@ func TestFix(t *testing.T) {
 					cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 					metrics := &mockMetrics{}
 					metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+					metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+					metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 					metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					testClock := clock.NewFakeClock(testStartTime)
 					nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
@@ -1873,6 +2244,8 @@ func TestResizeTaintError(t *testing.T) {
 			cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			metrics := &mockMetrics{}
 			metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+			metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 			op := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 			testCases := []struct {
@@ -2348,6 +2721,14 @@ func (m *mockMetrics) RegisterResizableVmReconcileNodeStateEvents(machineFamily 
 	m.MethodCalled("RegisterResizableVmReconcileNodeStateEvents", machineFamily, attemptsNum, status, shouldRetry)
 }
 
+func (m *mockMetrics) RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action metrics.IpprAction) {
+	m.MethodCalled("RegisterBalloonPodIpprEvent", machineFamily, direction, reason, action)
+}
+
+func (m *mockMetrics) ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action metrics.IpprAction, duration time.Duration) {
+	m.MethodCalled("ObserveBalloonPodIpprResizeDuration", machineFamily, direction, action, duration)
+}
+
 func (m *mockMetrics) RegisterVmResizeOperation(machineFamily, direction, reason string, status metrics.OperationStatus) {
 	m.MethodCalled("RegisterVmResizeOperation", machineFamily, direction, reason, status)
 }
@@ -2385,6 +2766,8 @@ func setupCacheStaleTest(initialAPIServerNodes ...runtime.Object) *cacheStaleTes
 	metrics := &mockMetrics{}
 	metrics.On("RegisterVmResizeOperation", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+	metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 
 	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock, nil)
 	ot.consistencyStore = consistencyStore

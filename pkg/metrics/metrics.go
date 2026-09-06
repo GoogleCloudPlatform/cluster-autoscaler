@@ -96,6 +96,41 @@ const (
 	TopologySpreadMutation FilteredFalsePositiveReason = "pts_mutation"
 )
 
+// IpprAction describes a balloon pod IPPR lifecycle event action.
+type IpprAction string
+
+const (
+	// IpprActionAttempt represents an IPPR resize attempt.
+	IpprActionAttempt IpprAction = "attempt"
+	// IpprActionSuccess represents a successful IPPR resize.
+	IpprActionSuccess IpprAction = "success"
+	// IpprActionFallback represents a failed IPPR resize triggering fallback.
+	IpprActionFallback IpprAction = "fallback"
+)
+
+// IpprFallbackReason describes the reason for falling back from IPPR to balloon pod recreation.
+type IpprFallbackReason string
+
+const (
+	// IpprFallbackReasonNone indicates no fallback occurred.
+	IpprFallbackReasonNone IpprFallbackReason = "none"
+	// IpprFallbackReasonTimeout indicates timeout waiting for Kubelet admission.
+	IpprFallbackReasonTimeout IpprFallbackReason = "timeout"
+	// IpprFallbackReasonRejected indicates Kubelet rejected the resize (Infeasible or Deferred).
+	IpprFallbackReasonRejected IpprFallbackReason = "rejected"
+	// IpprFallbackReasonPatchError indicates failure to patch the balloon pod.
+	IpprFallbackReasonPatchError IpprFallbackReason = "patch_error"
+	// IpprFallbackReasonNoActivePod indicates no active balloon pod was found on the node.
+	IpprFallbackReasonNoActivePod IpprFallbackReason = "no_active_pod"
+	// IpprFallbackReasonIncompatibleQoS indicates the balloon pod predates the move to
+	// the Burstable QoS class, so resizing it in place would change its QoS class.
+	IpprFallbackReasonIncompatibleQoS IpprFallbackReason = "incompatible_qos"
+	// IpprFallbackReasonConcurrentResize indicates an in-place resize of the balloon pod was already in flight.
+	IpprFallbackReasonConcurrentResize IpprFallbackReason = "concurrent_resize"
+	// IpprFallbackReasonOther indicates any other unexpected error during IPPR.
+	IpprFallbackReasonOther IpprFallbackReason = "other"
+)
+
 // OperationStatus says whether an operation succeeded or failed.
 type OperationStatus string
 
@@ -664,6 +699,7 @@ var (
 		[]string{"direction", "status"},
 	)
 
+	// TODO(b/470880235): DEPRECATED, use vmResizeOperation instead.
 	ekResizeOperation = k8smetrics.NewCounterVec(
 		&k8smetrics.CounterOpts{
 			Namespace: caNamespace,
@@ -671,6 +707,28 @@ var (
 			Help:      "How many times an EK resize failed / succeeded.",
 		},
 		[]string{"direction", "reason", "status"},
+	)
+
+	balloonPodIpprEvents = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "balloon_pod_ippr_events",
+			Help:      "Tracks balloon pod IPPR resize attempts, successes, and fallbacks.",
+		},
+		[]string{"machine_family", "direction", "action", "reason"},
+	)
+
+	// Buckets straddle the Kubelet acknowledgement timeout so that resizes
+	// sitting in the wait are distinguishable from resizes that simply take a
+	// while, and so that the timeout itself is a bucket boundary.
+	balloonPodIpprResizeDuration = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "balloon_pod_ippr_resize_duration_seconds",
+			Help:      "How long a balloon pod IPPR resize takes, from issuing the patch until Kubelet acknowledges it or the attempt gives up.",
+			Buckets:   []float64{0.1, 0.25, 0.5, 1, 2, 3, 5, 7.5, 10, 12.5, 15, 20, 30},
+		},
+		[]string{"machine_family", "direction", "action"},
 	)
 
 	vmGceResizeRequestDuration = k8smetrics.NewHistogramVec(
@@ -1204,6 +1262,8 @@ var allMetrics = []k8smetrics.Registerable{
 	uasMaxSizeRecommendationAge,
 	ekGceResizeRequestDuration,
 	ekResizeOperation,
+	balloonPodIpprEvents,
+	balloonPodIpprResizeDuration,
 	vmGceResizeRequestDuration,
 	vmResizeOperation,
 	ekBackoffStatus,
@@ -1726,6 +1786,17 @@ func (pm *prometheusMetrics) ObserveVmGceResizeRequestDuration(machineFamily, di
 // RegisterEkResizeOperation increments the count of EK resize operations for the given reason and operation status.
 func (*prometheusMetrics) RegisterEkResizeOperation(direction string, reason string, status OperationStatus) {
 	ekResizeOperation.WithLabelValues(direction, reason, string(status)).Inc()
+}
+
+// RegisterBalloonPodIpprEvent increments the count of balloon pod IPPR events.
+func (*prometheusMetrics) RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action IpprAction) {
+	balloonPodIpprEvents.WithLabelValues(machineFamily, direction, string(action), reason).Inc()
+}
+
+// ObserveBalloonPodIpprResizeDuration records how long a balloon pod IPPR resize attempt took.
+// The action says whether the attempt succeeded or fell back to recreation.
+func (*prometheusMetrics) ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action IpprAction, duration time.Duration) {
+	balloonPodIpprResizeDuration.WithLabelValues(machineFamily, direction, string(action)).Observe(duration.Seconds())
 }
 
 // RegisterVmResizeOperation increments the count of VM resize operations for the given reason and operation status.
