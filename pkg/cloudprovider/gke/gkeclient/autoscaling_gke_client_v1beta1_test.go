@@ -5117,7 +5117,7 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 					"name": "custom-pool",
 					"config": {
 					  "machineType": "ct4p-hightpu-4t",
-					  "imageType": "custom_containerd",
+					  "imageType": "CUSTOM_CONTAINERD",
 					  "nodeImageConfig": {
 						"image": "my-custom-image",
 						"imageProject": "my-custom-project"

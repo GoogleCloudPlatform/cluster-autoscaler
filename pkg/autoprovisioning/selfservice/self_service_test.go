@@ -509,6 +509,23 @@ func TestNodepoolMetadata(t *testing.T) {
 			},
 		},
 		{
+			name: "Nodepool with custom containerd image returned in uppercase is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ImageType: "CUSTOM_CONTAINERD",
+					NodeImageConfig: &container.CustomImageConfig{
+						Image:        "my-custom-image",
+						ImageProject: "my-custom-project",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				CustomImageTypeMetadataKey:    "custom_containerd",
+				CustomImageNameMetadataKey:    "my-custom-image",
+				CustomImageProjectMetadataKey: "my-custom-project",
+			},
+		},
+		{
 			name: "Nodepool with NodeDrainConfig is processed correctly",
 			nodepool: &container.NodePool{
 				NodeDrainConfig: &container.NodeDrainConfig{

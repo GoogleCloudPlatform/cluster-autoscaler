@@ -15,6 +15,8 @@
 package selfservice
 
 import (
+	"strings"
+
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
@@ -51,7 +53,7 @@ func (c *customImage) FromNodepool(pool *gke_api_beta.NodePool) Metadata {
 	}
 
 	m := make(Metadata)
-	if pool.Config.ImageType == ImageTypeCustomContainerd {
+	if strings.EqualFold(pool.Config.ImageType, ImageTypeCustomContainerd) {
 		m[CustomImageTypeMetadataKey] = ImageTypeCustomContainerd
 		if pool.Config.NodeImageConfig != nil {
 			if pool.Config.NodeImageConfig.Image != "" {
@@ -81,7 +83,7 @@ func (c *customImage) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 	}
 
 	m := make(Metadata)
-	if spec.NodePoolConfig.ImageType == ImageTypeCustomContainerd {
+	if strings.EqualFold(spec.NodePoolConfig.ImageType, ImageTypeCustomContainerd) {
 		m[CustomImageTypeMetadataKey] = ImageTypeCustomContainerd
 		if spec.NodePoolConfig.CustomImageConfig != nil {
 			config := spec.NodePoolConfig.CustomImageConfig
