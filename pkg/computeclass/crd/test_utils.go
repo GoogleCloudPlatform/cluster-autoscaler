@@ -58,6 +58,7 @@ type testCrd struct {
 	consolidationThreshold    *int
 	consolidationGpuThreshold *int
 	nodeVersion               string
+	configHash                string
 	targetNodeCount           *int
 	architectureTaintBehavior string
 }
@@ -187,6 +188,10 @@ func (t *testCrd) TargetNodeCount() *int {
 	return t.targetNodeCount
 }
 
+func (t *testCrd) ConfigHash(rule crdRules.Rule) string {
+	return t.configHash
+}
+
 type TestCrdOption func(crd *testCrd)
 
 func WithLabel(label string) TestCrdOption {
@@ -204,6 +209,12 @@ func WithCrdType(crdType string) TestCrdOption {
 func WithName(name string) TestCrdOption {
 	return func(crd *testCrd) {
 		crd.name = name
+	}
+}
+
+func WithConfigHash(hash string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.configHash = hash
 	}
 }
 

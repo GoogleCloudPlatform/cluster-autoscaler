@@ -73,4 +73,5 @@ type CRD interface {
 	UpdateConditions(client.Client, []metav1.Condition) error
 	TargetNodeCount() *int
 	GetRuleCondition(ruleIdx string) []metav1.Condition
+	ConfigHash(rule rules.Rule) string
 }

@@ -59,6 +59,14 @@ func TestLocalSSDDiskSizes(t *testing.T) {
 			machineType:  "a3-ultragpu-8g",
 			wantDiskSize: 1000,
 		},
+		"z3-highmem-192-metal disk size override": {
+			machineType:  "z3-highmem-192-metal",
+			wantDiskSize: 6000,
+		},
+		"z3-highmem-192-highlssd-metal disk size override": {
+			machineType:  "z3-highmem-192-highlssd-metal",
+			wantDiskSize: 6000,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			got := mcp.LocalSSDDiskSizes()[tc.machineType]

@@ -869,7 +869,7 @@ func (b *Builder) Build(
 		CustomResourcesProcessor: customResourcesProcessor,
 		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
 			resourcequotas.NewCloudMinProvider(cloudProvider),
-			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager),
+			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager, cloudProvider, true /* exemptAtomicNodeGroups */),
 		}),
 		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
 			ca_utils.VirtualKubeletNodeFilter{},
@@ -882,7 +882,8 @@ func (b *Builder) Build(
 		CustomResourcesProcessor: customResourcesProcessor,
 		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
 			resourcequotas.NewCloudMinProvider(cloudProvider),
-			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, true, experimentsManager),
+			// exemptAtomicNodeGroups is false on purpose: the atomic-group exemption only applies to the scale-down path.
+			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, true, experimentsManager, nil, false /* exemptAtomicNodeGroups */),
 		}),
 		NodeFilter: minQuotasTrackerOptions.NodeFilter,
 	}

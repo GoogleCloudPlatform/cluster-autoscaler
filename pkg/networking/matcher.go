@@ -64,8 +64,8 @@ func (m *matcherImpl) GetNetworkingResourcesFromNetworkConfig(networkConfigs []g
 	for _, nConfig := range networkConfigs {
 		id := paramsID(nConfig.VPCNetName, nConfig.VPCSubnetName, nConfig.SubRange, nConfig.NetworkAttachment)
 
-		pSet, found := paramSetsMap[id]
-		if !found {
+		pSet := findParamSet(nConfig, paramSetsMap, paramSetsList)
+		if pSet == nil {
 			klog.Warningf("Didn't find corresponding GKENetworkParamSet for networking config: %v.", id)
 			continue
 		}
@@ -208,6 +208,30 @@ func paramsID(network, subnetwork, subRange, networkAttachment string) string {
 	}
 
 	return networkAttachment
+}
+
+// findParamSet attempts to find a matching GKENetworkParamSet for the given AdditionalNetworkConfig.
+func findParamSet(nConfig gkeclient.AdditionalNetworkConfig, paramSetsMap map[string]*api.GKENetworkParamSet, paramSetsList []*api.GKENetworkParamSet) *api.GKENetworkParamSet {
+	// Case 1: Exact match on (VPC, Subnet, SubRange, NetworkAttachment).
+	id := paramsID(nConfig.VPCNetName, nConfig.VPCSubnetName, nConfig.SubRange, nConfig.NetworkAttachment)
+	if pSet, found := paramSetsMap[id]; found {
+		return pSet
+	}
+	// Case 2: NodePool has a subrange, but GNP has no subranges defined (e.g., NetDevice/RDMA).
+	if nConfig.SubRange != "" {
+		fallbackID := paramsID(nConfig.VPCNetName, nConfig.VPCSubnetName, "", nConfig.NetworkAttachment)
+		if pSet, found := paramSetsMap[fallbackID]; found {
+			return pSet
+		}
+		return nil
+	}
+	// Case 3: NodePool has no subrange (""), but GNP has subranges defined (matches parent GNP by VPC/Subnet).
+	for _, pSet := range paramSetsList {
+		if pSet.Spec.VPC == nConfig.VPCNetName && pSet.Spec.VPCSubnet == nConfig.VPCSubnetName && pSet.Spec.NetworkAttachment == nConfig.NetworkAttachment {
+			return pSet
+		}
+	}
+	return nil
 }
 
 func validateInterfaceAnnotation(interfaceAnnotation api.InterfaceAnnotation) error {

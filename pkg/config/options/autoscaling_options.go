@@ -121,6 +121,7 @@ type InternalOptions struct {
 	EnhancedCrdStatusReporting                   bool
 	ZoneTypesEnabled                             bool
 	EnableComputeClassMinCapacity                bool
+	EnableComputeClassConfigHash                 bool
 	NapMaxNodes                                  int
 	NodeWatchLabelSelector                       string
 	NodeWatchFieldSelector                       string

@@ -17,14 +17,19 @@ package ccc
 import (
 	"fmt"
 	"os"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
+
+	_ "embed"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -2980,4 +2985,145 @@ func testOptionsTracker(modifier func(opts *internalopts.InternalOptions)) *opts
 	return optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{
 		InternalOptions: opts,
 	}, gkeclient.Cluster{}, experiments.NewMockManager())
+}
+
+func TestConfigHash(t *testing.T) {
+	sa1 := "sa1"
+	sa2 := "sa2"
+	mt1 := "n1-standard-1"
+	mt2 := "n1-standard-2"
+	mt3 := "n1-standard-3"
+	provider := crd.TestDefaultDataProvider()
+
+	ccc := &v1.ComputeClass{
+		Spec: v1.ComputeClassSpec{
+			NodePoolConfig: &v1.NodePoolConfig{
+				ServiceAccount: sa1,
+			},
+			Priorities: []v1.Priority{
+				{MachineType: &mt1},
+				{MachineType: &mt2},
+			},
+		},
+	}
+	crdInstance := NewCccCrd(ccc, "proj1", false, provider, nil)
+	rules := crdInstance.Rules()
+	assert.Len(t, rules, 2)
+
+	hashP1 := crdInstance.ConfigHash(rules[0])
+	hashP2 := crdInstance.ConfigHash(rules[1])
+
+	assert.NotEmpty(t, hashP1)
+	assert.NotEmpty(t, hashP2)
+	assert.NotEqual(t, hashP1, hashP2)
+
+	// 1. Change NodePoolConfig (Global) - both hashes should change
+	cccGlobalChange := ccc.DeepCopy()
+	cccGlobalChange.Spec.NodePoolConfig.ServiceAccount = sa2
+	crdGlobalChange := NewCccCrd(cccGlobalChange, "proj1", false, provider, nil)
+	rulesGlobalChange := crdGlobalChange.Rules()
+
+	assert.NotEqual(t, hashP1, crdGlobalChange.ConfigHash(rulesGlobalChange[0]))
+	assert.NotEqual(t, hashP2, crdGlobalChange.ConfigHash(rulesGlobalChange[1]))
+
+	// 2. Modify priority 1 - only hash for P1 should change
+	cccPriorityChange := ccc.DeepCopy()
+	cccPriorityChange.Spec.Priorities[0].MachineType = &mt3
+	crdPriorityChange := NewCccCrd(cccPriorityChange, "proj1", false, provider, nil)
+	rulesPriorityChange := crdPriorityChange.Rules()
+
+	assert.NotEqual(t, hashP1, crdPriorityChange.ConfigHash(rulesPriorityChange[0]))
+	assert.Equal(t, hashP2, crdPriorityChange.ConfigHash(rulesPriorityChange[1]))
+
+	// 3. Add priority - existing hashes should NOT change
+	cccAddPriority := ccc.DeepCopy()
+	cccAddPriority.Spec.Priorities = append(cccAddPriority.Spec.Priorities, v1.Priority{MachineType: &mt3})
+	crdAddPriority := NewCccCrd(cccAddPriority, "proj1", false, provider, nil)
+	rulesAddPriority := crdAddPriority.Rules()
+
+	assert.Equal(t, hashP1, crdAddPriority.ConfigHash(rulesAddPriority[0]))
+	assert.Equal(t, hashP2, crdAddPriority.ConfigHash(rulesAddPriority[1]))
+
+	// 4. Change internal fields (CapacityCheckWaitTimeSeconds, PriorityScore, AllocationStrategy) - hashes should NOT change
+	cccInternalChange := ccc.DeepCopy()
+	val60 := 60
+	val1 := 1
+	strategy := v1.AllocationStrategyLowestCost
+	cccInternalChange.Spec.Priorities[0].CapacityCheckWaitTimeSeconds = &val60
+	cccInternalChange.Spec.Priorities[0].PriorityScore = &val1
+	cccInternalChange.Spec.Priorities[0].AllocationStrategy = &strategy
+	crdInternalChange := NewCccCrd(cccInternalChange, "proj1", false, provider, nil)
+	rulesInternalChange := crdInternalChange.Rules()
+
+	assert.Equal(t, hashP1, crdInternalChange.ConfigHash(rulesInternalChange[0]))
+	assert.Equal(t, hashP2, crdInternalChange.ConfigHash(rulesInternalChange[1]))
+}
+
+//go:embed testdata/hashed_config_paths.txt
+var hashedPathsData string
+
+func TestComputeClassAPIGuard(t *testing.T) {
+	// This test prevents regressions of ConfigHash() when new fields are added to the CCC API.
+	// If the new field should not be included in the hash, update ConfigHash() to ignore it.
+	// Either way, update testdata/hashed_config_paths.txt to acknowledge the new field.
+	hashedPaths := sets.NewString()
+	for _, line := range strings.Split(hashedPathsData, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			hashedPaths.Insert(trimmed)
+		}
+	}
+
+	collectedPaths := sets.NewString()
+	seenTypes := make(map[reflect.Type]bool)
+
+	var walkType func(reflect.Type, string)
+	walkType = func(typ reflect.Type, prefix string) {
+		if typ.Kind() == reflect.Ptr {
+			typ = typ.Elem()
+		}
+
+		if seenTypes[typ] {
+			return
+		}
+		// Avoid infinite recursion for cyclic types if any
+		seenTypes[typ] = true
+		defer func() { seenTypes[typ] = false }()
+
+		if typ.Kind() == reflect.Struct {
+			for i := 0; i < typ.NumField(); i++ {
+				field := typ.Field(i)
+				// Skip unexported fields
+				if field.PkgPath != "" {
+					continue
+				}
+				path := prefix + "." + field.Name
+				collectedPaths.Insert(path)
+				walkType(field.Type, path)
+			}
+		} else if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
+			walkType(typ.Elem(), prefix)
+		} else if typ.Kind() == reflect.Map {
+			// We usually don't care about map keys for path guarding if they are primitives,
+			// but we care about value types.
+			walkType(typ.Elem(), prefix)
+		}
+	}
+
+	// We hash these types in ConfigHash
+	walkType(reflect.TypeOf(v1.NodePoolConfig{}), "NodePoolConfig")
+	walkType(reflect.TypeOf(v1.NodePoolGroup{}), "NodePoolGroup")
+	walkType(reflect.TypeOf(v1.PriorityDefaults{}), "PriorityDefaults")
+	walkType(reflect.TypeOf(v1.Priority{}), "Priority")
+
+	// Check for new paths
+	newPaths := collectedPaths.Difference(hashedPaths)
+	if newPaths.Len() > 0 {
+		t.Errorf("New field paths detected in CCC API. Please verify if they should be included in ConfigHash().\nNew paths:\n%s", strings.Join(newPaths.List(), "\n"))
+	}
+
+	// Check for removed paths (stale allowlist)
+	removedPaths := hashedPaths.Difference(collectedPaths)
+	if removedPaths.Len() > 0 {
+		t.Logf("Stale field paths found in allowlist (likely removed from API):\n%s", strings.Join(removedPaths.List(), "\n"))
+	}
 }

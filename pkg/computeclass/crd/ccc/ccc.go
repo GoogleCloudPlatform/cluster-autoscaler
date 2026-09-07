@@ -16,6 +16,8 @@ package ccc
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -782,4 +784,48 @@ func (ccc *cccCrd) TargetNodeCount() *int {
 		return nil
 	}
 	return ccc.Spec.MinimumCapacity.TargetNodeCount
+}
+
+// ConfigHash computes a combined hash of the global configuration and the specific matched priority.
+// It is used to detect changes which affect the node pool configuration.
+func (ccc *cccCrd) ConfigHash(rule rules.Rule) string {
+	if ccc == nil || ccc.ComputeClass == nil {
+		return ""
+	}
+
+	var matchedPriority *v1.Priority
+	for idx, r := range ccc.Rules() {
+		if r == rule {
+			priorities := ccc.priorities()
+			if idx < len(priorities) {
+				matchedPriority = &priorities[idx]
+				// nil-out the fields that do not affect the node pool configuration.
+				matchedPriority.CapacityCheckWaitTimeSeconds = nil
+				matchedPriority.PriorityScore = nil
+				matchedPriority.AllocationStrategy = nil
+			}
+			break
+		}
+	}
+
+	data := struct {
+		NodePoolConfig   *v1.NodePoolConfig   `json:"nodePoolConfig,omitempty"`
+		NodePoolGroup    *v1.NodePoolGroup    `json:"nodePoolGroup,omitempty"`
+		PriorityDefaults *v1.PriorityDefaults `json:"priorityDefaults,omitempty"`
+		MatchedPriority  *v1.Priority         `json:"matchedPriority,omitempty"`
+	}{
+		NodePoolConfig:   ccc.Spec.NodePoolConfig,
+		NodePoolGroup:    ccc.Spec.NodePoolGroup,
+		PriorityDefaults: ccc.Spec.PriorityDefaults,
+		MatchedPriority:  matchedPriority,
+	}
+
+	bytes, err := json.Marshal(data)
+	if err != nil {
+		klog.Errorf("Failed to marshal CCC config for hashing: %v", err)
+		return ""
+	}
+
+	hash := sha256.Sum256(bytes)
+	return fmt.Sprintf("%x", hash)[:32]
 }

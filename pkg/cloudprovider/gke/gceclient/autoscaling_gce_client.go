@@ -335,7 +335,7 @@ func (client *autoscalingInternalGceClient) FetchAcceleratorTypes(zone string) (
 func (client *autoscalingInternalGceClient) FetchMigInstances(ctx context.Context, migRef gce.GceRef) ([]gce.GceInstance, error) {
 	ignoreStockouts, capacityCheckTimeoutExpired := client.ignoreInstanceCreationStockoutErrors(migRef)
 	b := newInstanceListBuilder(migRef, client.migInfoProvider.QueuedProvisioning(migRef), ignoreStockouts, capacityCheckTimeoutExpired)
-	return fetchMigInstancesBeta[gce.GceInstance](client, b, migRef)
+	return fetchMigInstancesBeta[gce.GceInstance](client, b, migRef, "")
 }
 
 func (client *autoscalingInternalGceClient) FetchFutureReservationsInProject(projectID string) ([]*GceFutureReservation, error) {
@@ -394,10 +394,14 @@ type listBuilder[T any] interface {
 	build() []T
 }
 
-func fetchMigInstancesBeta[T any](client *autoscalingInternalGceClient, b listBuilder[T], migRef gce.GceRef) ([]T, error) {
+func fetchMigInstancesBeta[T any](client *autoscalingInternalGceClient, b listBuilder[T], migRef gce.GceRef, filter string) ([]T, error) {
 	start := time.Now()
 	lastRequestStart := start
-	err := client.gceBetaService.InstanceGroupManagers.ListManagedInstances(migRef.Project, migRef.Zone, migRef.Name).Pages(
+	call := client.gceBetaService.InstanceGroupManagers.ListManagedInstances(migRef.Project, migRef.Zone, migRef.Name)
+	if filter != "" {
+		call = call.Filter(filter)
+	}
+	err := call.Pages(
 		context.Background(),
 		func(page *gce_api_beta.InstanceGroupManagersListManagedInstancesResponse) error {
 			gke_metrics.EmitGceLatency("instance_group_managers", "list_managed_instances_page", page, nil, lastRequestStart)
@@ -749,7 +753,7 @@ func (client *autoscalingInternalGceClient) waitForActionToStopRunning(action st
 }
 
 func (client *autoscalingInternalGceClient) actionFinishedForAllInstances(action string, migRef gce.GceRef, targetInstances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) bool {
-	instances, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef)
+	instances, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, "")
 	if err != nil {
 		klog.Errorf("Fetching instances %v failed: %v", targetInstances, err)
 		return false

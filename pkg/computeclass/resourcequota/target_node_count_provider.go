@@ -22,6 +22,7 @@ import (
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -30,19 +31,31 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 )
 
+// MigProvider is the subset of the GKE cloud provider needed to detect whether
+// a node belongs to an atomically-scaled (ZeroOrMaxNodeScaling) node group.
+type MigProvider interface {
+	GkeMigForNode(node *apiv1.Node) (*gke.GkeMig, error)
+}
+
 // TargetNodeCountProvider provides quotas based on targetNodeCount in ComputeClass CRDs.
 type TargetNodeCountProvider struct {
 	ccLister           cc_lister.Lister
 	excludeTopLevel    bool
 	experimentsManager experiments.Manager
+	migProvider        MigProvider
+	// exemptAtomicNodeGroups, when true, makes the produced quotas skip nodes
+	// that belong to atomically-scaled node groups.
+	exemptAtomicNodeGroups bool
 }
 
 // NewTargetNodeCountProvider creates a new TargetNodeCountProvider.
-func NewTargetNodeCountProvider(ccLister cc_lister.Lister, excludeTopLevel bool, experimentsManager experiments.Manager) *TargetNodeCountProvider {
+func NewTargetNodeCountProvider(ccLister cc_lister.Lister, excludeTopLevel bool, experimentsManager experiments.Manager, migProvider MigProvider, exemptAtomicNodeGroups bool) *TargetNodeCountProvider {
 	return &TargetNodeCountProvider{
-		ccLister:           ccLister,
-		excludeTopLevel:    excludeTopLevel,
-		experimentsManager: experimentsManager,
+		ccLister:               ccLister,
+		excludeTopLevel:        excludeTopLevel,
+		experimentsManager:     experimentsManager,
+		migProvider:            migProvider,
+		exemptAtomicNodeGroups: exemptAtomicNodeGroups,
 	}
 }
 
@@ -64,10 +77,12 @@ func (p *TargetNodeCountProvider) Quotas(ctx context.Context) ([]resourcequotas.
 		if !p.excludeTopLevel && c.TargetNodeCount() != nil {
 			if target := *c.TargetNodeCount(); target >= 0 {
 				quotas = append(quotas, &TargetNodeCountQuota{
-					id:              fmt.Sprintf("cc-min-nodes-%s", crdName),
-					crdName:         crdName,
-					targetNodeCount: int64(target),
-					ruleIdxStr:      "", // Empty means all nodes for this CC
+					id:                     fmt.Sprintf("cc-min-nodes-%s", crdName),
+					crdName:                crdName,
+					targetNodeCount:        int64(target),
+					ruleIdxStr:             "", // Empty means all nodes for this CC
+					migProvider:            p.migProvider,
+					exemptAtomicNodeGroups: p.exemptAtomicNodeGroups,
 				})
 			} else {
 				klog.Warningf("Ignoring invalid TargetNodeCount %d for CCC %s", target, crdName)
@@ -79,10 +94,12 @@ func (p *TargetNodeCountProvider) Quotas(ctx context.Context) ([]resourcequotas.
 			if r.TargetNodeCount() != nil {
 				if target := *r.TargetNodeCount(); target >= 0 {
 					quotas = append(quotas, &TargetNodeCountQuota{
-						id:              fmt.Sprintf("cc-min-nodes-%s-rule-%d", crdName, ruleIdx),
-						crdName:         crdName,
-						targetNodeCount: int64(target),
-						ruleIdxStr:      strconv.Itoa(ruleIdx),
+						id:                     fmt.Sprintf("cc-min-nodes-%s-rule-%d", crdName, ruleIdx),
+						crdName:                crdName,
+						targetNodeCount:        int64(target),
+						ruleIdxStr:             strconv.Itoa(ruleIdx),
+						migProvider:            p.migProvider,
+						exemptAtomicNodeGroups: p.exemptAtomicNodeGroups,
 					})
 				} else {
 					klog.Warningf("Ignoring invalid TargetNodeCount %d for rule %d of CCC %s", target, ruleIdx, crdName)
@@ -99,6 +116,9 @@ type TargetNodeCountQuota struct {
 	crdName         string
 	targetNodeCount int64
 	ruleIdxStr      string
+	migProvider     MigProvider
+	// exemptAtomicNodeGroups gates the atomic-group exemption in AppliesTo.
+	exemptAtomicNodeGroups bool
 }
 
 // ID returns a unique quota identifier (CC name + optional rule index).
@@ -114,8 +134,21 @@ func (q *TargetNodeCountQuota) AppliesTo(node *apiv1.Node) bool {
 	if node.Labels[labels.ComputeClassLabel] != q.crdName {
 		return false
 	}
-	if q.ruleIdxStr != "" {
-		return node.Annotations[labels.CCCPriorityIndexAnnotationKey] == q.ruleIdxStr
+	if q.ruleIdxStr != "" && node.Annotations[labels.CCCPriorityIndexAnnotationKey] != q.ruleIdxStr {
+		return false
+	}
+	// Atomic node groups are exempt from this per-node quota in the
+	// scale-down path; whole-group enforcement is handled by
+	// AtomicMinCapacityProcessor instead. The exemption is opt-in via
+	// exemptAtomicNodeGroups.
+	// Defrag leaves it false to keep per-node enforcement for atomic groups.
+	if q.exemptAtomicNodeGroups && q.migProvider != nil {
+		mig, err := q.migProvider.GkeMigForNode(node)
+		if err != nil {
+			klog.Warningf("Assuming node %s is non-atomic for target node count quota %s; failed to get its mig: %v", node.Name, q.id, err)
+		} else if mig != nil && mig.ResizeAtomically() {
+			return false
+		}
 	}
 	return true
 }

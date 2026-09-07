@@ -31,36 +31,34 @@ import (
 func BenchmarkMegaclusterScaleUpWithAntiAffinity(b *testing.B) {
 	// The benchmark creates 100 nodepools with 201 nodes in each (67 nodes per zone), so 20100 existing nodes total.
 	// Change benchmarkTotalNodes and/or benchmarkNumPools to adjust the initial cluster size.
-	benchmarkTotalNodes := 20100 // should be divisible by benchmarkNumPools and by 3 zones
+	benchmarkNodesPerZone := 6700 // total number of nodes is benchmarkNodesPerZone * 3
 	benchmarkNumPools := 100
-	megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools).run(b)
+	megaclusterScaleUpWithAntiAffinity(benchmarkNodesPerZone, benchmarkNumPools).run(b)
 }
 
 // TestMegaclusterScaleUpWithAntiAffinity runs the megacluster benchmark scenario in CI with small number of nodes to ensure the scenario works.
 func TestMegaclusterScaleUpWithAntiAffinity(t *testing.T) {
-	testTotalNodes := 300
+	nodesPerZone := 100
 	testNumPools := 1
-	megaclusterScaleUpWithAntiAffinity(testTotalNodes, testNumPools).run(t)
+	megaclusterScaleUpWithAntiAffinity(nodesPerZone, testNumPools).run(t)
 }
 
 // There are 10 running pods on each existing node with labels l0 ... l-9.
 // 30% of the existing pods have anti-affinity:
-//   - l7 pods have AA for l8
-//   - l8 pods have AA for themselves (l8)
-//   - l9 pods have AA for themselves (l9)
+//   - l7, l8 and l9 pods have AA for l8
 //
 // All pods and nodes in the test have a realistic set of k8s labels (this affects interpodaffinity plugin performance).
 //
 // The test creates 200 pending pods with the same label setup.
-// Those 200 pods require 21 to 24 nodes (it's not deterministic because the number of nodes depends on the order in which we simulate pod scheduling)
+// Those 200 pods require 21 to 22 nodes (it's not deterministic because the number of nodes depends on the order in which we simulate pod scheduling)
 //
 // The test is similar to the autoscaled part of the Pine manual stress test setup, but without CCC and with a larger number of labels http://google3/experimental/users/jonatany/megacluster-ccc/README.md;rcl=939761744
-func megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools int) scenario {
-	nodesPerPool := benchmarkTotalNodes / benchmarkNumPools
-	minNodesPerZone := nodesPerPool / 3
+func megaclusterScaleUpWithAntiAffinity(nodesPerZone, numPools int) scenario {
+	minNodesPerZone := nodesPerZone / numPools
+	nodesPerPool := nodesPerZone * 3 / numPools
 	return scenario{
 		given: func() *integration.TestConfig {
-			return megaclusterBenchmarkConfig(benchmarkNumPools, minNodesPerZone).WithOverrides(
+			return megaclusterBenchmarkConfig(numPools, minNodesPerZone).WithOverrides(
 				integration.WithMaxNodesPerScaleUp(500),
 				integration.WithMaxBinpackingTime(300*time.Second),
 				// Feature gate for performance optimization of (anti)affinity with topologyKey=hostname
@@ -71,14 +69,14 @@ func megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools i
 		when: func(infra *integration.TestInfrastructure) {
 			podsPerNode := 10
 			labelKey := "logical-type"
-			numApps := benchmarkTotalNodes / 10 // (e.g. 2000 apps per 20000 nodes)
+			numApps := nodesPerZone * 3 / 10 // (e.g. 2000 apps per 20000 nodes)
 			gceInstancesByMig := make(map[string][]gce.GceInstance)
 
 			// Pre-populate nodes and pods directly in the fakes.
 			// Bypassing REST controllers via Tracker Add before informers start
 			// eliminates watch event channel congestion and panics.
 			podNumber := 0
-			for i := 0; i < benchmarkNumPools; i++ {
+			for i := 0; i < numPools; i++ {
 				poolName := fmt.Sprintf("default-pool-%d", i)
 
 				zones := []string{"us-central1-a", "us-central1-b", "us-central1-c"}
@@ -114,13 +112,10 @@ func megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools i
 						appName := fmt.Sprintf("app-%d", podNumber%numApps)
 						pod := buildBenchmarkPod(podNumber/podsPerNode, appName, nodeName, labelKey, labelVal, 3180)
 
-						// Pod l7 has Required anti-affinity targeting l8.
-						// The last 2 pods (l8 and l9) carry required hostname anti-affinity for their own label value.
-						if p == 7 || p >= 8 {
-							targetLabelVal := labelVal
-							if p == 7 {
-								targetLabelVal = "l8"
-							}
+						// Pods l7, l8 and l9 have Required anti-affinity targeting l8.
+						if p >= 7 {
+							targetLabelVal := "l8"
+
 							pod.Spec.Affinity = &apiv1.Affinity{
 								PodAntiAffinity: &apiv1.PodAntiAffinity{
 									RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
@@ -145,21 +140,18 @@ func megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools i
 
 			// Create 200 pending pods requesting 600m CPU each.
 			// 10 label values:
-			// - l7 has required anti-affinity for l8.
-			// - l8 and l9 have required anti-affinity for itself.
+			// l0-l6 have no interpod affinity
+			// Pods l7, l8 and l9 have Required anti-affinity targeting l8.
 			for i := 0; i < 200; i++ {
 				podNumber++
 				appName := fmt.Sprintf("app-%d", podNumber%numApps)
 				logicalTypeVal := fmt.Sprintf("l%d", i%10)
 
-				pod := buildBenchmarkPod(podNumber, appName, "", labelKey, logicalTypeVal, 600)
+				pod := buildBenchmarkPod(podNumber, appName, "", labelKey, logicalTypeVal, 350)
 
 				// Apply required anti-affinity rules
-				if i%10 == 7 || i%10 >= 8 {
-					targetLabelVal := logicalTypeVal
-					if i%10 == 7 {
-						targetLabelVal = "l8"
-					}
+				if i%10 >= 7 {
+					targetLabelVal := "l8"
 					pod.Spec.Affinity = &apiv1.Affinity{
 						PodAntiAffinity: &apiv1.PodAntiAffinity{
 							RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
@@ -177,25 +169,7 @@ func megaclusterScaleUpWithAntiAffinity(benchmarkTotalNodes, benchmarkNumPools i
 				_ = infra.Fakes.KubeClient.Tracker().Add(pod)
 			}
 		},
-		then: func(tb testing.TB, infra *integration.TestInfrastructure) {
-			zones := []string{"us-central1-a", "us-central1-b", "us-central1-c"}
-			totalTargetSize := 0
-			for _, zone := range zones {
-				migs, err := infra.Fakes.GceService.FetchAllMigs(zone)
-				if err != nil {
-					tb.Fatalf("Failed to fetch MIGs in zone %s: %v", zone, err)
-				}
-				for _, mig := range migs {
-					totalTargetSize += int(mig.TargetSize)
-				}
-			}
-			// We expect all pools to successfully scale up, adding 21 to 24 nodes total due to anti-affinity and randomized pool split packing
-			baseTarget := int(benchmarkNumPools * minNodesPerZone * 3)
-			if totalTargetSize < baseTarget+21 || totalTargetSize > baseTarget+24 {
-				tb.Fatalf("total target size = %d, want between %d and %d", totalTargetSize, baseTarget+21, baseTarget+24)
-			}
-			tb.Logf("Benchmark completed successfully. computed target size: %d nodes", totalTargetSize)
-		},
+		then: verifyTargetNumberOfNodesInRange(21+nodesPerZone*3, 22+nodesPerZone*3),
 	}
 }
 

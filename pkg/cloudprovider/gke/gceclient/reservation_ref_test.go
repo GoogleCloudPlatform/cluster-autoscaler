@@ -14,7 +14,11 @@
 
 package gceclient
 
-import "testing"
+import (
+	"testing"
+
+	gce_api "google.golang.org/api/compute/v1"
+)
 
 func TestReservationRef_Serialize(t *testing.T) {
 	tests := []struct {
@@ -116,6 +120,43 @@ func TestReservationRef_Serialize(t *testing.T) {
 			if got != tt.expected {
 				t.Errorf("Serialize(%q) for ReservationRef %+v got %q, want %q",
 					tt.clusterProject, tt.reservation, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestReservationRef_ShortenSelfLink(t *testing.T) {
+	tests := []struct {
+		name        string
+		reservation *gce_api.Reservation
+		expected    string
+	}{
+		{
+			name:        "production_SelfLink",
+			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
+			expected:    "/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1",
+		},
+		{
+			name:        "alpha_v1_SelfLink",
+			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/alpha_v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
+			expected:    "/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1",
+		},
+		{
+			name:        "unexpected_SelfLink",
+			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "this-is-not-a-standard-self-link"},
+			expected:    "this-is-not-a-standard-self-link",
+		},
+		{
+			name:        "empty_SelfLink",
+			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: ""},
+			expected:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := GetShortSelfLink(tt.reservation)
+			if got != tt.expected {
+				t.Errorf("ShortenSelfLink(%v) got %q, want %q", tt.reservation, got, tt.expected)
 			}
 		})
 	}

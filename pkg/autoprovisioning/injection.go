@@ -164,7 +164,10 @@ type nodeGroupParameters struct {
 
 // System labels that are not taken into account when calculating node group signature.
 // This means that two node groups with different values of these labels can still be considered the same.
-var systemLabelsIgnoredForSignature = sets.New(gkelabels.ComputeClassPriorityIdxLabel)
+var systemLabelsIgnoredForSignature = sets.New(
+	gkelabels.ComputeClassPriorityIdxLabel,
+	gkelabels.ComputeClassConfigHashLabel,
+)
 
 func (p nodeGroupParameters) signature() string {
 	systemLabels := make(map[string]string)
@@ -1890,15 +1893,17 @@ type ComputeClassGenerator struct {
 	cloudProvider                 napcloudprovider.AutoprovisioningCloudProvider
 	lister                        computeclass_lister.Lister
 	enableComputeClassMinCapacity bool
+	enableComputeClassConfigHash  bool
 	experimentsManager            experiments.Manager
 }
 
 // NewComputeClassGenerator creates a new generator.
-func NewComputeClassGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, lister computeclass_lister.Lister, enableComputeClassMinCapacity bool, experimentsManager experiments.Manager) *ComputeClassGenerator {
+func NewComputeClassGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, lister computeclass_lister.Lister, enableComputeClassMinCapacity bool, enableComputeClassConfigHash bool, experimentsManager experiments.Manager) *ComputeClassGenerator {
 	return &ComputeClassGenerator{
 		cloudProvider:                 cloudProvider,
 		lister:                        lister,
 		enableComputeClassMinCapacity: enableComputeClassMinCapacity,
+		enableComputeClassConfigHash:  enableComputeClassConfigHash,
 		experimentsManager:            experimentsManager,
 	}
 }
@@ -2061,6 +2066,14 @@ func (ng ComputeClassGenerator) UpdateParameters(params *nodeGroupParameters, ng
 		params.taints = appendTaintsWithOverride(params.taints, ngReq.computeClassRule.UserDefinedTaints())
 	}
 
+	if ng.enableComputeClassConfigHash && ccpkg.IsComputeClassConfigHashEnabled(ng.experimentsManager) {
+		if ngReq.computeClassRule != nil {
+			if configHash := ngReq.computeClass.ConfigHash(ngReq.computeClassRule); configHash != "" {
+				params.systemLabels[gkelabels.ComputeClassConfigHashLabel] = configHash
+			}
+		}
+	}
+
 	// Set compute class priority index label
 	if !ng.enableComputeClassMinCapacity || !ccpkg.IsComputeClassMinCapacityEnabled(ng.experimentsManager) {
 		return nil
@@ -2177,6 +2190,11 @@ func (ng ComputeClassGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec,
 
 	if val := systemLabels[gkelabels.ComputeClassPriorityIdxLabel]; val != "" {
 		spec.Labels[gkelabels.ComputeClassPriorityIdxLabel] = val
+	}
+	if ng.enableComputeClassConfigHash && ccpkg.IsComputeClassConfigHashEnabled(ng.experimentsManager) {
+		if val := systemLabels[gkelabels.ComputeClassConfigHashLabel]; val != "" {
+			spec.Labels[gkelabels.ComputeClassConfigHashLabel] = val
+		}
 	}
 	if val := systemLabels[gkelabels.GeneralPurposePodFamilyLabel]; val == "true" {
 		spec.Labels[gkelabels.GeneralPurposePodFamilyLabel] = val

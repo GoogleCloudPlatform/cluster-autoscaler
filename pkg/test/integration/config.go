@@ -316,6 +316,11 @@ func (c *TestConfig) WithMachineConfigEnabled() *TestConfig {
 	return c
 }
 
+// WithDefaultComputeClassEnabled enables Default Compute Class on the cluster configuration.
+func (c *TestConfig) WithDefaultComputeClassEnabled() *TestConfig {
+	return c.WithClusterOverrides(WithClusterDefaultComputeClassEnabled())
+}
+
 // WithReservations replaces the entire map of reservations.
 func (c *TestConfig) WithReservations(reservations map[string][]*compute.Reservation) *TestConfig {
 	c.Reservations = reservations
@@ -502,6 +507,14 @@ func WithComputeClassMinCapacityEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
+func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EnableComputeClassConfigHash = true
+		return o
+	}
+}
+
 // WithEnhancedCrdStatusReportingEnabled enables EnhancedCrdStatusReporting in CA.
 func WithEnhancedCrdStatusReportingEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -618,6 +631,17 @@ func WithHighThroughputNAPEnabled(maxParallelOps, maxQueuedOps int) Option[*conf
 	}
 }
 
+// WithGceEndpoint overrides the compute endpoint used by the autoscaler. This is
+// the only special ingredient needed to set up the sovereign-endpoint scenario:
+// NAP-created MIG URLs (and therefore synthesized "upcoming" node names) embed
+// this host.
+func WithGceEndpoint(endpoint string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.GceEndpoint = endpoint
+		return o
+	}
+}
+
 // WithDraEnabled enables DRA support.
 func WithDraEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -702,6 +726,17 @@ func WithClusterAutoProvisioningEnabled() Option[*gke_api_beta.Cluster] {
 			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
 		}
 		c.Autoscaling.EnableNodeAutoprovisioning = true
+		return c
+	}
+}
+
+// WithClusterDefaultComputeClassEnabled enables Default Compute Class on the internal cluster configuration.
+func WithClusterDefaultComputeClassEnabled() Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		if c.Autoscaling == nil {
+			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
+		}
+		c.Autoscaling.DefaultComputeClassConfig = &gke_api_beta.DefaultComputeClassConfig{Enabled: true}
 		return c
 	}
 }

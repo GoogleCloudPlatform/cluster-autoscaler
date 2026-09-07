@@ -25,6 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -34,7 +35,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 )
 
-const cccPriorityIndexAnnotationKey = "ccc_priority_index"
+const cccPriorityIndexAnnotationKey = labels.CCCPriorityIndexAnnotationKey
 
 func TestTargetNodeCountProvider_Quotas(t *testing.T) {
 	testCases := []struct {
@@ -164,7 +165,7 @@ func TestTargetNodeCountProvider_Quotas(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ccLister := lister.NewMockCrdLister(tc.crds)
-			provider := NewTargetNodeCountProvider(ccLister, tc.excludeTopLevel, nil)
+			provider := NewTargetNodeCountProvider(ccLister, tc.excludeTopLevel, nil, nil, false)
 
 			quotas, err := provider.Quotas(context.TODO())
 			assert.NoError(t, err)
@@ -189,7 +190,7 @@ func TestTargetNodeCountProvider_Quotas_WithExclusion(t *testing.T) {
 		),
 	}
 	ccLister := lister.NewMockCrdLister(crds)
-	provider := NewTargetNodeCountProvider(ccLister, true, nil)
+	provider := NewTargetNodeCountProvider(ccLister, true, nil, nil, false)
 
 	quotas, err := provider.Quotas(context.TODO())
 	assert.NoError(t, err)
@@ -306,6 +307,94 @@ func buildNodeWithLabelsAndAnnotations(cc, priority string) *apiv1.Node {
 	return n
 }
 
+// fakeMigProvider is a test double for MigProvider.
+type fakeMigProvider struct {
+	mig *gke.GkeMig
+	err error
+}
+
+func (f *fakeMigProvider) GkeMigForNode(_ *apiv1.Node) (*gke.GkeMig, error) {
+	return f.mig, f.err
+}
+
+func atomicTestMig() *gke.GkeMig {
+	spec := gke.NewTestMigSpecBuilder().
+		SetTpuType("tpu7x").
+		SetTpuTopology("4x4x4").
+		SetTpuMultiHost(true).
+		SpecBuild()
+	return gke.NewTestGkeMigBuilder().SetSpec(spec).Build()
+}
+
+func TestTargetNodeCountQuota_AppliesTo_AtomicExemption(t *testing.T) {
+	matchingNode := buildNodeWithLabelsAndAnnotations("my-ccc", "")
+
+	testCases := []struct {
+		name          string
+		migProvider   MigProvider
+		exempt        bool
+		node          *apiv1.Node
+		expectedMatch bool
+	}{
+		{
+			name:          "atomic node is exempt",
+			migProvider:   &fakeMigProvider{mig: atomicTestMig()},
+			exempt:        true,
+			node:          matchingNode,
+			expectedMatch: false,
+		},
+		{
+			name:          "atomic node not exempt when flag disabled",
+			migProvider:   &fakeMigProvider{mig: atomicTestMig()},
+			exempt:        false,
+			node:          matchingNode,
+			expectedMatch: true,
+		},
+		{
+			name:          "no mig provider applies quota",
+			migProvider:   nil,
+			exempt:        true,
+			node:          matchingNode,
+			expectedMatch: true,
+		},
+		{
+			name:          "nil mig applies quota",
+			migProvider:   &fakeMigProvider{mig: nil},
+			exempt:        true,
+			node:          matchingNode,
+			expectedMatch: true,
+		},
+		{
+			name:          "mig lookup error applies quota",
+			migProvider:   &fakeMigProvider{err: assert.AnError},
+			exempt:        true,
+			node:          matchingNode,
+			expectedMatch: true,
+		},
+		{
+			name:          "atomic node with wrong CC still does not match",
+			migProvider:   &fakeMigProvider{mig: atomicTestMig()},
+			exempt:        true,
+			node:          buildNodeWithLabelsAndAnnotations("other-ccc", ""),
+			expectedMatch: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			quota := &TargetNodeCountQuota{
+				id:                     "test-quota",
+				crdName:                "my-ccc",
+				targetNodeCount:        5,
+				ruleIdxStr:             "",
+				migProvider:            tc.migProvider,
+				exemptAtomicNodeGroups: tc.exempt,
+			}
+			assert.Equal(t, tc.expectedMatch, quota.AppliesTo(tc.node))
+		})
+	}
+}
+
 func intPtr(v int) *int { return &v }
 
 func TestTargetNodeCountProvider_Quotas_DisabledByExperiment(t *testing.T) {
@@ -322,7 +411,7 @@ func TestTargetNodeCountProvider_Quotas_DisabledByExperiment(t *testing.T) {
 		map[string]string{},
 	)
 
-	provider := NewTargetNodeCountProvider(ccLister, false, mockManager)
+	provider := NewTargetNodeCountProvider(ccLister, false, mockManager, nil, false)
 	quotas, err := provider.Quotas(context.TODO())
 	assert.NoError(t, err)
 	assert.Empty(t, quotas)

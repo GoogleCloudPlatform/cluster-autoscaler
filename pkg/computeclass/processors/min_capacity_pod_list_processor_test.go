@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	cloudprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -307,6 +308,12 @@ func (m *minCapacityMockNodeGroup) TargetSize(ctx context.Context) (int, error) 
 	return m.targetSize, nil
 }
 
+// GetOptions reports non-atomic scaling by default. Tests exercising atomic
+// grouping can embed a node group that overrides this.
+func (m *minCapacityMockNodeGroup) GetOptions(ctx context.Context, defaults config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+	return &defaults, nil
+}
+
 func (m *minCapacityMockNodeGroup) Spec() *gkeclient.NodePoolSpec {
 	return &gkeclient.NodePoolSpec{
 		Labels: m.labels,
@@ -356,4 +363,10 @@ func (m *minCapacityMockCloudProvider) NodeGroups(ctx context.Context) []cloudpr
 
 func (m *minCapacityMockCloudProvider) IsAutopilotEnabled() bool {
 	return false
+}
+
+// NodeGroupForNode returns no node group by default. Tests exercising atomic
+// grouping can embed a provider that overrides this.
+func (m *minCapacityMockCloudProvider) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	return nil, nil
 }

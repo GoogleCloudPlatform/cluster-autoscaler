@@ -2914,6 +2914,16 @@ var (
 				withAutomaticEphemeralLocalSsdCount(12).
 				withInstancePriceOverride(21.980576).
 				withPreemptibleInstancePriceOverride(5.467054),
+			NewMachineTypeInfo("z3-highmem-192-metal", 192, 1536).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(27.497871).
+				withPreemptibleInstancePriceOverride(8.833465).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("z3-highmem-192-highlssd-metal", 192, 1536).
+				withAutomaticEphemeralLocalSsdCount(12).
+				withInstancePriceOverride(27.497871).
+				withPreemptibleInstancePriceOverride(8.833465).
+				withExplicitReqOnly(),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: IntelSapphireRapids, upperBound: IntelSapphireRapids},
 		supportCompactPlacement:  false,
@@ -3163,12 +3173,14 @@ var (
 
 // LocalSSDDiskSizes are mappings between machine type/family to the local disk sizes in GiB
 var LocalSSDDiskSizes = map[string]uint64{
-	Z3.Name():                    3000,
-	Z4D.Name():                   3500,
-	Z4M.Name():                   14000,
-	A4X.Name():                   3000,
-	"c4-standard-288-lssd-metal": 3000,
-	"c4-highmem-288-lssd-metal":  3000,
+	Z3.Name():                       3000,
+	Z4D.Name():                      3500,
+	Z4M.Name():                      14000,
+	A4X.Name():                      3000,
+	"c4-standard-288-lssd-metal":    3000,
+	"c4-highmem-288-lssd-metal":     3000,
+	"z3-highmem-192-metal":          6000,
+	"z3-highmem-192-highlssd-metal": 6000,
 }
 
 func pInt64(i int64) *int64 {

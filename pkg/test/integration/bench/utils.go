@@ -152,19 +152,35 @@ func (s scenario) run(tb testing.TB) {
 func verifyTargetNumberOfNodes(expectedTargetSize int) func(tb testing.TB, infra *integration.TestInfrastructure) {
 	return func(tb testing.TB, infra *integration.TestInfrastructure) {
 		tb.Helper()
-		zones := integration.DefaultNodePool().Locations
-		totalTargetSize := 0
-		for _, zone := range zones {
-			migs, err := infra.Fakes.GceService.FetchAllMigs(zone)
-			if err != nil {
-				tb.Fatalf("Failed to fetch MIGs for zone %s: %v", zone, err)
-			}
-			for _, mig := range migs {
-				totalTargetSize += int(mig.TargetSize)
-			}
-		}
+		totalTargetSize := getClusterSize(infra, tb)
 		if totalTargetSize != expectedTargetSize {
 			tb.Fatalf("expected total target size %d, got %d", expectedTargetSize, totalTargetSize)
 		}
 	}
+
+}
+
+func verifyTargetNumberOfNodesInRange(expectedMinTargetSize, expectedMaxTargetSize int) func(tb testing.TB, infra *integration.TestInfrastructure) {
+	return func(tb testing.TB, infra *integration.TestInfrastructure) {
+		tb.Helper()
+		totalTargetSize := getClusterSize(infra, tb)
+		if totalTargetSize < expectedMinTargetSize || totalTargetSize > expectedMaxTargetSize {
+			tb.Fatalf("expected total target size between %d and %d, got %d", expectedMinTargetSize, expectedMaxTargetSize, totalTargetSize)
+		}
+	}
+}
+
+func getClusterSize(infra *integration.TestInfrastructure, tb testing.TB) int {
+	zones := integration.DefaultNodePool().Locations
+	totalTargetSize := 0
+	for _, zone := range zones {
+		migs, err := infra.Fakes.GceService.FetchAllMigs(zone)
+		if err != nil {
+			tb.Fatalf("Failed to fetch MIGs for zone %s: %v", zone, err)
+		}
+		for _, mig := range migs {
+			totalTargetSize += int(mig.TargetSize)
+		}
+	}
+	return totalTargetSize
 }

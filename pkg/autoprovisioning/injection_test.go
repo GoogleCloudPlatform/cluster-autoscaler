@@ -4380,6 +4380,8 @@ func TestComputeClassGenerator_UpdateParameters(t *testing.T) {
 		existingTaints                 []apiv1.Taint
 		autopilotEnabled               bool
 		disableComputeClassMinCapacity bool
+		disableComputeClassConfigHash  bool
+		experimentsManager             experiments.Manager
 		expectedLabels                 map[string]string
 		expectedTaints                 []apiv1.Taint
 	}{
@@ -4741,11 +4743,89 @@ func TestComputeClassGenerator_UpdateParameters(t *testing.T) {
 				gkelabels.PodsPerNodeKey:  gkelabels.BinpackedSliceOfHardwareValue,
 			},
 		},
+		"Config hash label is set when experiment is enabled and hash is available": {
+			cc: computeclass.NewTestCrd(
+				computeclass.WithName(ccName),
+				computeclass.WithLabel(ccLabel),
+				computeclass.WithConfigHash("test-hash"),
+				computeclass.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineFamilyRule(ptr.To("first"))),
+				}),
+			),
+			ruleIndex: ptr.To(0),
+			experimentsManager: experiments.NewMockManager(
+				experiments.ComputeClassConfigHashEnabledFlag,
+				experiments.ComputeClassConfigHashMinCAVersionFlag,
+			),
+			expectedLabels: map[string]string{
+				ccLabel:                                ccName,
+				labelComputeClassRequired:              "true",
+				gkelabels.ComputeClassPriorityIdxLabel: "0",
+				gkelabels.ComputeClassConfigHashLabel:  "test-hash",
+			},
+		},
+		"Config hash label is not set when flag is disabled but experiment is enabled": {
+			cc: computeclass.NewTestCrd(
+				computeclass.WithName(ccName),
+				computeclass.WithLabel(ccLabel),
+				computeclass.WithConfigHash("test-hash"),
+				computeclass.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineFamilyRule(ptr.To("first"))),
+				}),
+			),
+			ruleIndex: ptr.To(0),
+			experimentsManager: experiments.NewMockManager(
+				experiments.ComputeClassConfigHashEnabledFlag,
+				experiments.ComputeClassConfigHashMinCAVersionFlag,
+			),
+			disableComputeClassConfigHash: true,
+			expectedLabels: map[string]string{
+				ccLabel:                                ccName,
+				labelComputeClassRequired:              "true",
+				gkelabels.ComputeClassPriorityIdxLabel: "0",
+			},
+		},
+		"Config hash label is not set when experiment is disabled": {
+			cc: computeclass.NewTestCrd(
+				computeclass.WithName(ccName),
+				computeclass.WithLabel(ccLabel),
+				computeclass.WithConfigHash("test-hash"),
+				computeclass.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineFamilyRule(ptr.To("first"))),
+				}),
+			),
+			ruleIndex: ptr.To(0),
+			expectedLabels: map[string]string{
+				ccLabel:                                ccName,
+				labelComputeClassRequired:              "true",
+				gkelabels.ComputeClassPriorityIdxLabel: "0",
+			},
+		},
+		"Config hash label is not set when hash is empty": {
+			cc: computeclass.NewTestCrd(
+				computeclass.WithName(ccName),
+				computeclass.WithLabel(ccLabel),
+				computeclass.WithConfigHash(""),
+				computeclass.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineFamilyRule(ptr.To("first"))),
+				}),
+			),
+			ruleIndex: ptr.To(0),
+			experimentsManager: experiments.NewMockManager(
+				experiments.ComputeClassConfigHashEnabledFlag,
+				experiments.ComputeClassConfigHashMinCAVersionFlag,
+			),
+			expectedLabels: map[string]string{
+				ccLabel:                                ccName,
+				labelComputeClassRequired:              "true",
+				gkelabels.ComputeClassPriorityIdxLabel: "0",
+			},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("test-machine-type").WithAutopilotEnabled(tc.autopilotEnabled).Build()
 			lister := computeclass_lister.NewMockCrdLister(nil)
-			generator := NewComputeClassGenerator(provider, lister, !tc.disableComputeClassMinCapacity, nil)
+			generator := NewComputeClassGenerator(provider, lister, !tc.disableComputeClassMinCapacity, !tc.disableComputeClassConfigHash, tc.experimentsManager)
 			params := &nodeGroupParameters{
 				systemLabels: make(map[string]string),
 				taints:       tc.existingTaints,
@@ -4772,12 +4852,14 @@ func TestComputeClassGenerator_UpdateNodePoolSpec(t *testing.T) {
 	nonDefaultCCName := "non-default-cc"
 
 	for tName, tc := range map[string]struct {
-		systemLabels     map[string]string
-		ccName           string
-		ccLabel          string
-		defaultCCExists  bool
-		autopilotEnabled bool
-		expectedSpec     *gkeclient.NodePoolSpec
+		systemLabels                  map[string]string
+		ccName                        string
+		ccLabel                       string
+		defaultCCExists               bool
+		autopilotEnabled              bool
+		disableComputeClassConfigHash bool
+		experimentsManager            experiments.Manager
+		expectedSpec                  *gkeclient.NodePoolSpec
 	}{
 		"standard, default cc - taint not present": {
 			systemLabels:    map[string]string{defaultCCLabel: defaultCCName},
@@ -4991,6 +5073,61 @@ func TestComputeClassGenerator_UpdateNodePoolSpec(t *testing.T) {
 				},
 			},
 		},
+		"Config hash label is applied to spec when experiment is enabled": {
+			ccLabel: gkelabels.ComputeClassLabel,
+			systemLabels: map[string]string{
+				gkelabels.ComputeClassLabel:           defaultCCName,
+				gkelabels.ComputeClassConfigHashLabel: "test-hash",
+			},
+			experimentsManager: experiments.NewMockManager(
+				experiments.ComputeClassConfigHashEnabledFlag,
+				experiments.ComputeClassConfigHashMinCAVersionFlag,
+			),
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel:           defaultCCName,
+					gkelabels.ComputeClassConfigHashLabel: "test-hash",
+				},
+				Taints: []apiv1.Taint{
+					{Key: gkelabels.ComputeClassLabel, Value: defaultCCName, Effect: apiv1.TaintEffectNoSchedule},
+				},
+			},
+		},
+		"Config hash label is not applied to spec when flag is disabled but experiment is enabled": {
+			ccLabel: gkelabels.ComputeClassLabel,
+			systemLabels: map[string]string{
+				gkelabels.ComputeClassLabel:           defaultCCName,
+				gkelabels.ComputeClassConfigHashLabel: "test-hash",
+			},
+			experimentsManager: experiments.NewMockManager(
+				experiments.ComputeClassConfigHashEnabledFlag,
+				experiments.ComputeClassConfigHashMinCAVersionFlag,
+			),
+			disableComputeClassConfigHash: true,
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel: defaultCCName,
+				},
+				Taints: []apiv1.Taint{
+					{Key: gkelabels.ComputeClassLabel, Value: defaultCCName, Effect: apiv1.TaintEffectNoSchedule},
+				},
+			},
+		},
+		"Config hash label is not applied to spec when experiment is disabled": {
+			ccLabel: gkelabels.ComputeClassLabel,
+			systemLabels: map[string]string{
+				gkelabels.ComputeClassLabel:           defaultCCName,
+				gkelabels.ComputeClassConfigHashLabel: "test-hash",
+			},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel: defaultCCName,
+				},
+				Taints: []apiv1.Taint{
+					{Key: gkelabels.ComputeClassLabel, Value: defaultCCName, Effect: apiv1.TaintEffectNoSchedule},
+				},
+			},
+		},
 	} {
 		t.Run(tName, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("test-machine-type").WithAutopilotEnabled(tc.autopilotEnabled).Build()
@@ -5004,7 +5141,7 @@ func TestComputeClassGenerator_UpdateNodePoolSpec(t *testing.T) {
 			if tc.defaultCCExists {
 				lister.SetDefaultCrdName(defaultCCName)
 			}
-			pgg := NewComputeClassGenerator(provider, lister, true, nil)
+			pgg := NewComputeClassGenerator(provider, lister, true, !tc.disableComputeClassConfigHash, tc.experimentsManager)
 			spec := &gkeclient.NodePoolSpec{
 				Labels: map[string]string{},
 			}
@@ -11356,7 +11493,7 @@ func TestBootDiskEncryptionKeyIntegration_UpdateNodePoolSpec(t *testing.T) {
 
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("e2-standard-2").Build()
 	bootDiskGenerator := NewBootDiskConfigGenerator(provider)
-	computeClassGenerator := NewComputeClassGenerator(provider, lister, true, nil)
+	computeClassGenerator := NewComputeClassGenerator(provider, lister, true, true, nil)
 
 	selectorEncryptionKey := "nodeselector-key"
 	selectorValue := "annotationKey"

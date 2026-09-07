@@ -110,6 +110,38 @@ func Test_GetNetworkingResourcesFromMigSpec(t *testing.T) {
 				"networking.gke.io.networks/nd-net":    *quantity1,
 			},
 		},
+		"One network config, high performance netdevice with additional pod network subrange": {
+			paramSets: []*api.GKENetworkParamSet{
+				paramSet("nd-net", "net", "sub", []string{}, deviceModePtr(api.NetDevice)),
+			},
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{
+				gkeclient.TestAdditionalNetworkConfig("net", "sub", "sec-range", 8),
+			},
+			expectedResources: map[string]resource.Quantity{
+				"networking.gke.io.networks/nd-net.IP": *quantity1,
+				"networking.gke.io.networks/nd-net":    *quantity1,
+			},
+		},
+		"One network config, standard network with paramset pod range but network config has empty subrange": {
+			paramSets: []*api.GKENetworkParamSet{
+				paramSet("red-net", "net", "sub", []string{"sec-range-1", "sec-range-2"}, nil),
+			},
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{
+				gkeclient.TestAdditionalNetworkConfig("net", "sub", "", 10),
+			},
+			expectedResources: map[string]resource.Quantity{
+				"networking.gke.io.networks/red-net.IP": *quantity10,
+			},
+		},
+		"One network config, mismatched subrange does not match paramset with different subranges": {
+			paramSets: []*api.GKENetworkParamSet{
+				paramSet("red-net", "net", "sub", []string{"sec-range-1", "sec-range-2"}, nil),
+			},
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{
+				gkeclient.TestAdditionalNetworkConfig("net", "sub", "mismatched-range", 10),
+			},
+			expectedResources: map[string]resource.Quantity{},
+		},
 		"One network config, no network name specified in paramset Status": {
 			paramSets: []*api.GKENetworkParamSet{
 				paramSet("", "net", "sub", []string{}, nil),

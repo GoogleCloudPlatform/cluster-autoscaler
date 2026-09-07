@@ -441,6 +441,9 @@ const (
 	// CA internal use only
 	ComputeClassPriorityIdxLabel = "cloud.google.com/compute-class-priority-idx"
 
+	// ComputeClassConfigHashLabel stores the combined hash of the global configuration and the matched priority of the CCC.
+	ComputeClassConfigHashLabel = "cloud.google.com/compute-class-config-hash"
+
 	// Warning! Consider adding your label to `systemLabelsAddedByClusterAutoscaler` below
 )
 
@@ -456,6 +459,7 @@ var (
 	systemLabelsAddedByClusterAutoscaler = sets.NewString(
 		RequestedMinCpuPlatformLabel,
 		ComputeClassLabel,
+		ComputeClassConfigHashLabel,
 		AcceleratorCountLabel,
 		ExtendedDurationPodsLabel,
 		NodeProvisioningConfigLabel,

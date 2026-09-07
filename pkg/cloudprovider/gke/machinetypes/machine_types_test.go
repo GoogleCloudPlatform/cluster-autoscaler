@@ -1958,6 +1958,16 @@ func TestAutomaticEphemeralLocalSsdCountByMachineType(t *testing.T) {
 			expectFound:   true,
 			expectedCount: 32,
 		},
+		"expect 12 local ssds in z3-highmem-192-metal": {
+			machineName:   "z3-highmem-192-metal",
+			expectFound:   true,
+			expectedCount: 12,
+		},
+		"expect 12 local ssds in z3-highmem-192-highlssd-metal": {
+			machineName:   "z3-highmem-192-highlssd-metal",
+			expectFound:   true,
+			expectedCount: 12,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			p := NewMachineConfigProvider(nil)
@@ -2641,6 +2651,14 @@ func TestIsBareMetal(t *testing.T) {
 		{
 			machineType: "c3-highcpu-192",
 			expected:    false,
+		},
+		{
+			machineType: "z3-highmem-192-metal",
+			expected:    true,
+		},
+		{
+			machineType: "z3-highmem-192-highlssd-metal",
+			expected:    true,
 		},
 	} {
 		t.Run(tc.machineType, func(t *testing.T) {

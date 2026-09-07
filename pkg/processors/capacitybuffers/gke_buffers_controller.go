@@ -98,6 +98,7 @@ func InitializeAndRunBufferController(
 
 	go controller.Run(ctx.Done())
 	cbmetrics.RegisterReconciliationTimestampCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
+	RegisterProcessingIntervalCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
 }
 
 func getGkeBufferTranslatorParts(

@@ -135,6 +135,7 @@ type AutoprovisioningNodeGroupManagerFlags struct {
 	AsyncNodeGroupsDeletionEnabled bool
 	EnableUserAnyZoneSelection     bool
 	EnableComputeClassMinCapacity  bool
+	EnableComputeClassConfigHash   bool
 }
 
 // ReservationFlags defines flags impacting autoprovisioning with reservations.
@@ -155,7 +156,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 
 	machineSelectionGenerator := NewMachineSelectionGenerator(opts.CloudProvider, machineSelector, opts.ResizableMachineTypesProvider)
 	preemptionGenerator := NewPreemeptionOptionGenerator(opts.Flags.ProvisioningLabelEnabled)
-	computeClassGenerator := NewComputeClassGenerator(opts.CloudProvider, opts.Lister, opts.Flags.EnableComputeClassMinCapacity, opts.ExperimentsManager)
+	computeClassGenerator := NewComputeClassGenerator(opts.CloudProvider, opts.Lister, opts.Flags.EnableComputeClassMinCapacity, opts.Flags.EnableComputeClassConfigHash, opts.ExperimentsManager)
 	// initialGenerators is a slice with generators that need to be run before others.
 	// For example - GPU request generator needs to be run before machine selection generator,
 	// so that GPU is known before we select machine.
