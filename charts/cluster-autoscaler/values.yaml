@@ -177,7 +177,7 @@ config:
     # ==========================================================================
     enable-defrag: "true"
     defrag-candidate-node-limit: "20"
-    defrag-plugins: "daemonset,recycling,high-priority-migration,ek-consolidation,failed-nodes"
+    defrag-plugins: "daemonset,recycling,high-priority-migration,resizable-vm-consolidation,failed-nodes"
 
     # ==========================================================================
     # Metrics

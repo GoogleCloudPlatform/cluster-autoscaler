@@ -21,7 +21,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/annotation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/daemonset"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/ekconsolidation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/failednodes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/highprioritymigration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/nodeconfigdrift"
@@ -31,13 +30,11 @@ import (
 )
 
 var pluginBuildersByName = map[string][]config.PluginBuilder{
-	annotation.PluginName:            annotation.PluginBuilders,
-	daemonset.PluginName:             {daemonset.NewPlugin},
-	nodepooldrain.PluginName:         {nodepooldrain.NewPlugin},
-	highprioritymigration.PluginName: {highprioritymigration.NewPlugin},
-	nodeconfigdrift.PluginName:       {nodeconfigdrift.NewPlugin},
-	// TODO(b/548914018): Remove ekconsolidation plugin when it is no longer needed.
-	ekconsolidation.PluginName:          {ekconsolidation.NewPlugin},
+	annotation.PluginName:               annotation.PluginBuilders,
+	daemonset.PluginName:                {daemonset.NewPlugin},
+	nodepooldrain.PluginName:            {nodepooldrain.NewPlugin},
+	highprioritymigration.PluginName:    {highprioritymigration.NewPlugin},
+	nodeconfigdrift.PluginName:          {nodeconfigdrift.NewPlugin},
 	resizablevmconsolidation.PluginName: {resizablevmconsolidation.NewPlugin},
 	recycling.PluginName:                {recycling.NewPlugin},
 	failednodes.PluginName:              {failednodes.NewPlugin},
