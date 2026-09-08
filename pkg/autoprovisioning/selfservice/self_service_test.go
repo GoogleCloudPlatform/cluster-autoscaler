@@ -540,6 +540,21 @@ func TestNodepoolMetadata(t *testing.T) {
 				respectPdbDuringNodePoolDeletionMetadataKey: "true",
 			},
 		},
+		{
+			name: "SubnetPriorities feature is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					Subnetwork: "projects/test-project/regions/us-central1/subnetworks/test-subnet",
+					PodRange:   "test-pod-range",
+				},
+			},
+			wantMetadata: Metadata{
+				subnetPriorityKey:    "test-subnet",
+				podRangeKey:          "test-pod-range",
+				privateNodeFromLabel: "false",
+				privateNodeFromCcc:   "false",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -965,6 +980,23 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 				pdbTimeoutDurationMetadataKey:               "60s",
 				graceTerminationDurationMetadataKey:         "120s",
 				respectPdbDuringNodePoolDeletionMetadataKey: "true",
+			},
+		},
+		{
+			name: "SubnetPriorities feature is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{
+					SubnetPriorities: []v1.SubnetPriority{
+						{
+							Name:     "test-subnet",
+							PodRange: "test-pod-range",
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				subnetPriorityKey: "test-subnet",
+				podRangeKey:       "test-pod-range",
 			},
 		},
 	}
@@ -1598,6 +1630,20 @@ func TestUpdateNodepool(t *testing.T) {
 					GraceTerminationDuration:         "120s",
 					RespectPdbDuringNodePoolDeletion: true,
 					ForceSendFields:                  []string{"PdbTimeoutDuration", "GraceTerminationDuration", "RespectPdbDuringNodePoolDeletion"},
+				},
+			},
+		},
+		{
+			name: "SubnetPriorities feature sets subnetwork and podRange on nodepool",
+			metadata: Metadata{
+				subnetPriorityKey: "test-subnet",
+				podRangeKey:       "test-pod-range",
+			},
+			wantNodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					Subnetwork:      "test-subnet",
+					PodRange:        "test-pod-range",
+					ForceSendFields: []string{"Subnetwork", "PodRange"},
 				},
 			},
 		},
