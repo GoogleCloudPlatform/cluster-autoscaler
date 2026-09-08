@@ -31,6 +31,8 @@ type CRDStatus interface {
 	UpdateRuleResourceInfo(ruleIdx string, info ResourceInfo)
 	// UpdateRuleScalingHistory updates the scaling history of a rule.
 	UpdateRuleScalingHistory(ruleIdx string, history ScalingEventsHistory)
+	// UpdateRuleConfigHash updates the configuration hash of a rule.
+	UpdateRuleConfigHash(ruleIdx string, hash string)
 	// GetConditions returns the current conditions of the CRD.
 	GetConditions() []metav1.Condition
 	// GetRuleConditions returns the conditions of a rule.

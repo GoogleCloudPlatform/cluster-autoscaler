@@ -145,7 +145,7 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
 				map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
 			)
-			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), newFakeStatusClient(), mgr)
+			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), newFakeStatusClient(), mgr, false)
 			if tc.setup != nil {
 				crdObj, _ := mockLister.Crd(tc.msgId.CRDLabel, tc.msgId.CRDName)
 				if crdObj != nil {
@@ -169,6 +169,66 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 	}
 }
 
+type fakeCRDStatusForHash struct {
+	crd.CRDStatus
+	hashes map[string]string
+}
+
+func (f *fakeCRDStatusForHash) UpdateRuleConfigHash(ruleIdx string, hash string) {
+	if f.hashes == nil {
+		f.hashes = make(map[string]string)
+	}
+	f.hashes[ruleIdx] = hash
+}
+
+func TestPopulateConfigHashes(t *testing.T) {
+	testCrdLabel := "ComputeClass"
+	crdName := "test-ccc"
+
+	testCases := []struct {
+		name         string
+		crdObj       crd.CRD
+		expectedHash map[string]string
+	}{
+		{
+			name: "populates hashes for rules",
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash-123"),
+			),
+			expectedHash: map[string]string{},
+		},
+		{
+			name: "populates hash for ScaleUpAnyway",
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash-fallback"),
+				crd.WithScaleUpAnyway(),
+			),
+			expectedHash: map[string]string{
+				"ScaleUpAnyway": "test-hash-fallback",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeStatus := &fakeCRDStatusForHash{}
+			populateConfigHashes(fakeStatus, tc.crdObj)
+
+			if len(tc.expectedHash) == 0 {
+				assert.Empty(t, fakeStatus.hashes)
+			} else {
+				for k, v := range tc.expectedHash {
+					assert.Equal(t, v, fakeStatus.hashes[k])
+				}
+			}
+		})
+	}
+}
+
 func TestAggregator_ExperimentEnabledVsDisabled(t *testing.T) {
 	testCrd := crd.NewTestCrd(
 		crd.WithLabel("test-label"),
@@ -185,7 +245,7 @@ func TestAggregator_ExperimentEnabledVsDisabled(t *testing.T) {
 				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: false},
 				map[string]string{},
 			)
-			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr)
+			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr, false)
 
 			ctx, cancel := context.WithCancel(context.Background())
 
@@ -217,7 +277,7 @@ func TestAggregator_ExperimentEnabledVsDisabled(t *testing.T) {
 				map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
 				map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
 			)
-			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr)
+			aggregator := NewAggregator(nil, mockLister, inputCh, nil, mgr, false)
 
 			ctx, cancel := context.WithCancel(context.Background())
 
@@ -323,7 +383,7 @@ func TestAggregator_MakeUpdates_Metrics(t *testing.T) {
 			metrics.ResetAllForTest()
 			client := newFakeStatusClient()
 			client.writer.err = tc.patchErr
-			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), client, mgr)
+			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), client, mgr, false)
 			crdId := CRDId{CRDName: "test-ccc-1", CRDLabel: testCrdLabel}
 			aggregator.dirtySet[crdId] = true
 
@@ -337,6 +397,100 @@ func TestAggregator_MakeUpdates_Metrics(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, uint64(1), durCount)
 			assert.Empty(t, aggregator.dirtySet)
+		})
+	}
+}
+
+func TestAggregator_ProcessMessage_ConfigHash(t *testing.T) {
+	testCrdLabel := "ComputeClass"
+	crdName := "test-ccc"
+
+	testCases := []struct {
+		name             string
+		enableFlag       bool
+		enableExperiment bool
+		crdObj           crd.CRD
+		wantDirty        bool
+	}{
+		{
+			name:             "flag enabled, experiment enabled -> dirty",
+			enableFlag:       true,
+			enableExperiment: true,
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash"),
+				crd.WithScaleUpAnyway(),
+			),
+			wantDirty: true,
+		},
+		{
+			name:             "flag disabled, experiment enabled -> not dirty",
+			enableFlag:       false,
+			enableExperiment: true,
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash"),
+				crd.WithScaleUpAnyway(),
+			),
+			wantDirty: false,
+		},
+		{
+			name:             "flag enabled, experiment disabled -> not dirty",
+			enableFlag:       true,
+			enableExperiment: false,
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash"),
+				crd.WithScaleUpAnyway(),
+			),
+			wantDirty: false,
+		},
+		{
+			name:             "flag disabled, experiment disabled -> not dirty",
+			enableFlag:       false,
+			enableExperiment: false,
+			crdObj: crd.NewTestCrd(
+				crd.WithLabel(testCrdLabel),
+				crd.WithName(crdName),
+				crd.WithConfigHash("test-hash"),
+				crd.WithScaleUpAnyway(),
+			),
+			wantDirty: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockLister := lister.NewMockCrdLister([]crd.CRD{tc.crdObj})
+			mockLister.SetCrdLabel(testCrdLabel)
+
+			var expFlags map[string]bool
+			if tc.enableExperiment {
+				expFlags = map[string]bool{experiments.ComputeClassConfigHashEnabledFlag: true}
+			} else {
+				expFlags = map[string]bool{experiments.ComputeClassConfigHashEnabledFlag: false}
+			}
+
+			mgr := experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				expFlags,
+				map[string]string{experiments.ComputeClassConfigHashMinCAVersionFlag: "1.0.0"},
+			)
+
+			aggregator := NewAggregator(nil, mockLister, make(chan UpdateMessage), newFakeStatusClient(), mgr, tc.enableFlag)
+			msgId := CRDId{CRDLabel: testCrdLabel, CRDName: crdName}
+
+			aggregator.processMessage(UpdateMessage{
+				Id: msgId,
+				Mutate: func(status crd.CRDStatus) {
+					// no-op
+				},
+			})
+
+			assert.Equal(t, tc.wantDirty, aggregator.dirtySet[msgId])
 		})
 	}
 }

@@ -48,6 +48,7 @@ func (f *fakeCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history crd.Sca
 	}
 	f.histories[ruleIdx] = history
 }
+func (f *fakeCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string)    {}
 func (f *fakeCRDStatus) GetConditions() []metav1.Condition                   { return nil }
 func (f *fakeCRDStatus) GetRuleConditions(ruleIdx string) []metav1.Condition { return nil }
 func (f *fakeCRDStatus) GetRuleScalingHistory(ruleIdx string) *crd.ScalingEventsHistory {

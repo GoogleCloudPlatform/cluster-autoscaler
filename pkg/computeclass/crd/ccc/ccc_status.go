@@ -98,6 +98,12 @@ func (s *cccCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history crd.Scal
 	s.apiStatus.PriorityStatuses[idx].ScalingEventsHistory = h
 }
 
+// UpdateRuleConfigHash implements crd.CRDStatus.
+func (s *cccCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
+	idx := s.getOrCreatePriorityStatusIdx(ruleIdx)
+	s.apiStatus.PriorityStatuses[idx].ConfigHash = hash
+}
+
 // ResetAllScalingHistories implements crd.CRDStatus.
 func (s *cccCRDStatus) ResetAllScalingHistories() {
 	for i := range s.apiStatus.PriorityStatuses {

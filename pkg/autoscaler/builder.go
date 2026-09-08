@@ -734,7 +734,7 @@ func (b *Builder) Build(
 			}
 		}
 
-		aggregator := status.NewAggregator(b.npcCrdClient, b.npcCrdLister, cccStatusUpdatesCh, ctrClient, experimentsManager)
+		aggregator := status.NewAggregator(b.npcCrdClient, b.npcCrdLister, cccStatusUpdatesCh, ctrClient, experimentsManager, autoscalingOptions.EnableComputeClassConfigHash)
 		go aggregator.Start(bgContext)
 	}
 
