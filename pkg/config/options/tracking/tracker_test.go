@@ -44,6 +44,7 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 		flagValues             internalopts.AutoscalingOptions
 		experimentValues       map[string]bool
 		stringExperimentValues map[string]string
+		clusterProto           gkeclient.Cluster
 
 		wantOptionsAfterExperiments internalopts.AutoscalingOptions
 		wantRestart                 bool
@@ -218,6 +219,14 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			},
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ReservationsAnyLocationPolicyOverride: true}},
 		},
+		{
+			testName:                    "ResizableVmEdpEnabled_field_is_tracked",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ResizableVmEdpEnabled: false}},
+			stringExperimentValues:      map[string]string{experiments.EnableResizableVmEdpMinGKEVersionFlag: "1.26.0-gke.0"},
+			clusterProto:                gkeclient.Cluster{ClusterVersion: "1.30.0-gke.0"},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ResizableVmEdpEnabled: true}},
+			wantRestart:                 false,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()
@@ -225,7 +234,7 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			// Make sure the same init logic used by the public NewOptionsTracker constructor gets tested here - it's crucial for OptionsTracker correctly
 			// handling the fields that aren't tracked.
 			tracker := NewOptionsTracker(tc.flagValues, noExperiments)
-			tracker.StoreCluster(gkeclient.Cluster{})
+			tracker.StoreCluster(tc.clusterProto)
 
 			// Compute the options for the first time with no experiments defined - all field values should stay the same as the flag ones.
 			// Since this is the first call to RecomputeOptions(), the resulting values should be saved as the startup options.

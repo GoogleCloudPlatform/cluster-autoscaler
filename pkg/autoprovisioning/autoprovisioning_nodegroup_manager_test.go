@@ -858,13 +858,11 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutopilotEnabled(true).
 		WithAutoprovisioningEnabled(true).
-		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
 	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
-	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    provider,
 		Backoff:                          gke_backoff.NewGkeBackoff(gke_backoff.Config{CustomResourceProcessor: processor, NpcLister: computeClassLister}),
@@ -872,10 +870,14 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		Flags:                            AutoprovisioningNodeGroupManagerFlags{},
 		PodLister:                        kube_util.NewTestPodLister([]*apiv1.Pod{}),
 		Lister:                           computeClassLister,
-		ExperimentsManager:               em,
+		ExperimentsManager:               experiments.NewMockManager(),
 		ResizableMachineTypesProvider:    config.NewSimpleStringSetProvider(allResizableMachineTypes),
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
-		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
+		OptionsTracker: tracking.StaticOptionsTracker(options.AutoscalingOptions{
+			InternalOptions: options.InternalOptions{
+				ResizableVmEdpEnabled: true,
+			},
+		}),
+		ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
@@ -998,7 +1000,6 @@ func TestCSNPod(t *testing.T) {
 		}).
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutoprovisioningEnabled(true).
-		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
@@ -1571,7 +1572,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewSandboxTypeGenerator(),
 		NewPreemeptionOptionGenerator(true),
 		NewConsolidationDelayGenerator(nil),
-		NewExtendedDurationPodGenerator(provider),
+		NewExtendedDurationPodGenerator(provider, nil),
 		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true, true, nil),
 		NewSelfServiceGenerator(),
 		NewPodIsolationLabelGenerator(provider),

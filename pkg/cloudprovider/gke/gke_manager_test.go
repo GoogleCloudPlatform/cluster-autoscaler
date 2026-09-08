@@ -3899,11 +3899,6 @@ func (mekp *mockResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledIn
 	return args.Get(0).(bool)
 }
 
-func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEdpEnabled() bool {
-	args := mekp.Called()
-	return args.Get(0).(bool)
-}
-
 func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	args := mekp.Called(machineFamily)
 	return args.Get(0).(bool)
@@ -5907,82 +5902,6 @@ func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 			}
 			assert.Equal(t, wantErr, gotErr)
 			assert.Equal(t, tc.wantCapacityCheckWaitTimeSeconds, got)
-		})
-	}
-}
-
-func TestIsResizableVmEdpEnabled(t *testing.T) {
-	testCases := []struct {
-		name           string
-		clusterVersion string
-		minVersion     string
-		want           bool
-	}{
-		{
-			name:           "Cluster version less than min version - Disabled",
-			clusterVersion: "1.25.10-gke.1000",
-			minVersion:     "1.26.1-gke.0",
-			want:           false, // 1.25.x < 1.26.x
-		},
-		{
-			name:           "Cluster version equals min version - Enabled",
-			clusterVersion: "1.26.5-gke.100",
-			minVersion:     "1.26.5-gke.100",
-			want:           true, // Equal versions: !v.LessThan(vMin) is true
-		},
-		{
-			name:           "Cluster version greater than min version - Enabled",
-			clusterVersion: "1.27.1-gke.500",
-			minVersion:     "1.26.10-gke.0",
-			want:           true, // 1.27.x > 1.26.x
-		},
-		{
-			name:           "Patch version greater - Enabled",
-			clusterVersion: "1.26.10-gke.10",
-			minVersion:     "1.26.10-gke.5",
-			want:           true, // 10 > 5
-		},
-		{
-			name:           "Different version formats (semantic vs GKE) - Enabled",
-			clusterVersion: "1.27.0",
-			minVersion:     "1.26.0-gke.10",
-			want:           true, // 1.27.0 > 1.26.x
-		},
-		{
-			name:           "Invalid clusterVersion string - Disabled",
-			clusterVersion: "invalid_version_string",
-			minVersion:     "1.26.1-gke.0",
-			want:           false, // Fails version.FromString(m.clusterVersion)
-		},
-		{
-			name:           "Invalid minVersion string - Disabled",
-			clusterVersion: "1.27.1-gke.500",
-			minVersion:     "invalid_min_version",
-			want:           false, // Fails version.FromString(minGkeVersion)
-		},
-		{
-			name:           "Both invalid - Disabled",
-			clusterVersion: "a.b.c",
-			minVersion:     "x.y.z",
-			want:           false, // Fails version.FromString(m.clusterVersion) first
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			server := NewHttpServerMock()
-			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil, tc.clusterVersion)
-
-			addDefaultListMigsMocks(server, g.cache)
-			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{},
-				map[string]bool{},
-				map[string]string{
-					experiments.EnableResizableVmEdpMinGKEVersionFlag: tc.minVersion,
-				})
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
-			g.refreshResizableVmEdpEnabled()
-			got := g.IsResizableVmEdpEnabled()
-
-			assert.Equal(t, tc.want, got)
 		})
 	}
 }

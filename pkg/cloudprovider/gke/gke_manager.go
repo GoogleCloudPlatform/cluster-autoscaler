@@ -357,8 +357,6 @@ type GkeManager interface {
 	GetInjectedMig(mig *GkeMig) *GkeMig
 	// SetInjectedMig sets an injected mig for existing mig.
 	SetInjectedMig(real, injected *GkeMig)
-	// IsResizableVmEdpEnabled returns true if Edp on resizable VMs with affinity X is enabled
-	IsResizableVmEdpEnabled() bool
 	// IsArmMachineFallbacksEnabled returns true if machine fallbacks to N4A and C4A are enabled.
 	IsArmMachineFallbacksEnabled() bool
 	// CapacityCheckWaitTimeSeconds returns capacityCheckWaitTimeSeconds for the given mig based on default experiment values and custom capacityCheckWaitTimeSeconds override.
@@ -547,7 +545,6 @@ type gkeManagerImpl struct {
 	draResourcePredictor   *dynamicresources.ResourcePredictor
 	machineConfigProvider  *machinetypes.MachineConfigProvider
 
-	resizableVmEdpEnabledCache          bool
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
 	recommendations                     sync.Map
 }
@@ -1978,8 +1975,6 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	m.InvalidateNodesScaleDownAllowedCache()
 	m.cache.InvalidateCapacityCheckWaitTimes()
 
-	m.refreshResizableVmEdpEnabled()
-
 	// TODO(b/348360895): Cleanup after EK experiment is over.
 	m.resizableVmAutoprovisioningProvider.Refresh()
 
@@ -2191,24 +2186,6 @@ func (m *gkeManagerImpl) refreshShortLivedUpgradeInProgress() {
 	}
 	_ = eg.Wait()
 	klogx.V(1).Over(loggingQuota).Infof("There are also %d other MIGs having ShortLived upgrade in progress", -loggingQuota.Left())
-}
-
-func (m *gkeManagerImpl) refreshResizableVmEdpEnabled() {
-	var minGkeVersion = m.optsTracker.ExperimentsManager().EvaluateStringFlagOrFailsafe(experiments.EnableResizableVmEdpMinGKEVersionFlag, "999.999.999-gke.0")
-
-	v, err := version.FromString(m.clusterVersion)
-	if err != nil {
-		m.resizableVmEdpEnabledCache = false
-		klog.Errorf("Failed to parse cluster version %q: %v", m.clusterVersion, err)
-		return
-	}
-	vMin, err := version.FromString(minGkeVersion)
-	if err != nil {
-		m.resizableVmEdpEnabledCache = false
-		klog.Errorf("Failed to parse min GKE version %q: %v", minGkeVersion, err)
-		return
-	}
-	m.resizableVmEdpEnabledCache = !v.LessThan(vMin)
 }
 
 func (m *gkeManagerImpl) refreshCSNMetrics() {
@@ -3052,11 +3029,6 @@ func (m *gkeManagerImpl) IsArmMachineFallbacksEnabled() bool {
 	}
 	return m.optsTracker.ExperimentsManager().EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotArmMachineFallbacksMinCAVersionFlag, false) &&
 		m.optsTracker.ExperimentsManager().EvaluateBoolFlagOrFailsafe(experiments.AutopilotArmMachineFallbacksEnabledFlag, true)
-}
-
-// IsResizableVmEdpEnabled returns true if Edp on resizable VMs with affinity X is enabled
-func (m *gkeManagerImpl) IsResizableVmEdpEnabled() bool {
-	return m.resizableVmEdpEnabledCache
 }
 
 // ResizingEnabled checks if resizing is enabled for the given machine family.

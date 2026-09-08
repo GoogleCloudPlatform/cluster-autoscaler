@@ -198,7 +198,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 		// generator, so that TPU config is known upfront.
 		initialGenerators = append(initialGenerators, NewTpuRequestGenerator(opts.CloudProvider))
 	}
-	generator := NewExtendedDurationPodGenerator(opts.CloudProvider)
+	generator := NewExtendedDurationPodGenerator(opts.CloudProvider, opts.OptionsTracker)
 	specGenerators = append(specGenerators, generator)
 	nodeGroupOptionsGenerators = append(nodeGroupOptionsGenerators, generator)
 	specGenerators = append(specGenerators, computeClassGenerator)
