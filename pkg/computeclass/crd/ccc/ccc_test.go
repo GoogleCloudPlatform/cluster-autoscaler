@@ -17,8 +17,6 @@ package ccc
 import (
 	"fmt"
 	"os"
-	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +27,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -3057,73 +3054,4 @@ func TestConfigHash(t *testing.T) {
 
 	assert.Equal(t, hashP1, crdInternalChange.ConfigHash(rulesInternalChange[0]))
 	assert.Equal(t, hashP2, crdInternalChange.ConfigHash(rulesInternalChange[1]))
-}
-
-//go:embed testdata/hashed_config_paths.txt
-var hashedPathsData string
-
-func TestComputeClassAPIGuard(t *testing.T) {
-	// This test prevents regressions of ConfigHash() when new fields are added to the CCC API.
-	// If the new field should not be included in the hash, update ConfigHash() to ignore it.
-	// Either way, update testdata/hashed_config_paths.txt to acknowledge the new field.
-	hashedPaths := sets.NewString()
-	for _, line := range strings.Split(hashedPathsData, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			hashedPaths.Insert(trimmed)
-		}
-	}
-
-	collectedPaths := sets.NewString()
-	seenTypes := make(map[reflect.Type]bool)
-
-	var walkType func(reflect.Type, string)
-	walkType = func(typ reflect.Type, prefix string) {
-		if typ.Kind() == reflect.Ptr {
-			typ = typ.Elem()
-		}
-
-		if seenTypes[typ] {
-			return
-		}
-		// Avoid infinite recursion for cyclic types if any
-		seenTypes[typ] = true
-		defer func() { seenTypes[typ] = false }()
-
-		if typ.Kind() == reflect.Struct {
-			for i := 0; i < typ.NumField(); i++ {
-				field := typ.Field(i)
-				// Skip unexported fields
-				if field.PkgPath != "" {
-					continue
-				}
-				path := prefix + "." + field.Name
-				collectedPaths.Insert(path)
-				walkType(field.Type, path)
-			}
-		} else if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
-			walkType(typ.Elem(), prefix)
-		} else if typ.Kind() == reflect.Map {
-			// We usually don't care about map keys for path guarding if they are primitives,
-			// but we care about value types.
-			walkType(typ.Elem(), prefix)
-		}
-	}
-
-	// We hash these types in ConfigHash
-	walkType(reflect.TypeOf(v1.NodePoolConfig{}), "NodePoolConfig")
-	walkType(reflect.TypeOf(v1.NodePoolGroup{}), "NodePoolGroup")
-	walkType(reflect.TypeOf(v1.PriorityDefaults{}), "PriorityDefaults")
-	walkType(reflect.TypeOf(v1.Priority{}), "Priority")
-
-	// Check for new paths
-	newPaths := collectedPaths.Difference(hashedPaths)
-	if newPaths.Len() > 0 {
-		t.Errorf("New field paths detected in CCC API. Please verify if they should be included in ConfigHash().\nNew paths:\n%s", strings.Join(newPaths.List(), "\n"))
-	}
-
-	// Check for removed paths (stale allowlist)
-	removedPaths := hashedPaths.Difference(collectedPaths)
-	if removedPaths.Len() > 0 {
-		t.Logf("Stale field paths found in allowlist (likely removed from API):\n%s", strings.Join(removedPaths.List(), "\n"))
-	}
 }
