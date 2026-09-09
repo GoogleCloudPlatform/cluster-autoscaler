@@ -15,24 +15,8 @@
 # Builder stage
 FROM --platform=$BUILDPLATFORM google-go.pkg.dev/golang:1.26.1 AS builder
 
-ARG PROTOC_VERSION=21.12
-ARG PROTOC_GEN_GO_VERSION=v1.31.0
-
-# Install dependencies needed for compilation (from builder/Dockerfile)
-RUN apt-get update && apt-get --yes install curl unzip && \
-    rm -rf /var/lib/apt/lists/*
-
-# Install protoc
-ARG BUILDPLATFORM
-COPY hack/install-protoc.sh hack/
-RUN ./hack/install-protoc.sh ${PROTOC_VERSION} /usr/local ${BUILDPLATFORM}
-
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
-
 WORKDIR /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler
 COPY . .
-
-RUN for protofile in $(find . -name "*.proto" -not -path "**/vendor/**"); do protoc $protofile --go_out=.; done
 
 ARG TARGETARCH
 ARG VERSION
