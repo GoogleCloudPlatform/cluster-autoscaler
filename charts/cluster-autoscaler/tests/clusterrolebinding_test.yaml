@@ -1,0 +1,71 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test ClusterRoleBinding template
+templates:
+  - clusterrolebinding.yaml
+tests:
+  - it: should render ClusterRoleBinding by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ClusterRoleBinding
+      - isAPIVersion:
+          of: rbac.authorization.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: roleRef.apiGroup
+          value: rbac.authorization.k8s.io
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: subjects[0].namespace
+          value: NAMESPACE
+
+  - it: should not render ClusterRoleBinding when rbac.create is false
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should bind to custom ServiceAccount name
+    set:
+      serviceAccount.name: custom-autoscaler-sa
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: custom-autoscaler-sa
+
+  - it: should support custom RBAC annotations
+    set:
+      rbac.annotations:
+        rbac.authorization.k8s.io/autoupdate: "false"
+    asserts:
+      - equal:
+          path: metadata.annotations["rbac.authorization.k8s.io/autoupdate"]
+          value: "false"

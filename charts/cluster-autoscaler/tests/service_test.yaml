@@ -1,0 +1,115 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test Service template
+templates:
+  - service.yaml
+tests:
+  - it: should render Service by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - isAPIVersion:
+          of: v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 8085
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].protocol
+          value: TCP
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: cluster-autoscaler
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+
+  - it: should not render Service when disabled
+    set:
+      service.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should support custom type, ports, clusterIP, and externalIPs
+    set:
+      service.type: LoadBalancer
+      service.port: 9090
+      server.portName: metrics
+      service.clusterIP: 10.96.0.10
+      service.externalIPs:
+        - 192.168.1.100
+      service.loadBalancerIP: 35.200.0.1
+      service.loadBalancerSourceRanges:
+        - 10.0.0.0/8
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: spec.ports[0].port
+          value: 9090
+      - equal:
+          path: spec.ports[0].targetPort
+          value: metrics
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+      - equal:
+          path: spec.clusterIP
+          value: 10.96.0.10
+      - equal:
+          path: spec.externalIPs[0]
+          value: 192.168.1.100
+      - equal:
+          path: spec.loadBalancerIP
+          value: 35.200.0.1
+      - equal:
+          path: spec.loadBalancerSourceRanges[0]
+          value: 10.0.0.0/8
+
+  - it: should support custom metadata, labels, and selector override
+    set:
+      service.annotations:
+        prometheus.io/scrape: "true"
+      service.labels:
+        custom-service-label: enabled
+      service.selector:
+        custom-app: custom-ca
+    asserts:
+      - equal:
+          path: metadata.annotations["prometheus.io/scrape"]
+          value: "true"
+      - equal:
+          path: metadata.labels["custom-service-label"]
+          value: enabled
+      - equal:
+          path: spec.selector["custom-app"]
+          value: custom-ca
+      - notExists:
+          path: spec.selector["app.kubernetes.io/name"]

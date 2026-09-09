@@ -1,0 +1,93 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test ServiceMonitor template
+templates:
+  - servicemonitor.yaml
+tests:
+  - it: should not render ServiceMonitor by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should render ServiceMonitor when enabled
+    set:
+      serviceMonitor.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor
+      - isAPIVersion:
+          of: monitoring.coreos.com/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - notExists:
+          path: metadata.namespace
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 10s
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: cluster-autoscaler
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: NAMESPACE
+
+  - it: should support custom namespace, interval, path, selector, and relabelings
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.namespace: monitoring
+      serviceMonitor.interval: 30s
+      serviceMonitor.path: /custom-metrics
+      serviceMonitor.selector:
+        prometheus: k8s
+      serviceMonitor.annotations:
+        monitoring.coreos.com/ready: "true"
+      serviceMonitor.relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+      serviceMonitor.metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: "cluster_autoscaler_.*"
+          action: keep
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: monitoring
+      - equal:
+          path: metadata.labels.prometheus
+          value: k8s
+      - equal:
+          path: metadata.annotations["monitoring.coreos.com/ready"]
+          value: "true"
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+      - equal:
+          path: spec.endpoints[0].path
+          value: /custom-metrics
+      - equal:
+          path: spec.endpoints[0].relabelings[0].targetLabel
+          value: pod
+      - equal:
+          path: spec.endpoints[0].metricRelabelings[0].action
+          value: keep

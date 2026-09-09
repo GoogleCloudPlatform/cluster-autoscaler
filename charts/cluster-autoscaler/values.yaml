@@ -18,6 +18,21 @@ nameOverride: ""
 fullnameOverride: ""
 # Labels to add to each object of the chart.
 additionalLabels: {}
+# Extra objects to deploy as part of this chart.
+extraObjects: []
+#  - apiVersion: v1
+#    kind: ConfigMap
+#    metadata:
+#      name: my-configmap
+#    data:
+#      key: "value"
+#  - apiVersion: scheduling.k8s.io/v1
+#    kind: PriorityClass
+#    metadata:
+#      name: high-priority
+#    value: 1000000
+#    globalDefault: false
+#    description: "This priority class should be used for XYZ service pods only."
 
 # ==============================================================================
 # CLUSTER IDENTITY
@@ -29,14 +44,6 @@ cluster:
   projectNumber: ""
   location: ""
   regional: true
-
-# ==============================================================================
-# CLOUD CONFIG
-# ==============================================================================
-
-# cloudConfig is the content of the gce.conf file. If set, it will be mounted
-# to /etc/gce.conf and provided to the autoscaler.
-cloudConfig: ""
 
 # ==============================================================================
 # AUTOSCALING PROFILES DEFINITION
