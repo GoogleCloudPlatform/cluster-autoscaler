@@ -195,8 +195,9 @@ func (p *ScaleUpStatusMetricsProcessor) processImpl(context *ca_context.Autoscal
 	//  1. Need GPU
 	//	2. Encountered a stockout.
 	unschedulablePods := make(map[types.UID]bool)
-	unscheduledPodsLabels := p.filterPodsAndAddLabels(p.aggregator.Unschedulable)
-	for _, pod := range p.aggregator.Unschedulable {
+	unschedulable := p.aggregator.GetUnschedulable()
+	unscheduledPodsLabels := p.filterPodsAndAddLabels(unschedulable)
+	for _, pod := range unschedulable {
 		if crutils.IsPodCapacityRequest(pod) {
 			continue
 		}
@@ -304,7 +305,7 @@ func (p *ScaleUpStatusMetricsProcessor) processImpl(context *ca_context.Autoscal
 	}
 
 	p.labelCounter.process(p.observer.setLongUnschedulablePodCount)
-	p.metricsFilter.CleanCache(p.aggregator.Unschedulable, now)
+	p.metricsFilter.CleanCache(unschedulable, now)
 }
 
 // filterPodsAndAddLabels filters out pods that have quota issues and have a

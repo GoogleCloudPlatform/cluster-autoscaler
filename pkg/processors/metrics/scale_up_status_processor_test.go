@@ -148,7 +148,7 @@ func TestLongUnschedulable(t *testing.T) {
 	longUnschedulable := makePendingPod("longUnschedulable", now.Add(-2*longUnschedulableThreshold))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{longUnschedulable}
+	aggregator.SetUnschedulable([]*apiv1.Pod{longUnschedulable})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -161,7 +161,7 @@ func TestLongUnschedulable(t *testing.T) {
 	assert.Equal(t, 1, observer.longUnschedulable)
 
 	// Make sure removing a pod decreases the metric
-	aggregator.Unschedulable = []*apiv1.Pod{}
+	aggregator.SetUnschedulable([]*apiv1.Pod{})
 	processor.Process(context.TODO(), autoscalingCtx, scaleUpStatus)
 	assert.Equal(t, 0, observer.longUnschedulable)
 }
@@ -172,7 +172,7 @@ func TestNoLongUnschedulableAfterRestart(t *testing.T) {
 	longUnschedulable := makePendingPod("longUnschedulable", now.Add(-2*longUnschedulableThreshold))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{longUnschedulable}
+	aggregator.SetUnschedulable([]*apiv1.Pod{longUnschedulable})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -189,7 +189,7 @@ func TestNoLongUnschedulableIfCantBeHelped(t *testing.T) {
 	longUnschedulable := makePendingPod("longUnschedulable", now.Add(-2*longUnschedulableThreshold))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{longUnschedulable}
+	aggregator.SetUnschedulable([]*apiv1.Pod{longUnschedulable})
 
 	scaleUpStatusUnhelpable := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotNeeded,
@@ -230,7 +230,7 @@ func TestPodScheduled(t *testing.T) {
 	pod := makePendingPod("PoddyThePrettyPod", now.Add(-1*time.Minute))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -245,7 +245,7 @@ func TestPodScheduled(t *testing.T) {
 	// Poddy is scheduled at t+2
 	later := now.Add(2 * time.Minute)
 	schedulePod(pod, later)
-	aggregator.Unschedulable = []*apiv1.Pod{}
+	aggregator.SetUnschedulable([]*apiv1.Pod{})
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 	processor.processImpl(autoscalingCtx, scaleUpStatus, later.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -263,7 +263,7 @@ func TestPodScheduledAfterBeingSchedulable(t *testing.T) {
 	pod := makePendingPod("PoddyNoLongerSchedulesInstantly", now.Add(-1*time.Minute))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -289,7 +289,7 @@ func TestPodScheduledAfterBeingSchedulable(t *testing.T) {
 	// Poddy was still not scheduled at the start of the loop!
 	// What a slacker. Good that our processor should handle that just fine.
 	// So we won't do this:
-	// aggregator.Unschedulable = []*apiv1.Pod{}
+	// aggregator.SetUnschedulable([]*apiv1.Pod{})
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 	processor.processImpl(autoscalingCtx, scaleUpStatus, evenLater.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -308,7 +308,7 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 	pod := makePendingPod("HungryPoddyStarvedByScheduler", now.Add(-1*time.Minute))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -339,7 +339,7 @@ func TestPodScheduledAfterBeingSchedulableAndUnschedulableAgain(t *testing.T) {
 	// Poddy is scheduled
 	evenLater := later.Add(2 * time.Minute)
 	schedulePod(pod, evenLater)
-	aggregator.Unschedulable = []*apiv1.Pod{}
+	aggregator.SetUnschedulable([]*apiv1.Pod{})
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 	processor.processImpl(autoscalingCtx, scaleUpStatus, evenLater.Add(1*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -360,7 +360,7 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 	pod := makePendingPod("LittleRedRidingPoddy", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaryScaleUpStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotNeeded,
@@ -397,7 +397,7 @@ func TestPodScheduledAfterBeingUnhelpable(t *testing.T) {
 	// And Poddy has scheduled in grandma's house (at t+5)
 	evenLater := later.Add(time.Minute)
 	schedulePod(pod, evenLater)
-	aggregator.Unschedulable = []*apiv1.Pod{}
+	aggregator.SetUnschedulable([]*apiv1.Pod{})
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 	processor.processImpl(autoscalingCtx, happyScaleUpStatus, evenLater.Add(time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -417,7 +417,7 @@ func TestUnschedulableDurationWithPodFilterableIssues(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -459,7 +459,7 @@ func TestForgetOldPods(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -516,7 +516,7 @@ func TestUnschedulableDurationWithPreemptionVmRequired(t *testing.T) {
 			pod.Spec.NodeSelector[preemptionLabel] = labels.PreemptionValue
 
 			aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result:               status.ScaleUpSuccessful,
@@ -558,7 +558,7 @@ func TestPodStockoutIssuesOnlyOneNodeGroupStockout(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -614,7 +614,7 @@ func TestPodIsConsumingProvisioningRequest(t *testing.T) {
 	}
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
@@ -646,7 +646,7 @@ func TestPodIsUsingDeviceAllocationMode(t *testing.T) {
 	}
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	newStatus := &status.ScaleUpStatus{
 		Result: status.ScaleUpNotTried,
@@ -727,7 +727,7 @@ func TestPodIsNotProcessedByScheduler(t *testing.T) {
 			pod.CreationTimestamp = metav1.NewTime(tc.createdAt)
 
 			aggregator, observer, processor, _ := setUpProcessor(tc.autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result: status.ScaleUpNotTried,
 			}
@@ -752,7 +752,7 @@ func TestPodIsNotProcessedByScheduler(t *testing.T) {
 			}
 
 			// Pod got scheduled later
-			aggregator.Unschedulable = []*apiv1.Pod{}
+			aggregator.SetUnschedulable([]*apiv1.Pod{})
 			schedulePod(pod, tc.scheduledAt)
 			autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 			processor.processImpl(autoscalingCtx, scaleUpStatus, tc.scheduledAt)
@@ -777,7 +777,7 @@ func TestGPUPodMetric(t *testing.T) {
 	})
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{gpuPod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{gpuPod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -822,7 +822,7 @@ func TestLongUnschedulableWithFilterableIssues(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -863,7 +863,7 @@ func TestLongUnschedulableWithClusterScaledToZero(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, metricsFilter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -921,7 +921,7 @@ func TestPodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -994,7 +994,7 @@ func TestLongUnschedulableWithDSPods(t *testing.T) {
 			pod := makePendingPod("p1", now.Add(-longUnschedulableThreshold-1))
 			pod.OwnerReferences = []metav1.OwnerReference{{Kind: tc.ownerKind}}
 			aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result:               status.ScaleUpSuccessful,
@@ -1073,7 +1073,7 @@ func TestLongUnschedulableWithDifferentSchedulers(t *testing.T) {
 			pod := makePendingPod("p1", now.Add(-longUnschedulableThreshold-1))
 			pod.Spec.SchedulerName = tc.scheduler
 			aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result:               status.ScaleUpSuccessful,
@@ -1118,7 +1118,7 @@ func TestLongUnschedulablePodStockoutIssuesAllNodeGroupsStockout(t *testing.T) {
 	pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -1174,7 +1174,7 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 	pod2 := makePendingPod("p2", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, filter := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod1, pod2}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod1, pod2})
 
 	scaleUpStatus1 := &status.ScaleUpStatus{
 		Result:               status.ScaleUpSuccessful,
@@ -1220,7 +1220,7 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 		Result: status.ScaleUpNotTried,
 	}
 
-	aggregator.Unschedulable = []*apiv1.Pod{pod2}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod2})
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod1})
 
 	processor.processImpl(autoscalingCtx, newStatus, later.Add(time.Minute))
@@ -1239,7 +1239,7 @@ func TestMultipleNodeGroupsScaleUpWithStockout(t *testing.T) {
 
 	// Ng3 now has a stockout and then gets scheduled, causing new metrics for p2
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod1, pod2})
-	aggregator.Unschedulable = []*apiv1.Pod{}
+	aggregator.SetUnschedulable([]*apiv1.Pod{})
 	filter.ObserveNodeGroupStockOut("ng3")
 	processor.processImpl(autoscalingCtx, newStatus, later.Add(2*time.Minute))
 	assert.Equal(t, 0, observer.longUnschedulable)
@@ -1373,7 +1373,7 @@ func TestPodSchedulingDurationPerAllocationMode(t *testing.T) {
 			tc.setupPod(pod)
 
 			aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 			scaleUpStatus := &status.ScaleUpStatus{
 				Result:               status.ScaleUpSuccessful,
@@ -1424,7 +1424,7 @@ func TestPodScheduled_CCC(t *testing.T) {
 			pod := makePendingPod("p1", now.Add(-5*time.Minute))
 
 			aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-			aggregator.Unschedulable = []*apiv1.Pod{pod}
+			aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 			processor.npcCrdLister = &mockNpcCrdLister{crdName: tc.returnedCCC}
 
@@ -1462,7 +1462,7 @@ func TestPodScheduled_NegativeDurationCappedAtZero(t *testing.T) {
 	pod := makePendingPod("RacePod", now.Add(-5*time.Minute))
 
 	aggregator, observer, processor, _ := setUpProcessor(autoscalerStart)
-	aggregator.Unschedulable = []*apiv1.Pod{pod}
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod})
 
 	scaleUpStatus := &status.ScaleUpStatus{Result: status.ScaleUpNotNeeded}
 	autoscalingCtx := setUpContext([]*apiv1.Pod{})
@@ -1489,7 +1489,7 @@ func TestPodScheduled_NegativeDurationCappedAtZero(t *testing.T) {
 	// But context lister returns it as scheduled!
 	autoscalingCtx = setUpContext([]*apiv1.Pod{pod})
 
-	aggregator.Unschedulable = []*apiv1.Pod{} // It's scheduled, so not in unschedulable aggregator anymore.
+	aggregator.SetUnschedulable([]*apiv1.Pod{}) // It's scheduled, so not in unschedulable aggregator anymore.
 
 	processor.processImpl(autoscalingCtx, scaleUpStatusUnhelpable, later)
 
