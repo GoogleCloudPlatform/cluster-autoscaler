@@ -51,10 +51,9 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dea
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install protoc v3.21.12
-ARG PROTOC_VERSION=21.12
+ARG PROTOC_VERSION=36.1
 ARG PROTOC_ZIP=protoc-${PROTOC_VERSION}-linux-x86_64.zip
-ARG PROTOC_SHA256=3a4c1e5f2516c639d3079b1586e703fc7bcfa2136d58bda24d1d54f949c315e8
+ARG PROTOC_SHA256=c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4
 RUN curl -fLO https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${PROTOC_ZIP} && \
     echo "${PROTOC_SHA256}  ${PROTOC_ZIP}" | sha256sum -c - && \
     unzip -o ${PROTOC_ZIP} -d /usr/local bin/protoc && \
@@ -62,7 +61,7 @@ RUN curl -fLO https://github.com/protocolbuffers/protobuf/releases/download/v${P
     rm -f ${PROTOC_ZIP}
 
 
-ARG PROTOC_GEN_GO_VERSION=v1.31.0
+ARG PROTOC_GEN_GO_VERSION=v1.36.12
 ARG GOLANGCI_LINT_VERSION=v2.9.0
 ARG MISSPEL_VERSION=v0.3.4
 RUN \
