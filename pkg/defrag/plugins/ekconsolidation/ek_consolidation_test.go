@@ -362,7 +362,8 @@ func TestEkConsolidationNewCandidate(t *testing.T) {
 			} else {
 				assert.NotNil(t, candidate)
 				assert.Equal(t, tc.wantCandidateNodeNames, candidate.Nodes)
-				assert.Equal(t, defrag.Partial, candidate.Mode)
+				assert.Equal(t, defrag.CreateBeforeDelete, candidate.Mode)
+				assert.False(t, candidate.IsAtomic)
 			}
 
 			latestUnfitNodesCount := plugin.LatestUnfitNodesCount()

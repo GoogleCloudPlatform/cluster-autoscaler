@@ -36,20 +36,12 @@ type Mode int
 
 const (
 	// CreateBeforeDelete means that the candidate nodes should be scaled-down iff.
-	// their pods can be scheduled on already existing nodes. This mode is atomic,
-	// i.e. scale down will be initiated once per candidate for all candidate
-	// nodes once all pods can be rescheduled. This is the default.
+	// their pods can be scheduled on already existing nodes. This is the default.
 	CreateBeforeDelete Mode = iota
 	// DeleteBeforeCreate means that the candidate nodes should be scaled-down ASAP,
 	// even if there is no place in the cluster to schedule them. This mode should
 	// be used iff. there is no possibility of scale-up before the nodes are deleted.
 	DeleteBeforeCreate
-	// Partial works similarly to CreateBeforeDelete, but defrag can scale down
-	// individual candidate nodes once their pods can be scheduled on already
-	// existing nodes. This mode allows defrag to scale down part of the nodes,
-	// even if it encounters issues further in the processing. Falls back
-	// to CreateBeforeDelete if experiment is disabled.
-	Partial
 )
 
 // Describes plugin type
@@ -75,22 +67,44 @@ type Candidate struct {
 	IsAtomic bool
 }
 
-func NewCandidate(nodes []string, mode Mode) *Candidate {
+// NewCandidate creates a Candidate with the specified nodes, mode, and atomicity.
+func NewCandidate(nodes []string, mode Mode, isAtomic bool) *Candidate {
 	return &Candidate{
 		id:       rand.Intn(10000),
 		Nodes:    nodes,
 		Mode:     mode,
-		IsAtomic: mode != Partial,
+		IsAtomic: isAtomic,
 	}
 }
 
-func NewCandidateWithLimit(nodes []string, mode Mode, limit int) *Candidate {
+// NewCandidateWithLimit creates a Candidate with at most limit nodes.
+func NewCandidateWithLimit(nodes []string, mode Mode, isAtomic bool, limit int) *Candidate {
 	if limit == 0 {
-		return NewCandidate(nodes, mode)
+		return NewCandidate(nodes, mode, isAtomic)
 	}
 	candidateNodes := make([]string, min(len(nodes), limit))
 	copy(candidateNodes, nodes)
-	return NewCandidate(candidateNodes, mode)
+	return NewCandidate(candidateNodes, mode, isAtomic)
+}
+
+// NewAtomicCandidate creates an atomic Candidate.
+func NewAtomicCandidate(nodes []string, mode Mode) *Candidate {
+	return NewCandidate(nodes, mode, true)
+}
+
+// NewAtomicCandidateWithLimit creates an atomic Candidate with at most limit nodes.
+func NewAtomicCandidateWithLimit(nodes []string, mode Mode, limit int) *Candidate {
+	return NewCandidateWithLimit(nodes, mode, true, limit)
+}
+
+// NewPartialCandidate creates a non-atomic (partial) Candidate.
+func NewPartialCandidate(nodes []string, mode Mode) *Candidate {
+	return NewCandidate(nodes, mode, false)
+}
+
+// NewPartialCandidateWithLimit creates a non-atomic (partial) Candidate with at most limit nodes.
+func NewPartialCandidateWithLimit(nodes []string, mode Mode, limit int) *Candidate {
+	return NewCandidateWithLimit(nodes, mode, false, limit)
 }
 
 func (c *Candidate) String() string {

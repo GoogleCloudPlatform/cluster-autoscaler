@@ -412,7 +412,8 @@ func TestNodeConfigDriftNewCandidate(t *testing.T) {
 			} else {
 				assert.NotNil(t, candidate)
 				assert.Equal(t, tc.wantCandidateNodeNames, candidate.Nodes)
-				assert.Equal(t, defrag.Partial, candidate.Mode)
+				assert.Equal(t, defrag.CreateBeforeDelete, candidate.Mode)
+				assert.False(t, candidate.IsAtomic)
 			}
 
 			assert.Equal(t, tc.wantLatestUnfitNodesCount, p.LatestUnfitNodesCount())
@@ -830,7 +831,7 @@ func TestNodeConfigDriftIsExpansionOptionValid(t *testing.T) {
 				NodeCount: len(tc.expandedNodeGroup.Nodes),
 			}
 			ctx, p := initTestCase(t, tc.nodeGroups, tc.crds, testCrdLabel)
-			candidate := defrag.NewCandidate(tc.candidateNodes, defrag.CreateBeforeDelete)
+			candidate := defrag.NewAtomicCandidate(tc.candidateNodes, defrag.CreateBeforeDelete)
 			assert.Equal(t, tc.wantExpansionValid, p.IsExpansionOptionValid(ctx, candidate, expansionOption))
 		})
 	}

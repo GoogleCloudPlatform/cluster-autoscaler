@@ -74,7 +74,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 	if len(suitableNodes) == 0 {
 		return nil
 	}
-	return defrag.NewCandidateWithLimit(suitableNodes, defrag.Partial, p.config.MaxCandidateNodeCount)
+	return defrag.NewPartialCandidateWithLimit(suitableNodes, defrag.CreateBeforeDelete, p.config.MaxCandidateNodeCount)
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {

@@ -105,7 +105,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 	selectedGroup := driftedNodeGroupNames[randIdx]
 	candidateNodes := driftedNodeGroups[selectedGroup]
 
-	return defrag.NewCandidateWithLimit(candidateNodes, defrag.Partial, p.config.MaxCandidateNodeCount)
+	return defrag.NewPartialCandidateWithLimit(candidateNodes, defrag.CreateBeforeDelete, p.config.MaxCandidateNodeCount)
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {

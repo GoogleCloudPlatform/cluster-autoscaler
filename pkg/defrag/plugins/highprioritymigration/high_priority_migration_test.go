@@ -452,7 +452,8 @@ func TestHighPriorityMigrationNewCandidate(t *testing.T) {
 			} else {
 				assert.NotNil(t, candidate)
 				assert.Equal(t, tc.wantCandidateNodeNames, candidate.Nodes)
-				assert.Equal(t, defrag.Partial, candidate.Mode)
+				assert.Equal(t, defrag.CreateBeforeDelete, candidate.Mode)
+				assert.False(t, candidate.IsAtomic)
 			}
 
 			latestUnfitNodesCount := plugin.LatestUnfitNodesCount()
@@ -968,7 +969,7 @@ func TestHighPriorityMigrationIsExpansionValid(t *testing.T) {
 				crdLabel = tc.crds[0].Label() // assumption: all crds have the same label.
 			}
 			ctx, plugin := initTestCase(t, tc.nodeGroups, tc.crds, tc.defaultCrd, testDefaultCrdName, crdLabel)
-			candidate := defrag.NewCandidate(tc.candidateNodes, defrag.CreateBeforeDelete)
+			candidate := defrag.NewAtomicCandidate(tc.candidateNodes, defrag.CreateBeforeDelete)
 			assert.Equal(t, tc.wantExpansionValid, plugin.IsExpansionOptionValid(ctx, candidate, expansionOption))
 		})
 	}

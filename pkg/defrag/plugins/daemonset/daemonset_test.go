@@ -341,7 +341,8 @@ func TestDaemonSetPluginNewCandidate(t *testing.T) {
 			if len(tc.wantNodes) > 0 {
 				if assert.NotNil(t, candidate) {
 					assert.Equal(t, tc.wantNodes, candidate.Nodes)
-					assert.Equal(t, defrag.Partial, candidate.Mode)
+					assert.Equal(t, defrag.CreateBeforeDelete, candidate.Mode)
+					assert.False(t, candidate.IsAtomic)
 				}
 			} else {
 				assert.Nil(t, candidate)
