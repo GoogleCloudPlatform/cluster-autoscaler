@@ -2696,6 +2696,31 @@ func TestPrioritySelfService(t *testing.T) {
 				selfservice.Metadata{"location-policy": "ANY"},
 			},
 		},
+		{
+			name: "Priority contains LocalSSDEncryptionMode",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("n2"),
+							Storage: &v1.Storage{
+								LocalSSDEncryptionMode: proto.String("EPHEMERAL_KEY_ENCRYPTION"),
+							},
+						},
+						{
+							MachineFamily: proto.String("n2"),
+							Storage: &v1.Storage{
+								LocalSSDEncryptionMode: proto.String("STANDARD_ENCRYPTION"),
+							},
+						},
+					},
+				},
+			},
+			wantLabels: []map[string]string{
+				selfservice.Metadata{selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION"},
+				selfservice.Metadata{selfservice.LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION"},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		gotCrd := NewCccCrd(tc.ccc, "", false, nil, testOptionsTracker(nil))

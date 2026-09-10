@@ -681,6 +681,17 @@ func TestNodepoolMetadata(t *testing.T) {
 				privateNodeFromCcc:   "false",
 			},
 		},
+		{
+			name: "Nodepool with localSsdEncryptionMode is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantMetadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1361,6 +1372,17 @@ func TestPriorityMetadata(t *testing.T) {
 				"instance-metadata.cloud.google.com/priority-key": "priority-val",
 			},
 		},
+		{
+			name: "Priority for LocalSSDEncryptionMode",
+			priority: v1.Priority{
+				Storage: &v1.Storage{
+					LocalSSDEncryptionMode: ptr.To("STANDARD_ENCRYPTION"),
+				},
+			},
+			wantMetadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2010,6 +2032,17 @@ func TestUpdateNodepool(t *testing.T) {
 				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "false",
 			},
 			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "LocalSSDEncryptionMode is set correctly",
+			metadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
 		},
 	}
 	for _, tc := range testCases {

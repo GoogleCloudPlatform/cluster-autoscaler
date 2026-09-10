@@ -2272,6 +2272,35 @@ func TestCreateNodePoolRequest(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "CCC self service local SSD encryption mode specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5488,6 +5517,32 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 			wantSelfServiceMetadata: map[string]string{
 				labels.ContainerdWritableCgroupsKey: "true",
 				labels.GvnicLabelKey:                "true",
+			},
+		},
+		{
+			name: "Nodepool with localSsdEncryptionMode set",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "pool-1",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "localSsdEncryptionMode": "EPHEMERAL_KEY_ENCRYPTION"
+					},
+					"autoscaling": {
+					  "enabled": false,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				labels.GvnicLabelKey:                          "true",
 			},
 		},
 	}

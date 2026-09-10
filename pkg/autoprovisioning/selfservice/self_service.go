@@ -61,6 +61,7 @@ func InitSelfService(cp CloudProvider) {
 		newResourceLabels(),
 		newOAuthScopes(),
 		newDisablePodCidrOverprovisionConfig(),
+		newLocalSSDEncryptionMode(),
 	}
 }
 
