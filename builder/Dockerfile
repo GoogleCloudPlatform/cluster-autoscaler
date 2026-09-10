@@ -12,17 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM google-go.pkg.dev/golang:1.26.1
+FROM google-go.pkg.dev/golang:1.26.8-debian12
 LABEL maintainer="Marcin Wielgus <mwielgus@google.com>"
 
 ENV GO111MODULE=auto
 
 # Install tools for build verification
-# TODO(b/558629081): Update the base image so that we can remove this temporary fix.
 RUN \
-    sed -i 's/^# deb http:\/\/snapshot/deb http:\/\/snapshot/g' /etc/apt/sources.list && \
-    sed -i 's/^deb http:\/\/deb/# deb http:\/\/deb/g' /etc/apt/sources.list && \
-    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99no-check-valid-until && \
     apt-get update && \
     apt-get --yes --no-install-recommends install \
     libseccomp-dev \
