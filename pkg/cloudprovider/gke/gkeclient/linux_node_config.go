@@ -146,6 +146,7 @@ func linuxNodeConfig(c *gke_api_beta.LinuxNodeConfig) *LinuxNodeConfig {
 	return &LinuxNodeConfig{
 		AccurateTimeConfig:         accurateTimeConfig(c.AccurateTimeConfig),
 		CgroupMode:                 c.CgroupMode,
+		CustomNodeInit:             customNodeInit(c.CustomNodeInit),
 		Hugepages:                  hugepagesConfig(c.Hugepages),
 		NodeKernelModuleLoading:    nodeKernelModuleLoading(c.NodeKernelModuleLoading),
 		SwapConfig:                 swapConfig(c.SwapConfig),
@@ -234,6 +235,22 @@ func ephemeralLocalSsdProfile(p *gke_api_beta.EphemeralLocalSsdProfile) *Ephemer
 	}
 }
 
+func customNodeInit(in *gke_api_beta.CustomNodeInit) *CustomNodeInit {
+	if in == nil {
+		return nil
+	}
+	out := &CustomNodeInit{}
+	if in.InitScript != nil {
+		out.InitScript = &InitScript{
+			Args:                      in.InitScript.Args,
+			GcpSecretManagerSecretUri: in.InitScript.GcpSecretManagerSecretUri,
+			GcsGeneration:             in.InitScript.GcsGeneration,
+			GcsUri:                    in.InitScript.GcsUri,
+		}
+	}
+	return out
+}
+
 func v1beta1LinuxNodeConfig(c *LinuxNodeConfig) *gke_api_beta.LinuxNodeConfig {
 	if c == nil {
 		return nil
@@ -241,6 +258,7 @@ func v1beta1LinuxNodeConfig(c *LinuxNodeConfig) *gke_api_beta.LinuxNodeConfig {
 	return &gke_api_beta.LinuxNodeConfig{
 		AccurateTimeConfig:         v1beta1AccurateTimeConfig(c.AccurateTimeConfig),
 		CgroupMode:                 c.CgroupMode,
+		CustomNodeInit:             v1beta1CustomNodeInit(c.CustomNodeInit),
 		Hugepages:                  v1beta1HugepagesConfig(c.Hugepages),
 		NodeKernelModuleLoading:    v1beta1NodeKernelModuleLoading(c.NodeKernelModuleLoading),
 		SwapConfig:                 v1beta1SwapConfig(c.SwapConfig),
@@ -257,6 +275,22 @@ func v1beta1AccurateTimeConfig(c *AccurateTimeConfig) *gke_api_beta.AccurateTime
 	return &gke_api_beta.AccurateTimeConfig{
 		EnablePtpKvmTimeSync: c.EnablePtpKvmTimeSync,
 	}
+}
+
+func v1beta1CustomNodeInit(in *CustomNodeInit) *gke_api_beta.CustomNodeInit {
+	if in == nil {
+		return nil
+	}
+	out := &gke_api_beta.CustomNodeInit{}
+	if in.InitScript != nil {
+		out.InitScript = &gke_api_beta.InitScript{
+			Args:                      in.InitScript.Args,
+			GcpSecretManagerSecretUri: in.InitScript.GcpSecretManagerSecretUri,
+			GcsGeneration:             in.InitScript.GcsGeneration,
+			GcsUri:                    in.InitScript.GcsUri,
+		}
+	}
+	return out
 }
 
 func v1beta1HugepagesConfig(c *HugepagesConfig) *gke_api_beta.HugepagesConfig {

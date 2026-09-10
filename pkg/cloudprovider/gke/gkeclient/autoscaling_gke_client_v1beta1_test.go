@@ -289,6 +289,14 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						EnablePtpKvmTimeSync: true,
 					},
 					CgroupMode: "CGROUP_MODE_V2",
+					CustomNodeInit: &CustomNodeInit{
+						InitScript: &InitScript{
+							Args:                      []string{"arg1"},
+							GcpSecretManagerSecretUri: "secret-uri",
+							GcsGeneration:             12345,
+							GcsUri:                    "gcs-uri",
+						},
+					},
 					Hugepages: &HugepagesConfig{
 						HugepageSize1g: 12345,
 						HugepageSize2m: 987654321,
@@ -334,6 +342,14 @@ func TestCreateNodePoolRequest(t *testing.T) {
 								EnablePtpKvmTimeSync: true,
 							},
 							CgroupMode: "CGROUP_MODE_V2",
+							CustomNodeInit: &gke_api_beta.CustomNodeInit{
+								InitScript: &gke_api_beta.InitScript{
+									Args:                      []string{"arg1"},
+									GcpSecretManagerSecretUri: "secret-uri",
+									GcsGeneration:             12345,
+									GcsUri:                    "gcs-uri",
+								},
+							},
 							Hugepages: &gke_api_beta.HugepagesConfig{
 								HugepageSize1g: 12345,
 								HugepageSize2m: 987654321,
@@ -4414,6 +4430,14 @@ func TestLinuxNodeConfig(t *testing.T) {
 							"net.core.somaxconn": "1024",
 							"more-sysctl": "1"
 						},
+						"customNodeInit": {
+							"initScript": {
+								"args": ["arg1"],
+								"gcpSecretManagerSecretUri": "secret-uri",
+								"gcsGeneration": "12345",
+								"gcsUri": "gcs-uri"
+							}
+						},
 						"transparentHugepageDefrag": "madvise",
 						"transparentHugepageEnabled": "always"
 					  }
@@ -4453,6 +4477,14 @@ func TestLinuxNodeConfig(t *testing.T) {
 				Sysctls: map[string]string{
 					"net.core.somaxconn": "1024",
 					"more-sysctl":        "1",
+				},
+				CustomNodeInit: &CustomNodeInit{
+					InitScript: &InitScript{
+						Args:                      []string{"arg1"},
+						GcpSecretManagerSecretUri: "secret-uri",
+						GcsGeneration:             12345,
+						GcsUri:                    "gcs-uri",
+					},
 				},
 				TransparentHugepageDefrag:  "madvise",
 				TransparentHugepageEnabled: "always",
