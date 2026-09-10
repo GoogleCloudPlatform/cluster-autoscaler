@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Builder stage
-FROM --platform=$BUILDPLATFORM google-go.pkg.dev/golang:1.26.1 AS builder
+FROM --platform=$BUILDPLATFORM google-go.pkg.dev/golang:1.26.8-debian12 AS builder
 
 ARG PROTOC_VERSION=21.12
 ARG PROTOC_GEN_GO_VERSION=v1.31.0
@@ -50,7 +50,7 @@ RUN ./hack/update-version-go.sh ${VERSION} && \
     ./hack/update-version-go.sh reset
 
 # Delve installation stage
-FROM google-go.pkg.dev/golang:1.26.1 AS delve
+FROM google-go.pkg.dev/golang:1.26.8-debian12 AS delve
 RUN CGO_ENABLED=0 \
     go install -ldflags "-s -w -extldflags '-static'" github.com/go-delve/delve/cmd/dlv@latest && \
     rm -rf /root/.cache/go-build/ /go/pkg/mod/
