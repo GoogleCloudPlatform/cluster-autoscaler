@@ -43,7 +43,11 @@ const (
 	// that signifies this type of error is persistent.
 	GkePersistentOperationError    = "GkePersistentOperationError"
 	instanceActionPollingFrequency = 5 * time.Second
-	instanceActionTimeout          = 60 * time.Minute
+
+	// DefaultResumeInstanceActionTimeout is the default timeout waiting for instances to resume.
+	DefaultResumeInstanceActionTimeout = 5 * time.Minute
+	// DefaultSuspendInstanceActionTimeout is the default timeout waiting for instances to suspend.
+	DefaultSuspendInstanceActionTimeout = 20 * time.Minute
 
 	// resumingGCEAction indicates that instances are resuming.
 	resumingGCEAction = "RESUMING"
@@ -145,7 +149,6 @@ type autoscalingInternalGceClient struct {
 	pollInterval                   time.Duration
 	operationPerCallTimeout        time.Duration
 	instanceActionPollingFrequency time.Duration
-	instanceActionTimeout          time.Duration
 
 	recommendationApplier RecommendationApplier
 }
@@ -163,16 +166,6 @@ func WithInstanceActionPollingFrequency(d time.Duration) Option {
 	return func(c *autoscalingInternalGceClient) {
 		if d > 0 {
 			c.instanceActionPollingFrequency = d
-		}
-	}
-}
-
-// WithInstanceActionTimeout sets the timeout of waiting for completion of
-// an action that changes the status of a GCE instance.
-func WithInstanceActionTimeout(d time.Duration) Option {
-	return func(c *autoscalingInternalGceClient) {
-		if d > 0 {
-			c.instanceActionTimeout = d
 		}
 	}
 }
@@ -209,7 +202,6 @@ func NewAutoscalingInternalGceClient(client *http.Client, migInfoProvider MigInf
 		experimentsManager:             experimentsManager,
 		httpTimeout:                    client.Timeout,
 		instanceActionPollingFrequency: instanceActionPollingFrequency,
-		instanceActionTimeout:          instanceActionTimeout,
 		recommendationApplier:          NoOpRecommendationApplier{},
 	}
 	for _, opt := range opts {
@@ -254,7 +246,6 @@ func NewCustomAutoscalingInternalGceClient(client *http.Client, migInfoProvider 
 		experimentsManager:             experimentsManager,
 		domainUrl:                      domainUrl,
 		instanceActionPollingFrequency: instanceActionPollingFrequency,
-		instanceActionTimeout:          instanceActionTimeout,
 		recommendationApplier:          NoOpRecommendationApplier{},
 	}
 	for _, opt := range opts {
@@ -713,12 +704,40 @@ func (client *autoscalingInternalGceClient) SuspendInstances(migRef gce.GceRef, 
 	return nil
 }
 
+// InstanceActionTimeout returns the timeout for waiting for the given instance action (e.g. RESUMING or SUSPENDING) to finish.
+// It evaluates Giraffe flags (ColdStandbyNodes::ResumeTimeoutSeconds, ColdStandbyNodes::SuspendTimeoutSeconds)
+// and falls back to DefaultResumeInstanceActionTimeout (5m) or DefaultSuspendInstanceActionTimeout (20m).
+func (client *autoscalingInternalGceClient) InstanceActionTimeout(action string) time.Duration {
+	switch action {
+	case resumingGCEAction:
+		if client.experimentsManager != nil {
+			timeout := client.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(
+				experiments.ColdStandbyNodesResumeTimeoutSecondsFlag, DefaultResumeInstanceActionTimeout)
+			if timeout > 0 {
+				return timeout
+			}
+		}
+		return DefaultResumeInstanceActionTimeout
+	case suspendingGCEAction:
+		if client.experimentsManager != nil {
+			timeout := client.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(
+				experiments.ColdStandbyNodesSuspendTimeoutSecondsFlag, DefaultSuspendInstanceActionTimeout)
+			if timeout > 0 {
+				return timeout
+			}
+		}
+		return DefaultSuspendInstanceActionTimeout
+	default:
+		return DefaultResumeInstanceActionTimeout
+	}
+}
+
 func (client *autoscalingInternalGceClient) waitForActionToStopRunning(action string, migRef gce.GceRef, instanceRefs []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) (err error) {
 	if !client.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesWaitForInstanceStatus) {
 		return nil
 	}
 	pollTimer := time.NewTimer(client.instanceActionPollingFrequency)
-	timeout := time.NewTimer(client.instanceActionTimeout)
+	timeout := time.NewTimer(client.InstanceActionTimeout(action))
 	defer func() {
 		pollTimer.Stop()
 		timeout.Stop()

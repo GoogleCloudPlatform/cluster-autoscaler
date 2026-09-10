@@ -34,6 +34,7 @@ import (
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -1720,7 +1721,6 @@ func TestResumeInstances(t *testing.T) {
 				false,
 				false,
 				WithInstanceActionPollingFrequency(1*time.Millisecond),
-				WithInstanceActionTimeout(5*time.Second),
 			)
 
 			if tt.wantErr == nil {
@@ -2298,4 +2298,104 @@ func TestFetchMigInstancesBeta_Filter(t *testing.T) {
 			assert.Equal(t, tt.filter != "", hasFilter)
 		})
 	}
+}
+
+func TestAutoscalingGceClient_InstanceActionTimeout(t *testing.T) {
+	tests := []struct {
+		name               string
+		action             string
+		experimentsManager experiments.Manager
+		want               time.Duration
+	}{
+		{
+			name:   "resume default timeout",
+			action: resumingGCEAction,
+			want:   DefaultResumeInstanceActionTimeout,
+		},
+		{
+			name:   "suspend default timeout",
+			action: suspendingGCEAction,
+			want:   DefaultSuspendInstanceActionTimeout,
+		},
+		{
+			name:   "resume Giraffe flag configured",
+			action: resumingGCEAction,
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				nil,
+				map[string]string{
+					experiments.ColdStandbyNodesResumeTimeoutSecondsFlag: "180",
+				},
+			),
+			want: 180 * time.Second,
+		},
+		{
+			name:   "suspend Giraffe flag configured",
+			action: suspendingGCEAction,
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				nil,
+				map[string]string{
+					experiments.ColdStandbyNodesSuspendTimeoutSecondsFlag: "900",
+				},
+			),
+			want: 900 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &autoscalingInternalGceClient{
+				experimentsManager: tc.experimentsManager,
+			}
+			assert.Equal(t, tc.want, client.InstanceActionTimeout(tc.action))
+		})
+	}
+}
+
+func TestWaitForActionToStopRunning_Timeout(t *testing.T) {
+	server := test_util.NewHttpServerMock()
+	defer server.Close()
+
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	instRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+	lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
+		ManagedInstances: []*gce_api.ManagedInstance{
+			{
+				Name:          "inst1",
+				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
+				CurrentAction: resumingGCEAction,
+			},
+		},
+	}
+	b, err := json.Marshal(lmiResponse)
+	assert.NoError(t, err)
+
+	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+	server.On("handle", listPath).Return(string(b))
+
+	expManager := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		nil,
+		map[string]string{
+			experiments.ColdStandbyNodesResumeTimeoutSecondsFlag: "1",
+		},
+	)
+	client, err := NewCustomAutoscalingInternalGceClient(
+		&http.Client{},
+		&fakeSingleMigInfoProvider{},
+		migRef.Project,
+		"",
+		server.URL,
+		"",
+		120*time.Second,
+		time.Second,
+		expManager,
+		WithInstanceActionPollingFrequency(time.Millisecond),
+	)
+	assert.NoError(t, err)
+
+	err = client.waitForActionToStopRunning(resumingGCEAction, migRef, []gce.GceRef{instRef}, nil)
+	assert.ErrorContains(t, err, "timeout waiting for instances")
 }

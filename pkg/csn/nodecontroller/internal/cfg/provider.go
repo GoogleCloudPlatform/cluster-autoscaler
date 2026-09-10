@@ -61,7 +61,7 @@ var defaultConfig = Controller{
 	Dispatcher: Dispatcher{
 		WorkerCount: 100,
 		Retry: Retry{
-			MaxRetries:   6,
+			MaxRetries:   3,
 			InitialDelay: metav1.Duration{Duration: 5 * time.Second},
 			MaxDelay:     metav1.Duration{Duration: 5 * time.Minute},
 		},

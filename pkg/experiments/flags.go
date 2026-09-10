@@ -103,6 +103,8 @@ const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersi
 const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                       // Direct launch.
 const ColdStandbyNodesBackoffMinCAVersionFlag = "ColdStandbyNodes::BackoffMinCAVersion"
 const ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag = "ColdStandbyNodes::PodAgeFallbackThresholdSeconds"
+const ColdStandbyNodesResumeTimeoutSecondsFlag = "ColdStandbyNodes::ResumeTimeoutSeconds"
+const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTimeoutSeconds"
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"
