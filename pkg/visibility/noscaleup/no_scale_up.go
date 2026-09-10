@@ -66,11 +66,12 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 	// Garbage collect old entries.
 	ns.recentlyReportedReasons.removeOld(now)
 
+	if ns.isFlexAdvisorCuttingAllMigs(scaleUpStatus, napStatus) {
+		allCurrentReasons := ns.computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus)
+		return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
+	}
+
 	if len(scaleUpStatus.NoScaleUpInfos) == 0 {
-		if ns.isFlexAdvisorCuttingAllMigs(scaleUpStatus, napStatus) {
-			allCurrentReasons := ns.computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus)
-			return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
-		}
 		// If there are no unschedulable pods, don't provide any reasons, they won't make sense anyway.
 		return &Reasons{}
 	}
@@ -88,10 +89,10 @@ func (ns *throttledNoScaleUp) isFlexAdvisorCuttingAllMigs(scaleUpStatus *vistype
 	if ns.flexAdvisorScaleUpLimiterTracker == nil || !ns.flexAdvisorScaleUpLimiterTracker.HasRemovedScaleUpOptions() {
 		return false
 	}
-	if scaleUpStatus.Result == status.ScaleUpSuccessful || scaleUpStatus.Result == status.ScaleUpNotNeeded {
+	if scaleUpStatus.Result != status.ScaleUpNoOptionsAvailable {
 		return false
 	}
-	if napStatus.Result != autoprovisioning.ProcessingOk {
+	if napStatus == nil || napStatus.Result != autoprovisioning.ProcessingOk {
 		return false
 	}
 	return true
