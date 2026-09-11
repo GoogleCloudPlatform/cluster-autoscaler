@@ -507,6 +507,16 @@ func WithComputeClassMinCapacityEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithScaleDownBlockingNodeLabels sets the node label keys that keep a node out of
+// scale-down (e.g. the TPU dynamic-slicing Slice label). Passing at least one label
+// enables blocking-label-aware scale-down.
+func WithScaleDownBlockingNodeLabels(blockingLabels ...string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ScaleDownBlockingNodeLabels = blockingLabels
+		return o
+	}
+}
+
 // WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
 func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -678,6 +688,14 @@ func WithAutoscalerVisibility(enabled bool) Option[*config.AutoscalingOptions] {
 func WithEmitNoScaleUpCAVizEvents(enabled bool) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.EmitNoScaleUpCAVizEvents = enabled
+		return o
+	}
+}
+
+// WithEmitNoScaleDownCAVizEvents enables or disables emitting NoScaleDown visibility events.
+func WithEmitNoScaleDownCAVizEvents(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EmitNoScaleDownCAVizEvents = enabled
 		return o
 	}
 }

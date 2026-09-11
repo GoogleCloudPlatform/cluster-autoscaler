@@ -243,6 +243,8 @@ const (
 	NoScaleDownNodeNoPlaceToMovePods
 	// NoScaleDownNodeUnexpectedError - node can't be removed because of an unexpected error.
 	NoScaleDownNodeUnexpectedError
+	// NoScaleDownNodeBoundToTPUSlice - node can't be removed because it is bound to a TPU dynamic-slicing Slice (cloud.google.com/gke-tpu-slice label).
+	NoScaleDownNodeBoundToTPUSlice
 
 	// NoScaleDownNodePodControllerNotFound - pod is blocking scale down because its controller can't be found.
 	NoScaleDownNodePodControllerNotFound
@@ -385,6 +387,7 @@ var MessageIdToStringMap = map[MessageId]string{
 	NoScaleDownNodeMinimalResourceLimitsExceeded: "no.scale.down.node.minimal.resource.limits.exceeded",
 	NoScaleDownNodeNoPlaceToMovePods:             "no.scale.down.node.no.place.to.move.pods",
 	NoScaleDownNodeUnexpectedError:               "no.scale.down.node.unexpected.error",
+	NoScaleDownNodeBoundToTPUSlice:               "no.scale.down.node.bound.to.tpu.slice",
 
 	NoScaleDownNodePodControllerNotFound:       "no.scale.down.node.pod.controller.not.found",
 	NoScaleDownNodePodMinReplicasReached:       "no.scale.down.node.pod.min.replicas.reached",
@@ -932,6 +935,11 @@ func NewNoScaleDownNodeNoPlaceToMovePodsMsg() *Message {
 // NewNoScaleDownNodeUnexpectedErrorMsg creates and returns a "node can't be removed because of an unexpected error" message.
 func NewNoScaleDownNodeUnexpectedErrorMsg() *Message {
 	return &Message{Id: NoScaleDownNodeUnexpectedError}
+}
+
+// NewNoScaleDownNodeBoundToTPUSliceMsg creates and returns a "node can't be removed because it is bound to a TPU slice" message, parameterized with the slice name.
+func NewNoScaleDownNodeBoundToTPUSliceMsg(sliceName string) *Message {
+	return &Message{Id: NoScaleDownNodeBoundToTPUSlice, Params: []string{sliceName}}
 }
 
 // NewNoScaleDownNodePodControllerNotFoundMsg creates and returns a "pod is blocking scale down because its controller can't be found" message.
