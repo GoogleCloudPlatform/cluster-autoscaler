@@ -772,11 +772,16 @@ func (client *autoscalingInternalGceClient) waitForActionToStopRunning(action st
 }
 
 func (client *autoscalingInternalGceClient) actionFinishedForAllInstances(action string, migRef gce.GceRef, targetInstances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) bool {
-	instances, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, "")
+	var filter string
+	if action != "" {
+		filter = fmt.Sprintf("currentAction = %s", action)
+	}
+	instances, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, filter)
 	if err != nil {
 		klog.Errorf("Fetching instances %v failed: %v", targetInstances, err)
 		return false
 	}
+
 	// name -> instance mapping
 	instancesMap := make(map[string]*gce_api_beta.ManagedInstance, len(instances))
 	for _, inst := range instances {
@@ -788,7 +793,7 @@ func (client *autoscalingInternalGceClient) actionFinishedForAllInstances(action
 	for _, targetInst := range targetInstances {
 		inst, found := instancesMap[targetInst.Name]
 		if !found {
-			// If the instance is not found then it could have been deleted,
+			// If the instance is not found then it could have been deleted or finished the action,
 			// which is why it's not desired to return false in that case.
 			continue
 		}

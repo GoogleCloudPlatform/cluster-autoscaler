@@ -2399,3 +2399,56 @@ func TestWaitForActionToStopRunning_Timeout(t *testing.T) {
 	err = client.waitForActionToStopRunning(resumingGCEAction, migRef, []gce.GceRef{instRef}, nil)
 	assert.ErrorContains(t, err, "timeout waiting for instances")
 }
+
+func TestActionFinishedForAllInstances_Filter(t *testing.T) {
+	tests := []struct {
+		name           string
+		action         string
+		expectedFilter string
+	}{
+		{
+			name:           "empty action",
+			action:         "",
+			expectedFilter: "",
+		},
+		{
+			name:           "resuming action",
+			action:         "RESUMING",
+			expectedFilter: "currentAction = RESUMING",
+		},
+		{
+			name:           "suspending action",
+			action:         "SUSPENDING",
+			expectedFilter: "currentAction = SUSPENDING",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedFilter string
+			var hasFilter bool
+			server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == "/projects/project1/zones/zoneA/instanceGroupManagers/mig1/listManagedInstances" {
+					capturedFilter = req.URL.Query().Get("filter")
+					hasFilter = req.URL.Query().Has("filter")
+					lmiResponse := &gce_api_beta.InstanceGroupManagersListManagedInstancesResponse{}
+					b, err := json.Marshal(lmiResponse)
+					assert.NoError(t, err)
+					res.WriteHeader(http.StatusOK)
+					res.Write(b)
+					return
+				}
+				res.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
+			migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+			inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+			_ = client.actionFinishedForAllInstances(tt.action, migRef, []gce.GceRef{inst1Ref}, nil)
+			assert.Equal(t, tt.expectedFilter, capturedFilter)
+			assert.Equal(t, tt.expectedFilter != "", hasFilter)
+		})
+	}
+}
