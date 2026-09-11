@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/sets"
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
+	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
@@ -41,6 +42,7 @@ func TestBuildProcessorOrder(t *testing.T) {
 func TestProvisioningRequestScaleUpStatusProcessor(t *testing.T) {
 	allowedPredecessors := sets.New[reflect.Type]()
 	allowedPredecessors.Insert(reflect.TypeOf(new(cb_metrics.FakePodStateObserver)).Elem())
+	allowedPredecessors.Insert(reflect.TypeOf(new(csn_processors.CSNScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(podinjection.FakePodsScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(status.EventingScaleUpStatusProcessor)).Elem())
@@ -86,6 +88,19 @@ func TestCapacityBufferFakePodsScaleUpStatusProcessorIsBeforePodInjection(t *tes
 	podInjectionOrder, _ := chain.orderOf(new(podinjection.FakePodsScaleUpStatusProcessor))
 
 	assert.True(t, capacityBufferOrder < podInjectionOrder)
+}
+
+func TestCSNScaleUpStatusProcessorIsBeforeCapacityBufferFakePodsScaleUpStatusProcessor(t *testing.T) {
+	// CapacityBuffer's FakePodsScaleUpStatusProcessor removes standby buffer fake pods from the
+	// status, so the CSN processor has to inspect it first.
+	chain := NewScaleUpStatusChainProcessor()
+	assert.NoError(t, chain.AddProcessor(new(csn_processors.CSNScaleUpStatusProcessor)))
+	assert.NoError(t, chain.AddProcessor(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor)))
+
+	csnOrder, _ := chain.orderOf(new(csn_processors.CSNScaleUpStatusProcessor))
+	capacityBufferOrder, _ := chain.orderOf(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor))
+
+	assert.True(t, csnOrder < capacityBufferOrder)
 }
 
 func TestCapacityBufferFakePodStateObserverIsBeforeCapacityBufferFakePodsScaleUpStatusProcessor(t *testing.T) {

@@ -414,11 +414,14 @@ func setUpProcessors(
 		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled)
 	}
 
-	if options.CapacitybufferPodInjectionEnabled && cbReady {
+	if cbReady {
 		// Add CapacityBuffer types to the default scheme for event recording.
 		if err := cbv1beta1.AddToScheme(scheme.Scheme); err != nil {
 			klog.Warningf("Failed to add CapacityBuffer (v1beta1) to scheme: %v", err)
 		}
+	}
+
+	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		cbFakePodStateObserver = cbmetrics.NewFakePodStateObserver(systemPodsClassifier, internalmetrics.Metrics, capacitybufferPodsRegistry, clock.RealClock{}, true)
 		scaleUpProcessorChain.AddProcessor(cbFakePodStateObserver)
 		scaleUpProcessorChain.AddProcessor(cbprocessors.NewFakePodsScaleUpStatusProcessor(capacitybufferPodsRegistry))
@@ -681,6 +684,9 @@ func setUpProcessors(
 		csnNodeReconcilationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
 		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
+		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
+			return nil, err
+		}
 	}
 
 	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled && cbReady)

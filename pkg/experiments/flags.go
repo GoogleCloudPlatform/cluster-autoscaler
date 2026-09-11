@@ -110,6 +110,7 @@ const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTime
 // decimal GB, that GCE VM Suspend/Resume cannot handle. Failsafe is
 // csn.defaultMinUnsupportedMemoryGB.
 const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
+const ColdStandbyNodesScaleUpStatusProcessorFlag = "ColdStandbyNodes::ScaleUpStatusProcessor"
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"

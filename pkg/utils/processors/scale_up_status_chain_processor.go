@@ -26,6 +26,7 @@ import (
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
+	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
@@ -49,18 +50,19 @@ func buildProcessorOrder() (map[reflect.Type]int, error) {
 		order     int
 	}{
 		{reflect.TypeOf(new(cb_metrics.FakePodStateObserver)).Elem(), 1},
-		{reflect.TypeOf(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor)).Elem(), 2},
-		{reflect.TypeOf(new(podinjection.FakePodsScaleUpStatusProcessor)).Elem(), 3},
-		{reflect.TypeOf(new(status.EventingScaleUpStatusProcessor)).Elem(), 4},
-		{reflect.TypeOf(new(processors.InternalEventingScaleUpStatusProcessor)).Elem(), 5},
-		{reflect.TypeOf(new(cr_processors.CapacityRequestScaleUpProcessor)).Elem(), 6},
-		{reflect.TypeOf(new(vis_processors.ScaleUpStatusVisibilityProcessor)).Elem(), 7},
-		{reflect.TypeOf(new(pr_processors.ProvisioningRequestScaleUpStatusProcessor)).Elem(), 8},
-		{reflect.TypeOf(new(npc_processors.CrdScaleUpStatusProcessor)).Elem(), 9},
-		{reflect.TypeOf(new(npc_history.ScaleUpStatusHistoryProcessor)).Elem(), 10},
-		{reflect.TypeOf(new(metrics_processors.ScaleUpStatusMetricsProcessor)).Elem(), 11},
-		{reflect.TypeOf(new(annotator.PodAnnotator)).Elem(), 12},
-		{reflect.TypeOf(new(podstate.PodStateObserver)).Elem(), 13},
+		{reflect.TypeOf(new(csn_processors.CSNScaleUpStatusProcessor)).Elem(), 2},
+		{reflect.TypeOf(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor)).Elem(), 3},
+		{reflect.TypeOf(new(podinjection.FakePodsScaleUpStatusProcessor)).Elem(), 4},
+		{reflect.TypeOf(new(status.EventingScaleUpStatusProcessor)).Elem(), 5},
+		{reflect.TypeOf(new(processors.InternalEventingScaleUpStatusProcessor)).Elem(), 6},
+		{reflect.TypeOf(new(cr_processors.CapacityRequestScaleUpProcessor)).Elem(), 7},
+		{reflect.TypeOf(new(vis_processors.ScaleUpStatusVisibilityProcessor)).Elem(), 8},
+		{reflect.TypeOf(new(pr_processors.ProvisioningRequestScaleUpStatusProcessor)).Elem(), 9},
+		{reflect.TypeOf(new(npc_processors.CrdScaleUpStatusProcessor)).Elem(), 10},
+		{reflect.TypeOf(new(npc_history.ScaleUpStatusHistoryProcessor)).Elem(), 11},
+		{reflect.TypeOf(new(metrics_processors.ScaleUpStatusMetricsProcessor)).Elem(), 12},
+		{reflect.TypeOf(new(annotator.PodAnnotator)).Elem(), 13},
+		{reflect.TypeOf(new(podstate.PodStateObserver)).Elem(), 14},
 	}
 	for _, entry := range entries {
 		if _, exists := order[entry.processor]; exists {
