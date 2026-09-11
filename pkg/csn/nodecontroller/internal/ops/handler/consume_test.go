@@ -569,3 +569,69 @@ func TestConsumeHandler_HandleBatching(t *testing.T) {
 	assert.Equal(t, nodeCount, totalSize)
 	assert.ElementsMatch(t, expectedRefs, actualRefs)
 }
+
+func TestConsumeHandler_ErrorCategorization(t *testing.T) {
+	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
+	n := test.CreateNode("node-1", test.StateOpt(csn.NodeStateSuspended))
+
+	tests := []struct {
+		name             string
+		errorCode        string
+		errorMsg         string
+		expectedCategory string
+	}{
+		{
+			name:             "stockout",
+			errorCode:        "ZONE_RESOURCE_POOL_EXHAUSTED",
+			expectedCategory: ops.CategoryStockout,
+		},
+		{
+			name:             "quota_exceeded",
+			errorCode:        "QUOTA_EXCEEDED",
+			expectedCategory: ops.CategoryQuotaExceeded,
+		},
+		{
+			name:             "invalid_config",
+			errorCode:        "PERMISSIONS_ERROR",
+			expectedCategory: ops.CategoryInvalidConfig,
+		},
+		{
+			name:             "actionable",
+			errorCode:        "UNKNOWN_ERROR",
+			expectedCategory: ops.CategoryActionable,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					n.Name: {Node: n, State: csn.NodeStateSuspended},
+				},
+			}
+			cp := &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					n.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           tc.errorCode,
+				NonBlockingErrorMsg:            tc.errorMsg,
+				ResumeErr:                      errors.New("resume failed"),
+			}
+			kc := &test.MockK8sClient{}
+			h := NewConsumeHandler(sm, cp, kc, &mockCSNCompositeBackoff{})
+
+			res, err := h.Handle(t.Context(), ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(n.Name),
+			})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedCategory, ops.CategorizeError(res.Errs[n.Name]))
+		})
+	}
+}

@@ -83,7 +83,6 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		refs = append(refs, inst.Ref)
 	}
 
-	nonBlockingErrorsHandler := h.getNonBlockingErrorsHandler()
 	for i := 0; i < len(refs); i += maxBatchSize {
 		end := i + maxBatchSize
 		if end > len(refs) {
@@ -91,22 +90,33 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		}
 		batch := refs[i:end]
 
-		err := h.cloudProvider.ResumeInstances(op.MIG, batch, nonBlockingErrorsHandler)
+		nodeErrors := make(map[string]string)
+		err := h.cloudProvider.ResumeInstances(op.MIG, batch, h.getNonBlockingErrorsHandler(nodeErrors))
 		status := gceSuccess
 		if err != nil {
 			status = gceFailure
-			result.AddErrForRefSlice(fmt.Errorf("failed to resume instances: %w, instances in batch: %v", err, instancesToResume[i:end]), batch)
+			batchErr := fmt.Errorf("failed to resume instances: %w, instances in batch: %v", err, instancesToResume[i:end])
+			for _, instRef := range batch {
+				cat := ops.CategoryActionable
+				if c, ok := nodeErrors[instRef.Name]; ok {
+					cat = c
+				}
+				result.Errs[instRef.Name] = ops.NewCategorizedError(cat, batchErr)
+			}
 		}
 		opGceBatchSize.WithLabelValues(resumeCall, status).Observe(float64(len(batch)))
 	}
 }
 
-// getNonBlockingErrorsHandler returns a non blocking errors handler (needed by ResumeInstances method) that reports node-level GCE errors to the global backoff.
-func (h *ConsumeHandler) getNonBlockingErrorsHandler() gceclient.NonBlockingErrorsHandler {
-	if h.backoff == nil || !h.stateManager.IsBackoffEnabled() {
-		return nil
-	}
+// getNonBlockingErrorsHandler returns a non blocking errors handler (needed by ResumeInstances method) that records node-level GCE error categories and reports errors to the global backoff.
+func (h *ConsumeHandler) getNonBlockingErrorsHandler(nodeErrors map[string]string) gceclient.NonBlockingErrorsHandler {
 	return func(ref gce.GceRef, code, msg, instanceStatus string) {
+		if nodeErrors != nil {
+			nodeErrors[ref.Name] = ops.ErrorCategoryFromGCEError(code, msg, instanceStatus)
+		}
+		if h.backoff == nil || !h.stateManager.IsBackoffEnabled() {
+			return
+		}
 		tn, ok := h.stateManager.Get(ref.Name)
 		if !ok || tn.Node == nil {
 			return
@@ -132,7 +142,7 @@ func (h *ConsumeHandler) patchNodesToConsumed(ctx context.Context, op ops.Operat
 		}
 		err := h.k8sClient.ApplyNodePatch(ctx, tn.Node, csn.NodeStateConsumed)
 		if err != nil {
-			result.Errs[nodeName] = fmt.Errorf("failed to patch node %q to be consumed: %w", nodeName, err)
+			result.Errs[nodeName] = ops.NewCategorizedError(ops.CategoryActionable, fmt.Errorf("failed to patch node %q to be consumed: %w", nodeName, err))
 			continue
 		}
 		result.Success.Insert(nodeName)
@@ -150,12 +160,12 @@ func (h *ConsumeHandler) getInstancesToResume(op ops.Operation, res *ops.Result)
 		}
 		ref, err := gce.GceRefFromProviderId(tn.Node.Spec.ProviderID)
 		if err != nil {
-			res.Errs[nodeName] = fmt.Errorf("invalid provider ID for node %q: %w", nodeName, err)
+			res.Errs[nodeName] = ops.NewCategorizedError(ops.CategoryInvalidConfig, fmt.Errorf("invalid provider ID for node %q: %w", nodeName, err))
 			continue
 		}
 		inst := h.cloudProvider.InstanceByRef(ref)
 		if inst == nil || inst.GCEStatus == "" {
-			res.Errs[nodeName] = fmt.Errorf("could not find instance status for node %q", nodeName)
+			res.Errs[nodeName] = ops.NewCategorizedError(ops.CategoryActionable, fmt.Errorf("could not find instance status for node %q", nodeName))
 			continue
 		}
 		if !internal.IsSuspended(inst.GCEStatus) {

@@ -28,7 +28,7 @@ var (
 			Name:      "csn_processed_operations",
 			Help:      "Total number of nodes processed by operations dispatcher.",
 		},
-		[]string{"op_type", "status", "attempt_number"},
+		[]string{"op_type", "status", "attempt_number", "error_category"},
 	)
 	opLatencySeconds = k8smetrics.NewHistogramVec(
 		&k8smetrics.HistogramOpts{
