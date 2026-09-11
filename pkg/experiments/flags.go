@@ -106,6 +106,11 @@ const ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag = "ColdStandbyNodes::Po
 const ColdStandbyNodesResumeTimeoutSecondsFlag = "ColdStandbyNodes::ResumeTimeoutSeconds"
 const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTimeoutSeconds"
 
+// ColdStandbyNodesMinUnsupportedMemoryGBFlag overrides the smallest node memory size, in
+// decimal GB, that GCE VM Suspend/Resume cannot handle. Failsafe is
+// csn.defaultMinUnsupportedMemoryGB.
+const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
+
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"
 

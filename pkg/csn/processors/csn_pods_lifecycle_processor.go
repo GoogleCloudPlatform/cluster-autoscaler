@@ -26,6 +26,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
@@ -71,10 +72,11 @@ type CSNPodsLifecycleProcessor struct {
 	bufferRegistry           *fakepods.Registry
 	defaultRefreshFrequency  time.Duration
 	cbFakePodStateObserver   *cbmetrics.FakePodStateObserver
+	experimentsManager       experiments.Manager
 	metrics                  csnMetrics
 }
 
-func NewCSNPodsLifecycleProcessor(nodeController csnNodeController, csnPodInjectionProcessor pods.PodListProcessor, cbFakePodStateObserver *cbmetrics.FakePodStateObserver, bufferRegistry *fakepods.Registry, csnDefaultRefreshFrequency time.Duration) *CSNPodsLifecycleProcessor {
+func NewCSNPodsLifecycleProcessor(nodeController csnNodeController, csnPodInjectionProcessor pods.PodListProcessor, cbFakePodStateObserver *cbmetrics.FakePodStateObserver, bufferRegistry *fakepods.Registry, csnDefaultRefreshFrequency time.Duration, experimentsManager experiments.Manager) *CSNPodsLifecycleProcessor {
 	return &CSNPodsLifecycleProcessor{
 		nodeController:           nodeController,
 		csnPodInjectionProcessor: csnPodInjectionProcessor,
@@ -82,6 +84,7 @@ func NewCSNPodsLifecycleProcessor(nodeController csnNodeController, csnPodInject
 		bufferRegistry:           bufferRegistry,
 		defaultRefreshFrequency:  csnDefaultRefreshFrequency,
 		cbFakePodStateObserver:   cbFakePodStateObserver,
+		experimentsManager:       experimentsManager,
 		metrics:                  internalmetrics.Metrics,
 	}
 }
@@ -116,6 +119,7 @@ func (p *CSNPodsLifecycleProcessor) Process(ctx context.Context, autoscalingCtx 
 
 	var newCSNPods []*apiv1.Pod
 	bufferIdToBuffer := map[string]*v1beta1.CapacityBuffer{}
+	memoryLimit := csn.NewMemoryLimit(p.experimentsManager)
 	for _, pod := range csnPods {
 		buffer := p.bufferRegistry.GetCapacityBuffer(pod.UID)
 		if buffer == nil {
@@ -124,7 +128,7 @@ func (p *CSNPodsLifecycleProcessor) Process(ctx context.Context, autoscalingCtx 
 		}
 		bufferId := fmt.Sprintf("%s/%s", buffer.Namespace, buffer.Name)
 		bufferIdToBuffer[bufferId] = buffer
-		csn.MakePodCSN(pod, bufferId)
+		csn.MakePodCSN(pod, bufferId, csn.WithMemoryLimit(memoryLimit))
 		addOwnerReference(pod, buffer)
 		newCSNPods = append(newCSNPods, pod)
 	}

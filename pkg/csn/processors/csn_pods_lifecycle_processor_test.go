@@ -34,6 +34,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers"
@@ -637,7 +638,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				defaultRefreshFrequency = 24 * time.Hour
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, defaultRefreshFrequency)
+			processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, defaultRefreshFrequency, experiments.NewMockManager())
 			processor.metrics = mockMetrics
 
 			clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
@@ -888,7 +889,7 @@ func TestCSNPodsLifecycleProcess_PackingOnUnassignedNodes(t *testing.T) {
 		bufferRegistry.SetCapacityBuffer(pod.UID, buffer)
 	}
 
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	for _, node := range initialNodes {
@@ -951,7 +952,7 @@ func TestCSNPodsLifecycleProcessor_Observer(t *testing.T) {
 	classifier := systempods.NewClassifier([]string{"kube-system"})
 	observer := cbmetrics.NewFakePodStateObserver(classifier, mockObserver, bufferRegistry, fakeClock, false)
 
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, observer, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, observer, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	node1 := create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer1"))
@@ -1050,7 +1051,7 @@ func TestCSNPodsLifecycleProcess_ScheduleAndMarkSuspendableNodesError(t *testing
 	mockNodeController := nodecontrollertesting.NewMockCSNNodeController(csnNodes)
 	bufferRegistry := fakepods.NewRegistry(nil)
 	mockMetrics := &mockCSNMetrics{}
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, nil, nil, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, nil, nil, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 	processor.metrics = mockMetrics
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())

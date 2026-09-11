@@ -15,6 +15,7 @@
 package csn
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,14 +32,17 @@ import (
 
 func TestMakePodCSN(t *testing.T) {
 	tests := []struct {
-		name     string
-		pod      *apiv1.Pod
-		bufferId string
+		name              string
+		pod               *apiv1.Pod
+		bufferId          string
+		opts              []PodOption
+		wantMemoryLimitGB int64
 	}{
 		{
-			name:     "nil annotations and node selector",
-			pod:      &apiv1.Pod{},
-			bufferId: "ns/buffer",
+			name:              "nil annotations and node selector",
+			pod:               &apiv1.Pod{},
+			bufferId:          "ns/buffer",
+			wantMemoryLimitGB: defaultMinUnsupportedMemoryGB,
 		},
 		{
 			name: "existing annotations and node selector",
@@ -61,13 +65,21 @@ func TestMakePodCSN(t *testing.T) {
 					},
 				},
 			},
-			bufferId: "ns/buffer-2",
+			bufferId:          "ns/buffer-2",
+			wantMemoryLimitGB: defaultMinUnsupportedMemoryGB,
+		},
+		{
+			name:              "non-default memory limit",
+			pod:               &apiv1.Pod{},
+			bufferId:          "ns/buffer-3",
+			opts:              []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
+			wantMemoryLimitGB: 129,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			MakePodCSN(test.pod, test.bufferId)
+			MakePodCSN(test.pod, test.bufferId, test.opts...)
 
 			expectedBufferId := strings.ReplaceAll(test.bufferId, "/", "_")
 
@@ -101,7 +113,7 @@ func TestMakePodCSN(t *testing.T) {
 						{
 							Key:      labels.MemoryScalingLevelLabel,
 							Operator: apiv1.NodeSelectorOpLt,
-							Values:   []string{"209"},
+							Values:   []string{strconv.FormatInt(test.wantMemoryLimitGB, 10)},
 						},
 					},
 				},

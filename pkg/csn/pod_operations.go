@@ -15,6 +15,7 @@
 package csn
 
 import (
+	"strconv"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -28,15 +29,36 @@ const (
 	// Annotation key and value to identify CSN pods, used internally only since those pods are fake.
 	CSNPodAnnotationKey   = "buffer.gke.io/standby-capacity-pod"
 	CSNPodAnnotationValue = "true"
-
-	minUnsupportedMemoryGBValue = "209"
 )
 
 func IsCSNPod(pod *apiv1.Pod) bool {
 	return pod != nil && pod.Annotations != nil && pod.Annotations[CSNPodAnnotationKey] == CSNPodAnnotationValue
 }
 
-func MakePodCSN(pod *apiv1.Pod, bufferId string) {
+// PodOption adjusts how MakePodCSN builds a standby buffer fake pod.
+type PodOption func(*podOptions)
+
+// podOptions holds the adjustable parts of MakePodCSN. The zero value is the default behaviour.
+type podOptions struct {
+	memoryLimit MemoryLimit
+}
+
+// WithMemoryLimit overrides the node memory limit encoded in the pod's node affinity. Without it
+// MakePodCSN uses the default limit; production callers should pass NewMemoryLimit's result so
+// that the configured limit is honoured.
+func WithMemoryLimit(limit MemoryLimit) PodOption {
+	return func(options *podOptions) {
+		options.memoryLimit = limit
+	}
+}
+
+// MakePodCSN turns pod into a standby buffer (CSN) fake pod for the given buffer.
+func MakePodCSN(pod *apiv1.Pod, bufferId string, opts ...PodOption) {
+	options := podOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+
 	applyWorkloadSeparation(pod, metadata.SoftWorkloadSeparationKey, metadata.SoftWorkloadSeparationValue, apiv1.TaintEffectPreferNoSchedule)
 
 	// TODO(b/484466017): Find a better fix.
@@ -68,25 +90,33 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string) {
 		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &apiv1.NodeSelector{}
 	}
 	nodeAffinityTerms := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	*nodeAffinityTerms = append(*nodeAffinityTerms,
-		apiv1.NodeSelectorTerm{
+	*nodeAffinityTerms = append(*nodeAffinityTerms, memoryLimitNodeSelectorTerms(options.memoryLimit)...)
+}
+
+// memoryLimitNodeSelectorTerms returns the node selector terms restricting a standby buffer pod to
+// nodes that GCE VM Suspend/Resume supports. The terms are OR-ed by the scheduler: a node is
+// acceptable if its memory scaling level is below the limit, or if it does not carry the label at
+// all.
+func memoryLimitNodeSelectorTerms(limit MemoryLimit) []apiv1.NodeSelectorTerm {
+	return []apiv1.NodeSelectorTerm{
+		{
 			MatchExpressions: []apiv1.NodeSelectorRequirement{
 				{
 					Key:      labels.MemoryScalingLevelLabel,
 					Operator: apiv1.NodeSelectorOpLt,
-					Values:   []string{minUnsupportedMemoryGBValue},
+					Values:   []string{strconv.FormatInt(limit.GB(), 10)},
 				},
 			},
 		},
-		apiv1.NodeSelectorTerm{
+		{
 			MatchExpressions: []apiv1.NodeSelectorRequirement{
 				{
 					Key:      labels.MemoryScalingLevelLabel,
 					Operator: apiv1.NodeSelectorOpDoesNotExist,
 				},
 			},
-		})
-
+		},
+	}
 }
 
 func RemoveBufferAssignmentWorkloadSeparation(pod *apiv1.Pod) {
