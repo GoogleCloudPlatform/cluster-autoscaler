@@ -220,3 +220,5 @@ const EnableNestedVirtualizationMinCAVersionFlag = "EnableNestedVirtualization::
 
 const DefaultReservedResourcesEnabledFlag = "DefaultReservedResources::Enabled"
 const DefaultReservedResourcesMinCAVersionFlag = "DefaultReservedResources::MinCAVersion"
+const AutopilotNapDefaultFallbackEnabledFlag = "AutopilotNapDefaultFallback::Enabled"
+const AutopilotNapDefaultFallbackMinCAVersionFlag = "AutopilotNapDefaultFallback::MinCAVersion"

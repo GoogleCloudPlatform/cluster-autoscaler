@@ -196,7 +196,7 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 		if !machineFamilySpecified && podClass.IsSliceOfHardware() {
 			// Slice of hardware compute classes must specify machine family
 			// except when Arm arch is specified, and would default to use C4A.
-			if len(architectures) == 1 && architectures[gce.Arm64] {
+			if isArmOnly(architectures) {
 				mf, selectionType := s.DefaultMachineFamilyForArm(allowE4A)
 				return []machinetypes.MachineFamily{mf}, podClass.Name(), selectionType, nil
 			}
@@ -236,13 +236,22 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 	}
 
 	defaultFamily, selectionType := s.defaultFamilyForPod(architectures, specifiedGpu, specifiedTpu, allowE4A)
-	// Confidential nodes should never use EK machine family as default.
-	if s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.EK.Name()) && !s.CloudProvider.AreConfidentialNodesEnabled() {
-		if s.CloudProvider.IsEkSpotEnabled() || (!customClassSpecified && !wantsSpot) {
-			// Default family is used as fallback when EKs are in backoff.
-			return []machinetypes.MachineFamily{machinetypes.EK, defaultFamily}, "", selectionType, nil
+
+	isEkEnabledForPod := s.isEkEnabledForPod(customClassSpecified, wantsSpot)
+
+	// Autopilot workloads fall back to regional prioritized machine lists in case of stockouts.
+	// See design: go/nap-default-fallback-stateless
+	if autopilotEnabled && selectionType == machinetypes.SelectionTypeDefault && s.CloudProvider.IsAutopilotNapDefaultFallbackEnabled() {
+		if fallbackFamilies := s.defaultFallbackMachineFamilies(isEkEnabledForPod, isE4Enabled); len(fallbackFamilies) > 0 {
+			return fallbackFamilies, "", selectionType, nil
 		}
 	}
+
+	if isEkEnabledForPod {
+		// Default family is used as fallback when EKs are in backoff.
+		return []machinetypes.MachineFamily{machinetypes.EK, defaultFamily}, "", selectionType, nil
+	}
+
 	return []machinetypes.MachineFamily{defaultFamily}, "", selectionType, nil
 }
 
@@ -386,6 +395,38 @@ func (s Selector) filterE4MachineFamilyIfNotEnabled(families []machinetypes.Mach
 
 	// Stateless in other regions: Keep E4 alongside E2/EK
 	return families
+}
+
+func (s Selector) isEkEnabledForPod(customClassSpecified, wantsSpot bool) bool {
+	// Confidential nodes should never use EK machine family as default.
+	// EKs are permitted if Spot is explicitly enabled or if it's a non-Spot standard class.
+	return s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.EK.Name()) &&
+		!s.CloudProvider.AreConfidentialNodesEnabled() &&
+		(s.CloudProvider.IsEkSpotEnabled() || (!customClassSpecified && !wantsSpot))
+}
+
+func (s Selector) defaultFallbackMachineFamilies(isEkEnabled, isE4Enabled bool) []machinetypes.MachineFamily {
+	gpFamilyNames := s.CloudProvider.GetGeneralPurposeMachineFamilies()
+	if len(gpFamilyNames) == 0 {
+		return nil
+	}
+
+	var gpFamilies []machinetypes.MachineFamily
+	for _, name := range gpFamilyNames {
+		name = strings.TrimSpace(name)
+		family, err := s.CloudProvider.MachineConfigProvider().ToMachineFamily(name)
+		if err != nil {
+			klog.Errorf("Unexpected invalid machine family %q in GeneralPurposeMachineFamilies: %v", name, err)
+			continue
+		}
+		gpFamilies = append(gpFamilies, family)
+	}
+
+	if !isEkEnabled {
+		gpFamilies = filterMachineFamilyByName(gpFamilies, machinetypes.EK.Name())
+	}
+
+	return s.filterE4MachineFamilyIfNotEnabled(gpFamilies, isE4Enabled)
 }
 
 func filterArmMachineFallbacksIfNotEnabled(podFamilyMachineFamilies []machinetypes.MachineFamily, isEnabled bool) []machinetypes.MachineFamily {
@@ -553,7 +594,7 @@ func (s Selector) defaultFamilyForPod(architectures map[gce.SystemArchitecture]b
 	// ARM machines would default to C4A, except for those allowlisted for E4A that are using autopilot mode. See go/autopilot-arm-container-optimized-pods.
 	// We are not handling x86 arch since we assume the AutoprovisioningDefaultFamily is going to be x86
 	// This logic would need to change we allow setting ARM machines as default
-	if len(architectures) == 1 && architectures[gce.Arm64] {
+	if isArmOnly(architectures) {
 		return s.DefaultMachineFamilyForArm(allowE4A)
 	}
 
@@ -579,4 +620,9 @@ func (s Selector) clusterWideMinCpuPlatform() (machinetypes.CpuPlatform, bool, e
 // the default confidential node types (SEV).
 func supportsDefaultConfidentialNodes(family machinetypes.MachineFamily) bool {
 	return family.IsConfidentialNodeTypeSupported(gkelabels.SEVConfidentialNodeTypeValue)
+}
+
+// isArmOnly checks if the pod explicitly and exclusively requests the ARM64 architecture.
+func isArmOnly(architectures map[gce.SystemArchitecture]bool) bool {
+	return len(architectures) == 1 && architectures[gce.Arm64]
 }

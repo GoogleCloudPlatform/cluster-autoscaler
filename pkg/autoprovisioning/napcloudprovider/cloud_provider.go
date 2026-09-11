@@ -69,6 +69,8 @@ type AutoprovisioningCloudProvider interface {
 	IsArmMachineFallbacksEnabled() bool
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 	IsE2lessRegion() bool
+	GetGeneralPurposeMachineFamilies() []string
+	IsAutopilotNapDefaultFallbackEnabled() bool
 }
 
 type NodePoolSpecBuilder interface {

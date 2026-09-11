@@ -368,6 +368,8 @@ type GkeManager interface {
 	PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool)
 	// ClearRecommendations removes all tracked recommendations.
 	ClearRecommendations()
+	// GetGeneralPurposeMachineFamilies returns the list of machine families enabled for general purpose workloads.
+	GetGeneralPurposeMachineFamilies() []string
 }
 
 type ScaleUpTimeProvider interface {
@@ -483,6 +485,7 @@ type gkeManagerImpl struct {
 	autoprovisioningNodePoolDefaults *gke_api_beta.AutoprovisioningNodePoolDefaults
 	nodePoolDefaults                 *gke_api_beta.NodePoolDefaults
 	napDefaultMachineTypeFamily      machinetypes.MachineFamily
+	generalPurposeMachineFamilies    []string
 	templates                        *GkeTemplateBuilder
 	interrupt                        chan struct{}
 	client                           *http.Client
@@ -556,6 +559,7 @@ type GkeManagerOptions struct {
 	enableUserAnyZoneSelection        bool
 	MachineSerenityLabelsEnabled      bool
 	DefaultReservedResourcesV2Enabled bool
+	generalPurposeMachineFamilies     []string
 }
 
 // CreateGkeManager constructs GkeManager object.
@@ -629,6 +633,7 @@ func CreateGkeManager(
 		matcher:                             matcher,
 		domainUrl:                           domainUrl,
 		allowlistedSystemLabelsMatcher:      managerOptions.allowlistedSystemLabelsMatcher,
+		generalPurposeMachineFamilies:       managerOptions.generalPurposeMachineFamilies,
 		clusterLocationsObserver:            clusterLocationsObserver,
 		localSSDDiskSizeProvider:            dynamicLocalSSDDiskSizeProvider,
 		autoscalingOptsProvider:             autoscalingOptsProvider,
@@ -2203,6 +2208,11 @@ func (m *gkeManagerImpl) GetResourceLimiter(n NodeGroupFromNode) (*cloudprovider
 // GetAutoprovisioningDefaultFamily returns the default machine family used for autoprovisioned node pools.
 func (m *gkeManagerImpl) GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily {
 	return m.napDefaultMachineTypeFamily
+}
+
+// GetGeneralPurposeMachineFamilies returns the list of machine families enabled for general purpose workloads.
+func (m *gkeManagerImpl) GetGeneralPurposeMachineFamilies() []string {
+	return m.generalPurposeMachineFamilies
 }
 
 // Return information about EK launch phase and source and if it is disabled by Cluster Proto

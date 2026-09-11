@@ -3215,19 +3215,21 @@ func TestGpuRequestGenerator_UpdateNodePoolSpec_UnavailableGpu(t *testing.T) {
 // TODO(b/266688134): Merge TestMachineSelectionGenerator_UpdateNodePoolSpec.* tests into one.
 func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		autopilotEnabled         bool
-		isEkInAutopilotEnabled   bool
-		confidentialNodesEnabled bool
-		confidentialInstanceType string
-		machineType              string
-		computeClassName         string
-		gpuType                  string
-		tpuPresent               bool
-		expectedClassName        string
-		expectedCpuScaling       string
-		expectedMemoryScaling    string
-		expectedTaints           []apiv1.Taint
-		expectedError            error
+		autopilotEnabled                     bool
+		isEkInAutopilotEnabled               bool
+		confidentialNodesEnabled             bool
+		confidentialInstanceType             string
+		machineType                          string
+		computeClassName                     string
+		gpuType                              string
+		tpuPresent                           bool
+		autopilotNapDefaultFallback          bool
+		expectedClassName                    string
+		expectedCpuScaling                   string
+		expectedMemoryScaling                string
+		expectedGeneralPurposePodFamilyLabel string
+		expectedTaints                       []apiv1.Taint
+		expectedError                        error
 	}{
 		"non-default family, autopilot disabled": {
 			autopilotEnabled:      false,
@@ -3399,6 +3401,23 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			expectedMemoryScaling:  "137",
 			expectedTaints:         []apiv1.Taint{},
 		},
+		"non-default family, autopilot enabled, NAP default fallback label set": {
+			autopilotEnabled:                     true,
+			machineType:                          "n4-standard-4",
+			autopilotNapDefaultFallback:          true,
+			expectedCpuScaling:                   "4",
+			expectedMemoryScaling:                "17",
+			expectedTaints:                       []apiv1.Taint{},
+			expectedGeneralPurposePodFamilyLabel: "true",
+		},
+		"non-default family, autopilot enabled, NAP default fallback label not set": {
+			autopilotEnabled:            true,
+			machineType:                 "n4-standard-4",
+			autopilotNapDefaultFallback: false,
+			expectedCpuScaling:          "4",
+			expectedMemoryScaling:       "17",
+			expectedTaints:              []apiv1.Taint{{Key: gkelabels.MachineFamilyLabel, Value: "n4", Effect: apiv1.TaintEffectNoSchedule}},
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			extraResources := map[string]resource.Quantity{}
@@ -3413,6 +3432,9 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			}
 			if tc.computeClassName != "" {
 				systemLabels[gkelabels.ComputeClassLabel] = tc.computeClassName
+			}
+			if tc.autopilotNapDefaultFallback {
+				systemLabels[labelAutopilotNapDefaultFallback] = "true"
 			}
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithConfidentialNodesEnabled(tc.confidentialNodesEnabled).
@@ -3439,6 +3461,11 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			assert.Equal(t, tc.expectedCpuScaling, spec.Labels[gkelabels.CpuScalingLevelLabel])
 			assert.Equal(t, tc.expectedMemoryScaling, spec.Labels[gkelabels.MemoryScalingLevelLabel])
 			assert.Equal(t, tc.machineType, spec.MachineType)
+			if tc.expectedGeneralPurposePodFamilyLabel != "" {
+				assert.Equal(t, tc.expectedGeneralPurposePodFamilyLabel, spec.Labels[gkelabels.GeneralPurposePodFamilyLabel])
+			} else {
+				assert.NotContains(t, spec.Labels, gkelabels.GeneralPurposePodFamilyLabel)
+			}
 			assert.Nil(t, spec.Metadata)
 		})
 	}
@@ -3565,6 +3592,189 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_MinCpuPlatform(t *testing.
 				for key, val := range tc.expectedTargetLabels {
 					assert.Equal(t, spec.Labels[key], val)
 				}
+			}
+		})
+	}
+}
+
+func TestMachineSelectionGenerator_UpdateParameters_AutopilotNapDefaultFallback(t *testing.T) {
+	pod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod",
+			Namespace: "default",
+		},
+		Spec: apiv1.PodSpec{
+			Containers: []apiv1.Container{
+				{
+					Name: "app",
+					Resources: apiv1.ResourceRequirements{
+						Requests: apiv1.ResourceList{
+							apiv1.ResourceCPU: resource.MustParse("500m"),
+						},
+					},
+				},
+			},
+		},
+	}
+	statefulPod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "stateful-pod",
+			Namespace: "default",
+		},
+		Spec: apiv1.PodSpec{
+			Containers: []apiv1.Container{
+				{
+					Name: "app",
+					VolumeMounts: []apiv1.VolumeMount{
+						{
+							Name: "data",
+						},
+					},
+				},
+			},
+			Volumes: []apiv1.Volume{
+				{
+					Name: "data",
+					VolumeSource: apiv1.VolumeSource{
+						PersistentVolumeClaim: &apiv1.PersistentVolumeClaimVolumeSource{
+							ClaimName: "my-pvc",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for tn, tc := range map[string]struct {
+		autopilotEnabled      bool
+		fallbackExpEnabled    bool
+		machineSelectionType  machinetypes.SelectionType
+		pods                  []*apiv1.Pod
+		machineType           string
+		defaultFamily         machinetypes.MachineFamily
+		expectedFallbackLabel bool
+		expectedError         error
+	}{
+		"Autopilot stateless default pod, fallback machine family, exp enabled -> fallback label set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: true,
+		},
+		"Autopilot stateless default pod, default machine family -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "e4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Autopilot stateless pod, explicit machine selection type -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeSpecified,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Autopilot stateful default pod, fallback machine family, exp enabled -> fallback label set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{statefulPod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: true,
+		},
+		"Autopilot stateful default pod, default machine family -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{statefulPod},
+			machineType:           "e4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Autopilot stateful pod, explicit machine selection type -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeSpecified,
+			pods:                  []*apiv1.Pod{statefulPod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Standard cluster (autopilot disabled) -> fallback label NOT set": {
+			autopilotEnabled:      false,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Autopilot stateless default pod, experiment disabled -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    false,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "n4-standard-4",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+		"Autopilot stateless default pod, invalid/unparseable machine type -> returns error": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "invalidmachinetype",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+			expectedError:         fmt.Errorf(`unknown machine type "invalidmachinetype", unable to parse machine type "invalidmachinetype"`),
+		},
+		"Autopilot stateless default pod, empty machine type -> fallback label NOT set": {
+			autopilotEnabled:      true,
+			fallbackExpEnabled:    true,
+			machineSelectionType:  machinetypes.SelectionTypeDefault,
+			pods:                  []*apiv1.Pod{pod},
+			machineType:           "",
+			defaultFamily:         machinetypes.E4,
+			expectedFallbackLabel: false,
+		},
+	} {
+		t.Run(tn, func(t *testing.T) {
+			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+				WithAutopilotEnabled(tc.autopilotEnabled).
+				WithAutopilotNapDefaultFallbackEnabled(tc.fallbackExpEnabled).
+				WithAutoprovisioningDefaultFamily(tc.defaultFamily).
+				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				Build()
+			msg := NewMachineSelectionGenerator(provider, machineselection.Selector{CloudProvider: provider}, nil)
+			params := &nodeGroupParameters{
+				systemLabels: map[string]string{},
+			}
+			ngReq := nodeGroupRequirements{
+				pods:                 tc.pods,
+				machineSelectionType: tc.machineSelectionType,
+			}
+			opts := NodeGroupOptions{
+				MachineType: tc.machineType,
+			}
+			err := msg.UpdateParameters(params, ngReq, opts)
+			if tc.expectedError != nil {
+				assert.Equal(t, tc.expectedError, err)
+				return
+			}
+			assert.NoError(t, err)
+			if tc.expectedFallbackLabel {
+				assert.Equal(t, "true", params.systemLabels[labelAutopilotNapDefaultFallback])
+			} else {
+				assert.NotContains(t, params.systemLabels, labelAutopilotNapDefaultFallback)
 			}
 		})
 	}

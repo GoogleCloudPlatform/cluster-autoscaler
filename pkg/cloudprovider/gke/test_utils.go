@@ -416,8 +416,10 @@ type TestAutoprovisioningCloudProvider struct {
 	isResizableVmEdpEnabled               bool
 	extendedFallbacksEnabled              bool
 	isArmMachineFallbacksEnabled          bool
+	isAutopilotNapDefaultFallbackEnabled  bool
 	machineTypesPerZone                   map[string][]string
 	machineConfigProvider                 *machinetypes.MachineConfigProvider
+	generalPurposeMachineFamilies         []string
 	nodePoolSpec                          *gkeclient.NodePoolSpec
 }
 
@@ -639,6 +641,22 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithExtendedFallbacksEnabled(
 	return b
 }
 
+// WithGeneralPurposeMachineFamilies sets the general purpose machine families in provider.
+func (b *TestAutoprovisioningCloudProviderBuilder) WithGeneralPurposeMachineFamilies(families []string) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		p.generalPurposeMachineFamilies = families
+	})
+	return b
+}
+
+// WithAutopilotNapDefaultFallbackEnabled sets whether AutopilotNapDefaultFallback experiment is enabled in provider.
+func (b *TestAutoprovisioningCloudProviderBuilder) WithAutopilotNapDefaultFallbackEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		p.isAutopilotNapDefaultFallbackEnabled = enabled
+	})
+	return b
+}
+
 // WithCompactPlacementEnabled enables compact placement in provider
 func (b *TestAutoprovisioningCloudProviderBuilder) WithCompactPlacementEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
@@ -748,7 +766,8 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithTrimmedLocations(zones []
 // Build returns a built test cloud provider
 func (b *TestAutoprovisioningCloudProviderBuilder) Build() *TestAutoprovisioningCloudProvider {
 	p := &TestAutoprovisioningCloudProvider{
-		TestCloudProvider: b.ossBuilder.Build(),
+		TestCloudProvider:                    b.ossBuilder.Build(),
+		isAutopilotNapDefaultFallbackEnabled: true,
 	}
 
 	for _, builder := range b.builders {
@@ -834,6 +853,10 @@ func (cp *TestAutoprovisioningCloudProvider) IsExtendedFallbacksEnabled() bool {
 
 func (cp *TestAutoprovisioningCloudProvider) IsE2lessRegion() bool {
 	return cp.GetAutoprovisioningDefaultFamily().Name() == machinetypes.E4.Name()
+}
+
+func (cp *TestAutoprovisioningCloudProvider) GetGeneralPurposeMachineFamilies() []string {
+	return cp.generalPurposeMachineFamilies
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsArmMachineFallbacksEnabled() bool {
@@ -1626,6 +1649,7 @@ type FakeGkeManager struct {
 	resizableVmWithinPodFamilyEnabled map[string]bool
 	isArmMachineFallbacksEnabled      bool
 	extendedFallbacksEnabled          bool
+	generalPurposeMachineFamilies     []string
 
 	suspensionStatuses    map[suspensionKey]SuspensionStatus
 	machineConfigProvider *machinetypes.MachineConfigProvider
@@ -2015,6 +2039,14 @@ func (fake *FakeGkeManager) IsExtendedFallbacksEnabled() bool {
 // SetExtendedFallbacksEnabled sets the extendedFallbacksEnabled field.
 func (fake *FakeGkeManager) SetExtendedFallbacksEnabled(enabled bool) {
 	fake.extendedFallbacksEnabled = enabled
+}
+
+func (fake *FakeGkeManager) GetGeneralPurposeMachineFamilies() []string {
+	return fake.generalPurposeMachineFamilies
+}
+
+func (fake *FakeGkeManager) SetGeneralPurposeMachineFamilies(families []string) {
+	fake.generalPurposeMachineFamilies = families
 }
 
 func (fake *FakeGkeManager) IsEkSpotEnabled() bool {
@@ -2682,6 +2714,11 @@ func (m *GkeManagerMock) GetAutoprovisioningDefaultFamily() machinetypes.Machine
 	return args.Get(0).(machinetypes.MachineFamily)
 }
 
+func (m *GkeManagerMock) GetGeneralPurposeMachineFamilies() []string {
+	args := m.Called()
+	return args.Get(0).([]string)
+}
+
 // AreConfidentialNodesEnabled is a mocked method
 func (m *GkeManagerMock) AreConfidentialNodesEnabled() bool {
 	args := m.Called()
@@ -3233,4 +3270,17 @@ func (m *GkeManagerMock) PopRecommendation(migId string) (rec ScaleUpRecommendat
 }
 func (m *GkeManagerMock) ClearRecommendations() {
 	m.Called()
+}
+
+func (cp *TestAutoprovisioningCloudProvider) IsAutopilotNapDefaultFallbackEnabled() bool {
+	return cp.isAutopilotNapDefaultFallbackEnabled
+}
+
+func (fake *FakeGkeManager) IsAutopilotNapDefaultFallbackEnabled() bool {
+	return true
+}
+
+func (m *GkeManagerMock) IsAutopilotNapDefaultFallbackEnabled() bool {
+	args := m.Called()
+	return args.Get(0).(bool)
 }
