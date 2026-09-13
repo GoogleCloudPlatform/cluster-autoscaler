@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
@@ -350,13 +351,13 @@ func (p *CSNPodsLifecycleProcessor) scheduledCSNPodsOnUnassignedNodes(pods []*ap
 			continue
 		}
 
-		// Since the node is unassigned (i.e. doesn't have csn.BufferAssignmentKey equivalent to the pod), pods won't be scheduled there.
+		// Since the node is unassigned (i.e. doesn't have metadata.BufferAssignmentKey equivalent to the pod), pods won't be scheduled there.
 		// So, we temporarily remove the nodeSelector of the pod and revert it after we do the scheduling.
-		prev := pod.Spec.NodeSelector[csn.BufferAssignmentKey]
-		delete(pod.Spec.NodeSelector, csn.BufferAssignmentKey)
+		prev := pod.Spec.NodeSelector[metadata.BufferAssignmentKey]
+		delete(pod.Spec.NodeSelector, metadata.BufferAssignmentKey)
 		defer func() {
 			if prev != "" {
-				pod.Spec.NodeSelector[csn.BufferAssignmentKey] = prev
+				pod.Spec.NodeSelector[metadata.BufferAssignmentKey] = prev
 			}
 		}()
 

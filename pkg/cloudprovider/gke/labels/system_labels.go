@@ -20,7 +20,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 )
 
 const (
@@ -483,7 +483,7 @@ var (
 		LoggingConfigVariant,
 		DraNetNodeLabel,
 		DraTpuNodeLabel,
-		csn.SoftWorkloadSeparationKey,
+		metadata.SoftWorkloadSeparationKey,
 		AcceleratorNetworkProfileLabel,
 		GpuDirectLabel,
 		MaintenanceExclusionLabelKey,

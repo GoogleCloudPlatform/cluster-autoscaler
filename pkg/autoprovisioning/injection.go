@@ -39,6 +39,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
@@ -988,11 +989,11 @@ func (g CSNGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, podReq *p
 		return nil
 	}
 
-	if v, ok := podReq.LabelReq.GetSingleValue(csn.SoftWorkloadSeparationKey); ok && v == csn.SoftWorkloadSeparationValue {
+	if v, ok := podReq.LabelReq.GetSingleValue(metadata.SoftWorkloadSeparationKey); ok && v == metadata.SoftWorkloadSeparationValue {
 		if ngReq.systemLabels == nil {
 			ngReq.systemLabels = make(map[string]string)
 		}
-		ngReq.systemLabels[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+		ngReq.systemLabels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 	}
 	return nil
 }
@@ -1006,7 +1007,7 @@ func (g CSNGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGr
 		return nil
 	}
 
-	if ngReq.systemLabels[csn.SoftWorkloadSeparationKey] != csn.SoftWorkloadSeparationValue {
+	if ngReq.systemLabels[metadata.SoftWorkloadSeparationKey] != metadata.SoftWorkloadSeparationValue {
 		return nil
 	}
 
@@ -1017,7 +1018,7 @@ func (g CSNGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGr
 	if params.systemLabels == nil {
 		params.systemLabels = make(map[string]string)
 	}
-	params.systemLabels[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+	params.systemLabels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 
 	return nil
 }

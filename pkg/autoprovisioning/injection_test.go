@@ -40,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -8175,17 +8176,17 @@ func TestCSNGenerator(t *testing.T) {
 		"pod has a CSN label requirement": {
 			podReq: &podrequirements.Requirements{
 				LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
-					csn.SoftWorkloadSeparationKey: podrequirements.NewValues(csn.SoftWorkloadSeparationValue),
+					metadata.SoftWorkloadSeparationKey: podrequirements.NewValues(metadata.SoftWorkloadSeparationValue),
 				}),
 			},
 			wantNgReq: &nodeGroupRequirements{
 				systemLabels: map[string]string{
-					csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+					metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 				},
 			},
 			wantParams: &nodeGroupParameters{
 				systemLabels: map[string]string{
-					csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+					metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 				},
 				taints: []apiv1.Taint{csn.SoftWorkloadSeparationTaint},
 			},

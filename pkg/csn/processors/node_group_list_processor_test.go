@@ -23,6 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -43,7 +44,7 @@ func TestNodeGroupListProcessor(t *testing.T) {
 
 	normalNode := test_utils.BuildTestNode("normal-node", 1000, 1000)
 	csnNode := test_utils.BuildTestNode("csn-node", 1000, 1000)
-	csnNode.Labels[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+	csnNode.Labels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 
 	csnPod := test_utils.BuildTestPod("csn-pod", 100, 100)
 	csn.MakePodCSN(csnPod, "ns/buffer")

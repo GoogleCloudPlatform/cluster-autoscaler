@@ -22,6 +22,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -416,7 +417,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -445,7 +446,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -462,7 +463,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -476,7 +477,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -492,7 +493,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -519,7 +520,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -574,7 +575,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-2",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -598,7 +599,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-2",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -624,8 +625,8 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
-							csn.BufferAssignmentKey:       "ns/buffer",
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+							metadata.BufferAssignmentKey:       "ns/buffer",
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -633,7 +634,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 						Taints: []apiv1.Taint{
 							csn.SuspendedTaint,
 							{
-								Key:    csn.BufferAssignmentKey,
+								Key:    metadata.BufferAssignmentKey,
 								Value:  "ns/buffer",
 								Effect: apiv1.TaintEffectNoSchedule,
 							},
@@ -650,7 +651,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -667,8 +668,8 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
-							csn.BufferAssignmentKey:       "ns/buffer",
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+							metadata.BufferAssignmentKey:       "ns/buffer",
 						},
 					},
 					Spec: apiv1.NodeSpec{
@@ -676,7 +677,7 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 						Taints: []apiv1.Taint{
 							csn.SuspendedTaint,
 							{
-								Key:    csn.BufferAssignmentKey,
+								Key:    metadata.BufferAssignmentKey,
 								Value:  "ns/buffer",
 								Effect: apiv1.TaintEffectNoSchedule,
 							},
@@ -693,15 +694,15 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: "csn-node-1",
 						Labels: map[string]string{
-							csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
-							csn.BufferAssignmentKey:       "ns/buffer",
+							metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+							metadata.BufferAssignmentKey:       "ns/buffer",
 						},
 					},
 					Spec: apiv1.NodeSpec{
 						Unschedulable: false,
 						Taints: []apiv1.Taint{
 							{
-								Key:    csn.BufferAssignmentKey,
+								Key:    metadata.BufferAssignmentKey,
 								Value:  "ns/buffer",
 								Effect: apiv1.TaintEffectNoSchedule,
 							},
@@ -830,12 +831,12 @@ func TestSetNodeAsForProcessors(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, tc.desiredState, csn.ClassifyNode(node))
 
-			hasBufferAssignmentTaint := taints.HasTaint(node, csn.BufferAssignmentKey)
+			hasBufferAssignmentTaint := taints.HasTaint(node, metadata.BufferAssignmentKey)
 			if tc.expectedBufferAssignmentExist {
-				assert.Contains(t, node.Labels, csn.BufferAssignmentKey)
+				assert.Contains(t, node.Labels, metadata.BufferAssignmentKey)
 				assert.True(t, hasBufferAssignmentTaint, "Expected buffer assignment taint to exist")
 			} else {
-				assert.NotContains(t, node.Labels, csn.BufferAssignmentKey)
+				assert.NotContains(t, node.Labels, metadata.BufferAssignmentKey)
 				assert.False(t, hasBufferAssignmentTaint, "Expected buffer assignment taint to be removed")
 			}
 
@@ -897,14 +898,14 @@ func TestAssignNodeToBufferForProcessors(t *testing.T) {
 			node:        create8CPUTestNode(t, "node-1", csn.NodeStateConsumed),
 			bufferId:    "ns1/buffer1",
 			expectedLabels: map[string]string{
-				csn.BufferAssignmentKey: "ns1_buffer1",
+				metadata.BufferAssignmentKey: "ns1_buffer1",
 			},
 			expectedAnnotations: map[string]string{
-				csn.BufferAssignmentKey: "ns1/buffer1",
+				metadata.BufferAssignmentKey: "ns1/buffer1",
 			},
 			expectedTaints: []apiv1.Taint{
 				{
-					Key:    csn.BufferAssignmentKey,
+					Key:    metadata.BufferAssignmentKey,
 					Value:  "ns1_buffer1",
 					Effect: apiv1.TaintEffectNoSchedule,
 				},
@@ -918,16 +919,16 @@ func TestAssignNodeToBufferForProcessors(t *testing.T) {
 			),
 			bufferId: "ns2/buffer2",
 			expectedLabels: map[string]string{
-				"other-label":           "other-value",
-				csn.BufferAssignmentKey: "ns2_buffer2",
+				"other-label":                "other-value",
+				metadata.BufferAssignmentKey: "ns2_buffer2",
 			},
 			expectedAnnotations: map[string]string{
-				csn.BufferAssignmentKey: "ns2/buffer2",
+				metadata.BufferAssignmentKey: "ns2/buffer2",
 			},
 			expectedTaints: []apiv1.Taint{
 				{Key: "other-taint", Value: "val", Effect: apiv1.TaintEffectNoSchedule},
 				{
-					Key:    csn.BufferAssignmentKey,
+					Key:    metadata.BufferAssignmentKey,
 					Value:  "ns2_buffer2",
 					Effect: apiv1.TaintEffectNoSchedule,
 				},
@@ -940,14 +941,14 @@ func TestAssignNodeToBufferForProcessors(t *testing.T) {
 			),
 			bufferId: "ns2/buffer2",
 			expectedLabels: map[string]string{
-				csn.BufferAssignmentKey: "ns2_buffer2",
+				metadata.BufferAssignmentKey: "ns2_buffer2",
 			},
 			expectedAnnotations: map[string]string{
-				csn.BufferAssignmentKey: "ns2/buffer2",
+				metadata.BufferAssignmentKey: "ns2/buffer2",
 			},
 			expectedTaints: []apiv1.Taint{
 				{
-					Key:    csn.BufferAssignmentKey,
+					Key:    metadata.BufferAssignmentKey,
 					Value:  "ns2_buffer2",
 					Effect: apiv1.TaintEffectNoSchedule,
 				},

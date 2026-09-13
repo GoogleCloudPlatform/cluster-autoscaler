@@ -33,7 +33,7 @@ import (
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
 
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
@@ -1053,7 +1053,7 @@ func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(ctx context.Context, m
 	if computeClassLabel, found := systemLabels[gkelabels.ComputeClassLabel]; found {
 		gkeNodeGroup.computeClass = computeClassLabel
 	}
-	if csnLabel, found := systemLabels[csn.SoftWorkloadSeparationKey]; found {
+	if csnLabel, found := systemLabels[metadata.SoftWorkloadSeparationKey]; found {
 		gkeNodeGroup.csnLabel = csnLabel
 	}
 	if cccPriorityIdxLabel, found := systemLabels[gkelabels.ComputeClassPriorityIdxLabel]; found {
@@ -1061,7 +1061,7 @@ func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(ctx context.Context, m
 	}
 
 	for _, t := range taints {
-		if t.Key == csn.SoftWorkloadSeparationKey {
+		if t.Key == metadata.SoftWorkloadSeparationKey {
 			gkeNodeGroup.csnSoftTaint = t
 			break
 		}
@@ -1297,7 +1297,7 @@ func (mig *TestGkeNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.N
 		node.Labels[gkelabels.ComputeClassLabel] = mig.computeClass
 	}
 	if mig.csnLabel != "" {
-		node.Labels[csn.SoftWorkloadSeparationKey] = mig.csnLabel
+		node.Labels[metadata.SoftWorkloadSeparationKey] = mig.csnLabel
 	}
 	if mig.cccPriorityIdx != "" {
 		node.Labels[gkelabels.ComputeClassPriorityIdxLabel] = mig.cccPriorityIdx

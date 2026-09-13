@@ -26,6 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -49,7 +50,7 @@ func TestNodeReconciliationProcess(t *testing.T) {
 		annotations.NodeUpcomingAnnotation: "true",
 	})
 	csnMig := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{
-		csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+		metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 	}}).Build()
 	testCases := []struct {
 		name                         string

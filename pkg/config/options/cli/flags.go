@@ -35,7 +35,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/parsing"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	resizable_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -196,8 +196,8 @@ func PostProcessOssOptions(ossOptions *config.AutoscalingOptions) {
 	// Ignore taints we apply during Balloon Pod resizes.
 	allStatusTaints = append(allStatusTaints, resizable_types.BPResizeTaint.Key)
 	// Ignore taints we apply for CSN nodes.
-	allStatusTaints = append(allStatusTaints, csn.BufferAssignmentKey)
-	allStatusTaints = append(allStatusTaints, csn.SuspendedTaintKey)
+	allStatusTaints = append(allStatusTaints, metadata.BufferAssignmentKey)
+	allStatusTaints = append(allStatusTaints, metadata.SuspendedTaintKey)
 	ossOptions.StatusTaints = allStatusTaints
 
 	// Update ExpendablePodsPriorityCutoff if autopilot is enabled

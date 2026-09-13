@@ -21,6 +21,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 
@@ -70,34 +72,34 @@ func TestMakePodCSN(t *testing.T) {
 			expectedBufferId := strings.ReplaceAll(test.bufferId, "/", "_")
 
 			assert.NotNil(t, test.pod.Spec.NodeSelector)
-			assert.Equal(t, SoftWorkloadSeparationValue, test.pod.Spec.NodeSelector[SoftWorkloadSeparationKey])
-			assert.Equal(t, expectedBufferId, test.pod.Spec.NodeSelector[BufferAssignmentKey])
+			assert.Equal(t, metadata.SoftWorkloadSeparationValue, test.pod.Spec.NodeSelector[metadata.SoftWorkloadSeparationKey])
+			assert.Equal(t, expectedBufferId, test.pod.Spec.NodeSelector[metadata.BufferAssignmentKey])
 
 			assert.NotNil(t, test.pod.Annotations)
 			assert.Equal(t, capacitybufferpodlister.CapacityBufferFakePodAnnotationValue, test.pod.Annotations[capacitybufferpodlister.CapacityBufferFakePodAnnotationKey])
 			assert.Equal(t, CSNPodAnnotationValue, test.pod.Annotations[CSNPodAnnotationKey])
-			assert.Equal(t, expectedBufferId, test.pod.Annotations[BufferAssignmentKey])
+			assert.Equal(t, expectedBufferId, test.pod.Annotations[metadata.BufferAssignmentKey])
 
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    SoftWorkloadSeparationKey,
-				Value:  SoftWorkloadSeparationValue,
+				Key:    metadata.SoftWorkloadSeparationKey,
+				Value:  metadata.SoftWorkloadSeparationValue,
 				Effect: apiv1.TaintEffectPreferNoSchedule,
 			})
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    BufferAssignmentKey,
+				Key:    metadata.BufferAssignmentKey,
 				Value:  expectedBufferId,
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    SuspendedTaintKey,
-				Value:  SuspendedTaintValue,
+				Key:    metadata.SuspendedTaintKey,
+				Value:  metadata.SuspendedTaintValue,
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
 			assert.Equal(t, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, []apiv1.NodeSelectorTerm{
 				{
 					MatchExpressions: []apiv1.NodeSelectorRequirement{
 						{
-							Key:      memoryScalingLevelLabel,
+							Key:      labels.MemoryScalingLevelLabel,
 							Operator: apiv1.NodeSelectorOpLt,
 							Values:   []string{"209"},
 						},
@@ -106,7 +108,7 @@ func TestMakePodCSN(t *testing.T) {
 				{
 					MatchExpressions: []apiv1.NodeSelectorRequirement{
 						{
-							Key:      memoryScalingLevelLabel,
+							Key:      labels.MemoryScalingLevelLabel,
 							Operator: apiv1.NodeSelectorOpDoesNotExist,
 						},
 					},
@@ -208,7 +210,7 @@ func TestGetBufferIdFromPod(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns_buffer",
+						metadata.BufferAssignmentKey: "ns_buffer",
 					},
 				},
 			},
@@ -355,16 +357,16 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
+						metadata.BufferAssignmentKey: "ns/buffer",
 					},
 				},
 				Spec: apiv1.PodSpec{
 					NodeSelector: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
+						metadata.BufferAssignmentKey: "ns/buffer",
 					},
 					Tolerations: []apiv1.Toleration{
 						{
-							Key:    BufferAssignmentKey,
+							Key:    metadata.BufferAssignmentKey,
 							Value:  "ns/buffer",
 							Effect: apiv1.TaintEffectNoSchedule,
 						},
@@ -374,7 +376,7 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			expectedTolerations:  nil,
 			expectedNodeSelector: map[string]string{},
 			expectedAnnotations: map[string]string{
-				BufferAssignmentKey: "ns/buffer",
+				metadata.BufferAssignmentKey: "ns/buffer",
 			},
 		},
 		{
@@ -417,18 +419,18 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
-						"other-annotation":  "value",
+						metadata.BufferAssignmentKey: "ns/buffer",
+						"other-annotation":           "value",
 					},
 				},
 				Spec: apiv1.PodSpec{
 					NodeSelector: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
-						"other-selector":    "value",
+						metadata.BufferAssignmentKey: "ns/buffer",
+						"other-selector":             "value",
 					},
 					Tolerations: []apiv1.Toleration{
 						{
-							Key:    BufferAssignmentKey,
+							Key:    metadata.BufferAssignmentKey,
 							Value:  "ns/buffer",
 							Effect: apiv1.TaintEffectNoSchedule,
 						},
@@ -451,8 +453,8 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 				"other-selector": "value",
 			},
 			expectedAnnotations: map[string]string{
-				"other-annotation":  "value",
-				BufferAssignmentKey: "ns/buffer",
+				"other-annotation":           "value",
+				metadata.BufferAssignmentKey: "ns/buffer",
 			},
 		},
 		{

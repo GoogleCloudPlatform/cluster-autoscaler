@@ -25,7 +25,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
@@ -699,7 +699,7 @@ func TestCSNShardComputeFunction(t *testing.T) {
 			pod: v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						csn.BufferAssignmentKey: "ns_buffer",
+						metadata.BufferAssignmentKey: "ns_buffer",
 					},
 				},
 			},
@@ -713,7 +713,7 @@ func TestCSNShardComputeFunction(t *testing.T) {
 			pod: v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						csn.BufferAssignmentKey: "ns_buffer",
+						metadata.BufferAssignmentKey: "ns_buffer",
 					},
 				},
 			},

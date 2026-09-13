@@ -23,6 +23,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
@@ -222,7 +223,7 @@ func NodeInCSNNodeGroup(node *apiv1.Node, cp cloudProvider) bool {
 		// no labels == no CSN label
 		return false
 	}
-	if spec.Labels[csn.SoftWorkloadSeparationKey] != csn.SoftWorkloadSeparationValue {
+	if spec.Labels[metadata.SoftWorkloadSeparationKey] != metadata.SoftWorkloadSeparationValue {
 		return false
 	}
 	return true

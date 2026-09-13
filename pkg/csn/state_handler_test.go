@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 )
 
 func TestSetNodeAs(t *testing.T) {
@@ -75,7 +76,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 			},
@@ -91,7 +92,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -105,7 +106,7 @@ func TestSetNodeAs(t *testing.T) {
 			initialNode: &apiv1.Node{
 				Spec: apiv1.NodeSpec{
 					Taints: []apiv1.Taint{
-						{Key: SuspendedTaintKey, Value: "other", Effect: apiv1.TaintEffectNoSchedule},
+						{Key: metadata.SuspendedTaintKey, Value: "other", Effect: apiv1.TaintEffectNoSchedule},
 						unrelatedTaint,
 					},
 				},
@@ -113,7 +114,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -127,7 +128,7 @@ func TestSetNodeAs(t *testing.T) {
 			initialNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -141,7 +142,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -163,7 +164,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -186,7 +187,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -204,7 +205,7 @@ func TestSetNodeAs(t *testing.T) {
 			initialNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -218,7 +219,7 @@ func TestSetNodeAs(t *testing.T) {
 			expectedNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -280,7 +281,7 @@ func TestSetNodeAs(t *testing.T) {
 			initialNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -302,7 +303,7 @@ func TestSetNodeAs(t *testing.T) {
 			initialNode: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -420,7 +421,7 @@ func TestIsCSNNode(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 			},
@@ -467,7 +468,7 @@ func TestClassifyNode(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 				Spec: apiv1.NodeSpec{
@@ -481,7 +482,7 @@ func TestClassifyNode(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						SoftWorkloadSeparationKey: SoftWorkloadSeparationValue,
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 					},
 				},
 			},
@@ -579,7 +580,7 @@ func TestAssignNodeToBuffer(t *testing.T) {
 			buffer:      "default/buffer1",
 			expectError: false,
 			expectedAnnotations: map[string]string{
-				BufferAssignmentKey: "default/buffer1",
+				metadata.BufferAssignmentKey: "default/buffer1",
 			},
 		},
 		{
@@ -587,14 +588,14 @@ func TestAssignNodeToBuffer(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "old/value",
+						metadata.BufferAssignmentKey: "old/value",
 					},
 				},
 			},
 			buffer:      "ns2/buffer2",
 			expectError: false,
 			expectedAnnotations: map[string]string{
-				BufferAssignmentKey: "ns2/buffer2",
+				metadata.BufferAssignmentKey: "ns2/buffer2",
 			},
 		},
 	}
@@ -686,8 +687,8 @@ func TestRemoveBufferAssignment(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
-						"other-label":       "value",
+						metadata.BufferAssignmentKey: "ns/buffer",
+						"other-label":                "value",
 					},
 				},
 			},
@@ -759,7 +760,7 @@ func TestGetBufferIdFromNode(t *testing.T) {
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
+						metadata.BufferAssignmentKey: "ns/buffer",
 					},
 				},
 			},
@@ -790,7 +791,7 @@ func setCommonTime(force bool, now metav1.Time, nodes ...*apiv1.Node) {
 			}
 		}
 		for i := range node.Spec.Taints {
-			if node.Spec.Taints[i].Key == SuspendedTaintKey {
+			if node.Spec.Taints[i].Key == metadata.SuspendedTaintKey {
 				node.Spec.Taints[i].TimeAdded = &now
 			}
 		}
@@ -819,7 +820,7 @@ func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
 		},
 		{
 			description:  "Chilling node transition to Suspended after delay",
-			initialNode:  &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{SoftWorkloadSeparationKey: SoftWorkloadSeparationValue}}},
+			initialNode:  &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue}}},
 			delay:        10 * time.Minute,
 			expectedTime: metav1.NewTime(synctestStartTime.Add(10 * time.Minute)),
 		},
@@ -835,8 +836,8 @@ func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
 				Spec: apiv1.NodeSpec{
 					Taints: []apiv1.Taint{
 						{
-							Key:       SuspendedTaintKey,
-							Value:     SuspendedTaintValue,
+							Key:       metadata.SuspendedTaintKey,
+							Value:     metadata.SuspendedTaintValue,
 							Effect:    apiv1.TaintEffectNoSchedule,
 							TimeAdded: &past,
 						},
@@ -860,7 +861,7 @@ func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
 
 				var suspendedTaint *apiv1.Taint
 				for i := range resultNode.Spec.Taints {
-					if resultNode.Spec.Taints[i].Key == SuspendedTaintKey {
+					if resultNode.Spec.Taints[i].Key == metadata.SuspendedTaintKey {
 						suspendedTaint = &resultNode.Spec.Taints[i]
 						break
 					}

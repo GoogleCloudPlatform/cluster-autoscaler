@@ -18,6 +18,8 @@ import (
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
@@ -27,7 +29,6 @@ const (
 	CSNPodAnnotationKey   = "buffer.gke.io/standby-capacity-pod"
 	CSNPodAnnotationValue = "true"
 
-	memoryScalingLevelLabel     = "cloud.google.com/gke-memory-gb-scaling-level"
 	minUnsupportedMemoryGBValue = "209"
 )
 
@@ -36,16 +37,16 @@ func IsCSNPod(pod *apiv1.Pod) bool {
 }
 
 func MakePodCSN(pod *apiv1.Pod, bufferId string) {
-	applyWorkloadSeparation(pod, SoftWorkloadSeparationKey, SoftWorkloadSeparationValue, apiv1.TaintEffectPreferNoSchedule)
+	applyWorkloadSeparation(pod, metadata.SoftWorkloadSeparationKey, metadata.SoftWorkloadSeparationValue, apiv1.TaintEffectPreferNoSchedule)
 
 	// TODO(b/484466017): Find a better fix.
 	// We replace the "/" because "_" is illegal character in taints/label.
 	bufferId = strings.ReplaceAll(bufferId, "/", "_")
-	applyWorkloadSeparation(pod, BufferAssignmentKey, bufferId, apiv1.TaintEffectNoSchedule)
+	applyWorkloadSeparation(pod, metadata.BufferAssignmentKey, bufferId, apiv1.TaintEffectNoSchedule)
 
 	pod.Spec.Tolerations = append(pod.Spec.Tolerations, apiv1.Toleration{
-		Key:    SuspendedTaintKey,
-		Value:  SuspendedTaintValue,
+		Key:    metadata.SuspendedTaintKey,
+		Value:  metadata.SuspendedTaintValue,
 		Effect: apiv1.TaintEffectNoSchedule,
 	})
 
@@ -55,7 +56,7 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string) {
 	pod.Annotations[capacitybufferpodlister.CapacityBufferFakePodAnnotationKey] = capacitybufferpodlister.CapacityBufferFakePodAnnotationValue
 	pod.Annotations[CSNPodAnnotationKey] = CSNPodAnnotationValue
 	// Annotation is the main identifier for buffer assignment. Buffer assignment workload separation doesn't exist for unschedulable pods.
-	pod.Annotations[BufferAssignmentKey] = bufferId
+	pod.Annotations[metadata.BufferAssignmentKey] = bufferId
 
 	if pod.Spec.Affinity == nil {
 		pod.Spec.Affinity = &apiv1.Affinity{}
@@ -71,7 +72,7 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string) {
 		apiv1.NodeSelectorTerm{
 			MatchExpressions: []apiv1.NodeSelectorRequirement{
 				{
-					Key:      memoryScalingLevelLabel,
+					Key:      labels.MemoryScalingLevelLabel,
 					Operator: apiv1.NodeSelectorOpLt,
 					Values:   []string{minUnsupportedMemoryGBValue},
 				},
@@ -80,7 +81,7 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string) {
 		apiv1.NodeSelectorTerm{
 			MatchExpressions: []apiv1.NodeSelectorRequirement{
 				{
-					Key:      memoryScalingLevelLabel,
+					Key:      labels.MemoryScalingLevelLabel,
 					Operator: apiv1.NodeSelectorOpDoesNotExist,
 				},
 			},
@@ -92,8 +93,8 @@ func RemoveBufferAssignmentWorkloadSeparation(pod *apiv1.Pod) {
 	if pod == nil {
 		return
 	}
-	delete(pod.Spec.NodeSelector, BufferAssignmentKey)
-	pod.Spec.Tolerations = removeTolerationsByKey(pod.Spec.Tolerations, BufferAssignmentKey)
+	delete(pod.Spec.NodeSelector, metadata.BufferAssignmentKey)
+	pod.Spec.Tolerations = removeTolerationsByKey(pod.Spec.Tolerations, metadata.BufferAssignmentKey)
 }
 
 func removeTolerationsByKey(tolerations []apiv1.Toleration, key string) []apiv1.Toleration {
@@ -123,7 +124,7 @@ func GetBufferIdFromPod(pod *apiv1.Pod) string {
 	if pod == nil || pod.Annotations == nil {
 		return ""
 	}
-	return pod.Annotations[BufferAssignmentKey]
+	return pod.Annotations[metadata.BufferAssignmentKey]
 }
 
 // IsPodBlockingSuspension returns true if a pod should block suspension.
