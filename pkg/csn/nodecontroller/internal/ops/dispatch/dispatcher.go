@@ -109,7 +109,7 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 		}
 		if len(res.Success) > 0 {
 			klog.V(4).Infof("%s op %q returned successfully for nodes: %v", logPrefix, op.Type.String(), res.Success)
-			d.countAndTrackByRetryCount(op.Type, opSuccess, res.Success, d.backoffManager.RetryCountsForNodes(op.Type, res.Success), nil)
+			d.countAndTrackByRetryCount(op.Type, opSuccess, res.Success, d.backoffManager.RetryCountsForNodes(op.Type, res.Success))
 			d.clearPendingOperation(op.Type, res.Success)
 		}
 		d.handleBackoff(op, res)
@@ -137,7 +137,7 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 
 	// Track retryable failures (nodes processed for backoff)
 	if len(backoffResult.BackedOffNodes) > 0 {
-		d.countAndTrackByRetryCount(op.Type, opRetryFailure, backoffResult.BackedOffNodes, attempts, res.Errs)
+		d.countAndTrackByRetryCount(op.Type, opRetryFailure, backoffResult.BackedOffNodes, attempts)
 	}
 
 	if len(backoffResult.FailedNodes) == 0 {
@@ -145,28 +145,19 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 	}
 
 	// Track permanent failures
-	d.countAndTrackByRetryCount(op.Type, opFailure, backoffResult.FailedNodes, attempts, res.Errs)
+	d.countAndTrackByRetryCount(op.Type, opFailure, backoffResult.FailedNodes, attempts)
 
 	// If the operation is considered a permanent failure,
 	// then pending operation should be cleared.
 	d.clearPendingOperation(op.Type, backoffResult.FailedNodes)
 }
 
-type attemptKey struct {
-	attempt  int
-	category string
-}
-
-func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status string, nodeNames set.Set[string], attempts map[string]int, errs map[string]error) {
-	counts := make(map[attemptKey]int)
+func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status string, nodeNames set.Set[string], attempts map[string]int) {
+	counts := make(map[int]int)
 	for nodeName := range nodeNames {
-		cat := ops.CategoryNone
-		if status != opSuccess && errs != nil {
-			cat = ops.CategorizeError(errs[nodeName])
-		}
-		counts[attemptKey{attempt: attempts[nodeName], category: cat}]++
+		counts[attempts[nodeName]]++
 	}
-	for ac, count := range counts {
-		opResultsTotal.WithLabelValues(opType.String(), status, strconv.Itoa(ac.attempt), ac.category).Add(float64(count))
+	for attempt, count := range counts {
+		opResultsTotal.WithLabelValues(opType.String(), status, strconv.Itoa(attempt)).Add(float64(count))
 	}
 }
