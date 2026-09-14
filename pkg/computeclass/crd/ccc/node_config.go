@@ -199,6 +199,9 @@ func ruleOptsForNodeSystemConfig(cccNodeSystemConfig *ccc_api.NodeSystemConfig) 
 		if singleProcessOOMKill := cccNodeSystemConfig.KubeletConfig.SingleProcessOOMKill; singleProcessOOMKill != nil {
 			ruleOpts = append(ruleOpts, rules.WithSingleProcessOOMKill(*singleProcessOOMKill))
 		}
+		if insecureKubeletReadonlyPortEnabled := cccNodeSystemConfig.KubeletConfig.InsecureKubeletReadonlyPortEnabled; insecureKubeletReadonlyPortEnabled != nil {
+			ruleOpts = append(ruleOpts, rules.WithInsecureKubeletReadonlyPortEnabledRule(*insecureKubeletReadonlyPortEnabled))
+		}
 		if evictionSoft := cccNodeSystemConfig.KubeletConfig.EvictionSoft; evictionSoft != nil {
 			if memoryAvailable := evictionSoft.MemoryAvailable; memoryAvailable != nil {
 				ruleOpts = append(ruleOpts, rules.WithEvictionSoftMemoryAvailableRule(*memoryAvailable))

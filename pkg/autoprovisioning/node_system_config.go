@@ -26,12 +26,14 @@ import (
 )
 
 const (
-	fieldCpuCfsQuota                         = "CpuCfsQuota"
-	fieldShutdownGracePeriod                 = "ShutdownGracePeriodSeconds"
-	fieldShutdownGracePeriodCriticalPods     = "ShutdownGracePeriodCriticalPodsSeconds"
-	fieldCpuCfsQuotaJSON                     = "cpuCfsQuota"
-	fieldShutdownGracePeriodJSON             = "shutdownGracePeriodSeconds"
-	fieldShutdownGracePeriodCriticalPodsJSON = "shutdownGracePeriodCriticalPodsSeconds"
+	fieldCpuCfsQuota                            = "CpuCfsQuota"
+	fieldInsecureKubeletReadonlyPortEnabled     = "InsecureKubeletReadonlyPortEnabled"
+	fieldShutdownGracePeriod                    = "ShutdownGracePeriodSeconds"
+	fieldShutdownGracePeriodCriticalPods        = "ShutdownGracePeriodCriticalPodsSeconds"
+	fieldCpuCfsQuotaJSON                        = "cpuCfsQuota"
+	fieldInsecureKubeletReadonlyPortEnabledJSON = "insecureKubeletReadonlyPortEnabled"
+	fieldShutdownGracePeriodJSON                = "shutdownGracePeriodSeconds"
+	fieldShutdownGracePeriodCriticalPodsJSON    = "shutdownGracePeriodCriticalPodsSeconds"
 )
 
 func linuxNodeConfigFromCCRule(rule rules.Rule) *gkeclient.LinuxNodeConfig {
@@ -213,6 +215,10 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gkeclient.NodeKubeletConfig {
 	}
 	if singleProcessOomKill := rule.SingleProcessOOMKill(); singleProcessOomKill != nil {
 		kubeletConfig.SingleProcessOomKill = *singleProcessOomKill
+	}
+	if insecureKubeletReadonlyPortEnabled := rule.InsecureKubeletReadonlyPortEnabled(); insecureKubeletReadonlyPortEnabled != nil {
+		kubeletConfig.InsecureKubeletReadonlyPortEnabled = *insecureKubeletReadonlyPortEnabled
+		kubeletConfig.ForceSendFields = append(kubeletConfig.ForceSendFields, fieldInsecureKubeletReadonlyPortEnabled)
 	}
 	if val := rule.EvictionSoftMemoryAvailable(); val != nil {
 		if kubeletConfig.EvictionSoft == nil {
@@ -525,6 +531,9 @@ func deserializeKubeletConfig(kubeletConfig string) (*gkeclient.NodeKubeletConfi
 	if _, ok := deserializedKubeletConfigMap[fieldCpuCfsQuotaJSON]; ok {
 		deserializedKubeletConfig.ForceSendFields = append(deserializedKubeletConfig.ForceSendFields, fieldCpuCfsQuota)
 	}
+	if _, ok := deserializedKubeletConfigMap[fieldInsecureKubeletReadonlyPortEnabledJSON]; ok {
+		deserializedKubeletConfig.ForceSendFields = append(deserializedKubeletConfig.ForceSendFields, fieldInsecureKubeletReadonlyPortEnabled)
+	}
 	if _, ok := deserializedKubeletConfigMap[fieldShutdownGracePeriodJSON]; ok {
 		deserializedKubeletConfig.ForceSendFields = append(deserializedKubeletConfig.ForceSendFields, fieldShutdownGracePeriod)
 	}
@@ -648,6 +657,9 @@ func kubeletConfigSignature(kubeletConfig *gkeclient.NodeKubeletConfig) string {
 	}
 	if kubeletConfig.SingleProcessOomKill {
 		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("SingleProcessOomKill: %t", kubeletConfig.SingleProcessOomKill))
+	}
+	if kubeletConfig.InsecureKubeletReadonlyPortEnabled || slices.Contains(kubeletConfig.ForceSendFields, fieldInsecureKubeletReadonlyPortEnabled) {
+		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("InsecureKubeletReadonlyPortEnabled: %t", kubeletConfig.InsecureKubeletReadonlyPortEnabled))
 	}
 	if sig := evictionSignature(kubeletConfig.EvictionSoft, "EvictionSoft"); sig != "" {
 		kubeletConfigParts = append(kubeletConfigParts, sig)
