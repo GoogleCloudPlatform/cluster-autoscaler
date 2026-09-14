@@ -89,34 +89,56 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string, opts ...PodOption) {
 	if pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
 		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &apiv1.NodeSelector{}
 	}
-	nodeAffinityTerms := &pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	*nodeAffinityTerms = append(*nodeAffinityTerms, memoryLimitNodeSelectorTerms(options.memoryLimit)...)
+	nodeSelector := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	nodeSelector.NodeSelectorTerms = withSuspensionConstraints(nodeSelector.NodeSelectorTerms, options.memoryLimit)
 }
 
-// memoryLimitNodeSelectorTerms returns the node selector terms restricting a standby buffer pod to
-// nodes that GCE VM Suspend/Resume supports. The terms are OR-ed by the scheduler: a node is
-// acceptable if its memory scaling level is below the limit, or if it does not carry the label at
-// all.
-func memoryLimitNodeSelectorTerms(limit MemoryLimit) []apiv1.NodeSelectorTerm {
-	return []apiv1.NodeSelectorTerm{
+// withSuspensionConstraints ANDs the Suspend/Resume requirements into every existing node
+// selector term.
+//
+// Kubernetes ORs NodeSelectorTerms and only ANDs the requirements within a single term, so the
+// suspension constraints must not be appended as new terms - that would widen the pod's affinity instead of
+// narrowing it, letting a node satisfy the pod by matching the injected requirements alone. The
+// result is therefore the cross product:
+//
+//	(T1 OR T2) AND (A1 OR A2) == (T1 AND A1) OR (T1 AND A2) OR (T2 AND A1) OR (T2 AND A2)
+func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit MemoryLimit) []apiv1.NodeSelectorTerm {
+	requirements := []apiv1.NodeSelectorRequirement{
 		{
-			MatchExpressions: []apiv1.NodeSelectorRequirement{
-				{
-					Key:      labels.MemoryScalingLevelLabel,
-					Operator: apiv1.NodeSelectorOpLt,
-					Values:   []string{strconv.FormatInt(limit.GB(), 10)},
-				},
-			},
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpLt,
+			Values:   []string{strconv.FormatInt(memoryLimit.GB(), 10)},
 		},
 		{
-			MatchExpressions: []apiv1.NodeSelectorRequirement{
-				{
-					Key:      labels.MemoryScalingLevelLabel,
-					Operator: apiv1.NodeSelectorOpDoesNotExist,
-				},
-			},
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpDoesNotExist,
 		},
 	}
+
+	if len(terms) == 0 {
+		// Nothing to narrow, the requirements stand on their own.
+		terms = []apiv1.NodeSelectorTerm{{}}
+	}
+	result := make([]apiv1.NodeSelectorTerm, 0, len(terms)*len(requirements))
+	for _, term := range terms {
+		for _, req := range requirements {
+			// The term needs to be copied for two reasons:
+			// 1. The terms generated for suspension constraints need
+			// to not share the same MatchExpressions slice. Otherwise, the
+			// generated terms would share all added constraints. That is:
+			// (T1) AND (A1 OR A2) == (T1 AND A1 AND A2) OR (T1 AND A1 AND A2)
+			// instead of the expected:
+			// (T1) AND (A1 OR A2) == (T1 AND A1) OR (T1 AND A2)
+			// 2. All other fields need to be copied as well in case some other
+			// place in CA starts mutating node affinities and is unpleasantly
+			// surprised that modifying a (sub)field of one term also modifies
+			// the same for the neighbouring term.
+			copied := *term.DeepCopy()
+			copied.MatchExpressions = append(copied.MatchExpressions, req)
+			result = append(result, copied)
+		}
+	}
+	return result
 }
 
 func RemoveBufferAssignmentWorkloadSeparation(pod *apiv1.Pod) {

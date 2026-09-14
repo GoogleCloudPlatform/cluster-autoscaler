@@ -31,18 +31,64 @@ import (
 )
 
 func TestMakePodCSN(t *testing.T) {
+	memoryLtTerm := func(val string) apiv1.NodeSelectorRequirement {
+		return apiv1.NodeSelectorRequirement{
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpLt,
+			Values:   []string{val},
+		}
+	}
+	defaultMemoryLimitStr := strconv.FormatInt(defaultMinUnsupportedMemoryGB, 10)
+	memoryDoesNotExistTerm := apiv1.NodeSelectorRequirement{
+		Key:      labels.MemoryScalingLevelLabel,
+		Operator: apiv1.NodeSelectorOpDoesNotExist,
+	}
+	zoneRequirement := func(zone string) apiv1.NodeSelectorRequirement {
+		return apiv1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: apiv1.NodeSelectorOpIn,
+			Values:   []string{zone},
+		}
+	}
+	archRequirement := apiv1.NodeSelectorRequirement{
+		Key:      "kubernetes.io/arch",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"arm64"},
+	}
+	nameField := apiv1.NodeSelectorRequirement{
+		Key:      "metadata.name",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"node-1"},
+	}
+	podWithNodeSelectorTerms := func(terms ...apiv1.NodeSelectorTerm) *apiv1.Pod {
+		return &apiv1.Pod{
+			Spec: apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: terms,
+						},
+					},
+				},
+			},
+		}
+	}
+
 	tests := []struct {
-		name              string
-		pod               *apiv1.Pod
-		bufferId          string
-		opts              []PodOption
-		wantMemoryLimitGB int64
+		name          string
+		pod           *apiv1.Pod
+		bufferId      string
+		opts          []PodOption
+		expectedTerms []apiv1.NodeSelectorTerm
 	}{
 		{
-			name:              "nil annotations and node selector",
-			pod:               &apiv1.Pod{},
-			bufferId:          "ns/buffer",
-			wantMemoryLimitGB: defaultMinUnsupportedMemoryGB,
+			name:     "nil annotations and node selector",
+			pod:      &apiv1.Pod{},
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
 		},
 		{
 			name: "existing annotations and node selector",
@@ -65,15 +111,61 @@ func TestMakePodCSN(t *testing.T) {
 					},
 				},
 			},
-			bufferId:          "ns/buffer-2",
-			wantMemoryLimitGB: defaultMinUnsupportedMemoryGB,
+			bufferId: "ns/buffer-2",
+			// nodeSelector is ANDed into the scheduling predicate separately, so the affinity is
+			// unaffected by it.
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
 		},
 		{
-			name:              "non-default memory limit",
-			pod:               &apiv1.Pod{},
-			bufferId:          "ns/buffer-3",
-			opts:              []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
-			wantMemoryLimitGB: 129,
+			name:     "non-default memory limit",
+			pod:      &apiv1.Pod{},
+			bufferId: "ns/buffer-3",
+			opts:     []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name:     "existing node affinity term is preserved in every term",
+			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}}),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name: "multiple existing node affinity terms",
+			pod: podWithNodeSelectorTerms(
+				apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}},
+				apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement}},
+			),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name:     "existing match fields are preserved in every term",
+			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchFields: []apiv1.NodeSelectorRequirement{nameField}}),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)},
+					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm},
+					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
+				},
+			},
 		},
 	}
 
@@ -107,25 +199,7 @@ func TestMakePodCSN(t *testing.T) {
 				Value:  metadata.SuspendedTaintValue,
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
-			assert.Equal(t, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, []apiv1.NodeSelectorTerm{
-				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{
-						{
-							Key:      labels.MemoryScalingLevelLabel,
-							Operator: apiv1.NodeSelectorOpLt,
-							Values:   []string{strconv.FormatInt(test.wantMemoryLimitGB, 10)},
-						},
-					},
-				},
-				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{
-						{
-							Key:      labels.MemoryScalingLevelLabel,
-							Operator: apiv1.NodeSelectorOpDoesNotExist,
-						},
-					},
-				},
-			})
+			assert.Equal(t, test.expectedTerms, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)
 			assert.True(t, IsCSNPod(test.pod))
 		})
 	}
