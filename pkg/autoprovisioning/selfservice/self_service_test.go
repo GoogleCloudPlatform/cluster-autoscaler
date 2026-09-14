@@ -692,6 +692,20 @@ func TestNodepoolMetadata(t *testing.T) {
 				LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
 			},
 		},
+		{
+			name: "Nodepool with performanceMonitoringUnit is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						PerformanceMonitoringUnit: "ARCHITECTURAL",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				nestedVirtualizationMetadataKey:      "false",
+				PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1381,6 +1395,15 @@ func TestPriorityMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{
 				LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION",
+			},
+		},
+		{
+			name: "Priority for PerformanceMonitoringUnit",
+			priority: v1.Priority{
+				PerformanceMonitoringUnit: ptr.To("ARCHITECTURAL"),
+			},
+			wantMetadata: Metadata{
+				PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
 			},
 		},
 	}

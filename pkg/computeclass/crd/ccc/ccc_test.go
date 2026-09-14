@@ -2721,6 +2721,27 @@ func TestPrioritySelfService(t *testing.T) {
 				selfservice.Metadata{selfservice.LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION"},
 			},
 		},
+		{
+			name: "Priority contains PerformanceMonitoringUnit",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily:             proto.String("n2"),
+							PerformanceMonitoringUnit: proto.String("ARCHITECTURAL"),
+						},
+						{
+							MachineFamily:             proto.String("n2"),
+							PerformanceMonitoringUnit: proto.String("STANDARD"),
+						},
+					},
+				},
+			},
+			wantLabels: []map[string]string{
+				selfservice.Metadata{selfservice.PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL"},
+				selfservice.Metadata{selfservice.PerformanceMonitoringUnitMetadataKey: "STANDARD"},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		gotCrd := NewCccCrd(tc.ccc, "", false, nil, testOptionsTracker(nil))
