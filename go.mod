@@ -45,7 +45,7 @@ require (
 	k8s.io/kubelet v0.37.0
 	k8s.io/kubernetes v1.37.0
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	sigs.k8s.io/cluster-autoscaler v0.0.0-20260908130433-ddd72921e2f6
+	sigs.k8s.io/cluster-autoscaler v0.0.0-20260915123124-b2e220b8e332
 	sigs.k8s.io/controller-runtime v0.24.1
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0
 	sigs.k8s.io/yaml v1.6.0
@@ -111,7 +111,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/ginkgo/v2 v2.32.1 // indirect
+	github.com/onsi/ginkgo/v2 v2.32.2 // indirect
 	github.com/onsi/gomega v1.43.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -214,4 +214,4 @@ replace (
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
 
-replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-20260908130433-ddd72921e2f6
+replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-20260915123124-b2e220b8e332
