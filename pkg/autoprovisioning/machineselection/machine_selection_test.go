@@ -71,7 +71,6 @@ func TestSelectMachineSpec(t *testing.T) {
 		autopilotManaged                      bool
 		wantsSpot                             bool
 		isE2lessRegion                        bool
-		isE4Enabled                           bool
 		boolFlags                             map[string]bool
 		stringFlags                           map[string]string
 		componentVersion                      string
@@ -135,12 +134,6 @@ func TestSelectMachineSpec(t *testing.T) {
 			architectures:                 map[gce.SystemArchitecture]bool{gce.Arm64: true},
 			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.C4A},
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4A.Name(): false},
-		},
-		"E4A used if only ARM specified, is Autopilot and E4A experiment enabled": {
-			architectures:                 map[gce.SystemArchitecture]bool{gce.Arm64: true},
-			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4A},
-			autopilotEnabled:              true,
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4A.Name(): true},
 		},
 		"C4A used if only ARM specified and IsResizableVmWithinPodFamilyEnabled is true (Standard)": {
 			architectures:                     map[gce.SystemArchitecture]bool{gce.Arm64: true},
@@ -564,12 +557,14 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedErr: NewMinCpuPlatformUnknownError("invalid"),
 		},
 		"E4 used if GeneralPurposePodFamily rule specified and is E2-less region": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    true,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   true,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
 		},
 		"E2/EK used if GeneralPurposePodFamily rule specified and is NOT E2-less region": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -579,10 +574,10 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"Default Autopilot pods use E4 in E2-less region": {
-			autopilotEnabled: true,
-			isE2lessRegion:   true,
-			isE4Enabled:      true,
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
+			autopilotEnabled:              true,
+			isE2lessRegion:                true,
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4.Name(): true},
+			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4},
 		},
 		"Default Autopilot pods use EK and default family in NOT E2-less region": {
 			autopilotEnabled:              true,
@@ -591,94 +586,101 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.EK, defaultCloudProviderFamily},
 		},
 		"E4 used in mixed region if pod is stateless and experiment enabled": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       true,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:      true,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
-		"E2/EK used in mixed region if pod is stateful with PVC and experiment enabled": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
-		},
-		"E2/EK used in mixed region if pod is stateful with Ephemeral and experiment enabled": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+		"E2/EK used in mixed region if pod is stateful and experiment enabled": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:      false,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"E4 still used in E2-less region even if pod is stateful and experiment enabled": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    true,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   true,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:      false,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
 		},
-		"autopilot compute class filters out E4 if isE4Enabled is false": {
+		"autopilot compute class filters out E4 if E4s aren't enabled": {
 			podClass:                      "autopilot",
 			autopilotEnabled:              true,
-			isE4Enabled:                   false,
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
 			expectedComputeClassName:      "autopilot",
 		},
-		"autopilot compute class keeps E4 if isE4Enabled is true": {
-			podClass:                      "autopilot",
-			autopilotEnabled:              true,
-			isE4Enabled:                   true,
-			isStateless:                   true,
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
-			expectedComputeClassName:      "autopilot",
+		"autopilot compute class keeps E4 if E4s are enabled": {
+			podClass:         "autopilot",
+			autopilotEnabled: true,
+			isStateless:      true,
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			expectedComputeClassName: "autopilot",
 		},
-		"autopilot compute class filters out E2/EK in E2-less region if isE4Enabled is true": {
-			podClass:                      "autopilot",
-			autopilotEnabled:              true,
-			isE4Enabled:                   true,
-			isStateless:                   true,
-			isE2lessRegion:                true,
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.E4},
-			expectedComputeClassName:      "autopilot",
+		"autopilot compute class filters out E2/EK in E2-less region if E4s aren't enabled": {
+			podClass:         "autopilot",
+			autopilotEnabled: true,
+			isStateless:      true,
+			isE2lessRegion:   true,
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E4},
+			expectedComputeClassName: "autopilot",
 		},
 		"E2-less region strips E2 and EK and forces E4 for general purpose": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    true,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.E2.Name(): true, machinetypes.EK.Name(): true},
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   true,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.E2.Name(): true,
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
 		},
 		"extended fallbacks disabled -> returns E2, EK, E4": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       true,
-			isExtendedFallbacksEnabled:        false,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:                true,
+			isExtendedFallbacksEnabled: false,
+			expectedFamilies:           []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
 		"extended fallbacks enabled -> returns E2, EK, E4 and fallback families": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       true,
-			isExtendedFallbacksEnabled:        true,
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:                true,
+			isExtendedFallbacksEnabled: true,
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4, machinetypes.EK, machinetypes.E2,
 				machinetypes.N4, machinetypes.N4D,
@@ -688,20 +690,21 @@ func TestSelectMachineSpec(t *testing.T) {
 			},
 		},
 		"extended fallbacks enabled but isStateless=false -> returns EK, E2 (E4 filtered)": {
-			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			isE2lessRegion:                    false,
-			isE4Enabled:                       true,
-			autopilotEnabled:                  true,
-			autopilotManaged:                  true,
-			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			isStateless:                       false,
-			isExtendedFallbacksEnabled:        true,
-			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			isE2lessRegion:   false,
+			autopilotEnabled: true,
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:                false,
+			isExtendedFallbacksEnabled: true,
+			expectedFamilies:           []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"isStateless=false with resizableVmStatefulInAutopilotEnabled -> returns E4, EK, E2": {
 			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:   false,
-			isE4Enabled:      true,
 			autopilotEnabled: true,
 			autopilotManaged: true,
 			resizableVmWithinPodFamilyEnabled: map[string]bool{
@@ -721,9 +724,11 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateless default pod returns GeneralPurposeMachineFamilies fallback candidate list": {
 			autopilotEnabled:              true,
 			isStateless:                   true,
-			isE4Enabled:                   true,
 			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
 				machinetypes.EK,
@@ -739,9 +744,11 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateless default pod with EK disabled filters EK from GeneralPurposeMachineFamilies": {
 			autopilotEnabled:              true,
 			isStateless:                   true,
-			isE4Enabled:                   true,
 			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): false},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): false,
+				machinetypes.E4.Name(): true,
+			},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
 				machinetypes.E2,
@@ -756,12 +763,14 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateful default pod returns GeneralPurposeMachineFamilies fallback candidate list": {
 			autopilotEnabled: true,
 			isStateless:      false,
-			isE4Enabled:      true,
 			resizableVmStatefulInAutopilotEnabled: map[string]bool{
 				machinetypes.E4.Name(): true,
 			},
 			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
 				machinetypes.EK,
@@ -777,7 +786,6 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateful default pod with E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
 			autopilotEnabled:              true,
 			isStateless:                   false,
-			isE4Enabled:                   false,
 			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies: []machinetypes.MachineFamily{
@@ -838,7 +846,7 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateless default pod with invalid machine family in GeneralPurposeMachineFamilies skips invalid family": {
 			autopilotEnabled:              true,
 			isStateless:                   true,
-			isE4Enabled:                   true,
+			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4.Name(): true},
 			generalPurposeMachineFamilies: []string{"e4", "invalid-fam", "e2"},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
@@ -848,7 +856,6 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateless default pod with E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
 			autopilotEnabled:              true,
 			isStateless:                   true,
-			isE4Enabled:                   false,
 			generalPurposeMachineFamilies: []string{"e4", "e2", "n4"},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E2,
@@ -858,9 +865,11 @@ func TestSelectMachineSpec(t *testing.T) {
 		"Autopilot stateless default pod with whitespace and mixed-case in GeneralPurposeMachineFamilies resolves families correctly": {
 			autopilotEnabled:              true,
 			isStateless:                   true,
-			isE4Enabled:                   true,
 			generalPurposeMachineFamilies: []string{" e4 ", "EK", " E2\t", "N4"},
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
 				machinetypes.EK,
@@ -896,10 +905,6 @@ func TestSelectMachineSpec(t *testing.T) {
 			}
 			for family, enabled := range tc.resizableVmStatefulInAutopilotEnabled {
 				builder = builder.WithResizableVmStatefulInAutopilotEnabled(family, enabled)
-			}
-			if tc.isE4Enabled {
-				builder = builder.WithResizableVmInAutopilotEnabled(machinetypes.E4.Name(), true)
-				builder = builder.WithResizableVmWithinPodFamilyEnabled(machinetypes.E4.Name(), true)
 			}
 			if tc.isE2lessRegion {
 				builder = builder.WithAutoprovisioningDefaultFamily(machinetypes.E4)
