@@ -56,6 +56,7 @@ func InitSelfService(cp CloudProvider) {
 		newNestedVirtualization(experimentsManager),
 		newCustomImage(),
 		newSubnetPriorities(),
+		newNetworkTags(),
 	}
 }
 

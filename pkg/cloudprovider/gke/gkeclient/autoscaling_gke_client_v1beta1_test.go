@@ -1916,6 +1916,36 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "NodePoolSpec with networkTags sets Tags on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"network-tags.cloud.google.com/secure-firewall": "true",
+					"network-tags.cloud.google.com/allow-ssh":       "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						Tags: []string{"allow-ssh", "secure-firewall"},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "NodePoolSpec with maintenance exclusion on static cluster enables EoS native setting",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{

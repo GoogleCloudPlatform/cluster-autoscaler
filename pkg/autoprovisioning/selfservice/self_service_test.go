@@ -555,6 +555,27 @@ func TestNodepoolMetadata(t *testing.T) {
 				privateNodeFromCcc:   "false",
 			},
 		},
+		{
+			name: "NetworkTags feature is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					Tags: []string{"secure-firewall", "allow-ssh"},
+				},
+			},
+			wantMetadata: Metadata{
+				"network-tags.cloud.google.com/secure-firewall": "true",
+				"network-tags.cloud.google.com/allow-ssh":       "true",
+			},
+		},
+		{
+			name: "NetworkTags feature with empty tags from nodepool returns empty metadata",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					Tags: []string{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -999,6 +1020,27 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 				podRangeKey:       "test-pod-range",
 			},
 		},
+		{
+			name: "NetworkTags feature is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					NetworkTags: []string{"secure-firewall", "allow-ssh"},
+				},
+			},
+			wantMetadata: Metadata{
+				"network-tags.cloud.google.com/secure-firewall": "true",
+				"network-tags.cloud.google.com/allow-ssh":       "true",
+			},
+		},
+		{
+			name: "NetworkTags feature with empty networkTags from spec returns empty metadata",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					NetworkTags: []string{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1216,6 +1258,14 @@ func TestUpdateNodePoolLabels(t *testing.T) {
 			wantLabels: map[string]string{
 				gkelabels.AcceleratorNetworkProfileLabel: "auto",
 			},
+		},
+		{
+			name: "NetworkTags feature does not add nodepool labels",
+			metadata: Metadata{
+				"network-tags.cloud.google.com/secure-firewall": "true",
+				"network-tags.cloud.google.com/allow-ssh":       "true",
+			},
+			wantLabels: map[string]string{},
 		},
 	}
 	for _, tc := range testCases {
@@ -1646,6 +1696,33 @@ func TestUpdateNodepool(t *testing.T) {
 					ForceSendFields: []string{"Subnetwork", "PodRange"},
 				},
 			},
+		},
+		{
+			name: "NetworkTags feature sets tags on nodepool",
+			metadata: Metadata{
+				"network-tags.cloud.google.com/secure-firewall": "true",
+				"network-tags.cloud.google.com/allow-ssh":       "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					Tags: []string{"allow-ssh", "secure-firewall"},
+				},
+			},
+		},
+		{
+			name: "NetworkTags feature does not modify nodepool when metadata has no network-tags keys",
+			metadata: Metadata{
+				"unrelated-feature.cloud.google.com/foo": "true",
+			},
+			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "NetworkTags feature ignores network-tags keys with non-true values",
+			metadata: Metadata{
+				"network-tags.cloud.google.com/secure-firewall": "false",
+				"network-tags.cloud.google.com/allow-ssh":       "other-value",
+			},
+			wantNodepool: &container.NodePool{},
 		},
 	}
 	for _, tc := range testCases {
