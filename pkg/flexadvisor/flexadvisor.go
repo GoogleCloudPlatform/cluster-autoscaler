@@ -645,8 +645,7 @@ func IsFlexAdvisorLateRegistrationEnabled(manager experiments.Manager) bool {
 	if manager == nil {
 		return true
 	}
-	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorLateRegistrationEnabledFlag, true) &&
-		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorLateRegistrationMinCAVersionFlag, true)
+	return manager.IsFeatureEnabled(experiments.FlexAdvisorLateRegistrationFeature, true)
 }
 
 func isFlexAdvisorGeneratorMachineErrorsCacheEnabled(manager experiments.Manager) bool {

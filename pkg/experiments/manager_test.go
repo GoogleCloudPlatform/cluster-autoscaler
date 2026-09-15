@@ -173,6 +173,63 @@ func TestManagerVersionEvaluation(t *testing.T) {
 	}
 }
 
+func TestManagerIsFeatureEnabled(t *testing.T) {
+	const feature = "SomeFeature"
+	minVersionFlag := feature + MinCAVersionSuffix
+	enabledFlag := feature + EnabledSuffix
+	testCases := []struct {
+		desc        string
+		stringFlags map[string]string
+		boolFlags   map[string]bool
+		failsafe    bool
+		wantEnabled bool
+	}{
+		{
+			desc:        "flags not set, failsafe true",
+			failsafe:    true,
+			wantEnabled: true,
+		},
+		{
+			desc:        "flags not set, failsafe false",
+			wantEnabled: false,
+		},
+		{
+			desc:        "min version not met",
+			stringFlags: map[string]string{minVersionFlag: "1.2.4"},
+			failsafe:    true,
+			wantEnabled: false,
+		},
+		{
+			desc:        "min version met, but disabled via enabled flag",
+			stringFlags: map[string]string{minVersionFlag: "1.2.3"},
+			boolFlags:   map[string]bool{enabledFlag: false},
+			failsafe:    true,
+			wantEnabled: false,
+		},
+		{
+			desc:        "min version met, enabled flag not set, failsafe false",
+			stringFlags: map[string]string{minVersionFlag: "1.2.3"},
+			wantEnabled: false,
+		},
+		{
+			desc:        "min version met and enabled, failsafe false",
+			stringFlags: map[string]string{minVersionFlag: "1.2.3"},
+			boolFlags:   map[string]bool{enabledFlag: true},
+			wantEnabled: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			evaluator := &fakeEvaluator{
+				stringFlags: tc.stringFlags,
+				boolFlags:   tc.boolFlags,
+			}
+			manager := NewManager(version.Version{1, 2, 3, 0}, evaluator)
+			assert.Equal(t, tc.wantEnabled, manager.IsFeatureEnabled(feature, tc.failsafe))
+		})
+	}
+}
+
 func TestManagerDurationEvaluation(t *testing.T) {
 	testCases := []struct {
 		desc     string
