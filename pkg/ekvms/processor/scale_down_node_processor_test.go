@@ -162,7 +162,7 @@ func TestScaleDownProcess(t *testing.T) {
 		"non-resizable nodes": {
 			nodes: []*testNodeWithPodsInfo{
 				{
-					node: nonEkNode("non-resizable-node", 8000, 32*size.GiB),
+					node: nonResizableNode("non-resizable-node", 8000, 32*size.GiB),
 					pods: []*v1.Pod{
 						userPod("pod1", 1000, 6*size.GiB),
 						systemPod("pod2", 2000, 7*size.GiB),
@@ -2045,7 +2045,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
 			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
@@ -2059,7 +2059,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
 			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
@@ -2079,7 +2079,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
 			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
@@ -2223,10 +2223,9 @@ func resizingPod(name string, fromCpu, fromMem, toCpu, toMem int64) *v1.Pod {
 	})
 }
 
-func nonEkNode(name string, cpu, mem int64) *v1.Node {
-	node := ekvms_test.EkNode32(name, cpu, mem)
-	node.Labels[v1.LabelInstanceTypeStable] = "e2-standard-32"
-	return node
+func nonResizableNode(name string, cpu, mem int64) *v1.Node {
+	b := ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode(name, cpu, mem))
+	return b.WithStandard32Capacity().WithSupportedMachineType("e2-standard-32").WithMachineFamily("e2").Build()
 }
 
 func upcomingNode(name string, cpu, mem int64) *v1.Node {

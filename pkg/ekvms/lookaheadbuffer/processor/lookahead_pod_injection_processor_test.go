@@ -97,7 +97,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "One default workload ID EK node with custom taint - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    "user-taint",
 						Value:  "true",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -112,7 +112,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "One default workload ID EK node with ignored taint",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    "status-taint",
 						Value:  "true",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -213,14 +213,14 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "Autopilot compute class nodes",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 2000, 2000)).WithTaint(apiv1.Taint{
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 2000, 2000)).WithTaint(apiv1.Taint{
 					Key:    gkelabels.ComputeClassLabel,
 					Value:  "autopilot",
 					Effect: apiv1.TaintEffectNoSchedule,
 				}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
 					test.BuildTestPod("pod-1", 2000, 2*size.GiB),
 				),
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode8("ek-node-2", 1000, 1000)).WithTaint(apiv1.Taint{
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8("ek-node-2", 1000, 1000)).WithTaint(apiv1.Taint{
 					Key:    gkelabels.ComputeClassLabel,
 					Value:  "autopilot-spot", // Pods on autopilot-spot Compute Class aren't eligible for lookahead.
 					Effect: apiv1.TaintEffectNoSchedule,
@@ -255,7 +255,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "Can combine workload separation and CCC",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
 					WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
@@ -290,7 +290,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "autopilot managed node taint doesn't prevent lookahead",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
 					WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
@@ -326,7 +326,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "spot EK node - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilder("ek-spot", 32, 128).
+					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
 						WithLabel(gkelabels.SpotLabel, gkelabels.PreemptionValue).Build(),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
@@ -338,7 +338,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "preemptible EK node - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilder("ek-spot", 32, 128).
+					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
 						WithLabel(gkelabels.PreemptibleLabel, gkelabels.PreemptionValue).Build(),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
@@ -521,7 +521,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "tainted node",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "taint-key",
 				Value:  "taint-value",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -531,7 +531,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "node with ignored taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "status-taint",
 				Value:  "true",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -541,7 +541,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -551,7 +551,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation with ignored taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -565,7 +565,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation with extra taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -579,7 +579,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "ccc is a type of workload separation",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    gkelabels.ComputeClassLabel,
 				Value:  "autopilot",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -915,14 +915,14 @@ func TestProcess(t *testing.T) {
 					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
 					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -1434,7 +1434,7 @@ func (s *fakeLookaheadPodProvider) GetLookaheadPods(cpus int, workloadID string)
 }
 
 func ekNode32WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,
@@ -1442,7 +1442,7 @@ func ekNode32WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.N
 }
 
 func ekNode8WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode8(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,

@@ -26,92 +26,92 @@ import (
 // EkNode32 creates an EK node with specified allocatable, capacity
 // and instance label set to standard-32.
 func EkNode32(name string, milliCpu, bytes int64) *v1.Node {
-	b := ResizableNodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
 	return b.WithStandard32Capacity().WithSupportedMachineType("ek-standard-32").WithMachineFamily("ek").Build()
 }
 
 // E4aNode32 creates an E4A node with specified allocatable, capacity
 // and instance label set to standard-32.
 func E4aNode32(name string, milliCpu, bytes int64) *v1.Node {
-	b := ResizableNodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
 	return b.WithStandard32Capacity().WithSupportedMachineType("e4a-standard-32").WithMachineFamily("e4a").Build()
 }
 
 // EkNode8 creates an EK node with specified allocatable, capacity
 // and instance label set to standard-8.
 func EkNode8(name string, milliCpu, bytes int64) *v1.Node {
-	b := ResizableNodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
 	return b.WithStandard8Capacity().WithSupportedMachineType("ek-standard-8").WithMachineFamily("ek").Build()
 }
 
 // E4aNode8 creates an E4A node with specified allocatable, capacity
 // and instance label set to standard-8.
 func E4aNode8(name string, milliCpu, bytes int64) *v1.Node {
-	b := ResizableNodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
 	return b.WithStandard8Capacity().WithSupportedMachineType("e4a-standard-8").WithMachineFamily("e4a").Build()
 }
 
-// ResizableNodeBuilder builds resizable nodes for test purposes.
-type ResizableNodeBuilder struct {
+// NodeBuilder builds nodes for test purposes.
+type NodeBuilder struct {
 	node *v1.Node
 }
 
-// NewResizableNodeBuilderFromNode creates new resizable node builder from a node.
-func NewResizableNodeBuilderFromNode(node *v1.Node) *ResizableNodeBuilder {
-	return &ResizableNodeBuilder{node: node}
+// NewNodeBuilderFromNode creates new node builder from a node.
+func NewNodeBuilderFromNode(node *v1.Node) *NodeBuilder {
+	return &NodeBuilder{node: node}
 }
 
-// NewResizableNodeBuilder creates new resizable node builder with specified name and resources.
-func NewResizableNodeBuilder(name string, milliCpu, giBytes int64) *ResizableNodeBuilder {
-	b := ResizableNodeBuilder{node: test.BuildTestNode(name, milliCpu, giBytes*1024*1024*1024)}
+// NewNodeBuilder creates new node builder with specified name and resources.
+func NewNodeBuilder(name string, milliCpu, giBytes int64) *NodeBuilder {
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, giBytes*1024*1024*1024)}
 	return b.WithStandard32Capacity()
 }
 
 // WithStandard32Capacity sets node capacity to standard-32.
-func (b *ResizableNodeBuilder) WithStandard32Capacity() *ResizableNodeBuilder {
+func (b *NodeBuilder) WithStandard32Capacity() *NodeBuilder {
 	b.node.Status.Capacity[v1.ResourceCPU] = *resource.NewMilliQuantity(32000, resource.DecimalSI)
 	b.node.Status.Capacity[v1.ResourceMemory] = *resource.NewQuantity(128*1024*1024, resource.DecimalSI)
 	return b
 }
 
 // WithStandard8Capacity sets node capacity to standard-8.
-func (b *ResizableNodeBuilder) WithStandard8Capacity() *ResizableNodeBuilder {
+func (b *NodeBuilder) WithStandard8Capacity() *NodeBuilder {
 	b.node.Status.Capacity[v1.ResourceCPU] = *resource.NewMilliQuantity(8000, resource.DecimalSI)
 	b.node.Status.Capacity[v1.ResourceMemory] = *resource.NewQuantity(32*1024*1024, resource.DecimalSI)
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithProvider(providerId string) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithProvider(providerId string) *NodeBuilder {
 	b.node.Spec.ProviderID = providerId
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithSupportedMachineType(supportedMachineType string) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithSupportedMachineType(supportedMachineType string) *NodeBuilder {
 	b.updateLabels(v1.LabelInstanceTypeStable, supportedMachineType)
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithMachineFamily(machineFamily string) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithMachineFamily(machineFamily string) *NodeBuilder {
 	b.updateLabels(gkelabels.MachineFamilyLabel, machineFamily)
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithTaint(taint v1.Taint) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithTaint(taint v1.Taint) *NodeBuilder {
 	b.node.Spec.Taints = append(b.node.Spec.Taints, taint)
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithLabel(label string, value string) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithLabel(label string, value string) *NodeBuilder {
 	b.updateLabels(label, value)
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithAnnotations(annotations map[string]string) *ResizableNodeBuilder {
+func (b *NodeBuilder) WithAnnotations(annotations map[string]string) *NodeBuilder {
 	b.node.Annotations = annotations
 	return b
 }
 
-func (b *ResizableNodeBuilder) WithReadyStatus() *ResizableNodeBuilder {
+func (b *NodeBuilder) WithReadyStatus() *NodeBuilder {
 	for i, c := range b.node.Status.Conditions {
 		if c.Type == v1.NodeReady {
 			b.node.Status.Conditions[i].Status = v1.ConditionTrue
@@ -122,11 +122,11 @@ func (b *ResizableNodeBuilder) WithReadyStatus() *ResizableNodeBuilder {
 	return b
 }
 
-func (b *ResizableNodeBuilder) Build() *v1.Node {
+func (b *NodeBuilder) Build() *v1.Node {
 	return b.node
 }
 
-func (b *ResizableNodeBuilder) updateLabels(label string, value string) {
+func (b *NodeBuilder) updateLabels(label string, value string) {
 	existingLabels := b.node.GetLabels()
 	if existingLabels != nil {
 		existingLabels[label] = value

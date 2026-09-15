@@ -941,7 +941,7 @@ func verifyResults(t *testing.T, tc ProcessTestCase, snapshot clustersnapshot.Cl
 }
 
 func createNodeForFamily(family string, name string, milliCpu, bytes int64) *v1.Node {
-	b := ekvms_test.NewResizableNodeBuilderFromNode(test.BuildTestNode(name, milliCpu, bytes))
+	b := ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode(name, milliCpu, bytes))
 	return b.WithStandard32Capacity().WithSupportedMachineType(family + "-standard-32").WithMachineFamily(family).Build()
 }
 
@@ -1268,7 +1268,7 @@ func toPodList(podInfos []*framework.PodInfo) []*v1.Pod {
 
 func TestSchedulePods(t *testing.T) {
 	createNode := func(family string, name string, milliCpu, bytes int64) *v1.Node {
-		b := ekvms_test.NewResizableNodeBuilderFromNode(test.BuildTestNode(name, milliCpu, bytes))
+		b := ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode(name, milliCpu, bytes))
 		return b.WithStandard32Capacity().WithSupportedMachineType(family + "-standard-32").WithMachineFamily(family).Build()
 	}
 
@@ -1346,22 +1346,22 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Schedule CCC pods",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc1-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc1-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc2-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc2-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{userPod("pod1", 24, 100), balloonPod(t, "balloon-pod", 8, 28)},
 					},
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc2-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc2-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc1-rule0-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
-					"ccc2-rule0-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc2-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
-					"ccc2-rule1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc2-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
+					"ccc1-rule0-node": {Node: ekvms_test.NewNodeBuilder("ccc1-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
+					"ccc2-rule0-node": {Node: ekvms_test.NewNodeBuilder("ccc2-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
+					"ccc2-rule1-node": {Node: ekvms_test.NewNodeBuilder("ccc2-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
 				},
 				backedOffRules: map[string]map[int]bool{
 					"ccc2": {0: true},
@@ -1413,7 +1413,7 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Schedule CCC and non-CCC pods",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 					{
@@ -1422,7 +1422,7 @@ func TestSchedulePods(t *testing.T) {
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc-node":     {Node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
+					"ccc-node":     {Node: ekvms_test.NewNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 					"non-ccc-node": {Node: createNode(family, "non-ccc-node", 32, 128)},
 				},
 				cccCrds: []crd.CRD{
@@ -1452,17 +1452,17 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Schedule on processing CCC node",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{userPod("pod1", 24, 100), balloonPod(t, "balloon-pod", 8, 28)},
 					},
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc-node-in-process", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc-node-in-process", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc-node":            {Node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
-					"ccc-node-in-process": {Node: ekvms_test.NewResizableNodeBuilder("ccc-node-in-process", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
+					"ccc-node":            {Node: ekvms_test.NewNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
+					"ccc-node-in-process": {Node: ekvms_test.NewNodeBuilder("ccc-node-in-process", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
 					crd.NewTestCrd(
@@ -1493,12 +1493,12 @@ func TestSchedulePods(t *testing.T) {
 				desc: "CCC pod is considered for scale up",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc-rule1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
+					"ccc-rule1-node": {Node: ekvms_test.NewNodeBuilder("ccc-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
 					crd.NewTestCrd(
@@ -1528,12 +1528,12 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Pod referencing non-EK CCC is returned as unschedulable",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
+					"ccc1-node": {Node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
 					crd.NewTestCrd(
@@ -1565,12 +1565,12 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Pod with unknown CCC CRD is returned as unschedulable",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
+						node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
 						pods: []*v1.Pod{},
 					},
 				},
 				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
-					"ccc1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
+					"ccc1-node": {Node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
 					crd.NewTestCrd(
@@ -2261,7 +2261,7 @@ func TestTrySchedulePods(t *testing.T) {
 			desc: "schedule_la_on_upcoming_ek_node",
 			nodes: []testNodeWithPodsInfo{
 				{
-					node: ekvms_test.NewResizableNodeBuilder("upcoming-ek-node", 1000, 1024*size.KiB).WithSupportedMachineType("ek-standard-32").WithMachineFamily("ek").WithAnnotations(
+					node: ekvms_test.NewNodeBuilder("upcoming-ek-node", 1000, 1024*size.KiB).WithSupportedMachineType("ek-standard-32").WithMachineFamily("ek").WithAnnotations(
 						map[string]string{
 							annotations.NodeUpcomingAnnotation: "true",
 						}).Build(),
@@ -2285,7 +2285,7 @@ func TestTrySchedulePods(t *testing.T) {
 					pods: []*v1.Pod{},
 				},
 				{
-					node: ekvms_test.NewResizableNodeBuilder("upcoming-ek-node", 1000, 1024*size.KiB).WithSupportedMachineType("ek-standard-32").WithMachineFamily("ek").WithAnnotations(
+					node: ekvms_test.NewNodeBuilder("upcoming-ek-node", 1000, 1024*size.KiB).WithSupportedMachineType("ek-standard-32").WithMachineFamily("ek").WithAnnotations(
 						map[string]string{
 							annotations.NodeUpcomingAnnotation: "true",
 						}).Build(),
@@ -2416,15 +2416,15 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			desc: "CCC nodes",
 			ekNodesWithMigs: []nodeWithMig{
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc2ScaleUpAnywayNode2", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc2ScaleUpAnywayNode2", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
 					mig:  ccc2ScaleUpAnywayMig,
 				},
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc1Rule1Node1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc1Rule1Node1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
 					mig:  ccc1Rule1Mig,
 				},
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc2ScaleUpAnywayNode1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc2ScaleUpAnywayNode1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
 					mig:  ccc2ScaleUpAnywayMig,
 				},
 			},
@@ -2432,17 +2432,17 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 				"ccc1": {
 					1: {
 						"ccc1Rule1Node1": operationtracker.ResizableNode{
-							Node: ekvms_test.NewResizableNodeBuilder("ccc1Rule1Node1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
+							Node: ekvms_test.NewNodeBuilder("ccc1Rule1Node1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
 						},
 					},
 				},
 				"ccc2": {
 					0: {
 						"ccc2ScaleUpAnywayNode1": operationtracker.ResizableNode{
-							Node: ekvms_test.NewResizableNodeBuilder("ccc2ScaleUpAnywayNode1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
+							Node: ekvms_test.NewNodeBuilder("ccc2ScaleUpAnywayNode1", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
 						},
 						"ccc2ScaleUpAnywayNode2": operationtracker.ResizableNode{
-							Node: ekvms_test.NewResizableNodeBuilder("ccc2ScaleUpAnywayNode2", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
+							Node: ekvms_test.NewNodeBuilder("ccc2ScaleUpAnywayNode2", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
 						},
 					},
 				},
@@ -2469,7 +2469,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			desc: "Skip nodes without associated mig",
 			ekNodesWithMigs: []nodeWithMig{
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc1Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc1Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
 				},
 			},
 			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
@@ -2478,7 +2478,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			desc: "Skip nodes with unexisting CCC",
 			ekNodesWithMigs: []nodeWithMig{
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc3Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc3").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc3Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc3").Build(),
 				},
 			},
 			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
@@ -2487,7 +2487,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			desc: "Skip nodes with CCC not mathching any rules and withouth ScaleUpAnyway enabled",
 			ekNodesWithMigs: []nodeWithMig{
 				{
-					node: ekvms_test.NewResizableNodeBuilder("ccc1ScaleUpAnywayNode", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
+					node: ekvms_test.NewNodeBuilder("ccc1ScaleUpAnywayNode", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
 					mig:  ccc1ScaleUpAnywayMig,
 				},
 			},

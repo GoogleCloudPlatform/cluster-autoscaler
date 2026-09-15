@@ -136,7 +136,7 @@ func TestIsBalloonPod(t *testing.T) {
 func TestInjectDefaultBalloonPod(t *testing.T) {
 	machineType := "ek-standard-32"
 	nodeName := "node-1"
-	resizableNode := ekvms_test.NewResizableNodeBuilder(nodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build()
+	resizableNode := ekvms_test.NewNodeBuilder(nodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build()
 	nonResizableNode := test_utils.BuildTestNode("node-2", 32000, 128)
 
 	bPod, _ := GenerateBalloonPod(
