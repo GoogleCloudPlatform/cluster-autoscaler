@@ -32,6 +32,7 @@ type Runnable interface {
 // using common patterns, such as version comparison.
 type Manager interface {
 	Runnable
+	IsFeatureEnabled(feature string, failsafe bool) bool
 	EvaluateMinimumVersionFlagOrFailsafe(flag string, failsafe bool) bool
 	EvaluateBoolFlagOrFailsafe(flag string, failsafe bool) bool
 	EvaluateDurationSecondsFlagOrFailsafe(flag string, failsafe time.Duration) time.Duration
@@ -66,6 +67,21 @@ func (m *manager) Start(ctx context.Context) error {
 
 func (m *manager) UpdateReleaseChannel(releaseChannel string) {
 	m.evaluator.UpdateReleaseChannel(releaseChannel)
+}
+
+// IsFeatureEnabled reports whether feature is enabled using the standard two-flag pattern.
+// The feature is enabled only if both of these flags allow it:
+//  1. <feature>::MinCAVersion: the CA version must be at least this value. If
+//     <feature>::MinCAVersionFor<major> is set for the running CA major version, it takes precedence.
+//  2. <feature>::Enabled: a kill switch that can turn the feature off.
+//
+// If a flag is unset or has an invalid value, failsafe is used as the result of that check.
+func (m *manager) IsFeatureEnabled(feature string, failsafe bool) bool {
+	minVersionFlag := feature + MinCAVersionSuffix
+	enabledFlag := feature + EnabledSuffix
+
+	return m.EvaluateMinimumVersionFlagOrFailsafe(minVersionFlag, failsafe) &&
+		m.EvaluateBoolFlagOrFailsafe(enabledFlag, failsafe)
 }
 
 // EvaluateBoolFlagOrFailsafe evaluates bool flag value.

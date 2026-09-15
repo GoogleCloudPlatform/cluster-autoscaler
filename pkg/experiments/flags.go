@@ -14,6 +14,11 @@
 
 package experiments
 
+// Recommended Giraffe flag suffixes for version rollout gating and experiment mitigation.
+// When using Manager.IsFeatureEnabled, only the feature prefix constant needs to be defined in this file.
+const MinCAVersionSuffix = "::MinCAVersion"
+const EnabledSuffix = "::Enabled"
+
 const ProvisioningRequestsRLAEnabledFlag = "ProvisioningRequest::RecommendLocationsMinCAVersion"
 const ProvisioningRequestsScaleDownUnreadyFlag = "ProvisioningRequest::ScaleDownUnreadyTimeSeconds"
 const ProvisioningRequestsZeroOrMaxRoundUpEnabledFlag = "ProvisioningRequest::ZeroOrMaxRoundUpMinCAVersion"
@@ -212,8 +217,7 @@ const FlexAdvisorPCCSupportMinCAVersionFlag = "FlexAdvisorPCCSupport::MinCAVersi
 
 const FlexAdvisorProcessingEnabledFlag = "FlexAdvisorProcessing::Enabled"
 const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersion"
-const FlexAdvisorLateRegistrationEnabledFlag = "FlexAdvisorLateRegistration::Enabled"
-const FlexAdvisorLateRegistrationMinCAVersionFlag = "FlexAdvisorLateRegistration::MinCAVersion"
+const FlexAdvisorLateRegistrationFeature = "FlexAdvisorLateRegistration"
 
 const FlexAdvisorRecommendationsBypassEnabledFlag = "FlexAdvisor::RecommendationsBypassEnabled"
 const FlexAdvisorRecommendationsBypassMinCAVersionFlag = "FlexAdvisor::RecommendationsBypassMinCAVersion"

@@ -58,6 +58,20 @@ func (m *mockManager) Start(ctx context.Context) error {
 	return nil
 }
 
+// IsFeatureEnabled evaluates whether an experiment is enabled in mockManager.
+func (m *mockManager) IsFeatureEnabled(feature string, failsafe bool) bool {
+	// Convenience for simple unit tests: if the feature prefix itself was configured in boolFlags
+	// (e.g. map[string]bool{MyFeature: false} in NewMockManagerWithOptions), return that value directly.
+	if val, found := m.boolFlags[feature]; found {
+		return val
+	}
+	minVersionFlag := feature + MinCAVersionSuffix
+	enabledFlag := feature + EnabledSuffix
+
+	return m.EvaluateMinimumVersionFlagOrFailsafe(minVersionFlag, failsafe) &&
+		m.EvaluateBoolFlagOrFailsafe(enabledFlag, failsafe)
+}
+
 // EvaluateBoolFlagOrFailsafe returns true i.f.f. provided flag is enabled
 func (m *mockManager) EvaluateBoolFlagOrFailsafe(flag string, failsafe bool) bool {
 	val, found := m.boolFlags[flag]
