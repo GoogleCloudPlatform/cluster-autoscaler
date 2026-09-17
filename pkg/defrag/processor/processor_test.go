@@ -34,7 +34,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
 	. "k8s.io/utils/clock/testing"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
@@ -2638,7 +2637,6 @@ func TestNewCandidate(t *testing.T) {
 		plugins           []defrag.Plugin
 		allNodesWithPods  map[*apiv1.Node][]*apiv1.Pod
 		allCandidateNodes []string
-		partialEnabled    bool
 		minNodeGroupSize  int
 		wantCandidateInfo *candidateInfo
 	}{
@@ -2690,7 +2688,6 @@ func TestNewCandidate(t *testing.T) {
 				buildReadyNode("node-2", 1000, 1): {},
 			},
 			minNodeGroupSize: 1,
-			partialEnabled:   true,
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{IsAtomic: false,
 					Mode:  defrag.CreateBeforeDelete,
@@ -2745,34 +2742,7 @@ func TestNewCandidate(t *testing.T) {
 			},
 		},
 		{
-			name: "partial plugin gets reverted to CreateBeforeDelete and yields only one candidate node if partial is not enabled",
-			plugins: []defrag.Plugin{
-				&fakePlugin{
-					targetNodes: []string{"partial-1", "partial-2"},
-					mode:        defrag.CreateBeforeDelete,
-					isAtomic:    false,
-				},
-			},
-			allNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
-				buildReadyNode("other", 1000, 1):     {},
-				buildReadyNode("partial-1", 1000, 1): {},
-				buildReadyNode("partial-2", 1000, 1): {},
-			},
-			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{IsAtomic: true,
-					Nodes: []string{"partial-1"},
-					Plugin: &fakePlugin{
-						targetNodes: []string{"partial-1", "partial-2"},
-						mode:        defrag.CreateBeforeDelete,
-						isAtomic:    false,
-					},
-					Mode: defrag.CreateBeforeDelete,
-				},
-				creationTime: timeNow,
-			},
-		},
-		{
-			name: "partial plugin produces partial candidate if partial is enabled",
+			name: "partial plugin produces partial candidate",
 			plugins: []defrag.Plugin{
 				&fakePlugin{
 					targetNodes: []string{"partial"},
@@ -2783,7 +2753,6 @@ func TestNewCandidate(t *testing.T) {
 			allNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
 				buildReadyNode("partial", 1000, 1): {},
 			},
-			partialEnabled: true,
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					IsAtomic: false,
@@ -2817,17 +2786,12 @@ func TestNewCandidate(t *testing.T) {
 			deleteOpts := options.NodeDeleteOptions{}
 			fakeClock := &FakePassiveClock{}
 			fakeClock.SetTime(timeNow)
-			var experimentsManager experiments.Manager
-			if tc.partialEnabled {
-				experimentsManager = experiments.NewMockManager(experiments.EnablePartialDefragFlag)
-			}
 			processor := NewProcessor(Options{
 				ScaleDownNodeProcessor:  allNodesProcessor,
 				DeleteOptions:           deleteOpts,
 				DrainabilityRules:       rules.Default(deleteOpts),
 				Plugins:                 tc.plugins,
 				Clock:                   fakeClock,
-				ExperimentsManager:      experimentsManager,
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			scaleDownActuator := &mockScaleDownActuator{}
@@ -3151,43 +3115,6 @@ func TestDefragPickedCandidate(t *testing.T) {
 				pickedCandidateInfo: tc.picked,
 			}
 			assert.Equal(t, tc.expected, p.DefragPickedCandidate())
-		})
-	}
-}
-
-func TestPartialEnabled(t *testing.T) {
-
-	tests := []struct {
-		name               string
-		experimentsManager experiments.Manager
-		want               bool
-	}{
-		{
-			name:               "experimentsManager is nil",
-			experimentsManager: nil,
-			want:               false,
-		},
-		{
-			name:               "flag disabled",
-			experimentsManager: experiments.NewMockManager(),
-			want:               false,
-		},
-		{
-			name:               "flag enabled",
-			experimentsManager: experiments.NewMockManager(experiments.EnablePartialDefragFlag),
-			want:               true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &Processor{
-				experimentsManager: tc.experimentsManager,
-			}
-			got := p.partialEnabled()
-			if got != tc.want {
-				t.Errorf("partialAllowed() = %v, want %v", got, tc.want)
-			}
 		})
 	}
 }

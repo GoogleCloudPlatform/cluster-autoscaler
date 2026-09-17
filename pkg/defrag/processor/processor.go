@@ -477,15 +477,6 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 		metrics.Metrics.SetDefragUnfitNodes(plugin.String(), unfitNodesCount+len(backedOffNodes))
 		metrics.Metrics.ObserveDefragStaleness(plugin.String())
 		if candidate != nil {
-			// When partial defrag is disabled, fallback non-atomic candidates to standard
-			// single-node atomic CreateBeforeDelete candidates so they are handled via processCandidateAtomic.
-			if !p.partialEnabled() && !candidate.IsAtomic {
-				candidate.Mode = defrag.CreateBeforeDelete
-				candidate.IsAtomic = true
-				if len(candidate.Nodes) > 0 {
-					candidate.Nodes = []string{candidate.Nodes[0]}
-				}
-			}
 			originalNodeCount := len(candidate.Nodes)
 			nodes, err := filter.filterNodesViolatingMinQuotas(p.ctx, candidate.Nodes)
 			if err != nil {
@@ -552,11 +543,4 @@ func (p *Processor) BestOptions(ctx context.Context, options []expander.Option, 
 
 // CleanUp cleans up the processor internal structures
 func (p *Processor) CleanUp() {
-}
-
-func (p *Processor) partialEnabled() bool {
-	if p.experimentsManager == nil {
-		return false
-	}
-	return p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.EnablePartialDefragFlag, false)
 }

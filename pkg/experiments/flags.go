@@ -122,7 +122,6 @@ const HtnapMinCAVersionFlag = "HTNAP::MinCAVersion"
 const IncreasedNapMaxNodesEnabledFlag = "IncreasedNapMaxNodes::Enabled"
 const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion"
 
-const EnablePartialDefragFlag = "ClusterAutoscalerDefrag::EnablePartialDefrag"
 const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 
 const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
