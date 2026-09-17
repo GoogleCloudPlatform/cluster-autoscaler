@@ -326,8 +326,6 @@ type GkeManager interface {
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	// IsExtendedFallbacksEnabled returns true if extended fallbacks are enabled.
 	IsExtendedFallbacksEnabled() bool
-	// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-	IsEkSpotEnabled() bool
 	// GetNodesScaleDownAllowedFromCache retrieves the scale-down information for nodes from the cache.
 	GetNodesScaleDownAllowedFromCache([]string) map[string]bool
 	// UpdateNodesScaleDownAllowedCache updates the scale-down information for nodes in the cache.
@@ -511,7 +509,6 @@ type gkeManagerImpl struct {
 
 	autoscalingOptsProvider             AutoscalingOptionsProvider
 	autoprovisioningEligibility         AutoprovisioningEligibility
-	ekSpotEnabledCache                  ekvm_provider_interfaces.ExperimentFlagCache[bool]
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
 	lookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
 	optsTracker                         *optstracking.OptionsTracker
@@ -581,7 +578,6 @@ func CreateGkeManager(
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	autoscalingOptsProvider AutoscalingOptionsProvider,
 	autoprovisioningEligibility AutoprovisioningEligibility,
-	ekSpotEnabledCache ekvm_provider_interfaces.ExperimentFlagCache[bool],
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider,
 	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
 	draResourcePredictor *dynamicresources.ResourcePredictor,
@@ -637,7 +633,6 @@ func CreateGkeManager(
 		clusterLocationsObserver:            clusterLocationsObserver,
 		localSSDDiskSizeProvider:            dynamicLocalSSDDiskSizeProvider,
 		autoscalingOptsProvider:             autoscalingOptsProvider,
-		ekSpotEnabledCache:                  ekSpotEnabledCache,
 		autoprovisioningEligibility:         autoprovisioningEligibility,
 		resizableVmAutoprovisioningProvider: resizableVmAutoprovisioningProvider,
 		lookaheadBufferStrategyProvider:     lookaheadBufferStrategyProvider,
@@ -1916,9 +1911,6 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	m.InvalidateNodesScaleDownAllowedCache()
 	m.cache.InvalidateCapacityCheckWaitTimes()
 
-	// TODO(b/449919936): Cleanup after EK spot enabled suppoerted experiment is over.
-	m.ekSpotEnabledCache.RefreshValue()
-
 	m.refreshResizableVmEdpEnabled()
 
 	// TODO(b/348360895): Cleanup after EK experiment is over.
@@ -2968,11 +2960,6 @@ func (m *gkeManagerImpl) IsResizableVmEdpEnabled() bool {
 // ResizingEnabled checks if resizing is enabled for the given machine family.
 func (m *gkeManagerImpl) ResizingEnabled(machineFamily string) bool {
 	return m.resizableVmAutoprovisioningProvider.ResizingEnabled(machineFamily)
-}
-
-// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-func (m *gkeManagerImpl) IsEkSpotEnabled() bool {
-	return m.ekSpotEnabledCache.Get()
 }
 
 // GetNodesScaleDownAllowedFromCache retrieves the scale-down information for nodes from the cache.

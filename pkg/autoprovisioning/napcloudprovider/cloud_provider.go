@@ -63,7 +63,6 @@ type AutoprovisioningCloudProvider interface {
 	GetAllZones() ([]string, error)
 	GetStandardZones() ([]string, error)
 	GetAIZones() ([]string, error)
-	IsEkSpotEnabled() bool
 	IsResizableVmEdpEnabled() bool
 	TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string
 	IsArmMachineFallbacksEnabled() bool

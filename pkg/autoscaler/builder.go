@@ -619,8 +619,6 @@ func (b *Builder) Build(
 
 	klog.V(1).Infof("GCE projectId=%s location=%s", b.projectID, b.location)
 
-	ekSpotEnabledCache := ekvms_providers.NewEkSpotEnabledCache(experimentsManager)
-
 	// Initialize GCE Reservations Puller.
 	reservationsPuller, err := gceclient.NewReservationsPuller(b.gceClient, b.consumableReservationsClient, experimentsManager, b.projectID, autoscalingOptions.EnableConsumablePuller, autoscalingOptions.Location)
 	if err != nil {
@@ -656,7 +654,6 @@ func (b *Builder) Build(
 		SystemLabelPatterns:                 systemLabelPatterns,
 		ClusterLocationsObserver:            clusterLocationsObserver,
 		AutoscalingOptsProvider:             autoscalingOptsProvider,
-		EkSpotEnabledCache:                  ekSpotEnabledCache,
 		AutoprovisioningEligibility:         autoprovisioningEligibility,
 		ResizableVmAutoprovisioningProvider: resizableVmAutoprovisioningProvider,
 		LookaheadBufferStrategyProvider:     lookaheadBufferStrategyProvider,

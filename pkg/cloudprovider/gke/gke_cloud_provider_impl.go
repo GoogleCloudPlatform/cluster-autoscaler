@@ -540,11 +540,6 @@ func (p *gkeCloudProviderImpl) IsExtendedFallbacksEnabled() bool {
 	return p.gkeManager.IsExtendedFallbacksEnabled()
 }
 
-// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-func (p *gkeCloudProviderImpl) IsEkSpotEnabled() bool {
-	return p.gkeManager.IsEkSpotEnabled()
-}
-
 // GetMachineType gets gce.MachineType for a given type name and location.
 func (p *gkeCloudProviderImpl) GetMachineType(machineType string, zone string) (gce.MachineType, error) {
 	return p.gkeManager.GetMachineType(machineType, zone)
@@ -2327,7 +2322,6 @@ type Config struct {
 	ClusterLocationsObserver            ClusterLocationsObserver
 	AutoscalingOptsProvider             AutoscalingOptionsProvider
 	AutoprovisioningEligibility         AutoprovisioningEligibility
-	EkSpotEnabledCache                  ekvm_provider_interfaces.ExperimentFlagCache[bool]
 	ResizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
 	LookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
 	ProviderConfigObserver              multitenancy.ProviderConfigObserver
@@ -2417,7 +2411,6 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		opts.GCEOptions.LocalSSDDiskSizeProvider,
 		config.AutoscalingOptsProvider,
 		config.AutoprovisioningEligibility,
-		config.EkSpotEnabledCache,
 		config.ResizableVmAutoprovisioningProvider,
 		config.LookaheadBufferStrategyProvider,
 		config.DraResourcePredictor,

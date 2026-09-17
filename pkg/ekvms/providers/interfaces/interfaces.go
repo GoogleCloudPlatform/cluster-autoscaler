@@ -14,13 +14,6 @@
 
 package interfaces
 
-// ExperimentFlagCache caches the experiment flag for a length of a CA loop.
-// The value is guaranteed to stay consistent across CA main loop (excluding async code outside of the main loop).
-type ExperimentFlagCache[T bool | string] interface {
-	RefreshValue()
-	Get() T
-}
-
 type ResizableVmAutoprovisioningProvider interface {
 	IsResizableVmEnabledInAutopilot(machineFamily string) bool
 	IsE4StatefulEnabledInAutopilot() bool

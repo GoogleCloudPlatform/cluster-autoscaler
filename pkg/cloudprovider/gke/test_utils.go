@@ -412,7 +412,6 @@ type TestAutoprovisioningCloudProvider struct {
 	autoprovisioningSecondaryFamily       *machinetypes.MachineFamily
 	autoprovisioningEligibility           AutoprovisioningEligibility
 	validMachineTypes                     map[gce.MachineTypeKey]bool
-	isEkSpotEnabled                       bool
 	isResizableVmEdpEnabled               bool
 	extendedFallbacksEnabled              bool
 	isArmMachineFallbacksEnabled          bool
@@ -708,13 +707,6 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithValidMachineTypes(validMa
 	return b
 }
 
-func (b *TestAutoprovisioningCloudProviderBuilder) WithEkSpotEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
-	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
-		p.isEkSpotEnabled = enabled
-	})
-	return b
-}
-
 func (b *TestAutoprovisioningCloudProviderBuilder) WithArmMachineFallbacksEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
 		p.isArmMachineFallbacksEnabled = enabled
@@ -994,10 +986,6 @@ func (cp *TestAutoprovisioningCloudProvider) ValidateMachineTypeConfig(machineTy
 		return nil
 	}
 	return fmt.Errorf("Machine type %s is not available in zone %s.", machineType, zone)
-}
-
-func (cp *TestAutoprovisioningCloudProvider) IsEkSpotEnabled() bool {
-	return cp.isEkSpotEnabled
 }
 
 // AddAutoprovisionedGkeNodeGroup creates and registers GkeNodeGroup
@@ -2049,10 +2037,6 @@ func (fake *FakeGkeManager) SetGeneralPurposeMachineFamilies(families []string) 
 	fake.generalPurposeMachineFamilies = families
 }
 
-func (fake *FakeGkeManager) IsEkSpotEnabled() bool {
-	panic("not implemented")
-}
-
 func (fake *FakeGkeManager) GetNodesScaleDownAllowedFromCache([]string) map[string]bool {
 	panic("not implemented")
 }
@@ -2966,11 +2950,6 @@ func (m *GkeManagerMock) ResizingEnabled(machineFamily string) bool {
 }
 
 func (m *GkeManagerMock) IsResizableVmEdpEnabled() bool {
-	args := m.Called()
-	return args.Get(0).(bool)
-}
-
-func (m *GkeManagerMock) IsEkSpotEnabled() bool {
 	args := m.Called()
 	return args.Get(0).(bool)
 }

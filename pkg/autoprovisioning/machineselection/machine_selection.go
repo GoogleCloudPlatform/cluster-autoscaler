@@ -133,9 +133,7 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 	isExtendedFallbacksEnabled := s.isExtendedFallbacksEnabled(autopilotEnabled, autopilotManaged, isStateless)
 	// If crd rule specifies families, always try to use it.
 	if podCrdFamiliesSpecified {
-		if !s.CloudProvider.IsEkSpotEnabled() {
-			podCrdFamilies = filterEkMachineFamilyIfNotEnabled(podCrdFamilies, wantsSpot, s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()))
-		}
+		podCrdFamilies = filterEkMachineFamilyIfNotEnabled(podCrdFamilies, wantsSpot, s.CloudProvider.IsResizableVmWithinPodFamilyEnabled(machinetypes.EK.Name()))
 		podCrdFamilies = filterE4aMachineFamilyIfNotEnabled(podCrdFamilies, isE4aEnabled)
 		if rule.PodFamilyName() == rules.GeneralPurposePodFamily {
 			podCrdFamilies = s.filterE4MachineFamilyIfNotEnabled(podCrdFamilies, isE4Enabled)
@@ -399,10 +397,11 @@ func (s Selector) filterE4MachineFamilyIfNotEnabled(families []machinetypes.Mach
 
 func (s Selector) isEkEnabledForPod(customClassSpecified, wantsSpot bool) bool {
 	// Confidential nodes should never use EK machine family as default.
-	// EKs are permitted if Spot is explicitly enabled or if it's a non-Spot standard class.
+	// EKs are permitted if it's a non-Spot standard class.
 	return s.CloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.EK.Name()) &&
 		!s.CloudProvider.AreConfidentialNodesEnabled() &&
-		(s.CloudProvider.IsEkSpotEnabled() || (!customClassSpecified && !wantsSpot))
+		!customClassSpecified &&
+		!wantsSpot
 }
 
 func (s Selector) defaultFallbackMachineFamilies(isEkEnabled, isE4Enabled bool) []machinetypes.MachineFamily {

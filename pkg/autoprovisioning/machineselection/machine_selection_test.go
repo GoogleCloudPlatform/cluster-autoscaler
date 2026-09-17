@@ -64,7 +64,6 @@ func TestSelectMachineSpec(t *testing.T) {
 		resizableVmInAutopilotEnabled         map[string]bool
 		resizableVmStatefulInAutopilotEnabled map[string]bool
 		resizableVmWithinPodFamilyEnabled     map[string]bool
-		isEkSpotEnabled                       bool
 		isArmMachineFallbacksEnabled          bool
 		confidentialNodes                     bool
 		confidentialInstanceType              string
@@ -430,34 +429,21 @@ func TestSelectMachineSpec(t *testing.T) {
 			podClass:                      "custom-compute-class",
 			expectedFamilies:              []machinetypes.MachineFamily{defaultCloudProviderFamily},
 		},
-		"EK: EK spots disabled, fallback to E2": {
+		"EK: EKs do not support spot, fallback to E2": {
 			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			autopilotEnabled:              true,
 			wantsSpot:                     true,
 			expectedFamilies:              []machinetypes.MachineFamily{defaultCloudProviderFamily},
-		},
-		"EK: EK spots enabled": {
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
-			autopilotEnabled:              true,
-			wantsSpot:                     true,
-			isEkSpotEnabled:               true,
-			expectedFamilies:              []machinetypes.MachineFamily{machinetypes.EK, defaultCloudProviderFamily},
 		},
 		"MN: pod family specified in CCC rule": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			resizableVmWithinPodFamilyEnabled: map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies:                  []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
-		"MN: EK spots disabled, fallback to E2": {
+		"MN: EKs do not support spot, fallback to E2": {
 			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			wantsSpot:        true,
 			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E2},
-		},
-		"MN: EK spots enabled": {
-			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
-			wantsSpot:        true,
-			isEkSpotEnabled:  true,
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
 		},
 		"MN: EK within pod family disabled, fallback to E2": {
 			rule:                              rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
@@ -898,7 +884,6 @@ func TestSelectMachineSpec(t *testing.T) {
 				WithConfidentialNodesEnabled(tc.confidentialNodes).
 				WithConfidentialInstanceType(tc.confidentialInstanceType).
 				WithAutopilotEnabled(tc.autopilotEnabled).
-				WithEkSpotEnabled(tc.isEkSpotEnabled).
 				WithArmMachineFallbacksEnabled(tc.isArmMachineFallbacksEnabled).
 				WithExtendedFallbacksEnabled(tc.isExtendedFallbacksEnabled).
 				WithGeneralPurposeMachineFamilies(tc.generalPurposeMachineFamilies).
