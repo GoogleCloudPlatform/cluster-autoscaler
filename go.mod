@@ -32,7 +32,7 @@ require (
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
 	k8s.io/apiserver v0.37.0
-	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260901142816-82260f4c6995
+	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260915134918-33467ba3ba47
 	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/client-go v0.37.0
 	k8s.io/cloud-provider v0.37.0
@@ -206,7 +206,7 @@ replace (
 //
 // Managed in the scope of the sync process
 replace (
-	k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260901142816-82260f4c6995
+	k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260915134918-33467ba3ba47
 	k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/gke-autoscaling/cluster-autoscaler/apis => ./apis
 )

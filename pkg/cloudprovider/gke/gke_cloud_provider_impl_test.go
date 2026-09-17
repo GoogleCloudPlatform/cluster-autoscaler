@@ -2633,7 +2633,7 @@ func TestHasInstance(t *testing.T) {
 			name:    "malformed node",
 			node:    malformedNode,
 			want:    false,
-			wantErr: fmt.Errorf("wrong id: expected format gce://<project-id>/<zone>/<name>, got nil"),
+			wantErr: fmt.Errorf("wrong id: expected format gce://<project-id>/<zone>/<name>, got \"\""),
 		},
 	}
 
