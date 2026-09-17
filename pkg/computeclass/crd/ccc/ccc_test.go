@@ -212,12 +212,12 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
-			name: "ccc max node disruption set",
+			name: "ccc disruption budget set",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
 					ActiveMigration: &v1.ActiveMigration{
 						ReconciliationPolicy: &v1.ReconciliationPolicy{
-							MaxNodeDisruption: ptr.To(int32(3)),
+							DisruptionBudgets: []v1.DisruptionBudget{{MaxNodes: 3}},
 						},
 					},
 				},
@@ -228,12 +228,27 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
-			name: "ccc max node disruption nil",
+			name: "ccc disruption budgets nil",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
 					ActiveMigration: &v1.ActiveMigration{
 						ReconciliationPolicy: &v1.ReconciliationPolicy{
-							MaxNodeDisruption: nil,
+							DisruptionBudgets: nil,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
+			name: "ccc disruption budgets empty",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							DisruptionBudgets: []v1.DisruptionBudget{},
 						},
 					},
 				},

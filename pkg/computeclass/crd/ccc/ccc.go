@@ -566,12 +566,22 @@ func (ccc *cccCrd) ConfigDrift() bool {
 	return *ccc.Spec.ActiveMigration.ConfigDrift
 }
 
-// MaxNodeDisruption returns the maxNodeDisruption from the active migration policy for CCC.
+// MaxNodeDisruption returns the maximum number of nodes that may be concurrently
+// migrated, taken from the disruption budget in the active migration policy for CCC.
+// Returns nil when no budget is configured, meaning the number is not limited.
 func (ccc *cccCrd) MaxNodeDisruption() *int32 {
 	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ReconciliationPolicy == nil {
 		return nil
 	}
-	return ccc.Spec.ActiveMigration.ReconciliationPolicy.MaxNodeDisruption
+	budgets := ccc.Spec.ActiveMigration.ReconciliationPolicy.DisruptionBudgets
+	if len(budgets) == 0 {
+		return nil
+	}
+	// TODO(b/562952754): currently we only support one budget, we should support multiple.
+	// This function should be changed once we do that.
+	// Copy the value so callers cannot mutate the underlying ComputeClass.
+	maxNodes := budgets[0].MaxNodes
+	return &maxNodes
 }
 
 // AtomicGroupLabels returns the atomicGroupLabels from the active migration policy for CCC.

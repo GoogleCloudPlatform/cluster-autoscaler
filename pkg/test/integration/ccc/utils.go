@@ -188,15 +188,15 @@ func (b *ComputeClassBuilder) WithConfigDrift(configDrift bool) *ComputeClassBui
 	return b
 }
 
-// WithMaxNodeDisruption sets the MaxNodeDisruption in ActiveMigration.ReconciliationPolicy.
-func (b *ComputeClassBuilder) WithMaxNodeDisruption(maxNodeDisruption int32) *ComputeClassBuilder {
+// WithMaxNodeDisruption sets a single DisruptionBudget in ActiveMigration.ReconciliationPolicy.
+func (b *ComputeClassBuilder) WithMaxNodeDisruption(maxNodes int32) *ComputeClassBuilder {
 	if b.cc.Spec.ActiveMigration == nil {
 		b.cc.Spec.ActiveMigration = &v1.ActiveMigration{}
 	}
 	if b.cc.Spec.ActiveMigration.ReconciliationPolicy == nil {
 		b.cc.Spec.ActiveMigration.ReconciliationPolicy = &v1.ReconciliationPolicy{}
 	}
-	b.cc.Spec.ActiveMigration.ReconciliationPolicy.MaxNodeDisruption = &maxNodeDisruption
+	b.cc.Spec.ActiveMigration.ReconciliationPolicy.DisruptionBudgets = []v1.DisruptionBudget{{MaxNodes: maxNodes}}
 	return b
 }
 
