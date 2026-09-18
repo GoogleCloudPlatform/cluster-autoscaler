@@ -245,7 +245,7 @@ func TestReconcileCandidate(t *testing.T) {
 			nodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 1),
 			},
-			candidate: &defrag.Candidate{
+			candidate: &defrag.Candidate{IsAtomic: true,
 				Nodes:  []string{"n1"},
 				Plugin: plugin,
 			},
@@ -257,7 +257,7 @@ func TestReconcileCandidate(t *testing.T) {
 			nodes: []*apiv1.Node{
 				setDefragTaints(buildReadyNode("n1", 1000, 1)),
 			},
-			candidate: &defrag.Candidate{
+			candidate: &defrag.Candidate{IsAtomic: true,
 				Nodes:  []string{"n1"},
 				Plugin: plugin,
 			},
@@ -270,7 +270,7 @@ func TestReconcileCandidate(t *testing.T) {
 				buildReadyNode("n2", 1000, 1),
 				buildReadyNode("n3", 1000, 1),
 			},
-			candidate: &defrag.Candidate{
+			candidate: &defrag.Candidate{IsAtomic: true,
 				Nodes:  []string{"n1", "n2"},
 				Plugin: plugin,
 			},

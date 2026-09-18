@@ -263,7 +263,9 @@ func setUpAnnotator(pods []*corev1.Pod, unschedulablePods []*corev1.Pod,
 		objects = append(objects, pod)
 	}
 	kubeClient = fake.NewSimpleClientset(objects...)
-	annotator = NewPodAnnotator(kubeClient, &metrics_processors.PodStatusAggregator{Unschedulable: unschedulablePods})
+	aggregator := metrics_processors.NewPodStatusAggregator()
+	aggregator.SetUnschedulable(unschedulablePods)
+	annotator = NewPodAnnotator(kubeClient, aggregator)
 	annotator.noLongerUnhelpableThreshold = noLongerUnhelpableThreshold
 	annotator.clock = clock
 	return

@@ -83,7 +83,7 @@ ifndef REGISTRY
 endif
 
 .PHONY: build
-build: clean-binary compile-proto compute-version
+build: clean-binary compute-version
 	echo "Building Cluster-Autoscaler version ${VERSION}"; \
 	./hack/update-version-go.sh ${VERSION}; \
 	trap "./hack/update-version-go.sh reset" EXIT; \
@@ -91,14 +91,14 @@ build: clean-binary compile-proto compute-version
 	$(ENVVAR) GOOS=$(GOOS) GOARCH=$(GOARCH) go build ${GOBUILDFLAGS} -o cluster-autoscaler
 
 .PHONY: build-binary
-build-binary: clean-binary compile-proto compute-version
+build-binary: clean-binary compute-version
 	echo "Building Cluster-Autoscaler version ${VERSION}"; \
 	./hack/update-version-go.sh ${VERSION}; \
 	trap "./hack/update-version-go.sh reset" EXIT; \
 	$(ENVVAR) GOOS=$(GOOS) GOARCH=$(GOARCH) go build ${GOBUILDFLAGS} -o cluster-autoscaler
 
 .PHONY: build-binary-no-internal-client
-build-binary-no-internal-client: clean-binary compile-proto compute-version
+build-binary-no-internal-client: clean-binary compute-version
 	echo "Building Cluster-Autoscaler version ${VERSION}"; \
 	./hack/update-version-go.sh ${VERSION}; \
 	trap "./hack/update-version-go.sh reset" EXIT; \
@@ -142,8 +142,7 @@ build-binary-in-docker: clean-binary docker-builder
 		set -x; cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make BUILD_DEBUG_VERSION=${BUILD_DEBUG_VERSION} GOARCH=$(GOARCH) build-binary && \
 		chown $${EXTUSER}:$${EXTGROUP} cluster-autoscaler && \
-		chown $${EXTUSER}:$${EXTGROUP} version.go && \
-		find pkg -name '*.pb.go' -exec chown $${EXTUSER}:$${EXTGROUP} {} \;"
+		chown $${EXTUSER}:$${EXTGROUP} version.go
 
 .PHONY: build-binary-in-docker-no-internal-client
 build-binary-in-docker-no-internal-client: clean-binary docker-builder
@@ -158,8 +157,7 @@ build-binary-in-docker-no-internal-client: clean-binary docker-builder
 		set -x; cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
 		make BUILD_DEBUG_VERSION=${BUILD_DEBUG_VERSION} GOARCH=$(GOARCH) build-binary-no-internal-client && \
 		chown $${EXTUSER}:$${EXTGROUP} cluster-autoscaler && \
-		chown $${EXTUSER}:$${EXTGROUP} version.go && \
-		find pkg -name '*.pb.go' -exec chown $${EXTUSER}:$${EXTGROUP} {} \;"
+		chown $${EXTUSER}:$${EXTGROUP} version.go
 
 .PHONY: build-image compute-tag
 build-image: compute-tag compute-version check-registry-defined
@@ -202,7 +200,6 @@ test-in-docker: clean-binary docker-builder
 	# synctest strictly requires the Go 1.23+ synchronous timer implementation, ensuring tests don't fall back to older async behaviors and fail.
 	docker run -e GODEBUG=asynctimerchan=0 -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		make compile-proto && \
 	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-no-internal-client
@@ -213,7 +210,6 @@ test-in-docker-no-internal-client: clean-binary docker-builder
 		--tmpfs /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler/pkg/internalclients \
 		autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		make compile-proto && \
 	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test -tags no_internal_clients ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-oss
@@ -230,14 +226,12 @@ compile-proto:
 test-scaledown: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler -v /tmp/:/tmp/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		make compile-proto && \
 	  CA_MANUAL_TEST=true go test ./pkg/impostor -run "TestScaleDown" -timeout=24h -race'
 
 .PHONY: test-largescaleuprequest
 test-largescaleuprequest: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler -v /tmp/:/tmp/ autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		make compile-proto && \
 	  CA_MANUAL_TEST=true go test ./pkg/expander/test -run "TestLargeScaleUpRequest" -timeout=1h -race'
 
 .PHONY: deploy

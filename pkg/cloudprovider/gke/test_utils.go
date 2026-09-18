@@ -33,7 +33,7 @@ import (
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
 
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
@@ -412,12 +412,13 @@ type TestAutoprovisioningCloudProvider struct {
 	autoprovisioningSecondaryFamily       *machinetypes.MachineFamily
 	autoprovisioningEligibility           AutoprovisioningEligibility
 	validMachineTypes                     map[gce.MachineTypeKey]bool
-	isEkSpotEnabled                       bool
 	isResizableVmEdpEnabled               bool
 	extendedFallbacksEnabled              bool
 	isArmMachineFallbacksEnabled          bool
+	isAutopilotNapDefaultFallbackEnabled  bool
 	machineTypesPerZone                   map[string][]string
 	machineConfigProvider                 *machinetypes.MachineConfigProvider
+	generalPurposeMachineFamilies         []string
 	nodePoolSpec                          *gkeclient.NodePoolSpec
 }
 
@@ -639,6 +640,22 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithExtendedFallbacksEnabled(
 	return b
 }
 
+// WithGeneralPurposeMachineFamilies sets the general purpose machine families in provider.
+func (b *TestAutoprovisioningCloudProviderBuilder) WithGeneralPurposeMachineFamilies(families []string) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		p.generalPurposeMachineFamilies = families
+	})
+	return b
+}
+
+// WithAutopilotNapDefaultFallbackEnabled sets whether AutopilotNapDefaultFallback experiment is enabled in provider.
+func (b *TestAutoprovisioningCloudProviderBuilder) WithAutopilotNapDefaultFallbackEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
+	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
+		p.isAutopilotNapDefaultFallbackEnabled = enabled
+	})
+	return b
+}
+
 // WithCompactPlacementEnabled enables compact placement in provider
 func (b *TestAutoprovisioningCloudProviderBuilder) WithCompactPlacementEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
@@ -686,13 +703,6 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithValidMachineTypes(validMa
 		for _, validMachineType := range validMachineTypes {
 			p.validMachineTypes[validMachineType] = true
 		}
-	})
-	return b
-}
-
-func (b *TestAutoprovisioningCloudProviderBuilder) WithEkSpotEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
-	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
-		p.isEkSpotEnabled = enabled
 	})
 	return b
 }
@@ -748,7 +758,8 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithTrimmedLocations(zones []
 // Build returns a built test cloud provider
 func (b *TestAutoprovisioningCloudProviderBuilder) Build() *TestAutoprovisioningCloudProvider {
 	p := &TestAutoprovisioningCloudProvider{
-		TestCloudProvider: b.ossBuilder.Build(),
+		TestCloudProvider:                    b.ossBuilder.Build(),
+		isAutopilotNapDefaultFallbackEnabled: true,
 	}
 
 	for _, builder := range b.builders {
@@ -834,6 +845,10 @@ func (cp *TestAutoprovisioningCloudProvider) IsExtendedFallbacksEnabled() bool {
 
 func (cp *TestAutoprovisioningCloudProvider) IsE2lessRegion() bool {
 	return cp.GetAutoprovisioningDefaultFamily().Name() == machinetypes.E4.Name()
+}
+
+func (cp *TestAutoprovisioningCloudProvider) GetGeneralPurposeMachineFamilies() []string {
+	return cp.generalPurposeMachineFamilies
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsArmMachineFallbacksEnabled() bool {
@@ -973,10 +988,6 @@ func (cp *TestAutoprovisioningCloudProvider) ValidateMachineTypeConfig(machineTy
 	return fmt.Errorf("Machine type %s is not available in zone %s.", machineType, zone)
 }
 
-func (cp *TestAutoprovisioningCloudProvider) IsEkSpotEnabled() bool {
-	return cp.isEkSpotEnabled
-}
-
 // AddAutoprovisionedGkeNodeGroup creates and registers GkeNodeGroup
 func (cp *TestAutoprovisioningCloudProvider) AddAutoprovisionedGkeNodeGroup(nodePoolName, id string, size int, exists, autoprovisioned bool, machineType string, isAutopilot bool, isStable bool) {
 	cp.InsertNodeGroup(cp.NewTestGkeNodeGroup(nodePoolName, id, size, exists, autoprovisioned, machineType, isAutopilot, false, isStable))
@@ -1030,7 +1041,7 @@ func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(ctx context.Context, m
 	if computeClassLabel, found := systemLabels[gkelabels.ComputeClassLabel]; found {
 		gkeNodeGroup.computeClass = computeClassLabel
 	}
-	if csnLabel, found := systemLabels[csn.SoftWorkloadSeparationKey]; found {
+	if csnLabel, found := systemLabels[metadata.SoftWorkloadSeparationKey]; found {
 		gkeNodeGroup.csnLabel = csnLabel
 	}
 	if cccPriorityIdxLabel, found := systemLabels[gkelabels.ComputeClassPriorityIdxLabel]; found {
@@ -1038,7 +1049,7 @@ func (cp *TestAutoprovisioningCloudProvider) NewNodeGroup(ctx context.Context, m
 	}
 
 	for _, t := range taints {
-		if t.Key == csn.SoftWorkloadSeparationKey {
+		if t.Key == metadata.SoftWorkloadSeparationKey {
 			gkeNodeGroup.csnSoftTaint = t
 			break
 		}
@@ -1274,7 +1285,7 @@ func (mig *TestGkeNodeGroup) TemplateNodeInfo(ctx context.Context) (*framework.N
 		node.Labels[gkelabels.ComputeClassLabel] = mig.computeClass
 	}
 	if mig.csnLabel != "" {
-		node.Labels[csn.SoftWorkloadSeparationKey] = mig.csnLabel
+		node.Labels[metadata.SoftWorkloadSeparationKey] = mig.csnLabel
 	}
 	if mig.cccPriorityIdx != "" {
 		node.Labels[gkelabels.ComputeClassPriorityIdxLabel] = mig.cccPriorityIdx
@@ -1626,6 +1637,7 @@ type FakeGkeManager struct {
 	resizableVmWithinPodFamilyEnabled map[string]bool
 	isArmMachineFallbacksEnabled      bool
 	extendedFallbacksEnabled          bool
+	generalPurposeMachineFamilies     []string
 
 	suspensionStatuses    map[suspensionKey]SuspensionStatus
 	machineConfigProvider *machinetypes.MachineConfigProvider
@@ -2017,8 +2029,12 @@ func (fake *FakeGkeManager) SetExtendedFallbacksEnabled(enabled bool) {
 	fake.extendedFallbacksEnabled = enabled
 }
 
-func (fake *FakeGkeManager) IsEkSpotEnabled() bool {
-	panic("not implemented")
+func (fake *FakeGkeManager) GetGeneralPurposeMachineFamilies() []string {
+	return fake.generalPurposeMachineFamilies
+}
+
+func (fake *FakeGkeManager) SetGeneralPurposeMachineFamilies(families []string) {
+	fake.generalPurposeMachineFamilies = families
 }
 
 func (fake *FakeGkeManager) GetNodesScaleDownAllowedFromCache([]string) map[string]bool {
@@ -2682,6 +2698,11 @@ func (m *GkeManagerMock) GetAutoprovisioningDefaultFamily() machinetypes.Machine
 	return args.Get(0).(machinetypes.MachineFamily)
 }
 
+func (m *GkeManagerMock) GetGeneralPurposeMachineFamilies() []string {
+	args := m.Called()
+	return args.Get(0).([]string)
+}
+
 // AreConfidentialNodesEnabled is a mocked method
 func (m *GkeManagerMock) AreConfidentialNodesEnabled() bool {
 	args := m.Called()
@@ -2929,11 +2950,6 @@ func (m *GkeManagerMock) ResizingEnabled(machineFamily string) bool {
 }
 
 func (m *GkeManagerMock) IsResizableVmEdpEnabled() bool {
-	args := m.Called()
-	return args.Get(0).(bool)
-}
-
-func (m *GkeManagerMock) IsEkSpotEnabled() bool {
 	args := m.Called()
 	return args.Get(0).(bool)
 }
@@ -3233,4 +3249,17 @@ func (m *GkeManagerMock) PopRecommendation(migId string) (rec ScaleUpRecommendat
 }
 func (m *GkeManagerMock) ClearRecommendations() {
 	m.Called()
+}
+
+func (cp *TestAutoprovisioningCloudProvider) IsAutopilotNapDefaultFallbackEnabled() bool {
+	return cp.isAutopilotNapDefaultFallbackEnabled
+}
+
+func (fake *FakeGkeManager) IsAutopilotNapDefaultFallbackEnabled() bool {
+	return true
+}
+
+func (m *GkeManagerMock) IsAutopilotNapDefaultFallbackEnabled() bool {
+	args := m.Called()
+	return args.Get(0).(bool)
 }

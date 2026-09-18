@@ -20,6 +20,7 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -78,7 +79,7 @@ func (info *candidateInfo) String() string {
 // reorganizeNodes reorganizes candidate by pushing removable nodes to the front,
 // so they will be processed first in the next iteration.
 func (info *candidateInfo) reorganizeNodes() {
-	if info.candidate.Mode != defrag.Partial {
+	if info.candidate.IsAtomic {
 		return
 	}
 	var removableNodes, unremovableNodes []string
@@ -139,6 +140,7 @@ type Options struct {
 	ExperimentsManager       experiments.Manager
 	FairnessEnforcer         fairness.FairnessEnforcer
 	MinQuotasTrackerFactory  *resourcequotas.TrackerFactory
+	CcLister                 lister.Lister
 }
 
 // NewProcessor returns the default implementation of defrag processor
@@ -153,7 +155,7 @@ func NewProcessor(opts Options) *Processor {
 			Clock:                    c,
 		}),
 		backoff:            newDefragBackoff(),
-		nodeFilterFactory:  newDefragNodeFilterFactory(opts.ScaleDownNodeProcessor, opts.DeleteOptions, opts.DrainabilityRules, opts.MinQuotasTrackerFactory),
+		nodeFilterFactory:  newDefragNodeFilterFactory(opts.ScaleDownNodeProcessor, opts.DeleteOptions, opts.DrainabilityRules, opts.MinQuotasTrackerFactory, opts.CcLister),
 		simulator:          newSimulator(simulatorOptions{DeleteOptions: opts.DeleteOptions, DrainabilityRules: opts.DrainabilityRules}),
 		fairnessEnforcer:   opts.FairnessEnforcer,
 		nodeReconciler:     newNodeReconciler(nodeReconcilerOptions{}),
@@ -219,13 +221,22 @@ func (p *Processor) cleanUpCandidates(filter *defragNodeFilter) error {
 	var candidateInfos []*candidateInfo
 	for _, info := range p.candidateInfos {
 		isScaledDown := p.actuator.isScaleDownFullyStarted(info.candidate)
+		filter.filterDeletedCandidateNodes(p.ctx, info.candidate)
+		survivingCount := len(info.candidate.Nodes)
+
 		filter.filterInvalidCandidateNodes(p.ctx, p.pdbTracker, info.candidate)
+
 		nodes, err := filter.filterNodesViolatingMinQuotas(p.ctx, info.candidate.Nodes)
 		if err != nil {
 			klog.Errorf("Defrag: failed to filter nodes violating min quotas for candidate %v: %v", info, err)
 			return err
 		}
 		info.candidate.Nodes = filter.filterNodesViolatingMinSize(p.ctx, nodes)
+
+		if info.candidate.IsAtomic && len(info.candidate.Nodes) < survivingCount {
+			klog.V(1).Infof("Atomic candidate %v lost nodes, invalidating candidate", info)
+			info.candidate.Nodes = nil
+		}
 
 		if shouldRemove, reason := p.shouldRemoveCandidate(info); shouldRemove {
 			if reason == noValidNodes && isScaledDown {
@@ -238,6 +249,10 @@ func (p *Processor) cleanUpCandidates(filter *defragNodeFilter) error {
 			// The leftover nodes
 			metrics.Metrics.IncreaseDefragFailedScaleDownNodesTotal(info.candidate.Plugin.String(), len(info.candidate.Nodes))
 			continue
+		}
+
+		if !isScaledDown {
+			filter.reserveMaxDisruptionBudget(p.ctx, info.candidate, p.actuator.isNodeScaleDownStarted)
 		}
 
 		pods, err := recreatablePods(p.ctx.ClusterSnapshot, info.candidate.Nodes)
@@ -299,6 +314,7 @@ func (p *Processor) processCandidates(filter *defragNodeFilter) ([]*apiv1.Pod, e
 			}
 			klog.V(4).Infof("New defrag candidate %v", newCandidateInfo)
 			p.candidateInfos = append(p.candidateInfos, newCandidateInfo)
+			filter.reserveMaxDisruptionBudget(p.ctx, newCandidateInfo.candidate, p.actuator.isNodeScaleDownStarted)
 		}
 
 		for _, nodeName := range p.candidateInfos[idx].candidate.Nodes {
@@ -322,7 +338,7 @@ func (p *Processor) processCandidates(filter *defragNodeFilter) ([]*apiv1.Pod, e
 
 // processCandidate processes a single defrag Candidate and returns its unschedulable pods if any exist
 func (p *Processor) processCandidate(info *candidateInfo, allCandidatesNodes map[string]bool) ([]*apiv1.Pod, error) {
-	if info.candidate.Mode == defrag.Partial {
+	if !info.candidate.IsAtomic {
 		return p.processCandidatePartial(info, allCandidatesNodes)
 	} else {
 		return p.processCandidateAtomic(info, allCandidatesNodes)
@@ -356,7 +372,7 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 			info.defragPossibleMap[node] = p.clock.Now()
 		}
 		defragPossibleTime := info.defragPossibleMap[node]
-		if p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
+		if info.candidate.Mode == defrag.DeleteBeforeCreate || p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
 			nodesToScaleDown = append(nodesToScaleDown, node)
 		}
 	}
@@ -461,18 +477,29 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 		metrics.Metrics.SetDefragUnfitNodes(plugin.String(), unfitNodesCount+len(backedOffNodes))
 		metrics.Metrics.ObserveDefragStaleness(plugin.String())
 		if candidate != nil {
-			if !p.partialEnabled() && candidate.Mode == defrag.Partial {
-				candidate.Mode = defrag.CreateBeforeDelete
-				if len(candidate.Nodes) > 0 {
-					candidate.Nodes = []string{candidate.Nodes[0]}
-				}
-			}
+			originalNodeCount := len(candidate.Nodes)
 			nodes, err := filter.filterNodesViolatingMinQuotas(p.ctx, candidate.Nodes)
 			if err != nil {
 				klog.Errorf("Defrag: failed to filter nodes violating min quotas for plugin %s: %v", plugin.String(), err)
 				continue
 			}
+			if candidate.IsAtomic && len(nodes) < originalNodeCount {
+				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated min quotas")
+				continue
+			}
 			candidate.Nodes = filter.filterNodesViolatingMinSize(p.ctx, nodes)
+			if candidate.IsAtomic && len(candidate.Nodes) < originalNodeCount {
+				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated min size")
+				continue
+			}
+			candidate.Nodes = filter.filterNodesViolatingMaxDisruption(p.ctx, candidate.Nodes)
+			if candidate.IsAtomic && len(candidate.Nodes) < originalNodeCount {
+				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated max disruption")
+				continue
+			}
+			if len(candidate.Nodes) == 0 {
+				continue
+			}
 
 			klog.V(4).Infof("Creating new defrag candidate for plugin: %s, nodes: %s", plugin.String(), strings.Join(candidate.Nodes, ","))
 			pods, err := recreatablePods(p.ctx.ClusterSnapshot, candidate.Nodes)
@@ -516,11 +543,4 @@ func (p *Processor) BestOptions(ctx context.Context, options []expander.Option, 
 
 // CleanUp cleans up the processor internal structures
 func (p *Processor) CleanUp() {
-}
-
-func (p *Processor) partialEnabled() bool {
-	if p.experimentsManager == nil {
-		return false
-	}
-	return p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.EnablePartialDefragFlag, false)
 }

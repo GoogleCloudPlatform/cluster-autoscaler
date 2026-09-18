@@ -137,6 +137,12 @@ func (a *defragActuator) isScaleDownFullyStarted(candidate *defrag.Candidate) bo
 	return true
 }
 
+// isNodeScaleDownStarted checks if scale-down was started for a specific node
+func (a *defragActuator) isNodeScaleDownStarted(nodeName string) bool {
+	_, found := a.scaledDownNodes[nodeName]
+	return found
+}
+
 // isScaleDownTimedOut checks if the Candidate scale-down timed out
 func (a *defragActuator) isScaleDownTimedOut(candidate *defrag.Candidate, timeout time.Duration) bool {
 	for _, nodeName := range candidate.Nodes {

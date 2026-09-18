@@ -24,6 +24,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
@@ -32,8 +33,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 const MinCapacityPodListProcessorName = "cc-min-capacity-pod-list-processor"
@@ -44,15 +47,22 @@ type MinCapacityPodListProcessor struct {
 	simulator          *scheduling.HintingSimulator
 	fairnessEnforcer   fairness.FairnessEnforcer
 	experimentsManager experiments.Manager
+	// blockingLabels are node label keys (e.g. the TPU slice label) that mark a
+	// node as unable to scale down. When set (or when a node carries the standard
+	// scale-down-disabled annotation), atomic-group packing prefers groups
+	// containing such nodes so the minimum-capacity floor is concentrated onto
+	// cubes that cannot scale down anyway, freeing unblocked cubes to be reclaimed.
+	blockingLabels []string
 }
 
 // NewMinCapacityPodListProcessor creates a MinCapacityPodListProcessor.
-func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer, experimentsManager experiments.Manager) *MinCapacityPodListProcessor {
+func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer, experimentsManager experiments.Manager, blockingLabels []string) *MinCapacityPodListProcessor {
 	return &MinCapacityPodListProcessor{
 		ccLister:           ccLister,
 		simulator:          scheduling.NewHintingSimulator(),
 		fairnessEnforcer:   fairnessEnforcer,
 		experimentsManager: experimentsManager,
+		blockingLabels:     blockingLabels,
 	}
 }
 
@@ -184,11 +194,12 @@ func buildSpecFakePods(ccName string, target int, priorityFakePodsCount int, sat
 
 // atomicGroupInfo summarizes an atomic node group for packing.
 type atomicGroupInfo struct {
-	id         string
-	totalNodes int
-	freeNodes  int             // nodes in this group that currently host no pod
-	nodeNames  map[string]bool // node names belonging to this group
-	ccLabels   map[string]bool // ComputeClass labels present on this group's nodes
+	id                   string
+	totalNodes           int
+	freeNodes            int             // nodes in this group that currently host no pod
+	nodeNames            map[string]bool // node names belonging to this group
+	ccLabels             map[string]bool // ComputeClass labels present on this group's nodes
+	blockedFromScaleDown bool            // true if any node in this group is blocked from scale-down
 }
 
 // filterOutSchedulableFakePods runs spec-level fake pods through the scheduling
@@ -262,6 +273,17 @@ func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscal
 		if cc := p.nodeCCC(node); cc != "" {
 			g.ccLabels[cc] = true
 		}
+		// TODO(b/560039714): this replicates a subset of the scale-down pipeline's
+		// blocking criteria (see nodeIsBlockedFromScaleDown). The coupling is
+		// implicit - nothing here imports the actual scale-down logic - so any new
+		// scale-down-blocking criterion added downstream (e.g. a new
+		// ScaleDownSetProcessor or eligibility check) will silently make this
+		// heuristic stale and may leave minCapacity pods pinned to cubes that could
+		// otherwise have been reclaimed. Resolve by making the placement genuinely
+		// scale-down aware, or by making scale-down able to reschedule these pods.
+		if p.nodeIsBlockedFromScaleDown(node) {
+			g.blockedFromScaleDown = true
+		}
 		if len(ni.Pods()) == 0 {
 			g.freeNodes++
 		}
@@ -271,9 +293,14 @@ func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscal
 
 // sortAtomicGroupsForPacking orders atomic groups deterministically for packing:
 //
+//	(0) scale-down-blocked groups first (they cannot scale down anyway, so pinning
+//	    the floor onto them frees unblocked cubes to be reclaimed),
 //	(1) most existing fake pods first (pack into groups already used),
 //	(2) then most free nodes (fill biggest group first),
 //	(3) then group ID for tie-break determinism.
+//
+// (0) applies when any node carries a scale-down-blocking label or the standard
+// scale-down-disabled annotation.
 func sortAtomicGroupsForPacking(atomicGroups map[string]*atomicGroupInfo) []*atomicGroupInfo {
 	sortedGroups := make([]*atomicGroupInfo, 0, len(atomicGroups))
 	for _, g := range atomicGroups {
@@ -281,6 +308,9 @@ func sortAtomicGroupsForPacking(atomicGroups map[string]*atomicGroupInfo) []*ato
 	}
 	sort.Slice(sortedGroups, func(i, j int) bool {
 		a, b := sortedGroups[i], sortedGroups[j]
+		if a.blockedFromScaleDown != b.blockedFromScaleDown {
+			return a.blockedFromScaleDown
+		}
 		apods, bpods := a.totalNodes-a.freeNodes, b.totalNodes-b.freeNodes
 		if apods != bpods {
 			return apods > bpods
@@ -338,7 +368,7 @@ func (p *MinCapacityPodListProcessor) packIntoGroups(autoscalingCtx *ca_context.
 			if n == nil {
 				return false
 			}
-			return g.nodeNames[n.Name]
+			return g.nodeNames[n.Name] && isNodeNotBeingDeleted(n)
 		})
 		if err != nil {
 			return remaining, err
@@ -359,7 +389,7 @@ func (p *MinCapacityPodListProcessor) packIntoNonAtomic(autoscalingCtx *ca_conte
 		if n == nil {
 			return false
 		}
-		return nonAtomicNodes[n.Name]
+		return nonAtomicNodes[n.Name] && isNodeNotBeingDeleted(n)
 	})
 	if err != nil {
 		return pods, err
@@ -414,6 +444,35 @@ func (p *MinCapacityPodListProcessor) nodeCCC(node *apiv1.Node) string {
 		return ""
 	}
 	return name
+}
+
+// nodeIsBlockedFromScaleDown reports whether the node is blocked from scale-down,
+// either via the standard scale-down-disabled annotation or by carrying any of
+// the configured scale-down-blocking labels (e.g. the TPU slice label) with a
+// non-empty value.
+//
+// TODO(b/560039714): this is a best-effort approximation of the real scale-down
+// pipeline, not a query against it. It only knows about the two criteria listed
+// above, while scale-down can be blocked for many other reasons (PDBs,
+// non-evictable pods, unreplicated pods, other ScaleDownSetProcessors, ...).
+// Because minCapacity pods are placed based on this approximation and are
+// themselves scale-down blocking, an out-of-date approximation can prevent or
+// delay an otherwise-possible atomic scale-down. See the bug for the possible
+// designs (import the real logic vs. make scale-down able to relocate injected
+// pods vs. a non-pod-based mechanism for atomic node groups).
+func (p *MinCapacityPodListProcessor) nodeIsBlockedFromScaleDown(node *apiv1.Node) bool {
+	if node == nil {
+		return false
+	}
+	if eligibility.HasNoScaleDownAnnotation(node) {
+		return true
+	}
+	for _, l := range p.blockingLabels {
+		if node.Labels[l] != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // groupTargetsAnyRemainingCCC reports whether the group has at least one node
@@ -498,7 +557,7 @@ func computeSaturatedNodeCounts(nodeInfos []*framework.NodeInfo) (map[string]map
 
 	for _, ni := range nodeInfos {
 		node := ni.Node()
-		if node == nil {
+		if !isNodeNotBeingDeleted(node) {
 			continue
 		}
 		ccName := node.Labels[labels.ComputeClassLabel]
@@ -549,4 +608,17 @@ func isNodeSaturated(nodeInfo *framework.NodeInfo) bool {
 	limit := allocatablePods.Value()
 	numPods := int64(len(nodeInfo.Pods()))
 	return numPods >= limit
+}
+
+// isNodeNotBeingDeleted returns true if a node is acceptable for min capacity fake pods.
+// Nodes that are being deleted or prepared for deletion (e.g. by defrag hard taint or CA scale-down) are not acceptable.
+func isNodeNotBeingDeleted(node *apiv1.Node) bool {
+	if node == nil || node.DeletionTimestamp != nil {
+		return false
+	}
+	if taints.HasToBeDeletedTaint(node) ||
+		taints.HasTaint(node, defrag.HardTaint) {
+		return false
+	}
+	return true
 }

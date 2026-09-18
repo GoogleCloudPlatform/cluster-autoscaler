@@ -31,8 +31,10 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers"
@@ -73,7 +75,7 @@ func withWorkloadSeparation(k, v string) func(*apiv1.Pod) {
 		if pod.Spec.NodeSelector == nil {
 			pod.Spec.NodeSelector = make(map[string]string)
 		}
-		pod.Spec.NodeSelector[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+		pod.Spec.NodeSelector[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 
 	}
 }
@@ -298,7 +300,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withBufferAssignmentMutator("ns/buffer")),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-2")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-2")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer-2",
@@ -316,7 +318,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withBufferAssignmentMutator("ns/buffer")),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -336,8 +338,8 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				create8CPUTestNode(t, "node-2", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer-2")),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-1")),
-				test.BuildTestPod("csn-p2", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-2")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-1")),
+				test.BuildTestPod("csn-p2", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-2")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer-1",
@@ -358,7 +360,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer")),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 7000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 7000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 				test.BuildTestPod("csn-p2", 7000, 1000),
 			},
 			csnPodsBuffersNames: map[string]string{
@@ -379,9 +381,9 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				create8CPUTestNode(t, "node-2", csn.NodeStateChilling, withLabelsMutator(map[string]string{"nodeId": "node-2"})),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-1"}), withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-1")),
-				test.BuildTestPod("csn-p2", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-1"}), withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-1")),
-				test.BuildTestPod("csn-p3", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-2"}), withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer-2")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-1"}), withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-1")),
+				test.BuildTestPod("csn-p2", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-1"}), withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-1")),
+				test.BuildTestPod("csn-p3", 1000, 1000, withNodeSelector(map[string]string{"nodeId": "node-2"}), withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer-2")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer-1",
@@ -434,7 +436,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -464,7 +466,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -496,7 +498,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-25*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -521,7 +523,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-23*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -548,7 +550,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-48*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -578,7 +580,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
-				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(csn.BufferAssignmentKey, "ns/buffer")),
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
 			},
 			csnPodsBuffersNames: map[string]string{
 				"csn-p1": "buffer",
@@ -636,7 +638,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				defaultRefreshFrequency = 24 * time.Hour
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, defaultRefreshFrequency)
+			processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, defaultRefreshFrequency, experiments.NewMockManager())
 			processor.metrics = mockMetrics
 
 			clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
@@ -699,15 +701,15 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 							continue
 						}
 						expectedBufferId := fmt.Sprintf("ns_%s", bufferName)
-						assert.Equal(t, csn.SoftWorkloadSeparationValue, pod.Spec.NodeSelector[csn.SoftWorkloadSeparationKey])
+						assert.Equal(t, metadata.SoftWorkloadSeparationValue, pod.Spec.NodeSelector[metadata.SoftWorkloadSeparationKey])
 						assert.Contains(t, pod.Spec.Tolerations, apiv1.Toleration{
-							Key:    csn.SoftWorkloadSeparationKey,
-							Value:  csn.SoftWorkloadSeparationValue,
+							Key:    metadata.SoftWorkloadSeparationKey,
+							Value:  metadata.SoftWorkloadSeparationValue,
 							Effect: apiv1.TaintEffectPreferNoSchedule,
 						})
 						assert.Contains(t, pod.Spec.Tolerations, apiv1.Toleration{
-							Key:    csn.SuspendedTaintKey,
-							Value:  csn.SuspendedTaintValue,
+							Key:    metadata.SuspendedTaintKey,
+							Value:  metadata.SuspendedTaintValue,
 							Effect: apiv1.TaintEffectNoSchedule,
 						})
 						assert.Equal(t, capacitybufferpodlister.CapacityBufferFakePodAnnotationValue, pod.Annotations[capacitybufferpodlister.CapacityBufferFakePodAnnotationKey])
@@ -718,16 +720,16 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 						assert.Equal(t, bufferName, pod.OwnerReferences[0].Name)
 
 						if _, ok := scheduledPods[pod.Name]; ok {
-							assert.Equal(t, expectedBufferId, pod.Spec.NodeSelector[csn.BufferAssignmentKey])
+							assert.Equal(t, expectedBufferId, pod.Spec.NodeSelector[metadata.BufferAssignmentKey])
 							assert.Contains(t, pod.Spec.Tolerations, apiv1.Toleration{
-								Key:    csn.BufferAssignmentKey,
+								Key:    metadata.BufferAssignmentKey,
 								Value:  expectedBufferId,
 								Effect: apiv1.TaintEffectNoSchedule,
 							})
 						} else {
-							assert.NotEqual(t, expectedBufferId, pod.Spec.NodeSelector[csn.BufferAssignmentKey])
+							assert.NotEqual(t, expectedBufferId, pod.Spec.NodeSelector[metadata.BufferAssignmentKey])
 							assert.NotContains(t, pod.Spec.Tolerations, apiv1.Toleration{
-								Key:    csn.BufferAssignmentKey,
+								Key:    metadata.BufferAssignmentKey,
 								Value:  expectedBufferId,
 								Effect: apiv1.TaintEffectNoSchedule,
 							})
@@ -887,7 +889,7 @@ func TestCSNPodsLifecycleProcess_PackingOnUnassignedNodes(t *testing.T) {
 		bufferRegistry.SetCapacityBuffer(pod.UID, buffer)
 	}
 
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, nil, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	for _, node := range initialNodes {
@@ -950,7 +952,7 @@ func TestCSNPodsLifecycleProcessor_Observer(t *testing.T) {
 	classifier := systempods.NewClassifier([]string{"kube-system"})
 	observer := cbmetrics.NewFakePodStateObserver(classifier, mockObserver, bufferRegistry, fakeClock, false)
 
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, observer, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, csnPodInjectionProcessor, observer, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 	node1 := create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer1"))
@@ -1049,7 +1051,7 @@ func TestCSNPodsLifecycleProcess_ScheduleAndMarkSuspendableNodesError(t *testing
 	mockNodeController := nodecontrollertesting.NewMockCSNNodeController(csnNodes)
 	bufferRegistry := fakepods.NewRegistry(nil)
 	mockMetrics := &mockCSNMetrics{}
-	processor := NewCSNPodsLifecycleProcessor(mockNodeController, nil, nil, bufferRegistry, 24*time.Hour)
+	processor := NewCSNPodsLifecycleProcessor(mockNodeController, nil, nil, bufferRegistry, 24*time.Hour, experiments.NewMockManager())
 	processor.metrics = mockMetrics
 
 	clusterSnapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())

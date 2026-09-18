@@ -192,7 +192,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 
 	var err error
 
-	p.podStatusAggregator.Unschedulable = append([]*apiv1.Pod{}, unschedulablePods...)
+	p.podStatusAggregator.SetUnschedulable(unschedulablePods)
 
 	if p.storageNodeAffinityProcessor != nil {
 		if cp, ok := autoscalingCtx.CloudProvider.(ProcessorsCloudProvider); ok && cp.IsMachineSerenityLabelsEnabled() && cp.IsE4StatefulEnabledInAutopilot() {

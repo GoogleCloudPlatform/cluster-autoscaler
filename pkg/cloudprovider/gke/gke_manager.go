@@ -326,8 +326,6 @@ type GkeManager interface {
 	IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool
 	// IsExtendedFallbacksEnabled returns true if extended fallbacks are enabled.
 	IsExtendedFallbacksEnabled() bool
-	// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-	IsEkSpotEnabled() bool
 	// GetNodesScaleDownAllowedFromCache retrieves the scale-down information for nodes from the cache.
 	GetNodesScaleDownAllowedFromCache([]string) map[string]bool
 	// UpdateNodesScaleDownAllowedCache updates the scale-down information for nodes in the cache.
@@ -368,6 +366,8 @@ type GkeManager interface {
 	PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool)
 	// ClearRecommendations removes all tracked recommendations.
 	ClearRecommendations()
+	// GetGeneralPurposeMachineFamilies returns the list of machine families enabled for general purpose workloads.
+	GetGeneralPurposeMachineFamilies() []string
 }
 
 type ScaleUpTimeProvider interface {
@@ -483,6 +483,7 @@ type gkeManagerImpl struct {
 	autoprovisioningNodePoolDefaults *gke_api_beta.AutoprovisioningNodePoolDefaults
 	nodePoolDefaults                 *gke_api_beta.NodePoolDefaults
 	napDefaultMachineTypeFamily      machinetypes.MachineFamily
+	generalPurposeMachineFamilies    []string
 	templates                        *GkeTemplateBuilder
 	interrupt                        chan struct{}
 	client                           *http.Client
@@ -508,7 +509,6 @@ type gkeManagerImpl struct {
 
 	autoscalingOptsProvider             AutoscalingOptionsProvider
 	autoprovisioningEligibility         AutoprovisioningEligibility
-	ekSpotEnabledCache                  ekvm_provider_interfaces.ExperimentFlagCache[bool]
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
 	lookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
 	optsTracker                         *optstracking.OptionsTracker
@@ -556,6 +556,7 @@ type GkeManagerOptions struct {
 	enableUserAnyZoneSelection        bool
 	MachineSerenityLabelsEnabled      bool
 	DefaultReservedResourcesV2Enabled bool
+	generalPurposeMachineFamilies     []string
 }
 
 // CreateGkeManager constructs GkeManager object.
@@ -577,7 +578,6 @@ func CreateGkeManager(
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	autoscalingOptsProvider AutoscalingOptionsProvider,
 	autoprovisioningEligibility AutoprovisioningEligibility,
-	ekSpotEnabledCache ekvm_provider_interfaces.ExperimentFlagCache[bool],
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider,
 	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
 	draResourcePredictor *dynamicresources.ResourcePredictor,
@@ -629,10 +629,10 @@ func CreateGkeManager(
 		matcher:                             matcher,
 		domainUrl:                           domainUrl,
 		allowlistedSystemLabelsMatcher:      managerOptions.allowlistedSystemLabelsMatcher,
+		generalPurposeMachineFamilies:       managerOptions.generalPurposeMachineFamilies,
 		clusterLocationsObserver:            clusterLocationsObserver,
 		localSSDDiskSizeProvider:            dynamicLocalSSDDiskSizeProvider,
 		autoscalingOptsProvider:             autoscalingOptsProvider,
-		ekSpotEnabledCache:                  ekSpotEnabledCache,
 		autoprovisioningEligibility:         autoprovisioningEligibility,
 		resizableVmAutoprovisioningProvider: resizableVmAutoprovisioningProvider,
 		lookaheadBufferStrategyProvider:     lookaheadBufferStrategyProvider,
@@ -1911,9 +1911,6 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	m.InvalidateNodesScaleDownAllowedCache()
 	m.cache.InvalidateCapacityCheckWaitTimes()
 
-	// TODO(b/449919936): Cleanup after EK spot enabled suppoerted experiment is over.
-	m.ekSpotEnabledCache.RefreshValue()
-
 	m.refreshResizableVmEdpEnabled()
 
 	// TODO(b/348360895): Cleanup after EK experiment is over.
@@ -2203,6 +2200,11 @@ func (m *gkeManagerImpl) GetResourceLimiter(n NodeGroupFromNode) (*cloudprovider
 // GetAutoprovisioningDefaultFamily returns the default machine family used for autoprovisioned node pools.
 func (m *gkeManagerImpl) GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily {
 	return m.napDefaultMachineTypeFamily
+}
+
+// GetGeneralPurposeMachineFamilies returns the list of machine families enabled for general purpose workloads.
+func (m *gkeManagerImpl) GetGeneralPurposeMachineFamilies() []string {
+	return m.generalPurposeMachineFamilies
 }
 
 // Return information about EK launch phase and source and if it is disabled by Cluster Proto
@@ -2958,11 +2960,6 @@ func (m *gkeManagerImpl) IsResizableVmEdpEnabled() bool {
 // ResizingEnabled checks if resizing is enabled for the given machine family.
 func (m *gkeManagerImpl) ResizingEnabled(machineFamily string) bool {
 	return m.resizableVmAutoprovisioningProvider.ResizingEnabled(machineFamily)
-}
-
-// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-func (m *gkeManagerImpl) IsEkSpotEnabled() bool {
-	return m.ekSpotEnabledCache.Get()
 }
 
 // GetNodesScaleDownAllowedFromCache retrieves the scale-down information for nodes from the cache.

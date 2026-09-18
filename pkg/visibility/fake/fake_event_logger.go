@@ -82,3 +82,21 @@ func (l *EventLogger) NoScaleUpEvents() []*vispb.NoScaleUpData {
 	}
 	return res
 }
+
+// NoScaleDownEvents returns all NoScaleDownData payloads from the recorded events.
+func (l *EventLogger) NoScaleDownEvents() []*vispb.NoScaleDownData {
+	events := l.Events()
+	var res []*vispb.NoScaleDownData
+	for _, event := range events {
+		noDecisionStatus := event.GetNoDecisionStatus()
+		if noDecisionStatus == nil {
+			continue
+		}
+		noScaleDown := noDecisionStatus.GetNoScaleDown()
+		if noScaleDown == nil {
+			continue
+		}
+		res = append(res, noScaleDown)
+	}
+	return res
+}

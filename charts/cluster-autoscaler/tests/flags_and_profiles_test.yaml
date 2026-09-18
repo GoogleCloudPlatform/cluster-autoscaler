@@ -1,0 +1,103 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test Autoscaler Flags and Profiles Generation
+templates:
+  - deployment.yaml
+tests:
+  - it: should include default profile flags and core flags
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --v=4
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --address=:8085
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cloud-provider=gke
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scale-down-delay-after-delete=10s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --daemonset-eviction-for-empty-nodes=true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --regional=true
+
+  - it: should apply optimizeUtilization profile overrides
+    set:
+      config.autoscalingProfile: optimizeUtilization
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scale-down-delay-after-delete=5s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scale-down-unneeded-time=1m
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scan-interval=5s
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scale-down-utilization-threshold=0.85
+
+  - it: should correctly generate cluster identity
+    set:
+      cloudConfig: "some-config"
+      cluster:
+        name: test-gke-cluster
+        hash: 1a2b3c4d5e
+        projectNumber: "987654321098"
+        location: us-central1
+        regional: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-name=test-gke-cluster
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-hash=1a2b3c4d5e
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --project-number=987654321098
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --location=us-central1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --regional=false
+
+  - it: should support multi-value slice flags and extraArguments
+    set:
+      config.flags.custom-multi-flag:
+        - item1
+        - item2
+      config.extraArguments:
+        - --custom-extra-flag=value
+        - --dry-run
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --custom-multi-flag=item1
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --custom-multi-flag=item2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --custom-extra-flag=value
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --dry-run

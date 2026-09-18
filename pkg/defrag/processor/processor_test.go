@@ -30,8 +30,10 @@ import (
 	v1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	crdtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
+	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
 	. "k8s.io/utils/clock/testing"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
@@ -106,7 +108,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			name: "candidate without nodes is removed",
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -137,14 +139,14 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n0", "n1", "n2", "n3", "n4", "n5", "n6", "m1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n0", "n1", "n2", "n3", "n4", "n5", "n6", "m1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
 			scaleDownTimes: []*time.Time{nil},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -170,7 +172,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -178,7 +180,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			minNodeGroupSize: 2,
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -204,7 +206,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n0", "n3", "n4", "n5", "n6", "m1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n0", "n3", "n4", "n5", "n6", "m1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -225,14 +227,14 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
 			scaleDownTimes: []*time.Time{&timeNow},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -246,13 +248,192 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 		},
 		{
+			name: "keep atomic candidate undergoing scale-down when partially deleted",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1): {},
+				buildReadyNode("n3", 1000, 1): {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3", "n4"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			scaleDownTimes: []*time.Time{&timeNow},
+			wantCandidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n3"},
+				neverValidPlugin:  {"n1", "n3"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "keep atomic candidate undergoing scale-down when node is unschedulable (ongoing deletion)",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1):         {},
+				buildUnschedulableNode("n2", 1000, 1): {},
+				buildReadyNode("n3", 1000, 1):         {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			scaleDownTimes: []*time.Time{&timeNow},
+			wantCandidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n2", "n3"},
+				neverValidPlugin:  {"n1", "n2", "n3"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "remove atomic candidate undergoing scale-down if a node was deleted and surviving node violates min group size",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1): {},
+				buildReadyNode("n3", 1000, 1): {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			minNodeGroupSize: 1,
+			scaleDownTimes:   []*time.Time{&timeNow},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n3"},
+				neverValidPlugin:  {"n1", "n3"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "remove atomic candidate undergoing scale-down if a node is ongoing deletion and surviving node violates min group size",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1):         {},
+				buildUnschedulableNode("n2", 1000, 1): {},
+				buildReadyNode("n3", 1000, 1):         {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			minNodeGroupSize: 2,
+			scaleDownTimes:   []*time.Time{&timeNow},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n2", "n3"},
+				neverValidPlugin:  {"n1", "n2", "n3"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "keep atomic candidate if some nodes are deleted before scale-down",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1): {},
+				buildReadyNode("n3", 1000, 1): {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			scaleDownTimes: []*time.Time{nil},
+			wantCandidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n3"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n3"},
+				neverValidPlugin:  {"n1", "n3"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "remove atomic candidate if it loses nodes due to invalidation before scale-down",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1): {},
+				buildReadyNode("n2", 1000, 1): {
+					test.BuildScheduledTestPod("p1", 100, 1, "n2"),
+				},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			scaleDownTimes: []*time.Time{nil},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n2"},
+				neverValidPlugin:  {"n1", "n2"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
+			name: "remove atomic candidate if it loses nodes due to min group size violation before scale-down",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 1): {},
+				buildReadyNode("n2", 1000, 1): {},
+			},
+			candidateInfos: []*candidateInfo{
+				{
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+					creationTime: timeNow,
+				},
+			},
+			minNodeGroupSize: 1,
+			scaleDownTimes:   []*time.Time{nil},
+			wantBackoffFilteredNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {"n1", "n2"},
+				neverValidPlugin:  {"n1", "n2"},
+			},
+			wantBackoffedNodes: map[defrag.Plugin][]string{
+				alwaysValidPlugin: {},
+				neverValidPlugin:  {},
+			},
+		},
+		{
 			name: "remove candidate undergoing scale-down over scale-down timeout",
 			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
 				buildReadyNode("n1", 1000, 1): {},
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -273,7 +454,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 			},
@@ -294,14 +475,14 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 			},
 			scaleDownTimes: []*time.Time{&timeNow},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 			},
@@ -321,7 +502,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 			},
@@ -342,7 +523,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					scaleUpNoOptions: true,
 				},
 			},
@@ -363,7 +544,7 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: neverValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: neverValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -407,19 +588,19 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin}, // Disruptions for big-pdb within limit
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin}, // Disruptions for big-pdb within limit
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n2"}, Plugin: alwaysValidPlugin}, // Disruptions for small-pdb exceeded
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n2"}, Plugin: alwaysValidPlugin}, // Disruptions for small-pdb exceeded
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n3", "n4", "n5"}, Plugin: alwaysValidPlugin}, // n3 exceeds disruptions for small-pdb, n4 and n5 with >0 remaining disruptions for big-pdb
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n3", "n4", "n5"}, Plugin: alwaysValidPlugin}, // n3 exceeds disruptions for small-pdb, n4 and n5 with >0 remaining disruptions for big-pdb
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n6"}, Plugin: alwaysValidPlugin}, // Remaining disruptions for big-pdb exceeded
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n6"}, Plugin: alwaysValidPlugin}, // Remaining disruptions for big-pdb exceeded
 					creationTime: timeNow,
 				},
 			},
@@ -430,11 +611,11 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n4", "n5"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n4", "n5"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -457,9 +638,9 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: false,
 						Nodes:  []string{"n1", "n2", "n3", "n4"},
-						Mode:   defrag.Partial,
+						Mode:   defrag.CreateBeforeDelete,
 						Plugin: alwaysValidPlugin,
 					},
 					creationTime: timeNow,
@@ -472,9 +653,9 @@ func TestCleanUpCandidates(t *testing.T) {
 			scaleDownTimes: []*time.Time{nil},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate: &defrag.Candidate{
+					candidate: &defrag.Candidate{IsAtomic: false,
 						Nodes:  []string{"n2", "n3", "n1", "n4"},
-						Mode:   defrag.Partial,
+						Mode:   defrag.CreateBeforeDelete,
 						Plugin: alwaysValidPlugin,
 					},
 					creationTime: timeNow,
@@ -516,43 +697,43 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n0", "n1", "n2", "n3", "n4", "n5", "m1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n0", "n1", "n2", "n3", "n4", "n5", "m1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n0", "n2", "n3", "n4", "n5", "m1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n0", "n2", "n3", "n4", "n5", "m1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n6"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n6"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n7"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n7"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n8"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n8"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n9"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n9"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n10"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n10"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"n11"}, Plugin: alwaysValidPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n11"}, Plugin: alwaysValidPlugin},
 					scaleUpNoOptions: true,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n12"}, Plugin: neverValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n12"}, Plugin: neverValidPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -570,15 +751,15 @@ func TestCleanUpCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: false, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n6"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n6"}, Plugin: alwaysValidPlugin},
 					creationTime: timeNow,
 				},
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"n9"}, Plugin: alwaysValidPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n9"}, Plugin: alwaysValidPlugin},
 					creationTime: overScaleUpTimeout,
 				},
 			},
@@ -652,6 +833,235 @@ func TestCleanUpCandidates(t *testing.T) {
 	}
 }
 
+func TestCleanUpCandidatesMaxDisruptionPreservesPendingCandidate(t *testing.T) {
+	alwaysValidPlugin := &fakePlugin{
+		backoffDuration: 12 * time.Minute,
+	}
+
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ng1_nodes := buildNodeGroup(provider, "ng1", 0, 3)
+
+	crd1 := crdtest.NewTestCrd(
+		crdtest.WithName("test-crd1"),
+		crdtest.WithLabel(ccc.CrdType),
+		crdtest.WithMaxNodeDisruption(ptrInt32(2)),
+	)
+	testLister := listertest.NewMockCrdListerWithLabel([]crdtest.CRD{crd1}, ccc.CrdType)
+	customLister := &testMaxDisruptionLister{
+		Lister:  testLister,
+		crdName: "test-crd1",
+		crd:     crd1,
+	}
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	for _, node := range ng1_nodes {
+		test.SetNodeReadyState(node, true, time.Now())
+		node.Spec.ProviderID = fmt.Sprintf("test://%s", node.Name)
+		node.Labels = map[string]string{ccc.CrdType: "test-crd1"}
+		assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+	}
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Config:                  Config{ScaleUpTimeout: 10 * time.Minute, ScaleDownTimeout: 5 * time.Minute},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+		CcLister:                customLister,
+	})
+
+	// Actuator has 1 deletion in progress for ng1, so disruption budget remaining is 2 - 1 = 1
+	scaleDownActuator := &mockScaleDownActuator{}
+	scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{
+		deletionsCountsByGroup: map[string]int{"ng1": 1},
+	})
+
+	candidate := &defrag.Candidate{
+		Nodes:  []string{ng1_nodes[0].Name},
+		Plugin: alwaysValidPlugin,
+		Mode:   defrag.CreateBeforeDelete,
+	}
+	processor.candidateInfos = []*candidateInfo{
+		{
+			candidate:    candidate,
+			creationTime: time.Now(),
+		},
+	}
+	processor.ctx = &cacontext.AutoscalingContext{
+		ClusterSnapshot:     snapshot,
+		RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+		CloudProvider:       provider,
+		ScaleDownActuator:   scaleDownActuator,
+	}
+
+	nodeFilter, err := processor.nodeFilterFactory.NewDefragNodeFilter(processor.ctx)
+	assert.NoError(t, err)
+
+	// Disruption tracker initially has 1 budget left
+	budget, exists := nodeFilter.disruptionTracker.Budget("test-crd1")
+	assert.True(t, exists)
+	assert.Equal(t, 1, budget)
+
+	// cleanUpCandidates should preserve the pending candidate (!isScaledDown)
+	// and reserve its budget without modifying candidate.Nodes or backing off
+	assert.NoError(t, processor.cleanUpCandidates(nodeFilter))
+
+	assert.Len(t, processor.candidateInfos, 1)
+	assert.Equal(t, []string{ng1_nodes[0].Name}, processor.candidateInfos[0].candidate.Nodes)
+	// Budget is reserved (decremented from 1 to 0)
+	budget, exists = nodeFilter.disruptionTracker.Budget("test-crd1")
+	assert.True(t, exists)
+	assert.Equal(t, 0, budget)
+
+	// Backoff was NOT applied
+	availableNodes, backedOffNodes := processor.backoff.splitNodesBasedOnBackoff(alwaysValidPlugin, []string{ng1_nodes[0].Name})
+	assert.Equal(t, []string{ng1_nodes[0].Name}, availableNodes)
+	assert.Empty(t, backedOffNodes)
+}
+
+func TestCleanUpCandidatesMaxDisruptionNoLeakOnCandidateRemoval(t *testing.T) {
+	alwaysValidPlugin := &fakePlugin{
+		backoffDuration: 12 * time.Minute,
+	}
+
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ng1_nodes := buildNodeGroup(provider, "ng1", 0, 3)
+
+	crd1 := crdtest.NewTestCrd(
+		crdtest.WithName("test-crd1"),
+		crdtest.WithLabel(ccc.CrdType),
+		crdtest.WithMaxNodeDisruption(ptrInt32(2)),
+	)
+	testLister := listertest.NewMockCrdListerWithLabel([]crdtest.CRD{crd1}, ccc.CrdType)
+	customLister := &testMaxDisruptionLister{
+		Lister:  testLister,
+		crdName: "test-crd1",
+		crd:     crd1,
+	}
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	for _, node := range ng1_nodes {
+		test.SetNodeReadyState(node, true, time.Now())
+		node.Spec.ProviderID = fmt.Sprintf("test://%s", node.Name)
+		node.Labels = map[string]string{ccc.CrdType: "test-crd1"}
+		assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+	}
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Config:                  Config{ScaleUpTimeout: 10 * time.Minute, ScaleDownTimeout: 5 * time.Minute},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+		CcLister:                customLister,
+	})
+
+	scaleDownActuator := &mockScaleDownActuator{}
+	scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+
+	// Candidate timed out on scale up, so shouldRemoveCandidate will remove it
+	candidate := &defrag.Candidate{
+		Nodes:  []string{ng1_nodes[0].Name},
+		Plugin: alwaysValidPlugin,
+		Mode:   defrag.CreateBeforeDelete,
+	}
+	processor.candidateInfos = []*candidateInfo{
+		{
+			candidate:    candidate,
+			creationTime: time.Now().Add(-20 * time.Minute), // exceeded ScaleUpTimeout
+		},
+	}
+	processor.ctx = &cacontext.AutoscalingContext{
+		ClusterSnapshot:     snapshot,
+		RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+		CloudProvider:       provider,
+		ScaleDownActuator:   scaleDownActuator,
+	}
+
+	nodeFilter, err := processor.nodeFilterFactory.NewDefragNodeFilter(processor.ctx)
+	assert.NoError(t, err)
+
+	budget, exists := nodeFilter.disruptionTracker.Budget("test-crd1")
+	assert.True(t, exists)
+	assert.Equal(t, 2, budget)
+
+	// Candidate is removed, budget must NOT be leaked/consumed
+	assert.NoError(t, processor.cleanUpCandidates(nodeFilter))
+
+	assert.Empty(t, processor.candidateInfos)
+	// Disruption budget remains 2 (not leaked!)
+	budget, exists = nodeFilter.disruptionTracker.Budget("test-crd1")
+	assert.True(t, exists)
+	assert.Equal(t, 2, budget)
+}
+
+func TestCleanUpCandidatesAtomicCandidateDroppedIfNodeStripped(t *testing.T) {
+	alwaysValidPlugin := &fakePlugin{
+		backoffDuration: 12 * time.Minute,
+	}
+
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	// ng1 has size 2 and MinSize 2, so scaling down any node will violate min size!
+	provider.AddNodeGroup("ng1", 2, 1000, 2)
+	node1 := test.BuildTestNode("n1", 1000, 10)
+	node2 := test.BuildTestNode("n2", 1000, 10)
+	test.SetNodeReadyState(node1, true, time.Now())
+	test.SetNodeReadyState(node2, true, time.Now())
+	provider.AddNode("ng1", node1)
+	provider.AddNode("ng1", node2)
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node1)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node2)))
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Config:                  Config{ScaleUpTimeout: 10 * time.Minute, ScaleDownTimeout: 5 * time.Minute},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+	})
+
+	scaleDownActuator := &mockScaleDownActuator{}
+	scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+
+	candidate := &defrag.Candidate{
+		Nodes:    []string{"n1", "n2"},
+		Plugin:   alwaysValidPlugin,
+		Mode:     defrag.CreateBeforeDelete,
+		IsAtomic: true,
+	}
+	processor.candidateInfos = []*candidateInfo{
+		{
+			candidate:    candidate,
+			creationTime: time.Now(),
+		},
+	}
+	processor.ctx = &cacontext.AutoscalingContext{
+		ClusterSnapshot:     snapshot,
+		RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+		CloudProvider:       provider,
+		ScaleDownActuator:   scaleDownActuator,
+	}
+
+	nodeFilter, err := processor.nodeFilterFactory.NewDefragNodeFilter(processor.ctx)
+	assert.NoError(t, err)
+
+	// Since minSize is reached, filterNodesViolatingMinSize strips nodes,
+	// and because IsAtomic is true, the candidate should be invalidated and removed
+	assert.NoError(t, processor.cleanUpCandidates(nodeFilter))
+	assert.Empty(t, processor.candidateInfos)
+}
+
 func TestShouldRemoveCandidate(t *testing.T) {
 	alwaysValidPlugin := &mockPlugin{}
 	alwaysValidPlugin.On("IsCandidateValid", mock.Anything, mock.Anything).Return(true)
@@ -679,7 +1089,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate with some nodes is not removed",
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime: timeNow,
 			},
 			wantShouldRemove: false,
@@ -687,7 +1097,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate without nodes is removed",
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{}, Plugin: alwaysValidPlugin},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{}, Plugin: alwaysValidPlugin},
 				creationTime: timeNow,
 			},
 			wantShouldRemove: true,
@@ -696,7 +1106,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate over scale up timeout is removed",
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime: overScaleUpTimeout,
 			},
 			wantShouldRemove: true,
@@ -705,7 +1115,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate without scale up options is removed",
 			candidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -715,7 +1125,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate without scale up options is not removed if it is waiting for upcoming nodes",
 			candidateInfo: &candidateInfo{
-				candidate:         &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime:      timeNow,
 				scaleUpNoOptions:  true,
 				waitingForScaleUp: true,
@@ -725,7 +1135,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate for resizes without scale up options not removed",
 			candidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: resizesOnlyPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: resizesOnlyPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -734,7 +1144,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "no scale up options, waiting for scale down delay, not removed",
 			candidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 				defragPossibleMap: map[string]time.Time{
@@ -746,7 +1156,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "no scale up options, node with scale down delay no longer in the candidate, removed",
 			candidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 				defragPossibleMap: map[string]time.Time{
@@ -759,7 +1169,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "scaled down candidate with some nodes is not removed",
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime: timeNow,
 			},
 			scaleDownTime:    &timeNow,
@@ -768,7 +1178,7 @@ func TestShouldRemoveCandidate(t *testing.T) {
 		{
 			name: "candidate over scale down timeout is removed",
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2"}, Plugin: alwaysValidPlugin},
 				creationTime: timeNow,
 			},
 			scaleDownTime:    &overScaleDownTimeout,
@@ -820,14 +1230,17 @@ func TestProcessCandidates(t *testing.T) {
 	specialPlugin := mockPluginBuilder{
 		targetNodeName: "special",
 		mode:           defrag.CreateBeforeDelete,
+		isAtomic:       true,
 	}.build()
 	otherPlugin := mockPluginBuilder{
 		targetNodeName: "other",
 		mode:           defrag.CreateBeforeDelete,
+		isAtomic:       true,
 	}.build()
 	deletePlugin := mockPluginBuilder{
 		targetNodeName: "delete",
 		mode:           defrag.DeleteBeforeCreate,
+		isAtomic:       true,
 	}.build()
 
 	testCases := []struct {
@@ -862,13 +1275,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -887,13 +1300,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -912,7 +1325,7 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime: timeNow,
 				},
 			},
@@ -932,13 +1345,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -963,7 +1376,7 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
@@ -1003,13 +1416,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1036,19 +1449,19 @@ func TestProcessCandidates(t *testing.T) {
 			wantStartDeletionCallsErrors: []error{nil},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
 				},
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1078,13 +1491,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
@@ -1116,7 +1529,7 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
@@ -1136,7 +1549,7 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:    &defrag.Candidate{Nodes: []string{"old"}},
+					candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}},
 					creationTime: timeNow.Add(-10 * time.Minute),
 				},
 			},
@@ -1148,13 +1561,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"old"}},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}},
 					creationTime:     timeNow.Add(-10 * time.Minute),
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"old"}},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}},
 				creationTime:     timeNow.Add(-10 * time.Minute),
 				scaleUpNoOptions: true,
 			},
@@ -1171,7 +1584,7 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1189,19 +1602,19 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1218,7 +1631,7 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1237,25 +1650,25 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
 				},
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1272,7 +1685,7 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1292,19 +1705,19 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"old"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"old"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
@@ -1324,13 +1737,13 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-20 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1348,13 +1761,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-20 * time.Minute),
 					defragPossible:     false,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1382,19 +1795,19 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"special"}, Plugin: specialPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"special"}, Plugin: specialPlugin},
 					creationTime:       timeNow,
 					defragPossible:     true,
 					defragPossibleTime: timeNow,
 				},
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"other"}, Plugin: otherPlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"other"}, Plugin: otherPlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1419,13 +1832,13 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:        &defrag.Candidate{Nodes: []string{"delete"}, Mode: defrag.DeleteBeforeCreate, Plugin: deletePlugin},
+					candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"delete"}, Mode: defrag.DeleteBeforeCreate, Plugin: deletePlugin},
 					creationTime:     timeNow,
 					scaleUpNoOptions: true,
 				},
 			},
 			wantPickedCandidateInfo: &candidateInfo{
-				candidate:        &defrag.Candidate{Nodes: []string{"delete"}, Mode: defrag.DeleteBeforeCreate, Plugin: deletePlugin},
+				candidate:        &defrag.Candidate{IsAtomic: true, Nodes: []string{"delete"}, Mode: defrag.DeleteBeforeCreate, Plugin: deletePlugin},
 				creationTime:     timeNow,
 				scaleUpNoOptions: true,
 			},
@@ -1443,19 +1856,19 @@ func TestProcessCandidates(t *testing.T) {
 			plugins: []defrag.Plugin{specialPlugin, otherPlugin},
 			candidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n1"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n2"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n2"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-20 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n3"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n3"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-30 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1476,19 +1889,19 @@ func TestProcessCandidates(t *testing.T) {
 			},
 			wantCandidateInfos: []*candidateInfo{
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n1"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-10 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n2"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n2"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-20 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
 				},
 				{
-					candidate:          &defrag.Candidate{Nodes: []string{"n3"}, Plugin: otherPlugin},
+					candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n3"}, Plugin: otherPlugin},
 					creationTime:       timeNow.Add(-30 * time.Minute),
 					defragPossible:     true,
 					defragPossibleTime: timeNow.Add(-2 * time.Minute),
@@ -1656,12 +2069,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1676,12 +2089,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1697,12 +2110,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{pod2, pod3},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1718,12 +2131,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{},
 			wantCandidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow,
@@ -1741,7 +2154,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
@@ -1752,7 +2165,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			wantCandidatePods: []*apiv1.Pod{},
 			wantCandidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
@@ -1769,14 +2182,14 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
 			},
 			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
 			wantCandidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
 			},
@@ -1792,12 +2205,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{pod2, pod3},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1814,12 +2227,12 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1835,7 +2248,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Mode: defrag.DeleteBeforeCreate},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Mode: defrag.DeleteBeforeCreate},
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
@@ -1844,7 +2257,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}, Mode: defrag.DeleteBeforeCreate},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}, Mode: defrag.DeleteBeforeCreate},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1860,12 +2273,12 @@ func TestProcessCandidate(t *testing.T) {
 			allCandidateNodes: []string{"n1"},
 			isScaledDown:      true,
 			candidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantCandidatePods: []*apiv1.Pod{},
 			wantCandidateInfo: &candidateInfo{
-				candidate:    &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime: timeNow,
 			},
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -1881,7 +2294,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			allCandidateNodes: []string{"n1"},
 			candidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
@@ -1892,7 +2305,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			wantStartDeletionError: caerrors.NewAutoscalerError("type", "msg"),
 			wantCandidateInfo: &candidateInfo{
-				candidate:          &defrag.Candidate{Nodes: []string{"n1"}},
+				candidate:          &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 				creationTime:       timeNow,
 				defragPossible:     true,
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
@@ -1914,7 +2327,7 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -1928,7 +2341,7 @@ func TestProcessCandidate(t *testing.T) {
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -1952,7 +2365,7 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 			},
@@ -1960,7 +2373,7 @@ func TestProcessCandidate(t *testing.T) {
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime:      timeNow,
 				waitingForScaleUp: true,
@@ -1984,7 +2397,7 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -1998,7 +2411,7 @@ func TestProcessCandidate(t *testing.T) {
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -2023,7 +2436,7 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2", "n3"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -2039,7 +2452,7 @@ func TestProcessCandidate(t *testing.T) {
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2", "n3"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -2064,14 +2477,14 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 			},
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -2095,7 +2508,7 @@ func TestProcessCandidate(t *testing.T) {
 			candidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 				defragPossibleMap: map[string]time.Time{
@@ -2105,7 +2518,7 @@ func TestProcessCandidate(t *testing.T) {
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
 					Nodes: []string{"n1", "n2"},
-					Mode:  defrag.Partial,
+					Mode:  defrag.CreateBeforeDelete,
 				},
 				creationTime:      timeNow,
 				defragPossibleMap: make(map[string]time.Time),
@@ -2209,10 +2622,12 @@ func TestNewCandidate(t *testing.T) {
 	specialPlugin := mockPluginBuilder{
 		targetNodeName: "special",
 		mode:           defrag.CreateBeforeDelete,
+		isAtomic:       true,
 	}.build()
 	otherPlugin := mockPluginBuilder{
 		targetNodeName: "other",
 		mode:           defrag.CreateBeforeDelete,
+		isAtomic:       true,
 	}.build()
 
 	timeNow := time.Now()
@@ -2222,7 +2637,6 @@ func TestNewCandidate(t *testing.T) {
 		plugins           []defrag.Plugin
 		allNodesWithPods  map[*apiv1.Node][]*apiv1.Pod
 		allCandidateNodes []string
-		partialEnabled    bool
 		minNodeGroupSize  int
 		wantCandidateInfo *candidateInfo
 	}{
@@ -2253,7 +2667,7 @@ func TestNewCandidate(t *testing.T) {
 				buildReadyNode("other", 1000, 1):   {},
 			},
 			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{
+				candidate: &defrag.Candidate{IsAtomic: true,
 					Nodes:  []string{"special"},
 					Plugin: specialPlugin,
 				},
@@ -2266,6 +2680,7 @@ func TestNewCandidate(t *testing.T) {
 				&fakePlugin{
 					targetNodes: []string{"node-1", "node-2"},
 					mode:        defrag.CreateBeforeDelete,
+					isAtomic:    false,
 				},
 			},
 			allNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
@@ -2274,11 +2689,13 @@ func TestNewCandidate(t *testing.T) {
 			},
 			minNodeGroupSize: 1,
 			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{
+				candidate: &defrag.Candidate{IsAtomic: false,
+					Mode:  defrag.CreateBeforeDelete,
 					Nodes: []string{"node-1"},
 					Plugin: &fakePlugin{
 						targetNodes: []string{"node-1", "node-2"},
 						mode:        defrag.CreateBeforeDelete,
+						isAtomic:    false,
 					},
 				},
 				creationTime: timeNow,
@@ -2292,7 +2709,7 @@ func TestNewCandidate(t *testing.T) {
 				buildReadyNode("other", 1000, 1):   {},
 			},
 			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{
+				candidate: &defrag.Candidate{IsAtomic: true,
 					Nodes:  []string{"special"},
 					Plugin: specialPlugin,
 				},
@@ -2307,7 +2724,7 @@ func TestNewCandidate(t *testing.T) {
 				buildReadyNode("other", 1000, 1):   {},
 			},
 			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{
+				candidate: &defrag.Candidate{IsAtomic: true,
 					Nodes:  []string{"other"},
 					Plugin: otherPlugin,
 				},
@@ -2325,50 +2742,27 @@ func TestNewCandidate(t *testing.T) {
 			},
 		},
 		{
-			name: "partial plugin gets reverted to CreateBeforeDelete and yields only one candidate node if partial is not enabled",
-			plugins: []defrag.Plugin{
-				&fakePlugin{
-					targetNodes: []string{"partial-1", "partial-2"},
-					mode:        defrag.Partial,
-				},
-			},
-			allNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
-				buildReadyNode("other", 1000, 1):     {},
-				buildReadyNode("partial-1", 1000, 1): {},
-				buildReadyNode("partial-2", 1000, 1): {},
-			},
-			wantCandidateInfo: &candidateInfo{
-				candidate: &defrag.Candidate{
-					Nodes: []string{"partial-1"},
-					Plugin: &fakePlugin{
-						targetNodes: []string{"partial-1", "partial-2"},
-						mode:        defrag.Partial,
-					},
-					Mode: defrag.CreateBeforeDelete,
-				},
-				creationTime: timeNow,
-			},
-		},
-		{
-			name: "partial plugin produces partial candidate if partial is enabled",
+			name: "partial plugin produces partial candidate",
 			plugins: []defrag.Plugin{
 				&fakePlugin{
 					targetNodes: []string{"partial"},
-					mode:        defrag.Partial,
+					mode:        defrag.CreateBeforeDelete,
+					isAtomic:    false,
 				},
 			},
 			allNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
 				buildReadyNode("partial", 1000, 1): {},
 			},
-			partialEnabled: true,
 			wantCandidateInfo: &candidateInfo{
 				candidate: &defrag.Candidate{
-					Nodes: []string{"partial"},
+					IsAtomic: false,
+					Nodes:    []string{"partial"},
 					Plugin: &fakePlugin{
 						targetNodes: []string{"partial"},
-						mode:        defrag.Partial,
+						mode:        defrag.CreateBeforeDelete,
+						isAtomic:    false,
 					},
-					Mode: defrag.Partial,
+					Mode: defrag.CreateBeforeDelete,
 				},
 				creationTime: timeNow,
 			},
@@ -2392,17 +2786,12 @@ func TestNewCandidate(t *testing.T) {
 			deleteOpts := options.NodeDeleteOptions{}
 			fakeClock := &FakePassiveClock{}
 			fakeClock.SetTime(timeNow)
-			var experimentsManager experiments.Manager
-			if tc.partialEnabled {
-				experimentsManager = experiments.NewMockManager(experiments.EnablePartialDefragFlag)
-			}
 			processor := NewProcessor(Options{
 				ScaleDownNodeProcessor:  allNodesProcessor,
 				DeleteOptions:           deleteOpts,
 				DrainabilityRules:       rules.Default(deleteOpts),
 				Plugins:                 tc.plugins,
 				Clock:                   fakeClock,
-				ExperimentsManager:      experimentsManager,
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
 			scaleDownActuator := &mockScaleDownActuator{}
@@ -2443,6 +2832,7 @@ func TestNewCandidate(t *testing.T) {
 type mockPluginBuilder struct {
 	targetNodeName string
 	mode           defrag.Mode
+	isAtomic       bool
 }
 
 func (b mockPluginBuilder) build() *mockPlugin {
@@ -2458,7 +2848,7 @@ func (b mockPluginBuilder) build() *mockPlugin {
 
 	plugin := &mockPlugin{}
 	plugin.On("NewCandidate", mock.Anything, mock.MatchedBy(containsNode)).
-		Return(&defrag.Candidate{Nodes: []string{b.targetNodeName}, Mode: b.mode})
+		Return(&defrag.Candidate{IsAtomic: b.isAtomic, Nodes: []string{b.targetNodeName}, Mode: b.mode})
 	plugin.On("NewCandidate", mock.Anything, mock.MatchedBy(notContainsNode)).
 		Return(nil)
 	plugin.On("LatestUnfitNodesCount").Return(0)
@@ -2544,7 +2934,7 @@ func TestFilterExpansionOptions(t *testing.T) {
 				Plugins:                 []defrag.Plugin{plugin},
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
-			tc.wantCandidateInfo.candidate = &defrag.Candidate{Plugin: plugin}
+			tc.wantCandidateInfo.candidate = &defrag.Candidate{IsAtomic: true, Plugin: plugin}
 			processor.pickedCandidateInfo = tc.wantCandidateInfo
 			assert.ElementsMatch(t, tc.wantOptions, processor.BestOptions(context.TODO(), tc.options, nil))
 			assert.Equal(t, tc.wantCandidateInfo, processor.pickedCandidateInfo)
@@ -2591,6 +2981,7 @@ func (m *mockPlugin) Type() defrag.PluginType {
 
 type fakePlugin struct {
 	mode            defrag.Mode
+	isAtomic        bool
 	targetNodes     []string
 	validFilter     func(string) bool
 	backoffDuration time.Duration
@@ -2613,7 +3004,7 @@ func (f fakePlugin) NewCandidate(ctx *cacontext.AutoscalingContext, nodeNames []
 			candidateNodes = append(candidateNodes, node)
 		}
 	}
-	return &defrag.Candidate{
+	return &defrag.Candidate{IsAtomic: f.isAtomic,
 		Plugin: f,
 		Nodes:  candidateNodes,
 		Mode:   f.mode,
@@ -2728,43 +3119,6 @@ func TestDefragPickedCandidate(t *testing.T) {
 	}
 }
 
-func TestPartialEnabled(t *testing.T) {
-
-	tests := []struct {
-		name               string
-		experimentsManager experiments.Manager
-		want               bool
-	}{
-		{
-			name:               "experimentsManager is nil",
-			experimentsManager: nil,
-			want:               false,
-		},
-		{
-			name:               "flag disabled",
-			experimentsManager: experiments.NewMockManager(),
-			want:               false,
-		},
-		{
-			name:               "flag enabled",
-			experimentsManager: experiments.NewMockManager(experiments.EnablePartialDefragFlag),
-			want:               true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			p := &Processor{
-				experimentsManager: tc.experimentsManager,
-			}
-			got := p.partialEnabled()
-			if got != tc.want {
-				t.Errorf("partialAllowed() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
 type fakeFairnessEnforcer struct {
 	admit bool
 }
@@ -2777,6 +3131,7 @@ func TestProcessReturnedPods(t *testing.T) {
 	specialPlugin := mockPluginBuilder{
 		targetNodeName: "special",
 		mode:           defrag.CreateBeforeDelete,
+		isAtomic:       true,
 	}.build()
 
 	testCases := []struct {
@@ -2866,5 +3221,84 @@ func TestProcessReturnedPods(t *testing.T) {
 				assert.NotEqual(t, unschedulablePods, returnedPods)
 			}
 		})
+	}
+}
+
+func TestProcessCandidatesMaxDisruptionBudgetReservedAcrossPlugins(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	ng1_nodes := buildNodeGroup(provider, "ng1", 0, 3)
+
+	crd1 := crdtest.NewTestCrd(
+		crdtest.WithName("test-crd1"),
+		crdtest.WithLabel(ccc.CrdType),
+		crdtest.WithMaxNodeDisruption(ptrInt32(1)), // BUDGET IS ONLY 1
+	)
+	testLister := listertest.NewMockCrdListerWithLabel([]crdtest.CRD{crd1}, ccc.CrdType)
+	customLister := &testMaxDisruptionLister{
+		Lister:  testLister,
+		crdName: "test-crd1",
+		crd:     crd1,
+	}
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	client := fake.NewSimpleClientset()
+	for _, node := range ng1_nodes {
+		test.SetNodeReadyState(node, true, time.Now())
+		node.Spec.ProviderID = fmt.Sprintf("test://%s", node.Name)
+		node.Labels = map[string]string{ccc.CrdType: "test-crd1"}
+		assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+		client.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+	}
+
+	// Two plugins. We expect the first to consume the 1 budget, and the second to be filtered out.
+	plugin1 := mockPluginBuilder{
+		targetNodeName: ng1_nodes[0].Name,
+		mode:           defrag.DeleteBeforeCreate, // atomic
+	}.build()
+	plugin2 := mockPluginBuilder{
+		targetNodeName: ng1_nodes[1].Name,
+		mode:           defrag.DeleteBeforeCreate, // atomic
+	}.build()
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Plugins:                 []defrag.Plugin{plugin1, plugin2},
+		Config:                  Config{CandidateLimit: 5},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+		CcLister:                customLister,
+		Clock:                   &FakePassiveClock{},
+	})
+
+	scaleDownActuator := &mockScaleDownActuator{}
+	scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+	// Mock start deletion to return success so it won't error out
+	scaleDownActuator.On("StartDeletion", mock.Anything, mock.Anything).Return(status.ScaleDownNodeDeleteStarted, []*status.ScaleDownNode{}, nil)
+
+	ctx := &cacontext.AutoscalingContext{
+		ClusterSnapshot:     snapshot,
+		CloudProvider:       provider,
+		ScaleDownActuator:   scaleDownActuator,
+		RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+		AutoscalingKubeClients: cacontext.AutoscalingKubeClients{
+			ClientSet: client,
+		},
+	}
+
+	// Process will loop through plugins until it finds a picked candidate or exhausts CandidateLimit.
+	// Since node 1 has no pods, processCandidateAtomic will succeed and NOT return unschedulable pods.
+	// So it won't be "picked", and the loop will continue to try plugin 2.
+	_, err := processor.Process(context.TODO(), ctx, nil)
+	assert.NoError(t, err)
+
+	// We expect candidateInfos to have ONLY 1 candidate, because plugin2's candidate
+	// should be rejected by filterNodesViolatingMaxDisruption since plugin1 reserved the budget.
+	assert.Equal(t, 1, len(processor.candidateInfos))
+	if len(processor.candidateInfos) > 0 {
+		assert.Equal(t, []string{ng1_nodes[0].Name}, processor.candidateInfos[0].candidate.Nodes)
 	}
 }

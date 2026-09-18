@@ -134,7 +134,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 		return nil
 	}
 	klog.V(4).Infof("Defrag %s: New candidates: %v", PluginName, candidates)
-	return defrag.NewCandidateWithLimit(candidates, defrag.Partial, p.maxCandidateNodeCount)
+	return defrag.NewPartialCandidateWithLimit(candidates, defrag.CreateBeforeDelete, p.maxCandidateNodeCount)
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {

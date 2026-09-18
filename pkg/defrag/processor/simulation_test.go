@@ -79,7 +79,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 0)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantCandidatePods: &candidatePods{
 				unschedulable: []*apiv1.Pod{pod1, pod2, pod3},
@@ -106,7 +106,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 3)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantCandidatePods: &candidatePods{
 				schedulableOnExisting: []*apiv1.Pod{pod1, pod2, pod3},
@@ -130,7 +130,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 0)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true, "n2": true},
 			wantCandidatePods: &candidatePods{
 				unschedulable: []*apiv1.Pod{pod1, pod2, pod3},
@@ -157,7 +157,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 3)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantCandidatePods: &candidatePods{
 				schedulableOnUpcoming: []*apiv1.Pod{pod1, pod2, pod3},
@@ -185,7 +185,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 2)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true, "n4": true},
 			wantCandidatePods: &candidatePods{
 				schedulableOnExisting: []*apiv1.Pod{pod1},
@@ -217,7 +217,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 2)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			allCandidateNodes: map[string]bool{"n1": true, "n2": true, "n3": true, "n6": true},
 			wantCandidatePods: &candidatePods{
 				schedulableOnExisting: []*apiv1.Pod{pod1},
@@ -245,7 +245,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 0)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 1)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantErr:           true,
 		},
@@ -270,7 +270,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 0)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 2)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantErr:           true,
 		},
@@ -295,7 +295,7 @@ func TestSimulatePodsScheduling(t *testing.T) {
 				snapshot.m.AssertNumberOfCalls(t, "Commit", 1)
 				snapshot.m.AssertNumberOfCalls(t, "StorePodInfo", 2)
 			},
-			candidate:         &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:         &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			allCandidateNodes: map[string]bool{"n1": true},
 			wantErr:           true,
 		},

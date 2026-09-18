@@ -21,7 +21,7 @@ set -o pipefail
 # This script installs protoc (Protocol Buffer Compiler) for the current or specified architecture.
 # It verifies the download using hardcoded SHA256 checksums.
 
-PROTOC_VERSION=${1:-"21.12"}
+PROTOC_VERSION=${1:-"36.1"}
 INSTALL_DIR=${2:-"/usr/local"}
 ARCH_OVERRIDE=${3:-""}
 
@@ -33,11 +33,11 @@ fi
 case "${ARCH}" in
   x86_64|amd64|linux/amd64)
     PROTOC_ARCH="x86_64"
-    PROTOC_SHA256="3a4c1e5f2516c639d3079b1586e703fc7bcfa2136d58bda24d1d54f949c315e8"
+    PROTOC_SHA256="c4bc672d9d49214dc8cafdceadf4df92182d6ca8e3ec65a56b2d7de5602669b4"
     ;;
   aarch64|arm64|linux/arm64)
     PROTOC_ARCH="aarch_64"
-    PROTOC_SHA256="2dd17f75d66a682640b136e31848da9fb2eefe68d55303baf8b32617374f6711"
+    PROTOC_SHA256="237a68856edf1bd28b6204bddd0596c1cf46d298bc29c620012540b2e44c73e7"
     ;;
   *)
     echo "Unsupported architecture: ${ARCH}"

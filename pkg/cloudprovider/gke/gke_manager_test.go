@@ -471,6 +471,7 @@ const managedInstancesResponse2 = `{
   "managedInstances": [
     {
       "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/%s/instances/%s-gdf607aac-9j4g",
+      "name": "%s-gdf607aac-9j4g",
       "id": "1974815323221473983",
       "instanceStatus": "RUNNING",
       "currentAction": "NONE"
@@ -576,7 +577,7 @@ func getManagedInstancesResponse2(zone string) string {
 }
 
 func getManagedInstancesResponse2Named(name, zone string) string {
-	return fmt.Sprintf(managedInstancesResponse2, zone, name)
+	return fmt.Sprintf(managedInstancesResponse2, zone, name, name)
 }
 
 func newTestAutoscalingGceClient(t *testing.T, projectId, url string, waitTimeout, pollInterval time.Duration) gceclient.AutoscalingInternalGceClient {

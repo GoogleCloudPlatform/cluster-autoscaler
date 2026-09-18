@@ -19,6 +19,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/kubernetes/pkg/util/taints"
 )
 
@@ -26,13 +27,6 @@ import (
 type NodeState string
 
 const (
-	SoftWorkloadSeparationKey   string = "buffer.gke.io/standby-capacity-node"
-	SoftWorkloadSeparationValue string = "true"
-	SuspendedTaintKey           string = "buffer.gke.io/standby-capacity-node-suspended"
-	SuspendedTaintValue         string = "true"
-
-	BufferAssignmentKey = "buffer.gke.io/standby-capacity-node-buffer"
-
 	// NodeStateChilling is the state where the node is running but has CSN taint and CSN label.
 	NodeStateChilling NodeState = "CHILLING"
 	// NodeStateConsumed is the state where the node is running and has no CSN taint or CSN label.
@@ -54,14 +48,14 @@ const (
 
 var (
 	SuspendedTaint = apiv1.Taint{
-		Key:    SuspendedTaintKey,
-		Value:  SuspendedTaintValue,
+		Key:    metadata.SuspendedTaintKey,
+		Value:  metadata.SuspendedTaintValue,
 		Effect: apiv1.TaintEffectNoSchedule,
 	}
 
 	SoftWorkloadSeparationTaint = apiv1.Taint{
-		Key:    SoftWorkloadSeparationKey,
-		Value:  SoftWorkloadSeparationValue,
+		Key:    metadata.SoftWorkloadSeparationKey,
+		Value:  metadata.SoftWorkloadSeparationValue,
 		Effect: apiv1.TaintEffectPreferNoSchedule,
 	}
 )
@@ -132,14 +126,14 @@ func addCSNLabel(node *apiv1.Node) {
 	if node.Labels == nil {
 		node.Labels = make(map[string]string)
 	}
-	node.Labels[SoftWorkloadSeparationKey] = SoftWorkloadSeparationValue
+	node.Labels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 }
 
 func removeCSNLabel(node *apiv1.Node) {
 	if node.Labels == nil {
 		return
 	}
-	delete(node.Labels, SoftWorkloadSeparationKey)
+	delete(node.Labels, metadata.SoftWorkloadSeparationKey)
 }
 
 func cordonNode(node *apiv1.Node) {
@@ -200,7 +194,7 @@ func IsCSNNode(node *apiv1.Node) bool {
 	if node.Labels == nil {
 		return false
 	}
-	return node.Labels[SoftWorkloadSeparationKey] == SoftWorkloadSeparationValue
+	return node.Labels[metadata.SoftWorkloadSeparationKey] == metadata.SoftWorkloadSeparationValue
 }
 
 func ClassifyNode(node *apiv1.Node) NodeState {
@@ -225,7 +219,7 @@ func AssignNodeToBufferId(node *apiv1.Node, bufferId string) (*apiv1.Node, error
 	if n.Annotations == nil {
 		n.Annotations = make(map[string]string)
 	}
-	n.Annotations[BufferAssignmentKey] = bufferId
+	n.Annotations[metadata.BufferAssignmentKey] = bufferId
 	return n, nil
 }
 
@@ -238,7 +232,7 @@ func IsAssignedToBuffer(node *apiv1.Node, bufferId string) bool {
 	if node.Annotations == nil {
 		return false
 	}
-	return node.Annotations[BufferAssignmentKey] == bufferId
+	return node.Annotations[metadata.BufferAssignmentKey] == bufferId
 }
 
 // RemoveBufferAssignment modifies the node to remove any mention of assigning a buffer.
@@ -247,7 +241,7 @@ func RemoveBufferAssignment(node *apiv1.Node) {
 		return
 	}
 
-	delete(node.Annotations, BufferAssignmentKey)
+	delete(node.Annotations, metadata.BufferAssignmentKey)
 }
 
 // GetBufferIdFromNode returns the buffer ID assigned to the node if exists, and an empty string otherwise.
@@ -255,7 +249,7 @@ func GetBufferIdFromNode(node *apiv1.Node) string {
 	if node == nil {
 		return ""
 	}
-	return node.Annotations[BufferAssignmentKey]
+	return node.Annotations[metadata.BufferAssignmentKey]
 }
 
 // IsSuspendedNode returns true if the node has the Suspended condition set to True.

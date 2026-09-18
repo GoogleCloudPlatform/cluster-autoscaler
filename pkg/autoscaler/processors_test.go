@@ -15,10 +15,13 @@
 package autoscaler
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 )
@@ -65,6 +68,95 @@ func TestInitCapacityBufferMetricsProcessor(t *testing.T) {
 			} else {
 				assert.Nil(t, processor)
 			}
+		})
+	}
+}
+
+// TestBuildScaleDownSetProcessorsOrdering guards the ordering invariant documented
+// on buildScaleDownSetProcessors: every per-node processor must run before
+// nodes.AtomicResizeFilteringProcessor, and only whole-group processors may run
+// after it. Getting this wrong silently breaks atomicity (a partially filtered
+// atomic group would be drained node by node).
+func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
+	testCases := []struct {
+		name          string
+		options       *internalopts.AutoscalingOptions
+		expectedOrder []string
+	}{
+		{
+			name:    "no optional processors",
+			options: &internalopts.AutoscalingOptions{},
+			expectedOrder: []string{
+				"*processors.TotalMinSizeProcessor",
+				"*nodes.AtomicResizeFilteringProcessor",
+			},
+		},
+		{
+			name: "blocking labels processor runs before the atomic filter",
+			options: &internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					ScaleDownBlockingNodeLabels: []string{labels.TPUSliceLabel},
+				},
+			},
+			expectedOrder: []string{
+				"*processors.TotalMinSizeProcessor",
+				"*scaledown.BlockingLabelsFilteringProcessor",
+				"*nodes.AtomicResizeFilteringProcessor",
+			},
+		},
+		{
+			name: "min capacity processor runs after the atomic filter",
+			options: &internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					EnableComputeClassMinCapacity: true,
+				},
+			},
+			expectedOrder: []string{
+				"*processors.TotalMinSizeProcessor",
+				"*nodes.AtomicResizeFilteringProcessor",
+				"*scaledown.AtomicMinCapacityProcessor",
+			},
+		},
+		{
+			name: "both optional processors sit on the correct side of the atomic filter",
+			options: &internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					ScaleDownBlockingNodeLabels:   []string{labels.TPUSliceLabel},
+					EnableComputeClassMinCapacity: true,
+				},
+			},
+			expectedOrder: []string{
+				"*processors.TotalMinSizeProcessor",
+				"*scaledown.BlockingLabelsFilteringProcessor",
+				"*nodes.AtomicResizeFilteringProcessor",
+				"*scaledown.AtomicMinCapacityProcessor",
+			},
+		},
+		{
+			name: "empty blocking labels do not add the blocking labels processor",
+			options: &internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					ScaleDownBlockingNodeLabels: nil,
+				},
+			},
+			expectedOrder: []string{
+				"*processors.TotalMinSizeProcessor",
+				"*nodes.AtomicResizeFilteringProcessor",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{})
+
+			built := buildScaleDownSetProcessors(nil, tc.options, nil, experimentsManager)
+
+			gotOrder := make([]string, 0, len(built))
+			for _, p := range built {
+				gotOrder = append(gotOrder, reflect.TypeOf(p).String())
+			}
+			assert.Equal(t, tc.expectedOrder, gotOrder)
 		})
 	}
 }

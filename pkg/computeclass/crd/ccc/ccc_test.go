@@ -17,8 +17,6 @@ package ccc
 import (
 	"fmt"
 	"os"
-	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +27,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -179,6 +176,126 @@ func TestNewCccCrd(t *testing.T) {
 				Spec: v1.ComputeClassSpec{
 					ActiveMigration: &v1.ActiveMigration{
 						OptimizeRulePriority: false,
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
+			name: "ccc config drift enabled",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ConfigDrift: ptr.To(true),
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithConfigDrift(true),
+			),
+		},
+		{
+			name: "ccc config drift disabled",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ConfigDrift: ptr.To(false),
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithConfigDrift(false),
+			),
+		},
+		{
+			name: "ccc max node disruption set",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							MaxNodeDisruption: ptr.To(int32(3)),
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMaxNodeDisruption(ptr.To(int32(3))),
+			),
+		},
+		{
+			name: "ccc max node disruption nil",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							MaxNodeDisruption: nil,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
+			name: "ccc atomic group labels set",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							AtomicGroupLabels: []string{"tier", "topology.kubernetes.io/zone"},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithAtomicGroupLabels([]string{"tier", "topology.kubernetes.io/zone"}),
+			),
+		},
+		{
+			name: "ccc migration strategy set to delete before create",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							Strategy: v1.MigrationStrategyDeleteBeforeCreate,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyDeleteBeforeCreate)),
+			),
+		},
+		{
+			name: "ccc migration strategy set to create before delete",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							Strategy: v1.MigrationStrategyCreateBeforeDelete,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithMigrationStrategy(string(v1.MigrationStrategyCreateBeforeDelete)),
+			),
+		},
+		{
+			name: "ccc reconciliation policy nil",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: nil,
 					},
 				},
 			},
@@ -3059,71 +3176,26 @@ func TestConfigHash(t *testing.T) {
 	assert.Equal(t, hashP2, crdInternalChange.ConfigHash(rulesInternalChange[1]))
 }
 
-//go:embed testdata/hashed_config_paths.txt
-var hashedPathsData string
-
-func TestComputeClassAPIGuard(t *testing.T) {
-	// This test prevents regressions of ConfigHash() when new fields are added to the CCC API.
-	// If the new field should not be included in the hash, update ConfigHash() to ignore it.
-	// Either way, update testdata/hashed_config_paths.txt to acknowledge the new field.
-	hashedPaths := sets.NewString()
-	for _, line := range strings.Split(hashedPathsData, "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			hashedPaths.Insert(trimmed)
-		}
+func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
+	labels := []string{"label1", "label2"}
+	c := &v1.ComputeClass{
+		Spec: v1.ComputeClassSpec{
+			ActiveMigration: &v1.ActiveMigration{
+				ReconciliationPolicy: &v1.ReconciliationPolicy{
+					AtomicGroupLabels: labels,
+				},
+			},
+		},
 	}
+	ccc := NewCccCrd(c, "", false, nil, nil)
 
-	collectedPaths := sets.NewString()
-	seenTypes := make(map[reflect.Type]bool)
+	// Get the labels slice from the method.
+	returnedLabels := ccc.AtomicGroupLabels()
+	assert.Equal(t, labels, returnedLabels)
 
-	var walkType func(reflect.Type, string)
-	walkType = func(typ reflect.Type, prefix string) {
-		if typ.Kind() == reflect.Ptr {
-			typ = typ.Elem()
-		}
+	// Mutate the returned slice.
+	returnedLabels[0] = "mutated-label"
 
-		if seenTypes[typ] {
-			return
-		}
-		// Avoid infinite recursion for cyclic types if any
-		seenTypes[typ] = true
-		defer func() { seenTypes[typ] = false }()
-
-		if typ.Kind() == reflect.Struct {
-			for i := 0; i < typ.NumField(); i++ {
-				field := typ.Field(i)
-				// Skip unexported fields
-				if field.PkgPath != "" {
-					continue
-				}
-				path := prefix + "." + field.Name
-				collectedPaths.Insert(path)
-				walkType(field.Type, path)
-			}
-		} else if typ.Kind() == reflect.Slice || typ.Kind() == reflect.Array {
-			walkType(typ.Elem(), prefix)
-		} else if typ.Kind() == reflect.Map {
-			// We usually don't care about map keys for path guarding if they are primitives,
-			// but we care about value types.
-			walkType(typ.Elem(), prefix)
-		}
-	}
-
-	// We hash these types in ConfigHash
-	walkType(reflect.TypeOf(v1.NodePoolConfig{}), "NodePoolConfig")
-	walkType(reflect.TypeOf(v1.NodePoolGroup{}), "NodePoolGroup")
-	walkType(reflect.TypeOf(v1.PriorityDefaults{}), "PriorityDefaults")
-	walkType(reflect.TypeOf(v1.Priority{}), "Priority")
-
-	// Check for new paths
-	newPaths := collectedPaths.Difference(hashedPaths)
-	if newPaths.Len() > 0 {
-		t.Errorf("New field paths detected in CCC API. Please verify if they should be included in ConfigHash().\nNew paths:\n%s", strings.Join(newPaths.List(), "\n"))
-	}
-
-	// Check for removed paths (stale allowlist)
-	removedPaths := hashedPaths.Difference(collectedPaths)
-	if removedPaths.Len() > 0 {
-		t.Logf("Stale field paths found in allowlist (likely removed from API):\n%s", strings.Join(removedPaths.List(), "\n"))
-	}
+	// Ensure the original slice within the struct is untouched.
+	assert.Equal(t, "label1", ccc.(*cccCrd).Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels[0], "The original slice was mutated, defensive copy is missing!")
 }

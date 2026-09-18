@@ -65,9 +65,14 @@ func TestBuildPlugins(t *testing.T) {
 			wantPlugins: []string{"failed-nodes"},
 		},
 		{
+			name:        "nodeconfigdrift plugin only",
+			pluginNames: []string{"nodeconfigdrift"},
+			wantPlugins: []string{"nodeconfigdrift"},
+		},
+		{
 			name:        "all plugins together",
-			pluginNames: []string{"daemonset", "annotation", "nodepool-drain", "high-priority-migration", "resizable-vm-consolidation", "failed-nodes"},
-			wantPlugins: []string{"daemonset", "annotation-delete-before-create", "annotation-partial", "annotation-create-before-delete", "nodepool-drain", "high-priority-migration", "resizable-vm-consolidation", "failed-nodes"},
+			pluginNames: []string{"daemonset", "annotation", "nodepool-drain", "high-priority-migration", "nodeconfigdrift", "resizable-vm-consolidation", "failed-nodes"},
+			wantPlugins: []string{"daemonset", "annotation-delete-before-create", "annotation-partial", "annotation-create-before-delete", "nodepool-drain", "high-priority-migration", "nodeconfigdrift", "resizable-vm-consolidation", "failed-nodes"},
 		},
 		{
 			name:        "unknown plugin only",

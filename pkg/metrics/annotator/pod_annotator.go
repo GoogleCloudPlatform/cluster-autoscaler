@@ -175,7 +175,7 @@ func (a *PodAnnotator) Process(_ context.Context, ctx *ca_context.AutoscalingCon
 			a.annotatePod(a.unhelpablePods[pod.UID])
 		}
 	}
-	a.annotateNoLongerUnhelpable(a.aggregator.Unschedulable)
+	a.annotateNoLongerUnhelpable(a.aggregator.GetUnschedulable())
 	a.clear()
 }
 

@@ -1,179 +1,137 @@
-# cluster-autoscaler
+# Self-Hosted GKE Cluster Autoscaler
 
-![Version: 0.1.0](https://img.shields.io/badge/Version-0.1.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: 1.36.0](https://img.shields.io/badge/AppVersion-1.36.0-informational?style=flat-square)
+This helm chart is focused on cluster autoscaler configurations, it's intentionally kept as generic as possible in order for it to not require any changes for specific use cases
 
-Scales Kubernetes worker nodes within autoscaling pools in GKE.
+> [!WARNING]
+> Deploying self-hosted in a GKE cluster currently will result in race conditions between self-hosted instance and the built-in GKE Cluster Autoscaler. The functionality to disable the built-in GKE Cluster Autoscaler is currently pending.
 
-**Homepage:** <https://github.com/GoogleCloudPlatform/cluster-autoscaler>
+## Managed CRDs installation
 
-## Source Code
+Cluster autoscaler integrates with multiple custom resource definitions both GKE-only and external, in case any of them is not installed or not accessible - cluster autoscaler may function incorrectly. It's recommended to install this component only into GKE cluster in order to have all the dependencies already installed
 
-* <https://github.com/GoogleCloudPlatform/cluster-autoscaler/tree/main>
+### Prerequisites
 
-## Values
+1. GKE cluster **v1.36.0 or higher**: `kubectl version`
+1. Helm **v4.0.0 or higher** [installed](https://helm.sh/docs/using_helm/#installing-helm): `helm version`
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| additionalLabels | object | `{}` |  |
-| affinity | object | `{}` |  |
-| autoscalingProfiles.default.daemonset-eviction-for-empty-nodes | string | `"true"` |  |
-| autoscalingProfiles.default.max-drain-parallelism | string | `"100"` |  |
-| autoscalingProfiles.default.max-scale-down-parallelism | string | `"100"` |  |
-| autoscalingProfiles.default.scale-down-delay-after-delete | string | `"10s"` |  |
-| autoscalingProfiles.optimizeUtilization.max-drain-parallelism | string | `"100"` |  |
-| autoscalingProfiles.optimizeUtilization.max-scale-down-parallelism | string | `"100"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-delay-after-delete | string | `"5s"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-delay-after-failure | string | `"5s"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-gpu-utilization-threshold | string | `"0.85"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-unneeded-time | string | `"1m"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-unready-time | string | `"5m"` |  |
-| autoscalingProfiles.optimizeUtilization.scale-down-utilization-threshold | string | `"0.85"` |  |
-| autoscalingProfiles.optimizeUtilization.scan-interval | string | `"5s"` |  |
-| autoscalingProfiles.optimizeUtilization.unremovable-node-recheck-timeout | string | `"20s"` |  |
-| cloudConfig | string | `""` |  |
-| cluster.hash | string | `""` |  |
-| cluster.location | string | `""` |  |
-| cluster.name | string | `""` |  |
-| cluster.projectNumber | string | `""` |  |
-| cluster.regional | bool | `true` |  |
-| config.autoscalingProfile | string | `"default"` |  |
-| config.envFromConfigMap | string | `""` |  |
-| config.envFromSecret | string | `""` |  |
-| config.extraArguments | list | `[]` |  |
-| config.extraEnv | object | `{}` |  |
-| config.extraEnvFromConfigMaps | object | `{}` |  |
-| config.extraEnvFromSecrets | object | `{}` |  |
-| config.flags.address | string | `":8085"` |  |
-| config.flags.async-node-groups | string | `"true"` |  |
-| config.flags.balance-similar-node-groups | string | `"true"` |  |
-| config.flags.bypassed-scheduler-names | string | `"default-scheduler,gke.io/default-scheduler,gke.io/optimize-utilization-scheduler,gke.io/high-throughput-scheduler,gke.io/first-fit"` |  |
-| config.flags.capacity-buffer-controller-enabled | string | `"true"` |  |
-| config.flags.capacity-buffer-pod-injection-enabled | string | `"true"` |  |
-| config.flags.capacity-quotas-enabled | string | `"true"` |  |
-| config.flags.ccc-node-autoprovisioning-enabled | string | `"true"` |  |
-| config.flags.cloud-provider | string | `"gke"` |  |
-| config.flags.cores-total | string | `"0:12800000"` |  |
-| config.flags.cp-max-parallel-ops | string | `"90"` |  |
-| config.flags.cp-max-queued-ops | string | `"200"` |  |
-| config.flags.debugging-snapshot-enabled | string | `"true"` |  |
-| config.flags.defrag-candidate-node-limit | string | `"20"` |  |
-| config.flags.defrag-plugins | string | `"daemonset,recycling,high-priority-migration,ek-consolidation,failed-nodes"` |  |
-| config.flags.drain-priority-config | string | `"0:3600,1000000000:600"` |  |
-| config.flags.dynamic-node-delete-delay-after-taint-enabled | string | `"true"` |  |
-| config.flags.enable-compact-placement | string | `"true"` |  |
-| config.flags.enable-compute-class-min-capacity | string | `"true"` |  |
-| config.flags.enable-consumable-reservations-puller | string | `"true"` |  |
-| config.flags.enable-defrag | string | `"true"` |  |
-| config.flags.enable-dynamic-resource-allocation | string | `"true"` |  |
-| config.flags.enable-graceful-degradation | string | `"true"` |  |
-| config.flags.enable-node-pool-updates | string | `"true"` |  |
-| config.flags.enable-pending-pods-metric | string | `"true"` |  |
-| config.flags.enable-pending-pods-per-ccc-metric | string | `"true"` |  |
-| config.flags.enable-proactive-scaleup | string | `"true"` |  |
-| config.flags.enable-provisioning-requests | string | `"true"` |  |
-| config.flags.enable-reservation-blocks | string | `"true"` |  |
-| config.flags.enable-reservation-match | string | `"true"` |  |
-| config.flags.enable-tpu-autoprovisioning | string | `"true"` |  |
-| config.flags.enable-user-any-zone-selection | string | `"true"` |  |
-| config.flags.enable-zone-types | string | `"true"` |  |
-| config.flags.expander | string | `"edp-filter,snowflake,mppn-filter,fleet-efficiency,gke-price"` |  |
-| config.flags.expendable-pods-priority-cutoff | string | `"-10"` |  |
-| config.flags.fastpath-binpacking-enabled | string | `"true"` |  |
-| config.flags.force-delete-failed-nodes | string | `"true"` |  |
-| config.flags.force-delete-unregistered-nodes | string | `"true"` |  |
-| config.flags.frequent-loops-enabled | string | `"true"` |  |
-| config.flags.ignore-daemonsets-utilization | string | `"true"` |  |
-| config.flags.ignore-mirror-pods-utilization | string | `"true"` |  |
-| config.flags.kube-client-burst | string | `"100"` |  |
-| config.flags.kube-client-qps | string | `"100"` |  |
-| config.flags.logtostderr | string | `"true"` |  |
-| config.flags.machine-config-enabled | string | `"true"` |  |
-| config.flags.machine-serenity-labels-enabled | string | `"true"` |  |
-| config.flags.max-autoprovisioned-node-group-count | string | `"999999"` |  |
-| config.flags.max-node-skip-eval-time-tracker-enabled | string | `"true"` |  |
-| config.flags.max-nodegroup-binpacking-duration | string | `"7s"` |  |
-| config.flags.max-nodes-per-scaleup | string | `"1000"` |  |
-| config.flags.max-total-unready-percentage | string | `"101"` |  |
-| config.flags.memory-total | string | `"0:256000000"` |  |
-| config.flags.metrics-per-ccc-enabled | string | `"true"` |  |
-| config.flags.nap-default-machine-type-family | string | `"e2"` |  |
-| config.flags.node-delete-delay-after-taint | string | `"1s"` |  |
-| config.flags.node-info-cache-expire-time | string | `"10m"` |  |
-| config.flags.node-removal-latency-tracking-enabled | string | `"true"` |  |
-| config.flags.parallel-scale-up | string | `"true"` |  |
-| config.flags.pod-injection-limit | string | `"5000"` |  |
-| config.flags.pvm-unfitness-penalty-enabled | string | `"true"` |  |
-| config.flags.scale-down-delay-after-add | string | `"0m"` |  |
-| config.flags.scale-up-from-zero | string | `"true"` |  |
-| config.flags.scaleup-per-ccc-metrics-enabled | string | `"true"` |  |
-| config.flags.skip-nodes-with-local-storage | string | `"false"` |  |
-| config.flags.startup-taint | string | `"readiness.k8s.io/gke-node-custom-script"` |  |
-| config.flags.system-namespaces | string | `"kube-system,gke-gmp-system,gmp-system,gke-managed-cim,gke-managed-volumepopulator,gke-managed-checkpointing,gkebackup,gke-managed-lustrecsi,gke-managed-otel,gke-managed-mldiagnostics,gke-managed-networking-dra-driver,gke-managed-pod-snapshots,gke-managed-slurm,gke-managed-ambient"` |  |
-| config.flags.v | string | `"4"` |  |
-| deployment.annotations | object | `{}` | Annotations to add to the Deployment object. |
-| deployment.selector | object | `{}` | Labels for Deployment `spec.selector.matchLabels`. |
-| dnsConfig | object | `{}` | Pod's DNS Config (https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config) |
-| dnsPolicy | string | `"ClusterFirst"` | Defaults to `ClusterFirst`. Valid values: `ClusterFirstWithHostNet`, `ClusterFirst`, `Default`, or `None`. |
-| fullnameOverride | string | `""` |  |
-| hostNetwork | bool | `false` | Whether to expose network interfaces of the host machine to pods.  Warning: enabling hostNetwork would likely be problematic due to inability to contact GKE metadata server from autoscler pods: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity#restrictions  Alternative in case when it's required to enable host networking: https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity#alternatives_to |
-| image.pullPolicy | string | `"IfNotPresent"` |  |
-| image.pullSecrets | list | `[]` |  |
-| image.repository | string | `"registry.k8s.io/autoscaling/cluster-autoscaler"` |  |
-| image.tag | string | `""` |  |
-| initContainers | list | `[]` | Any additional init containers. |
-| livenessProbe.httpGet.path | string | `"/health-check"` |  |
-| livenessProbe.httpGet.port | int | `8085` |  |
-| livenessProbe.initialDelaySeconds | int | `600` |  |
-| livenessProbe.periodSeconds | int | `60` |  |
-| nameOverride | string | `""` |  |
-| nodeSelector | object | `{}` |  |
-| podAnnotations | object | `{}` |  |
-| podDisruptionBudget | object | `{"annotations":{},"enabled":true,"maxUnavailable":1,"selector":{}}` | Pod disruption budget. |
-| podDisruptionBudget.annotations | object | `{}` | Annotations to add to the PodDisruptionBudget. |
-| podDisruptionBudget.enabled | bool | `true` | If true, creates a PodDisruptionBudget. |
-| podDisruptionBudget.selector | object | `{}` | Override labels for PodDisruptionBudget `spec.selector.matchLabels`. |
-| podLabels | object | `{}` |  |
-| podSecurityContext.runAsGroup | int | `2049` |  |
-| podSecurityContext.runAsUser | int | `2049` |  |
-| podSecurityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
-| priorityClassName | string | `""` |  |
-| rbac.additionalRules | list | `[]` | Additional rules for role/clusterrole |
-| rbac.annotations | object | `{}` | Additional annotations to add to RBAC resources (Role/RoleBinding/ClusterRole/ClusterRoleBinding). |
-| rbac.create | bool | `true` | If `true`, create and use RBAC resources. |
-| readinessProbe | object | `{}` |  |
-| replicaCount | int | `1` |  |
-| resources | object | `{}` |  |
-| revisionHistoryLimit | int | `10` | The number of old ReplicaSets to retain to allow rollback. |
-| securityContext.allowPrivilegeEscalation | bool | `false` |  |
-| securityContext.capabilities.drop[0] | string | `"ALL"` |  |
-| securityContext.readOnlyRootFilesystem | bool | `true` |  |
-| server.port | int | `8085` | Port the autoscaler server listens on. |
-| server.portName | string | `"http"` | Name for the server port in container spec. |
-| service.annotations | object | `{}` | Annotations to add to service |
-| service.clusterIP | string | `""` | IP address to assign to service |
-| service.create | bool | `true` | If `true`, a Service will be created. |
-| service.externalIPs | list | `[]` | List of IP addresses at which the service is available. Ref: https://kubernetes.io/docs/concepts/services-networking/service/#external-ips. |
-| service.labels | object | `{}` | Labels to add to service |
-| service.loadBalancerSourceRanges | list | `[]` | List of IP CIDRs allowed access to load balancer (if supported). |
-| service.port | int | `8085` | Service port to expose. |
-| service.selector | object | `{}` | Override labels for Service `spec.selector`. |
-| service.type | string | `"ClusterIP"` | Type of service to create. |
-| serviceAccount.annotations | object | `{}` |  |
-| serviceAccount.automount | bool | `true` |  |
-| serviceAccount.create | bool | `true` |  |
-| serviceAccount.gcpWorkloadIdentity | string | `""` |  |
-| serviceAccount.name | string | `""` |  |
-| serviceMonitor.annotations | object | `{}` | Annotations to add to service monitor |
-| serviceMonitor.enabled | bool | `false` | If true, creates a Prometheus Operator ServiceMonitor. |
-| serviceMonitor.interval | string | `"10s"` | Interval that Prometheus scrapes Cluster Autoscaler metrics. |
-| serviceMonitor.metricRelabelings | list | `[]` | MetricRelabelConfigs to apply to samples before ingestion. |
-| serviceMonitor.namespace | string | `""` | Namespace to deploy the ServiceMonitor into. If not set, the release namespace is used. |
-| serviceMonitor.path | string | `"/metrics"` | The path to scrape for metrics; autoscaler exposes `/metrics` (this is standard) |
-| serviceMonitor.relabelings | list | `[]` | RelabelConfigs to apply to metrics before scraping. |
-| serviceMonitor.selector | object | `{"release":"prometheus-operator"}` | Default to kube-prometheus install (CoreOS recommended), but should be set according to Prometheus install. |
-| tolerations | list | `[]` |  |
-| topologySpreadConstraints | list | `[]` |  |
-| updateStrategy | object | `{}` |  |
-| volumeMounts | list | `[]` |  |
-| volumes | list | `[]` |  |
+## Installing
 
+⚠️ OCI repository pending, only local installation supported right now
+
+To install the chart with default values:
+
+```bash
+helm install selfhosted-ca .
+```
+
+To customize the installation, provide a custom `values` file:
+
+```bash
+helm install -f myvalues.yaml selfhosted-ca .
+```
+
+## Customization
+
+If you want to customize the deployment for your needs, you can override default recommended chart configuration via [YAML or CLI](https://helm.sh/docs/chart_template_guide/values_files/)
+
+If you need to include additional Kubernetes objects or extend functionality, use `extraObjects` or add this chart as a subchart.
+
+For complete documentation on all available parameters, check the [default values file](./values.yaml) or refer to the [Deployment configurations](#deployment-configurations)
+
+## Authentification & authorization
+
+In order for autoscaler to manage your cluster it needs to authorize it to manage your GCP resources in the deployed project, recommended way to achieve that is [Workload Identity Federation](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity)
+
+What needs to be done in the cluster in order for cluster autoscaler to be able to manage your resources:
+
+* [Enable Identity Federation in the GKE cluster](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity#enable_on_clusters_and_node_pools)
+* [Create node pool with Identity Federation enabled](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity#migrate_applications_to)
+* [Create custom role](https://docs.cloud.google.com/iam/docs/creating-custom-roles#creating) using [GCP_ROLE.yaml](./GCP_ROLE.yaml) YAML manifest
+* [Create service account using custom role](https://docs.cloud.google.com/iam/docs/service-accounts-create#creating)
+* [Grant kubernetes service account access to use created IAM SA](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity#kubernetes-sa-to-iam)
+* Ensure that cluster autoscaler runs on the nodes with metadata server enabled
+
+```yaml
+nodeSelector:
+    iam.gke.io/gke-metadata-server-enabled: "true"
+```
+
+* Configure service account to use created IAM SA
+
+```yaml
+serviceAccount:
+    gcpWorkloadIdentity: "IAM_SA_NAME@IAM_SA_PROJECT_ID.iam.gserviceaccount.com"
+```
+
+OR
+
+```yaml
+serviceAccount:
+    annotations:
+        iam.gke.io/gcp-service-account: "IAM_SA_NAME@IAM_SA_PROJECT_ID.iam.gserviceaccount.com"
+```
+
+## Testing
+
+Static unit tests are implemented using the [`helm-unittest`](https://github.com/helm-unittest/helm-unittest) plugin to validate chart rendering and configuration options without requiring a live cluster.
+
+Run the test suite locally:
+
+```bash
+# If helm-unittest plugin is installed
+helm unittest .
+
+# Or using docker
+docker run --rm -v $(pwd):/apps helmunittest/helm-unittest .
+```
+
+## Deployment configurations
+
+### Required Configurations
+
+The `image` and `cluster` configuration sections are currently required when deploying the chart:
+
+```yaml
+# Container image repository and tag
+image:
+  repository: REPOSITORY
+  tag: TAG
+
+# Target GKE cluster identity (example values, should be replaced with your cluster details)
+cluster:
+  name: NAME
+  hash: ID
+  projectNumber: PROJECT_NUMBER
+  location: LOCATION
+  regional: REGIONAL
+```
+
+In order to obtain cluster ID:
+
+```bash
+gcloud container clusters describe CLUSTER_NAME --location=LOCATION --project=PROJECT_ID --format="value(id)"
+```
+
+In order to obtain project number:
+
+```bash
+gcloud projects describe PROJECT_ID --format="value(projectNumber)"
+```
+
+### Autoscaling Profiles
+
+You can select which autoscaling profile to apply using `config.autoscalingProfile`. The chart comes with preconfigured profiles such as `default` (balanced) and `optimizeUtilization` (aggressive scale-down):
+
+```yaml
+config:
+  autoscalingProfile: optimizeUtilization # Options: default, optimizeUtilization, or a custom profile
+```
+
+You can also override parameters in existing profiles or define custom profiles under `autoscalingProfiles`:
+
+```yaml
+autoscalingProfiles:
+  optimizeUtilization:
+    scale-down-unneeded-time: "1m"
+    scale-down-utilization-threshold: "0.85"
+```

@@ -122,6 +122,7 @@ type InternalOptions struct {
 	ZoneTypesEnabled                             bool
 	EnableComputeClassMinCapacity                bool
 	EnableComputeClassConfigHash                 bool
+	ScaleDownBlockingNodeLabels                  []string
 	NapMaxNodes                                  int
 	NodeWatchLabelSelector                       string
 	NodeWatchFieldSelector                       string

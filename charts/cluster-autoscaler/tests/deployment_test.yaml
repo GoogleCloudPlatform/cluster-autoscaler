@@ -1,0 +1,294 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test Deployment template
+templates:
+  - deployment.yaml
+tests:
+  - it: should render default Deployment manifest
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Deployment
+      - isAPIVersion:
+          of: apps/v1
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 10
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.k8s.io/autoscaling/cluster-autoscaler:1.36.0
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /cluster-autoscaler
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8085
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].name
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health-check
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 2049
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: false
+
+  - it: should support custom image, pullSecrets, and pullPolicy
+    set:
+      image:
+        repository: gcr.io/custom-repo/cluster-autoscaler
+        tag: v1.36.0-custom
+        pullPolicy: Always
+        pullSecrets:
+          - name: my-registry-secret
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: gcr.io/custom-repo/cluster-autoscaler:v1.36.0-custom
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+      - equal:
+          path: spec.template.spec.imagePullSecrets[0].name
+          value: my-registry-secret
+
+  - it: should configure replicaCount, revisionHistoryLimit, and updateStrategy
+    set:
+      replicaCount: 2
+      revisionHistoryLimit: 5
+      updateStrategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.revisionHistoryLimit
+          value: 5
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+
+  - it: should set environment variables and envFrom sources
+    set:
+      config:
+        extraEnv:
+          GODEBUG: "gctrace=1"
+          CUSTOM_VAR: "custom_value"
+        envFromConfigMap: global-config
+        envFromSecret: global-secret
+        extraEnvFromConfigMaps:
+          extraConfig: extra-cm
+        extraEnvFromSecrets:
+          extraSecret: extra-sec
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTERAUTOSCALER_VERSION
+            value: "1.36.0"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GODEBUG
+            value: "gctrace=1"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_VAR
+            value: "custom_value"
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: global-config
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: global-secret
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: extra-cm
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: extra-sec
+
+  - it: should configure scheduling, affinity, tolerations, and priorityClassName
+    set:
+      priorityClassName: system-cluster-critical
+      nodeSelector:
+        node.kubernetes.io/role: system
+      tolerations:
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/os
+                    operator: In
+                    values:
+                      - linux
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cluster-autoscaler
+    asserts:
+      - equal:
+          path: spec.template.spec.priorityClassName
+          value: system-cluster-critical
+      - equal:
+          path: spec.template.spec.nodeSelector["node.kubernetes.io/role"]
+          value: system
+      - equal:
+          path: spec.template.spec.tolerations[0].key
+          value: CriticalAddonsOnly
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key
+          value: kubernetes.io/os
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].topologyKey
+          value: topology.kubernetes.io/zone
+
+  - it: should configure container resources
+    set:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 300Mi
+        limits:
+          cpu: 500m
+          memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 300Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 500m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1Gi
+
+  - it: should configure readinessProbe
+    set:
+      readinessProbe:
+        httpGet:
+          path: /health-check
+          port: 8085
+        initialDelaySeconds: 10
+        periodSeconds: 10
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health-check
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 10
+
+  - it: should support custom annotations and labels across deployment and pod
+    set:
+      deployment:
+        annotations:
+          deployment.annotation: test-deploy-val
+        selector:
+          custom.match/label: custom-ca
+      podAnnotations:
+        pod.annotation: test-pod-val
+      podLabels:
+        pod.label: test-pod-label
+    asserts:
+      - equal:
+          path: metadata.annotations["deployment.annotation"]
+          value: test-deploy-val
+      - equal:
+          path: spec.selector.matchLabels["custom.match/label"]
+          value: custom-ca
+      - equal:
+          path: spec.template.metadata.annotations["pod.annotation"]
+          value: test-pod-val
+      - equal:
+          path: spec.template.metadata.labels["pod.label"]
+          value: test-pod-label
+
+  - it: should configure dnsPolicy and dnsConfig
+    set:
+      dnsPolicy: ClusterFirstWithHostNet
+      dnsConfig:
+        nameservers:
+          - 8.8.8.8
+        searches:
+          - ns1.svc.cluster-domain.example
+    asserts:
+      - equal:
+          path: spec.template.spec.dnsPolicy
+          value: ClusterFirstWithHostNet
+      - equal:
+          path: spec.template.spec.dnsConfig.nameservers[0]
+          value: 8.8.8.8
+      - equal:
+          path: spec.template.spec.dnsConfig.searches[0]
+          value: ns1.svc.cluster-domain.example
+
+  - it: should configure hostNetwork
+    set:
+      hostNetwork: true
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true

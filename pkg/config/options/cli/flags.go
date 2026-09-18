@@ -35,7 +35,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/parsing"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	resizable_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -136,6 +136,7 @@ var (
 	zoneTypesEnabled                     = flag.Bool("enable-zone-types", false, "Enables automatic AI zones selection via CCC zoneTypes field, see go/gke-auto-ai-zones for details.")
 	enableComputeClassMinCapacity        = flag.Bool("enable-compute-class-min-capacity", false, "Enables Compute Class minimum capacity support.")
 	enableComputeClassConfigHash         = flag.Bool("enable-compute-class-config-hash", false, "Enables Compute Class configuration hashing.")
+	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
 
@@ -195,8 +196,8 @@ func PostProcessOssOptions(ossOptions *config.AutoscalingOptions) {
 	// Ignore taints we apply during Balloon Pod resizes.
 	allStatusTaints = append(allStatusTaints, resizable_types.BPResizeTaint.Key)
 	// Ignore taints we apply for CSN nodes.
-	allStatusTaints = append(allStatusTaints, csn.BufferAssignmentKey)
-	allStatusTaints = append(allStatusTaints, csn.SuspendedTaintKey)
+	allStatusTaints = append(allStatusTaints, metadata.BufferAssignmentKey)
+	allStatusTaints = append(allStatusTaints, metadata.SuspendedTaintKey)
 	ossOptions.StatusTaints = allStatusTaints
 
 	// Update ExpendablePodsPriorityCutoff if autopilot is enabled
@@ -269,6 +270,16 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 			trimmed := strings.TrimSpace(f)
 			if trimmed != "" {
 				parsedGpMachineFamilies = append(parsedGpMachineFamilies, trimmed)
+			}
+		}
+	}
+
+	var parsedScaleDownBlockingNodeLabels []string
+	if *scaleDownBlockingNodeLabels != "" {
+		for _, l := range strings.Split(*scaleDownBlockingNodeLabels, ",") {
+			trimmed := strings.TrimSpace(l)
+			if trimmed != "" {
+				parsedScaleDownBlockingNodeLabels = append(parsedScaleDownBlockingNodeLabels, trimmed)
 			}
 		}
 	}
@@ -373,6 +384,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ZoneTypesEnabled:                             *zoneTypesEnabled,
 		EnableComputeClassMinCapacity:                *enableComputeClassMinCapacity,
 		EnableComputeClassConfigHash:                 *enableComputeClassConfigHash,
+		ScaleDownBlockingNodeLabels:                  parsedScaleDownBlockingNodeLabels,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,
 		NodeWatchFieldSelector:                       *nodeWatchFieldSelector,

@@ -82,7 +82,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 		return cmp.Compare(nodeToTTL[node1], nodeToTTL[node2])
 	})
 
-	return defrag.NewCandidateWithLimit(nodesToRecycle, defrag.Partial, p.config.MaxCandidateNodeCount)
+	return defrag.NewPartialCandidateWithLimit(nodesToRecycle, defrag.CreateBeforeDelete, p.config.MaxCandidateNodeCount)
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {

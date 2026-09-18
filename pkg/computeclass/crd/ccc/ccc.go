@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -555,6 +556,38 @@ func (ccc *cccCrd) OptimizeRulePriority() bool {
 		return false
 	}
 	return ccc.Spec.ActiveMigration.OptimizeRulePriority
+}
+
+// ConfigDrift checks if config drift active migration is enabled for CCC.
+func (ccc *cccCrd) ConfigDrift() bool {
+	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ConfigDrift == nil {
+		return false
+	}
+	return *ccc.Spec.ActiveMigration.ConfigDrift
+}
+
+// MaxNodeDisruption returns the maxNodeDisruption from the active migration policy for CCC.
+func (ccc *cccCrd) MaxNodeDisruption() *int32 {
+	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		return nil
+	}
+	return ccc.Spec.ActiveMigration.ReconciliationPolicy.MaxNodeDisruption
+}
+
+// AtomicGroupLabels returns the atomicGroupLabels from the active migration policy for CCC.
+func (ccc *cccCrd) AtomicGroupLabels() []string {
+	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		return nil
+	}
+	return slices.Clone(ccc.Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels)
+}
+
+// MigrationStrategy returns the migration strategy from the active migration policy for CCC.
+func (ccc *cccCrd) MigrationStrategy() string {
+	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.ActiveMigration == nil || ccc.Spec.ActiveMigration.ReconciliationPolicy == nil {
+		return ""
+	}
+	return string(ccc.Spec.ActiveMigration.ReconciliationPolicy.Strategy)
 }
 
 // ArchitectureTaintBehavior returns the architecture taint behavior for CCC.

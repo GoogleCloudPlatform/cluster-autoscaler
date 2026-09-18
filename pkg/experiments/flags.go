@@ -54,11 +54,9 @@ const NodeProvisionTimeSingleHostTPU = "NodeProvisionTime::SingleHostTPU"
 const EkLookaheadPodsV1Flag = "AutopilotEk::LookaheadPodsV1"
 const EkLookaheadMaxWorkloadSeparationsFlag = "AutopilotEk::LookaheadMaxWorkloadSeparations"
 const ConsumableReservationExperimentName = "ClusterAutoscaler::UseConsumableReservationsApi"
-const EkSpotFlag = "ClusterAutoscaler::EkSpotEnabled"
 const EnableResizableVmEdpMinGKEVersionFlag = "AutopilotExtendedDuration::EnableCAMinGKEVersion"
 const EkMachineTypesFlag = "AutopilotEk::MachineTypes"
 const EkUasUpsizabilityBufferFlag = "AutopilotEk::UasUpsizabilityBuffer"
-const EkDPV1SupportedFlag = "AutopilotEk::DPV1Supported"
 const EkForcefulMigrationFromEkToE2MinCAVersionFlag = "AutopilotEk::ForcefulMigrationFromEkToE2MinCAVersion"
 const EkDownsizeConfigFlag = "AutopilotEk::DownsizeConfig"
 const EkDownsizeNonResizableFlag = "AutopilotEk::DownsizeNonResizableEk"
@@ -103,6 +101,14 @@ const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersi
 const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                       // Direct launch.
 const ColdStandbyNodesBackoffMinCAVersionFlag = "ColdStandbyNodes::BackoffMinCAVersion"
 const ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag = "ColdStandbyNodes::PodAgeFallbackThresholdSeconds"
+const ColdStandbyNodesResumeTimeoutSecondsFlag = "ColdStandbyNodes::ResumeTimeoutSeconds"
+const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTimeoutSeconds"
+
+// ColdStandbyNodesMinUnsupportedMemoryGBFlag overrides the smallest node memory size, in
+// decimal GB, that GCE VM Suspend/Resume cannot handle. Failsafe is
+// csn.defaultMinUnsupportedMemoryGB.
+const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
+const ColdStandbyNodesScaleUpStatusProcessorFlag = "ColdStandbyNodes::ScaleUpStatusProcessor"
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"
@@ -116,7 +122,6 @@ const HtnapMinCAVersionFlag = "HTNAP::MinCAVersion"
 const IncreasedNapMaxNodesEnabledFlag = "IncreasedNapMaxNodes::Enabled"
 const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion"
 
-const EnablePartialDefragFlag = "ClusterAutoscalerDefrag::EnablePartialDefrag"
 const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 
 const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
@@ -218,3 +223,5 @@ const EnableNestedVirtualizationMinCAVersionFlag = "EnableNestedVirtualization::
 
 const DefaultReservedResourcesEnabledFlag = "DefaultReservedResources::Enabled"
 const DefaultReservedResourcesMinCAVersionFlag = "DefaultReservedResources::MinCAVersion"
+const AutopilotNapDefaultFallbackEnabledFlag = "AutopilotNapDefaultFallback::Enabled"
+const AutopilotNapDefaultFallbackMinCAVersionFlag = "AutopilotNapDefaultFallback::MinCAVersion"

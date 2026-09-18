@@ -1,0 +1,90 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test Helper Templates and Common Labels
+templates:
+  - deployment.yaml
+  - serviceaccount.yaml
+tests:
+  - it: should apply standard labels and release name by default
+    templates:
+      - deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-cluster-autoscaler
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: cluster-autoscaler-0.1.1
+      - equal:
+          path: metadata.labels["app.kubernetes.io/name"]
+          value: cluster-autoscaler
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: RELEASE-NAME
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "1.36.0"
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm
+
+  - it: should support nameOverride and fullnameOverride
+    templates:
+      - deployment.yaml
+    set:
+      fullnameOverride: custom-ca-full
+    asserts:
+      - equal:
+          path: metadata.name
+          value: custom-ca-full
+
+  - it: should support additionalLabels across resources
+    templates:
+      - deployment.yaml
+    set:
+      additionalLabels:
+        environment: production
+        team: autoscaling
+    asserts:
+      - equal:
+          path: metadata.labels["environment"]
+          value: production
+      - equal:
+          path: metadata.labels["team"]
+          value: autoscaling
+
+  - it: should resolve serviceAccountName correctly when serviceAccount.create is false and name is specified
+    templates:
+      - deployment.yaml
+    set:
+      serviceAccount:
+        create: false
+        name: preexisting-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: preexisting-sa
+
+  - it: should resolve serviceAccountName to default when serviceAccount.create is false and name is empty
+    templates:
+      - deployment.yaml
+    set:
+      serviceAccount:
+        create: false
+        name: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: default

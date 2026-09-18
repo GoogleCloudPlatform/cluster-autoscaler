@@ -22,6 +22,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -276,7 +277,7 @@ func assignNodeToBufferForProcessors(node *apiv1.Node, bufferId string) (*apiv1.
 	node.ResourceVersion = "1"
 
 	workloadSeparationTaint := &apiv1.Taint{
-		Key:    csn.BufferAssignmentKey,
+		Key:    metadata.BufferAssignmentKey,
 		Value:  bufferId,
 		Effect: apiv1.TaintEffectNoSchedule,
 	}
@@ -288,13 +289,13 @@ func assignNodeToBufferForProcessors(node *apiv1.Node, bufferId string) (*apiv1.
 	if node.Labels == nil {
 		node.Labels = make(map[string]string)
 	}
-	node.Labels[csn.BufferAssignmentKey] = bufferId
+	node.Labels[metadata.BufferAssignmentKey] = bufferId
 	return node, nil
 }
 
 func removeBufferAssignmentForProcessors(node *apiv1.Node) {
 	csn.RemoveBufferAssignment(node)
 
-	node.Spec.Taints, _ = taints.DeleteTaintsByKey(node.Spec.Taints, csn.BufferAssignmentKey)
-	delete(node.Labels, csn.BufferAssignmentKey)
+	node.Spec.Taints, _ = taints.DeleteTaintsByKey(node.Spec.Taints, metadata.BufferAssignmentKey)
+	delete(node.Labels, metadata.BufferAssignmentKey)
 }

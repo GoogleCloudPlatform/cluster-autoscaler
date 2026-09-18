@@ -43,6 +43,7 @@ type testCrd struct {
 	imageType                     string
 	optimizeRulePriority          bool
 	ensureAllDaemonSetPodsRunning bool
+	configDrift                   bool
 	dynamicMaxPodsPerNodeEnabled  bool
 	dynamicBootDiskSizeEnabled    bool
 	tpuDriverMode                 TpuDriverMode
@@ -61,6 +62,9 @@ type testCrd struct {
 	configHash                string
 	targetNodeCount           *int
 	architectureTaintBehavior string
+	maxNodeDisruption         *int32
+	atomicGroupLabels         []string
+	migrationStrategy         string
 }
 
 func (t *testCrd) ArchitectureTaintBehavior() string {
@@ -136,6 +140,22 @@ func (t *testCrd) OptimizeRulePriority() bool {
 
 func (t *testCrd) EnsureAllDaemonSetPodsRunning() bool {
 	return t.ensureAllDaemonSetPodsRunning
+}
+
+func (t *testCrd) ConfigDrift() bool {
+	return t.configDrift
+}
+
+func (t *testCrd) MaxNodeDisruption() *int32 {
+	return t.maxNodeDisruption
+}
+
+func (t *testCrd) AtomicGroupLabels() []string {
+	return t.atomicGroupLabels
+}
+
+func (t *testCrd) MigrationStrategy() string {
+	return t.migrationStrategy
 }
 
 func (t *testCrd) Conditions() []metav1.Condition {
@@ -295,6 +315,12 @@ func WithEnsureAllDaemonSetPodsRunning() TestCrdOption {
 	}
 }
 
+func WithConfigDrift(configDrift bool) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.configDrift = configDrift
+	}
+}
+
 func WithConditions(conditions []metav1.Condition) TestCrdOption {
 	return func(crd *testCrd) {
 		crd.conditions = conditions
@@ -376,6 +402,24 @@ func WithArchitectureTaintBehavior(behavior string) TestCrdOption {
 	}
 }
 
+func WithMaxNodeDisruption(maxNodeDisruption *int32) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.maxNodeDisruption = maxNodeDisruption
+	}
+}
+
+func WithAtomicGroupLabels(labels []string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.atomicGroupLabels = labels
+	}
+}
+
+func WithMigrationStrategy(strategy string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.migrationStrategy = strategy
+	}
+}
+
 func NewTestCrd(options ...TestCrdOption) CRD {
 	crd := &testCrd{}
 	for _, o := range options {
@@ -396,6 +440,7 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.ImageType(), c2.ImageType())
 	assert.Equal(t, c1.NodeVersion(), c2.NodeVersion())
 	assert.Equal(t, c1.OptimizeRulePriority(), c2.OptimizeRulePriority())
+	assert.Equal(t, c1.ConfigDrift(), c2.ConfigDrift())
 	assert.Equal(t, c1.Conditions(), c2.Conditions())
 	assert.Equal(t, c1.DynamicMaxPodsPerNodeEnabled(), c2.DynamicMaxPodsPerNodeEnabled())
 	assert.Equal(t, c1.DynamicBootDiskSizeEnabled(), c2.DynamicBootDiskSizeEnabled())
@@ -405,6 +450,9 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.ResourceManagerTags(), c2.ResourceManagerTags())
 	assert.Equal(t, c1.TargetNodeCount(), c2.TargetNodeCount())
 	assert.Equal(t, c1.ArchitectureTaintBehavior(), c2.ArchitectureTaintBehavior())
+	assert.Equal(t, c1.MaxNodeDisruption(), c2.MaxNodeDisruption())
+	assert.Equal(t, c1.AtomicGroupLabels(), c2.AtomicGroupLabels())
+	assert.Equal(t, c1.MigrationStrategy(), c2.MigrationStrategy())
 }
 
 func TestDefaultDataProvider() *testDataProvider {
@@ -489,6 +537,7 @@ func NewMockCRDStatus(existingRuleConditions map[string][]metav1.Condition) *Moc
 	m.On("UpdateRuleConditions", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleResourceInfo", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleScalingHistory", mock.Anything, mock.Anything).Return().Maybe()
+	m.On("UpdateRuleConfigHash", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("ResetAllScalingHistories").Return().Maybe()
 	m.On("ResetAllResourceInfo").Return().Maybe()
 	m.On("GetConditions").Return(([]metav1.Condition)(nil)).Maybe()
@@ -520,6 +569,10 @@ func (m *MockCRDStatus) UpdateRuleResourceInfo(ruleIdx string, info ResourceInfo
 
 func (m *MockCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history ScalingEventsHistory) {
 	m.Called(ruleIdx, history)
+}
+
+func (m *MockCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
+	m.Called(ruleIdx, hash)
 }
 
 func (m *MockCRDStatus) ResetAllScalingHistories() {

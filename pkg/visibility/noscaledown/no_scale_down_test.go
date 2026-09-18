@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -92,6 +93,7 @@ func TestTopLevelReason(t *testing.T) {
 func TestUnremovableNodeReasons(t *testing.T) {
 	for _, testCase := range []struct {
 		unremovableReason simulator.UnremovableReason
+		blockingLabel     *vistypes.BlockingLabel
 		blockingPod       *vistypes.BlockingPod
 		expectedReason    *vistypes.Message
 	}{
@@ -118,6 +120,14 @@ func TestUnremovableNodeReasons(t *testing.T) {
 		{
 			unremovableReason: simulator.ScaleDownDisabledAnnotation,
 			expectedReason:    vistypes.NewNoScaleDownNodeScaleDownDisabledAnnotationMsg(),
+		},
+		{
+			// A label-blocked node is reported with ScaleDownDisabledAnnotation by the
+			// blocking-labels filter, but the TPU slice label should surface a
+			// slice-specific reason.
+			unremovableReason: simulator.ScaleDownDisabledAnnotation,
+			blockingLabel:     &vistypes.BlockingLabel{Key: gke_labels.TPUSliceLabel, Value: "my-slice"},
+			expectedReason:    vistypes.NewNoScaleDownNodeBoundToTPUSliceMsg("my-slice"),
 		},
 		{
 			unremovableReason: simulator.NoPlaceToMovePods,
@@ -170,7 +180,7 @@ func TestUnremovableNodeReasons(t *testing.T) {
 		},
 	} {
 		noScaleDown := throttledNoScaleDown{}
-		node := &vistypes.Node{Name: "test-node"}
+		node := &vistypes.Node{Name: "test-node", BlockingLabel: testCase.blockingLabel}
 		scaleDownStatus := &vistypes.ScaleDownStatus{
 			UnremovableNodes: []*vistypes.UnremovableNode{
 				{

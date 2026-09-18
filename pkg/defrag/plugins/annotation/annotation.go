@@ -33,39 +33,35 @@ const (
 	partialValue            = "partial"
 )
 
-var (
-	modeToAnnotation = map[defrag.Mode]string{
-		defrag.CreateBeforeDelete: createBeforeDeleteValue,
-		defrag.DeleteBeforeCreate: deleteBeforeCreateValue,
-		defrag.Partial:            partialValue,
-	}
-)
-
 type plugin struct {
-	config config.PluginsConfig
-	mode   defrag.Mode
+	config   config.PluginsConfig
+	mode     defrag.Mode
+	isAtomic bool
+	name     string
 }
 
-// PluginBuilders return builders for 3 annotation plugins for 3 defrag modes.
+// PluginBuilders return builders for 3 annotation plugins.
 // Try DeleteBeforeCreate first, since it's the fastest to process,
 // then go with Partial, and finally CreateBeforeDelete because it's the slowest.
 var PluginBuilders = []config.PluginBuilder{
-	newPluginBuilder(defrag.DeleteBeforeCreate),
-	newPluginBuilder(defrag.Partial),
-	newPluginBuilder(defrag.CreateBeforeDelete),
+	newPluginBuilder(deleteBeforeCreateValue, defrag.DeleteBeforeCreate, true),
+	newPluginBuilder(partialValue, defrag.CreateBeforeDelete, false),
+	newPluginBuilder(createBeforeDeleteValue, defrag.CreateBeforeDelete, true),
 }
 
-func newPluginBuilder(mode defrag.Mode) config.PluginBuilder {
+func newPluginBuilder(name string, mode defrag.Mode, isAtomic bool) config.PluginBuilder {
 	return func(config config.PluginsConfig) defrag.Plugin {
 		return &plugin{
-			config: config,
-			mode:   mode,
+			config:   config,
+			mode:     mode,
+			isAtomic: isAtomic,
+			name:     name,
 		}
 	}
 }
 
 func (p *plugin) String() string {
-	return fmt.Sprintf("%s-%s", PluginName, modeToAnnotation[p.mode])
+	return fmt.Sprintf("%s-%s", PluginName, p.name)
 }
 
 func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
@@ -76,7 +72,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 			continue
 		}
 
-		if m := nodeInfo.Node().Annotations[annotationKey]; m == modeToAnnotation[p.mode] {
+		if m := nodeInfo.Node().Annotations[annotationKey]; m == p.name {
 			annotatedNodes = append(annotatedNodes, nodeName)
 		}
 	}
@@ -84,7 +80,7 @@ func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []strin
 	if len(annotatedNodes) == 0 {
 		return nil
 	}
-	return defrag.NewCandidateWithLimit(annotatedNodes, p.mode, p.config.MaxCandidateNodeCount)
+	return defrag.NewCandidateWithLimit(annotatedNodes, p.mode, p.isAtomic, p.config.MaxCandidateNodeCount)
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames []string) []string {
@@ -95,7 +91,7 @@ func (p *plugin) ValidCandidateNodes(ctx *context.AutoscalingContext, nodeNames 
 			continue
 		}
 
-		if a := nodeInfo.Node().Annotations[annotationKey]; a == modeToAnnotation[p.mode] {
+		if a := nodeInfo.Node().Annotations[annotationKey]; a == p.name {
 			candidateNodes = append(candidateNodes, nodeName)
 		}
 	}

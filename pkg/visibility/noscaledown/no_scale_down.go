@@ -17,6 +17,7 @@ package noscaledown
 import (
 	"time"
 
+	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -87,7 +88,7 @@ func (ns *throttledNoScaleDown) computeUnremovableNodes(scaleDownStatus *vistype
 
 func (ns *throttledNoScaleDown) computeNodeReasonMsg(unremovableNode *vistypes.UnremovableNode) *vistypes.Message {
 	if unremovableNode.Reason == simulator.ScaleDownDisabledAnnotation {
-		return vistypes.NewNoScaleDownNodeScaleDownDisabledAnnotationMsg()
+		return ns.computeScaleDownDisabledReasonMsg(unremovableNode.Node.BlockingLabel)
 	} else if unremovableNode.Reason == simulator.NodeGroupMinSizeReached {
 		return vistypes.NewNoScaleDownNodeNodeGroupMinSizeReachedMsg()
 	} else if unremovableNode.Reason == simulator.MinimalResourceLimitExceeded {
@@ -100,6 +101,22 @@ func (ns *throttledNoScaleDown) computeNodeReasonMsg(unremovableNode *vistypes.U
 		return ns.computeNodeReasonMsgFromBlockingPod(unremovableNode.BlockingPod)
 	} else {
 		return nil
+	}
+}
+
+// computeScaleDownDisabledReasonMsg maps a node reported unremovable with
+// ScaleDownDisabledAnnotation to a visibility reason. The blocking-labels
+// scale-down filter reuses ScaleDownDisabledAnnotation for label-blocked nodes
+// and carries the actual blocking label generically on the node.
+func (ns *throttledNoScaleDown) computeScaleDownDisabledReasonMsg(blockingLabel *vistypes.BlockingLabel) *vistypes.Message {
+	if blockingLabel == nil {
+		return vistypes.NewNoScaleDownNodeScaleDownDisabledAnnotationMsg()
+	}
+	switch blockingLabel.Key {
+	case gke_labels.TPUSliceLabel:
+		return vistypes.NewNoScaleDownNodeBoundToTPUSliceMsg(blockingLabel.Value)
+	default:
+		return vistypes.NewNoScaleDownNodeScaleDownDisabledAnnotationMsg()
 	}
 }
 

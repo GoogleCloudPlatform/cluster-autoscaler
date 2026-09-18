@@ -159,7 +159,7 @@ func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.
 	now := o.clock.Now()
 	filteredPods := make([]*v1.Pod, 0, len(pods))
 	for _, pod := range pods {
-		if !fake.IsFake(pod) && !cb.IsFakeCapacityBuffersPod(pod) && !coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) {
+		if !fake.IsFake(pod) && !cb.IsFakeCapacityBuffersPod(pod) && !coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) && !osspodutils.IsDaemonSetPod(pod) {
 			filteredPods = append(filteredPods, pod)
 		}
 	}

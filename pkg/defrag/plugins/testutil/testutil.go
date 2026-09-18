@@ -15,10 +15,13 @@
 package testutil
 
 import (
+	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 type ExtendedNodeGroup struct {
@@ -32,4 +35,31 @@ func CreateMig(ng ExtendedNodeGroup, manager gke.GkeManager) *gke.GkeMig {
 	return builder.SetSpec(ng.Spec).SetGceRef(gce.GceRef{
 		Name: ng.Name,
 	}).SetGkeManager(manager).Build()
+}
+
+type MockRandSource struct{}
+
+func (mrs *MockRandSource) Int63() int64 {
+	return 0
+}
+func (mrs *MockRandSource) Seed(seed int64) {}
+
+func MakeMockGkeManager() gke.GkeManager {
+	gkeManager := &gke.GkeManagerMock{}
+	gkeManager.On("GetMigTemplateNodeInfo", mock.Anything).Return(framework.NewTestNodeInfo(&apiv1.Node{}), nil)
+	return gkeManager
+}
+
+type MockPluginProvider struct {
+	mock.Mock
+}
+
+func (m *MockPluginProvider) GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily {
+	args := m.Called()
+	return args.Get(0).(machinetypes.MachineFamily)
+}
+
+func (m *MockPluginProvider) IsAutopilotEnabled() bool {
+	args := m.Called()
+	return args.Get(0).(bool)
 }

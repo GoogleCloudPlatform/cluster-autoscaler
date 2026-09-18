@@ -23,11 +23,13 @@ import (
 	cloudprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	gkeclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -35,6 +37,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 func intPtr(v int) *int { return &v }
@@ -263,12 +267,102 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			},
 			expectedFakePods: 2, // 4 target - 2 upcoming = 2 fake pods
 		},
+		{
+			name: "top-level CCC, existing node tainted with defrag hard candidate taint is not acceptable for fake pods",
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(2)),
+				),
+			},
+			existingNodes: []*apiv1.Node{
+				buildNodeWithLabel("n1", "my-ccc"),
+				func() *apiv1.Node {
+					n := buildNodeWithLabel("n2", "my-ccc")
+					n.Spec.Taints = append(n.Spec.Taints, apiv1.Taint{
+						Key:    defrag.HardTaint,
+						Effect: apiv1.TaintEffectNoSchedule,
+					})
+					return n
+				}(),
+			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
+			expectedFakePods: 1, // 2 target - 1 scheduled on n1, n2 is defrag candidate so fake pod cannot schedule on it
+		},
+		{
+			name: "top-level CCC, existing node tainted with defrag soft candidate taint is acceptable for fake pods",
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(2)),
+				),
+			},
+			existingNodes: []*apiv1.Node{
+				buildNodeWithLabel("n1", "my-ccc"),
+				func() *apiv1.Node {
+					n := buildNodeWithLabel("n2", "my-ccc")
+					n.Spec.Taints = append(n.Spec.Taints, apiv1.Taint{
+						Key:    defrag.SoftTaint,
+						Effect: apiv1.TaintEffectPreferNoSchedule,
+					})
+					return n
+				}(),
+			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
+			expectedFakePods: 0, // 2 target - both pods can schedule (n1 and n2 with soft taint)
+		},
+		{
+			name: "top-level CCC, existing node tainted with ToBeDeleted taint is not acceptable for fake pods",
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(2)),
+				),
+			},
+			existingNodes: []*apiv1.Node{
+				buildNodeWithLabel("n1", "my-ccc"),
+				func() *apiv1.Node {
+					n := buildNodeWithLabel("n2", "my-ccc")
+					n.Spec.Taints = append(n.Spec.Taints, apiv1.Taint{
+						Key:    taints.ToBeDeletedTaint,
+						Effect: apiv1.TaintEffectNoSchedule,
+					})
+					return n
+				}(),
+			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
+			expectedFakePods: 1, // 2 target - 1 scheduled on n1, n2 has ToBeDeleted taint
+		},
+		{
+			name: "top-level CCC, existing node with DeletionTimestamp is not acceptable for fake pods",
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(2)),
+				),
+			},
+			existingNodes: []*apiv1.Node{
+				buildNodeWithLabel("n1", "my-ccc"),
+				func() *apiv1.Node {
+					n := buildNodeWithLabel("n2", "my-ccc")
+					now := metav1.Now()
+					n.DeletionTimestamp = &now
+					return n
+				}(),
+			},
+			cloudProvider:    &minCapacityMockCloudProvider{},
+			expectedFakePods: 1, // 2 target - 1 scheduled on n1, n2 has DeletionTimestamp
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ccLister := lister.NewMockCrdListerWithLabel(tc.crds, labels.ComputeClassLabel)
-			processor := NewMinCapacityPodListProcessor(ccLister, nil, nil)
+			processor := NewMinCapacityPodListProcessor(ccLister, nil, nil, nil)
 
 			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
 			for _, n := range tc.existingNodes {
@@ -369,4 +463,76 @@ func (m *minCapacityMockCloudProvider) IsAutopilotEnabled() bool {
 // grouping can embed a provider that overrides this.
 func (m *minCapacityMockCloudProvider) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	return nil, nil
+}
+
+func TestSortAtomicGroupsForPacking(t *testing.T) {
+	groupIDs := func(gs []*atomicGroupInfo) []string {
+		ids := make([]string, 0, len(gs))
+		for _, g := range gs {
+			ids = append(ids, g.id)
+		}
+		return ids
+	}
+
+	t.Run("scale-down-blocked groups are packed first", func(t *testing.T) {
+		groups := map[string]*atomicGroupInfo{
+			"used":    {id: "used", totalNodes: 16, freeNodes: 0},
+			"blocked": {id: "blocked", totalNodes: 16, freeNodes: 16, blockedFromScaleDown: true},
+			"idle":    {id: "idle", totalNodes: 16, freeNodes: 16},
+		}
+		got := groupIDs(sortAtomicGroupsForPacking(groups))
+		assert.Equal(t, "blocked", got[0], "blocked group must be packed first")
+		assert.Equal(t, []string{"blocked", "used", "idle"}, got)
+	})
+
+	t.Run("legacy ordering preserved when no group is blocked", func(t *testing.T) {
+		groups := map[string]*atomicGroupInfo{
+			"a-empty": {id: "a-empty", totalNodes: 16, freeNodes: 16},
+			"b-used":  {id: "b-used", totalNodes: 16, freeNodes: 8},
+			"c-empty": {id: "c-empty", totalNodes: 16, freeNodes: 16},
+		}
+		got := groupIDs(sortAtomicGroupsForPacking(groups))
+		assert.Equal(t, []string{"b-used", "a-empty", "c-empty"}, got)
+	})
+
+	t.Run("multiple blocked groups fall back to legacy tie-breaks", func(t *testing.T) {
+		groups := map[string]*atomicGroupInfo{
+			"blocked-idle": {id: "blocked-idle", totalNodes: 16, freeNodes: 16, blockedFromScaleDown: true},
+			"blocked-used": {id: "blocked-used", totalNodes: 16, freeNodes: 4, blockedFromScaleDown: true},
+			"unblocked":    {id: "unblocked", totalNodes: 16, freeNodes: 0},
+		}
+		got := groupIDs(sortAtomicGroupsForPacking(groups))
+		assert.Equal(t, []string{"blocked-used", "blocked-idle", "unblocked"}, got)
+	})
+}
+
+func TestMinCapacityPodListProcessor_NodeIsBlockedFromScaleDown(t *testing.T) {
+	p := NewMinCapacityPodListProcessor(nil, nil, nil, []string{labels.TPUSliceLabel})
+
+	t.Run("nil node", func(t *testing.T) {
+		assert.False(t, p.nodeIsBlockedFromScaleDown(nil))
+	})
+
+	t.Run("node with scale-down-disabled annotation", func(t *testing.T) {
+		n := buildNodeWithLabel("n1", "")
+		n.Annotations = map[string]string{eligibility.ScaleDownDisabledKey: "true"}
+		assert.True(t, p.nodeIsBlockedFromScaleDown(n))
+	})
+
+	t.Run("node with blocking label", func(t *testing.T) {
+		n := buildNodeWithLabel("n2", "")
+		n.Labels[labels.TPUSliceLabel] = "my-slice"
+		assert.True(t, p.nodeIsBlockedFromScaleDown(n))
+	})
+
+	t.Run("node with empty blocking label is not blocked", func(t *testing.T) {
+		n := buildNodeWithLabel("n3", "")
+		n.Labels[labels.TPUSliceLabel] = ""
+		assert.False(t, p.nodeIsBlockedFromScaleDown(n))
+	})
+
+	t.Run("node without annotation or blocking label is not blocked", func(t *testing.T) {
+		n := buildNodeWithLabel("n4", "")
+		assert.False(t, p.nodeIsBlockedFromScaleDown(n))
+	})
 }

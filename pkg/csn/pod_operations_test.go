@@ -15,12 +15,15 @@
 package csn
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 
@@ -28,15 +31,64 @@ import (
 )
 
 func TestMakePodCSN(t *testing.T) {
+	memoryLtTerm := func(val string) apiv1.NodeSelectorRequirement {
+		return apiv1.NodeSelectorRequirement{
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpLt,
+			Values:   []string{val},
+		}
+	}
+	defaultMemoryLimitStr := strconv.FormatInt(defaultMinUnsupportedMemoryGB, 10)
+	memoryDoesNotExistTerm := apiv1.NodeSelectorRequirement{
+		Key:      labels.MemoryScalingLevelLabel,
+		Operator: apiv1.NodeSelectorOpDoesNotExist,
+	}
+	zoneRequirement := func(zone string) apiv1.NodeSelectorRequirement {
+		return apiv1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: apiv1.NodeSelectorOpIn,
+			Values:   []string{zone},
+		}
+	}
+	archRequirement := apiv1.NodeSelectorRequirement{
+		Key:      "kubernetes.io/arch",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"arm64"},
+	}
+	nameField := apiv1.NodeSelectorRequirement{
+		Key:      "metadata.name",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"node-1"},
+	}
+	podWithNodeSelectorTerms := func(terms ...apiv1.NodeSelectorTerm) *apiv1.Pod {
+		return &apiv1.Pod{
+			Spec: apiv1.PodSpec{
+				Affinity: &apiv1.Affinity{
+					NodeAffinity: &apiv1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+							NodeSelectorTerms: terms,
+						},
+					},
+				},
+			},
+		}
+	}
+
 	tests := []struct {
-		name     string
-		pod      *apiv1.Pod
-		bufferId string
+		name          string
+		pod           *apiv1.Pod
+		bufferId      string
+		opts          []PodOption
+		expectedTerms []apiv1.NodeSelectorTerm
 	}{
 		{
 			name:     "nil annotations and node selector",
 			pod:      &apiv1.Pod{},
 			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
 		},
 		{
 			name: "existing annotations and node selector",
@@ -60,58 +112,94 @@ func TestMakePodCSN(t *testing.T) {
 				},
 			},
 			bufferId: "ns/buffer-2",
+			// nodeSelector is ANDed into the scheduling predicate separately, so the affinity is
+			// unaffected by it.
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name:     "non-default memory limit",
+			pod:      &apiv1.Pod{},
+			bufferId: "ns/buffer-3",
+			opts:     []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name:     "existing node affinity term is preserved in every term",
+			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}}),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name: "multiple existing node affinity terms",
+			pod: podWithNodeSelectorTerms(
+				apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}},
+				apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement}},
+			),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr)}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm}},
+			},
+		},
+		{
+			name:     "existing match fields are preserved in every term",
+			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchFields: []apiv1.NodeSelectorRequirement{nameField}}),
+			bufferId: "ns/buffer",
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)},
+					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm},
+					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
+				},
+			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			MakePodCSN(test.pod, test.bufferId)
+			MakePodCSN(test.pod, test.bufferId, test.opts...)
 
 			expectedBufferId := strings.ReplaceAll(test.bufferId, "/", "_")
 
 			assert.NotNil(t, test.pod.Spec.NodeSelector)
-			assert.Equal(t, SoftWorkloadSeparationValue, test.pod.Spec.NodeSelector[SoftWorkloadSeparationKey])
-			assert.Equal(t, expectedBufferId, test.pod.Spec.NodeSelector[BufferAssignmentKey])
+			assert.Equal(t, metadata.SoftWorkloadSeparationValue, test.pod.Spec.NodeSelector[metadata.SoftWorkloadSeparationKey])
+			assert.Equal(t, expectedBufferId, test.pod.Spec.NodeSelector[metadata.BufferAssignmentKey])
 
 			assert.NotNil(t, test.pod.Annotations)
 			assert.Equal(t, capacitybufferpodlister.CapacityBufferFakePodAnnotationValue, test.pod.Annotations[capacitybufferpodlister.CapacityBufferFakePodAnnotationKey])
 			assert.Equal(t, CSNPodAnnotationValue, test.pod.Annotations[CSNPodAnnotationKey])
-			assert.Equal(t, expectedBufferId, test.pod.Annotations[BufferAssignmentKey])
+			assert.Equal(t, expectedBufferId, test.pod.Annotations[metadata.BufferAssignmentKey])
 
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    SoftWorkloadSeparationKey,
-				Value:  SoftWorkloadSeparationValue,
+				Key:    metadata.SoftWorkloadSeparationKey,
+				Value:  metadata.SoftWorkloadSeparationValue,
 				Effect: apiv1.TaintEffectPreferNoSchedule,
 			})
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    BufferAssignmentKey,
+				Key:    metadata.BufferAssignmentKey,
 				Value:  expectedBufferId,
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
 			assert.Contains(t, test.pod.Spec.Tolerations, apiv1.Toleration{
-				Key:    SuspendedTaintKey,
-				Value:  SuspendedTaintValue,
+				Key:    metadata.SuspendedTaintKey,
+				Value:  metadata.SuspendedTaintValue,
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
-			assert.Equal(t, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, []apiv1.NodeSelectorTerm{
-				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{
-						{
-							Key:      memoryScalingLevelLabel,
-							Operator: apiv1.NodeSelectorOpLt,
-							Values:   []string{"209"},
-						},
-					},
-				},
-				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{
-						{
-							Key:      memoryScalingLevelLabel,
-							Operator: apiv1.NodeSelectorOpDoesNotExist,
-						},
-					},
-				},
-			})
+			assert.Equal(t, test.expectedTerms, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)
 			assert.True(t, IsCSNPod(test.pod))
 		})
 	}
@@ -208,7 +296,7 @@ func TestGetBufferIdFromPod(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns_buffer",
+						metadata.BufferAssignmentKey: "ns_buffer",
 					},
 				},
 			},
@@ -355,16 +443,16 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
+						metadata.BufferAssignmentKey: "ns/buffer",
 					},
 				},
 				Spec: apiv1.PodSpec{
 					NodeSelector: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
+						metadata.BufferAssignmentKey: "ns/buffer",
 					},
 					Tolerations: []apiv1.Toleration{
 						{
-							Key:    BufferAssignmentKey,
+							Key:    metadata.BufferAssignmentKey,
 							Value:  "ns/buffer",
 							Effect: apiv1.TaintEffectNoSchedule,
 						},
@@ -374,7 +462,7 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			expectedTolerations:  nil,
 			expectedNodeSelector: map[string]string{},
 			expectedAnnotations: map[string]string{
-				BufferAssignmentKey: "ns/buffer",
+				metadata.BufferAssignmentKey: "ns/buffer",
 			},
 		},
 		{
@@ -417,18 +505,18 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 			pod: &apiv1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Annotations: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
-						"other-annotation":  "value",
+						metadata.BufferAssignmentKey: "ns/buffer",
+						"other-annotation":           "value",
 					},
 				},
 				Spec: apiv1.PodSpec{
 					NodeSelector: map[string]string{
-						BufferAssignmentKey: "ns/buffer",
-						"other-selector":    "value",
+						metadata.BufferAssignmentKey: "ns/buffer",
+						"other-selector":             "value",
 					},
 					Tolerations: []apiv1.Toleration{
 						{
-							Key:    BufferAssignmentKey,
+							Key:    metadata.BufferAssignmentKey,
 							Value:  "ns/buffer",
 							Effect: apiv1.TaintEffectNoSchedule,
 						},
@@ -451,8 +539,8 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 				"other-selector": "value",
 			},
 			expectedAnnotations: map[string]string{
-				"other-annotation":  "value",
-				BufferAssignmentKey: "ns/buffer",
+				"other-annotation":           "value",
+				metadata.BufferAssignmentKey: "ns/buffer",
 			},
 		},
 		{

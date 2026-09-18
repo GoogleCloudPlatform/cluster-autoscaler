@@ -39,6 +39,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
@@ -94,6 +95,9 @@ const (
 	labelKubeletConfig = "cloud.google.com/gke-node-kubelet-config"
 	// labelArchitectureTaintBehavior is an internal only system label used to pass information about architecture taint behavior.
 	labelArchitectureTaintBehavior = "cloud.google.com/gke-architecture-taint-behavior"
+	// labelAutopilotNapDefaultFallback is an internal only system label used to pass information that a node group
+	// was generated as a fallback machine family for an Autopilot default stateless workload.
+	labelAutopilotNapDefaultFallback = "cloud.google.com/gke-autopilot-nap-default-fallback"
 
 	// https://cloud.google.com/compute/docs/instances/limit-vm-runtime#restrictions
 	minMRDInSeconds = 30                 // 30 seconds
@@ -985,11 +989,11 @@ func (g CSNGenerator) UpdateRequirements(ngReq *nodeGroupRequirements, podReq *p
 		return nil
 	}
 
-	if v, ok := podReq.LabelReq.GetSingleValue(csn.SoftWorkloadSeparationKey); ok && v == csn.SoftWorkloadSeparationValue {
+	if v, ok := podReq.LabelReq.GetSingleValue(metadata.SoftWorkloadSeparationKey); ok && v == metadata.SoftWorkloadSeparationValue {
 		if ngReq.systemLabels == nil {
 			ngReq.systemLabels = make(map[string]string)
 		}
-		ngReq.systemLabels[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+		ngReq.systemLabels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 	}
 	return nil
 }
@@ -1003,7 +1007,7 @@ func (g CSNGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGr
 		return nil
 	}
 
-	if ngReq.systemLabels[csn.SoftWorkloadSeparationKey] != csn.SoftWorkloadSeparationValue {
+	if ngReq.systemLabels[metadata.SoftWorkloadSeparationKey] != metadata.SoftWorkloadSeparationValue {
 		return nil
 	}
 
@@ -1014,7 +1018,7 @@ func (g CSNGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGr
 	if params.systemLabels == nil {
 		params.systemLabels = make(map[string]string)
 	}
-	params.systemLabels[csn.SoftWorkloadSeparationKey] = csn.SoftWorkloadSeparationValue
+	params.systemLabels[metadata.SoftWorkloadSeparationKey] = metadata.SoftWorkloadSeparationValue
 
 	return nil
 }
@@ -1230,7 +1234,7 @@ func (msg MachineSelectionGenerator) shouldSkipMachineType(machineName, zone str
 	return false
 }
 
-func (msg MachineSelectionGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGroupRequirements, _ NodeGroupOptions) error {
+func (msg MachineSelectionGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGroupRequirements, opts NodeGroupOptions) error {
 	// Min cpu platform is passed through system labels, but only if it's concrete (as opposed to AnyPlatform, which
 	// means passing an empty string to GCE).
 	if platformName := machinetypes.CanonicalCpuPlatformName(ngReq.machineSpec.MinCpuPlatform, true); platformName != "" {
@@ -1244,6 +1248,23 @@ func (msg MachineSelectionGenerator) UpdateParameters(params *nodeGroupParameter
 	}
 	if ngReq.computeClass != nil && ngReq.computeClass.ArchitectureTaintBehavior() != "" {
 		params.systemLabels[labelArchitectureTaintBehavior] = ngReq.computeClass.ArchitectureTaintBehavior()
+	}
+
+	// Autopilot default workloads using fallback machine families should not be tainted with
+	// machine family taints and should receive the general purpose pod family billing label.
+	if msg.cloudProvider.IsAutopilotEnabled() &&
+		ngReq.machineSelectionType == machinetypes.SelectionTypeDefault &&
+		msg.cloudProvider.IsAutopilotNapDefaultFallbackEnabled() {
+		if opts.MachineType != "" {
+			machineFamily, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(opts.MachineType)
+			if err != nil {
+				return fmt.Errorf("unknown machine type %q, %v", opts.MachineType, err)
+			}
+			defaultFamily, _ := msg.machineSelector.DefaultMachineFamily()
+			if !machineFamily.Equal(defaultFamily) {
+				params.systemLabels[labelAutopilotNapDefaultFallback] = "true"
+			}
+		}
 	}
 	return nil
 }
@@ -1296,18 +1317,26 @@ func (msg MachineSelectionGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePool
 		defaultFamily, _ := msg.machineSelector.DefaultMachineFamily()
 		isDefaultFamily := machineFamily.Equal(defaultFamily)
 		isEkFamily := machineFamily.Equal(machinetypes.EK) && msg.cloudProvider.IsResizableVmEnabledInAutopilot(machinetypes.EK.Name())
+		isAutopilotNapDefaultFallback := systemLabels[labelAutopilotNapDefaultFallback] == "true"
 		// Do not taint the node pool with machine family if
 		// 1. The node pool already has compute class taint.
 		// 2. The node pool already has GPU taint.
 		// 3. The node pool already has TPU taint.
 		// 4. The node pool is using default machine family.
 		// 5. The node pool is using EK machine family in ekAutoprovisioning mode.
-		if !computeClassSpecified && !gpuSpecified && !tpuSpecified && !isDefaultFamily && !isEkFamily {
+		// 6. The node pool is using NAP default fallback machine family for Autopilot workloads.
+		if !computeClassSpecified && !gpuSpecified && !tpuSpecified && !isDefaultFamily && !isEkFamily && !isAutopilotNapDefaultFallback {
 			spec.Taints = append(spec.Taints, apiv1.Taint{
 				Key:    gkelabels.MachineFamilyLabel,
 				Value:  machineFamily.Name(),
 				Effect: apiv1.TaintEffectNoSchedule,
 			})
+		}
+
+		// Fallback node pools hosting general-purpose workloads must carry the
+		// general-purpose pod family label to ensure standard general-purpose pod billing rates.
+		if isAutopilotNapDefaultFallback {
+			spec.Labels[gkelabels.GeneralPurposePodFamilyLabel] = "true"
 		}
 	}
 

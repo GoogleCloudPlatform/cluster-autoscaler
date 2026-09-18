@@ -65,6 +65,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/daemonsetmutation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
@@ -1070,10 +1071,10 @@ func TestCSNPod(t *testing.T) {
 				})
 
 				if tc.wantCSNLabelAndSoftTaint {
-					assert.Equal(t, csn.SoftWorkloadSeparationValue, node.Labels[csn.SoftWorkloadSeparationKey])
+					assert.Equal(t, metadata.SoftWorkloadSeparationValue, node.Labels[metadata.SoftWorkloadSeparationKey])
 					assert.True(t, foundTaint, "Expected to find taint %v")
 				} else {
-					assert.NotEqual(t, csn.SoftWorkloadSeparationValue, node.Labels[csn.SoftWorkloadSeparationKey])
+					assert.NotEqual(t, metadata.SoftWorkloadSeparationValue, node.Labels[metadata.SoftWorkloadSeparationKey])
 					assert.False(t, foundTaint, "Did not expect to find taint %v")
 				}
 

@@ -1916,6 +1916,36 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "NodePoolSpec with networkTags sets Tags on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"network-tags.cloud.google.com/secure-firewall": "true",
+					"network-tags.cloud.google.com/allow-ssh":       "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						Tags: []string{"allow-ssh", "secure-firewall"},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "NodePoolSpec with maintenance exclusion on static cluster enables EoS native setting",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{
@@ -2036,6 +2066,38 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					},
 					Name:          nodePoolName,
 					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service subnet priorities specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"internal.subnet-priority-0": "custom-subnet",
+					"internal.pod-range-0":       "custom-pod-range",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						Subnetwork:      "custom-subnet",
+						PodRange:        "custom-pod-range",
+						ForceSendFields: []string{"Subnetwork", "PodRange"},
+					},
 					PlacementPolicy: &gke_api_beta.PlacementPolicy{
 						Type: "TYPE_UNSPECIFIED",
 					},
@@ -5201,6 +5263,37 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 				"NodeDrainConfigGraceTerminationDuration":         "43200s",
 				"NodeDrainConfigRespectPdbDuringNodePoolDeletion": "true",
 				labels.GvnicLabelKey:                              "true",
+			},
+		},
+		{
+			name: "Nodepool with SubnetPriorities (subnetwork and podRange) set",
+			apiClusterResponse: `{
+				"name": "cluster-1",
+				"nodePools": [
+				  {
+					"name": "pool-1",
+					"config": {
+					  "machineType": "e2-medium"
+					},
+					"networkConfig": {
+					  "subnetwork": "projects/my-project/regions/us-central1/subnetworks/custom-subnet",
+					  "podRange": "custom-pod-range"
+					},
+					"autoscaling": {
+					  "enabled": false,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"internal.subnet-priority-0":       "custom-subnet",
+				"internal.pod-range-0":             "custom-pod-range",
+				"internal.private-node-from-ccc":   "false",
+				"internal.private-node-from-label": "false",
+				labels.GvnicLabelKey:               "false",
 			},
 		},
 	}

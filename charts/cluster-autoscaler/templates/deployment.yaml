@@ -50,7 +50,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      {{- with .Values.imagePullSecrets }}
+      {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -89,9 +89,6 @@ spec:
           args:
             {{- $profile := index .Values.autoscalingProfiles .Values.config.autoscalingProfile | default dict }}
             {{- $flags := merge (deepCopy .Values.config.flags) $profile }}
-            {{- if .Values.cloudConfig }}
-            {{- $_ := set $flags "cloud-config" "/etc/gce.conf" }}
-            {{- end }}
             {{- if .Values.cluster.name }}
             {{- $_ := set $flags "cluster-name" .Values.cluster.name }}
             {{- end }}
@@ -161,25 +158,14 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          {{- if or .Values.cloudConfig .Values.volumeMounts }}
+          {{- if or .Values.volumeMounts }}
           volumeMounts:
-            {{- if .Values.cloudConfig }}
-            - name: cloud-config
-              mountPath: /etc/gce.conf
-              subPath: gce.conf
-              readOnly: true
-            {{- end }}
             {{- with .Values.volumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           {{- end }}
-      {{- if or .Values.cloudConfig .Values.volumes }}
+      {{- if .Values.volumes }}
       volumes:
-        {{- if .Values.cloudConfig }}
-        - name: cloud-config
-          configMap:
-            name: {{ include "cluster-autoscaler.fullname" . }}-cloud-config
-        {{- end }}
         {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

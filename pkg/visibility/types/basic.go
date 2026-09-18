@@ -22,6 +22,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -50,6 +51,16 @@ type Node struct {
 	Name     string
 	Mig      *GkeMig
 	UtilInfo *utilization.Info
+	// BlockingLabel is the scale-down-blocking node label that kept this node out
+	// of scale-down (one of the configured --scale-down-blocking-node-labels), or
+	// nil if the node wasn't blocked by such a label.
+	BlockingLabel *BlockingLabel
+}
+
+// BlockingLabel identifies the node label that kept a node out of scale-down.
+type BlockingLabel struct {
+	Key   string
+	Value string
 }
 
 // GkeMig contains information about a GKE MIG.
@@ -150,6 +161,12 @@ func ConvertNode(node *apiv1.Node, utilInfo *utilization.Info, nodeGroup cloudpr
 	result := &Node{
 		Name:     node.Name,
 		UtilInfo: utilInfo,
+	}
+
+	// Surface the scale-down-blocking label as a generic BlockingLabel. Currently
+	// only the TPU dynamic-slicing Slice label is threaded through visibility.
+	if v := node.Labels[gke_labels.TPUSliceLabel]; v != "" {
+		result.BlockingLabel = &BlockingLabel{Key: gke_labels.TPUSliceLabel, Value: v}
 	}
 
 	if nodeGroup != nil {

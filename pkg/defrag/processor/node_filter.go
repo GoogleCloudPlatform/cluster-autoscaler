@@ -19,9 +19,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
@@ -39,6 +41,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 // defragNodeFilterFactory is a factory for defragNodeFilter.
@@ -50,16 +53,18 @@ type defragNodeFilterFactory struct {
 	drainabilityRules       rules.Rules
 	clock                   clock.PassiveClock
 	minQuotasTrackerFactory *resourcequotas.TrackerFactory
+	ccLister                lister.Lister
 }
 
 // newDefragNodeFilterFactory returns a new instance of defragNodeFilterFactory
-func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, minQuotasTrackerFactory *resourcequotas.TrackerFactory) *defragNodeFilterFactory {
+func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProcessor, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, minQuotasTrackerFactory *resourcequotas.TrackerFactory, ccLister lister.Lister) *defragNodeFilterFactory {
 	return &defragNodeFilterFactory{
 		scaleDownNodeProcessor:  scaleDownNodeProcessor,
 		deleteOptions:           deleteOptions,
 		drainabilityRules:       drainabilityRules,
 		clock:                   clock.RealClock{},
 		minQuotasTrackerFactory: minQuotasTrackerFactory,
+		ccLister:                ccLister,
 	}
 }
 
@@ -81,6 +86,8 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.Autoscalin
 	if err != nil {
 		return nil, fmt.Errorf("failed to create min quotas tracker: %w", err)
 	}
+	disruptionTracker := NewMaxNodeDisruptionTracker(ctx, f.ccLister, allNodes)
+
 	return &defragNodeFilter{
 		scaleDownNodeProcessor:   f.scaleDownNodeProcessor,
 		deleteOptions:            f.deleteOptions,
@@ -89,6 +96,7 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.Autoscalin
 		scaleDownCandidatesCache: cache,
 		nodeGroupSize:            utils.GetNodeGroupSizeMap(context.TODO(), ctx.CloudProvider),
 		minQuotasTracker:         tracker,
+		disruptionTracker:        disruptionTracker,
 	}, nil
 }
 
@@ -125,6 +133,7 @@ type defragNodeFilter struct {
 
 	scaleDownCandidatesCache sets.Set[string]
 	minQuotasTracker         *resourcequotas.Tracker
+	disruptionTracker        *MaxNodeDisruptionTracker
 }
 
 // newValidCandidateNodes returns nodes that could be considered for defrag candidates.
@@ -148,6 +157,48 @@ func (f *defragNodeFilter) newValidCandidateNodes(ctx *ca_context.AutoscalingCon
 		nodeNames = append(nodeNames, nodeInfo.Node().Name)
 	}
 	return nodeNames, nil
+}
+
+// isNodeOngoingDeletion returns true if the node is in the process of deletion.
+func (f *defragNodeFilter) isNodeOngoingDeletion(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
+	if node.DeletionTimestamp != nil {
+		return true
+	}
+	if actuation.IsNodeBeingDeleted(node, f.clock.Now()) || taints.HasToBeDeletedTaint(node) {
+		return true
+	}
+	if node.Spec.Unschedulable {
+		return true
+	}
+	if ctx.ScaleDownActuator != nil && !reflect.ValueOf(ctx.ScaleDownActuator).IsNil() {
+		status := ctx.ScaleDownActuator.CheckStatus()
+		if status != nil && !reflect.ValueOf(status).IsNil() {
+			empty, drained := status.DeletionsInProgress()
+			if slices.Contains(empty, node.Name) || slices.Contains(drained, node.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// filterDeletedCandidateNodes removes candidate nodes that are no longer present in the cluster or are being deleted
+func (f *defragNodeFilter) filterDeletedCandidateNodes(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate) {
+	var nodeNames []string
+	for _, nodeName := range candidate.Nodes {
+		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+		if err != nil {
+			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
+				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
+			}
+			continue
+		}
+		if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
+			continue
+		}
+		nodeNames = append(nodeNames, nodeName)
+	}
+	candidate.Nodes = nodeNames
 }
 
 // filterInvalidCandidateNodes removes candidate nodes that are no longer valid
@@ -181,7 +232,7 @@ func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingConte
 		klog.V(4).Infof("Defrag: node %s has no-scale-down annotation", nodeName)
 		return false
 	}
-	if actuation.IsNodeBeingDeleted(nodeInfo.Node(), f.clock.Now()) {
+	if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
 		klog.V(4).Infof("Defrag: node %s is being deleted", nodeName)
 		return false
 	}
@@ -311,6 +362,23 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.Autoscali
 		f.nodeGroupSize[nodeGroupId]--
 	}
 	return result
+}
+
+// filterNodesViolatingMaxDisruption filters scale-down candidates that would violate
+// their ComputeClass's MaxNodeDisruption limit.
+func (f *defragNodeFilter) filterNodesViolatingMaxDisruption(ctx *ca_context.AutoscalingContext, nodes []string) []string {
+	if f.disruptionTracker != nil {
+		return f.disruptionTracker.FilterNodesViolatingMaxDisruption(ctx, nodes)
+	}
+	return nodes
+}
+
+// reserveMaxDisruptionBudget reserves disruption budget for an existing candidate
+// that has not yet scaled down, without modifying candidate.Nodes.
+func (f *defragNodeFilter) reserveMaxDisruptionBudget(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate, isNodeScaleDownStarted func(string) bool) {
+	if f.disruptionTracker != nil {
+		f.disruptionTracker.ReserveMaxDisruptionBudget(ctx, candidate, isNodeScaleDownStarted)
+	}
 }
 
 func addTaint(nodeInfo *framework.NodeInfo, taint apiv1.Taint) {

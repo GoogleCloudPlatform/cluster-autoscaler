@@ -497,6 +497,20 @@ func (p *gkeCloudProviderImpl) GetAutoprovisioningDefaultFamily() machinetypes.M
 	return p.gkeManager.GetAutoprovisioningDefaultFamily()
 }
 
+// GetGeneralPurposeMachineFamilies returns the list of machine families enabled for general purpose workloads.
+func (p *gkeCloudProviderImpl) GetGeneralPurposeMachineFamilies() []string {
+	return p.gkeManager.GetGeneralPurposeMachineFamilies()
+}
+
+// IsAutopilotNapDefaultFallbackEnabled returns true if the NapDefaultFallback experiment is enabled.
+func (p *gkeCloudProviderImpl) IsAutopilotNapDefaultFallbackEnabled() bool {
+	if p == nil || p.experimentsManager == nil {
+		return false
+	}
+	return p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotNapDefaultFallbackMinCAVersionFlag, false) &&
+		p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotNapDefaultFallbackEnabledFlag, true)
+}
+
 func (p *gkeCloudProviderImpl) ResizingEnabled(machineFamily string) bool {
 	return p.gkeManager.ResizingEnabled(machineFamily)
 }
@@ -524,11 +538,6 @@ func (p *gkeCloudProviderImpl) IsResizableVmWithinPodFamilyEnabled(machineFamily
 // IsExtendedFallbacksEnabled returns true if extended fallbacks are enabled.
 func (p *gkeCloudProviderImpl) IsExtendedFallbacksEnabled() bool {
 	return p.gkeManager.IsExtendedFallbacksEnabled()
-}
-
-// IsEkSpotEnabled returns true if EKs can be used as spot VMs
-func (p *gkeCloudProviderImpl) IsEkSpotEnabled() bool {
-	return p.gkeManager.IsEkSpotEnabled()
 }
 
 // GetMachineType gets gce.MachineType for a given type name and location.
@@ -2313,7 +2322,6 @@ type Config struct {
 	ClusterLocationsObserver            ClusterLocationsObserver
 	AutoscalingOptsProvider             AutoscalingOptionsProvider
 	AutoprovisioningEligibility         AutoprovisioningEligibility
-	EkSpotEnabledCache                  ekvm_provider_interfaces.ExperimentFlagCache[bool]
 	ResizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
 	LookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
 	ProviderConfigObserver              multitenancy.ProviderConfigObserver
@@ -2368,6 +2376,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		Regional:                          opts.Regional,
 		AutopilotEnabled:                  opts.AutopilotEnabled,
 		napDefaultMachineTypeFamily:       opts.NapDefaultMachineTypeFamily,
+		generalPurposeMachineFamilies:     opts.GeneralPurposeMachineFamilies,
 		AutopilotHigherMaxPodsPerNode:     opts.AutopilotHigherMaxPodsPerNode,
 		MultiNetworkSupportEnabled:        opts.MultiNetworkSupportEnabled,
 		bootDiskConfigEnabled:             opts.BootDiskSelectorEnabled,
@@ -2402,7 +2411,6 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		opts.GCEOptions.LocalSSDDiskSizeProvider,
 		config.AutoscalingOptsProvider,
 		config.AutoprovisioningEligibility,
-		config.EkSpotEnabledCache,
 		config.ResizableVmAutoprovisioningProvider,
 		config.LookaheadBufferStrategyProvider,
 		config.DraResourcePredictor,

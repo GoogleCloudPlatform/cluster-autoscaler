@@ -27,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -58,7 +59,7 @@ func (m *mockTemplateNodeInfoProvider) CleanUp() {
 
 func TestNodeInfoProvider_Process(t *testing.T) {
 	csnMig := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{
-		csn.SoftWorkloadSeparationKey: csn.SoftWorkloadSeparationValue,
+		metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 	}}).Build()
 	nonCsnMig := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{Labels: map[string]string{}}).Build()
 

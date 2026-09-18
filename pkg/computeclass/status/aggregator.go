@@ -47,10 +47,11 @@ type Aggregator struct {
 	inputCh            chan UpdateMessage
 	ctrClient          ctrClient.Client
 	experimentsManager experiments.Manager
+	enableConfigHash   bool
 }
 
 // NewAggregator creates a new Aggregator.
-func NewAggregator(client client.Client, lister lister.Lister, inputCh chan UpdateMessage, ctrClient ctrClient.Client, experimentsManager experiments.Manager) *Aggregator {
+func NewAggregator(client client.Client, lister lister.Lister, inputCh chan UpdateMessage, ctrClient ctrClient.Client, experimentsManager experiments.Manager, enableConfigHash bool) *Aggregator {
 	return &Aggregator{
 		client:             client,
 		lister:             lister,
@@ -59,6 +60,7 @@ func NewAggregator(client client.Client, lister lister.Lister, inputCh chan Upda
 		inputCh:            inputCh,
 		ctrClient:          ctrClient,
 		experimentsManager: experimentsManager,
+		enableConfigHash:   enableConfigHash,
 	}
 }
 
@@ -107,7 +109,14 @@ func (a *Aggregator) processMessage(msg UpdateMessage) {
 	// This merges the partial update into the master state safely.
 	status := a.getOrCreateStatus(crd)
 	before := status.GetCRDStatusPatch().DeepCopyObject()
+
+	if a.enableConfigHash && computeclass.IsComputeClassConfigHashEnabled(a.experimentsManager) {
+		// Surface CCC config hashes to the user via priority statuses.
+		// These hashes are used to determine whether a node pool was created with the current configuration.
+		populateConfigHashes(status, crd)
+	}
 	msg.Mutate(status)
+
 	after := status.GetCRDStatusPatch()
 
 	// 3. Mark as Dirty only if status actually changed
@@ -178,4 +187,17 @@ func errorCode(err error) string {
 		return strconv.Itoa(int(statusErr.Status().Code))
 	}
 	return "error"
+}
+
+func populateConfigHashes(status crd.CRDStatus, crdObj crd.CRD) {
+	for idx, rule := range crdObj.Rules() {
+		if hash := crdObj.ConfigHash(rule); hash != "" {
+			status.UpdateRuleConfigHash(strconv.Itoa(idx), hash)
+		}
+	}
+	if crdObj.ScaleUpAnyway() {
+		if hash := crdObj.ConfigHash(nil); hash != "" {
+			status.UpdateRuleConfigHash("ScaleUpAnyway", hash)
+		}
+	}
 }

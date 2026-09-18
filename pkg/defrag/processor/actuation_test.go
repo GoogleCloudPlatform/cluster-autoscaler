@@ -69,7 +69,7 @@ func TestStartScaleDown(t *testing.T) {
 				buildPdb("pdb-1", 2),
 				buildPdb("pdb-2", 2),
 			},
-			candidate:                     &defrag.Candidate{},
+			candidate:                     &defrag.Candidate{IsAtomic: true},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionStatus:       &status.ScaleDownStatus{},
@@ -89,7 +89,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{},
+			candidate:                     &defrag.Candidate{IsAtomic: true},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionStatus:       &status.ScaleDownStatus{},
@@ -109,7 +109,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionNodes: []*apiv1.Node{
@@ -139,7 +139,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionNodes: []*apiv1.Node{
@@ -170,7 +170,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionNodes: []*apiv1.Node{
@@ -200,7 +200,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
 			wantStartDeletionNodes: []*apiv1.Node{
@@ -225,7 +225,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			scaledDownNodes:               []string{"n1"},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
@@ -254,7 +254,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			scaledDownNodes:               []string{"n1"},
 			isScaleDownStatusProcessorSet: false,
 			wantStartDeletionCall:         true,
@@ -283,7 +283,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n4"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n4"}},
 			wantStartDeletionStatus:       &status.ScaleDownStatus{},
 			isScaleDownStatusProcessorSet: true,
 			wantPdbs: []*v1.PodDisruptionBudget{
@@ -303,7 +303,7 @@ func TestStartScaleDown(t *testing.T) {
 				test.BuildTestNode("n2", 100, 1): {pdbPod1, pdbPod3},
 				test.BuildTestNode("n3", 100, 1): {pdbPod2, pdbPod3},
 			},
-			candidate:                     &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantStartDeletionStatus:       &status.ScaleDownStatus{},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
@@ -391,13 +391,13 @@ func TestIsScaleDownStarted(t *testing.T) {
 		{
 			name:            "candidate with no nodes",
 			scaledDownNodes: map[string]time.Time{},
-			candidate:       &defrag.Candidate{},
+			candidate:       &defrag.Candidate{IsAtomic: true},
 			wantStarted:     true,
 		},
 		{
 			name:            "candidate with a single non-scaled down node",
 			scaledDownNodes: map[string]time.Time{},
-			candidate:       &defrag.Candidate{Nodes: []string{"n"}},
+			candidate:       &defrag.Candidate{IsAtomic: true, Nodes: []string{"n"}},
 			wantStarted:     false,
 		},
 		{
@@ -405,7 +405,7 @@ func TestIsScaleDownStarted(t *testing.T) {
 			scaledDownNodes: map[string]time.Time{
 				"n": time.Now(),
 			},
-			candidate:   &defrag.Candidate{Nodes: []string{"n"}},
+			candidate:   &defrag.Candidate{IsAtomic: true, Nodes: []string{"n"}},
 			wantStarted: true,
 		},
 		{
@@ -415,7 +415,7 @@ func TestIsScaleDownStarted(t *testing.T) {
 				"n2": time.Now(),
 				"n3": time.Now(),
 			},
-			candidate:   &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:   &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantStarted: true,
 		},
 		{
@@ -424,13 +424,13 @@ func TestIsScaleDownStarted(t *testing.T) {
 				"n1": time.Now(),
 				"n3": time.Now(),
 			},
-			candidate:   &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:   &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantStarted: false,
 		},
 		{
 			name:            "candidate multiple nodes, none scaled down",
 			scaledDownNodes: map[string]time.Time{},
-			candidate:       &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:       &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantStarted:     false,
 		},
 	}
@@ -456,13 +456,13 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 		{
 			name:            "candidate with no nodes",
 			scaledDownNodes: map[string]time.Time{},
-			candidate:       &defrag.Candidate{},
+			candidate:       &defrag.Candidate{IsAtomic: true},
 			wantTimedOut:    false,
 		},
 		{
 			name:            "candidate with a single non-scaled down node",
 			scaledDownNodes: map[string]time.Time{},
-			candidate:       &defrag.Candidate{Nodes: []string{"n"}},
+			candidate:       &defrag.Candidate{IsAtomic: true, Nodes: []string{"n"}},
 			wantTimedOut:    false,
 		},
 		{
@@ -470,7 +470,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 			scaledDownNodes: map[string]time.Time{
 				"n": time.Now(),
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n"}},
 			wantTimedOut: false,
 		},
 		{
@@ -478,7 +478,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 			scaledDownNodes: map[string]time.Time{
 				"n": timedOut,
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n"}},
 			wantTimedOut: true,
 		},
 		{
@@ -488,7 +488,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 				"n2": time.Now(),
 				"n3": time.Now(),
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantTimedOut: false,
 		},
 		{
@@ -498,7 +498,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 				"n2": timedOut,
 				"n3": time.Now(),
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantTimedOut: true,
 		},
 		{
@@ -508,7 +508,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 				"n2": timedOut,
 				"n3": timedOut,
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantTimedOut: true,
 		},
 		{
@@ -517,7 +517,7 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 				"n1": timedOut,
 				"n2": timedOut,
 			},
-			candidate:    &defrag.Candidate{Nodes: []string{"n1", "n2", "n3"}},
+			candidate:    &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			wantTimedOut: true,
 		},
 	}
@@ -532,8 +532,8 @@ func TestIsScaleDownTimedOut(t *testing.T) {
 }
 
 func TestCleanScaleDownInfo(t *testing.T) {
-	c1 := &defrag.Candidate{Nodes: []string{"n1"}}
-	c2 := &defrag.Candidate{Nodes: []string{"n2", "n3"}}
+	c1 := &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}}
+	c2 := &defrag.Candidate{IsAtomic: true, Nodes: []string{"n2", "n3"}}
 
 	testCases := []struct {
 		name                string
