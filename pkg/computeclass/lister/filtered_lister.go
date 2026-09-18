@@ -41,12 +41,15 @@ type FilteredCccLister struct {
 // NewFilteredCccLister creates a new FilteredCccLister wrapper, or returns base lister i.e. disables filtering if autoscalerNames is empty.
 func NewFilteredCccLister(base Lister, autoscalerNames []string) Lister {
 	if len(autoscalerNames) == 0 {
+		klog.Infof("ComputeClass ownership filtering disabled (no autoscalerNames)")
 		return base
 	}
+	handlesUnannotated := slices.Contains(autoscalerNames, options.UnannotatedAutoscalerName)
+	klog.Infof("ComputeClass ownership filtering enabled for autoscalerNames=%v (handles unannotated: %t)", autoscalerNames, handlesUnannotated)
 	return &FilteredCccLister{
 		baseLister:         base,
 		autoscalerNames:    autoscalerNames,
-		handlesUnannotated: slices.Contains(autoscalerNames, options.UnannotatedAutoscalerName),
+		handlesUnannotated: handlesUnannotated,
 	}
 }
 
