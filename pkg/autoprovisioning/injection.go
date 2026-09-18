@@ -2620,7 +2620,7 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 	if v, ok := pReq.LabelReq.GetSingleValue(gkelabels.ReservationBlocksLabel); ok {
 		ngReq.reservation.block = v
 	}
-	subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, false)
+	subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, true)
 	if v, ok := pReq.LabelReq.GetSingleValue(gkelabels.ReservationSubBlocksLabel); subBlocksEnabled && ok {
 		ngReq.reservation.subBlock = v
 	}
@@ -3004,7 +3004,7 @@ func (rg ReservationGenerator) UpdateParameters(params *nodeGroupParameters, ngR
 		params.systemLabels[gkelabels.ReservationBlocksLabel] = ngReq.reservation.block
 		params.systemLabels[gkelabels.ReservationBlocksCountLabel] = fmt.Sprintf("%d", ngReq.reservation.blockCount)
 	}
-	if rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, false) && ngReq.reservation.subBlock != "" {
+	if rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, true) && ngReq.reservation.subBlock != "" {
 		params.systemLabels[gkelabels.ReservationSubBlocksLabel] = ngReq.reservation.subBlock
 		params.systemLabels[gkelabels.ReservationSubBlocksCountLabel] = fmt.Sprintf("%d", ngReq.reservation.subBlockCount)
 	}
@@ -3038,7 +3038,7 @@ func (rg ReservationGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, 
 	if labeledReservationAffinity != "" {
 		gkeReservationAffinity, _ = reservations.GkeAffinityFromSelectorValue(labeledReservationAffinity)
 	}
-	subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, false)
+	subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, true)
 	if !subBlocksEnabled {
 		reservationSubBlock = ""
 	}
@@ -3112,7 +3112,7 @@ func (rg ReservationGenerator) matchReservationBlock(req *reservationRequirement
 	for _, reservationBlock := range reservationBlocks {
 		if req.block == reservationBlock.Name {
 			req.blockCount = reservationBlock.Count
-			subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, false)
+			subBlocksEnabled := rg.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubblocksTargetingEnabledFlag, true)
 			if subBlocksEnabled && req.subBlock != "" {
 				for _, subBlock := range reservationBlock.SubBlocks {
 					if req.subBlock == subBlock.Name {

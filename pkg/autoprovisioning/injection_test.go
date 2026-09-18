@@ -1500,7 +1500,7 @@ func TestNodeGroupParameters(t *testing.T) {
 				WithAutoprovisioningEnabled(tc.nodeAutoprovisioningEnabled).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			em := experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag)
+			em := experiments.NewMockManager()
 			opts := AutoprovisioningNodeGroupManagerOptions{
 				CloudProvider:                  provider,
 				AllowlistedSystemLabelsMatcher: buildTestMatcher(t, "cloud.google.com/my-feature"),
@@ -11971,6 +11971,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		reservations      []*gce_api.Reservation
 		reservationBlocks map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 		req               *reservationRequirements
+		subBlocksDisabled bool
 		wantError         bool
 		expectedError     error
 	}{
@@ -12088,6 +12089,35 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 				gceclient.ReservationRef{Name: "rsv1", Project: projectID, BlockName: "rb1", SubBlockName: "rsb2"},
 				"reservation sub-block 'rsb2' not found"),
 		},
+		{
+			name: "sub-block specified, sub-blocks disabled",
+			reservations: []*gce_api.Reservation{
+				rsv1,
+			},
+			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
+				rsv1Key: {
+					{
+						Name:       "rb1",
+						Count:      3,
+						InUseCount: 1,
+						Status:     "READY",
+						Zone:       "zone-A",
+						SubBlocks: []*gceclient.GceReservationSubBlock{
+							{Name: "rsb1", Count: 2, Status: "READY"},
+						},
+					},
+				},
+			},
+			req: &reservationRequirements{
+				name:     "rsv1",
+				project:  projectID,
+				zone:     "zone-A",
+				block:    "rb1",
+				subBlock: "rsb2",
+			},
+			subBlocksDisabled: true,
+			wantError:         false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -12096,10 +12126,16 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 			blocksPuller := reservations.NewBlocksPuller(reservations.NewFakeBlocksPullerProvider(tc.reservationBlocks, nil), reservationsPuller)
 			blocksPuller.Loop()
 
+			var em experiments.Manager
+			if tc.subBlocksDisabled {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ReservationSubblocksTargetingEnabledFlag: false}, nil)
+			} else {
+				em = experiments.NewMockManager()
+			}
 			rg := ReservationGenerator{
 				reservationsPuller:      reservationsPuller,
 				reservationBlocksPuller: blocksPuller,
-				experimentsManager:      experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag),
+				experimentsManager:      em,
 			}
 			err := rg.matchReservationBlock(tc.req)
 
@@ -12123,7 +12159,7 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 		name                                  string
 		systemLabels                          map[string]string
 		expectedSpec                          *gkeclient.NodePoolSpec
-		subBlocksEnabled                      bool
+		subBlocksDisabled                     bool
 		reservationsAnyLocationPolicyOverride bool
 	}{
 		{
@@ -12318,10 +12354,10 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 				},
 				ReservationBlockCount: 0,
 			},
+			subBlocksDisabled: true,
 		},
 		{
-			name:             "reservation subBlock specified, subBlocks enabled",
-			subBlocksEnabled: true,
+			name: "reservation subBlock specified, subBlocks enabled",
 			systemLabels: map[string]string{
 				gkelabels.ReservationNameLabel:           "rsv1",
 				gkelabels.ReservationProjectLabel:        "prj",
@@ -12352,8 +12388,8 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := &gkeclient.NodePoolSpec{Labels: make(map[string]string)}
 			var em experiments.Manager
-			if tc.subBlocksEnabled {
-				em = experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag)
+			if tc.subBlocksDisabled {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ReservationSubblocksTargetingEnabledFlag: false}, nil)
 			} else {
 				em = experiments.NewMockManager()
 			}
