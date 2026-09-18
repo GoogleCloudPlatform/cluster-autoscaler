@@ -249,6 +249,9 @@ func (o *PodStateObserver) track(pod *v1.Pod, unschedulableSince *time.Time) {
 	if o.shouldIgnorePod(pod) {
 		return
 	}
+	if o.npcCrdLister != nil && !o.npcCrdLister.IsPodOwned(pod) {
+		return
+	}
 
 	o.mux.Lock()
 	defer o.mux.Unlock()
