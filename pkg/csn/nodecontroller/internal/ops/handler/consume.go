@@ -83,7 +83,6 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		refs = append(refs, inst.Ref)
 	}
 
-	nonBlockingErrorsHandler := h.getNonBlockingErrorsHandler()
 	for i := 0; i < len(refs); i += maxBatchSize {
 		end := i + maxBatchSize
 		if end > len(refs) {
@@ -91,22 +90,33 @@ func (h *ConsumeHandler) resumeInstancesInBatches(op ops.Operation, instancesToR
 		}
 		batch := refs[i:end]
 
-		err := h.cloudProvider.ResumeInstances(op.MIG, batch, nonBlockingErrorsHandler)
+		nodeErrors := make(map[string]string)
+		err := h.cloudProvider.ResumeInstances(op.MIG, batch, h.getNonBlockingErrorsHandler(nodeErrors))
 		status := gceSuccess
 		if err != nil {
 			status = gceFailure
-			result.AddErrForRefSlice(fmt.Errorf("failed to resume instances: %w, instances in batch: %v", err, instancesToResume[i:end]), batch)
+			batchErr := fmt.Errorf("failed to resume instances: %w, instances in batch: %v", err, instancesToResume[i:end])
+			for _, instRef := range batch {
+				if c, ok := nodeErrors[instRef.Name]; ok {
+					result.Errs[instRef.Name] = ops.NewErrorWithCode(c, batchErr)
+					continue
+				}
+				result.Errs[instRef.Name] = batchErr
+			}
 		}
 		opGceBatchSize.WithLabelValues(resumeCall, status).Observe(float64(len(batch)))
 	}
 }
 
-// getNonBlockingErrorsHandler returns a non blocking errors handler (needed by ResumeInstances method) that reports node-level GCE errors to the global backoff.
-func (h *ConsumeHandler) getNonBlockingErrorsHandler() gceclient.NonBlockingErrorsHandler {
-	if h.backoff == nil || !h.stateManager.IsBackoffEnabled() {
-		return nil
-	}
+// getNonBlockingErrorsHandler returns a non blocking errors handler (needed by ResumeInstances method) that records node-level GCE error codes and reports errors to the global backoff.
+func (h *ConsumeHandler) getNonBlockingErrorsHandler(nodeErrors map[string]string) gceclient.NonBlockingErrorsHandler {
 	return func(ref gce.GceRef, code, msg, instanceStatus string) {
+		if nodeErrors != nil {
+			nodeErrors[ref.Name] = ops.ErrorCodeFromGCEError(code, msg, instanceStatus)
+		}
+		if h.backoff == nil || !h.stateManager.IsBackoffEnabled() {
+			return
+		}
 		tn, ok := h.stateManager.Get(ref.Name)
 		if !ok || tn.Node == nil {
 			return

@@ -52,8 +52,13 @@ type MockCloudProvider struct {
 	SuspendErr                     error
 	Instances                      func(gce.GceRef) *gce.GceInstance
 	InvokeNonBlockingErrorsHandler bool
-	NonBlockingErrorCode           string
-	NonBlockingErrorMsg            string
+	// NonBlockingErrorCode specifies the default error code passed to nonBlockingErrorsHandler
+	// when an instance is not in PerInstanceNonBlockingErrorCode.
+	NonBlockingErrorCode string
+	// PerInstanceNonBlockingErrorCode specifies optional per-instance error code overrides (keyed by instance name).
+	// When set, takes precedence over NonBlockingErrorCode for matching instances.
+	PerInstanceNonBlockingErrorCode map[string]string
+	NonBlockingErrorMsg             string
 
 	resumeCalls  []ResumeCall
 	suspendCalls []SuspendCall
@@ -72,6 +77,7 @@ func (m *MockCloudProvider) ResumeInstances(mig gce.GceRef, instances []gce.GceR
 	m.mutex.Lock()
 	invoke := m.InvokeNonBlockingErrorsHandler
 	errCode := m.NonBlockingErrorCode
+	perInstanceErrCode := m.PerInstanceNonBlockingErrorCode
 	errMsg := m.NonBlockingErrorMsg
 	instancesFunc := m.Instances
 	m.resumeCalls = append(m.resumeCalls, ResumeCall{MIG: mig, Instances: instances})
@@ -80,7 +86,11 @@ func (m *MockCloudProvider) ResumeInstances(mig gce.GceRef, instances []gce.GceR
 
 	if invoke && nonBlockingErrorsHandler != nil {
 		for _, ref := range instances {
-			nonBlockingErrorsHandler(ref, errCode, errMsg, instancesFunc(ref).GCEStatus)
+			if code, ok := perInstanceErrCode[ref.Name]; ok {
+				nonBlockingErrorsHandler(ref, code, errMsg, instancesFunc(ref).GCEStatus)
+			} else {
+				nonBlockingErrorsHandler(ref, errCode, errMsg, instancesFunc(ref).GCEStatus)
+			}
 		}
 	}
 	return resErr

@@ -569,3 +569,113 @@ func TestConsumeHandler_HandleBatching(t *testing.T) {
 	assert.Equal(t, nodeCount, totalSize)
 	assert.ElementsMatch(t, expectedRefs, actualRefs)
 }
+
+func TestConsumeHandler_ErrorCode(t *testing.T) {
+	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
+	n := test.CreateNode("node-1", test.StateOpt(csn.NodeStateSuspended))
+
+	tests := []struct {
+		name         string
+		errorCode    string
+		errorMsg     string
+		expectedCode string
+	}{
+		{
+			name:         "stockout",
+			errorCode:    "ZONE_RESOURCE_POOL_EXHAUSTED",
+			expectedCode: gce.ErrorCodeResourcePoolExhausted,
+		},
+		{
+			name:         "quota_exceeded",
+			errorCode:    "QUOTA_EXCEEDED",
+			expectedCode: gce.ErrorCodeQuotaExceeded,
+		},
+		{
+			name:         "permissions_error",
+			errorCode:    "PERMISSIONS_ERROR",
+			expectedCode: gce.ErrorCodePermissions,
+		},
+		{
+			name:         "unmapped_gce_error_code",
+			errorCode:    "RESOURCE_NOT_FOUND",
+			expectedCode: "RESOURCE_NOT_FOUND",
+		},
+		{
+			name:         "gke_internal_error",
+			errorCode:    "",
+			expectedCode: ops.ErrorCodeGKEInternal,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := &statetest.MockStateManager{
+				BackoffEnabled: true,
+				Nodes: map[string]state.TrackedNode{
+					n.Name: {Node: n, State: csn.NodeStateSuspended},
+				},
+			}
+			cp := &test.MockCloudProvider{
+				Instances: func(_ gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+				},
+				NodeNameToMIG: map[string]*gke.GkeMig{
+					n.Name: {},
+				},
+				InvokeNonBlockingErrorsHandler: true,
+				NonBlockingErrorCode:           tc.errorCode,
+				NonBlockingErrorMsg:            tc.errorMsg,
+				ResumeErr:                      errors.New("resume failed"),
+			}
+			kc := &test.MockK8sClient{}
+			h := NewConsumeHandler(sm, cp, kc, &mockCSNCompositeBackoff{})
+
+			res, err := h.Handle(t.Context(), ops.Operation{
+				MIG:       mig,
+				Type:      ops.ConsumeOp,
+				NodeNames: set.New(n.Name),
+			})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedCode, ops.ExtractErrorCode(res.Errs[n.Name]))
+		})
+	}
+}
+
+func TestConsumeHandler_BatchWithMixedErrors(t *testing.T) {
+	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
+	stockoutNode := test.CreateNode("node-stockout", test.StateOpt(csn.NodeStateSuspended))
+	quotaNode := test.CreateNode("node-quota", test.StateOpt(csn.NodeStateSuspended))
+	noGceErrorNode := test.CreateNode("node-no-gce-error", test.StateOpt(csn.NodeStateSuspended))
+
+	sm := &statetest.MockStateManager{
+		Nodes: map[string]state.TrackedNode{
+			stockoutNode.Name:   {Node: stockoutNode, State: csn.NodeStateSuspended},
+			quotaNode.Name:      {Node: quotaNode, State: csn.NodeStateSuspended},
+			noGceErrorNode.Name: {Node: noGceErrorNode, State: csn.NodeStateSuspended},
+		},
+	}
+
+	cp := &test.MockCloudProvider{
+		Instances: func(_ gce.GceRef) *gce.GceInstance {
+			return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+		},
+		InvokeNonBlockingErrorsHandler: true,
+		PerInstanceNonBlockingErrorCode: map[string]string{
+			stockoutNode.Name: "ZONE_RESOURCE_POOL_EXHAUSTED",
+			quotaNode.Name:    "QUOTA_EXCEEDED",
+		},
+		ResumeErr: errors.New("batch resume failed"),
+	}
+
+	h := NewConsumeHandler(sm, cp, &test.MockK8sClient{}, nil)
+	res, err := h.Handle(t.Context(), ops.Operation{
+		MIG:       mig,
+		Type:      ops.ConsumeOp,
+		NodeNames: set.New(stockoutNode.Name, quotaNode.Name, noGceErrorNode.Name),
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, gce.ErrorCodeResourcePoolExhausted, ops.ExtractErrorCode(res.Errs[stockoutNode.Name]))
+	assert.Equal(t, gce.ErrorCodeQuotaExceeded, ops.ExtractErrorCode(res.Errs[quotaNode.Name]))
+	assert.Equal(t, ops.ErrorCodeGKEInternal, ops.ExtractErrorCode(res.Errs[noGceErrorNode.Name]))
+}
