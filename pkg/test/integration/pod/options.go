@@ -205,3 +205,21 @@ func WithLabels(labels map[string]string) func(p *apiv1.Pod) {
 		}
 	}
 }
+
+// WithPodAffinity requires the pod to run in the same topology domain as pods
+// with the given labels.
+func WithPodAffinity(matchLabels map[string]string, topologyKey string) func(p *apiv1.Pod) {
+	return func(p *apiv1.Pod) {
+		if p.Spec.Affinity == nil {
+			p.Spec.Affinity = &apiv1.Affinity{}
+		}
+		p.Spec.Affinity.PodAffinity = &apiv1.PodAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: []apiv1.PodAffinityTerm{
+				{
+					LabelSelector: &metav1.LabelSelector{MatchLabels: matchLabels},
+					TopologyKey:   topologyKey,
+				},
+			},
+		}
+	}
+}

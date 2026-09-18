@@ -62,28 +62,29 @@ func (f *Client) MustGetTargetSize(t testing.TB, np *gkeapibeta.NodePool) int64 
 	t.Helper()
 	var size int64
 	for _, loc := range np.Locations {
-		migs, err := f.gceClient.FetchAllMigs(loc)
-		if err != nil {
-			t.Fatalf("Failed to fetch MIGs in zone %s: %v", loc, err)
-		}
-		found := false
-		for _, mig := range migs {
-			if mig.Name == np.Name {
-				size += mig.TargetSize
-				found = true
-				break
-			}
-		}
-		if !found {
-			// If the MIG is not found in a specific zone, its size is effectively 0.
-			// While the NodePool itself spans across multiple zones of a region, GKE
-			// Autoscaler may only instantiate the underlying MIG in a single specific zone
-			// (e.g. for TPUs where topologies are strictly zonal). We must gracefully skip
-			// the zones where a MIG was not created.
-			continue
-		}
+		size += f.MustGetTargetSizeInZone(t, np, loc)
 	}
 	return size
+}
+
+// MustGetTargetSizeInZone returns the target size of the node pool's MIG in the
+// given zone.
+func (f *Client) MustGetTargetSizeInZone(t testing.TB, np *gkeapibeta.NodePool, zone string) int64 {
+	t.Helper()
+	migs, err := f.gceClient.FetchAllMigs(zone)
+	if err != nil {
+		t.Fatalf("Failed to fetch MIGs in zone %s: %v", zone, err)
+	}
+	for _, mig := range migs {
+		if mig.Name == np.Name {
+			return mig.TargetSize
+		}
+	}
+	// If the MIG is not found in a specific zone, its size is effectively 0.
+	// While the NodePool itself spans across multiple zones of a region, GKE
+	// Autoscaler may only instantiate the underlying MIG in a single specific zone
+	// (e.g. for TPUs where topologies are strictly zonal).
+	return 0
 }
 
 func (f *Client) MustGetNodePool(t testing.TB, name string) *gkeapibeta.NodePool {

@@ -58,7 +58,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
-	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -287,10 +286,7 @@ func DefaultAutoscalingBuilder(
 
 	fakeNpcCrdClient := npc_client.NewClientFromClientsets(cccClient)
 
-	npcLister, err := npc_lister.NewCccLister(ctx, fakeNpcCrdClient, tracker)
-	if err != nil {
-		return nil, err
-	}
+	npcLister := autoscaler.MustCreateNpcCrdLister(ctx, tracker, fakeNpcCrdClient)
 
 	gkeCache := infra.GkeCache
 	gceCache := infra.GceCache
