@@ -242,6 +242,15 @@ func (b *ComputeClassBuilder) WithLabel(k, v string) *ComputeClassBuilder {
 	return b
 }
 
+// WithAnnotation sets a single annotation.
+func (b *ComputeClassBuilder) WithAnnotation(k, v string) *ComputeClassBuilder {
+	if b.cc.Annotations == nil {
+		b.cc.Annotations = make(map[string]string)
+	}
+	b.cc.Annotations[k] = v
+	return b
+}
+
 // Build returns the constructed ComputeClass.
 func (b *ComputeClassBuilder) Build() *v1.ComputeClass {
 	return b.cc

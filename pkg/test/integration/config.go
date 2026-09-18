@@ -1407,3 +1407,12 @@ func WithClusterScaleToZeroEnabled(delay time.Duration) Option[*config.Autoscali
 		return o
 	}
 }
+
+// WithAutoscalerNames configures the autoscaler names owned by this Cluster
+// Autoscaler instance.
+func WithAutoscalerNames(names ...string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.AutoscalerNames = names
+		return o
+	}
+}
