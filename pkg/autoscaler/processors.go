@@ -767,13 +767,18 @@ func (b *Builder) setUpProcessors(
 		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, options.ScaleDownBlockingNodeLabels)
 	}
 
+	var cccPodFilter *npc_processors.CccAnnotationPodFilter
+	if len(options.AutoscalerNames) > 0 {
+		cccPodFilter = npc_processors.NewCccAnnotationPodFilter(ccLister)
+	}
+
 	pvcLister := informerFactory.Core().V1().PersistentVolumeClaims().Lister()
 	scLister := informerFactory.Storage().V1().StorageClasses().Lister()
 	pvLister := informerFactory.Core().V1().PersistentVolumes().Lister()
 	storageNodeAffinityProcessor := internal_processors.NewStorageNodeAffinityPodListProcessor(pvcLister, scLister, pvLister)
 
 	autoscalingProcessors.PodListProcessor =
-		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconciliationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, storageNodeAffinityProcessor, experimentsManager)
+		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconciliationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, cccPodFilter, storageNodeAffinityProcessor, experimentsManager)
 
 	autoscalingProcessors.ScaleStateNotifier.Register(metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter))
 

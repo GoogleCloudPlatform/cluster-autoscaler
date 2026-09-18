@@ -155,6 +155,10 @@ func TestPodStateObserver(t *testing.T) {
 	var lowPriorityPod = test.BuildTestPod("lowPriorityPod", 100, 1, markPodUnschedulableWithTime(st), func(p *v1.Pod) {
 		p.Spec.Priority = ptr.To(-int32(11))
 	})
+	var unownedPod = test.BuildTestPod("unownedPod", 100, 1, markPodUnschedulableWithTime(st), withComputeClass("unowned-ccc"))
+	var schedUnownedPod = test.BuildTestPod("unownedPod", 100, 1, withComputeClass("unowned-ccc"), func(p *v1.Pod) {
+		p.Spec.NodeName = "some node"
+	})
 	var unSchedDraPod = test.BuildTestPod("draPod", 100, 1, markPodUnschedulableWithTime(st), func(p *v1.Pod) {
 		p.Spec.ResourceClaims = []v1.PodResourceClaim{
 			{
@@ -275,6 +279,15 @@ func TestPodStateObserver(t *testing.T) {
 				{t: st, et: newPodEvent, pod: provReqConsumerPod},
 				{t: st.Add(time.Second * 15), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{provReqConsumerPod}}},
 				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc: "Ignores unowned pod",
+			events: []event{
+				{t: st, et: newPodEvent, pod: unownedPod, scaleUp: nil},
+				{t: st.Add(time.Second * 15), et: scaleUpEvent, pod: nil, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{unownedPod}}},
+				{t: st.Add(time.Second * 20), et: updatePodEvent, pod: schedUnownedPod, scaleUp: nil},
 			},
 			observedReactionType: metrics.NoReaction,
 		},
@@ -684,7 +697,7 @@ func TestPodStateObserver(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers)
+				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{unownedCccs: map[string]bool{"unowned-ccc": true}}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
 				informerFactory.Start(stopCh)
@@ -1100,6 +1113,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 	var p3 = test.BuildTestPod("p3", 200, 2, withComputeClass("test-ccc"), func(p *v1.Pod) { p.Namespace = metav1.NamespaceSystem })
 	var ps = test.BuildScheduledTestPod("p1", 100, 1, "some node")
 	var pn = test.BuildTestPod("pn", 100, 1)
+	var punowned = test.BuildTestPod("punowned", 100, 1, withComputeClass("unowned-ccc"))
 	testCases := []struct {
 		name        string
 		events      []event
@@ -1111,6 +1125,13 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 			name:   "no pending pods",
 			events: []event{},
 			want:   []podstatetypes.PendingPodsPerCccMetric{},
+		},
+		{
+			name: "ignores unowned pod",
+			events: []event{
+				{t: st, et: newPodEvent, pod: punowned, scaleUp: nil},
+			},
+			want: []podstatetypes.PendingPodsPerCccMetric{},
 		},
 		{
 			name: "one unprocessed non-system pod",
@@ -1262,7 +1283,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds}, time.Minute, fakeClock, false, false, -10, nil)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds, unownedCccs: map[string]bool{"unowned-ccc": true}}, time.Minute, fakeClock, false, false, -10, nil)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1362,6 +1383,15 @@ type mockNpcCrdLister struct {
 	npc_lister.Lister
 	fallbackCcc string
 	crds        []crd.CRD
+	unownedCccs map[string]bool
+}
+
+func (m *mockNpcCrdLister) IsNodeOwned(node *v1.Node) bool {
+	return true
+}
+
+func (m *mockNpcCrdLister) IsPodOwned(pod *v1.Pod) bool {
+	return !m.unownedCccs[pod.Spec.NodeSelector[gkelabels.ComputeClassLabel]]
 }
 
 func (m *mockNpcCrdLister) PodCrd(pod *v1.Pod) (crd.CRD, string, error) {

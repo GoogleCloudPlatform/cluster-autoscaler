@@ -93,6 +93,7 @@ type GkeInternalPodListProcessor struct {
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor
 	cbFakePodStateObserver         *cb_metrics.FakePodStateObserver
 	ccMinCapacityProcessor         *cc_processors.MinCapacityPodListProcessor
+	cccPodFilter                   *cc_processors.CccAnnotationPodFilter
 	storageNodeAffinityProcessor   *StorageNodeAffinityPodListProcessor
 
 	experimentsManager experiments.Manager
@@ -120,6 +121,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor,
 	cbReactionTimeReporter *cb_metrics.FakePodStateObserver,
 	ccMinCapacityProcessor *cc_processors.MinCapacityPodListProcessor,
+	cccPodFilter *cc_processors.CccAnnotationPodFilter,
 	storageNodeAffinityProcessor *StorageNodeAffinityPodListProcessor,
 	em experiments.Manager,
 ) *GkeInternalPodListProcessor {
@@ -148,6 +150,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		podStateObserver:               podStateObserver,
 		cbFakePodStateObserver:         cbReactionTimeReporter,
 		ccMinCapacityProcessor:         ccMinCapacityProcessor,
+		cccPodFilter:                   cccPodFilter,
 		storageNodeAffinityProcessor:   storageNodeAffinityProcessor,
 		experimentsManager:             em,
 	}
@@ -196,6 +199,13 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	klog.Infof("Unschedulable pods count before processing: %v", len(unschedulablePods))
+
+	// Filter unowned real unschedulable pods upfront before status aggregation,
+	// storage affinity, Flex Advisor, and CapacityRequest processing.
+	if p.cccPodFilter != nil {
+		unschedulablePods = p.cccPodFilter.FilterPodsByAutoscaler(unschedulablePods)
+		klog.Infof("Unschedulable pods count after CCC autoscaler ownership filtering: %v", len(unschedulablePods))
+	}
 
 	var err error
 

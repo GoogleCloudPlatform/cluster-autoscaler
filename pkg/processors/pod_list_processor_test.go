@@ -32,6 +32,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
@@ -71,14 +72,25 @@ type mockDefaultPodListProcessor struct {
 	called                  bool
 	scaleToZeroCalledBefore bool
 	scaleToZero             *mockScaleToZeroProcessor
+	receivedPods            []*v1.Pod
 }
 
 func (m *mockDefaultPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
+	m.receivedPods = unschedulablePods
 	if m.scaleToZero != nil {
 		m.scaleToZeroCalledBefore = m.scaleToZero.called
 	}
 	return unschedulablePods, nil
+}
+
+type mockCccLister struct {
+	npc_lister.Lister
+	ownership map[string]bool
+}
+
+func (m *mockCccLister) IsPodOwned(pod *v1.Pod) bool {
+	return m.ownership[pod.Name]
 }
 
 func (m *mockDefaultPodListProcessor) CleanUp() {}
@@ -183,7 +195,7 @@ func (m *mockCSNBufferConsumptionProcessor) CleanUp() {
 }
 
 func TestNewGkeInternalPodListProcessorNil(t *testing.T) {
-	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if processor.defragProcessor != nil {
 		t.Errorf("Expected defragProcessor to be strictly nil")
 	}
@@ -647,4 +659,61 @@ func TestCSNBufferConsumptionObservesPodState(t *testing.T) {
 // withoutPod returns a copy of pods without the given pod.
 func withoutPod(pods []*v1.Pod, pod *v1.Pod) []*v1.Pod {
 	return slices.DeleteFunc(slices.Clone(pods), func(p *v1.Pod) bool { return p == pod })
+}
+
+func TestCccPodFilterInPodListProcessor(t *testing.T) {
+	pOwned1 := test.BuildTestPod("owned-1", 100, 1)
+	pOwned2 := test.BuildTestPod("owned-2", 100, 1)
+	pUnowned := test.BuildTestPod("unowned-1", 100, 1)
+
+	initialPods := []*v1.Pod{pOwned1, pUnowned, pOwned2}
+
+	testCases := []struct {
+		name         string
+		cccPodFilter *cc_processors.CccAnnotationPodFilter
+		expectPods   []*v1.Pod
+	}{
+		{
+			name:         "cccPodFilter is nil: all pods pass through",
+			cccPodFilter: nil,
+			expectPods:   []*v1.Pod{pOwned1, pUnowned, pOwned2},
+		},
+		{
+			name: "cccPodFilter filters out unowned pods before downstream processors",
+			cccPodFilter: cc_processors.NewCccAnnotationPodFilter(&mockCccLister{
+				ownership: map[string]bool{"owned-1": true, "owned-2": true, "unowned-1": false},
+			}),
+			expectPods: []*v1.Pod{pOwned1, pOwned2},
+		},
+		{
+			name: "cccPodFilter filters out all pods when none are owned",
+			cccPodFilter: cc_processors.NewCccAnnotationPodFilter(&mockCccLister{
+				ownership: map[string]bool{},
+			}),
+			expectPods: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultPodListProcessor := &mockDefaultPodListProcessor{}
+			processor := &GkeInternalPodListProcessor{
+				defaultPodListerProcessor: defaultPodListProcessor,
+				cccPodFilter:              tc.cccPodFilter,
+				podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+				experimentsManager:        experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
+			}
+
+			res, err := processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, initialPods)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tc.expectPods, defaultPodListProcessor.receivedPods); diff != "" {
+				t.Errorf("defaultPodListProcessor received unexpected pods diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.expectPods, res); diff != "" {
+				t.Errorf("Process returned unexpected pods diff (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
