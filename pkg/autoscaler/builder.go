@@ -789,7 +789,7 @@ func (b *Builder) Build(
 
 	var observers []gke_backoff.BackoffObserver
 	if autoscalingOptions.EnhancedCrdStatusReporting {
-		inf := npc_history.NewCrdBackoffObserver(cccStatusUpdatesCh, b.npcCrdLister, cloudProvider)
+		inf := npc_history.NewCrdBackoffObserver(cccStatusUpdatesCh, b.npcCrdLister, cloudProvider, autoscalingOptions.ProvisioningErrorDetailsEnabled)
 		observers = append(observers, inf)
 	}
 

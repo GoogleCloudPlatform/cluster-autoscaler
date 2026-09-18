@@ -118,6 +118,7 @@ type InternalOptions struct {
 	MetricsPerCccEnabled                         bool
 	PendingPodsPerCccMetricEnabled               bool
 	ScaleUpPerCccMetricsEnabled                  bool
+	ProvisioningErrorDetailsEnabled              bool
 	EnhancedCrdStatusReporting                   bool
 	ZoneTypesEnabled                             bool
 	EnableComputeClassMinCapacity                bool

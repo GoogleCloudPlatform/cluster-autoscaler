@@ -75,6 +75,9 @@ const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedO
 const ComputeClassConfigHashEnabledFlag = "ComputeClassConfigHash::Enabled"
 const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVersion"
 
+const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
+const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
+
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"

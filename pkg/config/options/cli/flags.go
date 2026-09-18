@@ -158,7 +158,8 @@ var (
 	pendingPodsPerCccMetricEnabled = flag.Bool("enable-pending-pods-per-ccc-metric", false, "Whether emmiting metrics pending pods per ccc metric should be enabled.")
 	scaleUpPerCccMetricsEnabled    = flag.Bool("scaleup-per-ccc-metrics-enabled", false, "Whether emitting the scale up metrics per ccc should be enabled.")
 
-	enhancedCrdStatusReporting = flag.Bool("enhanced-crd-status-reporting", false, "Whether to enable enhanced CRD status reporting.")
+	provisioningErrorDetailsEnabled = flag.Bool("provisioning-error-details-enabled", false, "Whether the verbatim cloud provider error message may be included in surfaces visible outside the cluster operator, namely Kubernetes events and ComputeClass status conditions.")
+	enhancedCrdStatusReporting      = flag.Bool("enhanced-crd-status-reporting", false, "Whether to enable enhanced CRD status reporting.")
 
 	parentProduct = flag.String("parent-product", "", "Parent product as a division property for experiments.")
 	clusterHash   = flag.String("cluster-hash", "", "The cluster's hash")
@@ -379,6 +380,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ResolveInstanceRefUsingNodePoolLabel:         *resolveInstanceRefUsingNodePoolLabel,
 		MetricsPerCccEnabled:                         *metricsPerCccEnabled,
 		PendingPodsPerCccMetricEnabled:               *pendingPodsPerCccMetricEnabled,
+		ProvisioningErrorDetailsEnabled:              *provisioningErrorDetailsEnabled,
 		EnhancedCrdStatusReporting:                   *enhancedCrdStatusReporting,
 		ScaleUpPerCccMetricsEnabled:                  *scaleUpPerCccMetricsEnabled,
 		ZoneTypesEnabled:                             *zoneTypesEnabled,

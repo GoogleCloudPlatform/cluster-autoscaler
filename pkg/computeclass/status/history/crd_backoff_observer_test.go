@@ -16,8 +16,10 @@ package history
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -124,7 +126,7 @@ func TestCrdBackoffObserver_FullBackoff(t *testing.T) {
 			mockP := &gke.GkeCloudProviderMock{}
 			mockP.On("IsAutopilotEnabled").Return(false).Maybe()
 
-			informer := NewCrdBackoffObserver(updates, mockL, mockP)
+			informer := NewCrdBackoffObserver(updates, mockL, mockP, false)
 			informer.now = func() time.Time { return now }
 
 			errInfo := defaultErrorInfo
@@ -227,7 +229,7 @@ func TestCrdBackoffObserver_RemoveExpiredBackoffs(t *testing.T) {
 			mockP := &gke.GkeCloudProviderMock{}
 			mockP.On("IsAutopilotEnabled").Return(false).Maybe()
 
-			informer := NewCrdBackoffObserver(updates, mockL, mockP)
+			informer := NewCrdBackoffObserver(updates, mockL, mockP, false)
 			informer.now = func() time.Time { return now }
 
 			ng := buildTestNodeGroup("pool-1", map[string]string{testLabel: crdName})
@@ -267,6 +269,154 @@ func TestCrdBackoffObserver_RemoveExpiredBackoffs(t *testing.T) {
 					t.Fatalf("Expected update message but channel was empty")
 				}
 			}
+		})
+	}
+}
+
+func TestCrdBackoffObserver_ErrorDetails(t *testing.T) {
+	now := time.Now()
+	until := now.Add(5 * time.Minute)
+	crdName := "test-crd"
+	testLabel := "test-label"
+	quotaError := "Quota 'CPUS' exceeded. Limit: 24.0 in region us-central1."
+	quotaMessage := fmt.Sprintf("NodeProvisioning associated with this priority failed due to the QuotaExceeded error. Backing off the priority until %v.", until.Format("2006-01-02 15:04:05 MST"))
+	unknownError := "A completely unknown error occurred."
+	unknownMessage := fmt.Sprintf("NodeProvisioning associated with this priority failed due to the InternalError error. Backing off the priority until %v.", until.Format("2006-01-02 15:04:05 MST"))
+
+	testCases := []struct {
+		name                string
+		includeErrorDetails bool
+		errorInfo           cloudprovider.InstanceErrorInfo
+		wantMessage         string
+		wantReason          string
+	}{
+		{
+			name:                "details omitted when experiment is disabled",
+			includeErrorDetails: false,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "QUOTA_EXCEEDED", ErrorMessage: quotaError},
+			wantMessage:         quotaMessage,
+			wantReason:          "QuotaExceeded",
+		},
+
+		{
+			name:                "details appended when experiment is enabled",
+			includeErrorDetails: true,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "QUOTA_EXCEEDED", ErrorMessage: quotaError},
+			wantMessage:         quotaMessage + " Cloud provider error: " + quotaError,
+			wantReason:          "QuotaExceeded",
+		},
+		{
+			name:                "no suffix when the cloud provider reported no message",
+			includeErrorDetails: true,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "QUOTA_EXCEEDED"},
+			wantMessage:         quotaMessage,
+			wantReason:          "QuotaExceeded",
+		},
+		{
+			name:                "whitespace only message is treated as empty",
+			includeErrorDetails: true,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "QUOTA_EXCEEDED", ErrorMessage: "   \n"},
+			wantMessage:         quotaMessage,
+			wantReason:          "QuotaExceeded",
+		},
+		{
+			name:                "long message is truncated",
+			includeErrorDetails: true,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "QUOTA_EXCEEDED", ErrorMessage: strings.Repeat("x", maxErrorDetailLength+50)},
+			wantMessage:         quotaMessage + " Cloud provider error: " + strings.Repeat("x", maxErrorDetailLength) + "...",
+			wantReason:          "QuotaExceeded",
+		},
+		{
+			name:                "details omitted for unknown error when feature is disabled",
+			includeErrorDetails: false,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "UNKNOWN_ERROR", ErrorMessage: unknownError},
+			wantMessage:         unknownMessage,
+			wantReason:          "InternalError",
+		},
+		{
+			name:                "details appended for unknown error when feature is enabled",
+			includeErrorDetails: true,
+			errorInfo:           cloudprovider.InstanceErrorInfo{ErrorCode: "UNKNOWN_ERROR", ErrorMessage: unknownError},
+			wantMessage:         unknownMessage + " Cloud provider error: " + unknownError,
+			wantReason:          "InternalError",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			updates := make(chan npc_status.UpdateMessage, 10)
+
+			testCrd := crd.NewTestCrd(crd.WithLabel(testLabel),
+				crd.WithName(crdName),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithNodePoolsRule([]string{"pool-1"})),
+				}))
+
+			mockL := npc_lister.NewMockCrdListerWithLabel([]crd.CRD{testCrd}, testLabel)
+			mockP := &gke.GkeCloudProviderMock{}
+			mockP.On("IsAutopilotEnabled").Return(false).Maybe()
+
+			informer := NewCrdBackoffObserver(updates, mockL, mockP, tc.includeErrorDetails)
+			informer.now = func() time.Time { return now }
+
+			informer.OnNpcBackoff(testCrd, 0, tc.errorInfo, until)
+
+			select {
+			case msg := <-updates:
+				testStatus := crd.NewMockCRDStatus(nil)
+				msg.Mutate(testStatus)
+
+				assert.Len(t, testStatus.Conditions, 1)
+				assert.Equal(t, tc.wantMessage, testStatus.Conditions[0].Message)
+				// The reason must stay a short token regardless of the error text.
+				assert.Equal(t, tc.wantReason, testStatus.Conditions[0].Reason)
+			case <-time.After(1 * time.Second):
+				t.Fatalf("Expected update message but channel was empty")
+			}
+		})
+	}
+}
+
+func TestTruncateErrorDetail(t *testing.T) {
+	testCases := []struct {
+		name   string
+		detail string
+		want   string
+	}{
+		{
+			name:   "short message is returned unchanged",
+			detail: "boom",
+			want:   "boom",
+		},
+		{
+			name:   "message at the limit is returned unchanged",
+			detail: strings.Repeat("x", maxErrorDetailLength),
+			want:   strings.Repeat("x", maxErrorDetailLength),
+		},
+		{
+			name:   "longer message is truncated",
+			detail: strings.Repeat("x", maxErrorDetailLength+1),
+			want:   strings.Repeat("x", maxErrorDetailLength) + "...",
+		},
+		{
+			// "ą" is two bytes, so a naive byte slice at the limit would split it and
+			// produce invalid UTF-8, which the apiserver rejects.
+			name:   "multi byte character is not split",
+			detail: strings.Repeat("x", maxErrorDetailLength-1) + "ąą",
+			want:   strings.Repeat("x", maxErrorDetailLength-1) + "...",
+		},
+		{
+			name:   "invalid utf-8 is replaced",
+			detail: "boom\xff boom",
+			want:   "boom\uFFFD boom",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := truncateErrorDetail(tc.detail)
+			assert.Equal(t, tc.want, got)
+			assert.True(t, utf8.ValidString(got), "truncated message must remain valid UTF-8")
 		})
 	}
 }
