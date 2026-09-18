@@ -26,6 +26,7 @@ import (
 
 	machinerynet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -116,6 +117,14 @@ func (l *gkeMigLister) GetBlockedGkeMigs(reason IrretrievableMigBlockReason) []*
 	}
 	return result
 }
+
+// IsMigOwned returns true by default for standard mig lister.
+func (l *gkeMigLister) IsMigOwned(mig cloudprovider.NodeGroup) bool {
+	return true
+}
+
+// InvalidateOwnershipCache is a no-op for standard mig lister.
+func (l *gkeMigLister) InvalidateOwnershipCache() {}
 
 // GetGkeMigsLocations returns list of locations where nodes can be created by existing Migs.
 func (l *gkeMigLister) GetGkeMigsLocations() []string {
