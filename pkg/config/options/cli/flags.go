@@ -165,6 +165,7 @@ var (
 	clusterHash   = flag.String("cluster-hash", "", "The cluster's hash")
 
 	clusterDefaultAllocationStrategy = flag.String("allocation-strategy-default", "", "Default allocation strategy to use when scaling up. Supports: lowest-cost, fleet-efficiency.")
+	experimentsConfigMap             = flag.String("experiments-config-map", "", "The name of the ConfigMap containing experiment configurations.")
 )
 
 // ComponentVersion returns cluster autoscaler component version.
@@ -394,5 +395,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		PodWatchFieldSelector:                        *podWatchFieldSelector,
 		DaemonSetMutationEnabled:                     *daemonSetMutationEnabled,
 		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
+		ExperimentsConfigMap:                         *experimentsConfigMap,
 	}
 }

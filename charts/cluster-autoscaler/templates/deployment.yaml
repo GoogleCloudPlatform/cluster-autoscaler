@@ -104,6 +104,12 @@ spec:
             {{- if hasKey .Values.cluster "regional" }}
             {{- $_ := set $flags "regional" (.Values.cluster.regional | toString) }}
             {{- end }}
+            {{- if not (hasKey $flags "experiments-config-map") }}
+            {{- $_ := set $flags "experiments-config-map" (include "cluster-autoscaler.experimentsConfigMap" .) }}
+            {{- end }}
+            {{- if not (hasKey $flags "namespace") }}
+            {{- $_ := set $flags "namespace" .Release.Namespace }}
+            {{- end }}
             {{- range $key, $value := $flags }}
             {{- if kindIs "slice" $value }}
             {{- range $val := $value }}

@@ -104,6 +104,10 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 		klog.Fatalf("Failed to create manager: %v", err)
 	}
 
+	if err := mgr.Add(optsTracker.ExperimentsManager()); err != nil {
+		klog.Fatalf("Failed to add experiments manager to manager: %v", err)
+	}
+
 	builder := initBuilder(context, optsTracker, mgr)
 	autoscaler, trigger, err := builder.Build(context, gkeDebuggingSnapshotter, config.OsReservedContent)
 

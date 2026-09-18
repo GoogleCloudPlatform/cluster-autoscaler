@@ -131,6 +131,7 @@ type InternalOptions struct {
 	PodWatchFieldSelector                        string
 	DaemonSetMutationEnabled                     bool
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
+	ExperimentsConfigMap                         string
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.

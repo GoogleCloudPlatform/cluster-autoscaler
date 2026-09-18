@@ -15,6 +15,7 @@
 package experiments
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -51,6 +52,11 @@ func NewMockManagerWithOptions(componentVersion version.Version, boolFlags map[s
 }
 
 func (m *mockManager) UpdateReleaseChannel(_ string) {}
+
+func (m *mockManager) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
+}
 
 // EvaluateBoolFlagOrFailsafe returns true i.f.f. provided flag is enabled
 func (m *mockManager) EvaluateBoolFlagOrFailsafe(flag string, failsafe bool) bool {
