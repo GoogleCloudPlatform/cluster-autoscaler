@@ -576,6 +576,21 @@ func TestNodepoolMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{},
 		},
+		{
+			name: "Nodepool with ContainerdConfig is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ContainerdConfig: &container.ContainerdConfig{
+						WritableCgroups: &container.WritableCgroups{
+							Enabled: true,
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1040,6 +1055,21 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{},
+		},
+		{
+			name: "ContainerdConfig in CCC is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					ContainerdConfig: &v1.ContainerdConfig{
+						WritableCgroups: &v1.WritableCgroups{
+							Enabled: ptr.To(true),
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
 		},
 	}
 	for _, tc := range testCases {
@@ -1723,6 +1753,22 @@ func TestUpdateNodepool(t *testing.T) {
 				"network-tags.cloud.google.com/allow-ssh":       "other-value",
 			},
 			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "ContainerdConfig is set correctly",
+			metadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ContainerdConfig: &container.ContainerdConfig{
+						WritableCgroups: &container.WritableCgroups{
+							Enabled:         true,
+							ForceSendFields: []string{"Enabled"},
+						},
+					},
+				},
+			},
 		},
 	}
 	for _, tc := range testCases {

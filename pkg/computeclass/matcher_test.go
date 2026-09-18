@@ -22,6 +22,7 @@ import (
 	container "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -144,6 +145,7 @@ func TestMatchesCrdLabel(t *testing.T) {
 }
 
 func TestMatchesCrdConfig(t *testing.T) {
+	selfservice.InitSelfService(nil)
 	testCrdLabel := "test.io/crd"
 
 	testCases := []struct {
@@ -512,6 +514,189 @@ func TestMatchesCrdConfig(t *testing.T) {
 					"feature-label-3": "feature-value-3",
 				}),
 			),
+			wantMatch: true,
+		},
+		{
+			name: "CCC has fields defined in containerdConfig section, node group has matching fields and few others defined in containerdConfig",
+			nodeGroup: gke.NewTestGkeMigBuilder().
+				SetSpec(&gkeclient.NodePoolSpec{
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "crd-1",
+					},
+					SelfServiceMetadata: selfservice.NodepoolMetadata(&container.NodePool{
+						Config: &container.NodeConfig{
+							ContainerdConfig: &container.ContainerdConfig{
+								WritableCgroups: &container.WritableCgroups{
+									Enabled: true,
+								},
+								PrivateRegistryAccessConfig: &container.PrivateRegistryAccessConfig{
+									Enabled: true,
+								},
+							},
+						},
+					}),
+				}).
+				Build(),
+			crd: ccc.NewCccCrd(&v1.ComputeClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "crd-1",
+				},
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						ContainerdConfig: &v1.ContainerdConfig{
+							WritableCgroups: &v1.WritableCgroups{
+								Enabled: ptr.To(true),
+							},
+						},
+					},
+				},
+			}, "test-project", false, crd.TestDefaultDataProvider(), nil),
+			wantMatch: true,
+		},
+		{
+			name: "CCC has PrivateRegistryAccessConfig enabled, node group has enabled and certificateAuthorityDomainConfig defined",
+			nodeGroup: gke.NewTestGkeMigBuilder().
+				SetSpec(&gkeclient.NodePoolSpec{
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "crd-1",
+					},
+					SelfServiceMetadata: selfservice.NodepoolMetadata(&container.NodePool{
+						Config: &container.NodeConfig{
+							ContainerdConfig: &container.ContainerdConfig{
+								PrivateRegistryAccessConfig: &container.PrivateRegistryAccessConfig{
+									Enabled: true,
+									CertificateAuthorityDomainConfig: []*container.CertificateAuthorityDomainConfig{
+										{
+											Fqdns: []string{"example.com"},
+											GcpSecretManagerCertificateConfig: &container.GCPSecretManagerCertificateConfig{
+												SecretUri: "projects/123/secrets/my-secret/versions/1",
+											},
+										},
+									},
+								},
+							},
+						},
+					}),
+				}).
+				Build(),
+			crd: ccc.NewCccCrd(&v1.ComputeClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "crd-1",
+				},
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						ContainerdConfig: &v1.ContainerdConfig{
+							PrivateRegistryAccessConfig: &v1.PrivateRegistryAccessConfig{
+								Enabled: ptr.To(true),
+							},
+						},
+					},
+				},
+			}, "test-project", false, crd.TestDefaultDataProvider(), nil),
+			wantMatch: true,
+		},
+		{
+			name: "CCC and node group have containerdConfig with arrays and nested arrays in different orders",
+			nodeGroup: gke.NewTestGkeMigBuilder().
+				SetSpec(&gkeclient.NodePoolSpec{
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "crd-1",
+					},
+					SelfServiceMetadata: selfservice.NodepoolMetadata(&container.NodePool{
+						Config: &container.NodeConfig{
+							ContainerdConfig: &container.ContainerdConfig{
+								PrivateRegistryAccessConfig: &container.PrivateRegistryAccessConfig{
+									Enabled: true,
+									CertificateAuthorityDomainConfig: []*container.CertificateAuthorityDomainConfig{
+										{
+											Fqdns: []string{"c.com"},
+											GcpSecretManagerCertificateConfig: &container.GCPSecretManagerCertificateConfig{
+												SecretUri: "projects/p/secrets/s2/versions/1",
+											},
+										},
+										{
+											Fqdns: []string{"a.com", "b.com"},
+											GcpSecretManagerCertificateConfig: &container.GCPSecretManagerCertificateConfig{
+												SecretUri: "projects/p/secrets/s1/versions/1",
+											},
+										},
+									},
+								},
+								RegistryHosts: []*container.RegistryHostConfig{
+									{
+										Server: "reg-1.com",
+										Hosts: []*container.HostConfig{
+											{Host: "mirror-1.com"},
+										},
+									},
+									{
+										Server: "reg-2.com",
+										Hosts: []*container.HostConfig{
+											{
+												Host:         "mirror-2.com",
+												Capabilities: []string{"HOST_CAPABILITY_PULL", "HOST_CAPABILITY_RESOLVE"},
+												Header: []*container.RegistryHeader{
+													{Key: "Header-A", Value: []string{"val-1", "val-2"}},
+													{Key: "Header-B", Value: []string{"val-b"}},
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					}),
+				}).
+				Build(),
+			crd: ccc.NewCccCrd(&v1.ComputeClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "crd-1",
+				},
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						ContainerdConfig: &v1.ContainerdConfig{
+							PrivateRegistryAccessConfig: &v1.PrivateRegistryAccessConfig{
+								Enabled: ptr.To(true),
+								CertificateAuthorityDomainConfig: []*v1.CertificateAuthorityDomainConfig{
+									{
+										FQDNs: []string{"b.com", "a.com"},
+										GCPSecretManagerCertificateConfig: &v1.GCPSecretManagerCertificateConfig{
+											SecretURI: ptr.To("projects/p/secrets/s1/versions/1"),
+										},
+									},
+									{
+										FQDNs: []string{"c.com"},
+										GCPSecretManagerCertificateConfig: &v1.GCPSecretManagerCertificateConfig{
+											SecretURI: ptr.To("projects/p/secrets/s2/versions/1"),
+										},
+									},
+								},
+							},
+							RegistryHosts: []*v1.RegistryHostConfig{
+								{
+									Server: "reg-2.com",
+									Hosts: []*v1.HostConfig{
+										{
+											Host:         "mirror-2.com",
+											Capabilities: []string{"HOST_CAPABILITY_RESOLVE", "HOST_CAPABILITY_PULL"},
+											Header: []*v1.HostHeader{
+												{Key: "Header-B", Value: []string{"val-b"}},
+												{Key: "Header-A", Value: []string{"val-2", "val-1"}},
+											},
+										},
+									},
+								},
+								{
+									Server: "reg-1.com",
+									Hosts: []*v1.HostConfig{
+										{Host: "mirror-1.com"},
+									},
+								},
+							},
+						},
+					},
+				},
+			}, "test-project", false, crd.TestDefaultDataProvider(), nil),
 			wantMatch: true,
 		},
 		{
@@ -993,7 +1178,7 @@ func TestMatchesCrdConfig(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockCrdLister := lister.NewMockCrdLister([]crd.CRD{tc.crd})
-			mockCrdLister.SetCrdLabel(testCrdLabel)
+			mockCrdLister.SetCrdLabel(tc.crd.Label())
 			mockProvider := NewMockGKEProvider(nil, machinetypes.E2)
 			if tc.autopilotEnabled {
 				mockProvider.SetAutopilotEnabled()

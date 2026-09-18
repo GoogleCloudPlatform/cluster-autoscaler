@@ -57,6 +57,7 @@ func InitSelfService(cp CloudProvider) {
 		newCustomImage(),
 		newSubnetPriorities(),
 		newNetworkTags(),
+		newContainerdConfig(),
 	}
 }
 

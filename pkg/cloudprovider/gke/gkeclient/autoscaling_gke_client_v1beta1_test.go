@@ -2108,6 +2108,40 @@ func TestCreateNodePoolRequest(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "CCC self service ContainerdConfig specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					labels.ContainerdWritableCgroupsKey: "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ContainerdConfig: &gke_api_beta.ContainerdConfig{
+							WritableCgroups: &gke_api_beta.WritableCgroups{
+								Enabled:         true,
+								ForceSendFields: []string{"Enabled"},
+							},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -5294,6 +5328,36 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 				"internal.private-node-from-ccc":   "false",
 				"internal.private-node-from-label": "false",
 				labels.GvnicLabelKey:               "false",
+			},
+		},
+		{
+			name: "CCC self service ContainerdConfig on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "default-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "containerdConfig": {
+					    "writableCgroups": {
+					      "enabled": true
+					    }
+					  }
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				labels.ContainerdWritableCgroupsKey: "true",
+				labels.GvnicLabelKey:                "true",
 			},
 		},
 	}
