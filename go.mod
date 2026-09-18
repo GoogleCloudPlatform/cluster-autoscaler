@@ -17,7 +17,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
-	github.com/googlecloudplatform/compute-class-api v0.0.0-20260916124810-e033d8f426e7
+	github.com/googlecloudplatform/compute-class-api v0.0.0-20260901140059-d5133d806dfe
 	github.com/prometheus/client_golang v1.24.1
 	github.com/satori/go.uuid v1.2.0
 	github.com/spf13/pflag v1.0.10
@@ -32,7 +32,7 @@ require (
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
 	k8s.io/apiserver v0.37.0
-	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260915134918-33467ba3ba47
+	k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260901142816-82260f4c6995
 	k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/client-go v0.37.0
 	k8s.io/cloud-provider v0.37.0
@@ -206,12 +206,13 @@ replace (
 //
 // Managed in the scope of the sync process
 replace (
-	k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260915134918-33467ba3ba47
 	k8s.io/autoscaler/cluster-autoscaler/apis => k8s.io/autoscaler/cluster-autoscaler/apis v0.0.0-20260717085528-eec9bc4dc1d2
 	k8s.io/gke-autoscaling/cluster-autoscaler/apis => ./apis
 )
 
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
+
+replace k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260901142816-82260f4c6995
 
 replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-20260915123124-b2e220b8e332
