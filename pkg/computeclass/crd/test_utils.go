@@ -537,6 +537,7 @@ func NewMockCRDStatus(existingRuleConditions map[string][]metav1.Condition) *Moc
 	m.On("UpdateRuleConditions", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleResourceInfo", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleScalingHistory", mock.Anything, mock.Anything).Return().Maybe()
+	m.On("UpdateRuleConsolidationStatus", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleConfigHash", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateConfigDriftInfo", mock.Anything).Return().Maybe()
 	m.On("ResetAllScalingHistories").Return().Maybe()
@@ -571,6 +572,11 @@ func (m *MockCRDStatus) UpdateRuleResourceInfo(ruleIdx string, info ResourceInfo
 
 func (m *MockCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history ScalingEventsHistory) {
 	m.Called(ruleIdx, history)
+}
+
+// UpdateRuleConsolidationStatus implements CRDStatus.
+func (m *MockCRDStatus) UpdateRuleConsolidationStatus(ruleIdx string, status ConsolidationStatus) {
+	m.Called(ruleIdx, status)
 }
 
 func (m *MockCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {

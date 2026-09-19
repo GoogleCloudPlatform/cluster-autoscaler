@@ -29,6 +29,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
+	"k8s.io/utils/ptr"
 )
 
 func TestCccCRDStatus(t *testing.T) {
@@ -718,5 +719,89 @@ func TestBlockReasonsAreAcceptedByTheApi(t *testing.T) {
 
 	if !apiEnum[unknownBlockReasonFallback] {
 		t.Errorf("the fallback reason %q is not accepted by the ComputeClass API enum, so an unknown reason would still be rejected", unknownBlockReasonFallback)
+	}
+}
+
+func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
+	measuredAt := metav1.NewTime(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC))
+
+	testCases := []struct {
+		name   string
+		status crd.ConsolidationStatus
+		want   *ccc_api.ConsolidationStatus
+	}{
+		{
+			name: "known reasons are reported verbatim in the producer's order",
+			status: crd.ConsolidationStatus{
+				ActuationInProgress: 2,
+				NotProcessed:        1,
+				BlockedNodes: []crd.BlockedNodesByReason{
+					{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 16},
+					{Reason: crd.ConsolidationReasonBlockingPods, Count: 3},
+				},
+				MeasuredAt: measuredAt,
+			},
+			want: &ccc_api.ConsolidationStatus{
+				ActuationInProgress: ptr.To(2),
+				NotProcessed:        ptr.To(1),
+				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
+					{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 16},
+					{Reason: crd.ConsolidationReasonBlockingPods, Count: 3},
+				},
+				MeasuredAt: &measuredAt,
+			},
+		},
+		{
+			// The CRD enum rejects unknown values, and a single invalid entry takes the whole
+			// status patch down with it, so unknown reasons must never reach the API.
+			name: "unknown reasons are folded into the catch-all and merged with it",
+			status: crd.ConsolidationStatus{
+				BlockedNodes: []crd.BlockedNodesByReason{
+					{Reason: "SomethingNew", Count: 2},
+					{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1},
+					{Reason: "SomethingElse", Count: 4},
+				},
+				MeasuredAt: measuredAt,
+			},
+			want: &ccc_api.ConsolidationStatus{
+				ActuationInProgress: ptr.To(0),
+				NotProcessed:        ptr.To(0),
+				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
+					{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 7},
+				},
+				MeasuredAt: &measuredAt,
+			},
+		},
+		{
+			name: "entries without nodes are dropped",
+			status: crd.ConsolidationStatus{
+				BlockedNodes: []crd.BlockedNodesByReason{
+					{Reason: crd.ConsolidationReasonBlockingPods, Count: 0},
+					{Reason: "SomethingNew", Count: -1},
+				},
+				MeasuredAt: measuredAt,
+			},
+			want: &ccc_api.ConsolidationStatus{
+				ActuationInProgress: ptr.To(0),
+				NotProcessed:        ptr.To(0),
+				BlockedNodes:        []ccc_api.ConsolidationBlockedNodesInfo{},
+				MeasuredAt:          &measuredAt,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewCccCRDStatus("test-ccc").(*cccCRDStatus)
+			s.UpdateRuleConsolidationStatus("0", tc.status)
+
+			statuses := s.apiStatus.PriorityStatuses
+			if len(statuses) != 1 {
+				t.Fatalf("expected exactly one priority status, got %d", len(statuses))
+			}
+			if diff := cmp.Diff(tc.want, statuses[0].Consolidation); diff != "" {
+				t.Errorf("Consolidation mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

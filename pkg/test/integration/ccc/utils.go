@@ -270,12 +270,12 @@ func (b *ComputeClassBuilder) Clone() *ComputeClassBuilder {
 // avoid races on the tick boundary.
 const ConditionsFlushInterval = status.BatchFlushInterval + 10*time.Second
 
-// AssertComputeClassConditions asserts that the conditions of actual match expected ComputeClassStatus while ignoring fields like LastTransitionTime, ResourceInfo, and ScalingEventsHistory.
+// AssertComputeClassConditions asserts that the conditions of actual match expected ComputeClassStatus while ignoring fields like LastTransitionTime, ResourceInfo, ScalingEventsHistory, and Consolidation.
 func AssertComputeClassConditions(t *testing.T, expected, actual v1.ComputeClassStatus, msg string) {
 	t.Helper()
 	diff := cmp.Diff(expected, actual,
 		cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
-		cmpopts.IgnoreFields(v1.PriorityStatus{}, "ResourceInfo", "ScalingEventsHistory"),
+		cmpopts.IgnoreFields(v1.PriorityStatus{}, "ResourceInfo", "ScalingEventsHistory", "Consolidation"),
 		cmpopts.IgnoreFields(v1.ComputeClassStatus{}, "ResourceInfo"),
 	)
 	assert.Empty(t, diff, "%s (-want +got):\n%s", msg, diff)

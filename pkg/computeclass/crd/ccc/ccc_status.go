@@ -15,6 +15,7 @@
 package ccc
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -105,6 +106,12 @@ func (s *cccCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history crd.Scal
 func (s *cccCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
 	idx := s.getOrCreatePriorityStatusIdx(ruleIdx)
 	s.apiStatus.PriorityStatuses[idx].ConfigHash = hash
+}
+
+// UpdateRuleConsolidationStatus implements crd.CRDStatus.
+func (s *cccCRDStatus) UpdateRuleConsolidationStatus(ruleIdx string, status crd.ConsolidationStatus) {
+	idx := s.getOrCreatePriorityStatusIdx(ruleIdx)
+	s.apiStatus.PriorityStatuses[idx].Consolidation = toCccConsolidationStatus(status)
 }
 
 // ResetAllScalingHistories implements crd.CRDStatus.
@@ -252,6 +259,45 @@ func toCccScalingEventsHistory(history crd.ScalingEventsHistory) *ccc_api.Scalin
 		MeasuredAt:             &history.MeasuredAt,
 		MeasuredSince:          &history.MeasuredSince,
 	}
+}
+
+func toCccConsolidationStatus(status crd.ConsolidationStatus) *ccc_api.ConsolidationStatus {
+	actuationInProgress := status.ActuationInProgress
+	notProcessed := status.NotProcessed
+	return &ccc_api.ConsolidationStatus{
+		ActuationInProgress: &actuationInProgress,
+		NotProcessed:        &notProcessed,
+		BlockedNodes:        toCccBlockedNodes(status.BlockedNodes),
+		MeasuredAt:          &status.MeasuredAt,
+	}
+}
+
+// toCccBlockedNodes converts the per-reason breakdown to the API type, preserving the order the
+// producer chose (the order CA evaluates the reasons in). Reasons outside the API enum are folded
+// into the catch-all: the API server rejects the whole status patch on a single invalid value, so
+// writing one through would take the rest of the status down with it. Counts are merged per
+// reason, because blockedNodes is a map-typed list keyed by reason and a folded entry may collide
+// with an existing catch-all entry; the merged entry keeps the position of its first occurrence.
+func toCccBlockedNodes(blocked []crd.BlockedNodesByReason) []ccc_api.ConsolidationBlockedNodesInfo {
+	blockedNodes := make([]ccc_api.ConsolidationBlockedNodesInfo, 0, len(blocked))
+	indexByReason := make(map[string]int, len(blocked))
+	for _, b := range blocked {
+		if b.Count <= 0 {
+			continue
+		}
+		reason := b.Reason
+		if !slices.Contains(crd.ConsolidationReasons, reason) {
+			klog.Warningf("Unknown consolidation blocked reason %q (%d nodes), reporting it as %s", reason, b.Count, crd.ConsolidationReasonConsolidationBlocked)
+			reason = crd.ConsolidationReasonConsolidationBlocked
+		}
+		if i, ok := indexByReason[reason]; ok {
+			blockedNodes[i].Count += b.Count
+			continue
+		}
+		indexByReason[reason] = len(blockedNodes)
+		blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason, Count: b.Count})
+	}
+	return blockedNodes
 }
 
 // knownBlockReasons are the values the ComputeClass API accepts for
