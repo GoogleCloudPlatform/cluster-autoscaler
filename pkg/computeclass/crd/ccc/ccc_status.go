@@ -251,6 +251,9 @@ func toCccResourceInfo(info crd.ResourceInfo) ccc_api.ResourceInfo {
 	}
 }
 
+// TODO(b/570549559): A zero MeasuredAt/MeasuredSince serialises to null, which the API server
+// rejects, failing the whole status patch. Handle it here (omit the field or default it) rather
+// than relying on every producer to set it.
 func toCccScalingEventsHistory(history crd.ScalingEventsHistory) *ccc_api.ScalingEventsHistory {
 	return &ccc_api.ScalingEventsHistory{
 		ConsolidatedNodesCount: &history.ConsolidatedNodesCount,

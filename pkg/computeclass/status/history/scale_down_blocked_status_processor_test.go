@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
@@ -56,10 +57,16 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 		Labels: map[string]string{gke_labels.TPUSliceLabel: "my-slice"},
 	}}
 	plainNode := &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Name: "plain-node"}}
+	fakePod := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:        "min-nodes-fake-ccc-pod-my-ccc-0",
+		Annotations: map[string]string{cc_processors.MinCapacityFakePodAnnotation: "true"},
+	}}
+	realPod := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "real-pod"}}
 
 	testCases := []struct {
 		name        string
 		unremovable *scaledownstatus.UnremovableNode
+		nodeInfo    *framework.NodeInfo
 		want        string
 	}{
 		{
@@ -85,6 +92,20 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 		{
 			name:        "no place to move pods is its own reason",
 			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.NoPlaceToMovePods},
+			want:        crd.ConsolidationReasonNoPlaceToMovePods,
+		},
+		{
+			// The fake pods holding a compute class floor fill their node, so the drain
+			// simulation reports NoPlaceToMovePods.
+			name:        "no place to move pods with only min capacity fake pods is reported as min capacity",
+			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.NoPlaceToMovePods},
+			nodeInfo:    framework.NewTestNodeInfo(plainNode, fakePod),
+			want:        crd.ConsolidationReasonMinCapacityReached,
+		},
+		{
+			name:        "no place to move pods with a real pod next to the fake pod stays no place to move pods",
+			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.NoPlaceToMovePods},
+			nodeInfo:    framework.NewTestNodeInfo(plainNode, fakePod, realPod),
 			want:        crd.ConsolidationReasonNoPlaceToMovePods,
 		},
 		{
@@ -183,7 +204,7 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 	processor := &ScaleDownBlockedStatusProcessor{blockingLabels: []string{gke_labels.TPUSliceLabel}}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := processor.mapReason(tc.unremovable)
+			got := processor.mapReason(tc.unremovable, tc.nodeInfo)
 			assert.Equal(t, tc.want, got)
 			if got != "" {
 				assert.Contains(t, crd.ConsolidationReasons, got, "every reported reason must be a member of the API enum")
@@ -390,6 +411,68 @@ func TestScaleDownBlockedStatusProcessor_RecentlyUnremovable(t *testing.T) {
 			assert.Equal(t, tc.want, getConsolidationStatus(t, updatesCh).BlockedNodes)
 		})
 	}
+}
+
+func TestScaleDownBlockedStatusProcessor_KeepsRememberedReasonDuringCooldown(t *testing.T) {
+	processor, updatesCh, _ := newTestProcessor(t)
+	mig := sizedMig(t, 4, 1)
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("atomic-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("young-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("busy-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("fresh-1"), nil)))
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: snapshot,
+		CloudProvider: &nodeGroupForNodeStub{nodeGroups: map[string]cloudprovider.NodeGroup{
+			"atomic-1": mig, "young-1": mig, "busy-1": mig, "fresh-1": mig,
+		}},
+	}
+
+	// A full pass: CA gives every node a reason.
+	processor.Process(t.Context(), autoscalingCtx, &scaledownstatus.ScaleDownStatus{
+		Result: scaledownstatus.ScaleDownNoNodeDeleted,
+		UnremovableNodes: []*scaledownstatus.UnremovableNode{
+			{NodeGroup: mig, Node: node("atomic-1"), Reason: simulator.AtomicScaleDownFailed},
+			{NodeGroup: mig, Node: node("young-1"), Reason: simulator.NotUnneededLongEnough},
+			{NodeGroup: mig, Node: node("busy-1"), Reason: simulator.NotUnderutilized},
+			{NodeGroup: mig, Node: node("fresh-1"), Reason: simulator.NotUnneededLongEnough},
+		},
+	})
+	getConsolidationStatuses(t, updatesCh)
+
+	// In cooldown CA skips the step that picks the nodes to delete, so the reasons given there
+	// are missing although nothing changed for those nodes: the user must keep seeing them. A
+	// reason CA does give is current and wins, and a node being deleted is not blocked anymore.
+	processor.Process(t.Context(), autoscalingCtx, &scaledownstatus.ScaleDownStatus{
+		Result: scaledownstatus.ScaleDownInCooldown,
+		UnremovableNodes: []*scaledownstatus.UnremovableNode{
+			{NodeGroup: mig, Node: node("busy-1"), Reason: simulator.NotUnderutilized},
+			{NodeGroup: mig, Node: node("fresh-1"), Reason: simulator.CurrentlyBeingDeleted},
+		},
+	})
+	cooldown := getConsolidationStatus(t, updatesCh)
+	assert.Equal(t, []crd.BlockedNodesByReason{
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
+		{Reason: crd.ConsolidationReasonNotUnneededLongEnough, Count: 1},
+		{Reason: crd.ConsolidationReasonAtomicGroupBlocked, Count: 1},
+	}, cooldown.BlockedNodes)
+	assert.Equal(t, 1, cooldown.ActuationInProgress)
+	assert.Equal(t, 0, cooldown.NotProcessed, "nodes without a reason keep their previous one")
+
+	// Once the cooldown is over, a pass that gives a node no reason is authoritative: nothing
+	// is carried over anymore.
+	processor.Process(t.Context(), autoscalingCtx, &scaledownstatus.ScaleDownStatus{
+		Result: scaledownstatus.ScaleDownNoNodeDeleted,
+		UnremovableNodes: []*scaledownstatus.UnremovableNode{
+			{NodeGroup: mig, Node: node("busy-1"), Reason: simulator.NotUnderutilized},
+		},
+	})
+	after := getConsolidationStatus(t, updatesCh)
+	assert.Equal(t, []crd.BlockedNodesByReason{
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
+	}, after.BlockedNodes)
+	assert.Equal(t, 3, after.NotProcessed)
 }
 
 func TestScaleDownBlockedStatusProcessor_ClearsPriorityNoLongerBlocked(t *testing.T) {

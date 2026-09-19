@@ -52,15 +52,13 @@ const (
 	// firstPriority is the identifier the CCC status uses for the first priority of a CCC.
 	firstPriority = "0"
 
-	cccName      = "tpu-slice-ccc"
-	sliceName    = "my-tpu-slice"
-	boundPool    = "tpu-slice-1"
-	unboundPool  = "tpu-slice-2"
+	// nodesPerCube is the size of one atomic TPU cube, and also the node pool size both
+	// scenarios below start from.
 	nodesPerCube = 16
-	// Loop 1 marks the idle nodes unneeded (ScaleDownUnneededTime is 1s); loop 2 removes
-	// the unbound cube while the slice-bound cube is filtered out and reported as
-	// unremovable; loop 3 re-observes the slice-bound cube as blocked, which asserts the
-	// reported count is stable rather than a one-off.
+
+	// caLoops is how many autoscaler loops each scenario runs. Loop 1 marks the idle nodes
+	// unneeded (ScaleDownUnneededTime is 1s), loop 2 acts on them, and loop 3 re-observes the
+	// outcome, which asserts the reported count is stable rather than a one-off.
 	caLoops = 3
 )
 
@@ -70,6 +68,13 @@ const (
 // belong to a single CCC priority, so the counts aggregate under that priority's
 // Consolidation block.
 func TestCCCScaleDownBlockedStatusReportsSliceBoundCube(t *testing.T) {
+	const (
+		cccName     = "tpu-slice-ccc"
+		sliceName   = "my-tpu-slice"
+		boundPool   = "tpu-slice-1"
+		unboundPool = "tpu-slice-2"
+	)
+
 	cccObj := ccc.NewComputeClassBuilder(cccName).
 		WithPriorities(v1.Priority{
 			Nodepools: []string{boundPool, unboundPool},
@@ -243,6 +248,72 @@ func TestCCCScaleDownBlockedStatusReportsStandardNodePool(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestCCCScaleDownBlockedStatusReportsMinCapacityFloor asserts that nodes an
+// otherwise idle ComputeClass keeps alive purely to satisfy its own minimumCapacity
+// are reported under minCapacityReached, rather than under noPlaceToMovePods.
+//
+// A unit test cannot prove this: the attribution depends on the fake pods holding
+// the floor really reaching the shared cluster snapshot, where the drain simulation
+// sees them and only their annotation tells them apart from a scheduling dead end.
+func TestCCCScaleDownBlockedStatusReportsMinCapacityFloor(t *testing.T) {
+	const (
+		cccName  = "min-capacity-ccc"
+		nodePool = "tpu-slice-1"
+	)
+
+	cccObj := ccc.NewComputeClassBuilder(cccName).
+		WithTargetNodeCount(ptr.To(nodesPerCube)).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithNodePools(atomicTPUNodePool(nodePool, cccName)).
+		WithCccCrds(cccObj).
+		WithOverrides(
+			integration.WithScaleDownUnneededTime(time.Second),
+			integration.WithComputeClassMinCapacityEnabled(),
+			integration.WithEnhancedCrdStatusReporting(true),
+			integration.WithComputeClassScaleDownStatusEnabled(),
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		// Given: one idle node pool whose ComputeClass declares a minimumCapacity floor
+		// covering every node in it.
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "unexpected initial node count")
+
+		// When: the autoscaler tries to consolidate the idle capacity and the status is flushed.
+		for range caLoops {
+			integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+		}
+		time.Sleep(consolidationFlushInterval)
+
+		// Then: the floor holds every node.
+		assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "the minimumCapacity floor must keep every node")
+
+		// Then: the pinned nodes are attributed to the floor, not to a phantom scheduling
+		// failure. Comparing the whole slice also asserts that nothing is reported under
+		// noPlaceToMovePods.
+		updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, cccName, metav1.GetOptions{})
+		assert.NoError(t, err)
+
+		consolidation := consolidationForPriority(t, updatedCCC, firstPriority)
+		if !assert.NotNil(t, consolidation, "expected a Consolidation status block on priority %s", firstPriority) {
+			return
+		}
+		assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
+			{Reason: reasonMinCapacityReached, Count: nodesPerCube},
+		}, consolidation.BlockedNodes, "expected the whole node pool to be reported blocked by the floor")
+		assert.Equal(t, 0, ptr.Deref(consolidation.NotProcessed, 0), "expected no unprocessed nodes")
+		assert.Equal(t, 0, ptr.Deref(consolidation.ActuationInProgress, 0), "expected no deletion in flight")
+	})
 }
 
 // consolidationForPriority returns the Consolidation block reported for the given CCC priority,

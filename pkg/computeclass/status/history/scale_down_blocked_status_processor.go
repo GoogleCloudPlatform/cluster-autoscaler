@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
@@ -37,6 +38,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
+	pod_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 // priorityKey identifies a single CCC priority.
@@ -135,7 +137,8 @@ func (p *ScaleDownBlockedStatusProcessor) CleanUp() {
 // groupByReason returns, per CCC priority, the number of blocked nodes per reason and the
 // number of nodes being deleted. Nodes with no scale-down blocked reason are left out, unless
 // their node group is at its minimum size, in which case they are reported under
-// MinCapacityReached.
+// MinCapacityReached, or scale-down is in cooldown, in which case they keep the reason
+// reported in the previous pass.
 func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledownstatus.ScaleDownStatus, snapshot snapshotInfo) (map[priorityKey]map[string]int, map[priorityKey]int) {
 	blockedCounts := make(map[priorityKey]map[string]int)
 	addBlocked := func(key priorityKey, reason string) {
@@ -178,7 +181,7 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 			}
 			continue
 		}
-		reason := p.blockedReason(unremovable)
+		reason := p.blockedReason(unremovable, snapshot.nodeInfos[unremovable.Node.Name])
 		if reason == "" {
 			continue
 		}
@@ -189,12 +192,28 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 
 	// The nodes of a node group at its minimum size are never inspected by CA (see
 	// PreFilteringScaleDownNodeProcessor.GetScaleDownCandidates), so they have no reason in the
-	// scale-down status. Nodes that do have one were counted above and keep it.
+	// scale-down status, and may be kept by their utilization or pods as well. Nodes that do
+	// have one were counted above and keep it.
 	for nodeName, key := range snapshot.minSizeNodesToPriority {
 		if counted.Has(nodeName) {
 			continue
 		}
+		counted.Insert(nodeName)
 		addBlocked(key, crd.ConsolidationReasonMinCapacityReached)
+	}
+
+	// In cooldown CA skips NodesToDelete, so the reasons it gives there (unneeded time, atomic
+	// groups, minimum sizes) are missing. Keep the previous reason until CA gives a new one.
+	if scaleDownStatus.Result == scaledownstatus.ScaleDownInCooldown {
+		for nodeName, reason := range p.lastReason {
+			key, ok := snapshot.nodePriority[nodeName]
+			if !ok || counted.Has(nodeName) {
+				continue
+			}
+			reasons[nodeName] = reason
+			counted.Insert(nodeName)
+			addBlocked(key, reason)
+		}
 	}
 	p.lastReason = reasons
 	return blockedCounts, deletionsInProgress
@@ -203,9 +222,9 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 // blockedReason returns the reason to report for an unremovable node. CA reports
 // RecentlyUnremovable while it skips re-running the drain simulation of a node that failed it
 // recently, so the node keeps the reason reported last time.
-func (p *ScaleDownBlockedStatusProcessor) blockedReason(un *scaledownstatus.UnremovableNode) string {
+func (p *ScaleDownBlockedStatusProcessor) blockedReason(un *scaledownstatus.UnremovableNode, nodeInfo *framework.NodeInfo) string {
 	if un.Reason != simulator.RecentlyUnremovable {
-		return p.mapReason(un)
+		return p.mapReason(un, nodeInfo)
 	}
 	if reason, ok := p.lastReason[un.Node.Name]; ok {
 		return reason
@@ -216,9 +235,13 @@ func (p *ScaleDownBlockedStatusProcessor) blockedReason(un *scaledownstatus.Unre
 type snapshotInfo struct {
 	// nodeCounts is the number of nodes per CCC priority.
 	nodeCounts map[priorityKey]int
+	// nodePriority is the CCC priority of every node.
+	nodePriority map[string]priorityKey
 	// minSizeNodesToPriority maps the nodes of node groups at their minimum size to their
 	// CCC priority.
 	minSizeNodesToPriority map[string]priorityKey
+	// nodeInfos holds the snapshot NodeInfo of every node.
+	nodeInfos map[string]*framework.NodeInfo
 }
 
 // getSnapshotInfo collects, for the nodes in the cluster that belong to a CCC priority, their
@@ -226,7 +249,9 @@ type snapshotInfo struct {
 func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, cloudProvider cloudprovider.CloudProvider, nodeInfos []*framework.NodeInfo) snapshotInfo {
 	info := snapshotInfo{
 		nodeCounts:             make(map[priorityKey]int),
+		nodePriority:           make(map[string]priorityKey),
 		minSizeNodesToPriority: make(map[string]priorityKey),
+		nodeInfos:              make(map[string]*framework.NodeInfo),
 	}
 	if cloudProvider == nil {
 		return info
@@ -246,6 +271,7 @@ func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, c
 			continue
 		}
 		info.nodeCounts[key]++
+		info.nodePriority[node.Name] = key
 		atMin, ok := atMinByNodeGroup[nodeGroup.Id()]
 		if !ok {
 			atMin = isAtMinSize(ctx, nodeGroup)
@@ -254,6 +280,7 @@ func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, c
 		if atMin {
 			info.minSizeNodesToPriority[node.Name] = key
 		}
+		info.nodeInfos[node.Name] = nodeInfo
 	}
 	return info
 }
@@ -273,6 +300,32 @@ func isAtMinSize(ctx context.Context, nodeGroup cloudprovider.NodeGroup) bool {
 		return false
 	}
 	return size <= nodeGroup.MinSize(ctx)
+}
+
+// heldOnlyByMinCapacity reports whether the only pods on the node that would need moving are
+// compute class minimum capacity fake pods, which fill their node so that the drain simulation
+// finds nowhere to move them. With any other pod on the node, that pod may be what can't move.
+//
+// Only reached while the fake pods stay in the scale-down snapshot. With
+// ComputeClassMinCapacityPodsRemoval (gkecl/2319094) they are removed before scale-down and the
+// floor arrives as MinimalResourceLimitExceeded or NodeGroupMinSizeReached instead.
+// TODO(b/570549559): Remove together with the ComputeClassMinCapacityPodsRemoval flag.
+func heldOnlyByMinCapacity(nodeInfo *framework.NodeInfo) bool {
+	if nodeInfo == nil {
+		return false
+	}
+	hasFakePod := false
+	for _, podInfo := range nodeInfo.Pods() {
+		switch {
+		case cc_processors.IsMinCapacityFakePod(podInfo.Pod):
+			hasFakePod = true
+		case pod_util.IsDaemonSetPod(podInfo.Pod), pod_util.IsMirrorPod(podInfo.Pod), pod_util.IsStaticPod(podInfo.Pod):
+			// Not moved by a drain.
+		default:
+			return false
+		}
+	}
+	return hasFakePod
 }
 
 // reportConsolidation sends the Consolidation status of every priority that needs one and
@@ -369,7 +422,7 @@ func (p *ScaleDownBlockedStatusProcessor) resolvePriority(nodeGroup cloudprovide
 // TODO(b/570549559): RecentConsolidationFailure is never produced, as no per-node reason maps
 // to it. Derive it from the scale-down status instead (a non-OK Result, or the cooldown after
 // a failed deletion).
-func (p *ScaleDownBlockedStatusProcessor) mapReason(un *scaledownstatus.UnremovableNode) string {
+func (p *ScaleDownBlockedStatusProcessor) mapReason(un *scaledownstatus.UnremovableNode, nodeInfo *framework.NodeInfo) string {
 	switch un.Reason {
 	case simulator.NotUnderutilized:
 		return crd.ConsolidationReasonAboveUtilizationThreshold
@@ -378,6 +431,9 @@ func (p *ScaleDownBlockedStatusProcessor) mapReason(un *scaledownstatus.Unremova
 	case simulator.ScaleDownUnreadyDisabled, simulator.NotUnreadyLongEnough:
 		return crd.ConsolidationReasonNodeNotReady
 	case simulator.NoPlaceToMovePods:
+		if heldOnlyByMinCapacity(nodeInfo) {
+			return crd.ConsolidationReasonMinCapacityReached
+		}
 		return crd.ConsolidationReasonNoPlaceToMovePods
 	case simulator.BlockedByOnCompletionPod:
 		return crd.ConsolidationReasonBlockingPods

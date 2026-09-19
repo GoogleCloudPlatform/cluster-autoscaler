@@ -274,7 +274,13 @@ func TestScaleDownStatusHistoryProcessor(t *testing.T) {
 						if assert.NotNil(t, h, "History should exist for rule %s", rIdx) {
 							assert.Equal(t, count, h.ConsolidatedNodesCount)
 							assert.Equal(t, metav1.NewTime(time.Unix(0, 0)), h.MeasuredAt)
+							// A zero MeasuredSince serialises to null, which the CRD
+							// schema rejects, and the API server then throws away the
+							// entire status patch rather than just this field.
+							assert.Equal(t, metav1.NewTime(time.Unix(0, 0)), h.MeasuredSince,
+								"MeasuredSince must be stamped when the collection window opens")
 						}
+
 					}
 				}
 			} else {
@@ -343,4 +349,94 @@ func TestScaleDownStatusHistoryProcessor_CleanupStalePendingDeletes(t *testing.T
 	nowTime = nowTime.Add(16 * time.Minute)
 	processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{})
 	assert.Len(t, processor.pendingDeletes, 0)
+}
+
+// TestScaleDownStatusHistoryProcessorMeasuredSince covers the collection window
+// stamped on ScalingEventsHistory: it must be set the first time a priority
+// records a consolidation, and must not move afterwards.
+//
+// The first part guards a real outage rather than a cosmetic field. A zero
+// metav1.Time marshals to null, the CRD types measuredSince as a non-nullable
+// string, and the API server rejects the whole ComputeClass status patch on it -
+// so a single unstamped field silently stops resourceInfo, conditions and the
+// consolidation breakdown from being reported at all.
+func TestScaleDownStatusHistoryProcessorMeasuredSince(t *testing.T) {
+	const (
+		testCrdLabel   = "test-crd-label"
+		defaultTestCrd = "default-crd-test"
+	)
+
+	testCrd := crd.NewTestCrd(crd.WithLabel(testCrdLabel),
+		crd.WithName(defaultTestCrd),
+		crd.WithCrdType("TEST"),
+		crd.WithRules([]rules.Rule{
+			rules.NewRule(rules.WithNodePoolsRule([]string{"nodepool-1"})),
+		}))
+
+	mig := gke.NewTestGkeMigBuilder().
+		SetNodePoolName("nodepool-1").
+		SetGceRefName("nodepool-1-mig").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels: map[string]string{testCrdLabel: defaultTestCrd},
+		}).Build()
+
+	mockLister := lister.NewMockCrdLister([]crd.CRD{testCrd})
+	mockLister.SetCrdLabel(testCrdLabel)
+	mockLister.SetDefaultCrdName(defaultTestCrd)
+
+	mockProvider := NewMockCloudProvider()
+	mockProvider.On("IsAutopilotEnabled").Return(false)
+
+	updatesCh := make(chan status.UpdateMessage, 100)
+	mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true}, map[string]string{})
+	processor := NewScaleDownStatusHistoryProcessor(mockLister, mockProvider, updatesCh, mockManager)
+
+	now := time.Unix(1000, 0)
+	processor.now = func() time.Time { return now }
+
+	fakeStatus := &fakeCRDStatus{histories: make(map[string]crd.ScalingEventsHistory)}
+	// consolidateOneNode runs the two cycles a node deletion takes (announced, then
+	// reported complete) and applies the resulting updates to fakeStatus.
+	consolidateOneNode := func(nodeName string) {
+		processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{
+			ScaledDownNodes: []*scaledownstatus.ScaleDownNode{
+				{NodeGroup: mig, Node: &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}},
+			},
+		})
+		processor.Process(context.TODO(), nil, &scaledownstatus.ScaleDownStatus{
+			NodeDeleteResults: map[string]scaledownstatus.NodeDeleteResult{
+				nodeName: {ResultType: scaledownstatus.NodeDeleteOk},
+			},
+		})
+		for len(updatesCh) > 0 {
+			(<-updatesCh).Mutate(fakeStatus)
+		}
+	}
+
+	consolidateOneNode("node-1")
+
+	history := fakeStatus.GetRuleScalingHistory("0")
+	if !assert.NotNil(t, history, "expected a scaling history for the priority") {
+		return
+	}
+	assert.Equal(t, 1, history.ConsolidatedNodesCount)
+	assert.Equal(t, metav1.NewTime(now), history.MeasuredSince,
+		"the first consolidation must open the collection window; a zero value serialises to null and the API server rejects the entire status patch")
+	assert.Equal(t, metav1.NewTime(now), history.MeasuredAt)
+
+	// A later consolidation advances MeasuredAt but must leave the window open
+	// where it started, otherwise the two timestamps carry the same information
+	// and the counts cannot be interpreted as a rate.
+	opened := now
+	now = now.Add(time.Hour)
+
+	consolidateOneNode("node-2")
+
+	history = fakeStatus.GetRuleScalingHistory("0")
+	if !assert.NotNil(t, history, "expected the scaling history to survive the second consolidation") {
+		return
+	}
+	assert.Equal(t, 2, history.ConsolidatedNodesCount)
+	assert.Equal(t, metav1.NewTime(opened), history.MeasuredSince, "MeasuredSince must not be reset by later consolidations")
+	assert.Equal(t, metav1.NewTime(now), history.MeasuredAt, "MeasuredAt must advance with each consolidation")
 }
