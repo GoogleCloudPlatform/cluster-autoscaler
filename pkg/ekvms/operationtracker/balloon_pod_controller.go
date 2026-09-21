@@ -254,12 +254,13 @@ func (c *balloonPodControllerImpl) defaultOnAdd(obj interface{}) {
 	if !exists {
 		podEntry = newPodStatus(pod)
 		klog.V(5).Infof("%sBalloon pod %q for node %q is being added to balloon pod controller internal state", balloonPodControllerLogPrefix, pod.Name, pod.Spec.NodeName)
-	} else if podState <= podEntry.state {
+	} else if podState < podEntry.state {
 		// Return if the pod is already in a later state in its lifecycle
-		klog.V(5).Infof("%sBalloon pod %q for node %q addition/update is skipped in balloon pod controller internal state: podState state %s is lower than or equal the internal podState %s", balloonPodControllerLogPrefix, pod.Name, pod.Spec.NodeName, podState, podEntry.state)
+		klog.V(5).Infof("%sBalloon pod %q for node %q addition/update is skipped in balloon pod controller internal state: podState state %s is lower than the internal podState %s", balloonPodControllerLogPrefix, pod.Name, pod.Spec.NodeName, podState, podEntry.state)
 		return
 	} else {
-		klog.V(5).Infof("%sBalloon pod %q for node %q is being updated in balloon pod controller internal state: podState state %s is higher than the internal podState %s", balloonPodControllerLogPrefix, pod.Name, pod.Spec.NodeName, podState, podEntry.state)
+		// Same-state updates are processed too, so that the cached pod keeps up with Kubelet updating the pod status during an in-place resize.
+		klog.V(5).Infof("%sBalloon pod %q for node %q is being updated in balloon pod controller internal state: podState state %s, internal podState %s", balloonPodControllerLogPrefix, pod.Name, pod.Spec.NodeName, podState, podEntry.state)
 	}
 
 	// On transition to running or when first-spotted pod is running.

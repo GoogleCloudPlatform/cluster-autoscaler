@@ -522,40 +522,32 @@ func TestResize(t *testing.T) {
 					expectedAddTaintCallCount:    1,
 				},
 				{
-					desc:                       "Upsize - vm resize non-gce error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                vmResizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize non-gce error",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  vmResizeErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedReconcileOp:          true,
 					expectedErr:                  vmResizeErr,
 				},
 				{
-					desc:                       "Upsize - vm resize gce error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                gceUpsizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize gce error",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  gceUpsizeErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedReconcileOp:          true,
 					expectedErr:                  gceUpsizeErr,
 				},
@@ -581,21 +573,17 @@ func TestResize(t *testing.T) {
 					expectedErr:                  bpResizeErr,
 				},
 				{
-					desc:                       "Upsize - vm resize gce instance is busy error - node at starting size and status at intent",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                gceInstanceIsBusyErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize gce instance is busy error - node at starting size and status at intent",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  gceInstanceIsBusyErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedErr:                  gceUpsizeErr,
 				},
 				{
@@ -616,27 +604,6 @@ func TestResize(t *testing.T) {
 					expectedRemoveTaintCallCount: 0,
 					expectedAddTaintCallCount:    1,
 					expectedErr:                  bpResizeErr,
-				},
-				{
-					desc:                       "Upsize - both vm and balloon pod resize error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                vmResizeErr,
-					bpResizeErr:                bpResizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size:        size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-							bpResizeErr: bpResizeErr,
-						},
-					},
-					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
-					expectedReconcileOp:          true,
-					expectedErr:                  vmResizeErr,
 				},
 				{
 					desc:                       "Downsize - successful",
@@ -1569,7 +1536,7 @@ func TestResizeTaintError(t *testing.T) {
 					desiredSize:       newSize(4000, 4096*giBToKiB),
 					resizeDirection:   Upsize,
 					errDuringAddTaint: fmt.Errorf("add taint error"),
-					wantErr:           ek_errors.NewBalloonPodResizeTaintError(family, fmt.Errorf("adding taint failed for node \"node1\": add taint error"), ek_errors.StartingState),
+					wantErr:           ek_errors.NewBalloonPodResizeTaintError(family, fmt.Errorf("adding taint failed for node \"node1\": add taint error"), ek_errors.DesiredState),
 				},
 				{
 					desc:              "Add resize taint failed during downsize",

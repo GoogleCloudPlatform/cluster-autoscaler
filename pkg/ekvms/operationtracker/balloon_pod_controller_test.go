@@ -477,3 +477,180 @@ func TestDefaultOnDeleteDoesNotPanic(t *testing.T) {
 	bPController := newBalloonPodController(clientSet, informerFactory)
 	bPController.defaultOnDelete(struct{}{})
 }
+
+// podEvent describes a single informer event for a balloon pod as data rather
+// than as a mutation closure, so the test table below stays declarative.
+// Annotations are used purely to identify which event produced a given pod, so
+// the tests can assert *which* pod ended up cached.
+type podEvent struct {
+	phase       v1.PodPhase
+	unassigned  bool
+	annotations map[string]string
+}
+
+func (e podEvent) apply(base *v1.Pod, nodeName string) *v1.Pod {
+	p := base.DeepCopy()
+	p.Status.Phase = e.phase
+	p.Annotations = e.annotations
+	if e.unassigned {
+		p.Spec.NodeName = ""
+	} else {
+		p.Spec.NodeName = nodeName
+	}
+	return p
+}
+
+// getPodEntryLocked reads a pod entry under the controller lock, which
+// getPodEntry expects its callers to hold.
+func getPodEntryLocked(c *balloonPodControllerImpl, pod *v1.Pod) (podStatus, bool) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+	return c.getPodEntry(pod)
+}
+
+func TestBalloonPodController_OnAdd(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node", 4000, 4000*1024)
+	basePod, err := GenerateBalloonPod(node,
+		*resource.NewMilliQuantity(1000, resource.DecimalSI),
+		*resource.NewQuantity(1024*1024, resource.DecimalSI),
+		true)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+
+	tests := []struct {
+		name     string
+		prior    []podEvent
+		incoming podEvent
+
+		wantEntryExists   bool
+		wantState         BalloonPodState
+		wantRunningClosed bool
+		// wantCachedPod identifies, by annotations, which event's pod the entry
+		// should be holding once the incoming event has been processed. For
+		// ignored events this is the previously cached pod, not the incoming one.
+		wantCachedPod map[string]string
+	}{
+		{
+			name:            "unassigned pod without NodeName is ignored",
+			incoming:        podEvent{unassigned: true},
+			wantEntryExists: false,
+		},
+		{
+			name:              "initial add is cached in Template state",
+			incoming:          podEvent{annotations: map[string]string{"event": "1"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodTemplate,
+			wantRunningClosed: false,
+			wantCachedPod:     map[string]string{"event": "1"},
+		},
+		{
+			name:              "first-spotted pod already Running closes the channel",
+			incoming:          podEvent{phase: v1.PodRunning, annotations: map[string]string{"event": "1"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodRunning,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "1"},
+		},
+		{
+			name:              "transition from Template to Running closes the channel",
+			prior:             []podEvent{{annotations: map[string]string{"event": "1"}}},
+			incoming:          podEvent{phase: v1.PodRunning, annotations: map[string]string{"event": "2"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodRunning,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "2"},
+		},
+		{
+			// This is the case the same-state handling exists for: Kubelet reports
+			// in-place resize progress through pod status while the pod stays
+			// Running, so the cached pod has to be refreshed even though the state
+			// does not change.
+			name: "same-state Running update refreshes the cached pod",
+			prior: []podEvent{
+				{annotations: map[string]string{"event": "1"}},
+				{phase: v1.PodRunning, annotations: map[string]string{"event": "2"}},
+			},
+			incoming:          podEvent{phase: v1.PodRunning, annotations: map[string]string{"event": "3"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodRunning,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "3"},
+		},
+		{
+			name: "transition from Running to Terminated updates state",
+			prior: []podEvent{
+				{annotations: map[string]string{"event": "1"}},
+				{phase: v1.PodRunning, annotations: map[string]string{"event": "2"}},
+			},
+			incoming:          podEvent{phase: v1.PodSucceeded, annotations: map[string]string{"event": "3"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodTerminated,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "3"},
+		},
+		{
+			name: "out-of-order Running event after termination is ignored",
+			prior: []podEvent{
+				{annotations: map[string]string{"event": "1"}},
+				{phase: v1.PodRunning, annotations: map[string]string{"event": "2"}},
+				{phase: v1.PodSucceeded, annotations: map[string]string{"event": "3"}},
+			},
+			incoming:          podEvent{phase: v1.PodRunning, annotations: map[string]string{"event": "4"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodTerminated,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "3"},
+		},
+		{
+			name: "out-of-order Template event after Running is ignored",
+			prior: []podEvent{
+				{annotations: map[string]string{"event": "1"}},
+				{phase: v1.PodRunning, annotations: map[string]string{"event": "2"}},
+			},
+			incoming:          podEvent{annotations: map[string]string{"event": "3"}},
+			wantEntryExists:   true,
+			wantState:         BalloonPodRunning,
+			wantRunningClosed: true,
+			wantCachedPod:     map[string]string{"event": "2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			clientSet := fake.NewSimpleClientset()
+			c := newBalloonPodController(clientSet, informers.NewSharedInformerFactory(clientSet, 0))
+
+			for _, e := range tt.prior {
+				c.defaultOnAdd(e.apply(basePod, node.Name))
+			}
+			incoming := tt.incoming.apply(basePod, node.Name)
+			c.defaultOnAdd(incoming)
+
+			entry, exists := getPodEntryLocked(c, incoming)
+			if !assert.Equal(t, tt.wantEntryExists, exists) {
+				t.FailNow()
+			}
+			if !exists {
+				return
+			}
+
+			assert.Equal(t, tt.wantState, entry.state)
+			assert.Equal(t, tt.wantRunningClosed, isChanClosed(entry.waitForRunning), "waitForRunning closed status mismatch")
+			assert.Equal(t, tt.wantCachedPod, entry.pod.Annotations, "entry holds the pod from the wrong event")
+		})
+	}
+}
+
+func isChanClosed(ch <-chan struct{}) bool {
+	select {
+	case _, ok := <-ch:
+		return !ok
+	default:
+		return false
+	}
+}

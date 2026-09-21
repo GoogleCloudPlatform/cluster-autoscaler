@@ -769,43 +769,34 @@ func (o *operationTracker) upsize(operation ResizeOperation) error {
 	node := resizableNode.Node.DeepCopy()
 	machineFamily := resizableNode.MachineFamily
 
-	vmResize := make(chan error)
-	bpResize := make(chan error)
+	upsizeCtx, upsizeCtxCancel := context.WithTimeout(context.Background(), upsizeTimeout)
+	defer upsizeCtxCancel()
+	if vmResizeErr := o.resizeVm(upsizeCtx, node, operation.DesiredSize, Upsize); vmResizeErr != nil {
+		return vmResizeErr
+	}
+
+	if err := o.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{Size: operation.DesiredSize, Status: ekvmtypes.ResizeStatusAtIntent}); err != nil {
+		return ek_errors.NewGenericError(machineFamily, err, ek_errors.DesiredState)
+	}
+
 	taintedNode, err := o.balloonPodResizer.addTaint(node, time.Now())
 	if err != nil {
 		return ek_errors.NewBalloonPodResizeTaintError(
 			machineFamily, fmt.Errorf("adding taint failed for node %q: %w", node.Name, err),
-			ek_errors.StartingState)
-	}
-	go func() {
-		upsizeCtx, upsizeCtxCancel := context.WithTimeout(context.Background(), upsizeTimeout)
-		defer upsizeCtxCancel()
-		vmResize <- o.resizeVm(upsizeCtx, node, operation.DesiredSize, Upsize)
-	}()
-	go func() {
-		bpResize <- o.balloonPodResizer.resizeBalloonPod(node, o.sizeCalculator.ToAllocatable(node, operation.DesiredSize))
-	}()
-	vmResizeErr := <-vmResize
-	bpResizeErr := <-bpResize
-
-	// Prioritize handling VM resize error even if balloon pod resize also failed.
-	if vmResizeErr != nil {
-		return vmResizeErr
+			ek_errors.DesiredState)
 	}
 
-	// If we are here, it means upsize was a success.
-	if err := o.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{Size: operation.DesiredSize, Status: ekvmtypes.ResizeStatusAtIntent}); err != nil {
-		// This should never fail.
-		return ek_errors.NewGenericError(machineFamily, err, ek_errors.DesiredState)
+	desiredAllocatable := o.sizeCalculator.ToAllocatable(taintedNode, operation.DesiredSize)
+	if err := o.balloonPodResizer.resizeBalloonPod(taintedNode, desiredAllocatable); err != nil {
+		return ek_errors.NewBalloonPodResizeError(machineFamily, err, ek_errors.DesiredState)
 	}
-	if bpResizeErr != nil {
-		return ek_errors.NewBalloonPodResizeError(machineFamily, bpResizeErr, ek_errors.DesiredState)
-	}
+
 	if _, err := o.balloonPodResizer.removeTaint(taintedNode); err != nil {
 		return ek_errors.NewBalloonPodResizeTaintError(
 			machineFamily, fmt.Errorf("removing taint failed for node %q: %w", taintedNode.Name, err),
 			ek_errors.DesiredState)
 	}
+
 	return nil
 }
 

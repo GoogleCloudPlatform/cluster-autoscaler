@@ -364,3 +364,619 @@ func TestSecurityPolicy(t *testing.T) {
 		assert.True(t, c.SecurityContext.RunAsNonRoot == nil || *c.SecurityContext.RunAsNonRoot)
 	}
 }
+
+func TestBalloonPodIsCorrect_IpprEnabled(t *testing.T) {
+	t.Parallel()
+
+	nodeMilliCPU := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	node := test.WithAllocatable(test.BuildTestNode("node", nodeMilliCPU, nodeMem), nodeMilliCPU, nodeMem)
+
+	desiredAllocatable := size.Allocatable{
+		MilliCpus: nodeMilliCPU / 2,
+		KBytes:    (nodeMem / 2) / size.KiB,
+	}
+
+	correctCPU := *resource.NewMilliQuantity(nodeMilliCPU/2, resource.DecimalSI)
+	correctMem := *resource.NewQuantity(nodeMem/2, resource.BinarySI)
+
+	wrongCPU := *resource.NewMilliQuantity(nodeMilliCPU/4, resource.DecimalSI)
+	wrongMem := *resource.NewQuantity(nodeMem/4, resource.BinarySI)
+
+	matchedAlloc := apiv1.ResourceList{
+		apiv1.ResourceCPU:    correctCPU,
+		apiv1.ResourceMemory: correctMem,
+	}
+
+	newStatus := func(containerName string, allocated apiv1.ResourceList) apiv1.PodStatus {
+		status := apiv1.PodStatus{Phase: apiv1.PodRunning}
+		if containerName != "" {
+			status.ContainerStatuses = []apiv1.ContainerStatus{{
+				Name:               containerName,
+				AllocatedResources: allocated,
+			}}
+		}
+		return status
+	}
+
+	// withConditions returns a status whose resize state is reported through pod conditions, which is the only source
+	// getResizeState reads.
+	withConditions := func(status apiv1.PodStatus, conditions ...apiv1.PodCondition) apiv1.PodStatus {
+		status.Conditions = conditions
+		return status
+	}
+	resizeCondition := func(condType apiv1.PodConditionType, reason string) apiv1.PodCondition {
+		return apiv1.PodCondition{Type: condType, Status: apiv1.ConditionTrue, Reason: reason}
+	}
+
+	testCases := []struct {
+		desc       string
+		pods       func(t *testing.T) []*apiv1.Pod
+		wantResult bool
+		wantStatus BalloonPodStatus
+	}{
+		{
+			desc: "success - allocated resources match desired size",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, matchedAlloc)
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "incorrect size - spec requests mismatch even if allocation matches",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, wrongCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, matchedAlloc)
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "incorrect size - allocated resources do not match",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, apiv1.ResourceList{
+					apiv1.ResourceCPU:    wrongCPU,
+					apiv1.ResourceMemory: wrongMem,
+				})
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "incorrect size - allocated resources missing memory key",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, apiv1.ResourceList{
+					apiv1.ResourceCPU: correctCPU,
+				})
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "success - empty container statuses list (relies on requests)",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus("", nil)
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "success - container status present but AllocatedResources is nil (relies on requests)",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, nil)
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "success - container status present but AllocatedResources is empty map (relies on requests)",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, apiv1.ResourceList{})
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "success - container status has other container, skips to requests check",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus("other-sidecar-container", matchedAlloc)
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "correct size - deprecated Pod.Status.Resize is ignored",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = newStatus(balloonContainerName, matchedAlloc)
+				// A node that only sets the deprecated field reports no resize at all, so a pod whose spec and
+				// allocation already match is correct. The resize conditions below are the only source consulted.
+				bPod.Status.Resize = apiv1.PodResizeStatusInfeasible
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: true,
+			wantStatus: BalloonPodOk,
+		},
+		{
+			desc: "incorrect size - PodResizeInProgress condition",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = withConditions(newStatus(balloonContainerName, matchedAlloc),
+					resizeCondition(apiv1.PodResizeInProgress, ""))
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "incorrect size - PodResizeInProgress condition with Error reason",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = withConditions(newStatus(balloonContainerName, matchedAlloc),
+					resizeCondition(apiv1.PodResizeInProgress, apiv1.PodReasonError))
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "incorrect size - PodResizePending condition with Infeasible reason",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = withConditions(newStatus(balloonContainerName, matchedAlloc),
+					resizeCondition(apiv1.PodResizePending, apiv1.PodReasonInfeasible))
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "incorrect size - PodResizePending condition with Deferred reason",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				bPod, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				bPod.Status = withConditions(newStatus(balloonContainerName, matchedAlloc),
+					resizeCondition(apiv1.PodResizePending, apiv1.PodReasonDeferred))
+				return []*apiv1.Pod{bPod}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodIncorrectSize,
+		},
+		{
+			desc: "no pods passed - returns not found",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				return []*apiv1.Pod{}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodWrongCount,
+		},
+		{
+			desc: "multiple pods passed - returns too many",
+			pods: func(t *testing.T) []*apiv1.Pod {
+				p1, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				p1.Name = "balloon-pod-1"
+				p1.Status = newStatus(balloonContainerName, matchedAlloc)
+
+				p2, err := GenerateBalloonPod(node, correctCPU, correctMem, false)
+				assert.NoError(t, err)
+				p2.Name = "balloon-pod-2"
+				p2.Status = newStatus(balloonContainerName, matchedAlloc)
+
+				return []*apiv1.Pod{p1, p2}
+			},
+			wantResult: false,
+			wantStatus: BalloonPodWrongCount,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			pods := tc.pods(t)
+			bPodIsCorrect, bPodStatus := balloonPodIsCorrect(node, desiredAllocatable, pods)
+
+			assert.Equal(t, tc.wantResult, bPodIsCorrect)
+			assert.Equal(t, tc.wantStatus, bPodStatus)
+		})
+	}
+}
+
+func TestBalloonContainerHelpers(t *testing.T) {
+	t.Parallel()
+
+	desiredCPU := *resource.NewMilliQuantity(2000, resource.DecimalSI)
+	desiredMem := *resource.NewQuantity(200*size.MiB, resource.DecimalSI)
+	otherCPU := *resource.NewMilliQuantity(1000, resource.DecimalSI)
+	otherMem := *resource.NewQuantity(100*size.MiB, resource.DecimalSI)
+
+	podWithRequests := func(cName string, res apiv1.ResourceList) *apiv1.Pod {
+		return &apiv1.Pod{
+			Spec: apiv1.PodSpec{
+				Containers: []apiv1.Container{
+					{Name: cName, Resources: apiv1.ResourceRequirements{Requests: res}},
+				},
+			},
+		}
+	}
+
+	podWithAllocated := func(cName string, res apiv1.ResourceList) *apiv1.Pod {
+		return &apiv1.Pod{
+			Status: apiv1.PodStatus{
+				ContainerStatuses: []apiv1.ContainerStatus{
+					{Name: cName, AllocatedResources: res},
+				},
+			},
+		}
+	}
+
+	t.Run("getBalloonContainerSpec", func(t *testing.T) {
+		testCases := []struct {
+			desc      string
+			pod       *apiv1.Pod
+			wantFound bool
+		}{
+			{desc: "nil pod", pod: nil, wantFound: false},
+			{desc: "empty containers list", pod: &apiv1.Pod{}, wantFound: false},
+			{desc: "single container matching", pod: podWithRequests(balloonContainerName, nil), wantFound: true},
+			{desc: "single container different name", pod: podWithRequests("custom-pause", nil), wantFound: false},
+			{
+				desc: "multiple containers with balloon container present",
+				pod: &apiv1.Pod{
+					Spec: apiv1.PodSpec{
+						Containers: []apiv1.Container{
+							{Name: "sidecar-logger"},
+							{Name: balloonContainerName},
+						},
+					},
+				},
+				wantFound: true,
+			},
+			{
+				desc: "multiple containers without balloon container",
+				pod: &apiv1.Pod{
+					Spec: apiv1.PodSpec{
+						Containers: []apiv1.Container{
+							{Name: "sidecar-1"},
+							{Name: "sidecar-2"},
+						},
+					},
+				},
+				wantFound: false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.desc, func(t *testing.T) {
+				t.Parallel()
+				res := getBalloonContainerSpec(tc.pod)
+				if !tc.wantFound {
+					assert.Nil(t, res)
+					return
+				}
+				if assert.NotNil(t, res) {
+					assert.Equal(t, balloonContainerName, res.Name)
+				}
+			})
+		}
+	})
+
+	t.Run("getBalloonContainerStatus", func(t *testing.T) {
+		testCases := []struct {
+			desc      string
+			pod       *apiv1.Pod
+			wantFound bool
+		}{
+			{desc: "nil pod", pod: nil, wantFound: false},
+			{desc: "empty container statuses list", pod: &apiv1.Pod{}, wantFound: false},
+			{desc: "single container matching", pod: podWithAllocated(balloonContainerName, nil), wantFound: true},
+			{desc: "single container different name", pod: podWithAllocated("custom-pause", nil), wantFound: false},
+			{
+				desc: "multiple statuses with balloon present",
+				pod: &apiv1.Pod{
+					Status: apiv1.PodStatus{
+						ContainerStatuses: []apiv1.ContainerStatus{
+							{Name: "sidecar-logger"},
+							{Name: balloonContainerName},
+						},
+					},
+				},
+				wantFound: true,
+			},
+			{
+				desc: "multiple statuses without balloon",
+				pod: &apiv1.Pod{
+					Status: apiv1.PodStatus{
+						ContainerStatuses: []apiv1.ContainerStatus{
+							{Name: "sidecar-1"},
+							{Name: "sidecar-2"},
+						},
+					},
+				},
+				wantFound: false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.desc, func(t *testing.T) {
+				t.Parallel()
+				res := getBalloonContainerStatus(tc.pod)
+				if !tc.wantFound {
+					assert.Nil(t, res)
+					return
+				}
+				if assert.NotNil(t, res) {
+					assert.Equal(t, balloonContainerName, res.Name)
+				}
+			})
+		}
+	})
+
+	t.Run("hasMatchingSpec", func(t *testing.T) {
+		testCases := []struct {
+			desc      string
+			pod       *apiv1.Pod
+			targetCPU resource.Quantity
+			targetMem resource.Quantity
+			wantMatch bool
+		}{
+			{desc: "nil pod", pod: nil, targetCPU: desiredCPU, targetMem: desiredMem, wantMatch: false},
+			{desc: "pod with no containers", pod: &apiv1.Pod{}, targetCPU: desiredCPU, targetMem: desiredMem, wantMatch: false},
+			{
+				desc:      "pod without balloon container",
+				pod:       podWithRequests("not-balloon", apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "matching spec requests",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: true,
+			},
+			{
+				desc:      "matching spec equivalent quantity units (2000m vs 2)",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: *resource.NewQuantity(2, resource.DecimalSI), apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: true,
+			},
+			{
+				desc:      "missing CPU key in requests map",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "missing memory key in requests map",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "mismatched CPU request",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: otherCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "mismatched memory request",
+				pod:       podWithRequests(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: otherMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.desc, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantMatch, hasMatchingSpec(tc.pod, tc.targetCPU, tc.targetMem))
+			})
+		}
+	})
+
+	t.Run("hasMatchingAlloc", func(t *testing.T) {
+		testCases := []struct {
+			desc      string
+			pod       *apiv1.Pod
+			targetCPU resource.Quantity
+			targetMem resource.Quantity
+			wantMatch bool
+		}{
+			{desc: "nil pod", pod: nil, targetCPU: desiredCPU, targetMem: desiredMem, wantMatch: false},
+			{desc: "pod with no container statuses", pod: &apiv1.Pod{}, targetCPU: desiredCPU, targetMem: desiredMem, wantMatch: false},
+			{
+				desc:      "pod without balloon container status",
+				pod:       podWithAllocated("not-balloon", apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "container status present but AllocatedResources is empty",
+				pod:       podWithAllocated(balloonContainerName, nil),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "matching allocated resources",
+				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: true,
+			},
+			{
+				desc:      "missing CPU key in AllocatedResources map",
+				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "missing memory key in AllocatedResources map",
+				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "mismatched allocated CPU",
+				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: otherCPU, apiv1.ResourceMemory: desiredMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc:      "mismatched allocated memory",
+				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: otherMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.desc, func(t *testing.T) {
+				t.Parallel()
+				assert.Equal(t, tc.wantMatch, hasMatchingAlloc(tc.pod, tc.targetCPU, tc.targetMem))
+			})
+		}
+	})
+}
+
+func TestGetResizeState(t *testing.T) {
+	t.Parallel()
+
+	condition := func(condType apiv1.PodConditionType, reason string) apiv1.PodCondition {
+		return apiv1.PodCondition{Type: condType, Status: apiv1.ConditionTrue, Reason: reason}
+	}
+
+	testCases := []struct {
+		desc      string
+		pod       *apiv1.Pod
+		wantState balloonPodResizeState
+	}{
+		{
+			desc:      "nil pod",
+			pod:       nil,
+			wantState: resizeStateNone,
+		},
+		{
+			desc:      "no resize reported",
+			pod:       &apiv1.Pod{},
+			wantState: resizeStateNone,
+		},
+		{
+			desc: "PodResizePending with Infeasible reason",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizePending, apiv1.PodReasonInfeasible)},
+			}},
+			wantState: resizeStateInfeasible,
+		},
+		{
+			desc: "PodResizePending with Deferred reason",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizePending, apiv1.PodReasonDeferred)},
+			}},
+			wantState: resizeStateDeferred,
+		},
+		{
+			desc: "PodResizePending with an unknown reason falls back to deferred",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizePending, "SomethingNew")},
+			}},
+			wantState: resizeStateDeferred,
+		},
+		{
+			desc: "PodResizeInProgress without a reason",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizeInProgress, "")},
+			}},
+			wantState: resizeStateInProgress,
+		},
+		{
+			desc: "PodResizeInProgress with Error reason",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizeInProgress, apiv1.PodReasonError)},
+			}},
+			wantState: resizeStateError,
+		},
+		{
+			desc: "both conditions set - pending describes the newest request and wins",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{
+					condition(apiv1.PodResizeInProgress, ""),
+					condition(apiv1.PodResizePending, apiv1.PodReasonDeferred),
+				},
+			}},
+			wantState: resizeStateDeferred,
+		},
+		{
+			desc: "deprecated Pod.Status.Resize is ignored",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Resize: apiv1.PodResizeStatusInProgress,
+			}},
+			wantState: resizeStateNone,
+		},
+		{
+			desc: "deprecated Pod.Status.Resize does not override the conditions",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Resize:     apiv1.PodResizeStatusInProgress,
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodResizePending, apiv1.PodReasonInfeasible)},
+			}},
+			wantState: resizeStateInfeasible,
+		},
+		{
+			desc: "unrelated conditions are ignored",
+			pod: &apiv1.Pod{Status: apiv1.PodStatus{
+				Conditions: []apiv1.PodCondition{condition(apiv1.PodReady, "")},
+			}},
+			wantState: resizeStateNone,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			got := getResizeState(tc.pod)
+			assert.Equal(t, tc.wantState, got)
+		})
+	}
+}

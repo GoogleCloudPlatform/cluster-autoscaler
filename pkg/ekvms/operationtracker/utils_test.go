@@ -147,7 +147,7 @@ func TestGetBalloonPodLogs(t *testing.T) {
 			bPodSizes: [][]resource.Quantity{
 				{*resource.NewMilliQuantity(nodeMilliCpu/4, resource.BinarySI), *resource.NewQuantity(nodeMem/4, resource.BinarySI)},
 			},
-			want: "Want balloon pod \"bp1\" size: {cpu: \"5\", memory: \"5368709120\"}, got: {cpu: \"2500m\", memory: \"2560Mi\"}.",
+			want: "Want balloon pod \"bp1\" size: {cpu: \"5\", memory: \"5368709120\"}, got requests: {cpu: \"2500m\", memory: \"2560Mi\"}, got allocated: {cpu: \"none\", memory: \"none\"}, resizeState: \"none\".",
 		},
 		{
 			desc:       "balloon pod not running",

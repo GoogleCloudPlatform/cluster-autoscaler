@@ -24,16 +24,17 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
-	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/klog/v2"
+	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/yaml"
 )
 
 const (
-	balloonPodPrefix = "gke-system-balloon-pod-"
-	MinBalloonPodCpu = 0
-	MinBalloonPodMem = 50 * size.MiB
+	balloonPodPrefix     = "gke-system-balloon-pod-"
+	balloonContainerName = "balloon"
+	MinBalloonPodCpu     = 0
+	MinBalloonPodMem     = 50 * size.MiB
 
 	componentLabel                = "component"
 	balloonPodComponentLabelValue = "gke-system-balloon-pod"
@@ -210,11 +211,26 @@ func getBalloonPodSize(node *apiv1.Node, overrideSize size.Allocatable) (resourc
 func balloonPodHasCorrectSize(node *apiv1.Node, desiredAllocatable size.Allocatable, bPod *apiv1.Pod) bool {
 	desiredCpu, desiredMem := getBalloonPodSize(node, desiredAllocatable)
 
-	currentBpRequests := podutils.PodRequests(bPod)
-	currentCpu := currentBpRequests[apiv1.ResourceCPU]
-	currentMem := currentBpRequests[apiv1.ResourceMemory]
+	if !hasMatchingSpec(bPod, desiredCpu, desiredMem) {
+		return false
+	}
 
-	return desiredCpu.Equal(currentCpu) && desiredMem.Equal(currentMem)
+	// Any resize state Kubelet reports means the pod does not guarantee the desired capacity yet: the resize is either
+	// still being actuated (InProgress) or was rejected (Deferred, Infeasible, Error). Marking the pod incorrect lets the
+	// fixer proactively recreate it instead of leaving it stuck waiting for a resize that may never land.
+	if state := getResizeState(bPod); state != resizeStateNone {
+		klog.Warningf("Balloon pod %q has pending or rejected resize state %q, marking incorrect to trigger recreation fallback.", bPod.Name, state)
+		return false
+	}
+
+	// If ContainerStatuses or AllocatedResources are not yet populated (e.g. newly created pod),
+	// allow it so newly created pods are not falsely marked incorrect before Kubelet populates them.
+	cStatus := getBalloonContainerStatus(bPod)
+	if cStatus == nil || len(cStatus.AllocatedResources) == 0 {
+		return true
+	}
+
+	return hasMatchingAlloc(bPod, desiredCpu, desiredMem)
 }
 
 func balloonPodHasCorrectState(bPod *apiv1.Pod) bool {
@@ -257,4 +273,102 @@ func getBalloonPodState(pod *apiv1.Pod) BalloonPodState {
 	}
 
 	return BalloonPodTemplate
+}
+
+// getBalloonContainerSpec retrieves the balloon container spec from a Pod.
+func getBalloonContainerSpec(pod *apiv1.Pod) *apiv1.Container {
+	if pod == nil {
+		return nil
+	}
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == balloonContainerName {
+			return &pod.Spec.Containers[i]
+		}
+	}
+	return nil
+}
+
+// getBalloonContainerStatus retrieves the balloon container status from a Pod.
+func getBalloonContainerStatus(pod *apiv1.Pod) *apiv1.ContainerStatus {
+	if pod == nil {
+		return nil
+	}
+	for i := range pod.Status.ContainerStatuses {
+		if pod.Status.ContainerStatuses[i].Name == balloonContainerName {
+			return &pod.Status.ContainerStatuses[i]
+		}
+	}
+	return nil
+}
+
+// hasMatchingSpec checks if the container's requested resources match desired CPU and memory.
+func hasMatchingSpec(pod *apiv1.Pod, cpu, mem resource.Quantity) bool {
+	c := getBalloonContainerSpec(pod)
+	if c == nil {
+		return false
+	}
+	reqCPU, hasCPU := c.Resources.Requests[apiv1.ResourceCPU]
+	reqMem, hasMem := c.Resources.Requests[apiv1.ResourceMemory]
+	return hasCPU && hasMem && reqCPU.Equal(cpu) && reqMem.Equal(mem)
+}
+
+// hasMatchingAlloc checks if Kubelet's allocated resources match desired CPU and memory.
+func hasMatchingAlloc(pod *apiv1.Pod, cpu, mem resource.Quantity) bool {
+	c := getBalloonContainerStatus(pod)
+	if c == nil {
+		return false
+	}
+	allocCPU, hasCPU := c.AllocatedResources[apiv1.ResourceCPU]
+	allocMem, hasMem := c.AllocatedResources[apiv1.ResourceMemory]
+	return hasCPU && hasMem && allocCPU.Equal(cpu) && allocMem.Equal(mem)
+}
+
+// balloonPodResizeState describes how far Kubelet has got with an in-place resize of a balloon pod.
+type balloonPodResizeState string
+
+const (
+	// resizeStateNone means Kubelet is not reporting any in-place resize for the pod.
+	resizeStateNone balloonPodResizeState = ""
+	// resizeStateInProgress means Kubelet accepted the resize and is still actuating it. This state is transient.
+	resizeStateInProgress balloonPodResizeState = "InProgress"
+	// resizeStateDeferred means the resize fits the node in theory, but cannot be applied right now.
+	resizeStateDeferred balloonPodResizeState = "Deferred"
+	// resizeStateInfeasible means the resize does not fit the node and was rejected. Kubelet may never re-evaluate it.
+	resizeStateInfeasible balloonPodResizeState = "Infeasible"
+	// resizeStateError means Kubelet hit an error while actuating a resize it had already accepted.
+	resizeStateError balloonPodResizeState = "Error"
+)
+
+// getResizeState reports the in-place resize state of a balloon pod.
+//
+// It reads the PodResizePending and PodResizeInProgress conditions. The deprecated Pod.Status.Resize field is
+// deliberately not consulted: it was never populated by a Kubelet old enough to matter here, since in-place resize was
+// alpha and off by default before the conditions were introduced.
+//
+// Like the upstream k8s.io/component-helpers/resource helpers, this keys off the presence and reason of a condition
+// rather than its Status: Kubelet removes these conditions when they stop applying instead of setting them to False.
+func getResizeState(pod *apiv1.Pod) balloonPodResizeState {
+	if pod == nil {
+		return resizeStateNone
+	}
+
+	// PodResizePending wins over PodResizeInProgress: when both are set, a new resize was requested while an earlier one
+	// was still being actuated, and the pending condition is the one describing the latest request.
+	if _, c := podutil.GetPodCondition(&pod.Status, apiv1.PodResizePending); c != nil {
+		if c.Reason == apiv1.PodReasonInfeasible {
+			return resizeStateInfeasible
+		}
+		// Anything else pending is reported as deferred: Kubelet has not allocated the requested resources, and the only
+		// other documented reason for this condition is PodReasonDeferred.
+		return resizeStateDeferred
+	}
+
+	if _, c := podutil.GetPodCondition(&pod.Status, apiv1.PodResizeInProgress); c != nil {
+		if c.Reason == apiv1.PodReasonError {
+			return resizeStateError
+		}
+		return resizeStateInProgress
+	}
+
+	return resizeStateNone
 }
