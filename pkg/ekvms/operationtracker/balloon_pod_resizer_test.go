@@ -15,6 +15,7 @@
 package operationtracker
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
+	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
@@ -123,12 +125,93 @@ func TestResizeBalloonPod(t *testing.T) {
 	}
 }
 
+func TestResizeBalloonPodInPlace(t *testing.T) {
+	t.Parallel()
+
+	desiredCpu := resource.MustParse("2000m")
+	desiredMem := *resource.NewQuantity(200*size.MiB, resource.DecimalSI)
+	baseNode := test.BuildTestNode("test-node", 4000, 400*size.MiB)
+	desiredSize := size.Allocatable{MilliCpus: 2000, KBytes: 200 * 1024}
+
+	errConflict := errors.New("apiserver conflict")
+	testCases := []struct {
+		desc       string
+		node       *v1.Node
+		setupMock  func(t *testing.T, m *mockBalloonPodController)
+		wantErr    error
+		wantErrMsg string
+	}{
+		{
+			desc:       "node has no allocatable set",
+			node:       &v1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-no-alloc"}},
+			setupMock:  func(t *testing.T, m *mockBalloonPodController) {},
+			wantErrMsg: fmt.Sprintf("cannot resize balloon pod for node %q with no allocatable set", "node-no-alloc"),
+		},
+		{
+			desc: "successful in-place resize via controller",
+			node: baseNode,
+			setupMock: func(t *testing.T, m *mockBalloonPodController) {
+				m.On("ResizeBalloonPodInPlace", baseNode, desiredCpu, desiredMem).Return(nil)
+			},
+			wantErr: nil,
+		},
+		{
+			desc: "controller returns error during resize",
+			node: baseNode,
+			setupMock: func(t *testing.T, m *mockBalloonPodController) {
+				m.On("ResizeBalloonPodInPlace", baseNode, desiredCpu, desiredMem).
+					Return(errConflict)
+			},
+			wantErr: errConflict,
+		},
+		{
+			desc: "controller returns NoActiveBalloonPodError",
+			node: baseNode,
+			setupMock: func(t *testing.T, m *mockBalloonPodController) {
+				m.On("ResizeBalloonPodInPlace", baseNode, desiredCpu, desiredMem).
+					Return(ek_errors.NoActiveBalloonPodError)
+			},
+			wantErr: ek_errors.NoActiveBalloonPodError,
+		},
+		{
+			desc: "controller returns IncompatibleQoSError",
+			node: baseNode,
+			setupMock: func(t *testing.T, m *mockBalloonPodController) {
+				m.On("ResizeBalloonPodInPlace", baseNode, desiredCpu, desiredMem).
+					Return(ek_errors.IncompatibleQoSError)
+			},
+			wantErr: ek_errors.IncompatibleQoSError,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			m := &mockBalloonPodController{}
+			tc.setupMock(t, m)
+
+			resizer := &defaultBalloonPodResizer{bPController: m}
+			err := resizer.resizeBalloonPodInPlace(tc.node, desiredSize)
+
+			if tc.wantErrMsg != "" {
+				assert.EqualError(t, err, tc.wantErrMsg)
+			} else if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			m.AssertExpectations(t)
+		})
+	}
+}
+
 func TestAddTaint(t *testing.T) {
 	var (
-		testNode                = test.BuildTestNode("node-1", 4000, 400*size.MiB)
-		testNodeWithTaint, _, _ = addOrUpdateTaintWithTimeAdded(testNode, ekvmtypes.BPResizeTaint, timeAdded)
-		patch                   = "{\"spec\":{\"taints\":[{\"effect\":\"NoSchedule\",\"key\":\"node.gke.io/balloon-pod-resize\",\"timeAdded\":\"2024-12-25T08:00:00Z\",\"value\":\"true\"}]}}"
-		patchErr                = fmt.Errorf("patch error")
+		patch    = fmt.Sprintf("{\"spec\":{\"taints\":[{\"effect\":\"NoSchedule\",\"key\":\"%s\",\"timeAdded\":\"2024-12-25T08:00:00Z\",\"value\":\"true\"}]}}", ekvmtypes.BPResizeTaint.Key)
+		patchErr = fmt.Errorf("patch error")
 	)
 
 	testCases := []struct {
@@ -328,6 +411,7 @@ func TestAddTaintWithConcurrentUpdate(t *testing.T) {
 	assert.True(t, balloonPodResizer.hasTaint(updatedNode), "Expected BPResize taint to be added")
 	assert.Contains(t, updatedNode.Spec.Taints, concurrentTaint, "Expected concurrent taint to be preserved")
 }
+
 func TestRemoveTaintWithConcurrentUpdate(t *testing.T) {
 	staleNode := test.BuildTestNode("node", 4000, 400*size.MiB)
 	staleNode.Spec.Taints = append(staleNode.Spec.Taints, *ekvmtypes.BPResizeTaint)

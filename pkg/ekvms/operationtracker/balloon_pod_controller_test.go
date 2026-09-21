@@ -16,6 +16,9 @@ package operationtracker
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -23,12 +26,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	client_testing "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -502,7 +510,7 @@ func (e podEvent) apply(base *v1.Pod, nodeName string) *v1.Pod {
 
 // getPodEntryLocked reads a pod entry under the controller lock, which
 // getPodEntry expects its callers to hold.
-func getPodEntryLocked(c *balloonPodControllerImpl, pod *v1.Pod) (podStatus, bool) {
+func getPodEntryLocked(c *balloonPodControllerImpl, pod *v1.Pod) (*podStatus, bool) {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 	return c.getPodEntry(pod)
@@ -653,4 +661,746 @@ func isChanClosed(ch <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+func setBalloonSpecRequests(t *testing.T, p *v1.Pod, cpu, mem resource.Quantity) {
+	t.Helper()
+
+	found := false
+	for i := range p.Spec.Containers {
+		if p.Spec.Containers[i].Name == balloonContainerName {
+			if p.Spec.Containers[i].Resources.Requests == nil {
+				p.Spec.Containers[i].Resources.Requests = make(v1.ResourceList)
+			}
+			p.Spec.Containers[i].Resources.Requests[v1.ResourceCPU] = cpu
+			p.Spec.Containers[i].Resources.Requests[v1.ResourceMemory] = mem
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "balloon container %q not found in pod spec", balloonContainerName)
+}
+
+func verifyResizePatchAction(t *testing.T, actions []client_testing.Action, expectPatch bool, targetCpu, targetMem resource.Quantity) {
+	t.Helper()
+
+	var patchActions []client_testing.PatchAction
+	for _, a := range actions {
+		if pa, ok := a.(client_testing.PatchAction); ok {
+			patchActions = append(patchActions, pa)
+		}
+	}
+
+	if !expectPatch {
+		assert.Empty(t, patchActions, "expected no patch actions")
+		return
+	}
+
+	if !assert.Len(t, patchActions, 1, "expected exactly one patch action") {
+		return
+	}
+	patchAction := patchActions[0]
+
+	assert.Equal(t, "resize", patchAction.GetSubresource(), "expected patch on resize subresource")
+
+	var patchPayload struct {
+		Spec struct {
+			Containers []struct {
+				Name      string                  `json:"name"`
+				Resources v1.ResourceRequirements `json:"resources"`
+			} `json:"containers"`
+		} `json:"spec"`
+	}
+
+	if !assert.NoError(t, json.Unmarshal(patchAction.GetPatch(), &patchPayload), "failed to unmarshal patch payload") {
+		return
+	}
+
+	var balloonFound bool
+	for _, container := range patchPayload.Spec.Containers {
+		if container.Name != balloonContainerName {
+			continue
+		}
+
+		cpuReq, hasCpu := container.Resources.Requests[v1.ResourceCPU]
+		if !assert.True(t, hasCpu, "cpu request missing in patch") {
+			return
+		}
+		assert.True(t, targetCpu.Equal(cpuReq), "expected CPU %s, got %s", targetCpu.String(), cpuReq.String())
+
+		memReq, hasMem := container.Resources.Requests[v1.ResourceMemory]
+		if !assert.True(t, hasMem, "memory request missing in patch") {
+			return
+		}
+		assert.True(t, targetMem.Equal(memReq), "expected Memory %s, got %s", targetMem.String(), memReq.String())
+
+		balloonFound = true
+		break
+	}
+	assert.True(t, balloonFound, "balloon container %q not found in patch payload", balloonContainerName)
+}
+
+func buildPodWithAllocated(t *testing.T, base *v1.Pod, cpu, mem resource.Quantity) *v1.Pod {
+	t.Helper()
+
+	p := base.DeepCopy()
+	setBalloonSpecRequests(t, p, cpu, mem)
+	p.Status.ContainerStatuses = []v1.ContainerStatus{{
+		Name: balloonContainerName,
+		AllocatedResources: v1.ResourceList{
+			v1.ResourceCPU:    cpu,
+			v1.ResourceMemory: mem,
+		},
+	}}
+	return p
+}
+
+// withResizeCondition reports the resize state the way Kubelet does: through the
+// PodResizePending and PodResizeInProgress conditions.
+func withResizeCondition(p *v1.Pod, condType v1.PodConditionType, reason string) *v1.Pod {
+	cp := p.DeepCopy()
+	cp.Status.Conditions = append(cp.Status.Conditions, v1.PodCondition{
+		Type:   condType,
+		Status: v1.ConditionTrue,
+		Reason: reason,
+	})
+	return cp
+}
+
+func withQoSClass(p *v1.Pod, qos v1.PodQOSClass) *v1.Pod {
+	cp := p.DeepCopy()
+	cp.Status.QOSClass = qos
+	return cp
+}
+
+// withResourceLimits mimics a legacy balloon pod created before balloon pods moved to the Burstable QoS class.
+func withResourceLimits(t *testing.T, p *v1.Pod, cpu, mem resource.Quantity) *v1.Pod {
+	t.Helper()
+
+	cp := p.DeepCopy()
+	c := getBalloonContainerSpec(cp)
+	if !assert.NotNil(t, c) {
+		t.FailNow()
+	}
+	c.Resources.Limits = v1.ResourceList{
+		v1.ResourceCPU:    cpu,
+		v1.ResourceMemory: mem,
+	}
+	return cp
+}
+
+func setupTestPod(t *testing.T, node *v1.Node, cpu, mem resource.Quantity) *v1.Pod {
+	t.Helper()
+	pod, err := GenerateBalloonPod(node, cpu, mem, true)
+	if !assert.NoError(t, err) {
+		t.FailNow()
+	}
+
+	pod.Name = "balloon-pod-node1"
+	pod.Namespace = "kube-system"
+	pod.UID = "pod-uid-node1"
+	pod.ResourceVersion = "1"
+	pod.Spec.NodeName = node.Name
+	pod.Status.Phase = v1.PodRunning
+	return pod
+}
+
+func (c *balloonPodControllerImpl) defaultOnUpdate(_, newObj interface{}) {
+	c.defaultOnAdd(newObj)
+}
+
+func TestBalloonPodController_ResizeBalloonPodInPlace_Immediate(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node1", 4000, 4000*1024)
+	targetCpu := resource.MustParse("2000m")
+	targetMem := resource.MustParse("200Mi")
+
+	basePod := setupTestPod(t, node, resource.MustParse("1000m"), resource.MustParse("100Mi"))
+	podAlreadyResized := buildPodWithAllocated(t, basePod, targetCpu, targetMem)
+
+	now := metav1.NewTime(time.Now())
+	terminatingPod := basePod.DeepCopy()
+	terminatingPod.DeletionTimestamp = &now
+
+	failedPod := basePod.DeepCopy()
+	failedPod.Status.Phase = v1.PodFailed
+
+	secondPod := setupTestPod(t, node, resource.MustParse("1000m"), resource.MustParse("100Mi"))
+	secondPod.Name = "balloon-pod-node1-second"
+	secondPod.UID = "pod-uid-node1-second"
+
+	tests := []struct {
+		desc        string
+		targetNode  *v1.Node
+		pod         *v1.Pod
+		extraPods   []*v1.Pod
+		seedCache   bool
+		patchErr    error
+		wantErr     string
+		expectPatch bool
+	}{
+		{
+			desc:        "nil node returns error",
+			targetNode:  nil,
+			pod:         nil,
+			wantErr:     "nil Node",
+			expectPatch: false,
+		},
+		{
+			desc:        "node not in controller cache returns NoActiveBalloonPodError",
+			targetNode:  node,
+			pod:         basePod,
+			seedCache:   false,
+			wantErr:     ek_errors.NoActiveBalloonPodError.Error(),
+			expectPatch: false,
+		},
+		{
+			desc:        "multiple balloon pods on node returns error",
+			targetNode:  node,
+			pod:         basePod,
+			extraPods:   []*v1.Pod{secondPod},
+			seedCache:   true,
+			wantErr:     "multiple balloon pods (2) found for node",
+			expectPatch: false,
+		},
+		{
+			desc:        "terminating balloon pod returns NoActiveBalloonPodError",
+			targetNode:  node,
+			pod:         terminatingPod,
+			seedCache:   true,
+			wantErr:     ek_errors.NoActiveBalloonPodError.Error(),
+			expectPatch: false,
+		},
+		{
+			desc:        "failed balloon pod returns NoActiveBalloonPodError",
+			targetNode:  node,
+			pod:         failedPod,
+			seedCache:   true,
+			wantErr:     ek_errors.NoActiveBalloonPodError.Error(),
+			expectPatch: false,
+		},
+		{
+			desc:        "patch api failure returns error",
+			targetNode:  node,
+			pod:         basePod,
+			seedCache:   true,
+			patchErr:    errors.New("apiserver unavailable"),
+			wantErr:     "failed to in-place patch balloon pod",
+			expectPatch: true,
+		},
+		{
+			desc:       "patch api 409 conflict returns error",
+			targetNode: node,
+			pod:        basePod,
+			seedCache:  true,
+			patchErr: apierrors.NewConflict(
+				schema.GroupResource{Resource: "pods"},
+				basePod.Name,
+				errors.New("object has been modified"),
+			),
+			wantErr:     "failed to in-place patch balloon pod",
+			expectPatch: true,
+		},
+		{
+			desc:        "already at desired size returns immediately without patch",
+			targetNode:  node,
+			pod:         podAlreadyResized,
+			seedCache:   true,
+			expectPatch: false,
+		},
+		{
+			desc:        "pod already marked Infeasible returns error without patch",
+			targetNode:  node,
+			pod:         withResizeCondition(podAlreadyResized, v1.PodResizePending, v1.PodReasonInfeasible),
+			seedCache:   true,
+			wantErr:     "as Infeasible",
+			expectPatch: false,
+		},
+		{
+			desc:        "pod already marked Deferred returns error without patch",
+			targetNode:  node,
+			pod:         withResizeCondition(podAlreadyResized, v1.PodResizePending, v1.PodReasonDeferred),
+			seedCache:   true,
+			wantErr:     "as Deferred",
+			expectPatch: false,
+		},
+		{
+			desc:        "Guaranteed pod returns error without patch",
+			targetNode:  node,
+			pod:         withQoSClass(basePod, v1.PodQOSGuaranteed),
+			seedCache:   true,
+			wantErr:     "not eligible for in-place resize",
+			expectPatch: false,
+		},
+		{
+			desc:        "pod with limits but no QoS class set returns error without patch",
+			targetNode:  node,
+			pod:         withResourceLimits(t, basePod, resource.MustParse("1000m"), resource.MustParse("100Mi")),
+			seedCache:   true,
+			wantErr:     "not eligible for in-place resize",
+			expectPatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
+
+			var initialObjects []runtime.Object
+			if tt.pod != nil {
+				initialObjects = append(initialObjects, tt.pod.DeepCopy())
+			}
+			for _, p := range tt.extraPods {
+				initialObjects = append(initialObjects, p.DeepCopy())
+			}
+			fakeClient := fake.NewSimpleClientset(initialObjects...)
+
+			if tt.patchErr != nil {
+				fakeClient.PrependReactor("patch", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+					return true, nil, tt.patchErr
+				})
+			}
+
+			informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+			controller := newBalloonPodController(fakeClient, informerFactory)
+
+			if tt.seedCache {
+				if tt.pod != nil {
+					controller.defaultOnAdd(tt.pod.DeepCopy())
+				}
+				for _, p := range tt.extraPods {
+					controller.defaultOnAdd(p.DeepCopy())
+				}
+			}
+
+			err := controller.ResizeBalloonPodInPlace(tt.targetNode, targetCpu, targetMem)
+
+			if tt.wantErr != "" {
+				assert.ErrorContains(t, err, tt.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			verifyResizePatchAction(t, fakeClient.Actions(), tt.expectPatch, targetCpu, targetMem)
+		})
+	}
+}
+
+func TestBalloonPodController_ResizeBalloonPodInPlace_Events(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node1", 4000, 4000*1024)
+	targetCpu := resource.MustParse("2000m")
+	targetMem := resource.MustParse("200Mi")
+
+	initialCpu := resource.MustParse("1000m")
+	initialMem := resource.MustParse("100Mi")
+
+	basePod := setupTestPod(t, node, initialCpu, initialMem)
+
+	tests := []struct {
+		desc       string
+		targetCpu  resource.Quantity
+		targetMem  resource.Quantity
+		emitEvent  func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod)
+		wantErr    error
+		wantErrSub string
+	}{
+		{
+			desc:      "kubelet allocates resources (scale up) -> resize succeeds",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				updated := buildPodWithAllocated(t, currentPod, targetCpu, targetMem)
+				c.defaultOnUpdate(currentPod, updated)
+			},
+		},
+		{
+			desc:      "kubelet allocates resources (scale down) -> resize succeeds",
+			targetCpu: resource.MustParse("500m"),
+			targetMem: resource.MustParse("50Mi"),
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				downCpu := resource.MustParse("500m")
+				downMem := resource.MustParse("50Mi")
+				updated := buildPodWithAllocated(t, currentPod, downCpu, downMem)
+				c.defaultOnUpdate(currentPod, updated)
+			},
+		},
+		{
+			desc:      "kubelet updates allocated resources while InProgress, then clears InProgress -> resize succeeds",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				inProgress := withResizeCondition(buildPodWithAllocated(t, currentPod, targetCpu, targetMem),
+					v1.PodResizeInProgress, "")
+				c.defaultOnUpdate(currentPod, inProgress)
+
+				// Kubelet clears the condition once the resize is acknowledged.
+				completed := buildPodWithAllocated(t, currentPod, targetCpu, targetMem)
+				c.defaultOnUpdate(inProgress, completed)
+			},
+		},
+		{
+			desc:      "spurious update (e.g. annotations/labels) ignored until target resources allocated",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				spurious := currentPod.DeepCopy()
+				if spurious.Annotations == nil {
+					spurious.Annotations = make(map[string]string)
+				}
+				spurious.Annotations["cluster-autoscaler"] = "touched"
+				c.defaultOnUpdate(currentPod, spurious)
+
+				completed := buildPodWithAllocated(t, spurious, targetCpu, targetMem)
+				c.defaultOnUpdate(spurious, completed)
+			},
+		},
+		{
+			desc:      "partial intermediate allocation does not resolve until full target reached",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				partialCpu := resource.MustParse("1500m")
+				partial := withResizeCondition(buildPodWithAllocated(t, currentPod, partialCpu, initialMem),
+					v1.PodResizeInProgress, "")
+				c.defaultOnUpdate(currentPod, partial)
+
+				completed := buildPodWithAllocated(t, currentPod, targetCpu, targetMem)
+				c.defaultOnUpdate(partial, completed)
+			},
+		},
+		{
+			desc:      "kubelet updates allocated resources but remains InProgress -> times out",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				// Allocation already matches the target, so only the lingering
+				// PodResizeInProgress condition keeps the resize unresolved.
+				inProgress := withResizeCondition(buildPodWithAllocated(t, currentPod, targetCpu, targetMem),
+					v1.PodResizeInProgress, "")
+				c.defaultOnUpdate(currentPod, inProgress)
+			},
+			wantErr: ek_errors.ResizeTimeoutError,
+		},
+		{
+			desc:      "kubelet sets PodResizePending/Deferred condition -> fails with rejection error",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				deferred := withResizeCondition(buildPodWithAllocated(t, currentPod, initialCpu, initialMem),
+					v1.PodResizePending, v1.PodReasonDeferred)
+				c.defaultOnUpdate(currentPod, deferred)
+			},
+			wantErrSub: "as Deferred",
+		},
+		{
+			desc:      "kubelet sets PodResizePending/Infeasible condition -> fails with rejection error",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				infeasible := withResizeCondition(buildPodWithAllocated(t, currentPod, initialCpu, initialMem),
+					v1.PodResizePending, v1.PodReasonInfeasible)
+				c.defaultOnUpdate(currentPod, infeasible)
+			},
+			wantErrSub: "as Infeasible",
+		},
+		{
+			desc:      "kubelet sets PodResizeInProgress/Error condition -> fails fast instead of timing out",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				errored := withResizeCondition(buildPodWithAllocated(t, currentPod, initialCpu, initialMem),
+					v1.PodResizeInProgress, v1.PodReasonError)
+				c.defaultOnUpdate(currentPod, errored)
+			},
+			wantErrSub: "as Error",
+		},
+		{
+			desc:      "pod deleted while waiting -> fails with deletion error",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				c.defaultOnDelete(currentPod)
+			},
+			wantErrSub: "was deleted during resize",
+		},
+		{
+			desc:      "no event arrives -> times out",
+			targetCpu: targetCpu,
+			targetMem: targetMem,
+			emitEvent: nil,
+			wantErr:   ek_errors.ResizeTimeoutError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				fakeClient := fake.NewSimpleClientset(basePod.DeepCopy())
+				informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+
+				controller := newBalloonPodController(fakeClient, informerFactory)
+				controller.defaultOnAdd(basePod.DeepCopy())
+				controller.podResizeTimeout = 5 * time.Second
+
+				errCh := make(chan error, 1)
+				go func() {
+					errCh <- controller.ResizeBalloonPodInPlace(node, tt.targetCpu, tt.targetMem)
+				}()
+
+				synctest.Wait()
+
+				if tt.emitEvent != nil {
+					tt.emitEvent(t, controller, basePod.DeepCopy())
+					synctest.Wait()
+				}
+
+				resizeErr := <-errCh
+
+				switch {
+				case tt.wantErr != nil:
+					assert.ErrorIs(t, resizeErr, tt.wantErr)
+				case tt.wantErrSub != "":
+					assert.ErrorContains(t, resizeErr, tt.wantErrSub)
+				default:
+					assert.NoError(t, resizeErr)
+				}
+			})
+		})
+	}
+}
+
+func TestBalloonPodController_ResizeBalloonPodInPlace_ConcurrentCallsFail(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		node := test.BuildTestNode("node1", 4000, 4000*1024)
+		targetCpu := resource.MustParse("2000m")
+		targetMem := resource.MustParse("200Mi")
+
+		basePod := setupTestPod(t, node, resource.MustParse("1000m"), resource.MustParse("100Mi"))
+
+		fakeClient := fake.NewSimpleClientset(basePod.DeepCopy())
+		informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+
+		bPController := newBalloonPodController(fakeClient, informerFactory)
+		bPController.podResizeTimeout = 5 * time.Second
+		bPController.defaultOnAdd(basePod.DeepCopy())
+
+		firstErrCh := make(chan error, 1)
+		go func() {
+			firstErrCh <- bPController.ResizeBalloonPodInPlace(node, targetCpu, targetMem)
+		}()
+
+		synctest.Wait()
+
+		secondErr := bPController.ResizeBalloonPodInPlace(node, targetCpu, targetMem)
+		assert.ErrorIs(t, secondErr, ek_errors.ConcurrentResizeError)
+
+		updatedPod := buildPodWithAllocated(t, basePod, targetCpu, targetMem)
+		bPController.defaultOnUpdate(basePod.DeepCopy(), updatedPod)
+		synctest.Wait()
+
+		assert.NoError(t, <-firstErrCh)
+	})
+}
+
+// TestBalloonPodController_ResizeBalloonPodInPlace_PreservesQoS pins the invariant behind the production failure: the
+// resize patch only sets Requests, so issuing it against a balloon pod that still carries Limits would move the pod from
+// Guaranteed to Burstable and the API server rejects it with "Pod QOS Class may not change as a result of resizing".
+//
+// The reactor stands in for that API server validation, which the fake client set does not perform. If the Guaranteed
+// pre-check in ResizeBalloonPodInPlace is ever removed, the Guaranteed case below starts issuing the patch and fails
+// with the real rejection instead of silently passing.
+func TestBalloonPodController_ResizeBalloonPodInPlace_PreservesQoS(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node1", 4000, 4000*1024)
+	initialCpu := resource.MustParse("1000m")
+	initialMem := resource.MustParse("100Mi")
+	targetCpu := resource.MustParse("2000m")
+	targetMem := resource.MustParse("200Mi")
+
+	burstablePod := setupTestPod(t, node, initialCpu, initialMem)
+	guaranteedPod := withQoSClass(withResourceLimits(t, burstablePod, initialCpu, initialMem), v1.PodQOSGuaranteed)
+
+	// Returned once the patch has cleared QoS validation, so the call fails fast instead of waiting for a Kubelet
+	// acknowledgement that no informer is going to deliver in this test.
+	errPatchAccepted := errors.New("patch accepted by fake apiserver")
+
+	tests := []struct {
+		desc      string
+		pod       *v1.Pod
+		wantPatch bool
+		wantErr   string
+	}{
+		{
+			desc:      "burstable balloon pod is patched and keeps its QoS class",
+			pod:       burstablePod,
+			wantPatch: true,
+			wantErr:   errPatchAccepted.Error(),
+		},
+		{
+			desc:      "guaranteed balloon pod is never patched",
+			pod:       guaranteedPod,
+			wantPatch: false,
+			wantErr:   ek_errors.IncompatibleQoSError.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
+
+			livePod := tt.pod.DeepCopy()
+			fakeClient := fake.NewSimpleClientset(livePod)
+
+			var patched bool
+			fakeClient.PrependReactor("patch", "pods", func(action client_testing.Action) (bool, runtime.Object, error) {
+				patched = true
+				if action.GetSubresource() != "resize" {
+					return true, nil, fmt.Errorf("unexpected patch on subresource %q", action.GetSubresource())
+				}
+				// The patch only ever sets Requests, so a pod that carries Limits would change QoS class.
+				if c := getBalloonContainerSpec(livePod); c != nil && len(c.Resources.Limits) > 0 {
+					return true, nil, fmt.Errorf("Pod %q is invalid: spec: Invalid value: %q: Pod QOS Class may not change as a result of resizing",
+						livePod.Name, v1.PodQOSGuaranteed)
+				}
+				return true, nil, errPatchAccepted
+			})
+
+			informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+			controller := newBalloonPodController(fakeClient, informerFactory)
+			controller.defaultOnAdd(livePod.DeepCopy())
+
+			err := controller.ResizeBalloonPodInPlace(node, targetCpu, targetMem)
+
+			assert.ErrorContains(t, err, tt.wantErr)
+			assert.NotContains(t, fmt.Sprint(err), "QOS Class may not change",
+				"resize patch must never be issued in a way that changes the pod QoS class")
+			assert.Equal(t, tt.wantPatch, patched, "unexpected patch behaviour")
+		})
+	}
+}
+
+// TestBalloonPodController_ResizeBalloonPodInPlace_VerifiesFailedPatch tests that a failed
+// patch whose write actually landed does not trigger unnecessary recreation fallback.
+func TestBalloonPodController_ResizeBalloonPodInPlace_VerifiesFailedPatch(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node1", 4000, 4000*1024)
+	initialCpu := resource.MustParse("1000m")
+	initialMem := resource.MustParse("100Mi")
+	targetCpu := resource.MustParse("2000m")
+	targetMem := resource.MustParse("200Mi")
+
+	cachedPod := setupTestPod(t, node, initialCpu, initialMem)
+	resizedPod := setupTestPod(t, node, targetCpu, targetMem)
+	// Same name, different identity: the pod was recreated by something else while we patched.
+	replacedPod := setupTestPod(t, node, targetCpu, targetMem)
+	replacedPod.UID = "pod-uid-node1-replacement"
+
+	tests := []struct {
+		desc string
+		// livePod is what reading the pod back from the apiserver returns after the failed patch.
+		livePod *v1.Pod
+		getErr  error
+		// wantFallback is true when the controller must surface the patch error so that the
+		// caller falls back to recreating the balloon pod.
+		wantFallback bool
+	}{
+		{
+			desc:         "patch landed despite the error, so keep waiting for Kubelet",
+			livePod:      resizedPod,
+			wantFallback: false,
+		},
+		{
+			desc:         "patch did not land, so fall back to recreation",
+			livePod:      cachedPod,
+			wantFallback: true,
+		},
+		{
+			desc:         "pod was replaced while patching, so fall back to recreation",
+			livePod:      replacedPod,
+			wantFallback: true,
+		},
+		{
+			desc:         "verification read failed, so fall back to recreation",
+			livePod:      cachedPod,
+			getErr:       errors.New("apiserver unavailable"),
+			wantFallback: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
+
+			fakeClient := fake.NewSimpleClientset(tt.livePod.DeepCopy())
+			fakeClient.PrependReactor("patch", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+				return true, nil, context.DeadlineExceeded
+			})
+			gets := 0
+			fakeClient.PrependReactor("get", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+				gets++
+				if tt.getErr != nil {
+					return true, nil, tt.getErr
+				}
+				return true, tt.livePod.DeepCopy(), nil
+			})
+
+			controller := newBalloonPodController(fakeClient, informers.NewSharedInformerFactory(fakeClient, 0))
+			// No informer runs in this test, so a resize that proceeds to the wait can only
+			// end in a timeout. Keep that short so the assertions distinguish "kept waiting"
+			// from "fell back" without sitting out the full ipprKubeletResizeTimeout.
+			controller.podResizeTimeout = 50 * time.Millisecond
+			controller.defaultOnAdd(cachedPod.DeepCopy())
+
+			err := controller.ResizeBalloonPodInPlace(node, targetCpu, targetMem)
+
+			assert.Equal(t, 1, gets, "a failed patch must be verified with exactly one read")
+			if tt.wantFallback {
+				assert.ErrorContains(t, err, ek_errors.ResizePatchError.Error(),
+					"caller must see a patch error so that it recreates the pod")
+				return
+			}
+			assert.ErrorContains(t, err, ek_errors.ResizeTimeoutError.Error(),
+				"controller must go on to wait for Kubelet instead of reporting a patch failure")
+			assert.NotContains(t, fmt.Sprint(err), ek_errors.ResizePatchError.Error(),
+				"a patch that landed must never be reported as a patch failure")
+		})
+	}
+}
+
+// TestBalloonPodController_ResizeBalloonPodInPlace_SucceedingPatchIsNotVerified guards the cost of
+// the verification read: it exists only for the failure path and must not add an apiserver round
+// trip to every in-place resize.
+func TestBalloonPodController_ResizeBalloonPodInPlace_SucceedingPatchIsNotVerified(t *testing.T) {
+	t.Parallel()
+
+	node := test.BuildTestNode("node1", 4000, 4000*1024)
+	targetCpu := resource.MustParse("2000m")
+	targetMem := resource.MustParse("200Mi")
+
+	cachedPod := setupTestPod(t, node, resource.MustParse("1000m"), resource.MustParse("100Mi"))
+
+	fakeClient := fake.NewSimpleClientset(cachedPod.DeepCopy())
+	gets := 0
+	fakeClient.PrependReactor("get", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+		gets++
+		return true, cachedPod.DeepCopy(), nil
+	})
+
+	controller := newBalloonPodController(fakeClient, informers.NewSharedInformerFactory(fakeClient, 0))
+	controller.podResizeTimeout = 50 * time.Millisecond
+	controller.defaultOnAdd(cachedPod.DeepCopy())
+
+	err := controller.ResizeBalloonPodInPlace(node, targetCpu, targetMem)
+
+	assert.ErrorContains(t, err, ek_errors.ResizeTimeoutError.Error())
+	assert.Zero(t, gets, "a successful patch must not trigger a verification read")
 }

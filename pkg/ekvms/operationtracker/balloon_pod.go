@@ -339,6 +339,17 @@ const (
 	resizeStateError balloonPodResizeState = "Error"
 )
 
+// shouldRecreate returns true if the resize state has stalled or failed,
+// indicating that the controller should fall back to recreating the pod.
+func (s balloonPodResizeState) shouldRecreate() bool {
+	switch s {
+	case resizeStateDeferred, resizeStateInfeasible, resizeStateError:
+		return true
+	default:
+		return false
+	}
+}
+
 // getResizeState reports the in-place resize state of a balloon pod.
 //
 // It reads the PodResizePending and PodResizeInProgress conditions. The deprecated Pod.Status.Resize field is
@@ -371,4 +382,18 @@ func getResizeState(pod *apiv1.Pod) balloonPodResizeState {
 	}
 
 	return resizeStateNone
+}
+
+// isGuaranteedQoS reports whether the balloon pod is in the Guaranteed QoS class.
+//
+// Such a pod cannot be resized in place: the resize patch only sets Requests, which breaks the requests == limits equality and moves the pod
+// to Burstable. The API server rejects that with "Pod QOS Class may not change as a result of resizing". Balloon pods created before balloon
+// pods moved to Burstable still carry Limits, so they stay ineligible until they are recreated.
+func isGuaranteedQoS(pod *apiv1.Pod) bool {
+	if pod.Status.QOSClass != "" {
+		return pod.Status.QOSClass == apiv1.PodQOSGuaranteed
+	}
+	// The API server populates Status.QOSClass on admission. Fall back to the spec for pods that have not been through it yet.
+	c := getBalloonContainerSpec(pod)
+	return c != nil && len(c.Resources.Limits) > 0
 }

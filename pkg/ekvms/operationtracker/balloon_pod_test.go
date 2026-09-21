@@ -980,3 +980,27 @@ func TestGetResizeState(t *testing.T) {
 		})
 	}
 }
+
+func TestBalloonPodResizeStateShouldRecreate(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		desc  string
+		state balloonPodResizeState
+		want  bool
+	}{
+		{desc: "none", state: resizeStateNone, want: false},
+		{desc: "in progress", state: resizeStateInProgress, want: false},
+		{desc: "deferred", state: resizeStateDeferred, want: true},
+		{desc: "infeasible", state: resizeStateInfeasible, want: true},
+		{desc: "error", state: resizeStateError, want: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tc.want, tc.state.shouldRecreate())
+		})
+	}
+}

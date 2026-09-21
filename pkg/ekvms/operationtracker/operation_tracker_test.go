@@ -1895,6 +1895,18 @@ func (m *mockBalloonPodController) DeleteAllBalloonPods(node *v1.Node) error {
 	return m.MethodCalled("DeleteAllBalloonPods", node).Error(0)
 }
 
+func (m *mockBalloonPodController) GetPodsForNode(node *v1.Node) []*v1.Pod {
+	args := m.MethodCalled("GetPodsForNode", node)
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).([]*v1.Pod)
+}
+
+func (m *mockBalloonPodController) ResizeBalloonPodInPlace(node *v1.Node, cpu, mem resource.Quantity) error {
+	return m.MethodCalled("ResizeBalloonPodInPlace", node, cpu, mem).Error(0)
+}
+
 func (m *mockBalloonPodController) List() []*v1.Pod {
 	var pods []*v1.Pod
 	pods, _ = (m.MethodCalled("List").Get(0)).([]*v1.Pod)
