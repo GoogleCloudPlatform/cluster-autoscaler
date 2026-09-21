@@ -275,6 +275,18 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 			klog.Warningf("Failed to inject pods: %v", err)
 		}
 		klog.Infof("Unschedulable pods count after fake pod injection processor: %v", len(unschedulablePods))
+		// podInjectionProcessor is a vendored OSS processor that reads
+		// scheduling-gated pods directly from AllPodLister(); filter again to
+		// strip fake pods cloned from unowned pods. Like unowned real pods,
+		// they're still taken into account in cluster scale-to-0:
+		// scheduling-gated pods are never unschedulable, so these fake pods are
+		// the only trace of them.
+		if p.cccPodFilter != nil {
+			var unownedPods []*apiv1.Pod
+			unschedulablePods, unownedPods = p.cccPodFilter.PartitionPodsByAutoscaler(unschedulablePods)
+			otherPendingPods = append(otherPendingPods, unownedPods...)
+			klog.Infof("Unschedulable pods count after post-injection CCC autoscaler filtering: %v", len(unschedulablePods))
+		}
 	}
 
 	if p.lookaheadPodsInjection != nil {

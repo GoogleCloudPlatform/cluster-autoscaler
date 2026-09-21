@@ -25,12 +25,14 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/client-go/informers"
-	"k8s.io/client-go/kubernetes/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
@@ -42,13 +44,18 @@ import (
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/utils/clock"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
+	podinjectionbackoff "sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection/backoff"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
+	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -94,7 +101,14 @@ type mockCccLister struct {
 	ownership map[string]bool
 }
 
+func (m *mockCccLister) IsNodeOwned(node *v1.Node) bool {
+	return true
+}
+
 func (m *mockCccLister) IsPodOwned(pod *v1.Pod) bool {
+	if ccc := pod.Spec.NodeSelector[gkelabels.ComputeClassLabel]; ccc != "" {
+		return m.ownership[ccc]
+	}
 	return m.ownership[pod.Name]
 }
 
@@ -343,7 +357,7 @@ func (m *mockReactionTimeMetrics) ObserveFirstReactionTime(_ time.Duration, syst
 // It must be called inside a synctest bubble.
 func newTestPodStateObserver(t *testing.T, pendingPods ...*v1.Pod) (*podstate.PodStateObserver, *mockReactionTimeMetrics) {
 	t.Helper()
-	kubeClient := fake.NewSimpleClientset()
+	kubeClient := kubefake.NewSimpleClientset()
 	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
 	reactionMetrics := &mockReactionTimeMetrics{}
 	observer, err := podstate.NewPodStateObserver(
@@ -670,7 +684,6 @@ func TestCccPodFilterInPodListProcessor(t *testing.T) {
 	pOwned1 := test.BuildTestPod("owned-1", 100, 1)
 	pOwned2 := test.BuildTestPod("owned-2", 100, 1)
 	pUnowned := test.BuildTestPod("unowned-1", 100, 1)
-
 	initialPods := []*v1.Pod{pOwned1, pUnowned, pOwned2}
 
 	testCases := []struct {
@@ -721,6 +734,129 @@ func TestCccPodFilterInPodListProcessor(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCccPodFilterAfterPodInjectionProcessor(t *testing.T) {
+	// podInjectionProcessor injects fake pods for the missing replicas of a
+	// ReplicaSet, cloned from its pending pods. It also clones scheduling-gated
+	// pods, which it lists from AllPodLister: they're never unschedulable, so
+	// their clones skip the ownership filtering of unschedulable pods.
+	pendingPod := test.BuildTestPod("pending-pod", 100, 1,
+		withComputeClass("pending-ccc"),
+		test.WithControllerOwnerRef("pending-rs", "ReplicaSet", "pending-rs"),
+	)
+	gatedPod := test.WithSchedulingGatedStatus(test.BuildTestPod("gated-pod", 100, 1,
+		withComputeClass("gated-ccc"),
+		test.WithControllerOwnerRef("gated-rs", "ReplicaSet", "gated-rs"),
+	))
+	// Each ReplicaSet has 2 replicas and 1 pod, so podInjectionProcessor
+	// injects 1 clone of each pod.
+	pendingPodClone := injectedPodClone(pendingPod, "pending-rs")
+	gatedPodClone := injectedPodClone(gatedPod, "gated-rs")
+	listerRegistry := newPodInjectionListerRegistry(t, []*v1.Pod{gatedPod},
+		replicaSetWithReplicas("pending-rs", 2),
+		replicaSetWithReplicas("gated-rs", 2),
+	)
+
+	testCases := []struct {
+		name                 string
+		ownership            map[string]bool
+		wantPods             []*v1.Pod
+		wantOtherPendingPods []*v1.Pod
+	}{
+		{
+			name:                 "owns the ComputeClass of the pending pod",
+			ownership:            map[string]bool{"pending-ccc": true},
+			wantPods:             []*v1.Pod{pendingPod, pendingPodClone},
+			wantOtherPendingPods: []*v1.Pod{gatedPodClone},
+		},
+		{
+			name:                 "owns the ComputeClass of the scheduling-gated pod",
+			ownership:            map[string]bool{"gated-ccc": true},
+			wantPods:             []*v1.Pod{gatedPodClone},
+			wantOtherPendingPods: []*v1.Pod{pendingPod},
+		},
+		{
+			name:                 "owns neither ComputeClass",
+			ownership:            map[string]bool{},
+			wantPods:             nil,
+			wantOtherPendingPods: []*v1.Pod{pendingPod, gatedPodClone},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultPodListProcessor := &mockDefaultPodListProcessor{}
+			scaleToZero := &mockScaleToZeroProcessor{}
+			processor := &GkeInternalPodListProcessor{
+				defaultPodListerProcessor: defaultPodListProcessor,
+				scaleToZeroProcessor:      scaleToZero,
+				podInjectionProcessor:     podinjection.NewPodInjectionPodListProcessor(podinjectionbackoff.NewFakePodControllerRegistry()),
+				cccPodFilter:              cc_processors.NewCccAnnotationPodFilter(&mockCccLister{ownership: tc.ownership}),
+				podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+				experimentsManager:        experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
+			}
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				ClusterSnapshot:        testsnapshot.NewTestSnapshotOrDie(t),
+				AutoscalingKubeClients: ca_context.AutoscalingKubeClients{ListerRegistry: listerRegistry},
+			}
+
+			res, err := processor.Process(t.Context(), autoscalingCtx, []*v1.Pod{pendingPod})
+			if err != nil {
+				t.Fatalf("Process() returned unexpected error: %v", err)
+			}
+			if diff := cmp.Diff(tc.wantPods, res); diff != "" {
+				t.Errorf("Process() returned unexpected pods (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantPods, defaultPodListProcessor.receivedPods); diff != "" {
+				t.Errorf("defaultPodListProcessor received unexpected pods (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantOtherPendingPods, scaleToZero.receivedOtherPendingPods); diff != "" {
+				t.Errorf("scaleToZeroProcessor received unexpected other pending pods (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func withComputeClass(computeClass string) func(*v1.Pod) {
+	return func(pod *v1.Pod) {
+		pod.Spec.NodeSelector = map[string]string{gkelabels.ComputeClassLabel: computeClass}
+	}
+}
+
+// injectedPodClone returns the first fake pod podInjectionProcessor clones from
+// the given pod of the given ReplicaSet.
+func injectedPodClone(pod *v1.Pod, replicaSetUID string) *v1.Pod {
+	clone := fake.WithFakePodAnnotation(pod.DeepCopy())
+	clone.Name = pod.Name + "-copy-1"
+	clone.UID = types.UID(replicaSetUID + "-1")
+	return clone
+}
+
+func replicaSetWithReplicas(name string, replicas int32) *appsv1.ReplicaSet {
+	return &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, UID: types.UID(name)},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr.To(replicas)},
+	}
+}
+
+// newPodInjectionListerRegistry returns a ListerRegistry with the listers
+// podInjectionProcessor uses.
+func newPodInjectionListerRegistry(t *testing.T, allPods []*v1.Pod, replicaSets ...*appsv1.ReplicaSet) kube_util.ListerRegistry {
+	t.Helper()
+	jobLister, err := kube_util.NewTestJobLister(nil)
+	if err != nil {
+		t.Fatalf("NewTestJobLister() returned unexpected error: %v", err)
+	}
+	rsLister, err := kube_util.NewTestReplicaSetLister(replicaSets)
+	if err != nil {
+		t.Fatalf("NewTestReplicaSetLister() returned unexpected error: %v", err)
+	}
+	stsLister, err := kube_util.NewTestStatefulSetLister(nil)
+	if err != nil {
+		t.Fatalf("NewTestStatefulSetLister() returned unexpected error: %v", err)
+	}
+	return kube_util.NewListerRegistry(nil, nil, kube_util.NewTestPodLister(allPods), nil, nil, nil, jobLister, rsLister, stsLister)
 }
 
 func TestScaleToZeroReceivesPodsOwnedByOtherInstances(t *testing.T) {
