@@ -63,10 +63,8 @@ const (
 )
 
 var (
-	testStartTime           = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
-	supportedMachineType    = fmt.Sprintf("%s-%s-%s", machinetypes.EK.Name(), "standard", "32")
-	notSupportedMachineType = fmt.Sprintf("%s-%s-%s", machinetypes.EK.Name(), "notsupported", "32")
-	nonEkMachineType        = fmt.Sprintf("%s-%s-%s", "xx", "notsupported", "32")
+	testStartTime             = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
+	nonResizableVmMachineType = fmt.Sprintf("%s-%s-%s", "xx", "notsupported", "32")
 )
 
 func TestOnUpdateNode(t *testing.T) {
@@ -87,8 +85,8 @@ func TestOnUpdateNode(t *testing.T) {
 			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
 
 			node := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
-			ekNode := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).Build()
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 2*giBToBytes)
+			testNode := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).Build()
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 2*giBToBytes)
 
 			mockBalloonPodResizer := &mockBalloonPodResizer{}
 			mockBalloonPodResizer.On("addTaint", mock.Anything, mock.Anything).Return(node, nil)
@@ -120,7 +118,7 @@ func TestOnUpdateNode(t *testing.T) {
 			assert.Equal(t, 0, nodeStateManager.nodesCount(family))
 			mockBackoff.AssertExpectations(t)
 
-			// Node with ToBeDeletedTaint are not added to ot.ekNodes cache.
+			// Node with ToBeDeletedTaint are not added to ot.nodeStateManager cache.
 			mockBackoff.On("DeleteNode", family, testResizableNodeName).Once()
 			ot.onUpdateNode(newNode, toBeDeletedNode)
 			ot.waitingOnAdd.Wait()
@@ -133,8 +131,8 @@ func TestOnAddNode(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
 			emptySize := size.VmSize{}
-			ekNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 2*giBToBytes)
+			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 2*giBToBytes)
 			gceRef, err := gce.GceRefFromProviderId(testResizableNodeProviderID)
 			assert.NoError(t, err)
 			defaultGceSchedulingSize := size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}
@@ -142,53 +140,53 @@ func TestOnAddNode(t *testing.T) {
 			notSupportedMachineType := fmt.Sprintf("%s-%s-%s", family, "notsupported", "32")
 
 			testCases := []struct {
-				desc                            string
-				node                            *v1.Node
-				bPod                            *v1.Pod
-				resizeErr                       error
-				setLabelsAfterOnAddNode         map[string]string
-				gceSchedulingSize               size.VmSize
-				cachedCurrentEkVmStates         map[gce.GceRef]ekvmtypes.ResizableVmState
-				expectedEkNodes                 ResizableNodesSnapshot
-				expectedResizeBalloonPod        bool
-				expectedCachedCurrentEkVmStates map[gce.GceRef]ekvmtypes.ResizableVmState
-				expectedUnknownStateNodes       []string
+				desc                                   string
+				node                                   *v1.Node
+				bPod                                   *v1.Pod
+				resizeErr                              error
+				setLabelsAfterOnAddNode                map[string]string
+				gceSchedulingSize                      size.VmSize
+				cachedCurrentResizableVmStates         map[gce.GceRef]ekvmtypes.ResizableVmState
+				expectedResizableVmNodes               ResizableNodesSnapshot
+				expectedResizeBalloonPod               bool
+				expectedCachedCurrentResizableVmStates map[gce.GceRef]ekvmtypes.ResizableVmState
+				expectedUnknownStateNodes              []string
 			}{
 				{
-					desc:                            "node with no instance label",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with no instance label",
+					node:                                   ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with non-ek instance label",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(nonEkMachineType).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with non resizable vm instance label",
+					node:                                   ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(nonResizableVmMachineType).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with resizable instance label, but not not ready",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with resizable instance label, but not ready",
+					node:                                   ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with not supported resizable machine type",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(notSupportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with not supported resizable machine type",
+					node:                                   ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(notSupportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "resizable - without balloon pod - no cache - no gce response",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedResizeBalloonPod:        false,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "resizable - without balloon pod - no cache - no gce response",
+					node:                                   ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedResizeBalloonPod:               false,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
 					desc: "new resizable node - without balloon pod",
 					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -196,14 +194,14 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               defaultGceSchedulingSize,
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      defaultGceSchedulingSize,
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "old downsized resizable node - without balloon pod",
 					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -211,15 +209,15 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc:                    "old downsized resizable - without balloon pod - machine type label is added after onAddNode",
 					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithReadyStatus().Build(),
 					setLabelsAfterOnAddNode: map[string]string{v1.LabelInstanceTypeStable: supportedMachineType},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -227,15 +225,15 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc:                    "old downsized resizable - without balloon pod - random label is added after onAddNode",
 					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					setLabelsAfterOnAddNode: map[string]string{v1.LabelInstanceTypeStable: supportedMachineType, "random": "string"},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -243,15 +241,15 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "resizable - with balloon pod",
 					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					bPod: bPod,
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 30 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -259,19 +257,19 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "resizable - with balloon pod - cache available with error status -> fix cache size to balloon pod and register unknown state node",
 					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					bPod: bPod,
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{
 						gceRef: {
 							Size:   size.VmSize{MilliCpus: 9000, KBytes: 41 * giBToKiB},
 							Status: ekvmtypes.ResizeStatusGuestAgentError,
 						},
 					},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 30 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -279,14 +277,14 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedUnknownStateNodes:       []string{testResizableNodeName},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedUnknownStateNodes:              []string{testResizableNodeName},
 				},
 				{
 					desc:      "resizable - balloon pod creation err",
 					node:      ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					resizeErr: fmt.Errorf("resize error"),
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -294,15 +292,15 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
-					desc:                    "resizable - without balloon pod - cache available with at intent status",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
-					expectedEkNodes: ResizableNodesSnapshot{
+					desc:                           "resizable - without balloon pod - cache available with at intent status",
+					node:                           ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -310,14 +308,14 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
-					desc:                    "resizable - without balloon pod - cache available with error status",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedEkNodes: ResizableNodesSnapshot{
+					desc:                           "resizable - without balloon pod - cache available with error status",
+					node:                           ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
@@ -325,9 +323,9 @@ func TestOnAddNode(t *testing.T) {
 							MachineFamily:   family,
 						},
 					},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedUnknownStateNodes:       []string{testResizableNodeName},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedUnknownStateNodes:              []string{testResizableNodeName},
 				},
 			}
 
@@ -343,7 +341,7 @@ func TestOnAddNode(t *testing.T) {
 						mockBalloonPodResizer.On("listAllBalloonPods", mock.Anything).Return([]*v1.Pod{}, nil)
 					}
 					if tc.expectedResizeBalloonPod {
-						mockBalloonPodResizer.On("resizeBalloonPod", mock.Anything, tc.expectedEkNodes[tc.node.Name].DesiredSize).
+						mockBalloonPodResizer.On("resizeBalloonPod", mock.Anything, tc.expectedResizableVmNodes[tc.node.Name].DesiredSize).
 							Run(func(_ mock.Arguments) {
 								waitForBalloonPod <- true
 							}).Return(tc.resizeErr).Once()
@@ -365,12 +363,12 @@ func TestOnAddNode(t *testing.T) {
 					cloudProvider.On("MachineConfigProvider", mock.Anything).Return(machinetypes.NewMachineConfigProvider(nil))
 					testClock := clock.NewFakeClock(testStartTime)
 
-					ekCalculator := calculator_test.New()
-					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, ekCalculator, testClock)
-					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, ekCalculator, 1, false, fixerInterval, testClock)
+					nodeSizeCalculator := calculator_test.New()
+					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, nodeSizeCalculator, testClock)
+					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, nodeSizeCalculator, 1, false, fixerInterval, testClock)
 					ot.balloonPodResizer = mockBalloonPodResizer
-					if tc.cachedCurrentEkVmStates != nil {
-						ot.vmStateCache.vmStates = tc.cachedCurrentEkVmStates
+					if tc.cachedCurrentResizableVmStates != nil {
+						ot.vmStateCache.vmStates = tc.cachedCurrentResizableVmStates
 					}
 
 					ot.onAddNode(tc.node)
@@ -388,11 +386,11 @@ func TestOnAddNode(t *testing.T) {
 					ot.waitingOnAdd.Wait()
 
 					nodes := nodeStateManager.snapshot(true)
-					assert.Equal(t, tc.expectedEkNodes, nodes)
+					assert.Equal(t, tc.expectedResizableVmNodes, nodes)
 					if tc.expectedResizeBalloonPod {
 						<-waitForBalloonPod
 					}
-					assert.Equal(t, tc.expectedCachedCurrentEkVmStates, ot.vmStateCache.vmStates)
+					assert.Equal(t, tc.expectedCachedCurrentResizableVmStates, ot.vmStateCache.vmStates)
 					assert.ElementsMatch(t, tc.expectedUnknownStateNodes, ot.nodeStateManager.getUnhealthyNodesWithStatus(UnknownResizeStatus))
 				})
 			}
@@ -404,8 +402,8 @@ func TestOnDeleteNode(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
-			ekNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 8*giBToBytes)
+			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 8*giBToBytes)
 			node := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
 			mockBalloonPodResizer := &mockBalloonPodResizer{}
 			mockBalloonPodResizer.On("init").Return(nil)
@@ -425,16 +423,16 @@ func TestOnDeleteNode(t *testing.T) {
 			testClock := clock.NewFakeClock(testStartTime)
 			metrics := &mockMetrics{}
 			metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-			ekCalculator := calculator_test.New()
+			nodeSizeCalculator := calculator_test.New()
 			mockBackoff := &mockBackoff{}
 			mockBackoff.On("DeleteNode", family, node.Name).Once()
-			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, ekCalculator, testClock)
+			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, nodeSizeCalculator, testClock)
 
 			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock)
 			ot.balloonPodResizer = mockBalloonPodResizer
 			ot.onAddNode(node)
 			ot.waitingOnAdd.Wait()
-			expectedEkNodes := ResizableNodesSnapshot{
+			expectedResizableVmNodes := ResizableNodesSnapshot{
 				node.Name: ResizableNode{
 					DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 24 * giBToKiB},
 					PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 100663296},
@@ -444,7 +442,7 @@ func TestOnDeleteNode(t *testing.T) {
 			}
 
 			nodes := nodeStateManager.snapshot(true)
-			assert.Equal(t, expectedEkNodes, nodes)
+			assert.Equal(t, expectedResizableVmNodes, nodes)
 			cachedState, err := ot.vmStateCache.getState(node)
 			assert.NoError(t, err)
 			assert.Equal(t, vmState, cachedState)
@@ -471,8 +469,8 @@ func TestResize(t *testing.T) {
 				gceInstanceIsBusyErr = ek_errors.NewInstanceIsBusyError(family, fmt.Errorf("gce resize error"))
 			)
 
-			ekNode := test.BuildTestNode("node1", 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 10000, 32*giBToBytes)
+			testNode := test.BuildTestNode("node1", 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 10000, 32*giBToBytes)
 
 			testCases := []struct {
 				desc                         string
@@ -583,7 +581,7 @@ func TestResize(t *testing.T) {
 					expectedErr:                  bpResizeErr,
 				},
 				{
-					desc:                       "Upsize - vm resize gce instance is busy error - ek at starting size and status at intent",
+					desc:                       "Upsize - vm resize gce instance is busy error - node at starting size and status at intent",
 					startingSize:               newSize(1000, 1024*giBToKiB),
 					desiredSize:                newSize(2000, 2048*giBToKiB),
 					vmResizeErr:                gceInstanceIsBusyErr,
@@ -719,7 +717,7 @@ func TestResize(t *testing.T) {
 					expectedErr:                  gceDownsizeErr,
 				},
 				{
-					desc:                       "Downsize - vm resize gce instance is busy error - ek at starting size and status at intent",
+					desc:                       "Downsize - vm resize gce instance is busy error - node at starting size and status at intent",
 					startingSize:               newSize(2000, 2048*giBToKiB),
 					desiredSize:                newSize(1000, 1024*giBToKiB),
 					vmResizeErr:                gceInstanceIsBusyErr,
@@ -956,7 +954,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 			testCases := []struct {
 				desc               string
 				resizeReturnValues []error
-				ekReturnedState    ekvmtypes.ResizableVmState
+				resizableVmState   ekvmtypes.ResizableVmState
 				wantFinalOpInQueue []operation
 				wantIsUnhealthy    bool
 				wantMetricStatus   reconcileNodeStateStatus
@@ -964,7 +962,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node already is at intent",
 					resizeReturnValues: []error{},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusAtIntent,
 					},
@@ -975,7 +973,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node already is in progress",
 					resizeReturnValues: []error{}, // Empty array means no resize occurs.
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusInProgress,
 					},
@@ -994,7 +992,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node is in error state - error during resize",
 					resizeReturnValues: []error{fmt.Errorf("resize error")},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusGuestAgentError,
 					},
@@ -1013,7 +1011,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node is in error state - resize is successful",
 					resizeReturnValues: []error{nil},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusGuestAgentError,
 					},
@@ -1035,7 +1033,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 					for _, resizeErr := range tc.resizeReturnValues {
 						cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(resizeErr).Once()
 					}
-					cloudProvider.On("GetCurrentResizableVmState", mock.Anything).Return(tc.ekReturnedState, nil)
+					cloudProvider.On("GetCurrentResizableVmState", mock.Anything).Return(tc.resizableVmState, nil)
 					metrics := &mockMetrics{}
 					metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
@@ -1045,7 +1043,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
 					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
 
-					// Manually cache EK size, this would normally be done during
+					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
 					err1 := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
@@ -1258,7 +1256,7 @@ func TestFix(t *testing.T) {
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
 					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
 
-					// Manually cache EK size, this would normally be done during
+					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
 					err1 := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   *tc.targetSize,
@@ -1681,11 +1679,11 @@ func TestRegisterResizeSuccess(t *testing.T) {
 func TestHandleResizeError(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
-			ek32FullAllocatable := size.Allocatable{
+			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,
 				KBytes:    128 * size.GiB,
 			}
-			ek32HalfAllocatable := size.Allocatable{
+			halfAllocatable := size.Allocatable{
 				MilliCpus: 16000,
 				KBytes:    64 * size.GiB,
 			}
@@ -1705,10 +1703,10 @@ func TestHandleResizeError(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "upsize: resize error with unknown VM state",
@@ -1716,10 +1714,10 @@ func TestHandleResizeError(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "upsize: resize error with known VM state",
@@ -1727,10 +1725,10 @@ func TestHandleResizeError(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32FullAllocatable,
+					fallbackSize: fullAllocatable32,
 				},
 				{
 					name: "downsize: resize error with unknown VM state",
@@ -1738,10 +1736,10 @@ func TestHandleResizeError(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32FullAllocatable),
-						DesiredSize:  size.VmSize(ek32HalfAllocatable),
+						StartingSize: size.VmSize(fullAllocatable32),
+						DesiredSize:  size.VmSize(halfAllocatable),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "downsize: resize error with known VM state",
@@ -1749,10 +1747,10 @@ func TestHandleResizeError(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32FullAllocatable),
-						DesiredSize:  size.VmSize(ek32HalfAllocatable),
+						StartingSize: size.VmSize(fullAllocatable32),
+						DesiredSize:  size.VmSize(halfAllocatable),
 					},
-					fallbackSize: ek32FullAllocatable,
+					fallbackSize: fullAllocatable32,
 				},
 			}
 
@@ -1774,8 +1772,8 @@ func TestHandleResizeError(t *testing.T) {
 					node := ResizableNode{
 						Node:             tt.node,
 						DesiredSize:      tt.fallbackSize,
-						UpsizableMaxSize: ek32FullAllocatable,
-						PhysicalMaxSize:  ek32FullAllocatable,
+						UpsizableMaxSize: fullAllocatable32,
+						PhysicalMaxSize:  fullAllocatable32,
 						MachineFamily:    family,
 					}
 					nsm.setNode(tt.operation.NodeName, node)
@@ -1796,7 +1794,7 @@ func TestHandleResizeError(t *testing.T) {
 func TestHandleResizeError_NonExistingNode(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
-			ek32FullAllocatable := size.Allocatable{
+			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,
 				KBytes:    128 * size.GiB,
 			}
@@ -1812,8 +1810,8 @@ func TestHandleResizeError_NonExistingNode(t *testing.T) {
 			ot.handleResizeError(ek_errors.NewBalloonPodResizeError(family, fmt.Errorf("balloon pod resize error"), ek_errors.StartingState),
 				ResizeOperation{
 					NodeName:     "node1",
-					StartingSize: size.VmSize(ek32FullAllocatable),
-					DesiredSize:  size.VmSize(ek32FullAllocatable),
+					StartingSize: size.VmSize(fullAllocatable32),
+					DesiredSize:  size.VmSize(fullAllocatable32),
 				})
 		})
 	}

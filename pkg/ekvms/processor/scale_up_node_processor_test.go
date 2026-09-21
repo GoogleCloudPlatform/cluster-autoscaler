@@ -63,7 +63,7 @@ import (
 type ProcessTestCase struct {
 	desc                              string
 	nodes                             []testNodeWithPodsInfo
-	ekSnapshot                        operationtracker.ResizableNodesSnapshot
+	resizableNodesSnapshot            operationtracker.ResizableNodesSnapshot
 	unschedulable                     []*v1.Pod
 	daemonSets                        []*appsv1.DaemonSet
 	useRoundingCalculator             bool
@@ -82,11 +82,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "No schedule - same balloon pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -96,7 +96,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{},
@@ -105,19 +105,19 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1000,
 					KBytes:    100 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 2000, KBytes: 200 * miBToKiB},
 			},
 			{
 				desc: "no_schedule_ek_backoff",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot:        map[string]operationtracker.ResizableNode{},
-				unschedulable:     []*v1.Pod{userPod("pod2", 750, 75*size.MiB)},
-				isResizingEnabled: true,
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
+				unschedulable:          []*v1.Pod{userPod("pod2", 750, 75*size.MiB)},
+				isResizingEnabled:      true,
 				expectedUpsizeAllocatable: size.Allocatable{
 					MilliCpus: 1500,
 					KBytes:    150 * miBToKiB,
@@ -128,11 +128,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "Schedule within allocatable - same balloon pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -142,7 +142,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod1", 250, 1*size.MiB)},
@@ -151,18 +151,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1000,
 					KBytes:    100 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {userPod("pod1", 250, 1*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {userPod("pod1", 250, 1*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 1750, KBytes: 199 * miBToKiB},
 			},
 			{
 				desc: "Schedule - daemonset lister throws error",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -172,7 +172,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:              []*v1.Pod{userPod("pod1", 250, 1*size.MiB)},
@@ -182,18 +182,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1000,
 					KBytes:    100 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {userPod("pod1", 250, 1*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {userPod("pod1", 250, 1*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 1750, KBytes: 199 * miBToKiB},
 			},
 			{
 				desc: "Schedule above allocatable and resizing is disabled - requested pod not scheduled",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -203,7 +203,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 750, 75*size.MiB)},
@@ -212,17 +212,17 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1500,
 					KBytes:    150 * miBToKiB,
 				},
-				expectedScheduledPods: map[string][]*v1.Pod{"ek-node": {userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods: map[string][]*v1.Pod{"node": {userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable: []*v1.Pod{userPod("pod2", 750, 75*size.MiB)},
 			},
 			{
 				desc: "Schedule above allocatable and resizing enabled - shrunk balloon pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -232,7 +232,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 750, 75*size.MiB)},
@@ -241,18 +241,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1500,
 					KBytes:    150 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {userPod("pod2", 750, 75*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {userPod("pod2", 750, 75*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 500, KBytes: 50 * miBToKiB},
 			},
 			{
 				desc: "No schedule above capacity - same allocatable",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 2500, 200*size.MiB), balloonPod(t, "ek-node", 0, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 2500, 200*size.MiB), balloonPod(t, "node", 0, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 2500,
@@ -262,7 +262,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 250, 50*size.MiB)},
@@ -271,18 +271,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 2500,
 					KBytes:    200 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {balloonPod(t, "ek-node", 0, 50*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {balloonPod(t, "node", 0, 50*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{userPod("pod2", 250, 50*size.MiB)},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 0, KBytes: 0 * miBToKiB},
 			},
 			{
 				desc: "Mixed - upsized allocatable",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1500, 150*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1500, 150*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -292,7 +292,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
@@ -301,18 +301,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1750,
 					KBytes:    200 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{userPod("pod3", 500, 100*size.MiB)},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 750, KBytes: 0 * miBToKiB},
 			},
 			{
 				desc: "Mixed - upsized allocatable with initially scheduled lookahead pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -322,14 +322,14 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:             []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				isResizingEnabled:         true,
 				expectedUpsizeAllocatable: size.Allocatable{},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)},
+					"node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)},
 				},
 				expectedUnschedulable:  []*v1.Pod{userPod("pod3", 500, 100*size.MiB)},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 1000, KBytes: 50 * miBToKiB},
@@ -337,11 +337,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "Mixed - upsized allocatable with initially unscheduled lookahead pod - upsize",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1250,
@@ -351,7 +351,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
@@ -361,7 +361,7 @@ func TestProcess(t *testing.T) {
 					KBytes:    125 * miBToKiB,
 				},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), balloonPod(t, "ek-node", 750, 100*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), balloonPod(t, "node", 750, 100*size.MiB)},
 				},
 				expectedNewlyScheduledLAPodsCount: 1,
 				expectedUnschedulable:             []*v1.Pod{userPod("pod3", 500, 100*size.MiB)},
@@ -370,11 +370,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "Mixed - upsized allocatable with initially unscheduled lookahead pod - no upsize",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -384,14 +384,14 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:             []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				isResizingEnabled:         true,
 				expectedUpsizeAllocatable: size.Allocatable{},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), balloonPod(t, "ek-node", 750, 75*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), balloonPod(t, "node", 750, 75*size.MiB)},
 				},
 				expectedNewlyScheduledLAPodsCount: 1,
 				expectedUnschedulable:             []*v1.Pod{userPod("pod3", 500, 100*size.MiB)},
@@ -400,11 +400,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "Mixed - upsized allocatable with initially scheduled lookahead pod - deprioritize lookahead pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -414,14 +414,14 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 1500,
 							KBytes:    150 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:             []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				isResizingEnabled:         true,
 				expectedUpsizeAllocatable: size.Allocatable{},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					"node": {userPod("pod2", 250, 50*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				},
 				expectedUnschedulable:  []*v1.Pod{userPod("pod3", 500, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB)},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 0, KBytes: 0 * miBToKiB},
@@ -429,15 +429,15 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "Mixed - upsized allocatable with initially scheduled lookahead pod on node not in ek snapshot - do not deprioritize lookahead pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				}},
-				ekSnapshot:                map[string]operationtracker.ResizableNode{},
+				resizableNodesSnapshot:    operationtracker.ResizableNodesSnapshot{},
 				unschedulable:             []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				isResizingEnabled:         true,
 				expectedUpsizeAllocatable: size.Allocatable{},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 				},
 				expectedUnschedulable: []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 			},
@@ -445,29 +445,29 @@ func TestProcess(t *testing.T) {
 				desc: "new desired size rounded up by calculator's RoundUp",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node", 1200, 1200*size.MiB),
+						node: createNodeForFamily(family, "node", 1200, 1200*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node", 500, 500*miBToKiB),
+							balloonPod(t, "node", 500, 500*miBToKiB),
 							userPod("pod1", 700, 700*size.MiB),
 						},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily:    family,
 						DesiredSize:      size.Allocatable{MilliCpus: 700, KBytes: 700 * miBToKiB},
 						UpsizableMaxSize: size.Allocatable{MilliCpus: 1000, KBytes: 1000 * miBToKiB},
-						Node:             createNodeForFamily(family, "ek-node", 1200, 1200*size.MiB),
+						Node:             createNodeForFamily(family, "node", 1200, 1200*size.MiB),
 					},
 				},
 				unschedulable:             []*v1.Pod{userPod("pod2", 195, 200*size.MiB)},
 				isResizingEnabled:         true,
 				useRoundingCalculator:     true,
 				expectedUpsizeAllocatable: size.Allocatable{MilliCpus: 900, KBytes: 900 * miBToKiB},
-				expectedScheduledPods: map[string][]*v1.Pod{"ek-node": {
+				expectedScheduledPods: map[string][]*v1.Pod{"node": {
 					userPod("pod1", 700, 700*size.MiB),
 					userPod("pod2", 195, 200*size.MiB),
-					balloonPod(t, "ek-node", 300, 300*size.MiB),
+					balloonPod(t, "node", 300, 300*size.MiB),
 				}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 105, KBytes: 100 * miBToKiB},
@@ -476,32 +476,32 @@ func TestProcess(t *testing.T) {
 				desc: "Schedule pod with prioritizing ready node over processing node - same balloon pod",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node-in-process", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-in-process", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node-in-process", 1500, 150*size.MiB),
+							balloonPod(t, "node-in-process", 1500, 150*size.MiB),
 						},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node", 1500, 150*size.MiB),
+							balloonPod(t, "node", 1500, 150*size.MiB),
 						},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-in-process-2", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-in-process-2", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node-in-process", 1500, 150*size.MiB),
+							balloonPod(t, "node-in-process", 1500, 150*size.MiB),
 						},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-2", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-2", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node", 1500, 150*size.MiB),
+							balloonPod(t, "node", 1500, 150*size.MiB),
 						},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node-in-process": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node-in-process": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -511,9 +511,9 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node-in-process", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-in-process", 2500, 250*size.MiB),
 					},
-					"ek-node": {
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -523,9 +523,9 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
-					"ek-node-in-process-2": {
+					"node-in-process-2": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -535,9 +535,9 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node-in-process-2", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-in-process-2", 2500, 250*size.MiB),
 					},
-					"ek-node-2": {
+					"node-2": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -547,7 +547,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node-2", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-2", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{
@@ -560,13 +560,13 @@ func TestProcess(t *testing.T) {
 					KBytes:    100 * miBToKiB,
 				},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {
+					"node": {
 						userPod("pod1", 250, 1*size.MiB),
-						balloonPod(t, "ek-node", 1500, 150*size.MiB),
+						balloonPod(t, "node", 1500, 150*size.MiB),
 					},
-					"ek-node-2": {
+					"node-2": {
 						userPod("pod2", 250, 1*size.MiB),
-						balloonPod(t, "ek-node-2", 1500, 150*size.MiB),
+						balloonPod(t, "node-2", 1500, 150*size.MiB),
 					},
 				},
 				expectedUnschedulable:  []*v1.Pod{},
@@ -576,21 +576,21 @@ func TestProcess(t *testing.T) {
 				desc: "Schedule on in-process node as idle node has no space",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
 							userPod("pod1", 2500, 200*size.MiB),
-							balloonPod(t, "ek-node", 0, 50*size.MiB),
+							balloonPod(t, "node", 0, 50*size.MiB),
 						},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-in-process", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-in-process", 2500, 250*size.MiB),
 						pods: []*v1.Pod{
-							balloonPod(t, "ek-node-in-process", 1500, 150*size.MiB),
+							balloonPod(t, "node-in-process", 1500, 150*size.MiB),
 						},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 2500,
@@ -600,9 +600,9 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
-					"ek-node-in-process": {
+					"node-in-process": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -612,7 +612,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node-in-process", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-in-process", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 250, 50*size.MiB)},
@@ -622,10 +622,10 @@ func TestProcess(t *testing.T) {
 					KBytes:    200 * miBToKiB,
 				},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {balloonPod(t, "ek-node", 0, 50*size.MiB)},
-					"ek-node-in-process": {
+					"node": {balloonPod(t, "node", 0, 50*size.MiB)},
+					"node-in-process": {
 						userPod("pod2", 250, 50*size.MiB),
-						balloonPod(t, "ek-node-in-process", 1500, 150*size.MiB),
+						balloonPod(t, "node-in-process", 1500, 150*size.MiB),
 					},
 				},
 				expectedUnschedulable:  []*v1.Pod{},
@@ -634,11 +634,11 @@ func TestProcess(t *testing.T) {
 			{
 				desc: "missing DaemonSet Pod triggers upsize",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -648,7 +648,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{},
@@ -660,18 +660,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1500,
 					KBytes:    150 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {balloonPod(t, "ek-node", 1000, 100*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {balloonPod(t, "node", 1000, 100*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 500, KBytes: 50 * miBToKiB},
 			},
 			{
 				desc: "unschedulable DaemonSet Pod doesn't appear in unschedulable pods",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -681,7 +681,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{},
@@ -693,18 +693,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1000,
 					KBytes:    150 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 1250, KBytes: 125 * miBToKiB},
 			},
 			{
 				desc: "already running DaemonSet Pod is omitted",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{daemonSetPod("ds", 750, 75*size.MiB, "ek-node"), balloonPod(t, "ek-node", 1500, 150*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{daemonSetPod("ds", 750, 75*size.MiB, "node"), balloonPod(t, "node", 1500, 150*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -714,7 +714,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{},
@@ -726,18 +726,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1000,
 					KBytes:    150 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {balloonPod(t, "ek-node", 1500, 150*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {balloonPod(t, "node", 1500, 150*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 1250, KBytes: 125 * miBToKiB},
 			},
 			{
 				desc: "cpu based eviction does not trigger upsizes",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod-1", 16000, 16*size.GiB), userPod("evictor", 16000, 16*size.GiB), balloonPod(t, "ek-node", 15000, 60*size.GiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod-1", 16000, 16*size.GiB), userPod("evictor", 16000, 16*size.GiB), balloonPod(t, "node", 15000, 60*size.GiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 17000,
@@ -747,22 +747,22 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 32000,
 							KBytes:    128 * giBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 32000, 128*size.GiB),
+						Node: createNodeForFamily(family, "node", 32000, 128*size.GiB),
 					},
 				},
 				unschedulable:         []*v1.Pod{},
 				isResizingEnabled:     true,
-				expectedScheduledPods: map[string][]*v1.Pod{"ek-node": {userPod("pod-1", 16000, 16*size.GiB), userPod("evictor", 16000, 16*size.GiB), balloonPod(t, "ek-node", 15000, 60*size.GiB)}},
+				expectedScheduledPods: map[string][]*v1.Pod{"node": {userPod("pod-1", 16000, 16*size.GiB), userPod("evictor", 16000, 16*size.GiB), balloonPod(t, "node", 15000, 60*size.GiB)}},
 				expectedUnschedulable: []*v1.Pod{},
 			},
 			{
 				desc: "memory based eviction does not trigger upsizes",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod-1", 2000, 64*size.GiB), userPod("evictor", 2000, 64*size.GiB), balloonPod(t, "ek-node", 24000, 60*size.GiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod-1", 2000, 64*size.GiB), userPod("evictor", 2000, 64*size.GiB), balloonPod(t, "node", 24000, 60*size.GiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 8000,
@@ -772,22 +772,22 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 32000,
 							KBytes:    128 * giBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 32000, 218*size.GiB),
+						Node: createNodeForFamily(family, "node", 32000, 218*size.GiB),
 					},
 				},
 				unschedulable:         []*v1.Pod{},
 				isResizingEnabled:     true,
-				expectedScheduledPods: map[string][]*v1.Pod{"ek-node": {userPod("pod-1", 2000, 64*size.GiB), userPod("evictor", 2000, 64*size.GiB), balloonPod(t, "ek-node", 24000, 60*size.GiB)}},
+				expectedScheduledPods: map[string][]*v1.Pod{"node": {userPod("pod-1", 2000, 64*size.GiB), userPod("evictor", 2000, 64*size.GiB), balloonPod(t, "node", 24000, 60*size.GiB)}},
 				expectedUnschedulable: []*v1.Pod{},
 			},
 			{
 				desc: "pod resize triggers upsize",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 32000, 128*size.GiB),
-					pods: []*v1.Pod{resizingPod("pod-1", 2000, 32*size.GiB, 4000, 64*size.GiB), balloonPod(t, "ek-node", 30000, 96*size.GiB)},
+					node: createNodeForFamily(family, "node", 32000, 128*size.GiB),
+					pods: []*v1.Pod{resizingPod("pod-1", 2000, 32*size.GiB, 4000, 64*size.GiB), balloonPod(t, "node", 30000, 96*size.GiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 2000,
@@ -797,7 +797,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 32000,
 							KBytes:    128 * giBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 32000, 128*size.GiB),
+						Node: createNodeForFamily(family, "node", 32000, 128*size.GiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{},
@@ -806,18 +806,18 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 4000,
 					KBytes:    64 * giBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {resizingPod("pod-1", 2000, 32*size.GiB, 4000, 64*size.GiB), balloonPod(t, "ek-node", 28000, 64*size.GiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {resizingPod("pod-1", 2000, 32*size.GiB, 4000, 64*size.GiB), balloonPod(t, "node", 28000, 64*size.GiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 28000, KBytes: 64 * giBToKiB},
 			},
 			{
 				desc: "Schedule above allocatable and resizing enabled - using desired memory over upsizable memory",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 300*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "ek-node", 1500, 225*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 300*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 750, 75*size.MiB), balloonPod(t, "node", 1500, 225*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1000,
@@ -827,7 +827,7 @@ func TestProcess(t *testing.T) {
 							MilliCpus: 2000,
 							KBytes:    50 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:     []*v1.Pod{userPod("pod2", 750, 25*size.MiB)},
@@ -836,7 +836,7 @@ func TestProcess(t *testing.T) {
 					MilliCpus: 1500,
 					KBytes:    200 * miBToKiB,
 				},
-				expectedScheduledPods:  map[string][]*v1.Pod{"ek-node": {userPod("pod2", 750, 25*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)}},
+				expectedScheduledPods:  map[string][]*v1.Pod{"node": {userPod("pod2", 750, 25*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)}},
 				expectedUnschedulable:  []*v1.Pod{},
 				expectedTotalUpsizable: &size.Allocatable{MilliCpus: 500, KBytes: 100 * miBToKiB},
 			},
@@ -892,10 +892,10 @@ func setupManager(tc ProcessTestCase) *ManagerMock {
 	m := newManagerMock()
 	m.On("IsResizingEnabled", mock.Anything).Return(
 		tc.isResizingEnabled)
-	m.On("FilteredNodesSnapshot", true, operationtracker.ResizableOnly).Return(tc.ekSnapshot).Once()
+	m.On("FilteredNodesSnapshot", true, operationtracker.ResizableOnly).Return(tc.resizableNodesSnapshot).Once()
 	m.On("Upsize", mock.AnythingOfType("*v1.Node"), tc.expectedUpsizeAllocatable).Return(nil).Maybe()
 	m.On("IsNodeInProcess", mock.MatchedBy(func(input string) bool {
-		return strings.HasPrefix(input, `ek-node-in-process`)
+		return strings.HasPrefix(input, `node-in-process`)
 	})).Return(true)
 	m.On("IsNodeInProcess", mock.AnythingOfType("string")).Return(false)
 	return m
@@ -959,7 +959,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 		testCases := []struct {
 			desc                              string
 			nodes                             []testNodeWithPodsInfo
-			ekSnapshot                        operationtracker.ResizableNodesSnapshot
+			resizableNodesSnapshot            operationtracker.ResizableNodesSnapshot
 			unschedulable                     []*v1.Pod
 			expectedScheduledPods             map[string][]*v1.Pod
 			expectedUnschedulable             []*v1.Pod
@@ -968,11 +968,11 @@ func TestScheduleLookaheadPods(t *testing.T) {
 			{
 				desc: "Don't schedule anything if no LA pods in unschedulable list",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), lookaheadPodForFamily(family, "lookahead-pod-1", 250, 50*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -982,7 +982,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:                     []*v1.Pod{userPod("pod2", 250, 50*size.MiB), userPod("pod3", 500, 100*size.MiB)},
@@ -993,11 +993,11 @@ func TestScheduleLookaheadPods(t *testing.T) {
 			{
 				desc: "Schedule LA pod without upsizing - Adjust ballloon pod",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "ek-node", 1250, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "node", 1250, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1250,
@@ -1007,12 +1007,12 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), balloonPod(t, "ek-node", 1000, 125*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), balloonPod(t, "node", 1000, 125*size.MiB)},
 				},
 				expectedUnschedulable:             []*v1.Pod{userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				expectedUnschedulableLAPodsMetric: 0,
@@ -1020,11 +1020,11 @@ func TestScheduleLookaheadPods(t *testing.T) {
 			{
 				desc: "Schedule LA pod without upsizing - subtract LA Pod from Balloon Pod (only cpu upsizability)",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "ek-node", 1000, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1250, 100*size.MiB), balloonPod(t, "node", 1000, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1034,12 +1034,12 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), balloonPod(t, "ek-node", 750, 50*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), balloonPod(t, "node", 750, 50*size.MiB)},
 				},
 				expectedUnschedulable:             []*v1.Pod{userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
 				expectedUnschedulableLAPodsMetric: 0,
@@ -1047,11 +1047,11 @@ func TestScheduleLookaheadPods(t *testing.T) {
 			{
 				desc: "Don't schedule LA pod when there is no space based on UAS, and move it to the end of the unscheduable list",
 				nodes: []testNodeWithPodsInfo{{
-					node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-					pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "ek-node", 1000, 50*size.MiB)},
+					node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+					pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "node", 1000, 50*size.MiB)},
 				}},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1061,7 +1061,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 1500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable:                     []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB), userPod("pod2", 250, 25*size.MiB), userPod("pod3", 500, 100*size.MiB)},
@@ -1073,16 +1073,16 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				desc: "Schedule LA pod - preferring resizable node over non-resizable",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-						pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+						node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+						pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-non-resizbale", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-non-resizbale", 2500, 250*size.MiB),
 						pods: []*v1.Pod{userPod("pod2", 1250, 100*size.MiB)},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1092,9 +1092,9 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
-					"ek-node-non-resizbale": {
+					"node-non-resizbale": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 2500,
@@ -1104,12 +1104,12 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 0,
 							KBytes:    0,
 						},
-						Node: createNodeForFamily(family, "ek-node-non-resizbale", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-non-resizbale", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB)},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB), balloonPod(t, "ek-node", 500, 125*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB), balloonPod(t, "node", 500, 125*size.MiB)},
 				},
 				expectedUnschedulableLAPodsMetric: 0,
 			},
@@ -1117,16 +1117,16 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				desc: "Schedule LA pod - preferring resizable node over no-upsizability",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-						pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "ek-node", 1000, 100*size.MiB)},
+						node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+						pods: []*v1.Pod{userPod("pod1", 1500, 100*size.MiB), balloonPod(t, "node", 1000, 100*size.MiB)},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-no-upsizability", 2500, 250*size.MiB),
-						pods: []*v1.Pod{userPod("pod2", 1500, 100*size.MiB), balloonPod(t, "ek-node", 1000, 50*size.MiB)},
+						node: createNodeForFamily(family, "node-no-upsizability", 2500, 250*size.MiB),
+						pods: []*v1.Pod{userPod("pod2", 1500, 100*size.MiB), balloonPod(t, "node", 1000, 50*size.MiB)},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1136,9 +1136,9 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 2500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
-					"ek-node-no-upsizability": {
+					"node-no-upsizability": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1148,12 +1148,12 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 1000,
 							KBytes:    100 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node-no-upsizability", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-no-upsizability", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB)},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node": {lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB), balloonPod(t, "ek-node", 500, 125*size.MiB)},
+					"node": {lookaheadPodForFamily(family, "lookahead-pod-1", 500, 25*size.MiB), balloonPod(t, "node", 500, 125*size.MiB)},
 				},
 				expectedUnschedulableLAPodsMetric: 0,
 			},
@@ -1161,16 +1161,16 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				desc: "Schedule LA pod - schedule on non-resizable if no place on resizable node",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
-						pods: []*v1.Pod{userPod("pod1", 1500, 200*size.MiB), balloonPod(t, "ek-node", 1000, 50*size.MiB)},
+						node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
+						pods: []*v1.Pod{userPod("pod1", 1500, 200*size.MiB), balloonPod(t, "node", 1000, 50*size.MiB)},
 					},
 					{
-						node: createNodeForFamily(family, "ek-node-non-resizbale", 2500, 250*size.MiB),
+						node: createNodeForFamily(family, "node-non-resizbale", 2500, 250*size.MiB),
 						pods: []*v1.Pod{userPod("pod2", 1250, 100*size.MiB)},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 1500,
@@ -1180,9 +1180,9 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 1500,
 							KBytes:    200 * miBToKiB,
 						},
-						Node: createNodeForFamily(family, "ek-node", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node", 2500, 250*size.MiB),
 					},
-					"ek-node-non-resizbale": {
+					"node-non-resizbale": {
 						MachineFamily: family,
 						DesiredSize: size.Allocatable{
 							MilliCpus: 2500,
@@ -1192,12 +1192,12 @@ func TestScheduleLookaheadPods(t *testing.T) {
 							MilliCpus: 0,
 							KBytes:    0,
 						},
-						Node: createNodeForFamily(family, "ek-node-non-resizbale", 2500, 250*size.MiB),
+						Node: createNodeForFamily(family, "node-non-resizbale", 2500, 250*size.MiB),
 					},
 				},
 				unschedulable: []*v1.Pod{lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB)},
 				expectedScheduledPods: map[string][]*v1.Pod{
-					"ek-node-non-resizbale": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB)},
+					"node-non-resizbale": {lookaheadPodForFamily(family, "lookahead-pod-1", 250, 25*size.MiB)},
 				},
 				expectedUnschedulableLAPodsMetric: 0,
 			},
@@ -1221,7 +1221,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				}
 				m := newManagerMock()
 				m.On("IsResizingEnabled", mock.Anything).Return(true)
-				m.On("FilteredNodesSnapshot", true, operationtracker.ResizableOnly).Return(tc.ekSnapshot).Once()
+				m.On("FilteredNodesSnapshot", true, operationtracker.ResizableOnly).Return(tc.resizableNodesSnapshot).Once()
 				m.On("Upsize", mock.AnythingOfType("*v1.Node"), mock.Anything).Return(nil).Once()
 				m.On("IsNodeInProcess", mock.AnythingOfType("string")).Return(false)
 
@@ -1281,7 +1281,7 @@ func TestSchedulePods(t *testing.T) {
 			nodes                      []testNodeWithPodsInfo
 			backedOffRules             map[string]map[int]bool
 			cccCrds                    []crd.CRD
-			ekSnapshot                 operationtracker.ResizableNodesSnapshot
+			resizableNodesSnapshot     operationtracker.ResizableNodesSnapshot
 			nodeMigs                   map[string]*gke.GkeMig
 			unschedulable              []*v1.Pod
 			expectedSchedulablePerNode map[string][]*v1.Pod
@@ -1291,55 +1291,55 @@ func TestSchedulePods(t *testing.T) {
 				desc: "Schedule on idle nodes",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNode(family, "ek-node", 1000, 1024*size.KiB),
+						node: createNode(family, "node", 1000, 1024*size.KiB),
 						pods: []*v1.Pod{},
 					},
 					{
-						node: createNode(family, "ek-node-in-process", 1000, 1024*size.KiB),
+						node: createNode(family, "node-in-process", 1000, 1024*size.KiB),
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node":            {Node: createNode(family, "ek-node", 1000, 1024*size.KiB)},
-					"ek-node-in-process": {Node: createNode(family, "ek-node-in-process", 1000, 1024*size.KiB)},
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node":            {Node: createNode(family, "node", 1000, 1024*size.KiB)},
+					"node-in-process": {Node: createNode(family, "node-in-process", 1000, 1024*size.KiB)},
 				},
 				unschedulable:              []*v1.Pod{userPod("pod1", 250, 500)},
-				expectedSchedulablePerNode: map[string][]*v1.Pod{"ek-node": {userPod("pod1", 250, 500)}},
+				expectedSchedulablePerNode: map[string][]*v1.Pod{"node": {userPod("pod1", 250, 500)}},
 				expectedUnschedulable:      []*v1.Pod{},
 			},
 			{
 				desc: "Schedule on processing nodes",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNode(family, "ek-node", 1000, 1024*size.KiB),
+						node: createNode(family, "node", 1000, 1024*size.KiB),
 						pods: []*v1.Pod{},
 					},
 					{
-						node: createNode(family, "ek-node-in-process", 1500, 1500*size.KiB),
+						node: createNode(family, "node-in-process", 1500, 1500*size.KiB),
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node":            {Node: createNode(family, "ek-node", 1000, 1024*size.KiB)},
-					"ek-node-in-process": {Node: createNode(family, "ek-node-in-process", 1500, 1500*size.KiB)},
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node":            {Node: createNode(family, "node", 1000, 1024*size.KiB)},
+					"node-in-process": {Node: createNode(family, "node-in-process", 1500, 1500*size.KiB)},
 				},
 				unschedulable:              []*v1.Pod{userPod("pod1", 1500, 1500*size.KiB)},
-				expectedSchedulablePerNode: map[string][]*v1.Pod{"ek-node-in-process": {userPod("pod1", 1500, 1500*size.KiB)}},
+				expectedSchedulablePerNode: map[string][]*v1.Pod{"node-in-process": {userPod("pod1", 1500, 1500*size.KiB)}},
 				expectedUnschedulable:      []*v1.Pod{},
 			},
 			{
 				desc: "Available allocatable for only 1 pod",
 				nodes: []testNodeWithPodsInfo{
 					{
-						node: createNode(family, "ek-node", 1500, 1500*size.KiB),
+						node: createNode(family, "node", 1500, 1500*size.KiB),
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: map[string]operationtracker.ResizableNode{
-					"ek-node": {Node: createNode(family, "ek-node", 1500, 1500*size.KiB)},
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node": {Node: createNode(family, "node", 1500, 1500*size.KiB)},
 				},
 				unschedulable:              []*v1.Pod{userPod("pod2", 1500, 1500*size.KiB), userPod("pod3", 500, 1000*size.KiB)},
-				expectedSchedulablePerNode: map[string][]*v1.Pod{"ek-node": {userPod("pod2", 1500, 1500*size.KiB)}},
+				expectedSchedulablePerNode: map[string][]*v1.Pod{"node": {userPod("pod2", 1500, 1500*size.KiB)}},
 				expectedUnschedulable:      []*v1.Pod{userPod("pod3", 500, 1000*size.KiB)},
 			},
 			{
@@ -1358,7 +1358,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc1-rule0-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
 					"ccc2-rule0-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc2-rule0-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
 					"ccc2-rule1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc2-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").WithMachineFamily(family).Build()},
@@ -1421,7 +1421,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc-node":     {Node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 					"non-ccc-node": {Node: createNode(family, "non-ccc-node", 32, 128)},
 				},
@@ -1460,7 +1460,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc-node":            {Node: ekvms_test.NewResizableNodeBuilder("ccc-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 					"ccc-node-in-process": {Node: ekvms_test.NewResizableNodeBuilder("ccc-node-in-process", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 				},
@@ -1497,7 +1497,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc-rule1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc-rule1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
@@ -1532,7 +1532,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
@@ -1569,7 +1569,7 @@ func TestSchedulePods(t *testing.T) {
 						pods: []*v1.Pod{},
 					},
 				},
-				ekSnapshot: operationtracker.ResizableNodesSnapshot{
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 					"ccc1-node": {Node: ekvms_test.NewResizableNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
 				},
 				cccCrds: []crd.CRD{
@@ -1597,7 +1597,7 @@ func TestSchedulePods(t *testing.T) {
 		for _, tc := range testCases {
 			t.Run(tc.desc, func(t *testing.T) {
 				m := newManagerMock()
-				m.On("IsNodeInProcess", "ek-node-in-process").Return(true)
+				m.On("IsNodeInProcess", "node-in-process").Return(true)
 				m.On("IsNodeInProcess", "ccc-node-in-process").Return(true)
 				m.On("IsNodeInProcess", mock.AnythingOfType("string")).Return(false)
 				b := NewFakeCCCRuleBackoff(tc.backedOffRules)
@@ -1618,7 +1618,7 @@ func TestSchedulePods(t *testing.T) {
 					}
 				}
 
-				schedulable, unschedulable, err := p.schedulePods(snapshot, tc.ekSnapshot, tc.unschedulable)
+				schedulable, unschedulable, err := p.schedulePods(snapshot, tc.resizableNodesSnapshot, tc.unschedulable)
 				assert.NoError(t, err)
 				nodeInfos, err := snapshot.ListNodeInfos()
 				assert.NoError(t, err)
@@ -1665,17 +1665,17 @@ func TestPreprocess(t *testing.T) {
 		Effect: v1.TaintEffectNoSchedule,
 	})
 	testCases := []struct {
-		desc               string
-		node               *v1.Node
-		ekSnapshot         operationtracker.ResizableNodesSnapshot
-		isResizingEnabled  bool
-		existingBalloonPod *v1.Pod
-		expectedBalloonPod *v1.Pod
+		desc                   string
+		node                   *v1.Node
+		resizableNodesSnapshot operationtracker.ResizableNodesSnapshot
+		isResizingEnabled      bool
+		existingBalloonPod     *v1.Pod
+		expectedBalloonPod     *v1.Pod
 	}{
 		{
 			desc: "Resize is not enabled",
 			node: ekvms_test.EkNode32("node1", 2000, 200*size.MiB),
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					DesiredSize: size.Allocatable{
 						MilliCpus: 1000,
@@ -1688,13 +1688,13 @@ func TestPreprocess(t *testing.T) {
 			expectedBalloonPod: balloonPod(t, "node1", 1500, 150*size.MiB),
 		},
 		{
-			desc:               "Non EK Node",
+			desc:               "Non-resizable Node",
 			node:               test.BuildTestNode("node1", 1000, 100*size.MiB),
 			isResizingEnabled:  true,
 			expectedBalloonPod: nil,
 		},
 		{
-			desc:               "EK Node without balloon pod and under deletion",
+			desc:               "Resizable node without balloon pod and under deletion",
 			node:               nodeUnderDeletion,
 			isResizingEnabled:  true,
 			expectedBalloonPod: nil,
@@ -1702,7 +1702,7 @@ func TestPreprocess(t *testing.T) {
 		{
 			desc: "EK Node",
 			node: ekvms_test.EkNode32("node1", 2000, 200*size.MiB),
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					DesiredSize: size.Allocatable{
 						MilliCpus: 1000,
@@ -1715,9 +1715,9 @@ func TestPreprocess(t *testing.T) {
 			expectedBalloonPod: balloonPod(t, "node1", 1000, (200-100)*size.MiB),
 		},
 		{
-			desc: "EK Node without balloon pod",
+			desc: "Resizable node without balloon pod",
 			node: ekvms_test.EkNode32("node1", 2000, 200*size.MiB),
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					DesiredSize: size.Allocatable{
 						MilliCpus: 1000,
@@ -1730,9 +1730,9 @@ func TestPreprocess(t *testing.T) {
 			expectedBalloonPod: balloonPod(t, "node1", 1000, (200-100)*size.MiB),
 		},
 		{
-			desc: "EK node desired size leaves no room for balloon pod",
+			desc: "Resizable node desired size leaves no room for balloon pod",
 			node: ekvms_test.EkNode32("node1", 1000, 100*size.MiB),
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					DesiredSize: size.Allocatable{
 						MilliCpus: 800,
@@ -1758,7 +1758,7 @@ func TestPreprocess(t *testing.T) {
 			m := newManagerMock()
 			m.On("IsResizingEnabled", mock.Anything).Return(
 				tc.isResizingEnabled)
-			m.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.ekSnapshot).Once()
+			m.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.resizableNodesSnapshot).Once()
 			autoscalingCtx := &autoscalingctx.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
@@ -1929,12 +1929,12 @@ func TestTryScheduleCCCPods(t *testing.T) {
 	scaleUpAnywayNode := operationtracker.ResizableNode{Node: ekvms_test.EkNode32("scaleUpAnywayNode", 500, 1000)}
 
 	testCases := []struct {
-		desc              string
-		nodes             []testNodeWithPodsInfo
-		ekSnapshots       map[int]operationtracker.ResizableNodesSnapshot
-		pods              []*v1.Pod
-		backedOffRules    map[int]bool
-		expectedPodToNode map[string]string // Mapping pod name to expected node name
+		desc                    string
+		nodes                   []testNodeWithPodsInfo
+		resizableNodesSnapshots map[int]operationtracker.ResizableNodesSnapshot
+		pods                    []*v1.Pod
+		backedOffRules          map[int]bool
+		expectedPodToNode       map[string]string // Mapping pod name to expected node name
 	}{
 		{
 			desc: "first rule EKs with space - pod schedulable on first rule node",
@@ -1943,7 +1943,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				{node: rule1Node.Node},
 				{node: scaleUpAnywayNode.Node},
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 				2: {"scaleUpAnywayNode": {}},
@@ -1961,7 +1961,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				{node: rule1Node.Node},
 				{node: scaleUpAnywayNode.Node},
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 				2: {"scaleUpAnywayNode": {}},
@@ -1978,7 +1978,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				},
 				{node: rule1Node.Node},
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 			},
@@ -1994,7 +1994,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				{node: rule0Node.Node}, // 500m free
 				{node: rule1Node.Node}, // 500m free
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 			},
@@ -2016,7 +2016,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				{node: rule0Node.Node}, // 500m free
 				{node: rule1Node.Node},
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 			},
@@ -2040,7 +2040,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				},
 				{node: scaleUpAnywayNode.Node},
 			},
-			ekSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshots: map[int]operationtracker.ResizableNodesSnapshot{
 				0: {"rule0Node": {}},
 				1: {"rule1Node": {}},
 				2: {"scaleUpAnywayNode": {}},
@@ -2075,7 +2075,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 				podsStatuses = append(podsStatuses, scheduling.Status{Pod: pod, NodeName: ""})
 			}
 
-			schedulable, _, err := p.tryScheduleCCCPods(snapshot, tc.ekSnapshots, podsStatuses, cccCrd, false)
+			schedulable, _, err := p.tryScheduleCCCPods(snapshot, tc.resizableNodesSnapshots, podsStatuses, cccCrd, false)
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.expectedPodToNode), len(schedulable))
 
@@ -2099,12 +2099,12 @@ func TestTryScheduleCCCPods(t *testing.T) {
 
 func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 	testCases := []struct {
-		desc                  string
-		nodes                 []testNodeWithPodsInfo
-		ekSnapshot            operationtracker.ResizableNodesSnapshot
-		pods                  []*v1.Pod
-		nodesStateForSchedule NodesState
-		expectedPodToNode     map[string]string
+		desc                   string
+		nodes                  []testNodeWithPodsInfo
+		resizableNodesSnapshot operationtracker.ResizableNodesSnapshot
+		pods                   []*v1.Pod
+		nodesStateForSchedule  NodesState
+		expectedPodToNode      map[string]string
 	}{
 		{
 			desc: "Available allocatable - multiple pods fit",
@@ -2113,7 +2113,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 					node: ekvms_test.EkNode32("ek-node", 1000, 1024*size.KiB),
 					pods: []*v1.Pod{},
 				}},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-node": {},
 			},
 			pods: []*v1.Pod{
@@ -2130,7 +2130,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 					node: ekvms_test.EkNode32("ek-node", 500, 1024*size.KiB),
 					pods: []*v1.Pod{},
 				}},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-node": {},
 			},
 			pods: []*v1.Pod{
@@ -2148,7 +2148,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 					pods: []*v1.Pod{userPod("busy", 1000, 1024*size.KiB)},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-node": {},
 			},
 			pods: []*v1.Pod{
@@ -2169,7 +2169,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 					pods: []*v1.Pod{},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-node":            {},
 				"ek-node-in-process": {},
 			},
@@ -2192,7 +2192,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 					pods: []*v1.Pod{},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-node":            {},
 				"ek-node-in-process": {},
 			},
@@ -2217,7 +2217,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
 			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
-			nodeFilter := p.createNodeFilterForPodNodeState(tc.ekSnapshot, tc.nodesStateForSchedule)
+			nodeFilter := p.createNodeFilterForPodNodeState(tc.resizableNodesSnapshot, tc.nodesStateForSchedule)
 
 			var podsStatuses []scheduling.Status
 			for _, pod := range tc.pods {
@@ -2249,13 +2249,13 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 
 func TestTrySchedulePods(t *testing.T) {
 	testCases := []struct {
-		desc                  string
-		nodes                 []testNodeWithPodsInfo
-		ekSnapshot            operationtracker.ResizableNodesSnapshot
-		pods                  []*v1.Pod
-		isLookaheadPods       bool
-		expectedSchedulable   []*v1.Pod
-		expectedUnschedulable []*v1.Pod
+		desc                   string
+		nodes                  []testNodeWithPodsInfo
+		resizableNodesSnapshot operationtracker.ResizableNodesSnapshot
+		pods                   []*v1.Pod
+		isLookaheadPods        bool
+		expectedSchedulable    []*v1.Pod
+		expectedUnschedulable  []*v1.Pod
 	}{
 		{
 			desc: "schedule_la_on_upcoming_ek_node",
@@ -2268,10 +2268,10 @@ func TestTrySchedulePods(t *testing.T) {
 					pods: []*v1.Pod{},
 				},
 			},
-			ekSnapshot:          operationtracker.ResizableNodesSnapshot{}, // Upcoming nodes are not in EK snapshot
-			pods:                []*v1.Pod{lookaheadPod("pod1", 250, 500)},
-			isLookaheadPods:     true,
-			expectedSchedulable: []*v1.Pod{lookaheadPod("pod1", 250, 500)},
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{}, // Upcoming nodes are not in EK snapshot
+			pods:                   []*v1.Pod{lookaheadPod("pod1", 250, 500)},
+			isLookaheadPods:        true,
+			expectedSchedulable:    []*v1.Pod{lookaheadPod("pod1", 250, 500)},
 		},
 		{
 			desc: "all_pods_accounted_for_across_filters",
@@ -2292,7 +2292,7 @@ func TestTrySchedulePods(t *testing.T) {
 					pods: []*v1.Pod{},
 				},
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"resizable": operationtracker.ResizableNode{
 					DesiredSize:      size.Allocatable{MilliCpus: 1000, KBytes: 1000},
 					UpsizableMaxSize: size.Allocatable{MilliCpus: 2000, KBytes: 2000},
@@ -2332,7 +2332,7 @@ func TestTrySchedulePods(t *testing.T) {
 				podsStatuses = append(podsStatuses, scheduling.Status{Pod: pod, NodeName: ""})
 			}
 
-			schedulable, unschedulable, err := p.trySchedulePods(snapshot, tc.ekSnapshot, podsStatuses, tc.isLookaheadPods)
+			schedulable, unschedulable, err := p.trySchedulePods(snapshot, tc.resizableNodesSnapshot, podsStatuses, tc.isLookaheadPods)
 			assert.NoError(t, err)
 
 			schedulablePods := []*v1.Pod{}
@@ -2408,9 +2408,9 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 	}).Build()
 
 	testCases := []struct {
-		desc                string
-		ekNodesWithMigs     []nodeWithMig
-		expectedEkSnapshots resizableNodesSnapshotsByCCC
+		desc                            string
+		ekNodesWithMigs                 []nodeWithMig
+		expectedResizableNodesSnapshots resizableNodesSnapshotsByCCC
 	}{
 		{
 			desc: "CCC nodes",
@@ -2428,7 +2428,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 					mig:  ccc2ScaleUpAnywayMig,
 				},
 			},
-			expectedEkSnapshots: resizableNodesSnapshotsByCCC{
+			expectedResizableNodesSnapshots: resizableNodesSnapshotsByCCC{
 				"ccc1": {
 					1: {
 						"ccc1Rule1Node1": operationtracker.ResizableNode{
@@ -2455,7 +2455,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 					node: ekvms_test.EkNode32("nonCCCNode", 32, 128),
 				},
 			},
-			expectedEkSnapshots: resizableNodesSnapshotsByCCC{
+			expectedResizableNodesSnapshots: resizableNodesSnapshotsByCCC{
 				"": {
 					0: {
 						"nonCCCNode": operationtracker.ResizableNode{
@@ -2472,7 +2472,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("ccc1Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
 				},
 			},
-			expectedEkSnapshots: make(resizableNodesSnapshotsByCCC),
+			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
 		},
 		{
 			desc: "Skip nodes with unexisting CCC",
@@ -2481,7 +2481,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 					node: ekvms_test.NewResizableNodeBuilder("ccc3Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc3").Build(),
 				},
 			},
-			expectedEkSnapshots: make(resizableNodesSnapshotsByCCC),
+			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
 		},
 		{
 			desc: "Skip nodes with CCC not mathching any rules and withouth ScaleUpAnyway enabled",
@@ -2491,24 +2491,24 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 					mig:  ccc1ScaleUpAnywayMig,
 				},
 			},
-			expectedEkSnapshots: make(resizableNodesSnapshotsByCCC),
+			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			cloudProvider := &gke.GkeCloudProviderMock{}
 			cloudProvider.On("IsAutopilotEnabled", mock.Anything).Return(true)
-			ekSnapshot := operationtracker.ResizableNodesSnapshot{}
+			resizableNodesSnapshot := operationtracker.ResizableNodesSnapshot{}
 			for _, nodeWithMig := range tc.ekNodesWithMigs {
 				cloudProvider.On("GkeMigForNode", nodeWithMig.node).Return(nodeWithMig.mig, nil)
-				ekSnapshot[nodeWithMig.node.Name] = operationtracker.ResizableNode{Node: nodeWithMig.node}
+				resizableNodesSnapshot[nodeWithMig.node.Name] = operationtracker.ResizableNode{Node: nodeWithMig.node}
 			}
 
 			cccLister := lister.NewMockCrdListerWithLabel(cccCrds, gkelabels.ComputeClassLabel)
 			p := NewScaleUpNodeProcessor(cloudProvider, nil, nil, nil, nil, cccLister, nil)
 
-			ekSnapshots := p.organizeByCCCByRule(ekSnapshot)
-			assert.Equal(t, tc.expectedEkSnapshots, ekSnapshots)
+			resizableNodesSnapshots := p.organizeByCCCByRule(resizableNodesSnapshot)
+			assert.Equal(t, tc.expectedResizableNodesSnapshots, resizableNodesSnapshots)
 		})
 	}
 }
