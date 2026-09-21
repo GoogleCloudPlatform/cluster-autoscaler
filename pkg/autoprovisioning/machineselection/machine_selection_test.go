@@ -648,6 +648,40 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E4},
 			expectedComputeClassName: "autopilot",
 		},
+		"E4 when autopilot compute class and resizableVmStatefulInAutopilotEnabled": {
+			podClass:         "autopilot",
+			autopilotEnabled: true,
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			resizableVmStatefulInAutopilotEnabled: map[string]bool{
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
+			expectedComputeClassName: "autopilot",
+		},
+		"E2/EK when autopilot compute class and stateful without resizableVmStatefulInAutopilotEnabled": {
+			podClass:         "autopilot",
+			autopilotEnabled: true,
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
+			expectedComputeClassName: "autopilot",
+		},
+		"E4 when autopilot compute class, E2-less region, stateful": {
+			podClass:         "autopilot",
+			autopilotEnabled: true,
+			isE2lessRegion:   true,
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.E4},
+			expectedComputeClassName: "autopilot",
+		},
 		"E2-less region strips E2 and EK and forces E4 for general purpose": {
 			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
 			isE2lessRegion:   true,
@@ -720,6 +754,53 @@ func TestSelectMachineSpec(t *testing.T) {
 				machinetypes.EK,
 				machinetypes.E2,
 			},
+		},
+		"E2/EK when autopilot and managed are disabled for GeneralPurposePodFamily even if stateless": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			autopilotEnabled: false,
+			autopilotManaged: false,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:      true,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+		},
+		"E4 with autopilot enabled for GeneralPurposePodFamily, resizableVmInAutopilotEnabled is true": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			autopilotEnabled: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+			},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.E4.Name(): true,
+			},
+			isStateless:      true,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+		},
+		"E2/EK when autopilot enabled for GeneralPurposePodFamily, resizableVmInAutopilotEnabled is false": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			autopilotEnabled: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+			},
+			resizableVmInAutopilotEnabled: map[string]bool{
+				machinetypes.E4.Name(): false,
+			},
+			isStateless:      true,
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+		},
+		"E4 with autopilot managed and GeneralPurposePodFamily rule and resizableVmStatefulInAutopilotEnabled": {
+			rule:             rules.NewRule(rules.WithPodFamilyRule(&generalPurposePodFamily)),
+			autopilotManaged: true,
+			resizableVmWithinPodFamilyEnabled: map[string]bool{
+				machinetypes.EK.Name(): true,
+				machinetypes.E4.Name(): true,
+			},
+			resizableVmStatefulInAutopilotEnabled: map[string]bool{
+				machinetypes.E4.Name(): true,
+			},
+			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
 		"Autopilot stateless default pod returns GeneralPurposeMachineFamilies fallback candidate list": {
 			autopilotEnabled:              true,

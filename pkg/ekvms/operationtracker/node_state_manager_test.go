@@ -54,7 +54,7 @@ func newMockResizingProvider(resizingEnabled func(string) bool) mockResizingProv
 }
 
 func TestSnapshotCreatesCopy(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
@@ -88,7 +88,7 @@ func TestSnapshotCreatesCopy(t *testing.T) {
 }
 
 func TestSnapshotCache(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			testClock := clock.NewFakeClock(testStartTime)
@@ -178,7 +178,7 @@ func TestSnapshotCache(t *testing.T) {
 }
 
 func TestUpdateSnapshot(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
@@ -210,7 +210,7 @@ func TestUpdateSnapshot(t *testing.T) {
 }
 
 func TestFilteredNodesSnapshot(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
 			halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
@@ -652,7 +652,7 @@ func TestFilteredNodesSnapshot(t *testing.T) {
 }
 
 func TestNodesCount(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				description       string
@@ -720,7 +720,7 @@ func TestNodesCount(t *testing.T) {
 }
 
 func TestSetGetNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
 			halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
@@ -767,7 +767,7 @@ func TestSetGetNode(t *testing.T) {
 }
 
 func TestSetNodeAsHealthyAndUnhealthy(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
 				backoffManager: &mockBackoff{},
@@ -804,7 +804,7 @@ func TestSetNodeAsHealthyAndUnhealthy(t *testing.T) {
 }
 
 func TestGetUnhealthyNodesWithStatus(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				name           string
@@ -939,7 +939,7 @@ func TestGetUnhealthyNodesWithStatus(t *testing.T) {
 }
 
 func TestDeleteNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tc := []struct {
 				description    string
@@ -1018,7 +1018,7 @@ func TestDeleteNode(t *testing.T) {
 }
 
 func TestEkNodeMissingRecommendationLogging(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				name                     string
@@ -1127,10 +1127,6 @@ func TestMultiFamilyNodesCount(t *testing.T) {
 	nsm.deleteNode(nodeE4A1.Name)
 	assert.Equal(t, 1, nsm.nodesCount("ek"))
 	assert.Equal(t, 0, nsm.nodesCount("e4a"))
-}
-
-func createEkSnapshot(nodeNames []string) ResizableNodesSnapshot {
-	return createTestSnapshotByNames(nodeNames, "ek")
 }
 
 func createTestSnapshotByNames(nodeNames []string, family string) ResizableNodesSnapshot {

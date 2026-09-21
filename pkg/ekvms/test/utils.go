@@ -37,6 +37,13 @@ func E4aNode32(name string, milliCpu, bytes int64) *v1.Node {
 	return b.WithStandard32Capacity().WithSupportedMachineType("e4a-standard-32").WithMachineFamily("e4a").Build()
 }
 
+// E4Node32 creates an E4 node with specified allocatable, capacity
+// and instance label set to e4-standard-32.
+func E4Node32(name string, milliCpu, bytes int64) *v1.Node {
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	return b.WithStandard32Capacity().WithSupportedMachineType("e4-standard-32").WithMachineFamily("e4").Build()
+}
+
 // EkNode8 creates an EK node with specified allocatable, capacity
 // and instance label set to standard-8.
 func EkNode8(name string, milliCpu, bytes int64) *v1.Node {

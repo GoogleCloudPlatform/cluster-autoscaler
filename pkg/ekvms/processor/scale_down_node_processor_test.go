@@ -93,6 +93,7 @@ var (
 		Value: map[string]*processor_proto.DownsizeConfig{
 			machinetypes.EK.Name():  testDownsizeConfig,
 			machinetypes.E4A.Name(): testDownsizeConfig,
+			machinetypes.E4.Name():  testDownsizeConfig,
 		},
 	}
 )
@@ -285,6 +286,44 @@ func TestScaleDownProcess(t *testing.T) {
 					systemPod("pod2", 3000, 13*size.GiB),
 					daemonsetPod("pod3", 3000, 8*size.GiB),
 					balloonPod(t, "node-e4a-32", 2000, 11*size.GiB),
+				},
+			},
+		},
+		"empty E4 node with possible downsize - downsize allowed": {
+			nodes: []*testNodeWithPodsInfo{
+				{
+					node: ekvms_test.E4Node32("node-e4-32", 8000, 32*size.GiB),
+					pods: []*v1.Pod{
+						systemPod("pod2", 3000, 13*size.GiB),
+						daemonsetPod("pod3", 3000, 8*size.GiB),
+						balloonPod(t, "node-e4-32", 1000, 1*size.GiB),
+					},
+				},
+			},
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
+				"node-e4-32": {
+					MachineFamily:     machinetypes.E4.Name(),
+					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
+					PhysicalMaxSize:   resizable32MaxSize,
+					UpsizableMaxSize:  resizable32MaxSize,
+					LastOperationTime: testStartTime.Add(-2 * time.Hour),
+				},
+			},
+			downsizePossibleSince: map[string]time.Time{
+				"node-e4-32": testStartTime.Add(-2 * time.Hour),
+			},
+			isResizingEnabled:     true,
+			nodesScaleDownAllowed: map[string]bool{},
+			expectedNodesScaleDownAllowed: map[string]bool{
+				"node-e4-32": false,
+			},
+			expectedCandidates: []string{},
+			expectedDownsizes:  []string{"node-e4-32"},
+			expectedPods: map[string][]*v1.Pod{
+				"node-e4-32": {
+					systemPod("pod2", 3000, 13*size.GiB),
+					daemonsetPod("pod3", 3000, 8*size.GiB),
+					balloonPod(t, "node-e4-32", 2000, 11*size.GiB),
 				},
 			},
 		},

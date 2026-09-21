@@ -282,6 +282,11 @@ func TestIsResizableMachineType(t *testing.T) {
 			wantResult:  true,
 		},
 		{
+			desc:        "E4 standard 16 is resizable",
+			machineType: "e4-standard-16",
+			wantResult:  true,
+		},
+		{
 			desc:        "E2 standard 32 is not resizable",
 			machineType: "e2-standard-32",
 			wantResult:  false,

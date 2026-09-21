@@ -75,7 +75,7 @@ var (
 )
 
 func TestOnUpdateNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			cloudProvider := &mockCloudProvider{}
@@ -135,7 +135,7 @@ func TestOnUpdateNode(t *testing.T) {
 }
 
 func TestOnAddNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			emptySize := size.VmSize{}
 			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
@@ -406,7 +406,7 @@ func TestOnAddNode(t *testing.T) {
 }
 
 func TestOnDeleteNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
@@ -465,7 +465,7 @@ func TestOnDeleteNode(t *testing.T) {
 }
 
 func TestResize(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			var (
 				bpResizeErr          = fmt.Errorf("BP resize error")
@@ -1580,7 +1580,7 @@ func setupTestTracker(t *testing.T, node *v1.Node, family string, ipprEnabled bo
 }
 
 func TestUpsize_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 
@@ -1603,7 +1603,7 @@ func TestUpsize_NonExistingNode(t *testing.T) {
 }
 
 func TestDownsize_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 
@@ -1626,7 +1626,7 @@ func TestDownsize_NonExistingNode(t *testing.T) {
 }
 
 func TestReconcileNodeStateOperation(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			nodeMilliCpu := int64(10 * 1000)
@@ -1758,7 +1758,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 }
 
 func TestFix(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			var (
 				bpResizeErr    = fmt.Errorf("BP resize error")
@@ -2003,7 +2003,7 @@ func TestFix(t *testing.T) {
 }
 
 func TestFix_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 			fakeClient := &fake.Clientset{}
@@ -2021,7 +2021,7 @@ func TestFix_NonExistingNode(t *testing.T) {
 }
 
 func TestFixerLoop(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			nodeMilliCpu := int64(10 * 1000)
@@ -2111,7 +2111,7 @@ func TestFixerLoop(t *testing.T) {
 }
 
 func TestConcurrentWorkers(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			testCases := []struct {
 				desc                    string
@@ -2231,7 +2231,7 @@ func TestConcurrentWorkers(t *testing.T) {
 }
 
 func TestResizeTaintError(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 			testClock := clock.NewFakeClock(testStartTime)
@@ -2335,7 +2335,7 @@ func TestOnDeleteNodeDoesNotPanic(t *testing.T) {
 }
 
 func TestRegisterResizeSuccess(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			mockMetrics := &mockMetrics{}
 			mockMetrics.On("RegisterVmResizeOperation", family, string(Downsize), "", metrics.OperationSucceeded).Once().Return()
@@ -2369,7 +2369,7 @@ func TestRegisterResizeSuccess(t *testing.T) {
 }
 
 func TestHandleResizeError(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,
@@ -2484,7 +2484,7 @@ func TestHandleResizeError(t *testing.T) {
 }
 
 func TestHandleResizeError_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,

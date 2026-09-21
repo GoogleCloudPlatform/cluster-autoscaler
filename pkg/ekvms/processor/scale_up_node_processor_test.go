@@ -77,7 +77,7 @@ type ProcessTestCase struct {
 }
 
 func TestProcess(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		testCases := []ProcessTestCase{
 			{
 				desc: "No schedule - same balloon pod",
@@ -955,7 +955,7 @@ func lookaheadPodForFamily(family string, name string, cpu, mem int64) *v1.Pod {
 }
 
 func TestScheduleLookaheadPods(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		testCases := []struct {
 			desc                              string
 			nodes                             []testNodeWithPodsInfo
@@ -1272,7 +1272,7 @@ func TestSchedulePods(t *testing.T) {
 		return b.WithStandard32Capacity().WithSupportedMachineType(family + "-standard-32").WithMachineFamily(family).Build()
 	}
 
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		machineType1 := family + "-standard-8"
 		machineType2 := family + "-standard-16"
 
@@ -1703,6 +1703,36 @@ func TestPreprocess(t *testing.T) {
 			desc: "EK Node",
 			node: ekvms_test.EkNode32("node1", 2000, 200*size.MiB),
 			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"node1": {
+					DesiredSize: size.Allocatable{
+						MilliCpus: 1000,
+						KBytes:    100 * miBToKiB,
+					},
+				},
+			},
+			isResizingEnabled:  true,
+			existingBalloonPod: balloonPod(t, "node1", 1500, 150*size.MiB),
+			expectedBalloonPod: balloonPod(t, "node1", 1000, (200-100)*size.MiB),
+		},
+		{
+			desc: "E4A Node",
+			node: ekvms_test.E4aNode32("node1", 2000, 200*size.MiB),
+			resizableNodesSnapshot: map[string]operationtracker.ResizableNode{
+				"node1": {
+					DesiredSize: size.Allocatable{
+						MilliCpus: 1000,
+						KBytes:    100 * miBToKiB,
+					},
+				},
+			},
+			isResizingEnabled:  true,
+			existingBalloonPod: balloonPod(t, "node1", 1500, 150*size.MiB),
+			expectedBalloonPod: balloonPod(t, "node1", 1000, (200-100)*size.MiB),
+		},
+		{
+			desc: "E4 Node",
+			node: ekvms_test.E4Node32("node1", 2000, 200*size.MiB),
+			resizableNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node1": {
 					DesiredSize: size.Allocatable{
 						MilliCpus: 1000,
