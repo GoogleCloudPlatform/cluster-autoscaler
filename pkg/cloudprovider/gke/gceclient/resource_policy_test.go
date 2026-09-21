@@ -15,10 +15,11 @@
 package gceclient
 
 import (
-	"github.com/stretchr/testify/assert"
-	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	gce_api_beta "google.golang.org/api/compute/v0.beta"
 )
 
 func TestToGceResourcePolicy(t *testing.T) {

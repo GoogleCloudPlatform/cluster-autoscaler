@@ -16,6 +16,7 @@ package test
 
 import (
 	"fmt"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
@@ -29,6 +30,14 @@ func CreateNode(name string, opts ...func(*v1.Node)) *v1.Node {
 		opt(node)
 	}
 	return node
+}
+
+// ReadyOpt sets the readiness Kubernetes reports for the node. All nodes
+// are expected to eventually become ready after resuming.
+func ReadyOpt(ready bool) func(*v1.Node) {
+	return func(n *v1.Node) {
+		test.SetNodeReadyState(n, ready, time.Now())
+	}
 }
 
 func StateOpt(state csn.NodeState) func(*v1.Node) {

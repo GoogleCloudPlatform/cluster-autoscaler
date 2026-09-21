@@ -92,11 +92,16 @@ var (
 type CloudProvider interface {
 	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
 	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	// PollUntilActionStops polls instances until each one has stopped running action, the poll times
+	// out, or ctx is cancelled. See gceclient.AutoscalingInternalGceClient for the full contract.
+	PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	// InstanceByRef allows for retrieval of GCE instances to get their status
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
+	// FetchManagedInstances fetches ManagedInstances for a given MIG.
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
 }
 
 type csnNodeController struct {
@@ -159,8 +164,12 @@ func NewCSNNodeController(
 		cfg:              config,
 	}
 
+	// The node lister reads the same informer cache as the state manager, but
+	// keeps reporting a node after the consume patch takes it out of CSN, which
+	// is exactly when the handler needs its readiness.
+	nodeLister := informerFactory.Core().V1().Nodes().Lister()
 	d.RegisterHandler(ops.SuspendOp, handler.NewSuspendHandler(nsm, cp, k8sAdapter, wq.Enqueue, config.Suspend.PreSuspendDelay.Duration).Handle)
-	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter, backoff).Handle)
+	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter, nodeLister, backoff, experimentsManager).Handle)
 	d.RegisterHandler(ops.AssignBufferOp, handler.NewAssignBufferHandler(nsm, k8sAdapter).Handle)
 	d.RegisterHandler(ops.AssignSoftTaintOp, handler.NewAssignSoftTaintHandler(nsm, k8sAdapter, tracker).Handle)
 

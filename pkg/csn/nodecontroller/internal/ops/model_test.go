@@ -15,10 +15,12 @@
 package ops
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/utils/set"
 )
 
 func TestOperationType_HasAny(t *testing.T) {
@@ -235,6 +237,64 @@ func TestOperationType_String(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, fmt.Sprintf("%s", tc.op))
+		})
+	}
+}
+
+func TestResult_AddResult(t *testing.T) {
+	errA := errors.New("err-a")
+	errB := errors.New("err-b")
+
+	tests := []struct {
+		name        string
+		result      Result
+		other       Result
+		wantSuccess []string
+		wantErrs    map[string]error
+	}{
+		{
+			name:        "add_into_empty_result",
+			result:      NewResult(),
+			other:       Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_empty_result",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       NewResult(),
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_zero_value_result",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_disjoint_results",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{Success: set.New("node-3"), Errs: map[string]error{"node-4": errB}},
+			wantSuccess: []string{"node-1", "node-3"},
+			wantErrs:    map[string]error{"node-2": errA, "node-4": errB},
+		},
+		{
+			name:        "add_keeps_single_entry_per_node",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errB}},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errB},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.result.AddResult(tc.other)
+
+			assert.ElementsMatch(t, tc.wantSuccess, tc.result.Success.UnsortedList())
+			assert.Equal(t, tc.wantErrs, tc.result.Errs)
 		})
 	}
 }

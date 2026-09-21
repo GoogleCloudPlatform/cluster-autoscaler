@@ -40,7 +40,9 @@ type autoscalingInternalGceClientMock struct {
 	fetchStandardZones                          func(region string) ([]string, error)
 	fetchAIZones                                func(region string) ([]string, error)
 	resumeInstances                             func(migRef gce.GceRef, instances []gce.GceRef) error
+	pollUntilActionStops                        func(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq
 	suspendInstances                            func(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
+	fetchManagedInstances                       func(migRef gce.GceRef, filter string) ([]*ManagedInstance, error)
 	httpTimeout                                 time.Duration
 }
 
@@ -73,6 +75,12 @@ func (a *autoscalingInternalGceClientMock) WithFetchNetwork(fetchNetwork func(pr
 // WithResumeInstances sets ResumeInstances handler.
 func (a *autoscalingInternalGceClientMock) WithResumeInstances(resumeInstances func(migRef gce.GceRef, instances []gce.GceRef) error) *autoscalingInternalGceClientMock {
 	a.resumeInstances = resumeInstances
+	return a
+}
+
+// WithPollUntilActionStops sets the PollUntilActionStops handler.
+func (a *autoscalingInternalGceClientMock) WithPollUntilActionStops(pollUntilActionStops func(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq) *autoscalingInternalGceClientMock {
+	a.pollUntilActionStops = pollUntilActionStops
 	return a
 }
 
@@ -166,12 +174,33 @@ func (a *autoscalingInternalGceClientMock) FetchNetwork(projectId string, name s
 	return a.fetchNetwork(projectId, name)
 }
 
-func (a *autoscalingInternalGceClientMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {
+func (a *autoscalingInternalGceClientMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+	if a.resumeInstances == nil {
+		return nil
+	}
 	return a.resumeInstances(migRef, instances)
 }
 
+func (a *autoscalingInternalGceClientMock) PollUntilActionStops(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq {
+	if a.pollUntilActionStops != nil {
+		return a.pollUntilActionStops(ctx, action, migRef, instances)
+	}
+	// Default: every instance is immediately ready.
+	return AllReady(instances)
+}
+
 func (a *autoscalingInternalGceClientMock) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
+	if a.suspendInstances == nil {
+		return nil
+	}
 	return a.suspendInstances(migRef, instances, forceSuspend)
+}
+
+func (a *autoscalingInternalGceClientMock) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*ManagedInstance, error) {
+	if a.fetchManagedInstances == nil {
+		return nil, nil
+	}
+	return a.fetchManagedInstances(migRef, filter)
 }
 
 func (a *autoscalingInternalGceClientMock) FetchZones(ctx context.Context, region string) ([]string, error) {

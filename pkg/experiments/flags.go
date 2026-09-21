@@ -102,6 +102,7 @@ const ColdStandbyNodesCheckPodsOnSuspendedNodes = "ColdStandbyNodes::CheckPodsOn
 const ColdStandbyNodesProcessTemplateNodeInfosFlag = "ColdStandbyNodes::ProcessTemplateNodeInfos"             // Direct launch.
 const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersionGuardForCAFlag"             // Direct launch style flag.
 const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                       // Direct launch.
+const ColdStandbyNodesWaitForNodeReadiness = "ColdStandbyNodes::WaitForNodeReadiness"                         // Direct launch.
 const ColdStandbyNodesBackoffMinCAVersionFlag = "ColdStandbyNodes::BackoffMinCAVersion"
 const ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag = "ColdStandbyNodes::PodAgeFallbackThresholdSeconds"
 const ColdStandbyNodesResumeTimeoutSecondsFlag = "ColdStandbyNodes::ResumeTimeoutSeconds"

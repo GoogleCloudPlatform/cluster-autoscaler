@@ -31,6 +31,15 @@ var (
 		},
 		[]string{"call_type", "status"},
 	)
+	nodeReadinessWaitSeconds = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: namespace,
+			Name:      "csn_node_readiness_wait",
+			Help:      "Time spent waiting for a resumed node to report ready to Kubernetes.",
+			Buckets:   []float64{1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 360, 420, 480, 540, 600},
+		},
+		[]string{"status"},
+	)
 )
 
 const (
@@ -45,8 +54,17 @@ const (
 	suspendCall = "suspend"
 )
 
+const (
+	// `status` label - describes what ended the wait for a node's readiness
+	readinessReady    = "ready"
+	readinessDeleted  = "deleted"
+	readinessTimedOut = "timeout"
+	readinessAborted  = "aborted"
+)
+
 func init() {
 	legacyregistry.MustRegister(
 		opGceBatchSize,
+		nodeReadinessWaitSeconds,
 	)
 }

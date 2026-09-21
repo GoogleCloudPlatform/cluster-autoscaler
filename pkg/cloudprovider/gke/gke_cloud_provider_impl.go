@@ -367,13 +367,24 @@ func (p *gkeCloudProviderImpl) GetMigInstanceTemplateSelfLink(mig *GkeMig) (stri
 }
 
 // ResumeInstances resumes instances
-func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
-	return p.gkeManager.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
+func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+	return p.gkeManager.ResumeInstances(migRef, instances)
+}
+
+// PollUntilActionStops polls instances until each one has stopped running action, the poll times
+// out, or ctx is cancelled. See gceclient.AutoscalingInternalGceClient for the full contract.
+func (p *gkeCloudProviderImpl) PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq {
+	return p.gkeManager.PollUntilActionStops(ctx, action, migRef, instances)
 }
 
 // SuspendInstances suspends instances
 func (p *gkeCloudProviderImpl) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
 	return p.gkeManager.SuspendInstances(migRef, instances, forceSuspend)
+}
+
+// FetchManagedInstances fetches ManagedInstances for a given MIG.
+func (p *gkeCloudProviderImpl) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	return p.gkeManager.FetchManagedInstances(migRef, filter)
 }
 
 // NodeGroupForNode returns the node group for the given node.

@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
@@ -177,6 +178,14 @@ func TestReconciliation(t *testing.T) {
 			withCloudProvider(&test.MockCloudProvider{
 				NodeNameToMIG: map[string]*gke.GkeMig{chillingNode.Name: mig, suspendedNode.Name: mig},
 				Instances:     instanceForRef,
+				// Consumption only runs once resumeNode is set, by which point
+				// GCE reports the instance as running again.
+				ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					mig.GceRef(): {
+						test.ManagedInstance(chillingNode.Name, "RUNNING"),
+						test.ManagedInstance(suspendedNode.Name, "RUNNING"),
+					},
+				},
 			}),
 			withSkipCacheSync(),
 		)
@@ -307,6 +316,9 @@ func TestList_PendingOperations(t *testing.T) {
 				Instances: func(gce.GceRef) *gce.GceInstance {
 					return &gce.GceInstance{GCEStatus: "RUNNING"}
 				},
+				ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					mig.GceRef(): {test.ManagedInstance(node.Name, "RUNNING")},
+				},
 			}),
 			withSkipCacheSync(),
 		)
@@ -364,16 +376,19 @@ func TestConsume(t *testing.T) {
 				mig := gke.NewTestGkeMigBuilder().
 					SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}).
 					Build()
+				instanceStatus := "RUNNING"
+				if tc.expectResume {
+					instanceStatus = "SUSPENDED"
+				}
 				c, suite := createSuite(t,
 					withInitialNodes(tc.node),
 					withCloudProvider(&test.MockCloudProvider{
 						NodeNameToMIG: map[string]*gke.GkeMig{tc.node.Name: mig},
 						Instances: func(gce.GceRef) *gce.GceInstance {
-							status := "RUNNING"
-							if tc.expectResume {
-								status = "SUSPENDED"
-							}
-							return &gce.GceInstance{GCEStatus: status}
+							return &gce.GceInstance{GCEStatus: instanceStatus}
+						},
+						ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+							mig.GceRef(): {test.ManagedInstance(tc.node.Name, instanceStatus)},
 						},
 					}),
 					withSkipCacheSync(),
@@ -547,6 +562,9 @@ func TestMarkAsSuspendable(t *testing.T) {
 						NodeNameToMIG: map[string]*gke.GkeMig{tc.node.Name: mig},
 						Instances: func(gce.GceRef) *gce.GceInstance {
 							return &gce.GceInstance{GCEStatus: "RUNNING"}
+						},
+						ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+							mig.GceRef(): {test.ManagedInstance(tc.node.Name, "RUNNING")},
 						},
 					}),
 				)

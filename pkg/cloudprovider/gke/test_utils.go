@@ -1641,6 +1641,7 @@ type FakeGkeManager struct {
 
 	suspensionStatuses    map[suspensionKey]SuspensionStatus
 	machineConfigProvider *machinetypes.MachineConfigProvider
+	managedInstances      map[gce.GceRef][]*gceclient.ManagedInstance
 }
 
 func NewFakeGkeManager(zones []string) *FakeGkeManager {
@@ -2118,7 +2119,7 @@ func (fake *FakeGkeManager) NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.No
 	panic("not implemented")
 }
 
-func (fake *FakeGkeManager) ResumeInstances(mig gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
+func (fake *FakeGkeManager) ResumeInstances(mig gce.GceRef, instances []gce.GceRef) error {
 	if fake.suspensionStatuses == nil {
 		return nil
 	}
@@ -2132,6 +2133,10 @@ func (fake *FakeGkeManager) ResumeInstances(mig gce.GceRef, instances []gce.GceR
 	return nil
 }
 
+func (fake *FakeGkeManager) PollUntilActionStops(_ context.Context, action gceclient.InstanceAction, mig gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq {
+	return gceclient.AllReady(instances)
+}
+
 func (fake *FakeGkeManager) SuspendInstances(mig gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
 	if fake.suspensionStatuses == nil {
 		fake.suspensionStatuses = make(map[suspensionKey]SuspensionStatus)
@@ -2141,6 +2146,20 @@ func (fake *FakeGkeManager) SuspendInstances(mig gce.GceRef, instances []gce.Gce
 		fake.suspensionStatuses[suspensionKey{MigRef: mig, InstanceRef: instRef}] = SuspensionStatus{Suspended: true, ForceUsed: forceSuspend}
 	}
 	return nil
+}
+
+func (fake *FakeGkeManager) FetchManagedInstances(mig gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	if fake.managedInstances == nil {
+		return nil, nil
+	}
+	return fake.managedInstances[mig], nil
+}
+
+func (fake *FakeGkeManager) SetManagedInstances(mig gce.GceRef, instances []*gceclient.ManagedInstance) {
+	if fake.managedInstances == nil {
+		fake.managedInstances = make(map[gce.GceRef][]*gceclient.ManagedInstance)
+	}
+	fake.managedInstances[mig] = instances
 }
 
 func (fake *FakeGkeManager) GetSuspensionStatus(mig gce.GceRef, instance gce.GceRef) SuspensionStatus {
@@ -3012,15 +3031,30 @@ func (m *GkeManagerMock) ExistingMigsInNodePool(nodePoolName string) []*GkeMig {
 }
 
 // ResumeInstances is a mocked method.
-func (m *GkeManagerMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
-	args := m.Called(migRef, instances, nonBlockingErrorsHandler)
+func (m *GkeManagerMock) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+	args := m.Called(migRef, instances)
 	return args.Error(0)
+}
+
+// PollUntilActionStops is a mocked method. It records the call and reports every instance as
+// ready, which is all the callers of this mock need.
+func (m *GkeManagerMock) PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq {
+	m.Called(ctx, action, migRef, instances)
+	return gceclient.AllReady(instances)
 }
 
 // SuspendInstances is a mocked method.
 func (m *GkeManagerMock) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
 	args := m.Called(migRef, instances, forceSuspend)
 	return args.Error(0)
+}
+
+func (m *GkeManagerMock) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	args := m.Called(migRef, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*gceclient.ManagedInstance), args.Error(1)
 }
 
 func (m *GkeManagerMock) GetDeploymentType(_ gce.GceRef, spec *gkeclient.NodePoolSpec) DeploymentTypeEnum {

@@ -38,9 +38,19 @@ type K8sClient interface {
 // CloudProvider defines the cloud provider operations needed by the handlers.
 type CloudProvider interface {
 	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
+}
+
+// NodeLister gives read-only access to the cluster nodes as Kubernetes last
+// reported them, including the nodes the state manager no longer tracks. It is
+// satisfied by a shared informer's node lister, whose cache costs no API call
+// to read.
+type NodeLister interface {
+	Get(nodeName string) (*v1.Node, error)
 }
 
 // StateManager is an abstraction for the node state manager.

@@ -16,6 +16,7 @@ package ops
 
 import (
 	"context"
+	"maps"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/utils/set"
@@ -118,10 +119,14 @@ func (r *Result) AddSuccessForNodeSet(nodeNames set.Set[string]) {
 	}
 }
 
-func (r *Result) AddSuccessForRefSlice(nodeRefs []gce.GceRef) {
-	for _, ref := range nodeRefs {
-		r.Success.Insert(ref.Name)
-	}
+// AddResult folds other into r, which is useful when a handler builds part of
+// its result separately, e.g. on another goroutine.
+//
+// Both results reporting on the same node is a caller error: the node would end
+// up reported as successful and failed at the same time.
+func (r *Result) AddResult(other Result) {
+	r.AddSuccessForNodeSet(other.Success)
+	maps.Copy(r.Errs, other.Errs)
 }
 
 // OperationHandler performs the logic for a specific operation type.

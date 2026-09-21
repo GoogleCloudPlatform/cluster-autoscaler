@@ -20,9 +20,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/set"
@@ -34,10 +32,12 @@ const (
 
 type SuspendHandler struct {
 	stateManager  StateManager
-	cloudProvider CloudProvider
 	k8sClient     K8sClient
 	enqueue       Enqueue
 	beforeSuspend time.Duration
+	// suspend drives the GCE side of the operation: it tells which instances still
+	// need to be suspended, suspends them and polls until they are down.
+	suspend instanceTransitioner
 }
 
 func NewSuspendHandler(
@@ -49,10 +49,10 @@ func NewSuspendHandler(
 ) *SuspendHandler {
 	return &SuspendHandler{
 		stateManager:  sm,
-		cloudProvider: cp,
 		k8sClient:     c,
 		enqueue:       e,
 		beforeSuspend: beforeSuspend,
+		suspend:       newSuspendTransitioner(sm, cp),
 	}
 }
 
@@ -95,13 +95,13 @@ func (h *SuspendHandler) Handle(ctx context.Context, op ops.Operation) (ops.Resu
 	}
 
 	// Check for pods that block suspension.
-	categorized, errs := h.categorizeNodeNames(ctx, set.KeySet(nodesToPatch))
+	nodes, errs := h.categorizeNodeNames(ctx, set.KeySet(nodesToPatch))
 	for nodeName, err := range errs {
 		result.Errs[nodeName] = err
 	}
 
 	// Consume nodes for which suspension is blocked.
-	if names := categorized.ToConsume; names.Len() > 0 {
+	if names := nodes.ToConsume; names.Len() > 0 {
 		klog.Infof("%s found %d nodes to consume (e.g. because they have pods scheduled): %v", suspendHandlerLogPrefix, names.Len(), names.UnsortedList())
 		// Enqueue consumption for these nodes
 		err := h.enqueue(ops.Operation{
@@ -117,62 +117,34 @@ func (h *SuspendHandler) Handle(ctx context.Context, op ops.Operation) (ops.Resu
 	}
 
 	// Nothing to suspend, return early.
-	if categorized.ToSuspend.Len() == 0 {
+	if nodes.ToSuspend.Len() == 0 {
 		return result, nil
 	}
 
-	// Suspend instances via GCE call.
-	instancesToSuspend := make([]instance, 0, categorized.ToSuspend.Len())
-	for nodeName := range categorized.ToSuspend {
-		tn, ok := h.stateManager.Get(nodeName)
-		if !ok {
-			result.Success.Insert(nodeName)
-			continue
-		}
-		ref, err := gce.GceRefFromProviderId(tn.Node.Spec.ProviderID)
-		if err != nil {
-			result.Errs[nodeName] = fmt.Errorf("failed to get GceRef for node %q: %v", nodeName, err)
-			continue
-		}
-		inst := h.cloudProvider.InstanceByRef(ref)
-		if inst == nil || inst.GCEStatus == "" {
-			result.Errs[nodeName] = fmt.Errorf("could not find instance status for node %q", nodeName)
-			continue
-		}
-		if internal.IsSuspended(inst.GCEStatus) {
-			result.Success.Insert(nodeName)
-			continue
-		}
-		instancesToSuspend = append(instancesToSuspend, instance{Ref: ref, Status: inst.GCEStatus})
+	instances := h.suspend.categorizeInstances(op.MIG, nodes.ToSuspend, &result)
+
+	// Instances that are already suspended need nothing more.
+	for _, ref := range instances.completed {
+		result.Success.Insert(ref.Name)
 	}
 
-	h.suspendInstancesInBatches(op, instancesToSuspend, &result)
+	toPoll := h.suspend.start(op.MIG, instances, &result)
+	if len(toPoll) == 0 {
+		return result, nil
+	}
+
+	for ref, nonBlockingErr := range h.suspend.pollUntilDone(ctx, op.MIG, toPoll, &result) {
+		if nonBlockingErr != nil {
+			// GCE keeps retrying the suspension, and there is no suspension backoff to
+			// feed, so just leave a trace and keep waiting.
+			klog.V(4).Infof("%s suspending instance %q reported a non-blocking error: code %q, message: %q, instance status: %q",
+				suspendHandlerLogPrefix, ref.Name, nonBlockingErr.Code, nonBlockingErr.Message, nonBlockingErr.InstanceStatus)
+			continue
+		}
+		result.Success.Insert(ref.Name)
+	}
+
 	return result, nil
-}
-
-func (h *SuspendHandler) suspendInstancesInBatches(op ops.Operation, instances []instance, result *ops.Result) {
-	if len(instances) == 0 {
-		return
-	}
-	refs := make([]gce.GceRef, 0, len(instances))
-	for _, inst := range instances {
-		refs = append(refs, inst.Ref)
-	}
-	for i := 0; i < len(refs); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(refs) {
-			end = len(refs)
-		}
-		batchRefs := refs[i:end]
-		status := gceSuccess
-		if err := h.cloudProvider.SuspendInstances(op.MIG, batchRefs, false); err != nil {
-			status = gceFailure
-			result.AddErrForRefSlice(fmt.Errorf("failed to suspend instances: %w, instances in batch: %v", err, instances[i:end]), batchRefs)
-		} else {
-			result.AddSuccessForRefSlice(batchRefs)
-		}
-		opGceBatchSize.WithLabelValues(suspendCall, status).Observe(float64(len(batchRefs)))
-	}
 }
 
 type categorizedNodeNames struct {

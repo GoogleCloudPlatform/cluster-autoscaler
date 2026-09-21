@@ -6687,17 +6687,6 @@ func TestSuspendInstances(t *testing.T) {
 	server.On("handle", suspendUrl).Return(suspendResponse).Once()
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
-	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := fmt.Sprintf(`{
-        "managedInstances": [
-            {
-                "name": "inst-1",
-                "instanceStatus": "SUSPENDED"
-            }
-        ]
-    }`)
-	server.On("handle", listUrl).Return(listResponse).Once()
-
 	mig := &GkeMig{
 		gceRef: gce.GceRef{
 			Project: projectId,
@@ -6758,17 +6747,6 @@ func TestResumeInstances(t *testing.T) {
 	server.On("handle", resumeUrl).Return(resumeResponse).Once()
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
-	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := `{
-        "managedInstances": [
-            {
-                "name": "inst-1",
-                "instanceStatus": "RUNNING"
-            }
-        ]
-    }`
-	server.On("handle", listUrl).Return(listResponse).Once()
-
 	mig := &GkeMig{
 		gceRef: gce.GceRef{
 			Project: projectId,
@@ -6782,9 +6760,67 @@ func TestResumeInstances(t *testing.T) {
 		{Project: projectId, Zone: zone, Name: "inst-1"},
 	}
 
-	err := g.ResumeInstances(mig.gceRef, instances, nil)
+	err := g.ResumeInstances(mig.gceRef, instances)
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, server)
+}
+
+// newSingleInstanceMigManager builds a manager whose mig-1 in zoneB holds a single running
+// instance, inst-1, and returns it alongside the refs of both. It is the shared fixture of the two
+// listManagedInstances-backed tests below, which differ only in the call they make. Every mocked
+// call is asserted to have happened once the test ends.
+func newSingleInstanceMigManager(t *testing.T) (*gkeManagerImpl, gce.GceRef, gce.GceRef) {
+	t.Helper()
+	server := NewHttpServerMock()
+	// Registered before the manager is built, so that it runs after the manager's own cleanup.
+	t.Cleanup(func() {
+		mock.AssertExpectationsForObjects(t, server)
+		server.Close()
+	})
+
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	migRef := gce.GceRef{Project: projectId, Zone: zoneB, Name: "mig-1"}
+	instanceRef := gce.GceRef{Project: projectId, Zone: zoneB, Name: "inst-1"}
+
+	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+	listResponse := `{
+        "managedInstances": [
+            {
+                "name": "inst-1",
+                "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneB/instances/inst-1",
+                "currentAction": "NONE",
+                "instanceStatus": "RUNNING"
+            }
+        ]
+    }`
+	server.On("handle", listUrl).Return(listResponse).Once()
+
+	return g, migRef, instanceRef
+}
+
+func TestPollUntilActionStops(t *testing.T) {
+	g, migRef, instanceRef := newSingleInstanceMigManager(t)
+
+	var ready []gce.GceRef
+	for ref, update := range g.PollUntilActionStops(t.Context(), gceclient.ActionResuming, migRef, []gce.GceRef{instanceRef}) {
+		assert.Equal(t, gceclient.PollCompleted{}, update)
+		ready = append(ready, ref)
+	}
+
+	assert.Equal(t, []gce.GceRef{instanceRef}, ready)
+}
+
+func TestFetchManagedInstances(t *testing.T) {
+	g, migRef, instanceRef := newSingleInstanceMigManager(t)
+
+	instances, err := g.FetchManagedInstances(migRef, "")
+
+	assert.NoError(t, err)
+	if assert.Len(t, instances, 1) {
+		assert.Equal(t, instanceRef.Name, instances[0].Name)
+	}
 }
 
 type AutoscalingGkeClientMock struct {

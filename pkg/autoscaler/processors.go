@@ -163,7 +163,8 @@ type GkeCloudProvider interface {
 	GetCurrentResizableVmState(*apiv1.Node) (ekvmtypes.ResizableVmState, error)
 	BulkFetchCurrentResizableVmStates() (map[gce.GceRef]ekvmtypes.ResizableVmState, error)
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	PollUntilActionStops(pollCtx ctx.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	CalculatePhysicalEphemeralStorageGiB(mig *gke.GkeMig, allocatableBytes int64) int64
 	ResizingEnabled(machineFamily string) bool
@@ -172,6 +173,7 @@ type GkeCloudProvider interface {
 	InvalidateNodesScaleDownAllowedCache()
 	ValidateMachineTypeConfig(machineType string, zone string) error
 
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
 

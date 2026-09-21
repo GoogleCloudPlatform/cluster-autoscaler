@@ -388,12 +388,23 @@ func (m *multitenancyGCEClient) CreateInstancesWithRecommendation(ref gce.GceRef
 	return gceService.CreateInstancesWithRecommendation(ref, basename, delta, instanceNames, recommendation)
 }
 
-func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {
+func (m *multitenancyGCEClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
 	gceClient, err := m.gceService(migRef.Project)
 	if err != nil {
 		return err
 	}
-	return gceClient.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
+	return gceClient.ResumeInstances(migRef, instances)
+}
+
+// PollUntilActionStops implements AutoscalingInternalGceClient by delegating to the client of
+// migRef's project. When that client cannot be resolved there is nothing to poll, so the lookup
+// error is reported once for every instance the caller asked about.
+func (m *multitenancyGCEClient) PollUntilActionStops(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq {
+	gceClient, err := m.gceService(migRef.Project)
+	if err != nil {
+		return AllAborted(instances, err)
+	}
+	return gceClient.PollUntilActionStops(ctx, action, migRef, instances)
 }
 
 func (m *multitenancyGCEClient) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
@@ -402,6 +413,16 @@ func (m *multitenancyGCEClient) SuspendInstances(migRef gce.GceRef, instances []
 		return err
 	}
 	return gceClient.SuspendInstances(migRef, instances, forceSuspend)
+}
+
+// FetchManagedInstances implements AutoscalingInternalGceClient by delegating to the client of
+// migRef's project.
+func (m *multitenancyGCEClient) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*ManagedInstance, error) {
+	gceService, err := m.gceService(migRef.Project)
+	if err != nil {
+		return nil, err
+	}
+	return gceService.FetchManagedInstances(migRef, filter)
 }
 
 func (m *multitenancyGCEClient) WaitForOperation(ctx context.Context, operationName, operationType, project, zone string) error {
