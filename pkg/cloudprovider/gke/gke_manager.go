@@ -1719,11 +1719,17 @@ func (m *gkeManagerImpl) CreateFlexResizeRequests(mig gce.Mig, delta int64) erro
 // QueuedProvisioningNodeHasScaleDownImmunity returns true if the provided QueuedProvisioning node still shouldn't get scaled down,
 // i.e. additionalImmunity hasn't ran out yet.
 func (m *gkeManagerImpl) QueuedProvisioningNodeHasScaleDownImmunity(node *apiv1.Node, migSpec *reconciler.QueuedProvisioningMigSpec, now time.Time) bool {
+	if m.provisioningRequestManager == nil {
+		return false
+	}
 	return m.provisioningRequestManager.QueuedProvisioningNodeHasScaleDownImmunity(node, migSpec, now)
 }
 
 // CreateQueuedInstances queues creation of VMs
 func (m *gkeManagerImpl) CreateQueuedInstances(pr prpods.ProvReqID, mig *GkeMig, delta int64, shouldUpdateProvReqDetails manager.ShouldUpdateProvReqDetails) error {
+	if m.provisioningRequestManager == nil {
+		return fmt.Errorf("cannot queue instances for mig %v: ProvisioningRequests are disabled", mig.Id())
+	}
 	spec := &manager.ProvisioningRequestDetailsSpec{
 		ProjectID:          mig.GceRef().Project,
 		ProvReqNamespace:   pr.Namespace,
@@ -2404,6 +2410,9 @@ func (m *gkeManagerImpl) GetGeneralPurposeMachineFamilies() []string {
 func (m *gkeManagerImpl) ResizeRequests(mig *GkeMig) ([]resizerequestclient.ResizeRequestStatus, error) {
 	switch {
 	case mig.QueuedProvisioning():
+		if m.provisioningRequestManager == nil {
+			return nil, nil
+		}
 		return m.provisioningRequestManager.ResizeRequests(mig.GceRef())
 	case mig.FlexStartNonQueued():
 		return m.flexResizeRequestService.ResizeRequests(context.Background(), mig.GceRef())

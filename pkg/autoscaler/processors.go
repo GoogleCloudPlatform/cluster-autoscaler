@@ -461,19 +461,19 @@ func (b *Builder) setUpProcessors(
 			eventingScaleUpStatusProcessor = optionalInternalEventingScaleUpProcessor
 		}
 	}
+	var prPodListProcessor *pr_processors.ProvisioningRequestPodListProcessor
 	if options.ProvisioningRequestEnabled {
+		klog.Infof("Enabling provisioning-requests")
 		optionalInternalEventingScaleUpProcessor.EnableProvReqProcessing()
 		if err := scaleUpProcessorChain.AddProcessor(pr_processors.NewProvisioningRequestScaleUpStatusProcessor()); err != nil {
 			return nil, err
 		}
 		eventingScaleUpStatusProcessor = optionalInternalEventingScaleUpProcessor
+		prPodListProcessor = pr_processors.NewProvisioningRequestPodListProcessor(prClient, prCache, ossProvReqInjector, options.ScanInterval, experimentsManager)
 	}
 	if err := scaleUpProcessorChain.AddProcessor(eventingScaleUpStatusProcessor); err != nil {
 		return nil, err
 	}
-
-	klog.Infof("Enabling provisioning-requests")
-	prPodListProcessor := pr_processors.NewProvisioningRequestPodListProcessor(prClient, prCache, ossProvReqInjector, options.ScanInterval, experimentsManager)
 
 	var (
 		edpNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor
@@ -519,8 +519,10 @@ func (b *Builder) setUpProcessors(
 		// scaleBlockingProcessor expects only autoscaled nodes, so it should be kept after PreFilteringScaleDownNodeProcessor.
 		scaleBlockingProcessor,
 	}
-	if prScaleDownNodeProcessor, enabled := pr_processors.NewProvisioningRequestScaleDownNodeProcessor(provider, options.NodeGroupDefaults.ScaleDownUnneededTime); enabled {
-		scaleDownNodeProcessors = append(scaleDownNodeProcessors, prScaleDownNodeProcessor)
+	if options.ProvisioningRequestEnabled {
+		if prScaleDownNodeProcessor, enabled := pr_processors.NewProvisioningRequestScaleDownNodeProcessor(provider, options.NodeGroupDefaults.ScaleDownUnneededTime); enabled {
+			scaleDownNodeProcessors = append(scaleDownNodeProcessors, prScaleDownNodeProcessor)
+		}
 	}
 	scaleDownNodeProcessors = append(scaleDownNodeProcessors, internal_processors.NewSurgeUpgradeScaleDownNodeProcessor(fetcher))
 

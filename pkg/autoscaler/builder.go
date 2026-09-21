@@ -55,6 +55,8 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/orchestrator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
@@ -121,7 +123,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
-	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
@@ -635,9 +636,11 @@ func (b *Builder) Build(
 	churnTrackerConfigProvider := ekvms_churntracker.NewConfigProvider(experimentsManager, autoscalingOptions.LookaheadChurnCircuitBreakerConfig, caVersion, internalmetrics.Metrics)
 
 	var provreqProcessor pods.PodListProcessor
-	prProcessor := provreq.NewProvReqProcessor(b.prClient, autoscalingOptions.CheckCapacityProcessorInstance)
-	loopStartObservers = append(loopStartObservers, b.prCache, prProcessor)
-	provreqProcessor = prProcessor
+	if autoscalingOptions.ProvisioningRequestEnabled {
+		prProcessor := provreq.NewProvReqProcessor(b.prClient, autoscalingOptions.CheckCapacityProcessorInstance)
+		loopStartObservers = append(loopStartObservers, b.prCache, prProcessor)
+		provreqProcessor = prProcessor
+	}
 
 	resizableVmAutoprovisioningFlags := ekvms_providers.ResizableVmAutoprovisioningFlags{
 		AutopilotEnabled:         autoscalingOptions.AutopilotEnabled,
@@ -1076,10 +1079,14 @@ func (b *Builder) Build(
 		return nil, nil, err
 	}
 
-	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
+	var baseOrchestrator scaleup.Orchestrator = orchestrator.New()
+	if autoscalingOptions.ProvisioningRequestEnabled {
+		prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
+		baseOrchestrator = provreqorchestrator.NewWrapperOrchestrator(prOrchestrator)
+	}
 	var scaleUpOrchestrator scaleup.Orchestrator
 	scaleUpOrchestrator = flexadvisor.NewWrapperOrchestrator(
-		provreqorchestrator.NewWrapperOrchestrator(prOrchestrator),
+		baseOrchestrator,
 		flexAdvisor,
 		b.npcCrdLister,
 		bypassTracker,
@@ -1221,11 +1228,16 @@ func (b *Builder) validateOptions() error {
 	if b.npcCrdLister == nil {
 		return fmt.Errorf("npcCrdLister is missing: ensure WithNpcCrdLister() is called")
 	}
-	if b.prClient == nil || b.prInjector == nil {
-		return fmt.Errorf("ProvisioningRequest dependencies are missing: ensure WithProvReqClient() and WithProvReqInjector() are called")
-	}
-	if b.prCache == nil {
-		return fmt.Errorf("ProvisioningRequest cache is missing: ensure WithProvReqCache() is called")
+	if b.optsTracker.Options().ProvisioningRequestEnabled {
+		if b.prClient == nil || b.prInjector == nil {
+			return fmt.Errorf("ProvisioningRequest dependencies are missing: ensure WithProvReqClient() and WithProvReqInjector() are called")
+		}
+		if b.prCache == nil {
+			return fmt.Errorf("ProvisioningRequest cache is missing: ensure WithProvReqCache() is called")
+		}
+		if b.prManager == nil {
+			return fmt.Errorf("provisioning request manager is missing: ensure WithProvReqManager() is called")
+		}
 	}
 	if b.httpClient == nil {
 		return fmt.Errorf("http client is missing: ensure WithHttpClient() is called")
@@ -1247,9 +1259,6 @@ func (b *Builder) validateOptions() error {
 	}
 	if b.flexAdvisorClient == nil {
 		return fmt.Errorf("flex advisor client is missing: ensure WithFlexAdvisorClient() is called")
-	}
-	if b.prManager == nil {
-		return fmt.Errorf("provisioning request manager is missing: ensure WithProvReqManager() is called")
 	}
 	if b.gceCache == nil || b.gkeCache == nil {
 		return fmt.Errorf("caches are missing: ensure WithGKECache() and WithGCECache() are called")

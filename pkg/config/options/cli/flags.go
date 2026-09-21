@@ -245,8 +245,6 @@ func PostProcessOssOptions(ossOptions *config.AutoscalingOptions) {
 		klog.Fatalf("Running without FrequentLoopsEnabled option is no longer supported.")
 	}
 
-	// GKE clusterautoscaler always uses ProvReqs, forcing the flag on
-	ossOptions.ProvisioningRequestEnabled = true
 	ossOptions.ScaleDownEnabled = true
 }
 

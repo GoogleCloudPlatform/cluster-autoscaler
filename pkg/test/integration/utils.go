@@ -244,15 +244,6 @@ func DefaultAutoscalingBuilder(
 	reactors.SimulateInitialListStreamForWatchCalls(&fakeKubeClient.Fake, fakeKubeClient.Tracker(), "deviceclasses", &resourceapi.DeviceClass{})
 	fakeInformerFactory := informers.NewSharedInformerFactory(fakeKubeClient, 0)
 
-	// TODO(b/456722077): follow dependency injection deprecating NewFakeProvisioningRequestClient usage.
-	fakePR := provreqclient.ProvisioningRequestWrapperForTesting("my-namespace", "my-pr-name")
-	prs := append([]*provreqwrapper.ProvisioningRequest{fakePR}, config.ProvisioningRequests...)
-	fakePrClient := provreqtest.NewFakeClientForTB(ctx, t, infra.Fakes.PRClientset, fakeKubeClient, prs...)
-	reactors.SimulateInitialListStreamForWatchCalls(&infra.Fakes.PRClientset.Fake, infra.Fakes.PRClientset.Tracker(), "*", &prv1.ProvisioningRequest{})
-	infra.Fakes.ProvReqClient = fakePrClient
-	fakePrInjector := provreq.NewFakePodsInjector(fakePrClient, fakeclock.NewFakePassiveClock(time.Now()))
-	fakePrCache := autoscaler.MustCreatePRCache(fakePrClient)
-
 	mccClient := infra.Fakes.MccClient
 	machineConfigProvider := autoscaler.CreateMachineConfigProvider(ctx, fakeOptions, mccClient, fakeExperimentsManager)
 	infra.MachineConfigProvider = machineConfigProvider
@@ -306,22 +297,6 @@ func DefaultAutoscalingBuilder(
 	gkeCache := infra.GkeCache
 	gceCache := infra.GceCache
 
-	bulkMigClient, err := bulkmig.NewBulkMigClientBeta(httpClient, config.ProjectID, fakeOptions.UserAgent, fakeOptions.GceEndpoint, fakeGceClient, gceCache)
-	if err != nil {
-		t.Fatalf("failed to create bulkMigClient: %v", err)
-	}
-	prManager, err := prmanager.NewProvisioningRequestManager(
-		fakePrClient,
-		infra.Fakes.ResizeRequestClient,
-		bulkMigClient,
-		config.ProjectID,
-		fakePrCache,
-		fakeExperimentsManager,
-	)
-	if err != nil {
-		t.Fatalf("failed to create ProvisioningRequestManager: %v", err)
-	}
-
 	var networkMatcher networking.Matcher
 	if len(config.GkeNetworkParamSets) > 0 {
 		networkMatcher = networking.GetMatcher(&mockNetworkParamSetLister{paramSets: config.GkeNetworkParamSets})
@@ -346,7 +321,7 @@ func DefaultAutoscalingBuilder(
 		nodeSizeRecommenderFactory = nodesizerecommender.DefaultFactory
 	}
 
-	return autoscaler.NewBuilder(tracker).
+	b := autoscaler.NewBuilder(tracker).
 		WithCAVersion(fakeCAVersion).
 		WithKubeConfig(kubeConfig).
 		WithKubeJSON(kubeConfig).
@@ -362,20 +337,16 @@ func DefaultAutoscalingBuilder(
 		WithProjectID(config.ProjectID).
 		WithLocation(config.Location).
 		WithTokenSource(fakeTokenSource).
-		WithProvReqClient(fakePrClient).
-		WithProvReqInjector(fakePrInjector).
 		WithHttpClient(httpClient).
 		WithGCEClient(gceClientToUse).
 		WithGkeClient(gkeClient).
 		WithResizableVmClient(resizableVmClientToUse).
 		WithConsumableReservationsClient(consumablereservations.NewNoOpClient()).
-		WithProvReqCache(fakePrCache).
 		WithRecommendLocationsClient(infra.Fakes.RecommendLocationsClient).
 		WithAtomicResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexResizeRequestClient(infra.Fakes.ResizeRequestClient).
 		WithFlexAdvisorClient(&infra.Fakes.FlexAdvisorClient).
 		WithEventLogger(infra.Fakes.EventLogger).
-		WithProvReqManager(prManager).
 		WithMachineConfigProvider(machineConfigProvider).
 		WithProviderConfigInformer(provConfigInformer).
 		WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory).
@@ -387,7 +358,40 @@ func DefaultAutoscalingBuilder(
 		// TODO(b/457174984): Update PodObserver usage once StartPodObserver accepts cache.ListerWatcher.
 		// This requires an OSS Kubernetes change. The current signature makes it hard to substitute with a fake informer/lister.
 		WithPodObserver(&loop.UnschedulablePodObserver{}).
-		WithNetworkMatcher(networkMatcher), nil
+		WithNetworkMatcher(networkMatcher)
+
+	if fakeOptions.ProvisioningRequestEnabled {
+		// TODO(b/456722077): follow dependency injection deprecating NewFakeProvisioningRequestClient usage.
+		fakePR := provreqclient.ProvisioningRequestWrapperForTesting("my-namespace", "my-pr-name")
+		prs := append([]*provreqwrapper.ProvisioningRequest{fakePR}, config.ProvisioningRequests...)
+		fakePrClient := provreqtest.NewFakeClientForTB(ctx, t, infra.Fakes.PRClientset, fakeKubeClient, prs...)
+		reactors.SimulateInitialListStreamForWatchCalls(&infra.Fakes.PRClientset.Fake, infra.Fakes.PRClientset.Tracker(), "*", &prv1.ProvisioningRequest{})
+		infra.Fakes.ProvReqClient = fakePrClient
+		fakePrInjector := provreq.NewFakePodsInjector(fakePrClient, fakeclock.NewFakePassiveClock(time.Now()))
+		fakePrCache := autoscaler.MustCreatePRCache(fakePrClient)
+		bulkMigClient, err := bulkmig.NewBulkMigClientBeta(httpClient, config.ProjectID, fakeOptions.UserAgent, fakeOptions.GceEndpoint, fakeGceClient, gceCache)
+		if err != nil {
+			t.Fatalf("failed to create bulkMigClient: %v", err)
+		}
+		prManager, err := prmanager.NewProvisioningRequestManager(
+			fakePrClient,
+			infra.Fakes.ResizeRequestClient,
+			bulkMigClient,
+			config.ProjectID,
+			fakePrCache,
+			fakeExperimentsManager,
+		)
+		if err != nil {
+			t.Fatalf("failed to create ProvisioningRequestManager: %v", err)
+		}
+		b.
+			WithProvReqClient(fakePrClient).
+			WithProvReqInjector(fakePrInjector).
+			WithProvReqCache(fakePrCache).
+			WithProvReqManager(prManager)
+	}
+
+	return b, nil
 }
 
 // SetupAutoscaler constructs a fully functional StaticAutoscaler using the provided configuration, returning the autoscaler instance and an error if any.
