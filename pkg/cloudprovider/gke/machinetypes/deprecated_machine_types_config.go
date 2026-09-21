@@ -1752,21 +1752,96 @@ var (
 			PreemptibleDiscount:     0.0130312 / 0.02181159,
 		},
 		autoprovisionedMachineTypes: onboardMachineType(
-			NewMachineTypeInfo("e4-standard-2", 2, 8),
-			NewMachineTypeInfo("e4-medium", 2, 4),
-			NewMachineTypeInfo("e4-standard-4", 4, 16),
-			NewMachineTypeInfo("e4-standard-8", 8, 32),
-			NewMachineTypeInfo("e4-standard-16", 16, 64),
-			NewMachineTypeInfo("e4-standard-32", 32, 128),
-			NewMachineTypeInfo("e4-highcpu-2", 2, 2),
-			NewMachineTypeInfo("e4-highcpu-4", 4, 4),
-			NewMachineTypeInfo("e4-highcpu-8", 8, 8),
-			NewMachineTypeInfo("e4-highcpu-16", 16, 16),
-			NewMachineTypeInfo("e4-highcpu-32", 32, 32),
-			NewMachineTypeInfo("e4-highmem-2", 2, 16),
-			NewMachineTypeInfo("e4-highmem-4", 4, 32),
-			NewMachineTypeInfo("e4-highmem-8", 8, 64),
-			NewMachineTypeInfo("e4-highmem-16", 16, 128),
+			NewResizableMachineTypeInfo("e4-standard-2", 2, 8, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-medium", 2, 4, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-standard-4", 4, 16, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-standard-8", 8, 32, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-standard-16", 16, 64, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("3Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-standard-32", 32, 128, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("3Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highcpu-2", 2, 2, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highcpu-4", 4, 4, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highcpu-8", 8, 8, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highcpu-16", 16, 16, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("3Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highcpu-32", 32, 32, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("3Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highmem-2", 2, 16, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highmem-4", 4, 32, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highmem-8", 8, 64, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			}),
+			NewResizableMachineTypeInfo("e4-highmem-16", 16, 128, &ResizableMachineTypeConfig{
+				MinResources: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("250m"),
+					apiv1.ResourceMemory: resource.MustParse("3Gi"),
+				},
+			}),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: IntelSapphireRapids, upperBound: IntelSapphireRapids},
 		supportCompactPlacement:  false,
@@ -1785,6 +1860,32 @@ var (
 		},
 		supportHugepageSize1g: false,
 		defaultDiskType:       "hyperdisk-balanced",
+		resizableConfig: &ResizableMachineFamilyConfig{
+			DefaultMachineTypes:                []string{"e4-standard-8", "e4-standard-16", "e4-standard-32"},
+			KubeProxyMemoryBytesOverheadPerCPU: *resource.NewQuantity(8192000, resource.BinarySI),
+			MinSizeLimit: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("250m"),
+				apiv1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+			MinIncrementLimit: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("50m"),
+				apiv1.ResourceMemory: resource.MustParse("1Mi"),
+			},
+			MinMemoryPerCPU: resource.MustParse("512Mi"),
+			MaxMemoryPerCPU: resource.MustParse("8Gi"),
+			MinVmSizeDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("2"),
+				apiv1.ResourceMemory: resource.MustParse("4Gi"),
+			},
+			IncrementStepDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("2"),
+				apiv1.ResourceMemory: resource.MustParse("1Mi"),
+			},
+			AllocationSafetyDefault: apiv1.ResourceList{
+				apiv1.ResourceCPU:    resource.MustParse("0"),
+				apiv1.ResourceMemory: resource.MustParse("500Mi"),
+			},
+		},
 	})
 	// EK represents ek machine family
 	EK = RegisterMachineFamily(MachineFamily{

@@ -4236,6 +4236,7 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				},
 				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
 			},
+			resizableMachineTypesProvider: config.NewCommaSeparatedStringSetProvider("e4-standard-2"),
 			machineTypesPerZone: map[string][]string{
 				"zone-1": {"e2-standard-2", "e4-standard-2"},
 			},
