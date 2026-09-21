@@ -130,6 +130,7 @@ type InternalOptions struct {
 	PodWatchLabelSelector                        string
 	PodWatchFieldSelector                        string
 	DaemonSetMutationEnabled                     bool
+	BalloonPodIpprResizeEnabled                  bool
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
 	ExperimentsConfigMap                         string
 }

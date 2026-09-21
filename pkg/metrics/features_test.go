@@ -55,6 +55,18 @@ func TestUpdateFeatureEnabled(t *testing.T) {
 			enabled:     false,
 			expected:    0,
 		},
+		{
+			name:        "Balloon Pod IPPR Resize Enabled",
+			featureName: BalloonPodIpprResizeFeatureName,
+			enabled:     true,
+			expected:    1,
+		},
+		{
+			name:        "Balloon Pod IPPR Resize Disabled",
+			featureName: BalloonPodIpprResizeFeatureName,
+			enabled:     false,
+			expected:    0,
+		},
 	}
 
 	for _, tc := range testCases {

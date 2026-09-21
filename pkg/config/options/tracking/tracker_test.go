@@ -143,6 +143,19 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{DefaultReservedResourcesV2Enabled: true}},
 			wantRestart:                 true,
 		},
+		{
+			testName:                    "BalloonPodIpprResizeEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: true}},
+			wantRestart:                 false,
+		},
+		{
+			testName:                    "BalloonPodIpprResizeEnabled_is_tracked_when_experiment_disables_it",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: true}},
+			experimentValues:            map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
+			wantRestart:                 true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()
@@ -154,7 +167,7 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			// Compute the options for the first time with no experiments defined - all field values should stay the same as the flag ones.
 			// Since this is the first call to RecomputeOptions(), the resulting values should be saved as the startup options.
 			tracker.RecomputeOptions(gkeclient.Cluster{})
-			assert.Equal(t, tc.flagValues, tracker.Options())
+			assert.Equal(t, withDirectLaunchDefaults(tc.flagValues), tracker.Options())
 			// Last computed options are trivially the same as startup options, so no need for restart.
 			assert.False(t, tracker.OptionChangesRequireRestart())
 
@@ -162,8 +175,21 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			// change value based on the experiments, the new value should be reflected after the next RecomputeOptions() call.
 			tracker.experimentsManager = withExperiments
 			tracker.RecomputeOptions(gkeclient.Cluster{})
-			assert.Equal(t, tc.wantOptionsAfterExperiments, tracker.Options())
+			wantOpts := tc.wantOptionsAfterExperiments
+			if _, isDirectLaunchDisable := tc.experimentValues[experiments.BalloonPodIpprResizeFlag]; !isDirectLaunchDisable {
+				wantOpts = withDirectLaunchDefaults(wantOpts)
+			}
+			assert.Equal(t, wantOpts, tracker.Options())
 			assert.Equal(t, tc.wantRestart, tracker.OptionChangesRequireRestart())
 		})
 	}
+}
+
+// withDirectLaunchDefaults returns opts with the fields backed by direct-launch experiment flags set to their default value. Direct-launch flags are
+// enabled unless an experiment explicitly disables them, so RecomputeOptions() always applies them regardless of the CLI flag values. Applying them to
+// the expected options here lets the assertions keep comparing the whole options struct, which is what guarantees that a tracked field doesn't
+// accidentally mutate any other field.
+func withDirectLaunchDefaults(opts internalopts.AutoscalingOptions) internalopts.AutoscalingOptions {
+	opts.BalloonPodIpprResizeEnabled = true
+	return opts
 }

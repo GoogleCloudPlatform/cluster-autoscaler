@@ -36,6 +36,8 @@ const (
 	IncreasedNapMaxNodesFeatureName = "increased_nap_max_nodes"
 	// GracefulDegradationFeatureName is the name of the graceful degradation feature.
 	GracefulDegradationFeatureName = "graceful_degradation_enabled"
+	// BalloonPodIpprResizeFeatureName is the name of the BalloonPodIpprResize feature.
+	BalloonPodIpprResizeFeatureName = "balloon_pod_ippr_resize"
 )
 
 var featureEnabled = k8smetrics.NewGaugeVec(

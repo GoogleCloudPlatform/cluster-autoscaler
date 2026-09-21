@@ -1149,6 +1149,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.IncreasedMaxNodesPerScaleUpFeatureName, "IncreasedMaxNodesPerScaleUp", options.MaxNodesPerScaleUp > optstracking.DecreasedMaxNodesPerScaleUp)
 	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
 	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
+	logAndRecordFeatureMetric(internalmetrics.BalloonPodIpprResizeFeatureName, "BalloonPodIpprResize", options.BalloonPodIpprResizeEnabled)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {
