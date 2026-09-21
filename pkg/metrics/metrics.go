@@ -659,7 +659,7 @@ var (
 			Namespace: caNamespace,
 			Name:      "ek_gce_resize_request_duration_seconds",
 			Help:      "How long it takes for a GCE resize request to complete.",
-			Buckets:   []float64{1, 2, 4, 6, 8, 10, 12, 15, 18, 21, 25, 30, 45, 60, 120, 300, 600},
+			Buckets:   []float64{1, 2, 4, 6, 8, 10, 12, 15, 18, 21, 25, 30, 45, 60, 65, 70, 90, 120, 125, 130, 180, 240, 300, 600},
 		},
 		[]string{"direction", "status"},
 	)
@@ -678,7 +678,7 @@ var (
 			Namespace: caNamespace,
 			Name:      "vm_gce_resize_request_duration_seconds",
 			Help:      "How long it takes for a GCE resize request to complete.",
-			Buckets:   []float64{1, 2, 4, 6, 8, 10, 12, 15, 18, 21, 25, 30, 45, 60, 120, 300, 600},
+			Buckets:   []float64{1, 2, 4, 6, 8, 10, 12, 15, 18, 21, 25, 30, 45, 60, 65, 70, 90, 120, 125, 130, 180, 240, 300, 600},
 		},
 		[]string{"machine_family", "direction", "status"},
 	)
