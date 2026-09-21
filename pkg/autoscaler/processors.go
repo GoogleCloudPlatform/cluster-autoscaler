@@ -554,6 +554,7 @@ func setUpProcessors(
 		downsizeExperimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkDownsizeConfigFlag,
 			machinetypes.E4A.Name(): experiments.E4aDownsizeConfigFlag,
+			machinetypes.E4.Name():  experiments.E4DownsizeConfigFlag,
 		}
 		configProvider := ekvms_processor.NewDownsizeConfigProvider(provider.MachineConfigProvider(), experimentsManager, downsizeConfigFlags, downsizeExperimentFlags)
 		scaleDownNodeProcessors = append(scaleDownNodeProcessors, ekvms_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), resizableVmManager, experimentsManager, fetcher, configProvider, resizeCalculator, internalmetrics.Metrics, clock.RealClock{}))
@@ -566,6 +567,7 @@ func setUpProcessors(
 		experimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkMachineTypesFlag,
 			machinetypes.E4A.Name(): experiments.E4aMachineTypesFlag,
+			machinetypes.E4.Name():  experiments.E4MachineTypesFlag,
 		}
 		resizableMachineTypesProvider = ekvms_providers.NewAllResizableMachineTypesProvider(provider.MachineConfigProvider(), experimentsManager, machineTypeFlags, experimentFlags)
 

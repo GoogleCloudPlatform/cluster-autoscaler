@@ -128,11 +128,18 @@ const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion
 
 const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 
-const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
-const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
-
 const AutopilotE4ExtendedFallbacksMinCAVersionFlag = "AutopilotE4ExtendedFallbacks::MinCAVersion"
+const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
+const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
+const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
+const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
+const AutopilotE4WithResizeEnabledFlag = "AutopilotE4::CoarseGrainedResizeEnabled"
+const AutopilotE4WithResizeMinVersionFlag = "AutopilotE4::CoarseGrainedResizeMinCAVersion"
+const E4MachineTypesFlag = "AutopilotE4::MachineTypes"
+const E4DownsizeConfigFlag = "AutopilotE4::DownsizeConfig"
+const E4UasUpsizabilityBufferFlag = "AutopilotE4::UasUpsizabilityBuffer"
 const E4OnManagedNodesMinCAVersionFlag = "E4OnManagedNodes::MinCaVersion"
+const E4OnManagedNodesEnabledFlag = "E4OnManagedNodes::Enabled"
 
 const AutopilotE4aNoResizeEnabledFlag = "AutopilotE4A::EnableAllowlistFeature"
 const AutopilotE4aNoResizeMinVersionFlag = "AutopilotE4A::MinCAVersion"
@@ -143,9 +150,6 @@ const E4aDownsizeConfigFlag = "AutopilotE4A::DownsizeConfig"
 const E4aUasUpsizabilityBufferFlag = "AutopilotE4A::UasUpsizabilityBuffer"
 const E4AOnManagedNodesMinCAVersionFlag = "E4AOnManagedNodes::MinCaVersion"
 const E4AOnManagedNodesEnabledFlag = "E4AOnManagedNodes::Enabled"
-
-const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
-const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
 
 const AutopilotArmMachineFallbacksMinCAVersionFlag = "AutopilotArmPodFamilyMachineFallbacks::MinCAVersion"
 const AutopilotArmMachineFallbacksEnabledFlag = "AutopilotArmPodFamilyMachineFallbacks::Enabled"

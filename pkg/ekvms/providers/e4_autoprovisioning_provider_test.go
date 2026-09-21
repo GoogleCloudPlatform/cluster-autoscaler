@@ -44,17 +44,71 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 			name:                  "experiment enables coarse resize",
 			isBalloonPodCreatable: true,
 			experimentFlags: map[string]bool{
-				experiments.AutopilotE4MinVersionFlag:      true,
-				experiments.AutopilotE4NoResizeEnabledFlag: false,
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
 			},
 			expectedPhase:  launchCoarseGrainedResize,
 			expectedSource: launchExperiment,
 		},
 		{
-			name:                  "experiment enables E4 without resize (default)",
+			name:                  "coarse resize min version not met - not enabled",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: false,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+			},
+			expectedPhase:  launchNotEnabled,
+			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "coarse resize enabled flag false - not enabled",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    false,
+			},
+			expectedPhase:  launchNotEnabled,
+			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "experiment enables E4 without resize",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:      true,
+				experiments.AutopilotE4NoResizeEnabledFlag: true,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchExperiment,
+		},
+		{
+			name:                  "no resize enabled flag missing - not enabled (failsafe is false)",
 			isBalloonPodCreatable: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag: true,
+			},
+			expectedPhase:  launchNotEnabled,
+			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "both coarse resize and no resize enabled - coarse resize takes precedence",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
+			},
+			expectedPhase:  launchCoarseGrainedResize,
+			expectedSource: launchExperiment,
+		},
+		{
+			name:                  "coarse resize disabled by flag, no resize enabled",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    false,
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 			},
 			expectedPhase:  launchEnabledNoResize,
 			expectedSource: launchExperiment,
@@ -122,12 +176,30 @@ func TestRefreshE4ManagedNodesStatus(t *testing.T) {
 			want:                        false,
 		},
 		{
-			name:                        "enabled via experiment",
+			name:                        "enabled via experiment (default enabled flag)",
 			enabledOnManagedNodesCAFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.E4OnManagedNodesMinCAVersionFlag: true,
 			},
 			want: true,
+		},
+		{
+			name:                        "enabled via experiment (explicit enabled flag)",
+			enabledOnManagedNodesCAFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.E4OnManagedNodesMinCAVersionFlag: true,
+				experiments.E4OnManagedNodesEnabledFlag:      true,
+			},
+			want: true,
+		},
+		{
+			name:                        "disabled via experiment (explicit disabled flag)",
+			enabledOnManagedNodesCAFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.E4OnManagedNodesMinCAVersionFlag: true,
+				experiments.E4OnManagedNodesEnabledFlag:      false,
+			},
+			want: false,
 		},
 		{
 			name:                        "disabled via experiment (min version not met)",

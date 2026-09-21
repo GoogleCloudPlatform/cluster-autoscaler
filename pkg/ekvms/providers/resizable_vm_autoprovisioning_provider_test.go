@@ -255,41 +255,78 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 		expectedResult   bool
 	}{
 		{
-			name:             "Autopilot cluster with stateful enabled",
+			name:             "Autopilot cluster with no resize, stateful enabled",
 			autopilotEnabled: true,
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: true,
 		},
 		{
-			name:             "Autopilot cluster with stateful disabled",
+			name:             "Autopilot cluster with coarse grained resize, stateful enabled",
+			autopilotEnabled: true,
+			managedNodesFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Autopilot cluster with no resize, stateful disabled",
 			autopilotEnabled: true,
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
 			},
 			expectedResult: false,
 		},
 		{
-			name:             "Standard cluster with Managed Nodes and stateful enabled",
+			name:             "Standard cluster with Managed Nodes and no resize, stateful enabled",
 			autopilotEnabled: false,
 			managedNodesFlag: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: true,
 		},
 		{
-			name:             "Standard cluster with Managed Nodes and stateful disabled",
+			name:             "Standard cluster with Managed Nodes and coarse grained resize, stateful enabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and no resize, stateful disabled",
 			autopilotEnabled: false,
 			managedNodesFlag: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
+			},
+			expectedResult: false,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and coarse grained resize, stateful disabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
 			},
 			expectedResult: false,
@@ -300,6 +337,7 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: false,
