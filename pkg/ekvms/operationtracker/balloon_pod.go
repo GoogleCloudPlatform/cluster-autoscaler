@@ -147,10 +147,6 @@ func GenerateBalloonPod(node *apiv1.Node, cpu, memory resource.Quantity, generat
 		apiv1.ResourceCPU:    cpu,
 		apiv1.ResourceMemory: memory,
 	}
-	pod.Spec.Containers[0].Resources.Limits = apiv1.ResourceList{
-		apiv1.ResourceCPU:    cpu,
-		apiv1.ResourceMemory: memory,
-	}
 
 	return pod, nil
 }

@@ -83,7 +83,7 @@ func TestGenerateBalloonPod(t *testing.T) {
 			}
 
 			assert.Equal(t, resourceList, pod.Spec.Containers[0].Resources.Requests)
-			assert.Equal(t, resourceList, pod.Spec.Containers[0].Resources.Limits)
+			assert.Empty(t, pod.Spec.Containers[0].Resources.Limits)
 			if tc.generateUID {
 				assert.NotEmpty(t, pod.UID)
 				assert.NotEmpty(t, pod.Name)
