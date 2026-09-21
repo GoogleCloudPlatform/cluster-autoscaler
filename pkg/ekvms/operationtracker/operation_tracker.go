@@ -32,6 +32,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodetracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -186,6 +187,7 @@ type cloudProvider interface {
 type balloonPodResizer interface {
 	init() error
 	resizeBalloonPod(node *v1.Node, desiredSize size.Allocatable) error
+	resizeBalloonPodInPlace(node *v1.Node, desiredSize size.Allocatable) error
 	addTaint(node *v1.Node, timeAdded time.Time) (*v1.Node, error)
 	removeTaint(node *v1.Node) (*v1.Node, error)
 	hasTaint(node *v1.Node) bool
@@ -226,15 +228,17 @@ type operationTracker struct {
 
 	fixerEnabled  bool
 	fixerInterval time.Duration
+
+	optionsTracker *tracking.OptionsTracker
 }
 
 // New builds and returns an instance of OperationTracker.
-func New(clientSet clientset.Interface, informerFactory informers.SharedInformerFactory, provider cloudProvider, nodeStateManager nodeStateManager, metrics resizeMetrics, sizeCalculator calculator.Calculator, workers int, fixerEnabled bool, fixerInterval time.Duration) OperationTracker {
-	return newOperationTracker(clientSet, informerFactory, provider, nodeStateManager, metrics, sizeCalculator, workers, fixerEnabled, fixerInterval, clock.RealClock{})
+func New(clientSet clientset.Interface, informerFactory informers.SharedInformerFactory, provider cloudProvider, nodeStateManager nodeStateManager, metrics resizeMetrics, sizeCalculator calculator.Calculator, workers int, fixerEnabled bool, fixerInterval time.Duration, optionsTracker *tracking.OptionsTracker) OperationTracker {
+	return newOperationTracker(clientSet, informerFactory, provider, nodeStateManager, metrics, sizeCalculator, workers, fixerEnabled, fixerInterval, clock.RealClock{}, optionsTracker)
 }
 
 // newOperationTracker builds and returns a new operationTracker instance.
-func newOperationTracker(clientSet clientset.Interface, informerFactory informers.SharedInformerFactory, provider cloudProvider, nodeStateManager nodeStateManager, metrics resizeMetrics, sizeCalculator calculator.Calculator, workers int, fixerEnabled bool, fixerInterval time.Duration, clock clock.PassiveClock) *operationTracker {
+func newOperationTracker(clientSet clientset.Interface, informerFactory informers.SharedInformerFactory, provider cloudProvider, nodeStateManager nodeStateManager, metrics resizeMetrics, sizeCalculator calculator.Calculator, workers int, fixerEnabled bool, fixerInterval time.Duration, clock clock.PassiveClock, optionsTracker *tracking.OptionsTracker) *operationTracker {
 	store := consistencyutil.NewConsistencyStore(map[schema.GroupResource]consistencyutil.LastSyncRVGetter{
 		{Resource: "nodes"}: informerFactory.Core().V1().Nodes().Informer().GetStore(),
 	})
@@ -262,6 +266,7 @@ func newOperationTracker(clientSet clientset.Interface, informerFactory informer
 		waitingOnAdd:                     sync.WaitGroup{},
 		fixerEnabled:                     fixerEnabled,
 		fixerInterval:                    fixerInterval,
+		optionsTracker:                   optionsTracker,
 	}
 	// Configure workers.
 	opTracker.worker = opTracker.opWorker
@@ -779,6 +784,13 @@ func (o *operationTracker) upsize(operation ResizeOperation) error {
 		return ek_errors.NewGenericError(machineFamily, err, ek_errors.DesiredState)
 	}
 
+	desiredAllocatable := o.sizeCalculator.ToAllocatable(node, operation.DesiredSize)
+
+	// Upsize shrinks the balloon pod, so it can run outside the taint window without risking over-commit.
+	if o.tryResizeBalloonPodInPlace(node, desiredAllocatable) {
+		return nil
+	}
+
 	taintedNode, err := o.balloonPodResizer.addTaint(node, time.Now())
 	if err != nil {
 		return ek_errors.NewBalloonPodResizeTaintError(
@@ -786,7 +798,6 @@ func (o *operationTracker) upsize(operation ResizeOperation) error {
 			ek_errors.DesiredState)
 	}
 
-	desiredAllocatable := o.sizeCalculator.ToAllocatable(taintedNode, operation.DesiredSize)
 	if err := o.balloonPodResizer.resizeBalloonPod(taintedNode, desiredAllocatable); err != nil {
 		return ek_errors.NewBalloonPodResizeError(machineFamily, err, ek_errors.DesiredState)
 	}
@@ -824,30 +835,61 @@ func (o *operationTracker) downsize(operation ResizeOperation) error {
 			machineFamily, fmt.Errorf("calculating requested resources failed for node %q: %w", taintedNode.Name, err),
 			ek_errors.StartingState)
 	}
+
 	desiredSizeAllocatable := o.sizeCalculator.ToAllocatable(taintedNode, operation.DesiredSize)
 	if requestedResources.IsUpsizeFrom(desiredSizeAllocatable) {
 		return ek_errors.NewExceededPodRequestsWarning(
 			machineFamily, fmt.Errorf("requested resources (%v) exceed new requested node size (%v) for node: %q", requestedResources, desiredSizeAllocatable, taintedNode.Name),
 			ek_errors.StartingState)
 	}
-	if err := o.balloonPodResizer.resizeBalloonPod(taintedNode, desiredSizeAllocatable); err != nil {
-		return ek_errors.NewBalloonPodResizeError(machineFamily, err, ek_errors.StartingState)
+	// Downsize grows the balloon pod to reclaim capacity, so it runs inside the taint window.
+	if !o.tryResizeBalloonPodInPlace(taintedNode, desiredSizeAllocatable) {
+		if err := o.balloonPodResizer.resizeBalloonPod(taintedNode, desiredSizeAllocatable); err != nil {
+			return ek_errors.NewBalloonPodResizeError(machineFamily, err, ek_errors.StartingState)
+		}
 	}
-
 	untaintedNode, err := o.balloonPodResizer.removeTaint(taintedNode)
 	if err != nil {
-		return ek_errors.NewBalloonPodResizeTaintError(machineFamily, fmt.Errorf("removing taint failed for node %q: %w", taintedNode.Name, err), ek_errors.StartingState)
+		return ek_errors.NewBalloonPodResizeTaintError(
+			machineFamily, fmt.Errorf("removing taint failed for node %q: %w", taintedNode.Name, err), ek_errors.StartingState)
 	}
+
 	downsizeCtx, downsizeCtxCancel := context.WithTimeout(context.Background(), downsizeTimeout)
 	defer downsizeCtxCancel()
 	if err := o.resizeVm(downsizeCtx, untaintedNode, operation.DesiredSize, Downsize); err != nil {
 		return err
 	}
+
 	// If we are here, it means downsize was a success.
 	if err := o.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{Size: operation.DesiredSize, Status: ekvmtypes.ResizeStatusAtIntent}); err != nil {
 		return ek_errors.NewGenericError(machineFamily, err, ek_errors.DesiredState)
 	}
 	return nil
+}
+
+func (o *operationTracker) isIpprEnabled() bool {
+	if o.optionsTracker == nil {
+		return false
+	}
+	return o.optionsTracker.Options().BalloonPodIpprResizeEnabled
+}
+
+// tryResizeBalloonPodInPlace attempts in-place pod resize if IPPR is enabled.
+// Returns true if resized in-place successfully, false if disabled or if recreation is needed.
+// Callers decide whether the node has to be tainted around this call; see the
+// comments in upsize and downsize for why they differ.
+func (o *operationTracker) tryResizeBalloonPodInPlace(
+	node *v1.Node,
+	desiredAllocatable size.Allocatable,
+) bool {
+	if !o.isIpprEnabled() {
+		return false
+	}
+	if err := o.balloonPodResizer.resizeBalloonPodInPlace(node, desiredAllocatable); err != nil {
+		klog.Warningf("In-place resize failed for node %q, falling back to recreation: %v", node.Name, err)
+		return false
+	}
+	return true
 }
 
 func (o *operationTracker) getMachineFamily(nodeName string) string {

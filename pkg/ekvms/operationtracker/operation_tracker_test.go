@@ -16,6 +16,7 @@ package operationtracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -36,12 +37,17 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/kubernetes/pkg/util/taints"
@@ -82,7 +88,7 @@ func TestOnUpdateNode(t *testing.T) {
 			mockBackoff := &mockBackoff{}
 			mockBackoff.On("DeleteNode", family, testResizableNodeName).Once()
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, &identitySizeCalculator{}, testClock)
-			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock, nil)
 
 			node := ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
 			testNode := ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).Build()
@@ -365,7 +371,7 @@ func TestOnAddNode(t *testing.T) {
 
 					nodeSizeCalculator := calculator_test.New()
 					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, nodeSizeCalculator, testClock)
-					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, nodeSizeCalculator, 1, false, fixerInterval, testClock)
+					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, nodeSizeCalculator, 1, false, fixerInterval, testClock, nil)
 					ot.balloonPodResizer = mockBalloonPodResizer
 					if tc.cachedCurrentResizableVmStates != nil {
 						ot.vmStateCache.vmStates = tc.cachedCurrentResizableVmStates
@@ -428,7 +434,7 @@ func TestOnDeleteNode(t *testing.T) {
 			mockBackoff.On("DeleteNode", family, node.Name).Once()
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, nodeSizeCalculator, testClock)
 
-			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock, nil)
 			ot.balloonPodResizer = mockBalloonPodResizer
 			ot.onAddNode(node)
 			ot.waitingOnAdd.Wait()
@@ -793,7 +799,7 @@ func TestResize(t *testing.T) {
 						}
 						vmResizerCalls = append(vmResizerCalls, vmResizerArgs{expectedSize: tc.startingSize, actualSize: actualDesiredSize})
 						return tc.vmResizeRollbackErr
-					}), nsm, mockMetrics, sizeCalc, 1, false, fixerInterval, testClock)
+					}), nsm, mockMetrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 					// Override resizer
 					mockBalloonPodResizer := &mockBalloonPodResizer{}
 					mockBalloonPodResizer.On("init").Return(nil)
@@ -860,6 +866,352 @@ func TestResize(t *testing.T) {
 	}
 }
 
+type operationTrackerHarness struct {
+	tracker       *operationTracker
+	cloudProvider *mockCloudProvider
+	resizer       *mockBalloonPodResizer
+	node          *v1.Node
+}
+
+func matchNode(nodeOrName any) any {
+	return mock.MatchedBy(func(n *v1.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch v := nodeOrName.(type) {
+		case string:
+			return n.Name == v
+		case *v1.Node:
+			return v != nil && n.Name == v.Name
+		default:
+			return false
+		}
+	})
+}
+
+func buildBaseNode() *v1.Node {
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	node := test.WithAllocatable(test.BuildTestNode("node1", nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+	node.Spec.ProviderID = "gce://project1/us-central1-b/node1"
+	node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: "e4a-standard-32"})
+	return node
+}
+
+func newTestOptionsTracker(ipprEnabled bool) *tracking.OptionsTracker {
+	expManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+		experiments.BalloonPodIpprResizeFlag: ipprEnabled,
+	}, nil)
+	return tracking.NewOptionsTracker(internalopts.AutoscalingOptions{}, expManager)
+}
+
+func newTestOperationTrackerHarness(
+	t *testing.T,
+	node *v1.Node,
+	family string,
+	ipprEnabled bool,
+	podList *v1.PodList,
+) *operationTrackerHarness {
+	t.Helper()
+
+	sizeCalc := calculator_test.New()
+	testClock := clock.NewFakeClock(testStartTime)
+	nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
+	nodeStateManager.setNode(node.Name, ResizableNode{Node: node.DeepCopy(), MachineFamily: family})
+
+	cloudProvider := &mockCloudProvider{}
+	mockResizer := &mockBalloonPodResizer{}
+	metrics := &mockMetrics{}
+	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+	// Guarantee mock assertions execute on test completion even if an assertion aborts early
+	t.Cleanup(func() {
+		cloudProvider.AssertExpectations(t)
+		mockResizer.AssertExpectations(t)
+	})
+
+	fakeClient := fake.NewSimpleClientset()
+	if podList != nil {
+		fakeClient.PrependReactor("list", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+			return true, podList.DeepCopyObject(), nil
+		})
+	}
+
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+	podInformer := informerFactory.Core().V1().Pods().Informer()
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	informerFactory.Start(stopCh)
+	if !assert.True(t, cache.WaitForCacheSync(stopCh, podInformer.HasSynced)) {
+		t.FailNow()
+	}
+
+	tracker := newOperationTracker(fakeClient, informerFactory, cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, newTestOptionsTracker(ipprEnabled))
+	tracker.balloonPodResizer = mockResizer
+
+	return &operationTrackerHarness{
+		tracker:       tracker,
+		cloudProvider: cloudProvider,
+		resizer:       mockResizer,
+		node:          node,
+	}
+}
+
+func TestUpsizeIppr(t *testing.T) {
+	t.Parallel()
+
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	startSize := newSize(nodeMilliCpu, nodeMem/size.KiB)
+	targetSize := newSize(nodeMilliCpu*2, nodeMem*2/size.KiB)
+
+	calc := calculator_test.New()
+
+	testCases := []struct {
+		desc       string
+		ipprOption bool
+		setupMocks func(h *operationTrackerHarness, targetAlloc size.Allocatable)
+		wantErr    string
+	}{
+		{
+			desc:       "IPPR enabled - in-place resize succeeds without taints",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation succeeds with taints",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback taint addition fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(nil, errors.New("failed to taint node")).Once()
+			},
+			wantErr: "adding taint failed for node",
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("recreation failed")).Once()
+			},
+			wantErr: "recreation failed",
+		},
+		{
+			desc:       "IPPR disabled - directly executes recreation with taints",
+			ipprOption: false,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+			},
+		},
+		{
+			desc:       "VM resize fails before touching balloon pod",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(errors.New("GCE resize error")).Once()
+			},
+			wantErr: "GCE resize error",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			node := buildBaseNode()
+			targetAlloc := calc.ToAllocatable(node, targetSize)
+			op := ResizeOperation{
+				NodeName:     node.Name,
+				StartingSize: startSize,
+				DesiredSize:  targetSize,
+			}
+
+			h := newTestOperationTrackerHarness(t, node, "e4a", tc.ipprOption, nil)
+			tc.setupMocks(h, targetAlloc)
+
+			err := h.tracker.upsize(op)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDownsizeIppr(t *testing.T) {
+	t.Parallel()
+
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	startSize := newSize(nodeMilliCpu, nodeMem/size.KiB)
+	targetSize := newSize(nodeMilliCpu/2, nodeMem/2/size.KiB)
+
+	calc := calculator_test.New()
+
+	testCases := []struct {
+		desc       string
+		ipprOption bool
+		podList    *v1.PodList
+		setupMocks func(h *operationTrackerHarness, targetAlloc size.Allocatable)
+		wantErr    string
+	}{
+		{
+			desc:       "IPPR enabled - in-place resize succeeds and VM resizes",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - initial taint fails before in-place resize",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(nil, errors.New("taint error")).Once()
+			},
+			wantErr: "adding taint failed for node",
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation succeeds and VM resizes",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails and fallback recreation also fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("recreation failed")).Once()
+			},
+			wantErr: "recreation failed",
+		},
+		{
+			desc:       "IPPR disabled - directly executes recreation and VM resizes",
+			ipprOption: false,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - balloon resize succeeds but GCE VM resize fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(errors.New("GCE resize quota error")).Once()
+			},
+			wantErr: "GCE resize quota error",
+		},
+		{
+			desc:       "Pod requests exceed desired size - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 8000, 8*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			node := buildBaseNode()
+			targetAlloc := calc.ToAllocatable(node, targetSize)
+			op := ResizeOperation{
+				NodeName:     node.Name,
+				StartingSize: startSize,
+				DesiredSize:  targetSize,
+			}
+
+			h := newTestOperationTrackerHarness(t, node, "e4a", tc.ipprOption, tc.podList)
+			tc.setupMocks(h, targetAlloc)
+
+			err := h.tracker.downsize(op)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestUpsize_NonExistingNode(t *testing.T) {
 	for _, family := range []string{"ek", "e4a"} {
 		t.Run(family, func(t *testing.T) {
@@ -871,7 +1223,7 @@ func TestUpsize_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 			// The method should not panic.
 			err := op.upsize(ResizeOperation{
 				NodeName:     "node1",
@@ -894,7 +1246,7 @@ func TestDownsize_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 			// The method should not panic.
 			err := op.downsize(ResizeOperation{
 				NodeName:     "node1",
@@ -1008,7 +1360,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 					testClock := clock.NewFakeClock(testStartTime)
 					nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
@@ -1221,7 +1573,7 @@ func TestFix(t *testing.T) {
 					testClock := clock.NewFakeClock(testStartTime)
 					nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
@@ -1288,7 +1640,7 @@ func TestFix_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			testClock := clock.NewFakeClock(testStartTime)
 			nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 			// The method should not panic.
 			err := op.handleFixOperation(fixOperation{NodeName: "node1", MachineFamily: family})
@@ -1352,7 +1704,7 @@ func TestFixerLoop(t *testing.T) {
 						},
 					}
 
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, tc.fixerEnabled, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, tc.fixerEnabled, fixerInterval, testClock, nil)
 
 					err := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   vmSize,
@@ -1521,7 +1873,7 @@ func TestResizeTaintError(t *testing.T) {
 			cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			metrics := &mockMetrics{}
 			metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-			op := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 			testCases := []struct {
 				desc                 string
@@ -1856,18 +2208,29 @@ func (m *mockBalloonPodResizer) resizeBalloonPod(node *v1.Node, desiredSize size
 }
 
 func (m *mockBalloonPodResizer) addTaint(node *v1.Node, timeAdded time.Time) (*v1.Node, error) {
-	args := m.MethodCalled("addTaint", node, timeAdded)
-	return args.Get(0).(*v1.Node), args.Error(1)
+	args := m.Called(node, timeAdded)
+	if n := args.Get(0); n != nil {
+		return n.(*v1.Node), args.Error(1)
+	}
+	return nil, args.Error(1)
 }
 
 func (m *mockBalloonPodResizer) removeTaint(node *v1.Node) (*v1.Node, error) {
-	args := m.MethodCalled("removeTaint", node)
-	return args.Get(0).(*v1.Node), args.Error(1)
+	args := m.Called(node)
+	if n := args.Get(0); n != nil {
+		return n.(*v1.Node), args.Error(1)
+	}
+	return nil, args.Error(1)
 }
 
 func (m *mockBalloonPodResizer) hasTaint(node *v1.Node) bool {
-	args := m.MethodCalled("hasTaint", node)
-	return args.Bool(0)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "hasTaint" {
+			args := m.MethodCalled("hasTaint", node)
+			return args.Bool(0)
+		}
+	}
+	return false
 }
 
 func (m *mockBalloonPodResizer) listAllBalloonPods(node *v1.Node) []*v1.Pod {
@@ -1875,7 +2238,16 @@ func (m *mockBalloonPodResizer) listAllBalloonPods(node *v1.Node) []*v1.Pod {
 }
 
 func (m *mockBalloonPodResizer) getPodForNode(node *v1.Node) *v1.Pod {
-	return m.MethodCalled("getPodForNode", node).Get(0).(*v1.Pod)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "getPodForNode" {
+			args := m.MethodCalled("getPodForNode", node)
+			if args.Get(0) == nil {
+				return nil
+			}
+			return args.Get(0).(*v1.Pod)
+		}
+	}
+	return nil
 }
 
 type mockBalloonPodController struct {
@@ -1911,6 +2283,10 @@ func (m *mockBalloonPodController) List() []*v1.Pod {
 	var pods []*v1.Pod
 	pods, _ = (m.MethodCalled("List").Get(0)).([]*v1.Pod)
 	return pods
+}
+
+func (m *mockBalloonPodResizer) resizeBalloonPodInPlace(node *v1.Node, desiredSize size.Allocatable) error {
+	return m.MethodCalled("resizeBalloonPodInPlace", node, desiredSize).Error(0)
 }
 
 type mockCloudProvider struct {
@@ -2010,7 +2386,7 @@ func setupCacheStaleTest(initialAPIServerNodes ...runtime.Object) *cacheStaleTes
 	metrics.On("RegisterVmResizeOperation", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 
-	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock, nil)
 	ot.consistencyStore = consistencyStore
 	ot.cacheStaleRequeueBackoff = 1 * time.Millisecond
 	ot.cacheStaleTimeout = 5 * time.Millisecond

@@ -533,7 +533,7 @@ func setUpProcessors(
 	if options.EkvmsFixerEnabled {
 		resizableVmBackoffManager := ekvms_backoff.NewManager(provider, resizableVmCustomThresholdsProvider, clock.RealClock{})
 		nodeStateManager := ekvms_operationtracker.NewNodeStateManager(provider, nodeSizeRecommender, resizableVmBackoffManager, resizeCalculator, clock.RealClock{})
-		opTracker := ekvms_operationtracker.New(kubeClient, informerFactory, provider, nodeStateManager, internalmetrics.Metrics, resizeCalculator, options.EkvmsConcurrentResizeWorkers, options.EkvmsFixerEnabled, options.EkvmsFixerInterval)
+		opTracker := ekvms_operationtracker.New(kubeClient, informerFactory, provider, nodeStateManager, internalmetrics.Metrics, resizeCalculator, options.EkvmsConcurrentResizeWorkers, options.EkvmsFixerEnabled, options.EkvmsFixerInterval, optionsTracker)
 		resizableVmManager = ekvms_operationtracker.NewManager(provider, opTracker, resizeCalculator, nodeSizeRecommender, internalmetrics.Metrics, nodeStateManager)
 
 		// ResizableVmAutoprovisioningProvider needs to know the NodesCount
