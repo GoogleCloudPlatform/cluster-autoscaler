@@ -103,6 +103,7 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 	GCEOptions: ossconfig.GCEOptions{
 		LocalSSDDiskSizeProvider: localssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 	},
+	ProvisioningRequestEnabled: true,
 	ScaleDownEnabled:           true,
 	PendingPodsBatchingTimeout: 4 * time.Minute,
 }
@@ -1413,6 +1414,15 @@ func WithClusterScaleToZeroEnabled(delay time.Duration) Option[*config.Autoscali
 func WithAutoscalerNames(names ...string) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.AutoscalerNames = names
+		return o
+	}
+}
+
+// WithProvisioningRequestEnabled enables or disables ProvisioningRequest
+// support in CA.
+func WithProvisioningRequestEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ProvisioningRequestEnabled = enabled
 		return o
 	}
 }

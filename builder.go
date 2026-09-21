@@ -60,10 +60,6 @@ func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, 
 	// NodeProvisioningConfig (NPC) / CustomProvisioningClass (CCC) CRDs
 	npcCrdClient := internalautoscaler.MustCreateNpcCrdClient(kubeConfigJSON)
 	npcCrdLister := internalautoscaler.MustCreateNpcCrdLister(ctx, optsTracker, npcCrdClient)
-	// ProvisioningRequest CRD
-	prClient := internalautoscaler.MustCreateProvReqClient(ctx, kubeConfigJSON, informerFactory)
-	prInjector := internalautoscaler.MustCreateProvReqInjector(options, prClient)
-	prCache := internalautoscaler.MustCreatePRCache(prClient)
 	// ProviderConfig CRD (related to MultiTenancy)
 	provConfigInformer := internalautoscaler.MustCreateProviderConfigInformer(options, kubeConfigJSON)
 	// GKENetworkParamSet CRD (Multi-Networking)
@@ -74,7 +70,6 @@ func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, 
 		projectID, options, httpClient, gkeCache, experimentsManager, provConfigInformer,
 	)
 	// Dedicated GCE sub-clients
-	provReqManager := internalautoscaler.MustCreatePRManager(prClient, httpClient, projectID, options, prCache, experimentsManager, gceClient, gceCache)
 	atomicRRClient := internalautoscaler.MustCreateAtomicResizeRequestClient(httpClient, projectID, options, provConfigInformer, experimentsManager)
 	flexRRClient := internalautoscaler.MustCreateFlexResizeRequestClient(httpClient, projectID, options)
 
@@ -97,15 +92,23 @@ func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, 
 		WithUpdateInfoLister(updateInfoLister, updateInfoFactory).
 		WithNpcCrdClient(npcCrdClient).
 		WithNpcCrdLister(npcCrdLister).
-		WithProvReqClient(prClient).
-		WithProvReqInjector(prInjector).
-		WithProvReqCache(prCache).
 		WithProviderConfigInformer(provConfigInformer).
 		WithGCEClient(gceClient).
-		WithProvReqManager(provReqManager).
 		WithAtomicResizeRequestClient(atomicRRClient).
 		WithFlexResizeRequestClient(flexRRClient).
 		WithNetworkMatcher(networkMatcher)
+
+	if options.ProvisioningRequestEnabled {
+		prClient := internalautoscaler.MustCreateProvReqClient(ctx, kubeConfigJSON, informerFactory)
+		prInjector := internalautoscaler.MustCreateProvReqInjector(options, prClient)
+		prCache := internalautoscaler.MustCreatePRCache(prClient)
+		provReqManager := internalautoscaler.MustCreatePRManager(prClient, httpClient, projectID, options, prCache, experimentsManager, gceClient, gceCache)
+		builder.
+			WithProvReqClient(prClient).
+			WithProvReqInjector(prInjector).
+			WithProvReqCache(prCache).
+			WithProvReqManager(provReqManager)
+	}
 
 	return configureGKEInternalClients(ctx, builder)
 }
