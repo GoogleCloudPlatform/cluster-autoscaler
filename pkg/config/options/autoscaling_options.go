@@ -161,6 +161,7 @@ type InternalOptions struct {
 	CapacityBuffersMetricsEndpointEnabled        bool
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
 	ExperimentsConfigMap                         string
+	KarpenterEnabled                             bool
 	FilterMigsByClusterNameEnabled               bool
 	ResizableVmEdpEnabled                        bool
 	AuthoritativeMachinesCacheEnabled            bool
