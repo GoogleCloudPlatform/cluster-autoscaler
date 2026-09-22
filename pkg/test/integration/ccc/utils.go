@@ -16,16 +16,19 @@ package ccc
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
+	k8sapimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	realccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 )
 
@@ -261,6 +264,12 @@ func (b *ComputeClassBuilder) Clone() *ComputeClassBuilder {
 	}
 }
 
+// ConditionsFlushInterval is how long a test must advance the virtual clock to
+// let the background status aggregator flush queued condition updates to the
+// API server. It is set slightly higher than the aggregator's own interval to
+// avoid races on the tick boundary.
+const ConditionsFlushInterval = status.BatchFlushInterval + 10*time.Second
+
 // AssertComputeClassConditions asserts that the conditions of actual match expected ComputeClassStatus while ignoring fields like LastTransitionTime, ResourceInfo, and ScalingEventsHistory.
 func AssertComputeClassConditions(t *testing.T, expected, actual v1.ComputeClassStatus, msg string) {
 	t.Helper()
@@ -270,6 +279,20 @@ func AssertComputeClassConditions(t *testing.T, expected, actual v1.ComputeClass
 		cmpopts.IgnoreFields(v1.ComputeClassStatus{}, "ResourceInfo"),
 	)
 	assert.Empty(t, diff, "%s (-want +got):\n%s", msg, diff)
+}
+
+// AssertPriorityCondition asserts that the priority status at priorityIndex carries
+// a condition of the given type with the wanted reason.
+func AssertPriorityCondition(t *testing.T, cc *v1.ComputeClass, priorityIndex int, conditionType, wantReason string) {
+	t.Helper()
+	if !assert.Greater(t, len(cc.Status.PriorityStatuses), priorityIndex, "ComputeClass %s has no priority status at index %d", cc.Name, priorityIndex) {
+		return
+	}
+	cond := k8sapimeta.FindStatusCondition(cc.Status.PriorityStatuses[priorityIndex].Conditions, conditionType)
+	if !assert.NotNil(t, cond, "condition %s not found on priority %d of ComputeClass %s", conditionType, priorityIndex, cc.Name) {
+		return
+	}
+	assert.Equal(t, wantReason, cond.Reason, "unexpected reason for condition %s", conditionType)
 }
 
 // ConditionBuilder is a builder for metav1.Condition.

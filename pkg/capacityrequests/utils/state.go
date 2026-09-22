@@ -31,6 +31,12 @@ import (
 // this is just for internal bookkeeping, it should never show up outside of CA.
 const crAnnotation = "cr.internal.gkeautoscaler.google.com/capacityrequest"
 
+// IsCapacityRequestPod returns true if the pod is a synthetic pod that CA
+// injected into the scale-up loop to represent a CapacityRequest.
+func IsCapacityRequestPod(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[crAnnotation] == "true"
+}
+
 // ObjectRef uniquely identifies an object of a certain kind.
 type ObjectRef struct {
 	Namespace string

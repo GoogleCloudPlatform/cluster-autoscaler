@@ -3135,11 +3135,12 @@ func TestProcessReturnedPods(t *testing.T) {
 	}.build()
 
 	testCases := []struct {
-		name                   string
-		admit                  bool
-		addDefragCandidateNode bool
-		wantPickedCandidate    bool
-		wantEqual              bool
+		name                    string
+		admit                   bool
+		addDefragCandidateNode  bool
+		wantPickedCandidate     bool
+		wantEqual               bool
+		wantActiveMigrationPods bool
 	}{
 		{
 			name:                "When defrag is not admitted, returned pods are the same as the pods passed to the Process function",
@@ -3154,11 +3155,12 @@ func TestProcessReturnedPods(t *testing.T) {
 			wantEqual:           true,
 		},
 		{
-			name:                   "When defrag picked a candidate, returned pods are NOT the same as the pods passed to the Process function",
-			admit:                  true,
-			addDefragCandidateNode: true,
-			wantPickedCandidate:    true,
-			wantEqual:              false,
+			name:                    "When defrag picked a candidate, returned pods are NOT the same as the pods passed to the Process function",
+			admit:                   true,
+			addDefragCandidateNode:  true,
+			wantPickedCandidate:     true,
+			wantEqual:               false,
+			wantActiveMigrationPods: true,
 		},
 	}
 
@@ -3170,8 +3172,10 @@ func TestProcessReturnedPods(t *testing.T) {
 			scaleDownActuator := &mockScaleDownActuator{}
 			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
 
+			var candidateNodeName string
 			if tc.addDefragCandidateNode {
 				node := buildReadyNode("special", 900, 10)
+				candidateNodeName = node.Name
 				pod1 := test.SetRSPodSpec(test.BuildTestPod("p1", 400, 1), "rs")
 				pod2 := test.SetRSPodSpec(test.BuildTestPod("p2", 500, 1), "rs")
 
@@ -3219,6 +3223,26 @@ func TestProcessReturnedPods(t *testing.T) {
 				assert.Equal(t, unschedulablePods, returnedPods)
 			} else {
 				assert.NotEqual(t, unschedulablePods, returnedPods)
+			}
+
+			// Pods surfaced to scale-up are marked, so that status reporting can
+			// attribute the resulting node provisioning to active migration.
+			if tc.wantActiveMigrationPods {
+				assert.NotEmpty(t, returnedPods)
+			}
+			for _, pod := range returnedPods {
+				assert.Equal(t, tc.wantActiveMigrationPods, pod.Annotations[defrag.ActiveMigrationPodAnnotation] == "true",
+					"unexpected active migration annotation on returned pod %s", pod.Name)
+			}
+
+			// Marking must not leak into the pods kept in the cluster snapshot.
+			if candidateNodeName != "" {
+				nodeInfo, err := snapshot.GetNodeInfo(candidateNodeName)
+				assert.NoError(t, err)
+				for _, podInfo := range nodeInfo.Pods() {
+					assert.NotContains(t, podInfo.Pod.Annotations, defrag.ActiveMigrationPodAnnotation,
+						"snapshot pod %s should not be annotated", podInfo.Pod.Name)
+				}
 			}
 		})
 	}
