@@ -17,28 +17,13 @@ package billing
 import (
 	"fmt"
 
-	"k8s.io/klog/v2"
-
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
+	gkebilling "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
 	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/klog/v2"
 	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
-
-	apiv1 "k8s.io/api/core/v1"
-	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/common"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	pod "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
-)
-
-const (
-
-	// Predefined compute classes use SoHW on autopilot clusters.
-	performanceComputeClass = "Performance"
-	acceleratorComputeClass = "Accelerator"
 )
 
 // BillingModelTranslator excludes buffers with pod templates that use pod based billing
@@ -89,16 +74,9 @@ func (t *BillingModelTranslator) Translate(buffers []*v1beta1.CapacityBuffer) []
 			continue
 		}
 
-		bufferUsesNodeBasedBilling := true
-		if t.isAutopilot {
-			// For autopilot if the workload requests hardware or uses crd for SoHW then the buffer results in node based billing
-			bufferUsesNodeBasedBilling = podRequestsSliceOfHardware(pod) || t.isCrdNodeBasedBillingOnAutopilot(crd, computeClassName)
-		} else {
-			// For standard if the workload has CCC CRD with rules define pod family then the buffer results in pod based billing
-			bufferUsesNodeBasedBilling = t.isCrdNodeBasedBillingOnStandard(crd)
-		}
+		billingModel := gkebilling.GetBillingModel(pod, crd, computeClassName, t.isAutopilot)
 
-		if !bufferUsesNodeBasedBilling {
+		if billingModel != gkebilling.NodeBasedBilling {
 			err := setBufferAsNotReadyForProvisioningWithError(buffer, "can't create a buffer with pod based billing")
 			errors = append(errors, err)
 			continue
@@ -110,62 +88,6 @@ func (t *BillingModelTranslator) Translate(buffers []*v1beta1.CapacityBuffer) []
 
 // CleanUp cleans up the translator's internal structures.
 func (t *BillingModelTranslator) CleanUp() {
-}
-
-// isCrdNodeBasedBillingOnStandard returns true if the passed Crd results in node-based billing model.
-func (t *BillingModelTranslator) isCrdNodeBasedBillingOnStandard(crd crd.CRD) bool {
-	if crd == nil || crd.CrdType() != ccc.CrdType {
-		return true
-	}
-	return !crdDefinesPodFamily(crd)
-}
-
-// isCrdNodeBasedBillingOnAutopilot returns true if the passed Crd results in node-based billing model on autopilot.
-func (t *BillingModelTranslator) isCrdNodeBasedBillingOnAutopilot(crd crd.CRD, computeClassName string) bool {
-	isPredefinedCC := machinetypes.IsPredefinedComputeClass(computeClassName)
-	if isPredefinedCC {
-		// only Performance and Accelerator predefined compute classes use node-based billing model
-		return computeClassName == performanceComputeClass || computeClassName == acceleratorComputeClass
-	}
-	// custom compute classes with no pod family defined use node-based billing model
-	return crd != nil && crd.CrdType() == ccc.CrdType && !crdDefinesPodFamily(crd)
-}
-
-// crdDefinesPodFamily returns true if any rule in the passed crd defines pod family.
-func crdDefinesPodFamily(crd crd.CRD) bool {
-	for _, rule := range crd.Rules() {
-		if _, err := rule.PodFamilyMachineFamilies(); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-// podRequestsSliceOfHardware returns true if the pod requests specific machine family, GPU, or TPU
-// using node selectors or requests GPU or TPU using resource limits
-func podRequestsSliceOfHardware(pod *apiv1.Pod) bool {
-	// Check for direct hardware node selectors
-	selectors := pod.Spec.NodeSelector
-	if _, exists := selectors[gkelabels.MachineFamilyLabel]; exists {
-		return true
-	}
-	if _, exists := selectors[gkelabels.GPULabel]; exists {
-		return true
-	}
-	if _, exists := selectors[gkelabels.TPULabel]; exists {
-		return true
-	}
-
-	// Check for GPU/TPU requests in container resources
-	for _, container := range pod.Spec.Containers {
-		if _, exists := container.Resources.Limits[gpu.ResourceNvidiaGPU]; exists {
-			return true
-		}
-		if _, exists := container.Resources.Limits[tpu.ResourceGoogleTPU]; exists {
-			return true
-		}
-	}
-	return false
 }
 
 // setBufferAsNotReadyForProvisioningWithError sets the buffer status as not ready for provisioning with the passed error message

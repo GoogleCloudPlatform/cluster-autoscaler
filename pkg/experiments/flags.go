@@ -235,3 +235,6 @@ const AutopilotNapDefaultFallbackEnabledFlag = "AutopilotNapDefaultFallback::Ena
 const AutopilotNapDefaultFallbackMinCAVersionFlag = "AutopilotNapDefaultFallback::MinCAVersion"
 
 const BalloonPodIpprResizeFlag = "Autopilot::BalloonPodIpprResize"
+
+const PayPerPodFleetEfficiencyEnabledFlag = "PayPerPodFleetEfficiency::Enabled"
+const PayPerPodFleetEfficiencyMinCAVersionFlag = "PayPerPodFleetEfficiency::MinCAVersion"

@@ -55,10 +55,28 @@ func TestBillingModelTranslator(t *testing.T) {
 		crd.WithLabel(labels.ComputeClassLabel),
 	)
 
-	lister := lister.NewMockCrdListerWithLabel([]crd.CRD{CCCWithPodFamily, CCCWithoutPodFamily}, labels.ComputeClassLabel)
+	CCCMixed := crd.NewTestCrd(
+		crd.WithName("CCCMixed"),
+		crd.WithCrdType(ccc.CrdType),
+		crd.WithAutoprovisioningEnabled(),
+		crd.WithAutopilotManaged(),
+		crd.WithRules([]rules.Rule{
+			rules.NewRule(
+				rules.WithAutopilotModeRule(),
+				rules.WithPodFamilyRule(&podFamily),
+			),
+			rules.NewRule(
+				rules.WithAutopilotModeRule(),
+			),
+		}),
+		crd.WithLabel(labels.ComputeClassLabel),
+	)
+
+	lister := lister.NewMockCrdListerWithLabel([]crd.CRD{CCCWithPodFamily, CCCWithoutPodFamily, CCCMixed}, labels.ComputeClassLabel)
 
 	podTempUsesCCCPodBasedBilling := getPodTemplateWithNodeSelectors("podTempUsesPodBasedBilling", map[string]string{labels.ComputeClassLabel: CCCWithPodFamily.Name()})
 	podTempUsesCCCNodeBasedBilling := getPodTemplateWithNodeSelectors("podTempUsesNodeBasedBilling", map[string]string{labels.ComputeClassLabel: CCCWithoutPodFamily.Name()})
+	podTempUsesCCCMixedBilling := getPodTemplateWithNodeSelectors("podTempUsesMixedBilling", map[string]string{labels.ComputeClassLabel: CCCMixed.Name()})
 	podTempUsesPerformanceCC := getPodTemplateWithNodeSelectors("podTempUsesPerformanceCC", map[string]string{labels.ComputeClassLabel: "Performance"})
 	podTempUsesScaleOutCC := getPodTemplateWithNodeSelectors("podTempUsesScaleOutCC", map[string]string{labels.ComputeClassLabel: "Scale-Out"})
 	podTempWithNoCrd := getPodTemplateWithNodeSelectors("podTempWithNoCrd", map[string]string{})
@@ -82,10 +100,13 @@ func TestBillingModelTranslator(t *testing.T) {
 			},
 		},
 	})
+	podTempUsesLocalSSD := getPodTemplateWithNodeSelectors("podTempUsesLocalSSD", map[string]string{labels.EphemeralLocalSsdLabel: "true"})
+	podTempUsesTPUTopology := getPodTemplateWithNodeSelectors("podTempUsesTPUTopology", map[string]string{labels.TPUTopologyLabel: "2x2x1"})
 
-	fakeClient := fakeClient.NewClientset(podTempUsesCCCPodBasedBilling, podTempUsesCCCNodeBasedBilling,
+	fakeClient := fakeClient.NewClientset(podTempUsesCCCPodBasedBilling, podTempUsesCCCNodeBasedBilling, podTempUsesCCCMixedBilling,
 		podTempUsesTPUNodeSel, podTempUsesGPUResource, podTempUsesPerformanceCC, podTempUsesScaleOutCC, podTempWithNoCrd,
-		podTempUsesAffinityForSoHW, podTempUsesMachineFamilyForSoHW)
+		podTempUsesAffinityForSoHW, podTempUsesMachineFamilyForSoHW, podTempUsesLocalSSD, podTempUsesTPUTopology)
+
 	fakeCapacityBuffersClient, _ := cbclient.NewCapacityBufferClient(nil, fakeClient, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	testCases := []struct {
 		name               string
@@ -112,6 +133,14 @@ func TestBillingModelTranslator(t *testing.T) {
 			isAutopilot: false,
 			buffersToTranslate: []*v1beta1.CapacityBuffer{
 				getBufferReadyForProvisioning(podTempUsesCCCPodBasedBilling.Name),
+			},
+			expectingError: []bool{true},
+		},
+		{
+			name:        "standard: a buffer with pod template uses CCC with mixed billing (both pod family and machine family defined)",
+			isAutopilot: false,
+			buffersToTranslate: []*v1beta1.CapacityBuffer{
+				getBufferReadyForProvisioning(podTempUsesCCCMixedBilling.Name),
 			},
 			expectingError: []bool{true},
 		},
@@ -217,6 +246,22 @@ func TestBillingModelTranslator(t *testing.T) {
 			isAutopilot: true,
 			buffersToTranslate: []*v1beta1.CapacityBuffer{
 				getBufferReadyForProvisioning(podTempUsesAffinityForSoHW.Name),
+			},
+			expectingError: []bool{false},
+		},
+		{
+			name:        "autopilot: a buffer with pod template uses local SSD selector for node based billing",
+			isAutopilot: true,
+			buffersToTranslate: []*v1beta1.CapacityBuffer{
+				getBufferReadyForProvisioning(podTempUsesLocalSSD.Name),
+			},
+			expectingError: []bool{false},
+		},
+		{
+			name:        "autopilot: a buffer with pod template uses TPU topology selector for node based billing",
+			isAutopilot: true,
+			buffersToTranslate: []*v1beta1.CapacityBuffer{
+				getBufferReadyForProvisioning(podTempUsesTPUTopology.Name),
 			},
 			expectingError: []bool{false},
 		},
