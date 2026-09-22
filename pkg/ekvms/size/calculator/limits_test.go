@@ -21,6 +21,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 )
 
@@ -279,6 +280,153 @@ func TestValidateValue(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+		})
+	}
+}
+
+type fakeResizeMetricsRecorder struct {
+	steps map[string]int64
+}
+
+func (f *fakeResizeMetricsRecorder) UpdateResizeIncrementStep(machineFamily string, milliCpus int64) {
+	f.steps[machineFamily] = milliCpus
+}
+
+func TestRegisterConfigs(t *testing.T) {
+	oneCpuStep := apiv1.ResourceList{
+		apiv1.ResourceCPU:    resource.MustParse("1"),
+		apiv1.ResourceMemory: resource.MustParse("512Mi"),
+	}
+	twoCpuStep := apiv1.ResourceList{
+		apiv1.ResourceCPU:    resource.MustParse("2"),
+		apiv1.ResourceMemory: resource.MustParse("512Mi"),
+	}
+	halfCpuStep := apiv1.ResourceList{
+		apiv1.ResourceCPU:    resource.MustParse("500m"),
+		apiv1.ResourceMemory: resource.MustParse("512Mi"),
+	}
+	customEkMinVmSize := apiv1.ResourceList{
+		apiv1.ResourceCPU:    resource.MustParse("4"),
+		apiv1.ResourceMemory: resource.MustParse("8Gi"),
+	}
+	customEkSafetyBuffer := apiv1.ResourceList{
+		apiv1.ResourceCPU:    resource.MustParse("500m"),
+		apiv1.ResourceMemory: resource.MustParse("1Gi"),
+	}
+
+	testCases := []struct {
+		testName        string
+		options         internalopts.AutoscalingOptions
+		expectedConfigs map[string]LimitConfig
+		expectedMetrics map[string]int64
+	}{
+		{
+			testName: "1 CPU step registers for EK (using custom EK flags) and other resizable families (E4, E4A using family defaults)",
+			options: internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					EkvmsIncrementStep:          oneCpuStep,
+					EkvmsMinVmSize:              customEkMinVmSize,
+					EkvmsAllocationSafetyBuffer: customEkSafetyBuffer,
+				},
+			},
+			expectedConfigs: map[string]LimitConfig{
+				machinetypes.EK.Name(): {
+					MinVmSize:     customEkMinVmSize,
+					IncrementStep: oneCpuStep,
+					SafetyBuffer:  customEkSafetyBuffer,
+				},
+				machinetypes.E4.Name(): {
+					MinVmSize:     machinetypes.E4.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: oneCpuStep,
+					SafetyBuffer:  machinetypes.E4.ResizableConfig().AllocationSafetyDefault,
+				},
+				machinetypes.E4A.Name(): {
+					MinVmSize:     machinetypes.E4A.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: oneCpuStep,
+					SafetyBuffer:  machinetypes.E4A.ResizableConfig().AllocationSafetyDefault,
+				},
+			},
+			expectedMetrics: map[string]int64{
+				machinetypes.EK.Name():  1000,
+				machinetypes.E4.Name():  1000,
+				machinetypes.E4A.Name(): 1000,
+			},
+		},
+		{
+			testName: "2 CPU coarse step registers for all resizable families (EK, E4, E4A) and exports 2000m metric",
+			options: internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					EkvmsIncrementStep:          twoCpuStep,
+					EkvmsMinVmSize:              customEkMinVmSize,
+					EkvmsAllocationSafetyBuffer: customEkSafetyBuffer,
+				},
+			},
+			expectedConfigs: map[string]LimitConfig{
+				machinetypes.EK.Name(): {
+					MinVmSize:     customEkMinVmSize,
+					IncrementStep: twoCpuStep,
+					SafetyBuffer:  customEkSafetyBuffer,
+				},
+				machinetypes.E4.Name(): {
+					MinVmSize:     machinetypes.E4.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: twoCpuStep,
+					SafetyBuffer:  machinetypes.E4.ResizableConfig().AllocationSafetyDefault,
+				},
+				machinetypes.E4A.Name(): {
+					MinVmSize:     machinetypes.E4A.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: twoCpuStep,
+					SafetyBuffer:  machinetypes.E4A.ResizableConfig().AllocationSafetyDefault,
+				},
+			},
+			expectedMetrics: map[string]int64{
+				machinetypes.EK.Name():  2000,
+				machinetypes.E4.Name():  2000,
+				machinetypes.E4A.Name(): 2000,
+			},
+		},
+		{
+			testName: "500m sub-core CPU step registers for all resizable families (EK, E4, E4A) and exports 500m metric",
+			options: internalopts.AutoscalingOptions{
+				InternalOptions: internalopts.InternalOptions{
+					EkvmsIncrementStep:          halfCpuStep,
+					EkvmsMinVmSize:              customEkMinVmSize,
+					EkvmsAllocationSafetyBuffer: customEkSafetyBuffer,
+				},
+			},
+			expectedConfigs: map[string]LimitConfig{
+				machinetypes.EK.Name(): {
+					MinVmSize:     customEkMinVmSize,
+					IncrementStep: halfCpuStep,
+					SafetyBuffer:  customEkSafetyBuffer,
+				},
+				machinetypes.E4.Name(): {
+					MinVmSize:     machinetypes.E4.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: halfCpuStep,
+					SafetyBuffer:  machinetypes.E4.ResizableConfig().AllocationSafetyDefault,
+				},
+				machinetypes.E4A.Name(): {
+					MinVmSize:     machinetypes.E4A.ResizableConfig().MinVmSizeDefault,
+					IncrementStep: halfCpuStep,
+					SafetyBuffer:  machinetypes.E4A.ResizableConfig().AllocationSafetyDefault,
+				},
+			},
+			expectedMetrics: map[string]int64{
+				machinetypes.EK.Name():  500,
+				machinetypes.E4.Name():  500,
+				machinetypes.E4A.Name(): 500,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.testName, func(t *testing.T) {
+			provider := NewResizeLimitProvider(&mockCloudProvider{})
+			metrics := &fakeResizeMetricsRecorder{steps: make(map[string]int64)}
+
+			provider.RegisterConfigs(metrics, tc.options)
+
+			assert.Equal(t, tc.expectedConfigs, provider.configs)
+			assert.Equal(t, tc.expectedMetrics, metrics.steps)
 		})
 	}
 }

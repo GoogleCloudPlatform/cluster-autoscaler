@@ -19,7 +19,9 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	"k8s.io/klog/v2"
 )
 
 type limits struct {
@@ -43,6 +45,11 @@ type LimitProvider interface {
 	GetLimits(node *apiv1.Node) (limits, error)
 }
 
+// MetricsRecorder exports metrics describing the resize limits a Cluster Autoscaler runs with.
+type MetricsRecorder interface {
+	UpdateResizeIncrementStep(machineFamily string, milliCpus int64)
+}
+
 type resizeLimitProvider struct {
 	configs       map[string]LimitConfig
 	cloudProvider cloudProvider
@@ -57,6 +64,35 @@ func NewResizeLimitProvider(cloudProvider cloudProvider) *resizeLimitProvider {
 
 func (p *resizeLimitProvider) RegisterConfig(machineFamily string, config LimitConfig) {
 	p.configs[machineFamily] = config
+}
+
+// RegisterConfigs registers resize limits for every resizable machine family. The increment step comes from
+// the --ekvms-increment-step flag and is shared by all the families. The remaining limits are family specific: EK uses
+// the dedicated flags, the other families use their own defaults.
+func (p *resizeLimitProvider) RegisterConfigs(metrics MetricsRecorder, options internalopts.AutoscalingOptions) {
+	for _, machineFamily := range p.cloudProvider.MachineConfigProvider().AllResizableMachineFamilies() {
+		config := limitConfigForFamily(machineFamily, options)
+		klog.Infof("Registering resize limits for machine family %q: incrementStep=%v, minVmSize=%v, safetyBuffer=%v",
+			machineFamily.Name(), config.IncrementStep, config.MinVmSize, config.SafetyBuffer)
+		metrics.UpdateResizeIncrementStep(machineFamily.Name(), config.IncrementStep.Cpu().MilliValue())
+		p.RegisterConfig(machineFamily.Name(), config)
+	}
+}
+
+func limitConfigForFamily(machineFamily machinetypes.MachineFamily, options internalopts.AutoscalingOptions) LimitConfig {
+	if machineFamily.Name() == machinetypes.EK.Name() {
+		return LimitConfig{
+			MinVmSize:     options.EkvmsMinVmSize,
+			IncrementStep: options.EkvmsIncrementStep,
+			SafetyBuffer:  options.EkvmsAllocationSafetyBuffer,
+		}
+	}
+	resizableConfig := machineFamily.ResizableConfig()
+	return LimitConfig{
+		MinVmSize:     resizableConfig.MinVmSizeDefault,
+		IncrementStep: options.EkvmsIncrementStep,
+		SafetyBuffer:  resizableConfig.AllocationSafetyDefault,
+	}
 }
 
 func (p *resizeLimitProvider) GetLimits(node *apiv1.Node) (limits, error) {

@@ -377,12 +377,7 @@ func setUpProcessors(
 	}
 
 	limitProvider := calculator.NewResizeLimitProvider(provider)
-	limitProvider.RegisterConfig(machinetypes.EK.Name(), calculator.LimitConfig{
-		MinVmSize:     options.EkvmsMinVmSize,
-		IncrementStep: options.EkvmsIncrementStep,
-		SafetyBuffer:  options.EkvmsAllocationSafetyBuffer,
-	})
-	internalmetrics.Metrics.UpdateResizeIncrementStep(machinetypes.EK.Name(), options.EkvmsIncrementStep.Cpu().MilliValue())
+	limitProvider.RegisterConfigs(internalmetrics.Metrics, *options)
 	resizeCalculator := calculator.New(vmreservation.New(gkeReserved, options.DefaultReservedResourcesV2Enabled), provider, options.IsClusterUsingDPV1, limitProvider)
 	autoscalingProcessors := processors.DefaultProcessors(options.AutoscalingOptions)
 
