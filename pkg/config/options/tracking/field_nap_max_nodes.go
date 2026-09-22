@@ -50,4 +50,5 @@ var napMaxNodesField = trackedField{
 		}
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

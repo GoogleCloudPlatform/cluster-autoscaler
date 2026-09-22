@@ -80,10 +80,15 @@ func waitForInformerSyncWithClusterRefresh(informerFactory informers.SharedInfor
 		}
 
 		klog.Info("Informer caches not synced yet, refreshing CloudProvider state.")
-		// Refresh the GKE Cluster state. AutoscalingOptions fields tracked by OptionsTracker that depend on the Cluster proto are recomputed as part of the refresh.
+		// Refresh the GKE Cluster state.
 		// Note that a cloudProvider.Refresh() call only refreshes the Cluster state if more than gke.ClusterRefreshInterval time has passed since the last refresh.
 		// We're intentionally using a slightly higher value for the timeout, so this call should always refresh the Cluster state.
 		if err := cloudProvider.Refresh(context.TODO()); err != nil {
+			return false, err
+		}
+
+		// Recompute the AutoscalingOptions tracked by OptionsTracker with the updated Cluster Proto from the refresh.
+		if err := optsTracker.RecomputeOptions(); err != nil {
 			return false, err
 		}
 

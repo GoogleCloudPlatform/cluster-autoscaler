@@ -15,6 +15,8 @@
 package tracking
 
 import (
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -163,10 +165,12 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			// Make sure the same init logic used by the public NewOptionsTracker constructor gets tested here - it's crucial for OptionsTracker correctly
 			// handling the fields that aren't tracked.
 			tracker := NewOptionsTracker(tc.flagValues, noExperiments)
+			tracker.StoreCluster(gkeclient.Cluster{})
 
 			// Compute the options for the first time with no experiments defined - all field values should stay the same as the flag ones.
 			// Since this is the first call to RecomputeOptions(), the resulting values should be saved as the startup options.
-			tracker.RecomputeOptions(gkeclient.Cluster{})
+			err := tracker.RecomputeOptions()
+			assert.NoError(t, err)
 			assert.Equal(t, withDirectLaunchDefaults(tc.flagValues), tracker.Options())
 			// Last computed options are trivially the same as startup options, so no need for restart.
 			assert.False(t, tracker.OptionChangesRequireRestart())
@@ -174,7 +178,9 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			// Simulate experiments being defined over time by swapping the experiment manager to one which has them defined. If the tested field should
 			// change value based on the experiments, the new value should be reflected after the next RecomputeOptions() call.
 			tracker.experimentsManager = withExperiments
-			tracker.RecomputeOptions(gkeclient.Cluster{})
+			err = tracker.RecomputeOptions()
+			assert.NoError(t, err)
+
 			wantOpts := tc.wantOptionsAfterExperiments
 			if _, isDirectLaunchDisable := tc.experimentValues[experiments.BalloonPodIpprResizeFlag]; !isDirectLaunchDisable {
 				wantOpts = withDirectLaunchDefaults(wantOpts)
@@ -192,4 +198,237 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 func withDirectLaunchDefaults(opts internalopts.AutoscalingOptions) internalopts.AutoscalingOptions {
 	opts.BalloonPodIpprResizeEnabled = true
 	return opts
+}
+
+func TestOptionsTrackerRequireRestart(t *testing.T) {
+	const (
+		nonRestartingExp = "NonRestartingExp"
+		restartingExp    = "RestartingExp"
+	)
+
+	nonRestartingField := trackedField{
+		name:        "NonRestartingField",
+		valueEqual:  func(optsA, optsB internalopts.AutoscalingOptions) bool { return optsA.Profile == optsB.Profile },
+		getValueStr: func(opts internalopts.AutoscalingOptions) string { return opts.Profile },
+		setValue: func(optsFromFlags internalopts.AutoscalingOptions, em experiments.Manager, optsToModify *internalopts.AutoscalingOptions) error {
+			if em.EvaluateBoolFlagOrFailsafe(nonRestartingExp, false) {
+				optsToModify.Profile = "modified"
+			} else {
+				optsToModify.Profile = "initial"
+			}
+			return nil
+		},
+		caRestartNeededOnValueChange: false,
+	}
+
+	restartingField := trackedField{
+		name:        "RestartingField",
+		valueEqual:  func(optsA, optsB internalopts.AutoscalingOptions) bool { return optsA.Location == optsB.Location },
+		getValueStr: func(opts internalopts.AutoscalingOptions) string { return opts.Location },
+		setValue: func(optsFromFlags internalopts.AutoscalingOptions, em experiments.Manager, optsToModify *internalopts.AutoscalingOptions) error {
+			if em.EvaluateBoolFlagOrFailsafe(restartingExp, false) {
+				optsToModify.Location = "modified"
+			} else {
+				optsToModify.Location = "initial"
+			}
+			return nil
+		},
+		caRestartNeededOnValueChange: true,
+	}
+
+	for _, tc := range []struct {
+		testName         string
+		experimentValues map[string]bool
+		wantRestart      bool
+	}{
+		{
+			testName:         "no_fields_changed",
+			experimentValues: map[string]bool{},
+			wantRestart:      false,
+		},
+		{
+			testName:         "only_non_restarting_field_changed",
+			experimentValues: map[string]bool{nonRestartingExp: true},
+			wantRestart:      false,
+		},
+		{
+			testName:         "only_restarting_field_changed",
+			experimentValues: map[string]bool{restartingExp: true},
+			wantRestart:      true,
+		},
+		{
+			testName:         "both_fields_changed",
+			experimentValues: map[string]bool{nonRestartingExp: true, restartingExp: true},
+			wantRestart:      true,
+		},
+	} {
+		t.Run(tc.testName, func(t *testing.T) {
+			tracker := NewOptionsTracker(internalopts.AutoscalingOptions{}, experiments.NewMockManager())
+			tracker.trackedFields = []trackedField{nonRestartingField, restartingField}
+			tracker.StoreCluster(gkeclient.Cluster{})
+			err := tracker.RecomputeOptions()
+			assert.NoError(t, err)
+
+			tracker.experimentsManager = experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentValues, nil)
+			err = tracker.RecomputeOptions()
+			assert.NoError(t, err)
+
+			assert.Equal(t, tc.wantRestart, tracker.OptionChangesRequireRestart())
+		})
+	}
+}
+
+func TestValidateTrackedFields(t *testing.T) {
+	for _, field := range allTrackedFields {
+		t.Run(field.name, func(t *testing.T) {
+			assert.NotNil(t, field.getValueStr, "getValueStr must not be nil")
+			assert.NotNil(t, field.valueEqual, "valueEqual must not be nil")
+
+			hasSetValue := field.setValue != nil
+			hasSetValueFromClusterProto := field.setValueFromClusterProto != nil
+			assert.True(t, hasSetValue != hasSetValueFromClusterProto, "setValue or setValueFromClusterProto must be set, never both")
+
+			_, isOSS := reflect.TypeFor[config.AutoscalingOptions]().FieldByName(field.name)
+			_, isInternal := reflect.TypeFor[internalopts.InternalOptions]().FieldByName(field.name)
+
+			assert.True(t, isOSS != isInternal, "field name must match option in config.AutoscalingOptions or internalopts.InternalOptions, never both")
+
+			if isInternal {
+				assert.Nil(t, field.propagateChangesToAutoscalingContext,
+					"internal field must not define propagateChangesToAutoscalingContext")
+			} else if field.caRestartNeededOnValueChange {
+				assert.Nil(t, field.propagateChangesToAutoscalingContext,
+					"restarting OSS field must not define propagateChangesToAutoscalingContext")
+			} else {
+				assert.NotNil(t, field.propagateChangesToAutoscalingContext,
+					"dynamic OSS field must define propagateChangesToAutoscalingContext")
+			}
+		})
+	}
+}
+
+func TestOptionsTrackerStoreClusterAndRecompute(t *testing.T) {
+	clusterField := trackedField{
+		name: "ClusterField",
+		valueEqual: func(optsA, optsB internalopts.AutoscalingOptions) bool {
+			return optsA.Profile == optsB.Profile
+		},
+		getValueStr: func(opts internalopts.AutoscalingOptions) string {
+			return opts.Profile
+		},
+		setValueFromClusterProto: func(optsFromFlags internalopts.AutoscalingOptions, em experiments.Manager, cluster gkeclient.Cluster, optsToModify *internalopts.AutoscalingOptions) error {
+			optsToModify.Profile = cluster.ClusterVersion
+			return nil
+		},
+		caRestartNeededOnValueChange: true,
+	}
+
+	t.Run("Recompute before StoreCluster returns error", func(t *testing.T) {
+		manager := experiments.NewMockManager()
+		tracker := NewOptionsTracker(internalopts.AutoscalingOptions{}, manager)
+		tracker.trackedFields = []trackedField{clusterField}
+		err := tracker.RecomputeOptions()
+		assert.Error(t, err)
+		assert.False(t, tracker.startupOptsFinalized)
+		assert.False(t, tracker.OptionChangesRequireRestart())
+	})
+
+	t.Run("Lifecycle: store cluster, recompute, and detect restart requirement", func(t *testing.T) {
+		manager := experiments.NewMockManager()
+		tracker := NewOptionsTracker(internalopts.AutoscalingOptions{}, manager)
+		tracker.trackedFields = []trackedField{clusterField}
+
+		// Storing a cluster enables RecomputeOptions() to initialize startup options.
+		tracker.StoreCluster(gkeclient.Cluster{ClusterVersion: "1.30.0"})
+		err := tracker.RecomputeOptions()
+		assert.NoError(t, err)
+		assert.Equal(t, "1.30.0", tracker.Options().Profile)
+		assert.False(t, tracker.OptionChangesRequireRestart())
+
+		// Options should not change until RecomputeOptions() is explicitly called.
+		tracker.StoreCluster(gkeclient.Cluster{ClusterVersion: "1.31.0"})
+		assert.Equal(t, "1.30.0", tracker.Options().Profile)
+
+		// Calling StoreCluster again before recomputing overwrites the previous cluster.
+		// RecomputeOptions() should apply only the latest stored cluster proto.
+		tracker.StoreCluster(gkeclient.Cluster{ClusterVersion: "1.32.0"})
+		err = tracker.RecomputeOptions()
+		assert.NoError(t, err)
+		assert.Equal(t, "1.32.0", tracker.Options().Profile)
+		assert.True(t, tracker.OptionChangesRequireRestart())
+	})
+}
+
+func TestOptionsTrackerThreadSafety(t *testing.T) {
+	manager := experiments.NewMockManager()
+	tracker := NewOptionsTracker(internalopts.AutoscalingOptions{}, manager)
+	tracker.StoreCluster(gkeclient.Cluster{})
+	if err := tracker.RecomputeOptions(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stopCh := make(chan struct{})
+
+	// Start concurrent readers
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stopCh:
+					return
+				default:
+					_ = tracker.Options()
+					_ = tracker.OptionChangesRequireRestart()
+				}
+			}
+		}()
+	}
+
+	// Start concurrent writer
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			tracker.StoreCluster(gkeclient.Cluster{})
+			_ = tracker.RecomputeOptions()
+		}
+		close(stopCh)
+	}()
+
+	wg.Wait()
+}
+
+func TestPropagateDynamicOptions(t *testing.T) {
+	tracker := &OptionsTracker{
+		lastOpts: internalopts.AutoscalingOptions{
+			AutoscalingOptions: config.AutoscalingOptions{
+				MaxNodesTotal: 100,
+				ScanInterval:  10 * time.Second,
+			},
+		},
+		trackedFields: []trackedField{
+			{
+				name: "MaxNodesTotal",
+				propagateChangesToAutoscalingContext: func(src config.AutoscalingOptions, dst *config.AutoscalingOptions) {
+					dst.MaxNodesTotal = src.MaxNodesTotal
+				},
+			},
+			{
+				name: "ScanInterval",
+				// propagateChangesToAutoscalingContext is nil
+			},
+		},
+	}
+	dst := config.AutoscalingOptions{
+		MaxNodesTotal: 50,
+		ScanInterval:  5 * time.Second,
+	}
+	tracker.PropagateDynamicOptions(&dst)
+	// Dynamically propagated field was updated
+	assert.Equal(t, 100, dst.MaxNodesTotal)
+	// Field without propagation was left untouched
+	assert.Equal(t, 5*time.Second, dst.ScanInterval)
 }

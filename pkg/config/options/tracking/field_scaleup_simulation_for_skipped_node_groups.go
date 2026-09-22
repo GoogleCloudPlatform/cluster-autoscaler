@@ -40,4 +40,5 @@ var scaleUpSimulationForSkippedNodeGroupsEnabledField = trackedField{
 		optsToModify.ScaleUpSimulationForSkippedNodeGroupsEnabled = directLaunchEnabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

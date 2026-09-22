@@ -40,4 +40,5 @@ var asyncNodeGroupsEnabledField = trackedField{
 		optsToModify.AsyncNodeGroupsEnabled = flagValue && enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

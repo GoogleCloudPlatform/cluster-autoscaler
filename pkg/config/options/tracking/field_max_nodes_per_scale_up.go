@@ -46,4 +46,5 @@ var maxNodePerScaleUpField = trackedField{
 		}
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

@@ -22,7 +22,7 @@ import (
 )
 
 var zoneTypesEnabledField = trackedField{
-	name: "AsyncZoneTypesEnabled",
+	name: "ZoneTypesEnabled",
 	valueEqual: func(optsA, optsB internalopts.AutoscalingOptions) bool {
 		return optsA.ZoneTypesEnabled == optsB.ZoneTypesEnabled
 	},
@@ -38,4 +38,5 @@ var zoneTypesEnabledField = trackedField{
 		optsToModify.ZoneTypesEnabled = flagValue && enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

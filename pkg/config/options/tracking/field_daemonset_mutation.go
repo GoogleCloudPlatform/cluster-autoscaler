@@ -37,4 +37,5 @@ var daemonSetMutationEnabledField = trackedField{
 		optsToModify.DaemonSetMutationEnabled = flagValue && enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

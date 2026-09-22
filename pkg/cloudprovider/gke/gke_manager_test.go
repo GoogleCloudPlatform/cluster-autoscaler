@@ -7064,7 +7064,7 @@ func TestTrimLocationsForMachineConfig(t *testing.T) {
 	}
 }
 
-func TestRefreshGkeResourcesCSNMetrics(t *testing.T) {
+func TestRefreshCSNMetrics(t *testing.T) {
 	testCases := []struct {
 		desc      string
 		csnStatus internalopts.CSNStatus
@@ -7084,33 +7084,19 @@ func TestRefreshGkeResourcesCSNMetrics(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			server := NewHttpServerMock()
-			defer server.Close()
-
 			mockMetrics := &mockGkeMetrics{}
 			mockMetrics.On("UpdateCSNEnabled", tc.expected).Return()
-			mockMetrics.On("UpdateNapEnabled", mock.Anything).Return()
 
-			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			g := &gkeManagerImpl{
+				gkeMetrics: mockMetrics,
+				optsTracker: optstracking.NewOptionsTracker(internalopts.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						CSNCAFlag: tc.csnStatus,
+					},
+				}, experiments.NewMockManager()),
+			}
 
-			addDefaultListMigsMocks(server, g.cache)
-			g.gkeMetrics = mockMetrics
-			g.optsTracker = optstracking.NewOptionsTracker(internalopts.AutoscalingOptions{
-				InternalOptions: internalopts.InternalOptions{
-					CSNCAFlag: tc.csnStatus,
-				},
-			}, experiments.NewMockManager())
-
-			getClusterResponse := fmt.Sprintf(getClusterResponseTemplate, allNodePools1, napDisabled, false, "")
-			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster1").Return(getClusterResponse).Maybe()
-			server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers").Return(buildListInstanceGroupManagersResponse(
-				buildListInstanceGroupManagersResponsePart("gke-cluster-1-default-pool", zoneB, 3),
-			)).Maybe()
-			server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Maybe()
-			server.On("handle", "/projects/project1/global/instanceTemplates/gke-blah-default-pool-67b773a0").Return(instanceTemplate).Maybe()
-
-			err := g.refreshGkeResources()
-			assert.NoError(t, err)
+			g.refreshCSNMetrics()
 
 			mockMetrics.AssertExpectations(t)
 		})

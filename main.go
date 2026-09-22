@@ -138,7 +138,17 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 			default:
 				trigger.Wait(lastRun)
 				lastRun = time.Now()
+
 				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun, iteration)
+
+				// Recompute options only once, at the end of the loop to keep them consistent during the loop execution
+				if err := optsTracker.RecomputeOptions(); err != nil {
+					klog.Fatalf("Failed to recompute autoscaling options: %v", err)
+				}
+				// Sync dynamically updated options from OptionsTracker to the OSS AutoscalingOptions in AutoscalingContext.
+				// This propagation is strictly for fields explicitly configured in OptionsTracker to support dynamic updates without a restart.
+				optsTracker.PropagateDynamicOptions(&autoscaler.AutoscalingOptions)
+
 				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
 				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
 					// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.

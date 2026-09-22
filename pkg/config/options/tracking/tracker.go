@@ -15,7 +15,11 @@
 package tracking
 
 import (
+	"fmt"
+	"sync"
+
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
@@ -24,7 +28,8 @@ import (
 
 // trackedField represents an AutoscalingOptions field for which the value can change dynamically during Cluster Autoscaler runtime.
 type trackedField struct {
-	// name should match the field name in AutoscalingOptions. OptionsTracker uses this for logging.
+	// name must match the field name in config.AutoscalingOptions (OSS) or internalopts.InternalOptions (GKE).
+	// OptionsTracker uses this for logging, and tests use it to distinguish OSS fields from internal ones.
 	name string
 	// setValue should compute the value of the tracked field based on the provided CLI flags and experiments, and set the computed value in the provided optsToModify.
 	// OptionsTracker uses this to recompute the value of this field in the AutoscalingOptions it tracks.
@@ -37,18 +42,28 @@ type trackedField struct {
 	// valueEqual should return true iff the provided AutoscalingOptions objects have the same value of the tracked field. OptionsTracker uses this to determine
 	// if the value of the tracked field changed since Cluster Autoscaler first started.
 	valueEqual func(optsA, optsB internalopts.AutoscalingOptions) bool
+	// caRestartNeededOnValueChange indicates if CA restart is necessary after value of the option is changed.
+	// Mutually exclusive with propagateChangesToAutoscalingContext.
+	caRestartNeededOnValueChange bool
+	// propagateChangesToAutoscalingContext copies the tracked field value from OptionsTracker to the OSS
+	// AutoscalingOptions embedded in AutoscalingContext. If nil, changes are not propagated dynamically.
+	//
+	// This should ONLY be configured if all accesses to the field in OSS logic read directly from
+	// AutoscalingContext on each loop iteration. It must NOT be used for fields that are:
+	// 1. Used in initialization logic (which requires a CA restart to re-run init).
+	// 2. Plumbed into constructors and cached by subcomponents (which won't notice dynamic changes).
+	// Updating such fields dynamically would lead to inconsistencies between components.
+	// 3. Internal field (belonging to InternalOptions)
+	//
+	// Fields that have this configured should be accompanied by a Big Unit Test with the value changing dynamically
+	// to prevent regressions if new accesses to the field are added in OSS logic in the future.
+	propagateChangesToAutoscalingContext func(src config.AutoscalingOptions, dst *config.AutoscalingOptions)
 }
 
 var allTrackedFields = []trackedField{asyncNodeGroupsEnabledField, dynamicResourceAllocationEnabledField, capacityBuffersControllerEnabledField, capacityBuffersPodInjectionEnabledField, zoneTypesEnabledField, fastpathBinpackingEnabledField, maxNodePerScaleUpField, csnEnabledField, napMaxNodesField, salvoScaleUpField, salvoScaleUpBudgetField, scaleUpSimulationForSkippedNodeGroupsEnabledField, daemonSetMutationEnabledField, gracefulDegradationEnabledField, defaultReservedResourcesV2EnabledField, provisioningErrorDetailsEnabledField, balloonPodIpprResizeEnabledField}
 
 // OptionsTracker computes AutoscalingOptions based on <CLI flags, experiments, Cluster proto> and tracks changes to them during Cluster Autoscaler runtime.
-//
-// Note: OptionsTracker currently only tracks AutoscalingOptions fields that are plumbed into OSS logic during CA startup, so CA needs to be restarted if their
-// values change. The tracker could be easily extended to handle non-OSS AutoscalingOptions fields that don't necessitate CA restart - we'd just need a mutex for
-// lastOpts read/write, and a requiresCaRestart bool added to trackedField. Then internal CA components could take OptionsTracker as a dependency, add new non-restarting
-// tracked fields, and get their latest value via OptionsTracker.Options(). Right now, these components instead depend on OptionsTracker.ExperimentsManager() and the startup
-// snapshot of OptionsTracker.Options() - they treat the field value from Options() as the CLI-flag-only value, and implement additional logic based on experiments
-// on top of it internally.
+// Thread-safe.
 type OptionsTracker struct {
 	// trackedFields contains an entry for each AutoscalingOptions field for which OptionsTracker is supposed to track changes to. This allows OptionsTracker to
 	// reason about the tracked fields without having to understand them individually, delegating field-specific logic to trackedFields.
@@ -58,6 +73,8 @@ type OptionsTracker struct {
 
 	// Snapshot of AutoscalingOptions computed directly from CLI flags, without taking experiments into account.
 	optsFromFlags internalopts.AutoscalingOptions
+
+	mu sync.RWMutex
 	// Snapshot of AutoscalingOptions combined from CLI flags and experiments - computed based on the most recent state.
 	lastOpts internalopts.AutoscalingOptions
 	// Snapshot of AutoscalingOptions combined from CLI flags and experiments - computed at Cluster Autoscaler startup time.
@@ -65,6 +82,11 @@ type OptionsTracker struct {
 	// startupOpts should be set once, after AutoscalingOptions are fully initialized for the first time during Cluster Autoscaler startup.
 	// This bool tracks whether this has happened yet.
 	startupOptsFinalized bool
+	// Snapshot of the Cluster proto stored on each cluster refresh.
+	clusterProto gkeclient.Cluster
+	// clusterStored needs to be called before RecomputeOptions is called.
+	// Tracks whether StoreCluster was updated at least once.
+	clusterStored bool
 }
 
 // NewOptionsTracker creates and initializes an instance of OptionsTracker.
@@ -92,6 +114,15 @@ func (t *OptionsTracker) ExperimentsManager() experiments.Manager {
 	return t.experimentsManager
 }
 
+// StoreCluster stores the latest Cluster proto in OptionsTracker.
+// Thread-safe.
+func (t *OptionsTracker) StoreCluster(cluster gkeclient.Cluster) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.clusterProto = cluster
+	t.clusterStored = true
+}
+
 // Options returns a snapshot of AutoscalingOptions computed based on the most recent state. AutoscalingOptions fields are computed at multiple stages of
 // CA startup, and each field should only be referenced after it's first computed:
 //   - The vast majority of fields depend only on their corresponding CLI flag (they don't need to be tracked, so they don't have an entry in allTrackedFields).
@@ -104,17 +135,26 @@ func (t *OptionsTracker) ExperimentsManager() experiments.Manager {
 //
 // All result fields can be safely referenced if CA startup is already completed and Options() is called from the main CA loop. The values of the tracked
 // AutoscalingOptions fields are recomputed every Cluster Autoscaler loop.
-// Not thread-safe, has to be called from the main CA goroutine.
+// Thread-safe.
 func (t *OptionsTracker) Options() internalopts.AutoscalingOptions {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	return t.lastOpts
 }
 
-// RecomputeOptions recomputes the values of the tracked AutoscalingOptions fields based on the current values of experiments and the provided Cluster proto. The result
-// can be obtained via Options().
-// Not thread-safe, has to be called from the main CA goroutine.
-func (t *OptionsTracker) RecomputeOptions(cluster gkeclient.Cluster) {
+// RecomputeOptions recomputes the values of the tracked AutoscalingOptions fields based on the current values of experiments and the stored Cluster proto. The result
+// can be obtained via Options(). Returns an error if called before a Cluster proto was stored.
+// Thread-safe.
+func (t *OptionsTracker) RecomputeOptions() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !t.clusterStored {
+		return fmt.Errorf("RecomputeOptions called before a cluster proto was stored via StoreCluster")
+	}
+
 	t.recomputeOptionsWithoutClusterProto()
-	t.recomputeOptionsWithClusterProto(cluster)
+	t.recomputeOptionsWithClusterProto(t.clusterProto)
 
 	// OptionsTracker needs to snapshot the initial AutoscalingOptions computed during Cluster Autoscaler startup, so that it can detect if an option changes
 	// later on (which might require a CA restart). The startup AutoscalingOptions are only fully initialized after RecomputeOptions() is called for the first time
@@ -124,17 +164,19 @@ func (t *OptionsTracker) RecomputeOptions(cluster gkeclient.Cluster) {
 		t.startupOpts = t.lastOpts
 		t.startupOptsFinalized = true
 	}
+	return nil
 }
 
 // OptionChangesRequireRestart returns whether OptionsTracker has detected that Cluster Autoscaler should be restarted in order to correctly handle the value
 // of a tracked field changing.
-// Not thread-safe, has to be called from the main CA goroutine.
+// Thread-safe.
 func (t *OptionsTracker) OptionChangesRequireRestart() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
 	for _, field := range t.trackedFields {
 		// The values for some fields are used in Cluster Autoscaler startup logic, and if the value changes CA needs to be fully restarted so that the
-		// startup logic can run again using the new value. Right now OptionsTracker only tracks fields that work this way - check if the value has changed
-		// since startup, the restart is needed if so.
-		if !field.valueEqual(t.startupOpts, t.lastOpts) {
+		// startup logic can run again using the new value. Check if the value has changed since startup for fields that require restart.
+		if field.caRestartNeededOnValueChange && !field.valueEqual(t.startupOpts, t.lastOpts) {
 			klog.Warningf("AutoscalingOptions.%s value switched by a Cluster proto/experiment change, new value: %v", field.name, field.getValueStr(t.lastOpts))
 			return true
 		}
@@ -164,6 +206,21 @@ func (t *OptionsTracker) recomputeOptionsWithClusterProto(cluster gkeclient.Clus
 				klog.Errorf("Error when computing AutoscalingOptions.%s: %v", field.name, err)
 				continue
 			}
+		}
+	}
+}
+
+// PropagateDynamicOptions syncs tracked fields that are configured to dynamically propagate changes
+// (via propagateChangesToAutoscalingContext) from the latest computed options to the provided OSS
+// AutoscalingOptions (typically embedded in AutoscalingContext).
+// Thread-safe.
+func (t *OptionsTracker) PropagateDynamicOptions(dst *config.AutoscalingOptions) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	for _, field := range t.trackedFields {
+		if field.propagateChangesToAutoscalingContext != nil {
+			field.propagateChangesToAutoscalingContext(t.lastOpts.AutoscalingOptions, dst)
 		}
 	}
 }

@@ -28,7 +28,10 @@ func FakeOptionsTracker(flagOpts internalopts.AutoscalingOptions, cluster gkecli
 		experimentsManager = experiments.NewMockManager()
 	}
 	tracker := NewOptionsTracker(flagOpts, experimentsManager)
-	tracker.RecomputeOptions(cluster)
+	tracker.StoreCluster(cluster)
+	if err := tracker.RecomputeOptions(); err != nil {
+		panic(err)
+	}
 	return tracker
 }
 

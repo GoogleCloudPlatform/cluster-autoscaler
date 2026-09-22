@@ -655,6 +655,14 @@ func CreateGkeManager(
 		return nil, err
 	}
 
+	// Computing options immediately after the initial Cluster proto is stored in forceRefreshResources()
+	// The subsequent init logic relies on OptionsTracker fields calculated based on Cluster proto
+	if optsTracker != nil {
+		if err := optsTracker.RecomputeOptions(); err != nil {
+			return nil, fmt.Errorf("failed to compute initial autoscaling options: %w", err)
+		}
+	}
+
 	go wait.Until(func() {
 		if err := manager.migInfoProvider.RegenerateMigInstancesCache(context.TODO()); err != nil {
 			klog.Errorf("Error while regenerating Mig cache: %v", err)
@@ -1929,6 +1937,8 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	// TODO(b/486148603): Cleanup experiment flag for custom thresholds when the experiment is over
 	m.resizableVmCustomThresholdsProvider.RefreshCustomThresholds()
 
+	m.refreshCSNMetrics()
+
 	if m.surgeUpgradeResourceTracker != nil {
 		err := m.surgeUpgradeResourceTracker.Refresh()
 		if err != nil {
@@ -2040,8 +2050,9 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 
 	if m.optsTracker != nil {
 		m.optsTracker.ExperimentsManager().UpdateReleaseChannel(m.releaseChannel)
-		m.optsTracker.RecomputeOptions(cluster)
-		m.gkeMetrics.UpdateCSNEnabled(m.optsTracker.Options().CSNEnabled)
+		// Storing the cluster state for recomputing options at the end of the autoscaler loop.
+		// This is done so that options are consistent during loop execution.
+		m.optsTracker.StoreCluster(cluster)
 	}
 
 	return nil
@@ -2138,6 +2149,12 @@ func (m *gkeManagerImpl) refreshResizableVmEdpEnabled() {
 		return
 	}
 	m.resizableVmEdpEnabledCache = !v.LessThan(vMin)
+}
+
+func (m *gkeManagerImpl) refreshCSNMetrics() {
+	if m.optsTracker != nil {
+		m.gkeMetrics.UpdateCSNEnabled(m.optsTracker.Options().CSNEnabled)
+	}
 }
 
 func (m *gkeManagerImpl) RefreshLocalSSDSizes() {

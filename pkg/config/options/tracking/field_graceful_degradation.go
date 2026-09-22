@@ -37,4 +37,5 @@ var gracefulDegradationEnabledField = trackedField{
 		optsToModify.GracefulDegradationEnabled = flagValue && enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

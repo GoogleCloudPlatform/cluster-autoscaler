@@ -37,6 +37,7 @@ var salvoScaleUpField = trackedField{
 		optsToModify.SalvoScaleUp = enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
 
 var salvoScaleUpBudgetField = trackedField{
@@ -51,4 +52,5 @@ var salvoScaleUpBudgetField = trackedField{
 		optsToModify.SalvoScaleUpBudget = experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(experiments.SalvoScaleUpBudgetSecondsFlag, optsFromFlags.SalvoScaleUpBudget)
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

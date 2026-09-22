@@ -36,4 +36,5 @@ var defaultReservedResourcesV2EnabledField = trackedField{
 		optsToModify.DefaultReservedResourcesV2Enabled = directLaunchEnabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

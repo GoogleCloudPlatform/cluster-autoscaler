@@ -37,4 +37,5 @@ var provisioningErrorDetailsEnabledField = trackedField{
 		optsToModify.ProvisioningErrorDetailsEnabled = enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
