@@ -96,6 +96,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/futurereservations"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/karpenter"
 	kubernetes_util "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	informerutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes/informers"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -120,6 +121,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
@@ -1075,7 +1077,8 @@ func (b *Builder) Build(
 	}
 
 	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
-	scaleUpOrchestrator := flexadvisor.NewWrapperOrchestrator(
+	var scaleUpOrchestrator scaleup.Orchestrator
+	scaleUpOrchestrator = flexadvisor.NewWrapperOrchestrator(
 		provreqorchestrator.NewWrapperOrchestrator(prOrchestrator),
 		flexAdvisor,
 		b.npcCrdLister,
@@ -1084,6 +1087,9 @@ func (b *Builder) Build(
 		[]flexadvisor.ScaleUpEndProcessor{estimationLimiter},
 		experimentsManager,
 	)
+	if autoscalingOptions.KarpenterEnabled {
+		scaleUpOrchestrator = karpenter.NewOrchestrator(scaleUpOrchestrator)
+	}
 
 	opts := coreoptions.AutoscalerOptions{
 		AutoscalingOptions:         autoscalingOptions.AutoscalingOptions,
