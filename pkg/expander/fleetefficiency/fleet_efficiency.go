@@ -20,14 +20,19 @@ import (
 	"fmt"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
@@ -57,7 +62,8 @@ type fleetEfficiencyFilter struct {
 	experimentsManager               experiments.Manager
 	// backoff is the scale-up backoff shared between NAP and the core scale-up logic. It is used to
 	// exclude zones in which uncreated NAP candidates cannot currently be scaled up. May be nil.
-	backoff base_backoff.Backoff
+	backoff        base_backoff.Backoff
+	optionsTracker *optstracking.OptionsTracker
 }
 
 // NewFilter creates a new instance of the fleet efficiency Filter.
@@ -72,6 +78,7 @@ func NewFilter(
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
 	backoff base_backoff.Backoff,
+	optionsTracker *optstracking.OptionsTracker,
 ) *fleetEfficiencyFilter {
 	return &fleetEfficiencyFilter{
 		flexAdvisor:                      flexAdvisor,
@@ -84,6 +91,7 @@ func NewFilter(
 		gceFlexAdvisorEnabled:            gceFlexAdvisorEnabled,
 		experimentsManager:               experimentsManager,
 		backoff:                          backoff,
+		optionsTracker:                   optionsTracker,
 	}
 }
 
@@ -100,14 +108,14 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	// Verify the allocation strategy.
 	samplePod := expansionOptions[0].Pods[0]
-	crd, _, err := f.cccLister.PodCrd(samplePod)
+	crd, err := f.getPodCrd(samplePod)
 	if err != nil {
 		klog.Errorf("FleetEfficiencyFilter: failed to get the CRD for pod: %v", err)
 		// We don't know the allocation strategy, do not record any metrics at this point.
 		return expansionOptions
 	}
 	if crd == nil {
-		// Allocation strategy is only supported for CCC, do not record metrics.
+		// Allocation strategy is only supported for CCC or pay-per-pod autopilot workloads, do not record metrics.
 		klog.V(4).Infof("FleetEfficiencyFilter: pod %s/%s does not use a ComputeClass, skipping", samplePod.Namespace, samplePod.Name)
 		return expansionOptions
 	}
@@ -263,7 +271,7 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, exp
 
 func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSet, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
 	nodeGroup := nodeGroupSet.Representative()
-	instanceRef, err := flexadvisor.ConstructInstanceReference(nodeGroup, f.cccLister, f.experimentsManager)
+	instanceRef, err := flexadvisor.ConstructInstanceReferenceForScope(nodeGroup, crd.Name(), f.experimentsManager)
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
 	}
@@ -299,6 +307,37 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 	}
 
 	return totalScore / float64(len(targetZones)), nil
+}
+
+func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, error) {
+	if pod == nil {
+		return nil, nil
+	}
+	crd, name, err := f.cccLister.PodCrd(pod)
+	if err != nil {
+		return nil, err
+	}
+	if crd != nil {
+		return crd, nil
+	}
+	if f.cloudProvider != nil && f.cloudProvider.IsAutopilotEnabled() && experiments.IsPayPerPodFleetEfficiencyEnabled(f.experimentsManager) {
+		projectId, _, _ := f.cloudProvider.GetClusterInfo()
+		if machinetypes.IsPredefinedComputeClass(name) {
+			if !flexadvisor.IsFlexAdvisorPCCSupportEnabled(f.experimentsManager) {
+				return nil, nil
+			}
+			if billing.GetBillingModel(pod, nil, name, true) == billing.PodBasedBilling {
+				if pcc, err := machinetypes.ToPredefinedComputeClass(name); err == nil {
+					return ccc.NewPccCrd(pcc, projectId, true, f.cloudProvider, f.optionsTracker), nil
+				}
+			}
+			return nil, nil
+		}
+		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod); ok {
+			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), nil
+		}
+	}
+	return nil, nil
 }
 
 func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {

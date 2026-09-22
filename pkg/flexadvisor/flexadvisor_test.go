@@ -1389,7 +1389,7 @@ func TestIsFlexAdvisorPCCSupportEnabled(t *testing.T) {
 			if !tc.nilManager {
 				manager = experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, tc.stringFlags)
 			}
-			got := isFlexAdvisorPCCSupportEnabled(manager)
+			got := IsFlexAdvisorPCCSupportEnabled(manager)
 			assert.Equal(t, tc.want, got)
 		})
 	}

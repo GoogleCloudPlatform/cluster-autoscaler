@@ -3445,3 +3445,116 @@ func TestNewPccCrd(t *testing.T) {
 		}
 	})
 }
+
+func TestPodFamilyAllocationStrategyDefaulting(t *testing.T) {
+	enabledTracker := optstracking.FakeOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{},
+		experiments.NewMockManager(experiments.PayPerPodFleetEfficiencyMinCAVersionFlag),
+	)
+	disabledTracker := optstracking.FakeOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{},
+		experiments.NewMockManager(),
+	)
+
+	testCases := []struct {
+		name                       string
+		priority                   v1.Priority
+		allocationStrategyDefaults *v1.AllocationStrategyDefaults
+		tracker                    *optstracking.OptionsTracker
+		wantStrategies             []*v1.AllocationStrategy
+	}{
+		{
+			name: "podFamily general-purpose defaults to fleet-efficiency when experiment enabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposePodFamily),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{new(v1.AllocationStrategyFleetEfficiency)},
+		},
+		{
+			name: "podFamily general-purpose-arm defaults to fleet-efficiency when experiment enabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposeArmPodFamily),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{new(v1.AllocationStrategyFleetEfficiency)},
+		},
+		{
+			name: "podFamily general-purpose does not default when experiment disabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposePodFamily),
+			},
+			tracker:        disabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{nil},
+		},
+		{
+			name: "podFamily with explicit lowest-cost preserves explicit strategy when experiment enabled",
+			priority: v1.Priority{
+				PodFamily:          new(rules.GeneralPurposePodFamily),
+				AllocationStrategy: new(v1.AllocationStrategyLowestCost),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{new(v1.AllocationStrategyLowestCost)},
+		},
+		{
+			name: "podFamily with allocationStrategyDefaults lowest-cost preserves default strategy when experiment enabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposePodFamily),
+			},
+			allocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: new(v1.AllocationStrategyLowestCost),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{new(v1.AllocationStrategyLowestCost)},
+		},
+		{
+			name: "on-demand podFamily with only spot allocationStrategyDefaults defaults to fleet-efficiency when experiment enabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposePodFamily),
+			},
+			allocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+				Spot: new(v1.AllocationStrategyLowestCost),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{new(v1.AllocationStrategyFleetEfficiency)},
+		},
+		{
+			name: "machineFamily rule without podFamily does not default to fleet-efficiency when experiment enabled",
+			priority: v1.Priority{
+				MachineFamily: new("n2"),
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{nil},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := &v1.ComputeClass{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-ccc",
+				},
+				Spec: v1.ComputeClassSpec{
+					Priorities:                 []v1.Priority{tc.priority},
+					AllocationStrategyDefaults: tc.allocationStrategyDefaults,
+				},
+			}
+			c := NewCccCrd(cc, "test-project", false, crd.TestDefaultDataProvider(), tc.tracker)
+			gotRules := c.Rules()
+			assert.Len(t, gotRules, len(tc.wantStrategies))
+			for i, r := range gotRules {
+				sr, ok := r.(rules.AllocationStrategyRule)
+				assert.True(t, ok)
+				if tc.wantStrategies[i] == nil {
+					assert.Nil(t, sr.AllocationStrategy())
+				} else {
+					if assert.NotNil(t, sr.AllocationStrategy()) {
+						assert.Equal(t, *tc.wantStrategies[i], *sr.AllocationStrategy())
+					}
+				}
+			}
+		})
+	}
+}

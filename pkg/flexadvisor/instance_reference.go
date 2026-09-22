@@ -49,16 +49,25 @@ func (i *InstanceReference) String() string {
 // ConstructInstanceReference returns InstanceReference for the nodeGroup.
 // Returns an error if any field in InstanceReference was not found from nodeGroup.
 func ConstructInstanceReference(nodeGroup cloudprovider.NodeGroup, cccLister lister.Lister, experimentsManager experiments.Manager) (*InstanceReference, error) {
+	if cccLister == nil {
+		return nil, errors.New("lister.Lister is nil")
+	}
+	_, flexibilityScopeKey, err := cccLister.NodeGroupCrd(nodeGroup)
+	if flexibilityScopeKey == "" {
+		return nil, fmt.Errorf("ccc label/flexibility scope key not found in the nodeGroup. err: %v", err)
+	}
+	return ConstructInstanceReferenceForScope(nodeGroup, flexibilityScopeKey, experimentsManager)
+}
+
+// ConstructInstanceReferenceForScope returns InstanceReference for the nodeGroup with the specified flexibility scope key.
+// Returns an error if any field in InstanceReference was not found from nodeGroup.
+func ConstructInstanceReferenceForScope(nodeGroup cloudprovider.NodeGroup, flexibilityScopeKey string, experimentsManager experiments.Manager) (*InstanceReference, error) {
 	gkeNodeGroup, ok := nodeGroup.(gke.NodeGroup)
 	if !ok {
 		return nil, fmt.Errorf("unexpected cloudprovider.NodeGroup type, got: %s, want: gke.NodeGroup", reflect.TypeOf(nodeGroup))
 	}
-	if cccLister == nil {
-		return nil, errors.New("lister.Lister is nil")
-	}
-	_, flexibilityScopeKey, err := cccLister.NodeGroupCrd(gkeNodeGroup.GetMig())
 	if flexibilityScopeKey == "" {
-		return nil, fmt.Errorf("ccc label/flexibility scope key not found in the nodeGroup. err: %v", err)
+		return nil, fmt.Errorf("ccc label/flexibility scope key not found in the nodeGroup")
 	}
 	zone := gkeNodeGroup.GceRef().Zone
 	if zone == "" {

@@ -1015,7 +1015,8 @@ func (b *Builder) Build(
 		autoscalingOptions.ClusterDefaultAllocationStrategy,
 		autoscalingOptions.GCEFlexAdvisorEnabled,
 		experimentsManager,
-		backoff)
+		backoff,
+		b.optsTracker)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -447,7 +447,7 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 	result := []v1.Priority{}
 	for i := range ccc.Spec.Priorities {
 		priority := ccc.Spec.Priorities[i]
-		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults, ccc.Spec.AllocationStrategyDefaults)
+		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults, ccc.Spec.AllocationStrategyDefaults, ccc.optionsTracker)
 		result = append(result, priority)
 	}
 
@@ -455,7 +455,7 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 }
 
 // applyDefaultsToPriority applies the default field to priority if it is not present in priority.
-func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults, allocationStrategyDefaults *v1.AllocationStrategyDefaults) {
+func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults, allocationStrategyDefaults *v1.AllocationStrategyDefaults, optionsTracker *optstracking.OptionsTracker) {
 	if defaults != nil {
 		// Check for Node System Config.
 		if priority.NodeSystemConfig == nil {
@@ -479,6 +479,10 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		} else {
 			priority.AllocationStrategy = allocationStrategyDefaults.OnDemand
 		}
+	}
+
+	if priority.AllocationStrategy == nil && priority.PodFamily != nil && rules.IsPodFamily(*priority.PodFamily) && optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
+		priority.AllocationStrategy = new(v1.AllocationStrategyFleetEfficiency)
 	}
 }
 

@@ -16,7 +16,7 @@ package provider
 
 import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
@@ -24,8 +24,8 @@ import (
 type GkeExpanderCloudProvider interface {
 	cloudprovider.CloudProvider
 	gke.PlannedLocationsProvider
+	ccc.DataProvider
 
 	GetClusterInfo() (projectId, location, clusterName string)
 	IsAutopilotEnabled() bool
-	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }

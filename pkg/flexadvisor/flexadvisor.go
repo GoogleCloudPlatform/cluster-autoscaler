@@ -495,7 +495,8 @@ func isFlexAdvisorMinCpuPlatformSupportEnabled(manager experiments.Manager) bool
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorMinCpuPlatformMinCAVersionFlag, true)
 }
 
-func isFlexAdvisorPCCSupportEnabled(manager experiments.Manager) bool {
+// IsFlexAdvisorPCCSupportEnabled returns whether Flex Advisor support for Predefined Compute Classes is enabled.
+func IsFlexAdvisorPCCSupportEnabled(manager experiments.Manager) bool {
 	if manager == nil {
 		return true
 	}
