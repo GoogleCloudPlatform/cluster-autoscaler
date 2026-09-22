@@ -1946,6 +1946,136 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "NodePoolSpec with resourceLabels sets ResourceLabels on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"resource-labels.cloud.google.com/team": "data-infra",
+					"resource-labels.cloud.google.com/env":  "prod",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ResourceLabels: map[string]string{
+							"env":  "prod",
+							"team": "data-infra",
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with oauthScopes sets OauthScopes on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/logging.write":  "true",
+					"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						OauthScopes: []string{
+							"https://www.googleapis.com/auth/cloud-platform",
+							"https://www.googleapis.com/auth/logging.write",
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with disablePodCidrOverprovisionConfig sets PodCidrOverprovisionConfig on NodeNetworkConfig (true)",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"PodCIDROverprovisionConfigDisable": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						PodCidrOverprovisionConfig: &gke_api_beta.PodCIDROverprovisionConfig{
+							Disable:         true,
+							ForceSendFields: []string{"Disable"},
+						},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with disablePodCidrOverprovisionConfig sets PodCidrOverprovisionConfig on NodeNetworkConfig (false)",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"PodCIDROverprovisionConfigDisable": "false",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						PodCidrOverprovisionConfig: &gke_api_beta.PodCIDROverprovisionConfig{
+							Disable:         false,
+							ForceSendFields: []string{"Disable"},
+						},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "NodePoolSpec with maintenance exclusion on static cluster enables EoS native setting",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{

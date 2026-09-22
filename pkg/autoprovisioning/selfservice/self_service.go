@@ -58,6 +58,9 @@ func InitSelfService(cp CloudProvider) {
 		newSubnetPriorities(),
 		newNetworkTags(),
 		newContainerdConfig(),
+		newResourceLabels(),
+		newOAuthScopes(),
+		newDisablePodCidrOverprovisionConfig(),
 	}
 }
 
