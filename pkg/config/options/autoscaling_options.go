@@ -74,6 +74,7 @@ type InternalOptions struct {
 	ReservationsAnyLocationPolicyOverride        bool
 	ExtendedDurationPodsUpgradeNodesTaintPerLoop int
 	ReservationBlocksEnabled                     bool
+	ReservationSubBlockDeduplicationEnabled      bool
 	GCEFlexAdvisorEnabled                        bool
 	CSNEnabled                                   bool
 	CSNCAFlag                                    CSNStatus

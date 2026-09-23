@@ -44,6 +44,11 @@ const RelaxedNodeGroupCreationPenalty = "RelaxedNodeGroupCreationPenalty::MinCAV
 
 const ReservationSubblocksTargetingEnabledFlag = "ReservationSubblocksTargeting::EnabledMinCAVersion"
 
+// ReservationSubBlockDeduplicationEnabledFlag controls whether NAP refuses to inject an atomically
+// resized node group candidate targeting a reservation sub-block that is already targeted by
+// another node group. See b/564377355.
+const ReservationSubBlockDeduplicationEnabledFlag = "ReservationSubBlockDeduplication::EnabledMinCAVersion"
+
 const CapacityCheckWaitTimeSecondsFlexStartEnabledFlag = "CapacityCheckWaitTimeSecondsFlexStart::EnabledMinCAVersion"
 const CapacityCheckWaitTimeSecondsMultiHostTpuEnabledFlag = "CapacityCheckWaitTimeSecondsMultiHostTpu::EnabledMinCAVersion"
 const CapacityCheckWaitTimeSecondsDefaultValueGpuFlag = "CapacityCheckWaitTimeSecondsGPU::DefaultValue"

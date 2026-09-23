@@ -489,3 +489,58 @@ func TestBackoffStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestBackoffStatusProvisionOnlyTpuWithoutTopologyLabel(t *testing.T) {
+	backoffDuration := 100 * time.Second
+	maxBackoffDuration := 200 * time.Second
+	outOfResourcesErrorInfo := cloudprovider.InstanceErrorInfo{
+		ErrorClass:   cloudprovider.OutOfResourcesErrorClass,
+		ErrorCode:    gce.ErrorCodeResourcePoolExhausted,
+		ErrorMessage: "Out of resources",
+	}
+
+	tpuSpec := gke.NewTestMigSpecBuilder().
+		SetTpuType("tpu7x").
+		SetTpuTopology("4x4x4").
+		SetTpuMultiHost(true).
+		SpecBuild()
+	existingProvisionOnlyMig := gke.NewTestGkeMigBuilder().
+		SetDeploymentType(gke.DeploymentTypeDense).
+		SetSpec(tpuSpec).
+		Build()
+	napCandidateMig := gke.NewTestGkeMigBuilder().
+		SetDeploymentType(gke.DeploymentTypeDense).
+		SetSpec(tpuSpec).
+		Build()
+
+	// Existing PROVISION_ONLY node pools omit cloud.google.com/gke-tpu-topology in kube-env.
+	existingNodeInfo := newNodeInfo(map[string]string{
+		labels.ReservationNameLabel:      "test-reservation",
+		labels.ReservationBlocksLabel:    "test-block",
+		labels.ReservationSubBlocksLabel: "test-subblock-0028",
+		labels.ReservationProjectLabel:   "test-project",
+		apiv1.LabelTopologyZone:          "us-central1-c",
+		labels.MachineFamilyLabel:        "tpu7x",
+		labels.TPULabel:                  "tpu7x",
+		apiv1.LabelInstanceTypeStable:    "tpu7x-standard-4t",
+	})
+	// NAP candidates include cloud.google.com/gke-tpu-topology from the ComputeClass spec.
+	napCandidateNodeInfo := newNodeInfo(map[string]string{
+		labels.ReservationNameLabel:      "test-reservation",
+		labels.ReservationBlocksLabel:    "test-block",
+		labels.ReservationSubBlocksLabel: "test-subblock-0028",
+		labels.ReservationProjectLabel:   "test-project",
+		apiv1.LabelTopologyZone:          "us-central1-c",
+		labels.MachineFamilyLabel:        "tpu7x",
+		labels.TPULabel:                  "tpu7x",
+		labels.TPUTopologyLabel:          "4x4x4",
+		apiv1.LabelInstanceTypeStable:    "tpu7x-standard-4t",
+	})
+
+	b := NewReservationsBackoff(backoffDuration, maxBackoffDuration, &mockProvider{})
+	b.Backoff(existingProvisionOnlyMig, existingNodeInfo, outOfResourcesErrorInfo, Now)
+
+	status := b.BackoffStatus(napCandidateMig, napCandidateNodeInfo, Now)
+	assert.True(t, status.IsBackedOff)
+	assert.Equal(t, outOfResourcesErrorInfo, status.ErrorInfo)
+}

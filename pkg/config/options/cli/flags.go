@@ -101,6 +101,7 @@ var (
 	reservationsAnyLocationPolicyOverride        = flag.Bool("enable-reservations-any-location-policy-override", false, "Whether NAP will use ANY location policy in injected node groups using reservations. It is used to query Recommend Locations API before every scale-up, as it has the knowledge about all (even cross org) reservations.")
 	extendedDurationPodsUpgradeNodesTaintPerLoop = flag.Int("extended-duration-pods-max-taint-per-loop", 10, "Number of EDP nodes that will be tainted during upgrade per loop")
 	reservationBlocksEnabled                     = flag.Bool("enable-reservation-blocks", false, "Fetch reservation blocks from GCE reservations to be used at NAP validation phase.")
+	reservationSubBlockDeduplicationEnabled      = flag.Bool("enable-reservation-subblock-deduplication", false, "Whether NAP should skip injecting atomic node group candidates targeting a reservation sub-block that is already claimed by another node group.")
 	gceFlexAdvisorEnabled                        = flag.Bool("enable-gce-flexadvisor", false, "Whether GCE Flex Advisor should be enabled.")
 	csnStatus                                    = flag.String("csn-status", string(options.CSNUnspecified), "Whether CSN is force enabled, force disabled or use experiment values (go/gke-csn-launch).")
 	csnDefaultRefreshFrequency                   = flag.Duration("csn-default-refresh-frequency", 24*time.Hour, `The default frequency for refreshing CSN nodes if not specified in the buffer annotation or an error occured during parsing.`)
@@ -340,6 +341,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ReservationsAnyLocationPolicyOverride:        *reservationsAnyLocationPolicyOverride,
 		ExtendedDurationPodsUpgradeNodesTaintPerLoop: *extendedDurationPodsUpgradeNodesTaintPerLoop,
 		ReservationBlocksEnabled:                     *reservationBlocksEnabled,
+		ReservationSubBlockDeduplicationEnabled:      *reservationSubBlockDeduplicationEnabled,
 		GCEFlexAdvisorEnabled:                        *gceFlexAdvisorEnabled,
 		CSNCAFlag:                                    options.CSNStatus(*csnStatus),
 		CSNDefaultRefreshFrequency:                   *csnDefaultRefreshFrequency,

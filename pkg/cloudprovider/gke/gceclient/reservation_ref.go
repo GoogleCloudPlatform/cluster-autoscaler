@@ -58,6 +58,15 @@ func (r ReservationRef) Path() string {
 	return r.RelativePath("")
 }
 
+const (
+	// ReservationBlocksPathSegment is the path segment preceding a reservation block name in a
+	// fully qualified reservation path.
+	ReservationBlocksPathSegment = "reservationBlocks"
+	// ReservationSubBlocksPathSegment is the path segment preceding a reservation sub-block name
+	// in a fully qualified reservation path.
+	ReservationSubBlocksPathSegment = "reservationSubBlocks"
+)
+
 // RelativePath provides a string representation of the ReservationPath. Produces long
 // form notation in cases where reservation is located in the different project
 // or a short form for reservations contained in the cluster project.
@@ -77,13 +86,29 @@ func (r ReservationRef) RelativePath(clusterProject string) string {
 	}
 	if r.BlockName != "" {
 		sb.WriteString("/")
-		sb.WriteString(path.Join("reservationBlocks", r.BlockName))
+		sb.WriteString(path.Join(ReservationBlocksPathSegment, r.BlockName))
 		if r.SubBlockName != "" {
 			sb.WriteString("/")
-			sb.WriteString(path.Join("reservationSubBlocks", r.SubBlockName))
+			sb.WriteString(path.Join(ReservationSubBlocksPathSegment, r.SubBlockName))
 		}
 	}
 	return sb.String()
+}
+
+// TargetsReservationSubBlock reports whether the given reservation path (as produced by
+// RelativePath or Path) is scoped down to a specific reservation sub-block.
+func TargetsReservationSubBlock(reservationPath string) bool {
+	return strings.Contains(reservationPath, "/"+ReservationSubBlocksPathSegment+"/")
+}
+
+// CanonicalizeReservationPath rewrites a long form reservation path pointing at the cluster project
+// into the equivalent short form produced by RelativePath, so that paths obtained from different
+// sources can be compared for equality. Paths in other projects are returned unchanged.
+func CanonicalizeReservationPath(reservationPath, clusterProject string) string {
+	if clusterProject == "" {
+		return reservationPath
+	}
+	return strings.TrimPrefix(reservationPath, path.Join("projects", clusterProject, "reservations")+"/")
 }
 
 // GetReservationRefFromReservation creates and returns a ReservationRef by value.

@@ -236,9 +236,10 @@ func initAutoprovisioningProcessors(
 			ProvisioningLabelEnabled:   options.ProvisioningLabelEnabled,
 			TpuAutoprovisioningEnabled: options.TpuAutoprovisioningEnabled,
 			ReservationFlags: autoprovisioning.ReservationFlags{
-				SpecificTypeReservationMatchEnabled:   options.SpecificTypeReservationMatchEnabled,
-				SpecificTypeReservationsEnabled:       options.SpecificTypeReservationMatchEnabled || options.SpecificTypeReservationWithoutMatchEnabled,
-				ReservationsAnyLocationPolicyOverride: options.ReservationsAnyLocationPolicyOverride,
+				SpecificTypeReservationMatchEnabled:     options.SpecificTypeReservationMatchEnabled,
+				SpecificTypeReservationsEnabled:         options.SpecificTypeReservationMatchEnabled || options.SpecificTypeReservationWithoutMatchEnabled,
+				ReservationsAnyLocationPolicyOverride:   options.ReservationsAnyLocationPolicyOverride,
+				ReservationSubBlockDeduplicationEnabled: options.ReservationSubBlockDeduplicationEnabled,
 			},
 			MultiNetworkingEnabled:         options.MultiNetworkSupportEnabled,
 			BootDiskConfigEnabled:          options.BootDiskSelectorEnabled,
