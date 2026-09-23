@@ -16,9 +16,11 @@ package main
 
 import (
 	ctx "context"
+	"flag"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -191,9 +193,6 @@ func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConf
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	klog.InitFlags(nil)
-	// Contextual logging is hard-coded to be enabled
-	// This overwrites the default value
-	klog.EnableContextualLogging(false)
 	ctrl.SetLogger(klog.NewKlogr())
 	featureGate := utilfeature.DefaultMutableFeatureGate
 
@@ -219,6 +218,8 @@ func main() {
 	experimentsManager := optstracking.InitExperimentsManager(optionsFromFlags)
 	optsTracker := optstracking.NewOptionsTracker(optionsFromFlags, experimentsManager)
 	options := optsTracker.Options()
+
+	disableContextualLoggingIfHighVerbosity(options.SchedulerVerbosityOffset)
 
 	if options.InterPodAffinityHostnameFastPath != featureGate.Enabled(features.InterPodAffinityHostnameFastPath) {
 		if err := featureGate.SetFromMap(map[string]bool{string(features.InterPodAffinityHostnameFastPath): options.InterPodAffinityHostnameFastPath}); err != nil {
@@ -324,5 +325,29 @@ func main() {
 				},
 			},
 		})
+	}
+}
+
+// disableContextualLoggingIfHighVerbosity checks if scheduler-verbosity is high and disables contextual logging if needed.
+// This is to avoid performance degradation coming from excessive scheduler logging.
+func disableContextualLoggingIfHighVerbosity(schedulerVerbosityOffset int) {
+	vFlag := flag.CommandLine.Lookup("v")
+	if vFlag == nil {
+		klog.Warningf("No flag found for -v, disabling contextual logging to avoid performance degradation")
+		klog.EnableContextualLogging(false)
+		return
+	}
+
+	verbosity, err := strconv.Atoi(vFlag.Value.String())
+	if err != nil {
+		klog.Warningf("Unable to parse -v flag value: %v, disabling contextual logging to avoid performance degradation", vFlag.Value.String())
+		klog.EnableContextualLogging(false)
+		return
+	}
+
+	schedulerVerbosity := verbosity - schedulerVerbosityOffset
+	if schedulerVerbosity > 2 {
+		klog.Warningf("Scheduler verbosity is %d (> 2), disabling contextual logging to avoid performance degradation", schedulerVerbosity)
+		klog.EnableContextualLogging(false)
 	}
 }
