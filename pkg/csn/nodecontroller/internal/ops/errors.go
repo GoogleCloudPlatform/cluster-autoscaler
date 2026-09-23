@@ -27,6 +27,8 @@ const (
 	ErrorCodeNone = ""
 	// ErrorCodeGKEInternal represents GKE-actionable internal errors or unrecognized errors.
 	ErrorCodeGKEInternal = "GKE_INTERNAL_ERROR"
+	// ErrorCodeGCESourcePrefix is a prefix for errors that were originally GCE errors but are not recognized by GetErrorInfo.
+	ErrorCodeGCESourcePrefix = "GCE_SOURCE_"
 )
 
 // ErrorWithCode wraps an error with a canonical error code for metrics reporting.
@@ -78,7 +80,7 @@ func ErrorCodeFromGCEError(errorCode, errorMessage, instanceStatus string) strin
 		return errInfo.ErrorCode
 	}
 	if errorCode != "" {
-		return errorCode
+		return ErrorCodeGCESourcePrefix + errorCode
 	}
 	return ErrorCodeGKEInternal
 }

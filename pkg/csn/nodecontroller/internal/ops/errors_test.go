@@ -172,13 +172,13 @@ func TestErrorCodeFromGCEError(t *testing.T) {
 			name:           "unrecognized GCE error code with provisioning status returns raw errorCode",
 			code:           "SOME_UNKNOWN_GCE_ERROR",
 			instanceStatus: "PROVISIONING",
-			expected:       "SOME_UNKNOWN_GCE_ERROR",
+			expected:       "GCE_SOURCE_SOME_UNKNOWN_GCE_ERROR",
 		},
 		{
 			name:           "unrecognized GCE error code with suspended status returns raw errorCode",
 			code:           "SOME_UNKNOWN_GCE_ERROR",
 			instanceStatus: "SUSPENDED",
-			expected:       "SOME_UNKNOWN_GCE_ERROR",
+			expected:       "GCE_SOURCE_SOME_UNKNOWN_GCE_ERROR",
 		},
 		{
 			name:           "empty error code defaults to GKE internal error",
