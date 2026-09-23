@@ -60,7 +60,7 @@ type trackedField struct {
 	propagateChangesToAutoscalingContext func(src config.AutoscalingOptions, dst *config.AutoscalingOptions)
 }
 
-var allTrackedFields = []trackedField{asyncNodeGroupsEnabledField, dynamicResourceAllocationEnabledField, capacityBuffersControllerEnabledField, capacityBuffersPodInjectionEnabledField, zoneTypesEnabledField, fastpathBinpackingEnabledField, maxNodePerScaleUpField, csnEnabledField, napMaxNodesField, salvoScaleUpField, salvoScaleUpBudgetField, scaleUpSimulationForSkippedNodeGroupsEnabledField, daemonSetMutationEnabledField, gracefulDegradationEnabledField, defaultReservedResourcesV2EnabledField, provisioningErrorDetailsEnabledField, balloonPodIpprResizeEnabledField}
+var allTrackedFields = []trackedField{asyncNodeGroupsEnabledField, dynamicResourceAllocationEnabledField, capacityBuffersControllerEnabledField, capacityBuffersPodInjectionEnabledField, zoneTypesEnabledField, fastpathBinpackingEnabledField, maxNodePerScaleUpField, csnEnabledField, napMaxNodesField, salvoScaleUpField, salvoScaleUpBudgetField, scaleUpSimulationForSkippedNodeGroupsEnabledField, daemonSetMutationEnabledField, gracefulDegradationEnabledField, defaultReservedResourcesV2EnabledField, provisioningErrorDetailsEnabledField, balloonPodIpprResizeEnabledField, ekvmsIncrementStepField}
 
 // OptionsTracker computes AutoscalingOptions based on <CLI flags, experiments, Cluster proto> and tracks changes to them during Cluster Autoscaler runtime.
 // Thread-safe.

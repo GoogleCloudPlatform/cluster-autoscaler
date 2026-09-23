@@ -767,6 +767,14 @@ var (
 		}, []string{"machine_family"},
 	)
 
+	resizeIncrementStepMilliCpus = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "resize_increment_step_millicpus",
+			Help:      "The configured resize increment step in milliCPUs, per resizable machine family.",
+		}, []string{"machine_family"},
+	)
+
 	taskQueueSize = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1268,6 +1276,7 @@ var allMetrics = []k8smetrics.Registerable{
 	vmResizeOperation,
 	ekBackoffStatus,
 	resizeBackoffStatus,
+	resizeIncrementStepMilliCpus,
 	taskQueueSize,
 	taskQueueDuration,
 	taskQueueCompletedCount,
@@ -1816,6 +1825,11 @@ func (*prometheusMetrics) UpdateEkBackoffStatus(isBackedOff bool) {
 	} else {
 		ekBackoffStatus.Set(0)
 	}
+}
+
+// UpdateResizeIncrementStep reports the resize increment step a machine family is configured with.
+func (pm *prometheusMetrics) UpdateResizeIncrementStep(machineFamily string, milliCpus int64) {
+	resizeIncrementStepMilliCpus.WithLabelValues(machineFamily).Set(float64(milliCpus))
 }
 
 // UpdateResizeBackoffStatus updates the resize backoff status metric.

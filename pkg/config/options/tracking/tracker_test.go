@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 
@@ -157,6 +159,24 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			experimentValues:            map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
 			wantRestart:                 true,
+		},
+		{
+			testName: "EkvmsIncrementStep_field_is_tracked",
+			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{
+				EkvmsIncrementStep: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("2"),
+					apiv1.ResourceMemory: resource.MustParse("1Mi"),
+				},
+			}},
+			experimentValues:       map[string]bool{experiments.EkFineGrainedResizeMinCAVersionFlag: true},
+			stringExperimentValues: map[string]string{experiments.EkFineGrainedResizeIncrementStepFlag: "1"},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{
+				EkvmsIncrementStep: apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("1"),
+					apiv1.ResourceMemory: resource.MustParse("1Mi"),
+				},
+			}},
+			wantRestart: true,
 		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {

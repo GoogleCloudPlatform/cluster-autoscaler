@@ -382,6 +382,7 @@ func setUpProcessors(
 		IncrementStep: options.EkvmsIncrementStep,
 		SafetyBuffer:  options.EkvmsAllocationSafetyBuffer,
 	})
+	internalmetrics.Metrics.UpdateResizeIncrementStep(machinetypes.EK.Name(), options.EkvmsIncrementStep.Cpu().MilliValue())
 	resizeCalculator := calculator.New(vmreservation.New(gkeReserved, options.DefaultReservedResourcesV2Enabled), provider, options.IsClusterUsingDPV1, limitProvider)
 	autoscalingProcessors := processors.DefaultProcessors(options.AutoscalingOptions)
 

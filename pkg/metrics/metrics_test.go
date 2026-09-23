@@ -161,6 +161,38 @@ func TestUpdateResizeBackoffStatus(t *testing.T) {
 	assert.Equal(t, float64(0), val)
 }
 
+func TestUpdateResizeIncrementStep(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	pm := &prometheusMetrics{}
+
+	ekName := machinetypes.EK.Name()
+	e4aName := machinetypes.E4A.Name()
+
+	// The 1 CPU step used from 1.37 onwards, and the 2 CPU default, are reported per family.
+	pm.UpdateResizeIncrementStep(ekName, 1000)
+	pm.UpdateResizeIncrementStep(e4aName, 1000)
+
+	val, err := testutil.GetGaugeMetricValue(resizeIncrementStepMilliCpus.WithLabelValues(ekName))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1000), val)
+
+	val, err = testutil.GetGaugeMetricValue(resizeIncrementStepMilliCpus.WithLabelValues(e4aName))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1000), val)
+
+	// Re-registering with a different step overwrites the previous value.
+	pm.UpdateResizeIncrementStep(ekName, 2000)
+	pm.UpdateResizeIncrementStep(e4aName, 2000)
+
+	val, err = testutil.GetGaugeMetricValue(resizeIncrementStepMilliCpus.WithLabelValues(ekName))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2000), val)
+
+	val, err = testutil.GetGaugeMetricValue(resizeIncrementStepMilliCpus.WithLabelValues(e4aName))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2000), val)
+}
+
 func TestUpdateResizableVmLaunchStatusNotCreated(t *testing.T) {
 	pm := &prometheusMetrics{}
 
