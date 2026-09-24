@@ -167,6 +167,9 @@ var (
 
 	clusterDefaultAllocationStrategy = flag.String("allocation-strategy-default", "", "Default allocation strategy to use when scaling up. Supports: lowest-cost, fleet-efficiency.")
 	experimentsConfigMap             = flag.String("experiments-config-map", "", "The name of the ConfigMap containing experiment configurations.")
+
+	enableKwokGceReconciler   = flag.Bool("enable-testonly-kwok-gce-reconciler", false, "Enable goroutine to reconcile GCE instances and K8s Nodes for KWOK integration.")
+	kwokGceReconcilerInterval = flag.Duration("testonly-kwok-gce-reconciler-interval", 10*time.Second, "Interval between KWOK GCE reconciler runs.")
 )
 
 // ComponentVersion returns cluster autoscaler component version.
@@ -374,6 +377,8 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		FutureReservationsBackoffEnabled:             *futureReservationsBackoffEnabled,
 		ClusterHash:                                  *clusterHash,
 		ParentProduct:                                *parentProduct,
+		EnableKwokGceReconciler:                      *enableKwokGceReconciler,
+		KwokGceReconcilerInterval:                    *kwokGceReconcilerInterval,
 		EkvmsMinVmSize:                               ekMinVmSize,
 		EkvmsIncrementStep:                           ekIncrementStep,
 		EkvmsAllocationSafetyBuffer:                  safetyBuffer,

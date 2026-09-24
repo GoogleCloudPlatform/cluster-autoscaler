@@ -43,6 +43,8 @@ type autoscalingInternalGceClientMock struct {
 	pollUntilActionStops                        func(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq
 	suspendInstances                            func(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	fetchManagedInstances                       func(migRef gce.GceRef, filter string) ([]*ManagedInstance, error)
+	fetchMachineType                            func(ctx context.Context, zone, machineType string) (*gce_api.MachineType, error)
+	fetchMigTemplate                            func(ctx context.Context, migRef gce.GceRef, templateName string, regional bool) (*gce_api.InstanceTemplate, error)
 	httpTimeout                                 time.Duration
 }
 
@@ -137,6 +139,16 @@ func (a *autoscalingInternalGceClientMock) GetRecordedRecommendations(migRef gce
 	return slices.Clone(a.recordedRecommendations[migKey])
 }
 
+func (a *autoscalingInternalGceClientMock) WithFetchMachineType(fetchMachineType func(ctx context.Context, zone, machineType string) (*gce_api.MachineType, error)) *autoscalingInternalGceClientMock {
+	a.fetchMachineType = fetchMachineType
+	return a
+}
+
+func (a *autoscalingInternalGceClientMock) WithFetchMigTemplate(fetchMigTemplate func(ctx context.Context, migRef gce.GceRef, templateName string, regional bool) (*gce_api.InstanceTemplate, error)) *autoscalingInternalGceClientMock {
+	a.fetchMigTemplate = fetchMigTemplate
+	return a
+}
+
 func (client *autoscalingInternalGceClientMock) FetchAcceleratorTypes(zone string) (*gce_api.AcceleratorTypeList, error) {
 	result := gce_api.AcceleratorTypeList{}
 	zoneGpuCounts, err := client.getZoneGpuCounts()
@@ -221,4 +233,18 @@ func (a *autoscalingInternalGceClientMock) FetchStandardZones(region string) ([]
 
 func (a *autoscalingInternalGceClientMock) FetchAIZones(region string) ([]string, error) {
 	return a.fetchAIZones(region)
+}
+
+func (a *autoscalingInternalGceClientMock) FetchMachineType(ctx context.Context, zone, machineType string) (*gce_api.MachineType, error) {
+	if a.fetchMachineType != nil {
+		return a.fetchMachineType(ctx, zone, machineType)
+	}
+	return nil, nil
+}
+
+func (a *autoscalingInternalGceClientMock) FetchMigTemplate(ctx context.Context, migRef gce.GceRef, templateName string, regional bool) (*gce_api.InstanceTemplate, error) {
+	if a.fetchMigTemplate != nil {
+		return a.fetchMigTemplate(ctx, migRef, templateName, regional)
+	}
+	return nil, nil
 }

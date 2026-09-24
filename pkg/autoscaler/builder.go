@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	gce_api "google.golang.org/api/compute/v1"
+	"google.golang.org/api/option"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
@@ -124,6 +126,7 @@ import (
 	cc_controller "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	cc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reconciler"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -1062,6 +1065,37 @@ func (b *Builder) Build(
 	if staticAutoscaler.AutoscalingContext != nil && staticAutoscaler.AutoscalingContext.ClusterStateRegistry != nil {
 		cloudProvider.SetScaleUpTimeProvider(staticAutoscaler.AutoscalingContext.ClusterStateRegistry)
 	}
+
+	if autoscalingOptions.EnableKwokGceReconciler {
+		if b.httpClient == nil {
+			return nil, nil, fmt.Errorf("httpClient is required for KWOK GCE reconciler")
+		}
+		if b.manager == nil {
+			return nil, nil, fmt.Errorf("manager is required for KWOK GCE reconciler")
+		}
+		var opts []option.ClientOption
+		opts = append(opts, option.WithHTTPClient(b.httpClient))
+		if autoscalingOptions.GceEndpoint != "" {
+			opts = append(opts, option.WithEndpoint(autoscalingOptions.GceEndpoint))
+		}
+		gceService, err := gce_api.NewService(bgContext, opts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create GCE service for KWOK reconciler: %w", err)
+		}
+		kwokReconciler := reconciler.NewKwokGceReconciler(
+			b.manager.GetClient(),
+			b.gceClient,
+			gceService,
+			b.projectID,
+			autoscalingOptions.ClusterName,
+			b.location,
+			autoscalingOptions.KwokGceReconcilerInterval,
+		)
+		if err := b.manager.Add(kwokReconciler); err != nil {
+			return nil, nil, fmt.Errorf("failed to add KWOK GCE reconciler to manager: %w", err)
+		}
+	}
+
 	return staticAutoscaler, trigger, nil
 }
 
