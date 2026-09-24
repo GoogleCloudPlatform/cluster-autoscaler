@@ -42,6 +42,7 @@ var (
 	n1           = buildNode("node-1")
 	n2           = buildNode("node-2")
 	n3           = buildNode("node-3")
+	n4           = buildNode("node-4")
 	n2Family     = "n2"
 	e2Family     = "e2"
 	c3Family     = "c3"
@@ -215,7 +216,7 @@ func TestScaleDownEarlierThan(t *testing.T) {
 			wantResult: true,
 		},
 		{
-			name: "Node(1) has same priority as Node(2)",
+			name: "Node(1) has same priority as Node(2), different node group (nodeGroup1 < nodeGroup2)",
 			node1: extendedNode{
 				nodeGroupName: "nodepool-1",
 				machineType:   "c3-standard-4",
@@ -225,6 +226,42 @@ func TestScaleDownEarlierThan(t *testing.T) {
 			},
 			node2: extendedNode{
 				nodeGroupName: "nodepool-2",
+				machineType:   "c3-standard-4",
+				spot:          true,
+				node:          n2,
+				crd:           icCrd,
+			},
+			wantResult: true,
+		},
+		{
+			name: "Node(1) has same priority as Node(2), different node group (nodeGroup1 > nodeGroup2)",
+			node1: extendedNode{
+				nodeGroupName: "nodepool-2",
+				machineType:   "c3-standard-4",
+				spot:          true,
+				node:          n2,
+				crd:           icCrd,
+			},
+			node2: extendedNode{
+				nodeGroupName: "nodepool-1",
+				machineType:   "c3-standard-4",
+				spot:          true,
+				node:          n1,
+				crd:           icCrd,
+			},
+			wantResult: false,
+		},
+		{
+			name: "Node(1) has same priority as Node(2), same node group",
+			node1: extendedNode{
+				nodeGroupName: "nodepool-1",
+				machineType:   "c3-standard-4",
+				spot:          true,
+				node:          n1,
+				crd:           icCrd,
+			},
+			node2: extendedNode{
+				nodeGroupName: "nodepool-1",
 				machineType:   "c3-standard-4",
 				spot:          true,
 				node:          n2,
@@ -379,6 +416,67 @@ func TestScaleDownSortingProcessorIntegration(t *testing.T) {
 				},
 			},
 			wantOrder: []*apiv1.Node{n1, n2, n3},
+		},
+		{
+			name: "Interleaved nodes with same priority index are grouped by node group",
+			nodes: []extendedNode{
+				{
+					nodeGroupName: "nodepool-2",
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n2,
+					crd:           icCrd,
+				},
+				{
+					nodeGroupName: "nodepool-1",
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n1,
+					crd:           icCrd,
+				},
+				{
+					nodeGroupName: "nodepool-2",
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n4,
+					crd:           icCrd,
+				},
+				{
+					nodeGroupName: "nodepool-1",
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n3,
+					crd:           icCrd,
+				},
+			},
+			wantOrder: []*apiv1.Node{n1, n3, n2, n4},
+		},
+		{
+			name: "Priority index takes precedence over node group ordering",
+			nodes: []extendedNode{
+				{
+					nodeGroupName: "nodepool-1", // priority index 0 (Rule 0: c3)
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n1,
+					crd:           icCrd,
+				},
+				{
+					nodeGroupName: "nodepool-2", // priority index 2 (Rule 2: n2) - lower priority, scales down earlier
+					machineType:   "n2-standard-4",
+					spot:          true,
+					node:          n2,
+					crd:           icCrd,
+				},
+				{
+					nodeGroupName: "nodepool-1", // priority index 0 (Rule 0: c3)
+					machineType:   "c3-standard-4",
+					spot:          true,
+					node:          n3,
+					crd:           icCrd,
+				},
+			},
+			wantOrder: []*apiv1.Node{n2, n1, n3},
 		},
 	}
 
