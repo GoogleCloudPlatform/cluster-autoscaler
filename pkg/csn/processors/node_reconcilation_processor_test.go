@@ -548,8 +548,13 @@ func TestNodeReconciliationProcess(t *testing.T) {
 
 type nodeMutator func(*apiv1.Node) *apiv1.Node
 
-func create8CPUTestNode(t *testing.T, name string, state csn.NodeState, mutators ...nodeMutator) *apiv1.Node {
-	node := test.BuildTestNode(name, 8000, 24*GiB)
+func create8CPUTestNode(t testing.TB, name string, state csn.NodeState, mutators ...nodeMutator) *apiv1.Node {
+	return createTestNode(t, name, 8000, 24*GiB, state, mutators...)
+}
+
+func createTestNode(t testing.TB, name string, cpu, mem int64, state csn.NodeState, mutators ...nodeMutator) *apiv1.Node {
+	t.Helper()
+	node := test.BuildTestNode(name, cpu, mem)
 	node, err := csn.SetNodeAs(node, state)
 	assert.NoError(t, err)
 	for _, mutator := range mutators {
