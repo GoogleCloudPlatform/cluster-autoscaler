@@ -36,81 +36,102 @@ import (
 )
 
 const (
-	capacityConstraintsMessageId          = "no.scale.up.nap.capacity.constraints"
-	migSkippedMessageId                   = "no.scale.up.mig.skipped"
-	reasonSkippedDueToCapacityConstraints = "skipped due to capacity constraints"
+	capacityConstraintsMessageId    = "no.scale.up.nap.capacity.constraints"
+	migCapacityConstraintsMessageId = "no.scale.up.mig.capacity.constraints"
 )
 
-func TestFlexAdvisorVisibilityLogTracking_CapacityConstraintEmitsNoScaleUpEvent(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer integration_synctest.TearDown(cancel)
-		infra := integration.SetupInfrastructure(ctx, t)
+func TestFlexAdvisorVisibilityLogTracking_EmitsEventsWhenMigsBlockedByFlexAdvisor(t *testing.T) {
+	testCases := []struct {
+		name                                  string
+		simulationForSkippedNodeGroupsEnabled bool
+	}{
+		{
+			name:                                  "simulation enabled",
+			simulationForSkippedNodeGroupsEnabled: true,
+		},
+		{
+			name:                                  "simulation disabled",
+			simulationForSkippedNodeGroupsEnabled: false,
+		},
+	}
 
-		cccCrd := ccc.NewComputeClassBuilder("test-ccc").WithNodePoolsRules("pool-1").Build()
-		nodePools := []*gke_api_beta.NodePool{
-			integration.EmptyNodePool("pool-1").WithMachineType("n1-standard-4").WithCCCLabel("test-ccc").Build(),
-		}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
+				infra := integration.SetupInfrastructure(ctx, t)
 
-		testConfig := integration.NewTestConfig().
-			WithNodePools(nodePools...).
-			WithCccCrds(cccCrd).
-			WithClusterOverrides(
-				integration.WithAutoprovisioningLocations("us-central1-b"),
-				integration.WithClusterAutoProvisioningEnabled(),
-			).
-			WithOverrides(
-				integration.WithMaxMemoryTotal(140*1024*1024*1024),
-				integration.WithFlexAdvisorEnabled(),
-				integration.WithAutoProvisioningEnabled(),
-				integration.WithAutoscalerVisibility(true),
-				integration.WithEmitNoScaleUpCAVizEvents(true),
-			)
+				cccCrd := ccc.NewComputeClassBuilder("test-ccc").WithNodePoolsRules("pool-1").Build()
+				nodePools := []*gke_api_beta.NodePool{
+					integration.EmptyNodePool("pool-1").WithMachineType("n1-standard-4").WithCCCLabel("test-ccc").Build(),
+				}
 
-		// Flex Advisor returns zero capacity for the machine type in pool-1
-		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
-			fake.NewGuidance("n1-standard-4").WithCapacity(0),
-		)
+				testConfig := integration.NewTestConfig().
+					WithNodePools(nodePools...).
+					WithCccCrds(cccCrd).
+					WithClusterOverrides(
+						integration.WithAutoprovisioningLocations("us-central1-b"),
+						integration.WithClusterAutoProvisioningEnabled(),
+					).
+					WithOverrides(
+						integration.WithMaxMemoryTotal(140*1024*1024*1024),
+						integration.WithFlexAdvisorEnabled(),
+						integration.WithAutoProvisioningEnabled(),
+						integration.WithAutoscalerVisibility(true),
+						integration.WithEmitNoScaleUpCAVizEvents(true),
+						integration.WithScaleUpSimulationForSkippedNodeGroups(tc.simulationForSkippedNodeGroupsEnabled),
+					)
 
-		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-		assert.NoError(t, err)
+				// Flex Advisor returns zero capacity for the machine type in pool-1
+				infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+					fake.NewGuidance("n1-standard-4").WithCapacity(0),
+				)
 
-		unschedulablePod := tu.BuildTestPod("unsched-pod", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
-		infra.Fakes.K8s.AddPod(unschedulablePod)
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
 
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 15*time.Second)
-		infra.Fakes.RunScheduler(ctx, t)
+				PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
 
-		// Verify pod is not scheduled
-		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "unsched-pod", metav1.GetOptions{})
-		assert.NoError(t, err)
-		assert.Empty(t, updatedPod.Spec.NodeName, "Expected unsched-pod to remain unschedulable")
+				unschedulablePod := tu.BuildTestPod("unsched-pod", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
+				infra.Fakes.K8s.AddPod(unschedulablePod)
 
-		// Verify NoScaleUp visibility event was logged with capacity constraint reason
-		noScaleUpEvents := infra.Fakes.EventLogger.NoScaleUpEvents()
-		assert.NotEmpty(t, noScaleUpEvents, "Expected at least one NoScaleUp visibility event")
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 15*time.Second)
+				infra.Fakes.RunScheduler(ctx, t)
 
-		lastEvent := noScaleUpEvents[len(noScaleUpEvents)-1]
-		assert.NotNil(t, lastEvent.NapFailureReason, "Expected NapFailureReason field in NoScaleUpData")
-		assert.Equal(t, capacityConstraintsMessageId, lastEvent.NapFailureReason.MessageId)
-		assert.Contains(t, lastEvent.NapFailureReason.Parameters, "test-ccc")
+				// Verify pod is not scheduled
+				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "unsched-pod", metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.Empty(t, updatedPod.Spec.NodeName, "Expected unsched-pod to remain unschedulable")
 
-		// Verify pool-1 is listed in SkippedMigs with capacity constraints reason
-		assert.NotEmpty(t, lastEvent.SkippedMigs, "Expected at least one SkippedMigs entry")
-		var foundSkippedMig bool
-		for _, sm := range lastEvent.SkippedMigs {
-			if sm.Mig != nil && sm.Mig.Nodepool == "pool-1" {
-				foundSkippedMig = true
-				assert.NotNil(t, sm.Reason)
-				assert.Equal(t, migSkippedMessageId, sm.Reason.MessageId)
-				assert.Contains(t, sm.Reason.Parameters, reasonSkippedDueToCapacityConstraints)
-			}
-		}
-		assert.True(t, foundSkippedMig, "Expected pool-1 in SkippedMigs")
-	})
+				// Verify NoScaleUp visibility event was logged with capacity constraint reason
+				noScaleUpEvents := infra.Fakes.EventLogger.NoScaleUpEvents()
+				assert.NotEmpty(t, noScaleUpEvents, "Expected at least one NoScaleUp visibility event")
+
+				lastEvent := noScaleUpEvents[len(noScaleUpEvents)-1]
+				assert.NotNil(t, lastEvent.NapFailureReason, "Expected NapFailureReason field in NoScaleUpData")
+				assert.Equal(t, capacityConstraintsMessageId, lastEvent.NapFailureReason.MessageId)
+				assert.Contains(t, lastEvent.NapFailureReason.Parameters, "test-ccc")
+
+				// Verify pool-1 is listed in PodGroup RejectedMigs with capacity constraints reason
+				if assert.NotEmpty(t, lastEvent.UnhandledPodGroups, "Expected at least one UnhandledPodGroup entry") {
+					var foundRejectedMig bool
+					for _, rm := range lastEvent.UnhandledPodGroups[0].RejectedMigs {
+						if rm.Mig != nil && rm.Mig.Nodepool == "pool-1" {
+							foundRejectedMig = true
+							assert.NotNil(t, rm.Reason)
+							assert.Equal(t, migCapacityConstraintsMessageId, rm.Reason.MessageId)
+							assert.Empty(t, rm.Reason.Parameters)
+						}
+					}
+					assert.True(t, foundRejectedMig, "Expected pool-1 in PodGroup RejectedMigs")
+				}
+			})
+		})
+	}
 }
 
-func TestFlexAdvisorVisibilityLogTracking_DisabledScenarios(t *testing.T) {
+func TestFlexAdvisorVisibilityLogTracking_DoesNotEmitEventsWhenExperimentsDisabled(t *testing.T) {
 	testCases := []struct {
 		name                string
 		flexAdvisorEnabled  bool
@@ -185,6 +206,10 @@ func TestFlexAdvisorVisibilityLogTracking_DisabledScenarios(t *testing.T) {
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
 
+				if tc.flexAdvisorEnabled {
+					PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+				}
+
 				unschedulablePod := tu.BuildTestPod("unsched-pod", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
 				infra.Fakes.K8s.AddPod(unschedulablePod)
 
@@ -200,7 +225,7 @@ func TestFlexAdvisorVisibilityLogTracking_DisabledScenarios(t *testing.T) {
 	}
 }
 
-func TestFlexAdvisorVisibilityLogTracking_StateResetBetweenLoops(t *testing.T) {
+func TestFlexAdvisorVisibilityLogTracking_StateResetsBetweenLoops(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer integration_synctest.TearDown(cancel)
@@ -233,6 +258,8 @@ func TestFlexAdvisorVisibilityLogTracking_StateResetBetweenLoops(t *testing.T) {
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
+
+		PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
 
 		pod1 := tu.BuildTestPod("pod-1", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
 		infra.Fakes.K8s.AddPod(pod1)
@@ -270,127 +297,6 @@ func TestFlexAdvisorVisibilityLogTracking_StateResetBetweenLoops(t *testing.T) {
 	})
 }
 
-func TestFlexAdvisorVisibilityLogTracking_NotEmittedWhenScaleUpSucceedsOnAlternativeOption(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer integration_synctest.TearDown(cancel)
-		infra := integration.SetupInfrastructure(ctx, t)
-
-		cccCrd := ccc.NewComputeClassBuilder("test-ccc").WithNodePoolsRules("pool-1", "pool-2").Build()
-		nodePools := []*gke_api_beta.NodePool{
-			integration.EmptyNodePool("pool-1").WithMachineType("n1-standard-4").WithCCCLabel("test-ccc").Build(),
-			integration.EmptyNodePool("pool-2").WithMachineType("n1-standard-8").WithCCCLabel("test-ccc").Build(),
-		}
-
-		testConfig := integration.NewTestConfig().
-			WithNodePools(nodePools...).
-			WithCccCrds(cccCrd).
-			WithClusterOverrides(
-				integration.WithAutoprovisioningLocations("us-central1-b"),
-				integration.WithClusterAutoProvisioningEnabled(),
-			).
-			WithOverrides(
-				integration.WithMaxMemoryTotal(140*1024*1024*1024),
-				integration.WithFlexAdvisorEnabled(),
-				integration.WithAutoProvisioningEnabled(),
-				integration.WithAutoscalerVisibility(true),
-				integration.WithEmitNoScaleUpCAVizEvents(true),
-			)
-
-		// pool-1 has 0 capacity (removed), pool-2 has 10 capacity (available)
-		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
-			fake.NewGuidance("n1-standard-4").WithCapacity(0),
-			fake.NewGuidance("n1-standard-8").WithCapacity(10),
-		)
-
-		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-		assert.NoError(t, err)
-
-		unschedulablePod := tu.BuildTestPod("standard-pod", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
-		infra.Fakes.K8s.AddPod(unschedulablePod)
-
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 15*time.Second)
-		infra.Fakes.RunScheduler(ctx, t)
-
-		// Verify pod is scheduled on pool-2
-		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "standard-pod", metav1.GetOptions{})
-		assert.NoError(t, err)
-		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled on alternative node pool")
-		assert.Contains(t, updatedPod.Spec.NodeName, "pool-2")
-
-		// Verify no capacity constraints event was emitted when scale-up succeeded on alternative option
-		noScaleUpEvents := infra.Fakes.EventLogger.NoScaleUpEvents()
-		for _, event := range noScaleUpEvents {
-			assertNoCapacityConstraintsReasons(t, event)
-		}
-	})
-}
-
-func TestFlexAdvisorVisibilityLogTracking_SimulationForSkippedNodeGroups(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer integration_synctest.TearDown(cancel)
-		infra := integration.SetupInfrastructure(ctx, t)
-
-		cccCrd := ccc.NewComputeClassBuilder("test-ccc").WithNodePoolsRules("pool-1").Build()
-		nodePools := []*gke_api_beta.NodePool{
-			integration.EmptyNodePool("pool-1").WithMachineType("n1-standard-4").WithCCCLabel("test-ccc").Build(),
-		}
-
-		testConfig := integration.NewTestConfig().
-			WithNodePools(nodePools...).
-			WithCccCrds(cccCrd).
-			WithClusterOverrides(
-				integration.WithAutoprovisioningLocations("us-central1-b"),
-				integration.WithClusterAutoProvisioningEnabled(),
-			).
-			WithOverrides(
-				integration.WithMaxMemoryTotal(140*1024*1024*1024),
-				integration.WithFlexAdvisorEnabled(),
-				integration.WithAutoProvisioningEnabled(),
-				integration.WithAutoscalerVisibility(true),
-				integration.WithEmitNoScaleUpCAVizEvents(true),
-				integration.WithScaleUpSimulationForSkippedNodeGroups(true),
-			)
-
-		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
-			fake.NewGuidance("n1-standard-4").WithCapacity(0),
-		)
-
-		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-		assert.NoError(t, err)
-
-		unschedulablePod := tu.BuildTestPod("unsched-pod", 3000, 8000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
-		infra.Fakes.K8s.AddPod(unschedulablePod)
-
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 15*time.Second)
-		infra.Fakes.RunScheduler(ctx, t)
-
-		noScaleUpEvents := infra.Fakes.EventLogger.NoScaleUpEvents()
-		assert.NotEmpty(t, noScaleUpEvents, "Expected at least one NoScaleUp visibility event")
-
-		lastEvent := noScaleUpEvents[len(noScaleUpEvents)-1]
-		assert.NotNil(t, lastEvent.NapFailureReason, "Expected NapFailureReason field in NoScaleUpData")
-		assert.Equal(t, capacityConstraintsMessageId, lastEvent.NapFailureReason.MessageId)
-		assert.Contains(t, lastEvent.NapFailureReason.Parameters, "test-ccc")
-
-		// When all options are removed before binpacking and there are no pod-level NoScaleUpInfos,
-		// the visibility processor falls back to reporting removed node groups in global SkippedMigs.
-		assert.NotEmpty(t, lastEvent.SkippedMigs, "Expected fallback to global SkippedMigs when no pod simulation infos exist")
-
-		var foundSkippedMig bool
-		for _, sm := range lastEvent.SkippedMigs {
-			if sm.Mig != nil && sm.Mig.Nodepool == "pool-1" {
-				foundSkippedMig = true
-				assert.NotNil(t, sm.Reason)
-				assert.Equal(t, migSkippedMessageId, sm.Reason.MessageId)
-				assert.Contains(t, sm.Reason.Parameters, reasonSkippedDueToCapacityConstraints)
-			}
-		}
-		assert.True(t, foundSkippedMig, "Expected pool-1 in SkippedMigs")
-	})
-}
-
 func assertNoCapacityConstraintsReasons(t *testing.T, event *vispb.NoScaleUpData) {
 	t.Helper()
 	if event.NapFailureReason != nil {
@@ -403,19 +309,25 @@ func assertNoCapacityConstraintsReasons(t *testing.T, event *vispb.NoScaleUpData
 	}
 	for _, sm := range event.SkippedMigs {
 		if sm.Reason != nil {
-			for _, param := range sm.Reason.Parameters {
-				assert.NotEqual(t, reasonSkippedDueToCapacityConstraints, param,
-					"Did not expect capacity constraint parameter in global SkippedMigs")
-			}
+			assert.NotEqual(t, migCapacityConstraintsMessageId, sm.Reason.MessageId,
+				"Did not expect capacity constraint reason in global SkippedMigs")
 		}
 	}
 	for _, pg := range event.UnhandledPodGroups {
+		for _, nfr := range pg.NapFailureReasons {
+			assert.NotEqual(t, "no.scale.up.nap.pod.zonal.capacity.constraints", nfr.MessageId,
+				"Did not expect zonal capacity constraint NapFailureReason in pod group")
+		}
 		for _, sm := range pg.SkippedMigs {
 			if sm.Reason != nil {
-				for _, param := range sm.Reason.Parameters {
-					assert.NotEqual(t, reasonSkippedDueToCapacityConstraints, param,
-						"Did not expect capacity constraint parameter in pod group SkippedMigs")
-				}
+				assert.NotEqual(t, migCapacityConstraintsMessageId, sm.Reason.MessageId,
+					"Did not expect capacity constraint reason in pod group SkippedMigs")
+			}
+		}
+		for _, rm := range pg.RejectedMigs {
+			if rm.Reason != nil {
+				assert.NotEqual(t, migCapacityConstraintsMessageId, rm.Reason.MessageId,
+					"Did not expect capacity constraint reason in pod group RejectedMigs")
 			}
 		}
 	}

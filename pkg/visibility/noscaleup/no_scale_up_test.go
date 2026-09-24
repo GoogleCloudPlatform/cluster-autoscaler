@@ -201,7 +201,7 @@ func TestTopLevelNapReason(t *testing.T) {
 		{autoprovisioning.NoAutoprovisioningLocationsAvailable, vistypes.NewNoScaleUpNapNoLocationsAvailableMsg()},
 	} {
 		noScaleUp := throttledNoScaleUp{}
-		assert.Equal(t, testCase.expectedReason, noScaleUp.computeTopLevelNap(&vistypes.NapStatus{Result: testCase.napProcessingResult}))
+		assert.Equal(t, testCase.expectedReason, noScaleUp.computeTopLevelNap(nil, &vistypes.NapStatus{Result: testCase.napProcessingResult}))
 	}
 }
 
@@ -723,95 +723,311 @@ func buildPodWithNodeSelector(name string, millicpu, mem int64, nodeSelector map
 	return pod
 }
 
-func TestGetNewReasons_CapacityConstraintsWhenFlexAdvisorCutsAllMigs(t *testing.T) {
-	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
-	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
-	nsu := NewNoScaleUp(time.Minute, false, tracker)
+func TestGetNewReasons_FlexAdvisorReasons(t *testing.T) {
 	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
-	scaleUpStatus := &vistypes.ScaleUpStatus{
-		Result:         status.ScaleUpNoOptionsAvailable,
-		ConsideredMigs: []*vistypes.GkeMig{mig1},
-		NoScaleUpInfos: nil,
+	mig2 := &vistypes.GkeMig{Id: "mig2", Name: "mig2", NodePoolName: "np2", Zone: "z1", Exists: true}
+	mig3 := &vistypes.GkeMig{Id: "mig3", Name: "mig3", NodePoolName: "np3", Zone: "z1", Exists: true}
+	napMigZ1 := &vistypes.GkeMig{Id: "nap-z1", Name: "nap-z1", NodePoolName: "nap-np-z1", Zone: "z1", Exists: false}
+	napMigZ1b := &vistypes.GkeMig{Id: "nap-z1-b", Name: "nap-z1-b", NodePoolName: "nap-np-z1-b", Zone: "z1", Exists: false}
+	napMigZ2 := &vistypes.GkeMig{Id: "nap-z2", Name: "nap-z2", NodePoolName: "nap-np-z2", Zone: "z2", Exists: false}
+	pod1 := &vistypes.Pod{Name: "pod1", Uid: "puid1"}
+
+	testCases := []struct {
+		name            string
+		nilTracker      bool
+		trackerEnabled  bool
+		removedOptions  [][2]string
+		scaleUpStatus   *vistypes.ScaleUpStatus
+		napStatus       *vistypes.NapStatus
+		expectedReasons *Reasons
+	}{
+		{
+			name:           "FA removes existing MIG while another fails predicate and another is skipped - preserves all reasons and ignores non-FA MIGs in tracker",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"mig1", "scope-1"}, {"mig2", "scope-2"}, {"mig3", "scope-3"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{mig1, mig2, mig3},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						SkippedNodeGroups: map[string]status.Reasons{
+							"mig2": &mockFailureReasons{reasons: []string{"max node group size reached"}},
+						},
+						RejectedNodeGroups: map[string]status.Reasons{
+							"mig1": orchestrator.NoScaleUpOptionsAvailableReason,
+							"mig3": clustersnapshot.NewFailingPredicateError(nil, "NodeResourcesFit", []string{"Insufficient cpu"}, "msg", ""),
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+			},
+			expectedReasons: &Reasons{
+				TopLevelNap: vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1"),
+				SkippedMigs: []*vistypes.MigExplanation{
+					{Mig: mig2, Reason: vistypes.NewNoScaleUpMigSkippedMsg([]string{"max node group size reached"})},
+				},
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod: pod1,
+						PodCount:  1,
+						MigReasons: map[string]*vistypes.MigExplanation{
+							"mig1": {Mig: mig1, Reason: vistypes.NewNoScaleUpMigCapacityConstraintsMsg()},
+							"mig3": {Mig: mig3, Reason: vistypes.NewNoScaleUpMigFailingPredicateMsg("NodeResourcesFit", []string{"Insufficient cpu"})},
+						},
+						NapReasons: []*vistypes.Message{},
+					},
+				},
+			},
+		},
+		{
+			name:           "FA removes existing MIG while NAP is disabled - reports TopLevelNap NapDisabled and reports FA in rejectedMigs",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"mig1", "scope-1"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{mig1},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						RejectedNodeGroups: map[string]status.Reasons{
+							"mig1": orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.NapDisabled,
+			},
+			expectedReasons: &Reasons{
+				TopLevelNap: vistypes.NewNoScaleUpNapDisabledMsg(),
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod: pod1,
+						PodCount:  1,
+						MigReasons: map[string]*vistypes.MigExplanation{
+							"mig1": {Mig: mig1, Reason: vistypes.NewNoScaleUpMigCapacityConstraintsMsg()},
+						},
+						NapReasons: []*vistypes.Message{},
+					},
+				},
+			},
+		},
+		{
+			name:           "FA removes theoretical NAP MIG across zones with coexisting predicate failures and backoff - reports capacity constraints and preserves predicate reasons without generic fallback",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"nap-z2", "scope-2"}, {"nap-z1", "scope-1"}, {"nap-z1-b", "scope-1-ignored"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{napMigZ1, napMigZ1b, napMigZ2},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						RejectedNodeGroups: map[string]status.Reasons{
+							"nap-z1":   orchestrator.NoScaleUpOptionsAvailableReason,
+							"nap-z1-b": clustersnapshot.NewFailingPredicateError(nil, "NodeAffinity", []string{"node(s) didn't match Pod's node affinity/selector"}, "msg", ""),
+							"nap-z2":   orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+				PodStatuses: map[string]autoprovisioning.PodProcessingStatus{
+					"puid1": {Picked: true},
+				},
+				DisregardedMigs: map[autoprovisioning.NodeGroupOptions]autoprovisioning.NodeGroupDisregardedReason{
+					{Zone: "z1", MachineType: "n2-standard-4"}: autoprovisioning.InStandardBackoff,
+					{Zone: "z2", MachineType: "n2-standard-4"}: autoprovisioning.InStandardBackoff,
+				},
+			},
+			expectedReasons: &Reasons{
+				TopLevelNap: vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1", "scope-2"),
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod:  pod1,
+						PodCount:   1,
+						MigReasons: map[string]*vistypes.MigExplanation{},
+						NapReasons: []*vistypes.Message{
+							vistypes.NewNoScaleUpNapPodZonalCapacityConstraintsMsg("z1"),
+							vistypes.NewNoScaleUpNapPodZonalFailingPredicatesMsg("z1", []string{"node(s) didn't match Pod's node affinity/selector"}),
+							vistypes.NewNoScaleUpNapPodZonalCapacityConstraintsMsg("z2"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name:           "FA removes theoretical NAP MIG in zone with disregarded resourceBackedOff MIG - emits zonal capacity constraints and suppresses zonal resources exceeded",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"nap-z1", "scope-1"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{napMigZ1},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						RejectedNodeGroups: map[string]status.Reasons{
+							"nap-z1": orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+				PodStatuses: map[string]autoprovisioning.PodProcessingStatus{
+					"puid1": {Picked: true},
+				},
+				DisregardedMigs: map[autoprovisioning.NodeGroupOptions]autoprovisioning.NodeGroupDisregardedReason{
+					{Zone: "z1", MachineType: "n1-standard-16"}: autoprovisioning.InResourceBasedBackoff,
+				},
+			},
+			expectedReasons: &Reasons{
+				TopLevelNap: vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1"),
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod:  pod1,
+						PodCount:   1,
+						MigReasons: map[string]*vistypes.MigExplanation{},
+						NapReasons: []*vistypes.Message{
+							vistypes.NewNoScaleUpNapPodZonalCapacityConstraintsMsg("z1"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name:           "FA removes theoretical NAP MIG in zone with skipped MaxResourceLimitReached MIG - emits zonal capacity constraints and suppresses zonal resources exceeded",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"nap-z1", "scope-1"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{napMigZ1, napMigZ1b},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						SkippedNodeGroups: map[string]status.Reasons{
+							"nap-z1-b": &orchestrator.MaxResourceLimitReached{},
+						},
+						RejectedNodeGroups: map[string]status.Reasons{
+							"nap-z1": orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+				PodStatuses: map[string]autoprovisioning.PodProcessingStatus{
+					"puid1": {Picked: true},
+				},
+			},
+			expectedReasons: &Reasons{
+				TopLevelNap: vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1"),
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod:  pod1,
+						PodCount:   1,
+						MigReasons: map[string]*vistypes.MigExplanation{},
+						NapReasons: []*vistypes.Message{
+							vistypes.NewNoScaleUpNapPodZonalCapacityConstraintsMsg("z1"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name:           "no unschedulable pods - returns empty reasons",
+			trackerEnabled: true,
+			removedOptions: [][2]string{{"mig1", "scope-1"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{mig1},
+				NoScaleUpInfos: nil,
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+			},
+			expectedReasons: &Reasons{},
+		},
+		{
+			name:           "tracker disabled - does not emit capacity constraints",
+			trackerEnabled: false,
+			removedOptions: [][2]string{{"mig1", "scope-1"}},
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{mig1},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						RejectedNodeGroups: map[string]status.Reasons{
+							"mig1": orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+			},
+			expectedReasons: &Reasons{
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod: pod1,
+						PodCount:  1,
+						MigReasons: map[string]*vistypes.MigExplanation{
+							"mig1": {Mig: mig1, Reason: vistypes.NewNoScaleUpMigUnknownReasonMsg()},
+						},
+						NapReasons: []*vistypes.Message{},
+					},
+				},
+			},
+		},
+		{
+			name:       "nil tracker - does not emit capacity constraints",
+			nilTracker: true,
+			scaleUpStatus: &vistypes.ScaleUpStatus{
+				Result:         status.ScaleUpNoOptionsAvailable,
+				ConsideredMigs: []*vistypes.GkeMig{mig1},
+				NoScaleUpInfos: []*vistypes.NoScaleUpInfo{
+					{
+						Pod: pod1,
+						RejectedNodeGroups: map[string]status.Reasons{
+							"mig1": orchestrator.NoScaleUpOptionsAvailableReason,
+						},
+					},
+				},
+			},
+			napStatus: &vistypes.NapStatus{
+				Result: autoprovisioning.ProcessingOk,
+			},
+			expectedReasons: &Reasons{
+				PodGroups: []*vistypes.PodGroupExplanation{
+					{
+						SamplePod: pod1,
+						PodCount:  1,
+						MigReasons: map[string]*vistypes.MigExplanation{
+							"mig1": {Mig: mig1, Reason: vistypes.NewNoScaleUpMigUnknownReasonMsg()},
+						},
+						NapReasons: []*vistypes.Message{},
+					},
+				},
+			},
+		},
 	}
-	napStatus := &vistypes.NapStatus{
-		Result: autoprovisioning.ProcessingOk,
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var tracker flexadvisor.ScaleUpLimiterTracker
+			if !tc.nilTracker {
+				tracker = flexadvisor.NewScaleUpLimiterTracker(tc.trackerEnabled, nil)
+				for _, opt := range tc.removedOptions {
+					tracker.MarkScaleUpOptionRemoved(opt[0], opt[1])
+				}
+			}
+			nsu := NewNoScaleUp(time.Minute, false, tracker)
+			reasons := nsu.GetNewReasons(tc.scaleUpStatus, tc.napStatus, time.Now())
+			assert.Equal(t, tc.expectedReasons, reasons)
+		})
 	}
-
-	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
-
-	assert.Nil(t, reasons.TopLevel)
-	assert.Equal(t, vistypes.NewNoScaleUpNapCapacityConstraintsMsg("scope-1"), reasons.TopLevelNap)
-	assert.Equal(t, []*vistypes.MigExplanation{
-		{Mig: mig1, Reason: vistypes.NewNoScaleUpMigSkippedMsg([]string{vistypes.ReasonSkippedDueToCapacityConstraints})},
-	}, reasons.SkippedMigs)
-}
-
-func TestGetNewReasons_NoCapacityConstraintsWhenScaleUpSuccessful(t *testing.T) {
-	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
-	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
-	nsu := NewNoScaleUp(time.Minute, false, tracker)
-	scaleUpStatus := &vistypes.ScaleUpStatus{
-		Result: status.ScaleUpSuccessful,
-	}
-	napStatus := &vistypes.NapStatus{
-		Result: autoprovisioning.ProcessingOk,
-	}
-
-	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
-
-	assert.True(t, reasons.IsEmpty())
-}
-
-func TestGetNewReasons_NoCapacityConstraintsWhenScaleUpNotNeeded(t *testing.T) {
-	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
-	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
-	nsu := NewNoScaleUp(time.Minute, false, tracker)
-	scaleUpStatus := &vistypes.ScaleUpStatus{
-		Result: status.ScaleUpNotNeeded,
-	}
-	napStatus := &vistypes.NapStatus{
-		Result: autoprovisioning.ProcessingOk,
-	}
-
-	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
-
-	assert.True(t, reasons.IsEmpty())
-}
-
-func TestGetNewReasons_NoCapacityConstraintsWhenNapError(t *testing.T) {
-	tracker := flexadvisor.NewScaleUpLimiterTracker(true, nil)
-	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
-	nsu := NewNoScaleUp(time.Minute, false, tracker)
-	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
-	scaleUpStatus := &vistypes.ScaleUpStatus{
-		Result:         status.ScaleUpNoOptionsAvailable,
-		ConsideredMigs: []*vistypes.GkeMig{mig1},
-		NoScaleUpInfos: nil,
-	}
-	napStatus := &vistypes.NapStatus{
-		Result: autoprovisioning.NapDisabled,
-	}
-
-	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
-
-	assert.True(t, reasons.IsEmpty())
-}
-
-func TestGetNewReasons_NoCapacityConstraintsWhenTrackerDisabled(t *testing.T) {
-	tracker := flexadvisor.NewScaleUpLimiterTracker(false, nil)
-	tracker.MarkScaleUpOptionRemoved("mig1", "scope-1")
-	nsu := NewNoScaleUp(time.Minute, false, tracker)
-	mig1 := &vistypes.GkeMig{Id: "mig1", Name: "mig1", NodePoolName: "np1", Zone: "z1", Exists: true}
-	scaleUpStatus := &vistypes.ScaleUpStatus{
-		Result:         status.ScaleUpNoOptionsAvailable,
-		ConsideredMigs: []*vistypes.GkeMig{mig1},
-		NoScaleUpInfos: nil,
-	}
-	napStatus := &vistypes.NapStatus{
-		Result: autoprovisioning.ProcessingOk,
-	}
-
-	reasons := nsu.GetNewReasons(scaleUpStatus, napStatus, time.Now())
-
-	assert.True(t, reasons.IsEmpty())
 }

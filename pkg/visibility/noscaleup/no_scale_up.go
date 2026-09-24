@@ -66,11 +66,6 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 	// Garbage collect old entries.
 	ns.recentlyReportedReasons.removeOld(now)
 
-	if ns.isFlexAdvisorCuttingAllMigs(scaleUpStatus, napStatus) {
-		allCurrentReasons := ns.computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus)
-		return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
-	}
-
 	if len(scaleUpStatus.NoScaleUpInfos) == 0 {
 		// If there are no unschedulable pods, don't provide any reasons, they won't make sense anyway.
 		return &Reasons{}
@@ -78,51 +73,44 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 
 	allCurrentReasons := &Reasons{
 		TopLevel:    ns.computeTopLevel(scaleUpStatus.Result),
-		TopLevelNap: ns.computeTopLevelNap(napStatus),
+		TopLevelNap: ns.computeTopLevelNap(scaleUpStatus, napStatus),
 		SkippedMigs: ns.computeSkippedMigs(scaleUpStatus),
 		PodGroups:   ns.computePodGroups(scaleUpStatus, napStatus),
 	}
 	return ns.recentlyReportedReasons.filterOutAlreadyTrackedReasons(allCurrentReasons, now)
 }
 
-func (ns *throttledNoScaleUp) isFlexAdvisorCuttingAllMigs(scaleUpStatus *vistypes.ScaleUpStatus, napStatus *vistypes.NapStatus) bool {
-	if ns.flexAdvisorScaleUpLimiterTracker == nil || !ns.flexAdvisorScaleUpLimiterTracker.HasRemovedScaleUpOptions() {
-		return false
+// getFlexAdvisorConstrainedScopes returns a sorted, deduplicated list of flexibility scopes
+// associated with node groups (both existing MIGs and theoretical NAP MIGs) that were rejected
+// due to FlexAdvisor capacity limits.
+// Including both existing and theoretical NAP MIGs ensures that constrained flexibility scopes
+// can be resolved and reported when either type of MIG is blocked by FlexAdvisor.
+func (ns *throttledNoScaleUp) getFlexAdvisorConstrainedScopes(scaleUpStatus *vistypes.ScaleUpStatus) []string {
+	if ns.flexAdvisorScaleUpLimiterTracker == nil {
+		return nil
 	}
-	if scaleUpStatus.Result != status.ScaleUpNoOptionsAvailable {
-		return false
-	}
-	if napStatus == nil || napStatus.Result != autoprovisioning.ProcessingOk {
-		return false
-	}
-	return true
-}
-
-func (ns *throttledNoScaleUp) computeReasonsForFlexAdvisorCuttingAllMigs(scaleUpStatus *vistypes.ScaleUpStatus) *Reasons {
-	var topLevelNap *vistypes.Message
-	scopes := ns.flexAdvisorScaleUpLimiterTracker.GetFlexibilityScopesWithRemovedScaleUpOptions()
-	if len(scopes) > 0 {
-		topLevelNap = vistypes.NewNoScaleUpNapCapacityConstraintsMsg(scopes...)
-	}
-
-	migsById := scaleUpStatus.GetMigsById()
-	var skippedMigs []*vistypes.MigExplanation
-	for _, migId := range ns.flexAdvisorScaleUpLimiterTracker.GetRemovedNodeGroupIds() {
-		mig, found := migsById[migId]
-		if !found || !mig.Exists {
-			continue
+	scopeSet := make(map[string]bool)
+	for _, info := range scaleUpStatus.NoScaleUpInfos {
+		// We only iterate over RejectedNodeGroups (and not SkippedNodeGroups) because FlexAdvisor
+		// evaluates capacity limits during bin-packing (ComputeExpansionOption) on SchedulableGroups.
+		// SkippedNodeGroups were filtered out prior to bin-packing and never evaluated by FlexAdvisor.
+		for migId, reasons := range info.RejectedNodeGroups {
+			if isRemovedByFlexAdvisor(migId, reasons, ns.flexAdvisorScaleUpLimiterTracker) {
+				for _, scope := range ns.flexAdvisorScaleUpLimiterTracker.GetFlexibilityScopesForNodeGroupIfRemoved(migId) {
+					scopeSet[scope] = true
+				}
+			}
 		}
-		skippedMigs = append(skippedMigs, &vistypes.MigExplanation{
-			Mig:    mig,
-			Reason: vistypes.NewNoScaleUpMigSkippedMsg([]string{vistypes.ReasonSkippedDueToCapacityConstraints}),
-		})
 	}
-
-	return &Reasons{
-		TopLevel:    ns.computeTopLevel(scaleUpStatus.Result),
-		TopLevelNap: topLevelNap,
-		SkippedMigs: skippedMigs,
+	if len(scopeSet) == 0 {
+		return nil
 	}
+	scopes := make([]string, 0, len(scopeSet))
+	for scope := range scopeSet {
+		scopes = append(scopes, scope)
+	}
+	sort.Strings(scopes)
+	return scopes
 }
 
 func (ns *throttledNoScaleUp) computeTopLevel(result status.ScaleUpResult) *vistypes.Message {
@@ -136,16 +124,25 @@ func (ns *throttledNoScaleUp) computeTopLevel(result status.ScaleUpResult) *vist
 	return nil
 }
 
-func (ns *throttledNoScaleUp) computeTopLevelNap(napStatus *vistypes.NapStatus) *vistypes.Message {
-	if napStatus.Result == autoprovisioning.ProcessingOk {
+func (ns *throttledNoScaleUp) computeTopLevelNap(scaleUpStatus *vistypes.ScaleUpStatus, napStatus *vistypes.NapStatus) *vistypes.Message {
+	switch napStatus.Result {
+	case autoprovisioning.ProcessingOk:
+		// TODO(b/562849116): TopLevelNap is not the ideal place for FlexAdvisor constrained scopes since FA is separate from NAP
+		// (e.g., it applies to CCC on existing MIGs as well). Note also that currently when NAP is disabled
+		// (napStatus.Result == NapDisabled), the list of constrained scopes is not logged at all (TopLevelNap returns
+		// NewNoScaleUpNapDisabledMsg instead of NewNoScaleUpNapCapacityConstraintsMsg with the scope list).
+		// Consider reporting constrained scopes per pod group (on PodGroupExplanation) or in a dedicated top-level field.
+		if scopes := ns.getFlexAdvisorConstrainedScopes(scaleUpStatus); len(scopes) > 0 {
+			return vistypes.NewNoScaleUpNapCapacityConstraintsMsg(scopes...)
+		}
 		return nil
-	} else if napStatus.Result == autoprovisioning.NapDisabled {
+	case autoprovisioning.NapDisabled:
 		return vistypes.NewNoScaleUpNapDisabledMsg()
-	} else if napStatus.Result == autoprovisioning.NoAutoprovisioningLocationsAvailable {
+	case autoprovisioning.NoAutoprovisioningLocationsAvailable:
 		return vistypes.NewNoScaleUpNapNoLocationsAvailableMsg()
-	} else if napStatus.Result == autoprovisioning.MaxAutoprovisionedNodeGroupsLimitReached {
+	case autoprovisioning.MaxAutoprovisionedNodeGroupsLimitReached:
 		return vistypes.NewNoScaleUpNapNodeGroupsLimitReachedMsg()
-	} else {
+	default:
 		return vistypes.NewNoScaleUpNapUnexpectedErrorMsg()
 	}
 }
@@ -235,6 +232,14 @@ func (ns *throttledNoScaleUp) computePodLevelRejectedMigReasons(noScaleUpInfo *v
 			continue
 		}
 
+		if isRemovedByFlexAdvisor(mig.Id, reasons, ns.flexAdvisorScaleUpLimiterTracker) {
+			result[mig.Id] = &vistypes.MigExplanation{
+				Mig:    mig,
+				Reason: vistypes.NewNoScaleUpMigCapacityConstraintsMsg(),
+			}
+			continue
+		}
+
 		schedErr, ok := reasons.(clustersnapshot.SchedulingError)
 		if !ok {
 			klog.Errorf("CA Viz NoScaleUp: unexpected rejected MIG reason, got %s, want: something implementing clustersnapshot.SchedulingError.", reflect.TypeOf(reasons))
@@ -280,10 +285,14 @@ func (ns *throttledNoScaleUp) computePodLevelNapReasons(noScaleUpInfo *vistypes.
 	zones := getAllSortedZonesFromReasonsByZone(skippedMigInfosByZone, rejectedMigInfosByZone, disregardedMigInfosByZone)
 	for _, zone := range zones {
 		skippedMigsDiv := divideSkippedMigs(skippedMigInfosByZone[zone])
-		rejectedMigsDiv := divideRejectedMigs(rejectedMigInfosByZone[zone])
+		rejectedMigsDiv := divideRejectedMigs(rejectedMigInfosByZone[zone], ns.flexAdvisorScaleUpLimiterTracker)
 		disregardedMigsDiv := divideDisregardedMigs(disregardedMigInfosByZone[zone])
 
 		initialReasonsLen := len(reasons)
+
+		if rejectedMigsDiv.hasFlexAdvisorRemoved() {
+			reasons = append(reasons, vistypes.NewNoScaleUpNapPodZonalCapacityConstraintsMsg(zone))
+		}
 
 		if skippedMigsDiv.hasInternalErrors() || disregardedMigsDiv.hasInternalErrors() {
 			// This means that there were "shouldn't happen" errors for some migs.
@@ -306,8 +315,9 @@ func (ns *throttledNoScaleUp) computePodLevelNapReasons(noScaleUpInfo *vistypes.
 		}
 
 		if rejectedMigsDiv.hasRemaining() {
-			// There are NAP node groups which were rejected because of a predicate other than PodFitsResources - this means that something really is wrong with pod's
-			// configuration, e.g. affinity-related stuff. Gather all the reasons and include them in the message.
+			// There are NAP node groups which were rejected for reasons other than PodFitsResources and FlexAdvisor capacity constraints
+			// (e.g. failing scheduling predicates like affinity or taints/tolerations) - this means that something really is wrong with pod's
+			// configuration. Gather all the reasons and include them in the message.
 
 			// Don't duplicate reasons.
 			failureReasonsSet := make(map[string]bool)

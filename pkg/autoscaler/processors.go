@@ -780,7 +780,11 @@ func setUpProcessors(
 	// processing order, it's initialized as the final NodeGroupListProcessor.
 	npcProcessor := npc_processors.NewNodeGroupListProcessor(ccLister, autoscalingProcessors.NodeGroupListProcessor, internalmetrics.Metrics, provider)
 	autoscalingProcessors.NodeGroupListProcessor = npcProcessor
-	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter([]binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor})
+	binpackingLimiters := []binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor}
+	if options.GCEFlexAdvisorEnabled {
+		binpackingLimiters = append(binpackingLimiters, flexadvisor.NewBinpackingLimiter(scaleUpLimiterTracker))
+	}
+	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter(binpackingLimiters)
 	npcCrdScaleUpStatusProcessor := npc_processors.NewCrdScaleUpStatusProcessor(ccLister, provider, internalmetrics.Metrics)
 	if err := scaleUpProcessorChain.AddProcessor(npcCrdScaleUpStatusProcessor); err != nil {
 		return nil, err

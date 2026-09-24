@@ -337,7 +337,7 @@ func TestFleetEfficiency(t *testing.T) {
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
 
-				primeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+				PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
 
 				infra.Fakes.K8s.AddPod(tu.BuildTestPod("fe-pod", 3000, 12000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable(), pod.WithProvisioningMode(tc.provisioningMode)))
 

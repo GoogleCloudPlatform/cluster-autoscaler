@@ -24,25 +24,78 @@ import (
 	expfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments/fake"
 )
 
-func TestMarkScaleUpOptionRemoved_Enabled(t *testing.T) {
-	tracker := NewScaleUpLimiterTracker(true, nil)
+func TestScaleUpLimiterTracker_RecordingAndQuerying(t *testing.T) {
+	type recordedOption struct {
+		nodeGroupId      string
+		flexibilityScope string
+	}
+	testCases := []struct {
+		name           string
+		recorded       []recordedOption
+		queryGroupId   string
+		expectedRemove bool
+		expectedScopes []string
+	}{
+		{
+			name: "single node group with single scope - returns removed true and matching scope",
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-a"},
+			},
+			queryGroupId:   "mig-1",
+			expectedRemove: true,
+			expectedScopes: []string{"scope-a"},
+		},
+		{
+			name: "single node group with multiple scopes - returns sorted deduplicated scopes",
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-b"},
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-a"},
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-b"},
+				{nodeGroupId: "mig-2", flexibilityScope: "scope-c"},
+			},
+			queryGroupId:   "mig-1",
+			expectedRemove: true,
+			expectedScopes: []string{"scope-a", "scope-b"},
+		},
+		{
+			name: "node group recorded with empty scope - returns removed true and nil scopes",
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: ""},
+			},
+			queryGroupId:   "mig-1",
+			expectedRemove: true,
+			expectedScopes: nil,
+		},
+		{
+			name: "queried node group not removed - returns removed false and nil scopes",
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-a"},
+			},
+			queryGroupId:   "mig-unknown",
+			expectedRemove: false,
+			expectedScopes: nil,
+		},
+		{
+			name: "empty node group ID ignored - returns removed false and nil scopes",
+			recorded: []recordedOption{
+				{nodeGroupId: "", flexibilityScope: "scope-a"},
+			},
+			queryGroupId:   "",
+			expectedRemove: false,
+			expectedScopes: nil,
+		},
+	}
 
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
-
-	assert.True(t, tracker.HasRemovedScaleUpOptions())
-	assert.Equal(t, []string{"scope-1"}, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Equal(t, []string{"mig-1"}, tracker.GetRemovedNodeGroupIds())
-}
-
-func TestGetFlexibilityScopesWithRemovedScaleUpOptions_ReturnsSortedUniqueScopes(t *testing.T) {
-	tracker := NewScaleUpLimiterTracker(true, nil)
-
-	tracker.MarkScaleUpOptionRemoved("mig-2", "scope-b")
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-a")
-	tracker.MarkScaleUpOptionRemoved("mig-3", "scope-b")
-
-	assert.Equal(t, []string{"scope-a", "scope-b"}, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Equal(t, []string{"mig-1", "mig-2", "mig-3"}, tracker.GetRemovedNodeGroupIds())
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := NewScaleUpLimiterTracker(true, nil)
+			for _, rec := range tc.recorded {
+				tracker.MarkScaleUpOptionRemoved(rec.nodeGroupId, rec.flexibilityScope)
+			}
+			assert.Equal(t, tc.expectedRemove, tracker.WasNodeGroupRemovedByFlexAdvisor(tc.queryGroupId))
+			assert.Equal(t, tc.expectedScopes, tracker.GetFlexibilityScopesForNodeGroupIfRemoved(tc.queryGroupId))
+		})
+	}
 }
 
 func TestReset_ClearsTrackedScopesAndNodeGroups(t *testing.T) {
@@ -51,47 +104,51 @@ func TestReset_ClearsTrackedScopesAndNodeGroups(t *testing.T) {
 
 	tracker.Reset()
 
-	assert.False(t, tracker.HasRemovedScaleUpOptions())
-	assert.Empty(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Empty(t, tracker.GetRemovedNodeGroupIds())
+	assert.False(t, tracker.WasNodeGroupRemovedByFlexAdvisor("mig-1"))
+	assert.Nil(t, tracker.GetFlexibilityScopesForNodeGroupIfRemoved("mig-1"))
 }
 
-func TestScaleUpLimiterTracker_DisabledByGCEFlexAdvisorEnabledFlag(t *testing.T) {
-	tracker := NewScaleUpLimiterTracker(false, nil)
+func TestScaleUpLimiterTracker_Disabled(t *testing.T) {
+	testCases := []struct {
+		name                  string
+		gceFlexAdvisorEnabled bool
+		boolFlags             map[string]bool
+	}{
+		{
+			name:                  "disabled by GCEFlexAdvisorEnabled flag - ignores recording and returns empty",
+			gceFlexAdvisorEnabled: false,
+		},
+		{
+			name:                  "disabled by ScaleUpLimiterTracker experiment flag - ignores recording and returns empty",
+			gceFlexAdvisorEnabled: true,
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorScaleUpLimiterTrackerEnabledFlag: false,
+			},
+		},
+		{
+			name:                  "disabled by main FlexAdvisorProcessing experiment flag - ignores recording and returns empty",
+			gceFlexAdvisorEnabled: true,
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			},
+		},
+	}
 
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var manager experiments.Manager
+			if tc.boolFlags != nil {
+				evaluator := expfake.NewEvaluator(tc.boolFlags, nil)
+				manager = experiments.NewManager(version.Version{}, evaluator)
+			}
+			tracker := NewScaleUpLimiterTracker(tc.gceFlexAdvisorEnabled, manager)
 
-	assert.False(t, tracker.HasRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetRemovedNodeGroupIds())
-}
+			tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
 
-func TestScaleUpLimiterTracker_DisabledByExperiment(t *testing.T) {
-	evaluator := expfake.NewEvaluator(map[string]bool{
-		experiments.FlexAdvisorScaleUpLimiterTrackerEnabledFlag: false,
-	}, nil)
-	manager := experiments.NewManager(version.Version{}, evaluator)
-	tracker := NewScaleUpLimiterTracker(true, manager)
-
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
-
-	assert.False(t, tracker.HasRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetRemovedNodeGroupIds())
-}
-
-func TestScaleUpLimiterTracker_DisabledByMainProcessingExperiment(t *testing.T) {
-	evaluator := expfake.NewEvaluator(map[string]bool{
-		experiments.FlexAdvisorProcessingEnabledFlag: false,
-	}, nil)
-	manager := experiments.NewManager(version.Version{}, evaluator)
-	tracker := NewScaleUpLimiterTracker(true, manager)
-
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
-
-	assert.False(t, tracker.HasRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
-	assert.Nil(t, tracker.GetRemovedNodeGroupIds())
+			assert.False(t, tracker.WasNodeGroupRemovedByFlexAdvisor("mig-1"))
+			assert.Nil(t, tracker.GetFlexibilityScopesForNodeGroupIfRemoved("mig-1"))
+		})
+	}
 }
 
 func TestScaleUpLimiterTracker_ConcurrentAccess(t *testing.T) {
@@ -99,22 +156,18 @@ func TestScaleUpLimiterTracker_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for i := 0; i < 50; i++ {
-		wg.Add(5)
+		wg.Add(4)
 		go func() {
 			defer wg.Done()
 			tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
 		}()
 		go func() {
 			defer wg.Done()
-			_ = tracker.HasRemovedScaleUpOptions()
+			_ = tracker.WasNodeGroupRemovedByFlexAdvisor("mig-1")
 		}()
 		go func() {
 			defer wg.Done()
-			_ = tracker.GetFlexibilityScopesWithRemovedScaleUpOptions()
-		}()
-		go func() {
-			defer wg.Done()
-			_ = tracker.GetRemovedNodeGroupIds()
+			_ = tracker.GetFlexibilityScopesForNodeGroupIfRemoved("mig-1")
 		}()
 		go func() {
 			defer wg.Done()
