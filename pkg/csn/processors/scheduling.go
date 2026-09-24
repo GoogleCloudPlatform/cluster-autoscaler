@@ -234,7 +234,7 @@ func makeCSNNodesSchedulable(nis []*framework.NodeInfo, opts schedulePodsOnCSNNo
 // Otherwise, scale-down won't be able to remove underutilized nodes.
 func setNodeAsForProcessors(node *apiv1.Node, desiredState csn.NodeState) (*apiv1.Node, error) {
 	currentState := csn.ClassifyNode(node)
-	node, err := csn.SetNodeAs(node, desiredState)
+	node, err := csn.SetNodeAs(node.DeepCopy(), desiredState)
 	if err != nil {
 		return nil, err
 	}
