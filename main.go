@@ -187,6 +187,7 @@ func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConf
 		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
 		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
 		ResourceLock:  resourcelock.LeasesResourceLock,
+		ResourceName:  "cluster-autoscaler",
 	}
 }
 
@@ -297,7 +298,7 @@ func main() {
 		lock, err := resourcelock.NewFromKubeconfig(
 			leaderElection.ResourceLock,
 			options.ConfigNamespace,
-			"cluster-autoscaler",
+			leaderElection.ResourceName,
 			resourcelock.ResourceLockConfig{
 				Identity:      id,
 				EventRecorder: kube_util.CreateEventRecorder(ctx.TODO(), kubeClient, options.RecordDuplicatedEvents),
