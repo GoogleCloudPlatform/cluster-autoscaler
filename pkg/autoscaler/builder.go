@@ -918,6 +918,7 @@ func (b *Builder) Build(
 
 	autoscalingProcessors, err := setUpProcessors(
 		bgContext,
+		b.manager,
 		caVersion,
 		b.optsTracker,
 		&autoscalingOptions,

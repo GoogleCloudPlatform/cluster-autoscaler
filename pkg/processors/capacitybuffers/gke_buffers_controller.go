@@ -34,6 +34,7 @@ import (
 	cbmetrics "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/metrics"
 	translators "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/translators"
 	updater "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/updater"
+	ctrl "sigs.k8s.io/controller-runtime"
 )
 
 // NewCapacityBufferClientIfCRDPresent creates a CapacityBufferClient if the CapacityBuffer CRD is present in the cluster.
@@ -74,14 +75,15 @@ const (
 
 func InitializeAndRunBufferController(
 	ctx context.Context,
+	mgr ctrl.Manager,
 	capacitybufferClient *cbclient.CapacityBufferClient,
 	fakePodsResolver fakepods.Resolver,
 	cccLister lister.Lister,
 	autopilotEnabled bool,
 	csnEnabled bool,
-) {
+) error {
 	if capacitybufferClient == nil {
-		return
+		return nil
 	}
 	realClock := clock.RealClock{}
 	reconciledBuffersCache := cbmetrics.NewReconciliationCache()
@@ -96,9 +98,12 @@ func InitializeAndRunBufferController(
 		reconciledBuffersCache,
 	)
 
-	go controller.Run(ctx.Done())
+	if err := mgr.Add(controller); err != nil {
+		return err
+	}
 	cbmetrics.RegisterReconciliationTimestampCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
 	RegisterProcessingIntervalCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
+	return nil
 }
 
 func getGkeBufferTranslatorParts(

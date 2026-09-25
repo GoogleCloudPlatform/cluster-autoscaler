@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
@@ -326,6 +328,7 @@ func buildScaleDownSetProcessors(
 
 func setUpProcessors(
 	context ctx.Context,
+	manager ctrl.Manager,
 	caVersion version.Version,
 	optionsTracker *optstracking.OptionsTracker,
 	options *internalopts.AutoscalingOptions,
@@ -410,7 +413,9 @@ func setUpProcessors(
 		} else {
 			fakePodsResolver = fakepods.NewDefaultingResolver()
 		}
-		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled)
+		if err := capacitybuffers.InitializeAndRunBufferController(context, manager, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled); err != nil {
+			return nil, fmt.Errorf("failed to initialize and run Capacity Buffer controller: %w", err)
+		}
 	}
 
 	if cbReady {
