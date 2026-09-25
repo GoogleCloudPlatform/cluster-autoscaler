@@ -2784,11 +2784,17 @@ var (
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
 		supportCompactPlacement:  false,
 		supportConfidentialNodes: false,
+		supportedAttachDiskTypes: map[string]ConfidentialMode{
+			DiskTypeHyperdiskBalanced:                 NonConfidentialOnlyMode,
+			DiskTypeHyperdiskBalancedHighAvailability: NonConfidentialOnlyMode,
+			DiskTypeHyperdiskThroughput:               NonConfidentialOnlyMode,
+			DiskTypeHyperdiskMl:                       NonConfidentialOnlyMode,
+		},
 		supportedBootDiskTypes: map[string]bool{
-			"hyperdisk-balanced": true,
+			DiskTypeHyperdiskBalanced: true,
 		},
 		supportHugepageSize1g: false,
-		defaultDiskType:       "hyperdisk-balanced",
+		defaultDiskType:       DiskTypeHyperdiskBalanced,
 	})
 	// T2A represents t2a (arm) machine family
 	T2A = RegisterMachineFamily(MachineFamily{
