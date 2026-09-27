@@ -1361,7 +1361,7 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 			p := NewLookaheadPodInjectionProcessor(
 				nil,
 				strategyProvider,
-				&mockWorkloadSeparationLimiter{limit: 10},
+				nil,
 				mcp,
 				nil,
 				nil,
@@ -1536,89 +1536,6 @@ func TestStringifyResourceList(t *testing.T) {
 	}
 }
 
-func TestLimitMaxWorkloadSeparations(t *testing.T) {
-	tests := []struct {
-		name                   string
-		requests               map[string]apiv1.ResourceList
-		maxWorkloadSeparations int
-		want                   map[string]apiv1.ResourceList
-	}{
-		{
-			name:                   "empty requests",
-			requests:               map[string]apiv1.ResourceList{},
-			maxWorkloadSeparations: 10,
-			want:                   map[string]apiv1.ResourceList{},
-		},
-		{
-			name: "default doesn't exist",
-			requests: map[string]apiv1.ResourceList{
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-			},
-			maxWorkloadSeparations: 0,
-			want:                   map[string]apiv1.ResourceList{},
-		},
-		{
-			name: "default workload ID is always included",
-			requests: map[string]apiv1.ResourceList{
-				"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-			},
-			maxWorkloadSeparations: 0,
-			want: map[string]apiv1.ResourceList{
-				"": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-			},
-		},
-		{
-			name: "default workload ID is prioritized over non-default",
-			requests: map[string]apiv1.ResourceList{
-				"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-				"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
-			},
-			maxWorkloadSeparations: 1,
-			want: map[string]apiv1.ResourceList{
-				"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-				"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
-			},
-		},
-		{
-			name: "under limit",
-			requests: map[string]apiv1.ResourceList{
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-				"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-			},
-			maxWorkloadSeparations: 10,
-			want: map[string]apiv1.ResourceList{
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
-				"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-			},
-		},
-		{
-			name: "equal cpu, fallback to sorting by name",
-			requests: map[string]apiv1.ResourceList{
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-				"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-			},
-			maxWorkloadSeparations: 1,
-			want: map[string]apiv1.ResourceList{
-				"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &LookaheadPodInjectionProcessor{
-				limiter: &mockWorkloadSeparationLimiter{limit: tt.maxWorkloadSeparations},
-			}
-			requests := map[string]map[string]apiv1.ResourceList{
-				machinetypes.EK.Name(): tt.requests,
-			}
-			got := p.limitMaxWorkloadSeparations(requests)
-			assert.Equal(t, tt.want, got[machinetypes.EK.Name()])
-		})
-	}
-}
-
 type fakeLookaheadPodProvider struct{}
 
 // GetLookaheadPods returns lookahead pods number equal to floor(cpus/32).
@@ -1760,8 +1677,12 @@ type mockWorkloadSeparationLimiter struct {
 	limit int
 }
 
-func (m *mockWorkloadSeparationLimiter) Limit() int {
-	return m.limit
+func (m *mockWorkloadSeparationLimiter) Limit(requestsByFamily map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList {
+	limited := map[string]map[string]apiv1.ResourceList{}
+	for family, requests := range requestsByFamily {
+		limited[family] = limitRequestsForFamily(requests, m.limit)
+	}
+	return limited
 }
 
 type mockCalculator struct {

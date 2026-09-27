@@ -680,10 +680,20 @@ func setUpProcessors(
 		enforceFakePodsLimitProcessor = podinjection.NewEnforceInjectedPodsLimitProcessor(options.PodInjectionLimit)
 	}
 	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
+	laWorkloadSeparationsConfigFlags := map[string]int{
+		machinetypes.EK.Name():  options.EkLookaheadMaxWorkloadSeparations,
+		machinetypes.E4A.Name(): options.E4aLookaheadMaxWorkloadSeparations,
+		machinetypes.E4.Name():  options.E4LookaheadMaxWorkloadSeparations,
+	}
+	experimentFlags := map[string]string{
+		machinetypes.EK.Name():  experiments.EkLookaheadMaxWorkloadSeparationsFlag,
+		machinetypes.E4A.Name(): experiments.E4aLookaheadMaxWorkloadSeparationsFlag,
+		machinetypes.E4.Name():  experiments.E4LookaheadMaxWorkloadSeparationsFlag,
+	}
 	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(
 		laPodProvider,
 		lookaheadBufferStrategyProvider,
-		lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion),
+		lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, laWorkloadSeparationsConfigFlags, experimentFlags, caVersion),
 		provider.MachineConfigProvider(),
 		systemPodsClassifier,
 		ccLister,

@@ -64,7 +64,7 @@ var biggestMachineTypeForMachineFamily = map[string]string{
 }
 
 type limiter interface {
-	Limit() int
+	Limit(requestsByFamily map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList
 }
 
 type metrics interface {
@@ -73,11 +73,6 @@ type metrics interface {
 
 type strategyProvider interface {
 	Strategy(machineFamily string) (lookaheadbuffer_strategy.LookaheadPodStrategy, error)
-}
-
-type workloadIDRequestsPair struct {
-	workloadID string
-	resources  apiv1.ResourceList
 }
 
 // LookaheadPodInjectionProcessor injects lookahead pods to unschedulable pods.
@@ -148,7 +143,7 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 
 	taintConfig := taintutils.NewTaintConfig(autoscalingCtx.AutoscalingOptions)
 	requests := p.podRequestsPerMachineFamilyPerWorkloadID(nodeInfos, &taintConfig, machineFamiliesWithLAEnabled)
-	topRequests := p.limitMaxWorkloadSeparations(requests)
+	topRequests := p.limiter.Limit(requests)
 	lookaheadPods := p.createLookaheadPods(autoscalingCtx, topRequests)
 
 	p.emitLookaheadPodsCountMetric(lookaheadPods)
@@ -192,40 +187,21 @@ func (p *LookaheadPodInjectionProcessor) podRequestsPerMachineFamilyPerWorkloadI
 	return requests
 }
 
-func (p *LookaheadPodInjectionProcessor) limitMaxWorkloadSeparations(requestsPerMachineFamily map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList {
-	// Default workload ID should always have lookahead enabled.
-	// This is in case default workload ID isn't in the top `maxWorkloadSeparations` by pod requests.
-	limitedRequests := map[string]map[string]apiv1.ResourceList{}
-	for machineFamily, requests := range requestsPerMachineFamily {
-		defaultWID, defaultExists := requests[""]
-		delete(requests, "")
-
-		// TODO(b/421106616): Set of workload IDs with lookahead is recomputed every loop. A cluster
-		// with more workload IDs than `maxWorkloadSeparations` might have some groups moving between having lookahead and not having it.
-		// This could lead to extra node churn. This is an edge-case and probably not worth handling right now.
-		limitedRequests[machineFamily] = selectLargestRequests(requests, p.limiter.Limit())
-		if defaultExists {
-			// Add default workload ID back, if it existed in the first place.
-			limitedRequests[machineFamily][""] = defaultWID
-		}
-	}
-	return limitedRequests
-}
-
 func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *ca_context.AutoscalingContext, requestsPerMachineFamilyPerWorkloadID map[string]map[string]apiv1.ResourceList) []*apiv1.Pod {
 	lookaheadPods := []*apiv1.Pod{}
-	for family, requestsPerWorkloadID := range requestsPerMachineFamilyPerWorkloadID {
+	for machineFamily, requestsPerWorkloadID := range requestsPerMachineFamilyPerWorkloadID {
 		for id, requests := range requestsPerWorkloadID {
-			pods, err := p.createLookaheadPodsForWorkloadID(id, requests, family, ctx)
+			pods, err := p.createLookaheadPodsForWorkloadID(id, requests, machineFamily, ctx)
 			if err != nil {
-				klog.Warningf("Couldn't create lookahead pods for workload ID %q and machine family %q: %v", id, family, err)
+				klog.Warningf("Couldn't create lookahead pods for workload ID %q and machine family %q: %v", id, machineFamily, err)
 				continue
 			}
 
-			logLookaheadPods(pods, id, family)
+			logLookaheadPods(pods, id, machineFamily)
 			lookaheadPods = append(lookaheadPods, pods...)
 		}
 	}
+
 	return lookaheadPods
 }
 
@@ -463,32 +439,4 @@ func updateNodeWithWorkloadID(node *apiv1.Node, wsTolerations []apiv1.Toleration
 		node.Labels[t.Key] = t.Value
 	}
 	return node
-}
-
-func selectLargestRequests(requests map[string]apiv1.ResourceList, limit int) map[string]apiv1.ResourceList {
-	if len(requests) <= limit {
-		return requests
-	}
-
-	pairs := make([]workloadIDRequestsPair, 0, len(requests))
-	for k, v := range requests {
-		pairs = append(pairs, workloadIDRequestsPair{k, v})
-	}
-	slices.SortFunc(pairs, func(a, b workloadIDRequestsPair) int {
-		aCpu := a.resources.Cpu().MilliValue()
-		bCpu := b.resources.Cpu().MilliValue()
-		if aCpu != bCpu {
-			return int(aCpu - bCpu)
-		}
-		return strings.Compare(b.workloadID, a.workloadID)
-
-	})
-	slices.Reverse(pairs)
-	topRequests := pairs[:min(limit, len(pairs))]
-	requests = map[string]apiv1.ResourceList{}
-	for _, pair := range topRequests {
-		requests[pair.workloadID] = pair.resources
-	}
-
-	return requests
 }
