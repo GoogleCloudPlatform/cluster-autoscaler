@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lookaheadbuffer
+package strategy
 
 import (
 	"testing"
@@ -24,7 +24,7 @@ import (
 )
 
 func TestSelectStrategyOnNilProvider(t *testing.T) {
-	var p *strategyProviderImpl
+	var p *providerImpl
 	_, err := p.Strategy()
 	assert.Error(t, err)
 }
@@ -199,9 +199,9 @@ func TestStrategy(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			metrics := &MockMetrics{}
+			metrics := &mockMetrics{}
 			metrics.On("UpdateLookaheadLaunchStatus", mock.Anything, mock.Anything, mock.Anything).Return()
-			p := &strategyProviderImpl{
+			p := &providerImpl{
 				flagStrategy:       tc.flagConfig,
 				experimentStrategy: tc.experimentConfig,
 				laMetrics:          metrics,
@@ -220,7 +220,7 @@ func TestStrategy(t *testing.T) {
 }
 
 func TestRefreshStrategySafeOnNil(t *testing.T) {
-	var provider *strategyProviderImpl
+	var provider *providerImpl
 	assert.NotPanics(t, func() {
 		provider.RefreshStrategy()
 	})
@@ -310,9 +310,17 @@ func TestRefreshStrategy(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			p := &strategyProviderImpl{Manager: tc.Manager, componentVersion: componentVersion}
+			p := &providerImpl{Manager: tc.Manager, componentVersion: componentVersion}
 			p.RefreshStrategy()
 			assert.Equal(t, tc.want, p.experimentStrategy)
 		})
 	}
+}
+
+type mockMetrics struct {
+	mock.Mock
+}
+
+func (m *mockMetrics) UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string) {
+	m.MethodCalled("UpdateLookaheadLaunchStatus", launchPhase, launchedFrom, strategy)
 }

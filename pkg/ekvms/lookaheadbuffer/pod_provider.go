@@ -19,6 +19,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	klog "k8s.io/klog/v2"
 )
@@ -28,10 +29,10 @@ type PodProvider interface {
 }
 
 type podProviderImpl struct {
-	strategyProvider StrategyProvider
+	strategyProvider strategy.Provider
 }
 
-func NewPodProvider(strategyProvider StrategyProvider) *podProviderImpl {
+func NewPodProvider(strategyProvider strategy.Provider) *podProviderImpl {
 	return &podProviderImpl{
 		strategyProvider: strategyProvider,
 	}
@@ -46,7 +47,7 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash st
 		klog.Errorf("Error during getting lookahead pods, assuming no lookahead pods: %v", err)
 		return nil
 	}
-	if laStrategy.Status != Enabled {
+	if laStrategy.Status != strategy.Enabled {
 		klog.V(4).Infof("Skipping lookahead pods as status is %q", laStrategy.Status)
 		return nil
 	}
@@ -64,7 +65,7 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash st
 	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash)
 }
 
-func getLookaheadPodNumber(targetNodesCPU int, tier Tier) int {
+func getLookaheadPodNumber(targetNodesCPU int, tier strategy.Tier) int {
 	if tier.LookaheadPodMilliCPU == 0 {
 		klog.Warning("LookaheadPodMilliCpu is 0, cannot calculate lookahead pod number from CPU-based settings. Returning a fixed number of lookahead pods")
 		return tier.NumLookaheadPods

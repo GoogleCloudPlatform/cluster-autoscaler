@@ -80,7 +80,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	ekvms_providers "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers"
 	internalestimator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/estimator"
@@ -600,12 +600,12 @@ func (b *Builder) Build(
 
 	// We need to trim single quotes from ekLookaheadPodStrategy since it's a single-line JSON string
 	// and we wrap it in single quotes for CA manifest to treat it as a string.
-	flagConfig, err := lookaheadbuffer.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
+	flagConfig, err := lookaheadbuffer_strategy.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
 	if err != nil {
 		klog.Errorf("Cannot parse lookahead pod strategy, error: %v", err)
 		return nil, nil, err
 	}
-	lookaheadBufferStrategyProvider := lookaheadbuffer.NewStrategyProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
+	lookaheadBufferStrategyProvider := lookaheadbuffer_strategy.NewProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
 
 	var provreqProcessor pods.PodListProcessor

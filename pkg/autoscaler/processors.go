@@ -98,6 +98,7 @@ import (
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	lookaheadbuffer_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/processor"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvms_recommender "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	ekvms_operationtracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	ekvms_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
@@ -362,7 +363,7 @@ func setUpProcessors(
 	prCache *provreqcache.QueuedProvisioningCache,
 	provreqProcessor pods.PodListProcessor,
 	resizableVmAutoprovisioningProvider *ekvms_providers.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
+	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
 	reservationBlocksPuller *reservations.BlocksPuller,
 	instanceAvailabilityProvider instanceavailability.Provider,
 	resourcePolicyPuller placement.ResourcePolicyPuller,

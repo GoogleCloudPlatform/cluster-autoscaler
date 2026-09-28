@@ -61,7 +61,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/validators"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvm_provider_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers/interfaces"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
@@ -515,7 +515,7 @@ type gkeManagerImpl struct {
 	autoscalingOptsProvider             AutoscalingOptionsProvider
 	autoprovisioningEligibility         AutoprovisioningEligibility
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
-	lookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
+	lookaheadBufferStrategyProvider     lookaheadbuffer_strategy.Provider
 	optsTracker                         *optstracking.OptionsTracker
 	// injectedMig is set for all existing node pools created by this instance of Cluster Autoscaler
 	// and represents an injected specification of this MIG (before part of the spec was filled
@@ -584,7 +584,7 @@ func CreateGkeManager(
 	autoscalingOptsProvider AutoscalingOptionsProvider,
 	autoprovisioningEligibility AutoprovisioningEligibility,
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
+	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
 	draResourcePredictor *dynamicresources.ResourcePredictor,
 	reservationsPuller *gceclient.ReservationsPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,

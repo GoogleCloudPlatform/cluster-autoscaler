@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lookaheadbuffer
+package strategy
 
 import (
 	"encoding/json"
@@ -22,6 +22,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	klog "k8s.io/klog/v2"
 )
+
+type metrics interface {
+	UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string)
+}
 
 type launchSource string
 
@@ -33,27 +37,27 @@ const (
 
 var unspecifiedStrategy = LookaheadPodStrategy{Status: Unspecified} // default strategy configuration if smth goes wrong
 
-type StrategyProvider interface {
+type Provider interface {
 	SetEkResizingEnabled(ekResizingEnabled bool)
 	RefreshStrategy()
 	Strategy() (LookaheadPodStrategy, error)
 }
 
-// strategyProviderImpl parses and provides lookahead config.
-type strategyProviderImpl struct {
+// providerImpl parses and provides lookahead config.
+type providerImpl struct {
 	experiments.Manager
 	// flagStrategy is passed via Cluster Autoscaler flags
 	flagStrategy LookaheadPodStrategy
 	// experimentStrategy is passed via an experiment
 	experimentStrategy LookaheadPodStrategy
-	laMetrics          Metrics
+	laMetrics          metrics
 	ekResizingEnabled  bool
 	componentVersion   version.Version
 }
 
-// NewStrategyProvider creates a new lookahead provider instance.
-func NewStrategyProvider(em experiments.Manager, flagConfig LookaheadPodStrategy, laMetrics Metrics, componentVersion version.Version) *strategyProviderImpl {
-	return &strategyProviderImpl{
+// NewProvider creates a new lookahead provider instance.
+func NewProvider(em experiments.Manager, flagConfig LookaheadPodStrategy, laMetrics metrics, componentVersion version.Version) *providerImpl {
+	return &providerImpl{
 		Manager:          em,
 		flagStrategy:     flagConfig,
 		laMetrics:        laMetrics,
@@ -61,14 +65,14 @@ func NewStrategyProvider(em experiments.Manager, flagConfig LookaheadPodStrategy
 	}
 }
 
-func (p *strategyProviderImpl) SetEkResizingEnabled(ekResizingEnabled bool) {
+func (p *providerImpl) SetEkResizingEnabled(ekResizingEnabled bool) {
 	p.ekResizingEnabled = ekResizingEnabled
 }
 
 // RefreshStrategy reads the value of config from experiment, parses it, and sets it.
-func (p *strategyProviderImpl) RefreshStrategy() {
+func (p *providerImpl) RefreshStrategy() {
 	if p == nil {
-		klog.Warning("RefreshStrategy called on nil podStrategyProviderImpl. The value should not be nil.")
+		klog.Warning("RefreshStrategy called on nil providerImpl. The value should not be nil.")
 		return
 	}
 	experimentConfigFlag := p.EvaluateStringFlagOrFailsafe(experiments.EkLookaheadPodsV1Flag, `{"minCaVersion": "999.999.999"}`)
@@ -96,9 +100,9 @@ func (p *strategyProviderImpl) RefreshStrategy() {
 }
 
 // Strategy returns the authoritative LookaheadPodStrategy.
-func (p *strategyProviderImpl) Strategy() (LookaheadPodStrategy, error) {
+func (p *providerImpl) Strategy() (LookaheadPodStrategy, error) {
 	if p == nil {
-		return unspecifiedStrategy, errors.New("Strategy called on nil podStrategyProviderImpl. The value should not be nil")
+		return unspecifiedStrategy, errors.New("Strategy called on nil providerImpl. The value should not be nil")
 	}
 	if !p.ekResizingEnabled {
 		klog.Info("EK resizing is not enabled, skipping lookahead buffer")
@@ -116,7 +120,7 @@ func (p *strategyProviderImpl) Strategy() (LookaheadPodStrategy, error) {
 	return unspecifiedStrategy, nil
 }
 
-func (p *strategyProviderImpl) updateLaunchStatus(strategy LookaheadPodStrategy, launchedFrom launchSource) {
+func (p *providerImpl) updateLaunchStatus(strategy LookaheadPodStrategy, launchedFrom launchSource) {
 	launchPhase := string(strategy.Status)
 	launchStrategy := ""
 	if strategy.Status == Enabled {
