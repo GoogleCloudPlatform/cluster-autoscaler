@@ -215,18 +215,18 @@ func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.Clust
 
 	// Prevent simulation on non resizable nodes or current candidates
 	isNodeAcceptable := func(schedulingCandidateNodeInfo *framework.NodeInfo) bool {
-		schedulingCandidateName := schedulingCandidateNodeInfo.Node().Name
-		_, found := resizableNodesSnapshot[schedulingCandidateName]
+		node := schedulingCandidateNodeInfo.Node()
+		_, found := resizableNodesSnapshot[node.Name]
 		if !found {
 			return false
 		}
-		if isCandidate[schedulingCandidateName] {
+		if isCandidate[node.Name] {
 			return false
 		}
-		if p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodesFlag) && processor.HasLookaheadPods(schedulingCandidateNodeInfo) {
+		if processor.HasLookaheadPods(schedulingCandidateNodeInfo) && processor.PreventScheduleOnLookaheadNode(p.experimentsManager, node) {
 			return false
 		}
-		return schedulingCandidateName != nodeName
+		return node.Name != nodeName
 	}
 
 	// Try to schedule pods from current node
