@@ -96,7 +96,8 @@ func createDraGpuDevice(mcp *mt.MachineConfigProvider, name, deviceType, acceler
 }
 
 func memoryGbToQuantity(memoryGb int64) *resource.Quantity {
-	return resource.NewQuantity(int64(memoryGb)*2^30, resource.BinarySI)
+	memoryBytes := int64(memoryGb) * 1024 * 1024 * 1024
+	return resource.NewQuantity(memoryBytes, resource.BinarySI)
 }
 
 func gpuSlicePoolName(nodeName string, acceleratorIndex int) string {
