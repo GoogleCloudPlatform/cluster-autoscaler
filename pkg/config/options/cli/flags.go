@@ -76,6 +76,7 @@ var (
 	e4aMachineTypes                              = flag.String("e4a-machine-types", "", "A comma-separated list of E4A machine types to override E4A machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	ekDownsizeConfig                             = flag.String("ek-downsize-config", "{}", "An override for DownsizeConfig in json format for EK.")
 	e4aDownsizeConfig                            = flag.String("e4a-downsize-config", "{}", "An override for DownsizeConfig in json format for E4A.")
+	e4DownsizeConfig                             = flag.String("e4-downsize-config", "{}", "An override for DownsizeConfig in json format for E4.")
 	isClusterUsingDPV1                           = flag.Bool("is-cluster-using-dpv1", false, "Is the cluster using dataplane v1 (i.e. kube-proxy)")
 	gceEndpoint                                  = flag.String("gce-endpoint", "", "GCE endpoint address. If not set default GCE API endpoint is used.")
 	clusterScaleToZeroEnabled                    = flag.Bool("enable-cluster-scale-to-zero", false, "Whether the cluster can be scaled to 0 nodes if all pods are in kube-system namespace")
@@ -319,6 +320,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		E4aMachineTypes:                              *e4aMachineTypes,
 		EkDownsizeConfig:                             *ekDownsizeConfig,
 		E4aDownsizeConfig:                            *e4aDownsizeConfig,
+		E4DownsizeConfig:                             *e4DownsizeConfig,
 		IsClusterUsingDPV1:                           *isClusterUsingDPV1,
 		GceEndpoint:                                  *gceEndpoint,
 		ClusterScaleToZeroEnabled:                    *clusterScaleToZeroEnabled,

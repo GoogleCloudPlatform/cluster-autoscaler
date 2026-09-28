@@ -49,6 +49,7 @@ type InternalOptions struct {
 	E4aMachineTypes                              string
 	EkDownsizeConfig                             string
 	E4aDownsizeConfig                            string
+	E4DownsizeConfig                             string
 	IsClusterUsingDPV1                           bool
 	GceEndpoint                                  string
 	ClusterScaleToZeroEnabled                    bool

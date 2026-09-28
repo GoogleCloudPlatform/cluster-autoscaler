@@ -552,6 +552,7 @@ func setUpProcessors(
 		downsizeConfigFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkDownsizeConfig,
 			machinetypes.E4A.Name(): options.E4aDownsizeConfig,
+			machinetypes.E4.Name():  options.E4DownsizeConfig,
 		}
 		downsizeExperimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkDownsizeConfigFlag,
