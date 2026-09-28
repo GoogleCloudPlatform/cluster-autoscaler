@@ -562,7 +562,7 @@ func setUpProcessors(
 		}
 		configProvider := ekvms_processor.NewDownsizeConfigProvider(provider.MachineConfigProvider(), experimentsManager, downsizeConfigFlags, downsizeExperimentFlags)
 		scaleDownNodeProcessors = append(scaleDownNodeProcessors, ekvms_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), resizableVmManager, experimentsManager, fetcher, configProvider, resizeCalculator, internalmetrics.Metrics, clock.RealClock{}))
-		scaleDownNodeProcessors = append(scaleDownNodeProcessors, lookaheadbuffer_processor.NewScaleDownNodeProcessor(experimentsManager))
+		scaleDownNodeProcessors = append(scaleDownNodeProcessors, lookaheadbuffer_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), experimentsManager))
 
 		machineTypeFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkMachineTypes,

@@ -32,9 +32,11 @@ import (
 )
 
 func TestGetPodDestinationCandidates(t *testing.T) {
-	ekNode := createNode("ek-node", "ek-standard-2")
+	resizableNode := createNode("resizable-node", "ek-standard-2")
 	ekNodeWithLookahead := createNode("ek-node-with-lookahead", "ek-standard-2")
-	nonEkNode := createNode("non-ek-node", "n1-standard-2")
+	e4aNodeWithLookahead := createNode("e4a-node-with-lookahead", "e4a-standard-2")
+	e4NodeWithLookahead := createNode("e4-node-with-lookahead", "e4-standard-2")
+	nonResizableNode := createNode("non-resizable-node", "n1-standard-2")
 	unknownNode := createNode("unknown-node", "") // No instance type label
 	missingFromSnapshotNode := createNode("missing-node", "ek-standard-2")
 
@@ -42,41 +44,95 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 	normalPod := test.BuildTestPod("normal-pod", 100, 100)
 
 	tests := []struct {
-		name              string
-		experimentEnabled bool
-		nodes             []*apiv1.Node
-		pods              map[string][]*apiv1.Pod
-		wantCandidates    []string
+		name               string
+		experimentsEnabled map[string]bool
+		nodes              []*apiv1.Node
+		pods               map[string][]*apiv1.Pod
+		wantCandidates     []string
 	}{
 		{
-			name:              "Experiment disabled, return all nodes",
-			experimentEnabled: false,
-			nodes:             []*apiv1.Node{ekNode, ekNodeWithLookahead, nonEkNode},
-			pods: map[string][]*apiv1.Pod{
-				ekNode.Name:              {normalPod},
-				ekNodeWithLookahead.Name: {lookaheadPod},
-				nonEkNode.Name:           {normalPod},
+			name: "Experiment disabled, return all nodes",
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag:  false,
+				experiments.E4aPreventScheduleOnLookaheadNodesFlag: false,
+				experiments.E4PreventScheduleOnLookaheadNodesFlag:  false,
 			},
-			wantCandidates: []string{ekNode.Name, ekNodeWithLookahead.Name, nonEkNode.Name},
+			nodes: []*apiv1.Node{resizableNode, e4NodeWithLookahead, nonResizableNode},
+			pods: map[string][]*apiv1.Pod{
+				resizableNode.Name:       {normalPod},
+				e4NodeWithLookahead.Name: {lookaheadPod},
+				nonResizableNode.Name:    {normalPod},
+			},
+			wantCandidates: []string{resizableNode.Name, e4NodeWithLookahead.Name, nonResizableNode.Name},
 		},
 		{
-			name:              "Experiment enabled, filter logic",
-			experimentEnabled: true,
-			nodes:             []*apiv1.Node{ekNode, ekNodeWithLookahead, nonEkNode, unknownNode, missingFromSnapshotNode, nil},
+			name: "Experiments partially enabled: EK enabled, E4 and E4A disabled",
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag:  true,
+				experiments.E4aPreventScheduleOnLookaheadNodesFlag: false,
+				experiments.E4PreventScheduleOnLookaheadNodesFlag:  false,
+			},
+			nodes: []*apiv1.Node{resizableNode, ekNodeWithLookahead, e4aNodeWithLookahead, e4NodeWithLookahead, nonResizableNode},
 			pods: map[string][]*apiv1.Pod{
-				ekNode.Name:              {normalPod},
-				ekNodeWithLookahead.Name: {lookaheadPod},
-				nonEkNode.Name:           {normalPod},
+				resizableNode.Name:        {normalPod},
+				ekNodeWithLookahead.Name:  {lookaheadPod},
+				e4aNodeWithLookahead.Name: {lookaheadPod},
+				e4NodeWithLookahead.Name:  {lookaheadPod},
+				nonResizableNode.Name:     {normalPod},
+			},
+			// Logic:
+			// resizableNode -> !HasLookahead -> kept
+			// ekNodeWithLookahead -> EK experiment enabled && HasLookahead -> dropped
+			// e4aNodeWithLookahead -> E4a experiment disabled -> kept
+			// e4NodeWithLookahead -> E4 experiment disabled -> kept
+			// nonResizableNode -> kept
+			wantCandidates: []string{resizableNode.Name, e4aNodeWithLookahead.Name, e4NodeWithLookahead.Name, nonResizableNode.Name},
+		},
+		{
+			name: "Experiments partially enabled: E4 enabled, EK and E4A disabled",
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag:  false,
+				experiments.E4aPreventScheduleOnLookaheadNodesFlag: false,
+				experiments.E4PreventScheduleOnLookaheadNodesFlag:  true,
+			},
+			nodes: []*apiv1.Node{resizableNode, ekNodeWithLookahead, e4aNodeWithLookahead, e4NodeWithLookahead, nonResizableNode},
+			pods: map[string][]*apiv1.Pod{
+				resizableNode.Name:        {normalPod},
+				ekNodeWithLookahead.Name:  {lookaheadPod},
+				e4aNodeWithLookahead.Name: {lookaheadPod},
+				e4NodeWithLookahead.Name:  {lookaheadPod},
+				nonResizableNode.Name:     {normalPod},
+			},
+			// Logic:
+			// resizableNode -> !HasLookahead -> kept
+			// ekNodeWithLookahead -> EK experiment disabled -> kept
+			// e4NodeWithLookahead -> E4 experiment enabled && HasLookahead -> dropped
+			// e4aNodeWithLookahead -> E4a experiment disabled -> kept
+			// nonResizableNode -> kept
+			wantCandidates: []string{resizableNode.Name, ekNodeWithLookahead.Name, e4aNodeWithLookahead.Name, nonResizableNode.Name},
+		},
+		{
+			name: "Experiments enabled, filter logic",
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag:  true,
+				experiments.E4aPreventScheduleOnLookaheadNodesFlag: true,
+				experiments.E4PreventScheduleOnLookaheadNodesFlag:  true,
+			},
+			nodes: []*apiv1.Node{resizableNode, e4NodeWithLookahead, nonResizableNode, unknownNode, missingFromSnapshotNode, nil},
+			pods: map[string][]*apiv1.Pod{
+				resizableNode.Name:       {normalPod},
+				e4NodeWithLookahead.Name: {lookaheadPod},
+				nonResizableNode.Name:    {normalPod},
 				unknownNode.Name:         {},
 			},
 			// Logic:
 			// nil -> dropped
-			// ekNode -> !HasLookahead -> kept
-			// ekNodeWithLookahead -> HasLookahead -> dropped
-			// nonEkNode -> kept (not EK)
-			// unknownNode -> kept (IsEkMachine fails)
+			// resizableNode -> !HasLookahead -> kept
+			// e4NodeWithLookahead -> HasLookahead -> dropped
+			// nonResizableNode -> kept
+			// unknownNode -> kept (IsResizableNode fails)
 			// missingFromSnapshotNode -> kept (GetNodeInfo fails)
-			wantCandidates: []string{ekNode.Name, nonEkNode.Name, unknownNode.Name, missingFromSnapshotNode.Name},
+			wantCandidates: []string{resizableNode.Name, nonResizableNode.Name, unknownNode.Name, missingFromSnapshotNode.Name},
 		},
 	}
 
@@ -100,12 +156,12 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 				}
 			}
 
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentsEnabled, nil)
+			p := NewScaleDownNodeProcessor(machinetypes.NewMachineConfigProvider(nil), experimentsManager)
+
 			ctx := &ca_context.AutoscalingContext{
 				ClusterSnapshot: snapshot,
 			}
-
-			p := NewScaleDownNodeProcessor(createExpManager(tc.experimentEnabled))
-
 			got, err := p.GetPodDestinationCandidates(ctx, tc.nodes)
 			assert.NoError(t, err)
 
@@ -125,7 +181,8 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 
 func TestGetScaleDownCandidates(t *testing.T) {
 	t.Parallel()
-	p := NewScaleDownNodeProcessor(createExpManager(false))
+	experimentsManager := experiments.NewMockManager()
+	p := NewScaleDownNodeProcessor(machinetypes.NewMachineConfigProvider(nil), experimentsManager)
 	nodes := []*apiv1.Node{
 		createNode("node1", "ek-standard-32"),
 		createNode("node2", "n2-standard-4"),
@@ -153,11 +210,4 @@ func createNode(name string, machineType string) *apiv1.Node {
 		n.Labels[apiv1.LabelInstanceTypeStable] = machineType
 	}
 	return n
-}
-
-func createExpManager(expEnabled bool) experiments.Manager {
-	if !expEnabled {
-		return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.EkPreventScheduleOnLookaheadNodesFlag: expEnabled}, nil)
-	}
-	return experiments.NewMockManager()
 }
