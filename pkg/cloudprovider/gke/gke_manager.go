@@ -2457,6 +2457,13 @@ func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig) (*apiv1.Node, erro
 	// Add an annotation to easily distinguish nodeInfos generated from real nodes from the ones generated from templates.
 	addAnnotation(node, gkelabels.NodeGeneratedFromTemplateAnnotation, "true")
 
+	if m.managerOptions.MultiNetworkSupportEnabled && m.matcher != nil {
+		node, err = addMultiNetworkCapacity(node, mig, m.matcher)
+		if err != nil {
+			return node, err
+		}
+	}
+
 	return node, nil
 }
 

@@ -5051,6 +5051,65 @@ func (m *mockMatcher) GetNetworkConfigFromResources(_ map[string]resource.Quanti
 	return nil, nil
 }
 
+func TestNodeTemplateFromMigSpec_MultiNetworking(t *testing.T) {
+	quantity10 := resource.NewQuantity(10, resource.DecimalSI)
+	netResName := apiv1.ResourceName("networking.gke.io.networks/red-net.IP")
+
+	for desc, tc := range map[string]struct {
+		networkConfigs   []gkeclient.AdditionalNetworkConfig
+		matcherResources map[string]resource.Quantity
+		wantQuantity     *resource.Quantity
+	}{
+		"empty network config, no multi-network capacity added": {
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{},
+			wantQuantity:   nil,
+		},
+		"multi-networking network config, multi-network capacity added": {
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{
+				gkeclient.TestAdditionalNetworkConfig("net1", "subnet", "", 0),
+			},
+			matcherResources: map[string]resource.Quantity{
+				string(netResName): *quantity10,
+			},
+			wantQuantity: quantity10,
+		},
+	} {
+		t.Run(desc, func(t *testing.T) {
+			server := NewHttpServerMock()
+			defer server.Close()
+			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			addDefaultListMigsMocks(server, g.cache)
+
+			g.managerOptions.MultiNetworkSupportEnabled = true
+			g.matcher = &mockMatcher{resources: tc.matcherResources}
+
+			mig := &GkeMig{
+				gceRef:          gce.GceRef{Name: "nap-mig", Zone: zoneB, Project: projectId},
+				gkeManager:      g,
+				exist:           false,
+				autoprovisioned: true,
+				spec: &gkeclient.NodePoolSpec{
+					MachineType:        machineTypeA,
+					SystemArchitecture: &arch,
+					NetworkConfigs:     tc.networkConfigs,
+				},
+			}
+
+			node, err := g.nodeTemplateFromMigSpec(mig)
+			assert.NoError(t, err)
+			assert.NotNil(t, node)
+
+			if tc.wantQuantity != nil {
+				assert.Equal(t, *tc.wantQuantity, node.Status.Capacity[netResName])
+				assert.Equal(t, *tc.wantQuantity, node.Status.Allocatable[netResName])
+			} else {
+				assert.NotContains(t, node.Status.Capacity, netResName)
+				assert.NotContains(t, node.Status.Allocatable, netResName)
+			}
+		})
+	}
+}
+
 func TestGkeManagerImplQueuedProvisioningMigGceRefs(t *testing.T) {
 	bulkMigSpec := &gkeclient.NodePoolSpec{MachineType: "a4x-highgpu-4g", FlexStart: true, PlacementGroup: placement.Spec{Policy: "a4x-policy"}}
 	gceRefGen := func(id int) *gce.GceRef {

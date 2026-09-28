@@ -55,6 +55,7 @@ type Processor struct {
 	gpuPartitioningProcessor        *GpuPartitioningCustomResourcesProcessor
 	tpuProcessor                    *tpu.TpuCustomResourcesProcessor
 	labelsProcessor                 *LabelsProcessor
+	multiNetworkingProcessor        *MultiNetworkingProcessor
 	draResourcePredictor            *gke_dra.ResourcePredictor // Intentionally only hooked into FilterOutNodesWithUnreadyResources().
 	draCustomResourcesProcessor     DraCrpInternalOverride
 	worstAllocatableOverestimation  map[waKey]float64
@@ -82,6 +83,7 @@ func NewProcessor(cache *nodetemplate.Cache) *Processor {
 		gpuPartitioningProcessor:        NewGpuPartitioningCustomResourcesProcessor(),
 		tpuProcessor:                    &tpu.TpuCustomResourcesProcessor{},
 		labelsProcessor:                 &LabelsProcessor{},
+		multiNetworkingProcessor:        &MultiNetworkingProcessor{},
 		draResourcePredictor:            gke_dra.NewResourcePredictor(),
 		draCustomResourcesProcessor:     NewDraCrpInternalOverride(),
 		worstAllocatableOverestimation:  make(map[waKey]float64),
@@ -99,6 +101,7 @@ func (p *Processor) GetDraResourcePredictor() *gke_dra.ResourcePredictor {
 // SetContext sets context for the processor to use when the provided one is nil
 func (p *Processor) SetContext(context *ca_context.AutoscalingContext) {
 	p.gpuPartitioningProcessor.SetContext(context)
+	p.multiNetworkingProcessor.SetContext(context)
 }
 
 // SetCloudProvider sets machine config provider for the processors to use.
@@ -207,6 +210,7 @@ func (p *Processor) FilterOutNodesWithUnreadyResources(ctx context.Context, auto
 	newAllNodes, newReadyNodes = p.gpuPartitioningProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
 	newAllNodes, newReadyNodes = p.tpuProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot)
 	newAllNodes, newReadyNodes = p.labelsProcessor.FilterOutNodesWithMissingLabels(newAllNodes, newReadyNodes)
+	newAllNodes, newReadyNodes = p.multiNetworkingProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes)
 
 	if autoscalingCtx.DynamicResourceAllocationEnabled {
 		newAllNodes, newReadyNodes = p.draCustomResourcesProcessor.FilterOutNodesWithUnreadyResources(ctx, autoscalingCtx, newAllNodes, newReadyNodes, snapshot, csiSnapshot)
