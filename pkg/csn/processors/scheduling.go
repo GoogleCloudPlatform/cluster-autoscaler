@@ -52,18 +52,6 @@ func allOfPriorityFilters(priorities ...priorityFilter) priorityFilter {
 	}
 }
 
-// anyOfPriorityFilters returns a single priorityFilter that returns true if any of the given filters return true.
-func anyOfPriorityFilters(priorities ...priorityFilter) priorityFilter {
-	return func(ni *framework.NodeInfo) bool {
-		for _, priority := range priorities {
-			if priority(ni) {
-				return true
-			}
-		}
-		return false
-	}
-}
-
 type schedulePodsOnCSNNodesOptions struct {
 	ignoreBufferAssignment bool
 }
@@ -126,23 +114,21 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 			continue
 		}
 
-		// We need to adjust priorities to run against the original nodes, not the modified nodes.
-		newPriorities := []priorityFilter{}
-		for _, priority := range g.priorities {
-			newPriorities = append(newPriorities, func(ni *framework.NodeInfo) bool {
-				node := ni.Node()
-				originalNI, ok := originalNodeInfo[node.Name]
-				// TODO(b/479842232): This is fine as we will not have non-CSN nodes in the originalNodeInfo.
-				// Their priority will thus be lowest possible,
-				// but we don't want to schedule non-CSN nodes in this function, so its ok.
-				if !ok {
-					return false
+		// Pre-categorize CSN nodes into priority buckets once per podGroup against the original nodes.
+		// TODO(b/479842232): This is fine as we will not have non-CSN nodes in the originalNodeInfo.
+		// Their priority will thus be lowest possible,
+		// but we don't want to schedule non-CSN nodes in this function, so its ok.
+		nodePriorities := make(map[string]int, len(originalNodeInfo))
+		for name, origNI := range originalNodeInfo {
+			for i, priority := range g.priorities {
+				if priority(origNI) {
+					nodePriorities[name] = i
+					break
 				}
-				return priority(originalNI)
-			})
+			}
 		}
 
-		scheduled, err := schedulePods(sn, simulator, g.pods, newPriorities...)
+		scheduled, err := schedulePodsWithBuckets(sn, simulator, g.pods, nodePriorities, len(g.priorities))
 		if err != nil {
 			sn.Revert()
 			return nil, fmt.Errorf("failed to schedule pods: %v", err)
@@ -176,29 +162,13 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 	return nodesOfScheduledPods, nil
 }
 
-func comparator(priorityFilters ...priorityFilter) clustersnapshot.NodeOrderMapping {
-	priorityIdxFn := func(ni *framework.NodeInfo) int {
-		for i := range priorityFilters {
-			if priorityFilters[i](ni) {
-				return i
-			}
-		}
-		return len(priorityFilters)
-	}
-
-	return clustersnapshot.NewPriorityNodeOrderMapping(
-		func(a, b *framework.NodeInfo) bool {
-			return priorityIdxFn(a) < priorityIdxFn(b)
-		},
-	)
-}
-
-func schedulePods(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, priorities ...priorityFilter) (map[*apiv1.Pod]string, error) {
+func schedulePodsWithBuckets(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, nodePriorities map[string]int, numBuckets int) (map[*apiv1.Pod]string, error) {
 	scheduledPods := map[*apiv1.Pod]string{}
+	ordering := newBucketedNodeOrderMapping(nodePriorities, numBuckets)
 
 	res, err := simulator.TrySchedulePods(context.Background(), sn, pods, false, clustersnapshot.SchedulingOptions{
-		IsNodeAcceptable: anyOfPriorityFilters(priorities...),
-		NodeOrdering:     comparator(priorities...),
+		IsNodeAcceptable: ordering.isNodeAcceptable,
+		NodeOrdering:     ordering,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to schedule pods: %v", err)
