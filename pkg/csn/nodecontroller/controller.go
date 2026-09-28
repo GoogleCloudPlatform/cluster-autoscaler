@@ -23,6 +23,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
+	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/bluegreen"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -122,6 +123,7 @@ func NewCSNNodeController(
 	cp CloudProvider,
 	experimentsManager experiments.Manager,
 	backoff handler.CSNCompositeBackoff,
+	recorder kube_record.EventRecorder,
 ) *csnNodeController {
 	config := cfg.NewProvider(experimentsManager).GetConfig()
 	var nodeEventHandlers []state.EventHandler
@@ -145,7 +147,9 @@ func NewCSNNodeController(
 	}, wq, func(op ops.OperationType, nodeNames set.Set[string]) {
 		// best-effort clear operation.
 		nsm.SetPendingOperation(op, false, nodeNames)
-	})
+	},
+		dispatch.NewEventEmitter(recorder, nsm, experimentsManager),
+	)
 	tracker := taints.NewTracker(wq)
 	nodeEventHandlers = append(nodeEventHandlers, tracker.HandleNodeEvent)
 	k8sAdapter := k8s.NewClientAdapter(clientSet)

@@ -188,6 +188,7 @@ func TestDispatcherMetrics(t *testing.T) {
 				func(op ops.OperationType, nodeNames set.Set[string]) {
 					sm.SetPendingOperation(op, false, nodeNames)
 				},
+				nil,
 			)
 
 			handler := &fakeHandler{

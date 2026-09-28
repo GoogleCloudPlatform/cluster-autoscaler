@@ -63,8 +63,19 @@ func (m *MockStateManager) GetPendingOperationUpdateCalls() []SetPendingOperatio
 	return m.pendingOps
 }
 
-func (m *MockStateManager) GetAssignedBuffers(_ ...string) map[string]*v1beta1.CapacityBuffer {
-	return m.NodeNameToBuffer
+func (m *MockStateManager) GetAssignedBuffers(nodeNames ...string) map[string]*v1beta1.CapacityBuffer {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	if len(nodeNames) == 0 || m.NodeNameToBuffer == nil {
+		return m.NodeNameToBuffer
+	}
+	res := make(map[string]*v1beta1.CapacityBuffer, len(nodeNames))
+	for _, name := range nodeNames {
+		if b, ok := m.NodeNameToBuffer[name]; ok && b != nil {
+			res[name] = b
+		}
+	}
+	return res
 }
 
 func (m *MockStateManager) IsBackoffEnabled() bool {

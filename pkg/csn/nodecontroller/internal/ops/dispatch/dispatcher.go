@@ -28,13 +28,20 @@ import (
 	"k8s.io/utils/set"
 )
 
-const logPrefix = "CSN Operation Dispatcher:"
+const (
+	logPrefix = "CSN Operation Dispatcher:"
+)
 
 type Queue interface {
 	Dequeue(ctx context.Context) (ops.Operation, bool)
 	Enqueue(o ops.Operation) error
 }
 type ClearPendingOperationF func(op ops.OperationType, nodeNames set.Set[string])
+
+type eventEmitter interface {
+	emitSuccess(opType ops.OperationType, nodeNames set.Set[string])
+	emitFailure(opType ops.OperationType, failedNodes set.Set[string], errs map[string]error)
+}
 
 // Dispatcher is responsible for starting up and coordinating worker
 // goroutines which perform operations related to Cold Standby Nodes.
@@ -44,11 +51,12 @@ type Dispatcher struct {
 	handlers              map[ops.OperationType]ops.OperationHandler
 	workerCount           int
 	backoffManager        *retry.BackoffManager
+	eventEmitter          eventEmitter
 }
 
 // NewDispatcher returns a concrete Dispatcher struct.
 // It uses the queue to dequeue and enqueue operations.
-func NewDispatcher(workerCount int, retryCfg retry.Config, queue Queue, clearOpF ClearPendingOperationF) *Dispatcher {
+func NewDispatcher(workerCount int, retryCfg retry.Config, queue Queue, clearOpF ClearPendingOperationF, emitter eventEmitter) *Dispatcher {
 	return &Dispatcher{
 		queue:                 queue,
 		clearPendingOperation: clearOpF,
@@ -59,6 +67,7 @@ func NewDispatcher(workerCount int, retryCfg retry.Config, queue Queue, clearOpF
 			retryCfg,
 			queue.Enqueue,
 		),
+		eventEmitter: emitter,
 	}
 }
 
@@ -110,6 +119,9 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 		if len(res.Success) > 0 {
 			klog.V(4).Infof("%s op %q returned successfully for nodes: %v", logPrefix, op.Type.String(), res.Success)
 			d.countAndTrackByRetryCount(op.Type, opSuccess, res.Success, d.backoffManager.RetryCountsForNodes(op.Type, res.Success), nil)
+			if d.eventEmitter != nil {
+				d.eventEmitter.emitSuccess(op.Type, res.Success)
+			}
 			d.clearPendingOperation(op.Type, res.Success)
 		}
 		d.handleBackoff(op, res)
@@ -149,6 +161,9 @@ func (d *Dispatcher) handleBackoff(op ops.Operation, res ops.Result) {
 
 	// If the operation is considered a permanent failure,
 	// then pending operation should be cleared.
+	if d.eventEmitter != nil {
+		d.eventEmitter.emitFailure(op.Type, backoffResult.FailedNodes, res.Errs)
+	}
 	d.clearPendingOperation(op.Type, backoffResult.FailedNodes)
 }
 

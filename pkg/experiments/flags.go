@@ -121,6 +121,7 @@ const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTime
 // csn.defaultMinUnsupportedMemoryGB.
 const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
 const ColdStandbyNodesScaleUpStatusProcessorFlag = "ColdStandbyNodes::ScaleUpStatusProcessor"
+const ColdStandbyNodesEmitNodeControllerEventsFlag = "ColdStandbyNodes::EmitNodeControllerEvents" // Direct launch.
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"

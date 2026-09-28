@@ -685,7 +685,7 @@ func setUpProcessors(
 		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
 		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
-		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff)
+		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
 		go csnNodeController.Run(context)
 		csnNodeReconcilationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)

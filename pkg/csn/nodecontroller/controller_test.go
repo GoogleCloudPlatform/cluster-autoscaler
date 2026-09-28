@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -685,6 +686,7 @@ type controllerTestSuite struct {
 	ClientSet            kubernetes.Interface
 	CloudProvider        *test.MockCloudProvider
 	Backoff              handler.CSNCompositeBackoff
+	Recorder             *kube_record.FakeRecorder
 	skipCacheSync        bool
 	csnBackoffExperiment bool
 }
@@ -731,6 +733,7 @@ func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controller
 	suite := controllerTestSuite{
 		ClientSet:     fake.NewSimpleClientset(),
 		CloudProvider: &test.MockCloudProvider{},
+		Recorder:      kube_record.NewFakeRecorder(100),
 	}
 	for _, opt := range opts {
 		opt(&suite)
@@ -739,14 +742,15 @@ func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controller
 	experimentsManager := experiments.NewMockManagerWithOptions(
 		version.Version{},
 		map[string]bool{
-			experiments.ColdStandbyNodesBackoffMinCAVersionFlag: suite.csnBackoffExperiment,
+			experiments.ColdStandbyNodesBackoffMinCAVersionFlag:      suite.csnBackoffExperiment,
+			experiments.ColdStandbyNodesEmitNodeControllerEventsFlag: true,
 		},
 		map[string]string{
 			experiments.ColdStandbyNodesControllerConfigV1Flag: cfg.ExampleControllerJSON,
 		},
 	)
 	factory := informers.NewSharedInformerFactory(suite.ClientSet, 0)
-	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager, suite.Backoff)
+	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager, suite.Backoff, suite.Recorder)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
