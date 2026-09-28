@@ -89,7 +89,7 @@ func (p *rpPuller) Run(ctx context.Context) {
 
 // Loop runs a single loop of resource policies pulling.
 func (p *rpPuller) Loop() {
-	pullerEnabled := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ResourcePolicyPullerFlag, false)
+	pullerEnabled := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ResourcePolicyPullerFlag, true)
 	if !pullerEnabled {
 		klog.Info("Skipping resourcePolicyPuller loop: disabled by experiment")
 		p.Lock()
