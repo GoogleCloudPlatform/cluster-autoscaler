@@ -1410,11 +1410,16 @@ func TestNewNodePoolSpec(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			spec, err := g.NewNodePoolSpec(tc.mig)
+			planned, plannedErr := g.PlannedNodePoolLocations(tc.mig)
 			if tc.expectedErr != nil {
 				assert.Error(t, err)
 				assert.Equal(t, tc.expectedErr, err)
+				assert.Equal(t, tc.expectedErr, plannedErr)
 			} else {
 				assert.Equal(t, tc.expectedSpec, spec)
+				// Planned locations must be exactly the locations the node pool is created with.
+				assert.NoError(t, plannedErr)
+				assert.Equal(t, tc.expectedSpec.Locations, planned)
 			}
 		})
 	}

@@ -1043,6 +1043,12 @@ func (p *gkeCloudProviderImpl) TrimLocationsForMachineConfig(locations []string,
 	return p.gkeManager.TrimLocationsForMachineConfig(locations, machineType, acceleratorConfig, minCpuPlatform, diskType)
 }
 
+// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+// would span. It uses the same computation as node pool creation.
+func (p *gkeCloudProviderImpl) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	return p.gkeManager.PlannedNodePoolLocations(mig)
+}
+
 // MigUpdateColor is the color of a MIG during a Blue/Green update.
 type MigUpdateColor string
 

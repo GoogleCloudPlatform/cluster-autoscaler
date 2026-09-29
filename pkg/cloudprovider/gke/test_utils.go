@@ -959,7 +959,29 @@ func (cp *TestAutoprovisioningCloudProvider) ValidateLocationForDiskType(locatio
 }
 
 func (cp *TestAutoprovisioningCloudProvider) TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string {
-	return cp.trimmedLocations
+	if cp.trimmedLocations != nil {
+		return cp.trimmedLocations
+	}
+	return locations
+}
+
+// PlannedNodePoolLocations approximates the node pool creation logic: specified locations (if any) or
+// autoprovisioning locations, trimmed for the machine configuration. Compact placement and reservation
+// zone handling are not emulated.
+func (cp *TestAutoprovisioningCloudProvider) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	if mig == nil || mig.Spec() == nil {
+		return nil, fmt.Errorf("mig or its spec is nil")
+	}
+	spec := mig.Spec()
+	locations := spec.Locations
+	if len(locations) == 0 {
+		locations = cp.GetAutoprovisioningLocations()
+	}
+	var acceleratorConfig *gke_api_beta.AcceleratorConfig
+	if len(spec.Accelerators) > 0 {
+		acceleratorConfig = spec.Accelerators[0]
+	}
+	return cp.TrimLocationsForMachineConfig(locations, spec.MachineType, acceleratorConfig, spec.MinCpuPlatform, spec.DiskType), nil
 }
 
 // GetAutoprovisioningDefaultFamily returns an ad-hoc machine family based on machine types specified in the
@@ -2185,6 +2207,10 @@ func (fake *FakeGkeManager) TrimLocationsForMachineConfig(locations []string, ma
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	panic("not implemented")
+}
+
 // FakeGkeManagerBuilder is a builder for FakeGkeManager.
 type FakeGkeManagerBuilder struct {
 	zones                             []string
@@ -3081,6 +3107,10 @@ func (m *GkeManagerMock) GetBasenameForMig(mig *GkeMig) (string, error) {
 }
 
 func (m *GkeManagerMock) TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string {
+	panic("not implemented")
+}
+
+func (m *GkeManagerMock) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
 	panic("not implemented")
 }
 

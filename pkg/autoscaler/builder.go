@@ -985,7 +985,8 @@ func (b *Builder) Build(
 		b.npcCrdLister,
 		autoscalingOptions.ClusterDefaultAllocationStrategy,
 		autoscalingOptions.GCEFlexAdvisorEnabled,
-		experimentsManager)
+		experimentsManager,
+		backoff)
 	if err != nil {
 		return nil, nil, err
 	}

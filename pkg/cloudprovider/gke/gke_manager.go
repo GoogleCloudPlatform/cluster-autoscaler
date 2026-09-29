@@ -361,6 +361,9 @@ type GkeManager interface {
 	NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.NodePoolSpec, error)
 	// TrimLocationsForMachineConfig cross-checks each location for mig specification, and rejects locations where mig cannot be created.
 	TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string
+	// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+	// would span. It is the same computation that is used to build the node pool spec on creation.
+	PlannedNodePoolLocations(mig *GkeMig) ([]string, error)
 	// MachineConfigProvider return the MachineConfigProvider.
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 	// ExperimentsManager returns the experiments.Manager.
@@ -1250,22 +1253,19 @@ func (m *gkeManagerImpl) CreateNodePool(mig *GkeMig) (MigCreateNodePoolResult, e
 	return MigCreateNodePoolResult{}, fmt.Errorf("could not find main MIG for node pool %s", mig.NodePoolName())
 }
 
-// NewNodePoolSpec creates node-pool spec based on mig definition.
-func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, error) {
-	if err := m.validateNAPEnabled(); err != nil {
-		return nil, err
+// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+// would span. The MIG's zone is the main zone of the node pool. The result depends only on the MIG spec and
+// cached zonal machine configuration data; it does not account for scale-up backoff.
+func (m *gkeManagerImpl) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	if mig == nil {
+		return nil, fmt.Errorf("mig is nil")
 	}
-
 	if mig.spec == nil {
 		return nil, fmt.Errorf("could not find mig spec for mig %s", mig.NodePoolName())
 	}
-
 	if len(mig.spec.Accelerators) > 1 {
 		return nil, fmt.Errorf("autoprovisioning for MIG with multiple accelerators is not supported (%s)", mig.NodePoolName())
 	}
-
-	// Make copy-by-value.
-	nodePoolSpec := *mig.spec
 
 	var acceleratorConfig *gke_api_beta.AcceleratorConfig
 	if len(mig.spec.Accelerators) > 0 {
@@ -1274,11 +1274,23 @@ func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, 
 
 	// non-empty specifiedLocations can currently only be a result of CCC zonal preferences
 	specifiedLocations := mig.spec.Locations
-	locations, err := m.limitNodePoolLocations(mig.GceRef().Zone, specifiedLocations, nodePoolSpec.MachineType, nodePoolSpec.DiskType, acceleratorConfig, nodePoolSpec.MinCpuPlatform,
+	return m.limitNodePoolLocations(mig.GceRef().Zone, specifiedLocations, mig.spec.MachineType, mig.spec.DiskType, acceleratorConfig, mig.spec.MinCpuPlatform,
 		usesPlacement(mig), reservationZoneSpecified(mig))
+}
+
+// NewNodePoolSpec creates node-pool spec based on mig definition.
+func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, error) {
+	if err := m.validateNAPEnabled(); err != nil {
+		return nil, err
+	}
+
+	locations, err := m.PlannedNodePoolLocations(mig)
 	if err != nil {
 		return nil, err
 	}
+
+	// Make copy-by-value.
+	nodePoolSpec := *mig.spec
 	nodePoolSpec.Locations = locations
 
 	// Remove internal Labels and Taints.

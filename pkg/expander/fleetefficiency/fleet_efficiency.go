@@ -18,11 +18,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
@@ -37,6 +39,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 )
 
 var (
@@ -54,6 +57,9 @@ type fleetEfficiencyFilter struct {
 	clusterDefaultAllocationStrategy options.ClusterDefaultAllocationStrategy
 	gceFlexAdvisorEnabled            bool
 	experimentsManager               experiments.Manager
+	// backoff is the scale-up backoff shared between NAP and the core scale-up logic. It is used to
+	// exclude zones in which uncreated NAP candidates cannot currently be scaled up. May be nil.
+	backoff base_backoff.Backoff
 }
 
 // NewFilter creates a new instance of the fleet efficiency Filter.
@@ -67,6 +73,7 @@ func NewFilter(
 	clusterDefaultAllocationStrategy options.ClusterDefaultAllocationStrategy,
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
+	backoff base_backoff.Backoff,
 ) *fleetEfficiencyFilter {
 	return &fleetEfficiencyFilter{
 		flexAdvisor:                      flexAdvisor,
@@ -78,6 +85,7 @@ func NewFilter(
 		clusterDefaultAllocationStrategy: clusterDefaultAllocationStrategy,
 		gceFlexAdvisorEnabled:            gceFlexAdvisorEnabled,
 		experimentsManager:               experimentsManager,
+		backoff:                          backoff,
 	}
 }
 
@@ -88,6 +96,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	}
 
 	if len(expansionOptions) == 0 || len(expansionOptions[0].Pods) == 0 {
+		klog.V(4).Infof("FleetEfficiencyFilter: no expansion options or no pods in the first option, skipping")
 		return expansionOptions
 	}
 
@@ -101,16 +110,22 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	}
 	if crd == nil {
 		// Allocation strategy is only supported for CCC, do not record metrics.
+		klog.V(4).Infof("FleetEfficiencyFilter: pod %s/%s does not use a ComputeClass, skipping", samplePod.Namespace, samplePod.Name)
 		return expansionOptions
 	}
 	if !f.isFleetEfficiencyStrategySelected(crd, expansionOptions) {
-		klog.V(4).Infof("FleetEfficiencyFilter: allocation strategy is not fleet-efficiency (CCC %s), skipping", crd.Name())
-		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
+		klog.V(4).Infof("FleetEfficiencyFilter: allocation strategy is not fleet-efficiency (CCC %s, cluster default %q), skipping", crd.Name(), f.getClusterDefaultAllocationStrategy())
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
 	}
 
-	if f.hasUsableReservations(expansionOptions) {
-		klog.V(4).Infof("FleetEfficiencyFilter: some options have usable reservations (CCC %s), skipping", crd.Name())
-		return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
+	if nodeGroupId, found := f.usableReservationNodeGroup(expansionOptions); found {
+		klog.V(4).Infof("FleetEfficiencyFilter: node group %s has matching unused reservations (CCC %s), falling back to lowest-cost", nodeGroupId, crd.Name())
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
+	}
+
+	if reason, explanation, shouldFallback := shouldFallbackToLowestCost(expansionOptions); shouldFallback {
+		klog.V(4).Infof("FleetEfficiencyFilter: %s (CCC %s), falling back to lowest-cost with reason %q", explanation, crd.Name(), reason)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: evaluating %d expansion options (CCC %s)", len(expansionOptions), crd.Name())
@@ -119,10 +134,15 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	scores := make([]float64, len(expansionOptions))
 	maxScore := -1.0
 	for i, option := range expansionOptions {
-		score, err := f.scoreOption(option, crd)
+		score, err := f.scoreOption(ctx, option, crd, nodeInfo)
 		if err != nil {
-			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s (CCC %s), ignoring strategy: %v", option.NodeGroup.Id(), crd.Name(), err)
-			return f.fallbackAndRecordMetric(expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, determineFallbackReason(err))
+			nodeGroupId := "unknown"
+			if option.NodeGroup != nil {
+				nodeGroupId = option.NodeGroup.Id()
+			}
+			reason := determineFallbackReason(err)
+			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s (CCC %s), falling back to lowest-cost with reason %q: %v", nodeGroupId, crd.Name(), reason, err)
+			return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
 		}
 
 		klog.V(5).Infof("FleetEfficiencyFilter: fleet efficiency score for option %s (CCC %s) is %f", option.NodeGroup.Id(), crd.Name(), score)
@@ -156,7 +176,46 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options (CCC %s), fallback to lowest-cost", len(bestOptions), crd.Name())
-	return f.fallbackAndRecordMetric(bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
+	return f.fallbackAndRecordMetric(ctx, bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
+}
+
+// shouldFallbackToLowestCost returns whether fleet efficiency cannot be used for the given options because
+// of unsupported constraints, together with the metric reason and a human-readable explanation.
+func shouldFallbackToLowestCost(options []expander.Option) (metrics.AllocationStrategyFallbackReason, string, bool) {
+	// 1. Fall back if pods have any zonal, topology, or stateful constraints.
+	for _, opt := range options {
+		for _, pod := range opt.Pods {
+			if constraint, found := zonalConstraint(pod); found {
+				return metrics.AllocationStrategyFallbackUnsupported, fmt.Sprintf("pod %s/%s has %s", pod.Namespace, pod.Name, constraint), true
+			}
+		}
+	}
+
+	// 2. Fall back if any option has compact placement, TPU multi-host, or targets a specific reservation.
+	for _, opt := range options {
+		gkeNg, ok := opt.NodeGroup.(gke.NodeGroup)
+		if !ok {
+			continue
+		}
+		spec := gkeNg.Spec()
+		if spec == nil {
+			continue
+		}
+		if spec.PlacementGroup.UsesPlacement() {
+			return metrics.AllocationStrategyFallbackUnsupported, fmt.Sprintf("node group %s uses placement policy", gkeNg.Id()), true
+		}
+		if spec.TpuMultiHost {
+			return metrics.AllocationStrategyFallbackUnsupported, fmt.Sprintf("node group %s is TPU multi-host", gkeNg.Id()), true
+		}
+		// Only SPECIFIC_RESERVATION pins the node pool to a particular reservation (and zone).
+		// ANY_RESERVATION (the GKE default for Standard node pools) and unspecified affinities do not constrain
+		// placement; whether matching unused reservations actually exist is checked by usableReservationNodeGroup.
+		if spec.ReservationAffinity != nil && spec.ReservationAffinity.ConsumeReservationType == gkeclient.ReservationAffinitySpecific {
+			return metrics.AllocationStrategyFallbackReservationPresent, fmt.Sprintf("node group %s targets a specific reservation", gkeNg.Id()), true
+		}
+	}
+
+	return metrics.AllocationStrategyFallbackNone, "", false
 }
 
 func determineFallbackReason(err error) metrics.AllocationStrategyFallbackReason {
@@ -183,11 +242,11 @@ func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationS
 	metrics.RegisterNodesWithAllocationStrategy(string(requestedStrategy), fallbackReason, machineType, option.NodeCount)
 }
 
-func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason) []expander.Option {
+func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason) []expander.Option {
 	if f.fallback == nil {
 		return expansionOptions
 	}
-	selected := f.fallback.BestOption(context.TODO(), expansionOptions, nodeInfo)
+	selected := f.fallback.BestOption(ctx, expansionOptions, nodeInfo)
 	if selected != nil {
 		f.recordMetric(requestedStrategy, fallbackReason, selected)
 		return []expander.Option{*selected}
@@ -198,7 +257,96 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(expansionOptions []expan
 	return expansionOptions
 }
 
-func (f *fleetEfficiencyFilter) scoreOption(option expander.Option, crd crd.CRD) (float64, error) {
+func (f *fleetEfficiencyFilter) targetZonesForOption(ctx context.Context, option expander.Option, nodeInfos map[string]*framework.NodeInfo) ([]string, error) {
+	if option.NodeGroup == nil {
+		return nil, errors.New("option has nil node group")
+	}
+	gkeNg, ok := option.NodeGroup.(gke.NodeGroup)
+	if !ok {
+		return nil, fmt.Errorf("node group %s is not a GKE node group", option.NodeGroup.Id())
+	}
+
+	isExistingOrUpcoming := option.NodeGroup.Exist(ctx) || gkeNg.IsUpcoming()
+
+	// Existing or upcoming node group:
+	// The scalable zones are exactly the zones of the healthy MIGs in this option
+	// (NodeGroup + SimilarNodeGroups, as ComputeSimilarNodeGroups excludes backed-off MIGs).
+	if isExistingOrUpcoming || len(option.SimilarNodeGroups) > 0 {
+		var rawZones []string
+		rawZones = append(rawZones, gkeNg.GceRef().Zone)
+		for _, ng := range option.SimilarNodeGroups {
+			if similarGkeNg, ok := ng.(gke.NodeGroup); ok {
+				rawZones = append(rawZones, similarGkeNg.GceRef().Zone)
+			}
+		}
+		return sanitizeZones(rawZones), nil
+	}
+
+	// Uncreated NAP candidate node group:
+	// Score it across the locations that GKE will create the node pool in. These are computed by the same code
+	// that builds the node pool spec on creation, so that fleet efficiency does not re-derive them.
+	candidateZones, err := f.plannedNodePoolLocations(gkeNg)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidateZones) == 0 {
+		return []string{gkeNg.GceRef().Zone}, nil
+	}
+
+	// Exclude zones in which the candidate is backed off, so that backed-off (e.g. stocked-out) zones
+	// do not create phantom scores for the uncreated candidate.
+	// Zones that are merely not covered by existing node pools are intentionally kept.
+	// An empty result means that the candidate is not scalable in any of its target zones.
+	backedOff := f.backedOffZonesForCandidate(gkeNg, candidateZones, nodeInfos)
+	if len(backedOff) == 0 {
+		return candidateZones, nil
+	}
+	var availableZones []string
+	for _, z := range candidateZones {
+		if !backedOff[z] {
+			availableZones = append(availableZones, z)
+		}
+	}
+	klog.V(5).Infof("FleetEfficiencyFilter: excluding backed-off zones %v from target zones %v of uncreated node group %s", sortedZones(backedOff), candidateZones, gkeNg.Id())
+	return availableZones, nil
+}
+
+// plannedNodePoolLocations returns the sanitized locations that a node pool created from the given uncreated
+// candidate would span. Returns an error if locations cannot be determined; in that case node pool creation would fail too.
+func (f *fleetEfficiencyFilter) plannedNodePoolLocations(candidate gke.NodeGroup) ([]string, error) {
+	mig := candidate.GetMig()
+	if f.cloudProvider == nil || mig == nil {
+		return nil, nil
+	}
+	locations, err := f.cloudProvider.PlannedNodePoolLocations(mig)
+	if err != nil {
+		klog.Warningf("FleetEfficiencyFilter: couldn't determine planned node pool locations for uncreated node group %s: %v", candidate.Id(), err)
+		return nil, fmt.Errorf("couldn't determine planned node pool locations for %s: %w", candidate.Id(), err)
+	}
+	return sanitizeZones(locations), nil
+}
+
+// backedOffZonesForCandidate returns the subset of zones in which an uncreated candidate node group
+// is backed off, according to the scale-up backoff shared with NAP and the core logic (e.g. resource-based
+// backoff after a stockout on an autoprovisioned node pool, or backoff of the same node pool shape created
+// earlier by NAP).
+func (f *fleetEfficiencyFilter) backedOffZonesForCandidate(candidate gke.NodeGroup, zones []string, nodeInfos map[string]*framework.NodeInfo) map[string]bool {
+	backedOff := make(map[string]bool)
+	mig := candidate.GetMig()
+	if f.backoff == nil || mig == nil {
+		return backedOff
+	}
+	now := time.Now()
+	candidateNodeInfo := nodeInfos[candidate.Id()]
+	for _, z := range zones {
+		if f.backoff.BackoffStatus(mig.ShallowCopyInZone(z), nodeInfoInZone(candidateNodeInfo, z), now).IsBackedOff {
+			backedOff[z] = true
+		}
+	}
+	return backedOff
+}
+
+func (f *fleetEfficiencyFilter) scoreOption(ctx context.Context, option expander.Option, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
 	instanceRef, err := flexadvisor.ConstructInstanceReference(option.NodeGroup, f.cccLister, f.experimentsManager)
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
@@ -208,36 +356,40 @@ func (f *fleetEfficiencyFilter) scoreOption(option expander.Option, crd crd.CRD)
 		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 	}
 
-	totalScore := 0.0
-	count := 0
+	targetZones, err := f.targetZonesForOption(ctx, option, nodeInfos)
+	if err != nil {
+		return 0, err
+	}
+	if len(targetZones) == 0 {
+		// Only uncreated candidates can end up without target zones, when all of them are backed off.
+		// Score the candidate with 0 so that it loses to any healthy option (> 0). If all candidates
+		// are backed off (all score 0), they tie at 0 and tie-breaking falls back to lowest-cost.
+		klog.V(5).Infof("FleetEfficiencyFilter: all target zones are backed off for uncreated node group %s, scoring 0", option.NodeGroup.Id())
+		return 0.0, nil
+	}
 
-	processNodeGroup := func(ng cloudprovider.NodeGroup) error {
-		gkeNg, ok := ng.(gke.NodeGroup)
-		if !ok {
-			return fmt.Errorf("node group %s is not a GKE node group", ng.Id())
-		}
-		zone := gkeNg.GceRef().Zone
+	scoreZone := func(zone string) (float64, error) {
 		score, found := snapshot.GcePreferenceScore(zone)
 		if !found {
-			return fmt.Errorf("%w for scope %s and zone %s", ErrPreferenceScoreNotPresent, instanceRef.FlexibilityScopeKey, zone)
+			return 0, fmt.Errorf("%w for scope %s and zone %s", ErrPreferenceScoreNotPresent, instanceRef.FlexibilityScopeKey, zone)
 		}
 		if score < 0 || score > 1 {
 			// TODO(b/527312993): Move the filtering to flex advisor (reject invalid scores).
-			return fmt.Errorf("invalid GCE Preference Score (%f) for scope %s and zone %s", score, instanceRef.FlexibilityScopeKey, zone)
+			return 0, fmt.Errorf("invalid GCE Preference Score (%f) for scope %s and zone %s", score, instanceRef.FlexibilityScopeKey, zone)
 		}
-		klog.V(5).Infof("FleetEfficiencyFilter: gce preference score for node group %s is %f (CCC %s)", ng.Id(), score, crd.Name())
-		totalScore += score
-		count++
-		return nil
+		klog.V(5).Infof("FleetEfficiencyFilter: gce preference score for node group %s in zone %s is %f (CCC %s)", option.NodeGroup.Id(), zone, score, crd.Name())
+		return score, nil
 	}
 
-	for _, ng := range option.SimilarNodeGroups {
-		if err := processNodeGroup(ng); err != nil {
+	totalScore := 0.0
+	count := 0
+	for _, zone := range targetZones {
+		score, err := scoreZone(zone)
+		if err != nil {
 			return 0, err
 		}
-	}
-	if err := processNodeGroup(option.NodeGroup); err != nil {
-		return 0, err
+		totalScore += score
+		count++
 	}
 
 	if count == 0 {
@@ -296,7 +448,13 @@ func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, o
 	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
 }
 
+// getClusterDefaultAllocationStrategy returns the cluster default allocation strategy, taken from the CLI flag
+// or, if unset, from experiments. Returns an empty strategy (i.e. lowest-cost) if the override is disabled by
+// experiments.
 func (f *fleetEfficiencyFilter) getClusterDefaultAllocationStrategy() options.ClusterDefaultAllocationStrategy {
+	if !IsDefaultAllocationStrategyEnabled(f.experimentsManager) {
+		return ""
+	}
 	clusterStrategy := f.clusterDefaultAllocationStrategy
 	if clusterStrategy == "" {
 		expValue := f.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ClusterDefaultAllocationStrategyFlag, "")
@@ -305,21 +463,23 @@ func (f *fleetEfficiencyFilter) getClusterDefaultAllocationStrategy() options.Cl
 	return clusterStrategy
 }
 
-func (f *fleetEfficiencyFilter) hasUsableReservations(expansionOptions []expander.Option) bool {
+// usableReservationNodeGroup returns the id of the first node group in the given options that has matching
+// unused reservations, and whether such a node group was found.
+func (f *fleetEfficiencyFilter) usableReservationNodeGroup(expansionOptions []expander.Option) (string, bool) {
 	if f.reservationsPuller == nil {
-		return false
+		return "", false
 	}
 	gceReservations := f.reservationsPuller.GetReservations()
 	if len(gceReservations) == 0 {
-		return false
+		return "", false
 	}
 	for _, option := range expansionOptions {
-		nodeGroups := append(option.SimilarNodeGroups, option.NodeGroup)
+		nodeGroups := append([]cloudprovider.NodeGroup{option.NodeGroup}, option.SimilarNodeGroups...)
 		for _, nodeGroup := range nodeGroups {
 			if reservations.MatchingUnusedReservations(f.cloudProvider, nodeGroup, gceReservations, f.localSSDDiskSizeProvider) > 0 {
-				return true
+				return nodeGroup.Id(), true
 			}
 		}
 	}
-	return false
+	return "", false
 }

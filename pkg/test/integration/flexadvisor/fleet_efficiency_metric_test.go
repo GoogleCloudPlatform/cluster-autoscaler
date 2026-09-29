@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	compute "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -48,6 +49,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 		isFlexStart               bool
 		podCount                  int
 		podCpuRequest             int64
+		podCustomizer             func(*apiv1.Pod)
 		nodePools                 []*gke_api_beta.NodePool
 		guidances                 []fake.CapacityGuidance
 		reservations              []*compute.Reservation
@@ -178,6 +180,24 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedMachineType:       "e2-standard-4",
 			expectedCount:             1,
 		},
+		"Fallback: Unsupported (Zonal Pod)": {
+			strategy: new(v1.AllocationStrategyFleetEfficiency),
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			podCustomizer: func(p *apiv1.Pod) {
+				pod.WithNodeSelectorEntry("topology.kubernetes.io/zone", "us-central1-b")(p)
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "unsupported",
+			expectedMachineType:       "e2-standard-4",
+			expectedCount:             1,
+		},
 	}
 
 	for name, tc := range testCases {
@@ -252,6 +272,9 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 					testPod := tu.BuildTestPod(podName, cpuReq, 12000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable())
 					if tc.isFlexStart {
 						pod.WithFlexStart()(testPod)
+					}
+					if tc.podCustomizer != nil {
+						tc.podCustomizer(testPod)
 					}
 					infra.Fakes.K8s.AddPod(testPod)
 				}
@@ -347,6 +370,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric_ExperimentDisabled(t 
 			"reservation_present",
 			"error",
 			"flex_advisor_not_supported",
+			"unsupported",
 		}
 		for _, reason := range reasons {
 			count, err := metrics.GetNodesWithAllocationStrategyCountForTest("fleet-efficiency", reason, "e2-standard-4")

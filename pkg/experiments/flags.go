@@ -217,6 +217,9 @@ const FleetEfficiencyStrategyMinCAVersionFlag = "FleetEfficiencyStrategy::MinCAV
 
 const ClusterDefaultAllocationStrategyFlag = "AllocationStrategy::DefaultStrategy"
 
+const DefaultAllocationStrategyEnabledFlag = "DefaultAllocationStrategy::Enabled"
+const DefaultAllocationStrategyMinCAVersionFlag = "DefaultAllocationStrategy::MinCAVersion"
+
 const SimshipAutomationApplyCRDMinCAVersionFlag = "SimshipAutomation::ApplyCRDMinCAVersion"
 const SimshipAutomationApplyCRDEnabledFlag = "SimshipAutomation::ApplyCRDEnabled"
 const SimshipAutomationBigRedButtonFlag = "SimshipAutomation::BigRedButton"

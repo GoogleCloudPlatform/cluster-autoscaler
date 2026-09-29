@@ -150,6 +150,9 @@ const (
 	AllocationStrategyFallbackTieBreak AllocationStrategyFallbackReason = "tie_break"
 	// AllocationStrategyFallbackReservationPresent represents reservation present fallback.
 	AllocationStrategyFallbackReservationPresent AllocationStrategyFallbackReason = "reservation_present"
+	// AllocationStrategyFallbackUnsupported represents fallback due to a scale-up the strategy doesn't support (e.g., placement,
+	// TPU multi-host, zonal/topology constraints).
+	AllocationStrategyFallbackUnsupported AllocationStrategyFallbackReason = "unsupported"
 )
 
 // ReactionType defines the type of reaction CA has for a pod.

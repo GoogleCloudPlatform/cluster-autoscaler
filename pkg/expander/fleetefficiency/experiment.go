@@ -33,3 +33,13 @@ func IsFleetEfficiencyEnabled(gceFlexAdvisorEnabled bool, experimentsManager exp
 	return experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FleetEfficiencyStrategyMinCAVersionFlag, true) &&
 		experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.FleetEfficiencyStrategyEnabledFlag, true)
 }
+
+// IsDefaultAllocationStrategyEnabled checks if the cluster default allocation strategy may override the
+// lowest-cost default. Both experiments fail safe to enabled, so they only act as a kill switch.
+func IsDefaultAllocationStrategyEnabled(experimentsManager experiments.Manager) bool {
+	if experimentsManager == nil {
+		return true
+	}
+	return experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.DefaultAllocationStrategyMinCAVersionFlag, true) &&
+		experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.DefaultAllocationStrategyEnabledFlag, true)
+}
