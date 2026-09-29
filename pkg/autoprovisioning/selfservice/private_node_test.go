@@ -489,7 +489,7 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 				defaultPrivateNode: tc.defaultPrivateNode,
 				isAutopilot:        tc.isAutopilot,
 			}
-			f := &privateNode{cp: cp}
+			f := newPrivateNode(cp)
 			mig := &mockGkeMigSetter{}
 
 			f.UpdateMig(mig, tc.metadata)

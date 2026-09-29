@@ -15,22 +15,24 @@
 package selfservice
 
 import (
+	"sync"
+
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	container "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+	"k8s.io/klog/v2"
 )
 
 // InitSelfService initializes supportedFeatures.
 // This function MUST be called before anything else
 // to ensure that features are set and operate correctly.
-func InitSelfService(cp CloudProvider) {
-	var experimentsManager experiments.Manager
-	if cp != nil {
-		experimentsManager = cp.GetExperimentsManager()
-	}
-
+// In particular, it has to be called before the GKE cloud provider is built,
+// because building it computes the self-service metadata of all node pools.
+func InitSelfService(experimentsManager experiments.Manager) {
+	// The cloud provider does not exist yet, it is set by SetCloudProvider.
+	privateNodeFeature = newPrivateNode(nil)
 	supportedFeatures = []feature{
 		newNodePoolGroupName(),
 		newWorkloadType(),
@@ -44,7 +46,7 @@ func InitSelfService(cp CloudProvider) {
 		newResourceManagerTags(),
 		newLocationPolicy(),
 		newLoggingConfig(),
-		newPrivateNode(cp),
+		privateNodeFeature,
 		newDraFeature(),
 		newAcceleratorNetworkProfile(),
 		newGpuDirect(),
@@ -66,13 +68,25 @@ func InitSelfService(cp CloudProvider) {
 	}
 }
 
+// SetCloudProvider sets the cloud provider used by features that depend on
+// the cluster configuration. The cloud provider only exists once the cluster
+// has been fetched, so this MUST be called after InitSelfService and before
+// the autoscaler loop starts. Node pool metadata does not depend on the cloud
+// provider, so it can be computed before this is called.
+func SetCloudProvider(cp CloudProvider) {
+	if privateNodeFeature == nil {
+		klog.Errorf("SetCloudProvider called before InitSelfService, ignoring")
+		return
+	}
+	privateNodeFeature.cp = cp
+}
+
 // CloudProvider is an interface defining the subset of cloud provider methods
 // required by the selfservice features. This allows for a minimal viable interface.                                                                                                              │
 type CloudProvider interface {
 	IsClusterUsingPSCInfrastructure() bool
 	GetDefaultEnablePrivateNodes() bool
 	IsAutopilotEnabled() bool
-	GetExperimentsManager() experiments.Manager
 }
 
 type GkeMigSetter interface {
@@ -132,10 +146,26 @@ var (
 	// supportedFeatures lists all supported self-service features.
 	// It is set by InitSelfService.
 	supportedFeatures []feature
+
+	// privateNodeFeature is the private node feature registered by
+	// InitSelfService. Its cloud provider is set by SetCloudProvider.
+	privateNodeFeature *privateNode
+
+	uninitializedLogOnce sync.Once
 )
 
-// NodepoolMetadata returns Metadata of provided Nodepool
+// NodepoolMetadata returns Metadata of provided Nodepool.
+//
+// It returns nil if InitSelfService has not been called yet, so that callers
+// can tell unknown metadata apart from a node pool without self-service
+// features.
 func NodepoolMetadata(np *container.NodePool) Metadata {
+	if supportedFeatures == nil {
+		uninitializedLogOnce.Do(func() {
+			klog.Errorf("Self-service node pool metadata requested before InitSelfService was called")
+		})
+		return nil
+	}
 	m := make(Metadata)
 	for _, f := range supportedFeatures {
 		for k, v := range f.FromNodepool(np) {

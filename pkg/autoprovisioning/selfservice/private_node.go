@@ -16,6 +16,7 @@ package selfservice
 
 import (
 	"strconv"
+	"sync"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	container "google.golang.org/api/container/v1beta1"
@@ -37,11 +38,41 @@ const (
 )
 
 type privateNode struct {
+	// cp is nil until SetCloudProvider is called.
 	cp CloudProvider
+
+	missingCloudProviderLogOnce sync.Once
 }
 
 func newPrivateNode(cp CloudProvider) *privateNode {
 	return &privateNode{cp: cp}
+}
+
+// cloudProvider returns the cloud provider, or nil if SetCloudProvider has
+// not been called yet. In the latter case it logs an error once, so that
+// misordered initialization is easy to diagnose.
+func (f *privateNode) cloudProvider() CloudProvider {
+	if f.cp == nil {
+		f.missingCloudProviderLogOnce.Do(func() {
+			klog.Errorf("Private node self-service used before SetCloudProvider was called, falling back to defaults")
+		})
+	}
+	return f.cp
+}
+
+func (f *privateNode) isClusterUsingPSCInfrastructure() bool {
+	cp := f.cloudProvider()
+	return cp != nil && cp.IsClusterUsingPSCInfrastructure()
+}
+
+func (f *privateNode) defaultEnablePrivateNodes() bool {
+	cp := f.cloudProvider()
+	return cp != nil && cp.GetDefaultEnablePrivateNodes()
+}
+
+func (f *privateNode) isAutopilotEnabled() bool {
+	cp := f.cloudProvider()
+	return cp != nil && cp.IsAutopilotEnabled()
 }
 
 func (f *privateNode) FromNodepool(np *container.NodePool) Metadata {
@@ -70,7 +101,7 @@ func (f *privateNode) FromLabelRequirements(req podrequirements.LabelRequirement
 		return nil
 	}
 
-	if !f.cp.IsClusterUsingPSCInfrastructure() {
+	if !f.isClusterUsingPSCInfrastructure() {
 		klog.Warningf("PrivateNodeLabel present in cluster with PSC infrastructure disabled, ignoring")
 		return nil
 	}
@@ -83,7 +114,7 @@ func (f *privateNode) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 		return nil
 	}
 
-	if !f.cp.IsClusterUsingPSCInfrastructure() {
+	if !f.isClusterUsingPSCInfrastructure() {
 		klog.Warningf("CCC IPType defined for cluster with PSC infrastructure disabled, ignoring")
 		return nil
 	}
@@ -121,7 +152,7 @@ func (f *privateNode) ToNodepool(np *container.NodePool, metadata Metadata) {
 		return
 	}
 
-	if f.cp.GetDefaultEnablePrivateNodes() == enablePrivateNodes {
+	if f.defaultEnablePrivateNodes() == enablePrivateNodes {
 		return
 	}
 
@@ -167,11 +198,11 @@ func (f *privateNode) UpdateMig(mig GkeMigSetter, metadata Metadata) {
 		return
 	}
 
-	if f.cp.GetDefaultEnablePrivateNodes() == enablePrivateNodes {
+	if f.defaultEnablePrivateNodes() == enablePrivateNodes {
 		return
 	}
 
-	if f.cp.IsAutopilotEnabled() {
+	if f.isAutopilotEnabled() {
 		taint := apiv1.Taint{
 			Key:    gkelabels.PrivateNodeLabel,
 			Value:  value,

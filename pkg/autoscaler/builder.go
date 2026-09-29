@@ -625,6 +625,11 @@ func (b *Builder) Build(
 	}
 	go reservationsPuller.Run(bgContext)
 
+	// Self-service features must be registered before the GKE cloud provider is
+	// built, because BuildGKE builds the node pool specs, including their
+	// self-service metadata. The cloud provider is set once it exists.
+	selfservice.InitSelfService(experimentsManager)
+
 	// Create GKE cloud provider.
 	cloudProvider, err := gke.BuildGKE(bgContext, gke.Config{
 		ProjectId: b.projectID,
@@ -670,7 +675,7 @@ func (b *Builder) Build(
 		b.npcCrdLister.SetCloudProvider(cloudProvider)
 	}
 
-	selfservice.InitSelfService(cloudProvider)
+	selfservice.SetCloudProvider(cloudProvider)
 
 	// Some autoscalingOptions fields depend on the Cluster proto, and are only properly initialized after it's obtained from the API for the first time
 	// as part of the BuildGKE() call above. Refresh the variable to pick up the newest state. Alternatively we could just inline optsTracker.Options()
