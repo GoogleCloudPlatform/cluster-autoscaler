@@ -26,6 +26,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
@@ -54,6 +55,7 @@ func TestCCCMinCapacityActiveMigration(t *testing.T) {
 	testConfig := integration.NewTestConfig().
 		WithOverrides(
 			integration.WithComputeClassMinCapacityEnabled(),
+			integration.WithEnhancedCrdStatusReportingEnabled(),
 			integration.WithDefragEnabled("high-priority-migration"),
 			integration.WithDefragCandidateLimit(10),
 			integration.WithMaxDrainParallelism(10),
@@ -122,9 +124,21 @@ func TestCCCMinCapacityActiveMigration(t *testing.T) {
 		// we want the backoffs to expire, so we wait 5 minutes.
 		time.Sleep(5 * time.Minute)
 
-		// There are 4 iteration to ensure defrag fully happens - new node needs to get created
-		// for the scale down to finish
-		for i := 0; i < 4; i++ {
+		// Defrag needs 4 iterations to fully happen - a new node has to be created
+		// for the scale down to finish. The condition is checked after the first
+		// one, while the migration is still in progress.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+
+		// Let the background status aggregator flush the queued condition.
+		time.Sleep(ccc.ConditionsFlushInterval)
+
+		updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, cccName, metav1.GetOptions{})
+		assert.NoError(t, err)
+
+		// The scale-up was triggered by pods defrag wants to migrate, not by real pending pods.
+		ccc.AssertPriorityCondition(t, updatedCCC, 0, history.ConditionTypeNodeProvisioningInProgress, history.ConditionReasonActiveMigration)
+
+		for i := 0; i < 3; i++ {
 			integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
 		}
 

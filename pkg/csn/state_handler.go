@@ -16,6 +16,7 @@ package csn
 
 import (
 	"fmt"
+	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,6 +34,8 @@ const (
 	NodeStateConsumed NodeState = "CONSUMED"
 	// NodeStateSuspended is the state where the node is suspended and has CSN taint, CSN label and cordoned.
 	NodeStateSuspended NodeState = "SUSPENDED"
+	// NodeStateFailed is the state where the node is permanently failed and has the failed taint applied.
+	NodeStateFailed NodeState = "FAILED"
 	// NodeStateUnknown is the state where the node state is unknown.
 	NodeStateUnknown NodeState = "UNKNOWN"
 	// NodeConditionSuspended is used to have visibility on the K8s layer if a given node is suspended or not
@@ -53,6 +56,12 @@ var (
 		Effect: apiv1.TaintEffectNoSchedule,
 	}
 
+	FailedTaint = apiv1.Taint{
+		Key:    metadata.FailedTaintKey,
+		Value:  metadata.FailedTaintValue,
+		Effect: apiv1.TaintEffectNoSchedule,
+	}
+
 	SoftWorkloadSeparationTaint = apiv1.Taint{
 		Key:    metadata.SoftWorkloadSeparationKey,
 		Value:  metadata.SoftWorkloadSeparationValue,
@@ -66,15 +75,7 @@ func SetNodeAs(node *apiv1.Node, desiredState NodeState) (*apiv1.Node, error) {
 	var err error
 	switch desiredState {
 	case NodeStateChilling:
-		// We only uncordon if the current state was suspended which is identified by existence of hard taint.
-		// Otherwise, the cordon might have came from another entity.
-		if taints.TaintExists(node.Spec.Taints, &SuspendedTaint) {
-			uncordonNode(node)
-		}
-		node, _, err = taints.RemoveTaint(node, &SuspendedTaint)
-		if err != nil {
-			return node, fmt.Errorf("error removing taint %v to node %q: %v", SuspendedTaint, node.Name, err)
-		}
+		RemoveSuspensionSchedulingConstraints(node)
 		addCSNLabel(node)
 		removeSuspendedCondition(node, NodeResumedMessage)
 	case NodeStateSuspended:
@@ -83,14 +84,13 @@ func SetNodeAs(node *apiv1.Node, desiredState NodeState) (*apiv1.Node, error) {
 		addCSNLabel(node)
 		addSuspendedCondition(node)
 	case NodeStateConsumed:
-		// We only uncordon if the current state was suspended which is identified by existence of hard taint.
-		// Otherwise, the cordon might have came from another entity.
-		if taints.TaintExists(node.Spec.Taints, &SuspendedTaint) {
+		RemoveSuspensionSchedulingConstraints(node)
+		if taints.TaintExists(node.Spec.Taints, &FailedTaint) {
 			uncordonNode(node)
 		}
-		node, _, err = taints.RemoveTaint(node, &SuspendedTaint)
+		node, _, err = taints.RemoveTaint(node, &FailedTaint)
 		if err != nil {
-			return node, fmt.Errorf("error removing taint %v to node %q: %v", SuspendedTaint, node.Name, err)
+			return node, fmt.Errorf("error removing taint %v to node %q: %v", FailedTaint, node.Name, err)
 		}
 		node, _, err = taints.RemoveTaint(node, &SoftWorkloadSeparationTaint)
 		if err != nil {
@@ -102,10 +102,31 @@ func SetNodeAs(node *apiv1.Node, desiredState NodeState) (*apiv1.Node, error) {
 		if err := ApplySoftTaints(node, 0); err != nil {
 			return node, fmt.Errorf("error removing soft taints: %v", err)
 		}
+	case NodeStateFailed:
+		AddTaint(node, withTimeAdded(FailedTaint))
+		cordonNode(node)
+		// addCSNLabel guarantees IsCSNNode remains true on failed nodes, preventing csn.ClassifyNode
+		// from short-circuiting to NodeStateConsumed before checking FailedTaint.
+		addCSNLabel(node)
 	default:
 		return node, fmt.Errorf("state %s is not supported in markNodeAs", desiredState)
 	}
 	return node, nil
+}
+
+// RemoveSuspensionSchedulingConstraints removes the suspended taint from the
+// node along with the cordon that comes with it, and reports whether the node
+// had the taint.
+// It doesn't uncordon if the suspended taint didn't exist on the node.
+func RemoveSuspensionSchedulingConstraints(node *apiv1.Node) bool {
+	remainingTaints, removed := taints.DeleteTaint(node.Spec.Taints, &SuspendedTaint)
+	if !removed {
+		// Without the taint, the cordon, if any, didn't come from the suspension.
+		return false
+	}
+	node.Spec.Taints = remainingTaints
+	uncordonNode(node)
+	return true
 }
 
 func AddTaint(node *apiv1.Node, taint *apiv1.Taint) {
@@ -201,7 +222,10 @@ func ClassifyNode(node *apiv1.Node) NodeState {
 	if !IsCSNNode(node) {
 		return NodeStateConsumed
 	}
-	if taints.TaintExists(node.Spec.Taints, &SuspendedTaint) {
+	if taints.TaintExists(node.Spec.Taints, &FailedTaint) {
+		return NodeStateFailed
+	}
+	if IsSuspendedNode(node) {
 		return NodeStateSuspended
 	}
 	return NodeStateChilling
@@ -255,10 +279,21 @@ func GetBufferIdFromNode(node *apiv1.Node) string {
 // IsSuspendedNode returns true if the node has the Suspended condition set to True.
 // Which means the node is already suspended, or in the middle of suspend or resume operation.
 func IsSuspendedNode(node *apiv1.Node) bool {
+	_, suspended := SuspendedSince(node)
+	return suspended
+}
+
+// SuspendedSince returns when the node's Suspended condition turned True, and
+// whether it is True.
+func SuspendedSince(node *apiv1.Node) (time.Time, bool) {
 	for _, condition := range node.Status.Conditions {
-		if condition.Type == NodeConditionSuspended {
-			return condition.Status == apiv1.ConditionTrue
+		if condition.Type != NodeConditionSuspended {
+			continue
 		}
+		if condition.Status != apiv1.ConditionTrue {
+			return time.Time{}, false
+		}
+		return condition.LastTransitionTime.Time, true
 	}
-	return false
+	return time.Time{}, false
 }

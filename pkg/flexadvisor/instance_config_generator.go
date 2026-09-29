@@ -22,8 +22,6 @@ import (
 	"strconv"
 	"time"
 
-	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -34,6 +32,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
@@ -517,9 +516,24 @@ func (g *instanceConfigGenerator) findGkeMig(nodePoolName string) *gke.GkeMig {
 	return nil
 }
 
+// isPayPerPodPodFamilyScope returns whether flexibilityScopeKey is a synthetic podFamily scope
+// (general-purpose / general-purpose-arm) registered for pay-per-pod Autopilot workloads.
+// Such scopes are not backed by a ComputeClass CRD and are only active on Autopilot clusters
+// with the PayPerPodFleetEfficiency experiment enabled.
+func (g *instanceConfigGenerator) isPayPerPodPodFamilyScope(flexibilityScopeKey string) bool {
+	return rules.IsPodFamily(flexibilityScopeKey) &&
+		g.provider.IsAutopilotEnabled() &&
+		g.optionsTracker != nil &&
+		experiments.IsPayPerPodFleetEfficiencyEnabled(g.optionsTracker.ExperimentsManager())
+}
+
 func (g *instanceConfigGenerator) matchingCrd(flexibilityScopeKey string) (crd.CRD, error) {
 	if machinetypes.IsPredefinedComputeClass(flexibilityScopeKey) {
 		return g.cccCrdFromPCC(flexibilityScopeKey)
+	}
+	if g.isPayPerPodPodFamilyScope(flexibilityScopeKey) {
+		projectId, _, _ := g.provider.GetClusterInfo()
+		return ccc.NewPodFamilyCrd(flexibilityScopeKey, projectId, true, g.provider, g.optionsTracker), nil
 	}
 	crd, err := g.cccLister.GetCrd(flexibilityScopeKey)
 	if err != nil {
@@ -612,25 +626,7 @@ func (g *instanceConfigGenerator) cccCrdFromPCC(flexibilityScopeKey string) (crd
 	if err != nil {
 		return nil, err
 	}
-	var priorities []v1.Priority
-	for _, family := range pcc.MachineFamilies() {
-		familyRef := family.Name()
-		priority := v1.Priority{
-			MachineFamily: &familyRef,
-		}
-		priorities = append(priorities, priority)
-	}
-
-	cc := &v1.ComputeClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: flexibilityScopeKey,
-		},
-		Spec: v1.ComputeClassSpec{
-			Priorities: priorities,
-		},
-	}
-
 	projectId, _, _ := g.provider.GetClusterInfo()
 	autopilotEnabled := g.provider.IsAutopilotEnabled()
-	return ccc.NewCccCrd(cc, projectId, autopilotEnabled, g.provider, g.optionsTracker), nil
+	return ccc.NewPccCrd(pcc, projectId, autopilotEnabled, g.provider, g.optionsTracker), nil
 }

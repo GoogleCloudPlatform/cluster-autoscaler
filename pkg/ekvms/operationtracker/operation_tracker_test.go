@@ -16,7 +16,9 @@ package operationtracker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,12 +38,17 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	client_testing "k8s.io/client-go/testing"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	consistencyutil "k8s.io/kubernetes/pkg/controller/util/consistency"
 	"k8s.io/kubernetes/pkg/util/taints"
@@ -63,14 +70,12 @@ const (
 )
 
 var (
-	testStartTime           = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
-	supportedMachineType    = fmt.Sprintf("%s-%s-%s", machinetypes.EK.Name(), "standard", "32")
-	notSupportedMachineType = fmt.Sprintf("%s-%s-%s", machinetypes.EK.Name(), "notsupported", "32")
-	nonEkMachineType        = fmt.Sprintf("%s-%s-%s", "xx", "notsupported", "32")
+	testStartTime             = time.Date(2024, 1, 1, 1, 1, 1, 1, time.UTC)
+	nonResizableVmMachineType = fmt.Sprintf("%s-%s-%s", "xx", "notsupported", "32")
 )
 
 func TestOnUpdateNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			cloudProvider := &mockCloudProvider{}
@@ -84,11 +89,11 @@ func TestOnUpdateNode(t *testing.T) {
 			mockBackoff := &mockBackoff{}
 			mockBackoff.On("DeleteNode", family, testResizableNodeName).Once()
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, &identitySizeCalculator{}, testClock)
-			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock, nil)
 
-			node := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
-			ekNode := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).Build()
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 2*giBToBytes)
+			node := ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
+			testNode := ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).Build()
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 2*giBToBytes)
 
 			mockBalloonPodResizer := &mockBalloonPodResizer{}
 			mockBalloonPodResizer.On("addTaint", mock.Anything, mock.Anything).Return(node, nil)
@@ -120,7 +125,7 @@ func TestOnUpdateNode(t *testing.T) {
 			assert.Equal(t, 0, nodeStateManager.nodesCount(family))
 			mockBackoff.AssertExpectations(t)
 
-			// Node with ToBeDeletedTaint are not added to ot.ekNodes cache.
+			// Node with ToBeDeletedTaint are not added to ot.nodeStateManager cache.
 			mockBackoff.On("DeleteNode", family, testResizableNodeName).Once()
 			ot.onUpdateNode(newNode, toBeDeletedNode)
 			ot.waitingOnAdd.Wait()
@@ -130,11 +135,11 @@ func TestOnUpdateNode(t *testing.T) {
 }
 
 func TestOnAddNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			emptySize := size.VmSize{}
-			ekNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 2*giBToBytes)
+			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 2*giBToBytes)
 			gceRef, err := gce.GceRefFromProviderId(testResizableNodeProviderID)
 			assert.NoError(t, err)
 			defaultGceSchedulingSize := size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}
@@ -142,192 +147,192 @@ func TestOnAddNode(t *testing.T) {
 			notSupportedMachineType := fmt.Sprintf("%s-%s-%s", family, "notsupported", "32")
 
 			testCases := []struct {
-				desc                            string
-				node                            *v1.Node
-				bPod                            *v1.Pod
-				resizeErr                       error
-				setLabelsAfterOnAddNode         map[string]string
-				gceSchedulingSize               size.VmSize
-				cachedCurrentEkVmStates         map[gce.GceRef]ekvmtypes.ResizableVmState
-				expectedEkNodes                 ResizableNodesSnapshot
-				expectedResizeBalloonPod        bool
-				expectedCachedCurrentEkVmStates map[gce.GceRef]ekvmtypes.ResizableVmState
-				expectedUnknownStateNodes       []string
+				desc                                   string
+				node                                   *v1.Node
+				bPod                                   *v1.Pod
+				resizeErr                              error
+				setLabelsAfterOnAddNode                map[string]string
+				gceSchedulingSize                      size.VmSize
+				cachedCurrentResizableVmStates         map[gce.GceRef]ekvmtypes.ResizableVmState
+				expectedResizableVmNodes               ResizableNodesSnapshot
+				expectedResizeBalloonPod               bool
+				expectedCachedCurrentResizableVmStates map[gce.GceRef]ekvmtypes.ResizableVmState
+				expectedUnknownStateNodes              []string
 			}{
 				{
-					desc:                            "node with no instance label",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with no instance label",
+					node:                                   ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with non-ek instance label",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(nonEkMachineType).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with non resizable vm instance label",
+					node:                                   ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(nonResizableVmMachineType).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with resizable instance label, but not not ready",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with resizable instance label, but not ready",
+					node:                                   ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "node with not supported resizable machine type",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(notSupportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "node with not supported resizable machine type",
+					node:                                   ekvms_test.NewNodeBuilder(testResizableNodeName, 1000, 1).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(notSupportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
-					desc:                            "resizable - without balloon pod - no cache - no gce response",
-					node:                            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes:                 ResizableNodesSnapshot{},
-					expectedResizeBalloonPod:        false,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
+					desc:                                   "resizable - without balloon pod - no cache - no gce response",
+					node:                                   ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes:               ResizableNodesSnapshot{},
+					expectedResizeBalloonPod:               false,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{},
 				},
 				{
 					desc: "new resizable node - without balloon pod",
-					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes: ResizableNodesSnapshot{
+					node: ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               defaultGceSchedulingSize,
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      defaultGceSchedulingSize,
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 32000, KBytes: 128 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "old downsized resizable node - without balloon pod",
-					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					expectedEkNodes: ResizableNodesSnapshot{
+					node: ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc:                    "old downsized resizable - without balloon pod - machine type label is added after onAddNode",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithReadyStatus().Build(),
+					node:                    ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithReadyStatus().Build(),
 					setLabelsAfterOnAddNode: map[string]string{v1.LabelInstanceTypeStable: supportedMachineType},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc:                    "old downsized resizable - without balloon pod - random label is added after onAddNode",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					node:                    ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					setLabelsAfterOnAddNode: map[string]string{v1.LabelInstanceTypeStable: supportedMachineType, "random": "string"},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().WithLabel("random", "string").Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().WithLabel("random", "string").Build(),
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "resizable - with balloon pod",
-					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					node: ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					bPod: bPod,
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 30 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
 					desc: "resizable - with balloon pod - cache available with error status -> fix cache size to balloon pod and register unknown state node",
-					node: ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					node: ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					bPod: bPod,
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{
 						gceRef: {
 							Size:   size.VmSize{MilliCpus: 9000, KBytes: 41 * giBToKiB},
 							Status: ekvmtypes.ResizeStatusGuestAgentError,
 						},
 					},
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 30 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedUnknownStateNodes:       []string{testResizableNodeName},
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 8000, KBytes: 40 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedUnknownStateNodes:              []string{testResizableNodeName},
 				},
 				{
 					desc:      "resizable - balloon pod creation err",
-					node:      ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					node:      ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 					resizeErr: fmt.Errorf("resize error"),
-					expectedEkNodes: ResizableNodesSnapshot{
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					gceSchedulingSize:               size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					gceSchedulingSize:                      size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
-					desc:                    "resizable - without balloon pod - cache available with at intent status",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
-					expectedEkNodes: ResizableNodesSnapshot{
+					desc:                           "resizable - without balloon pod - cache available with at intent status",
+					node:                           ekvms_test.NewNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusAtIntent}},
 				},
 				{
-					desc:                    "resizable - without balloon pod - cache available with error status",
-					node:                    ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
-					cachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedEkNodes: ResizableNodesSnapshot{
+					desc:                           "resizable - without balloon pod - cache available with error status",
+					node:                           ekvms_test.NewNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+					cachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedResizableVmNodes: ResizableNodesSnapshot{
 						testResizableNodeName: ResizableNode{
 							DesiredSize:     size.Allocatable{MilliCpus: 3000, KBytes: 12 * giBToKiB},
 							PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 96 * giBToKiB},
-							Node:            ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
+							Node:            ekvms_test.NewNodeBuilder(testResizableNodeName, 32000, 128).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build(),
 							MachineFamily:   family,
 						},
 					},
-					expectedResizeBalloonPod:        true,
-					expectedCachedCurrentEkVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
-					expectedUnknownStateNodes:       []string{testResizableNodeName},
+					expectedResizeBalloonPod:               true,
+					expectedCachedCurrentResizableVmStates: map[gce.GceRef]ekvmtypes.ResizableVmState{gceRef: {Size: size.VmSize{MilliCpus: 4000, KBytes: 16 * giBToKiB}, Status: ekvmtypes.ResizeStatusGuestAgentError}},
+					expectedUnknownStateNodes:              []string{testResizableNodeName},
 				},
 			}
 
@@ -343,7 +348,7 @@ func TestOnAddNode(t *testing.T) {
 						mockBalloonPodResizer.On("listAllBalloonPods", mock.Anything).Return([]*v1.Pod{}, nil)
 					}
 					if tc.expectedResizeBalloonPod {
-						mockBalloonPodResizer.On("resizeBalloonPod", mock.Anything, tc.expectedEkNodes[tc.node.Name].DesiredSize).
+						mockBalloonPodResizer.On("resizeBalloonPod", mock.Anything, tc.expectedResizableVmNodes[tc.node.Name].DesiredSize).
 							Run(func(_ mock.Arguments) {
 								waitForBalloonPod <- true
 							}).Return(tc.resizeErr).Once()
@@ -365,12 +370,12 @@ func TestOnAddNode(t *testing.T) {
 					cloudProvider.On("MachineConfigProvider", mock.Anything).Return(machinetypes.NewMachineConfigProvider(nil))
 					testClock := clock.NewFakeClock(testStartTime)
 
-					ekCalculator := calculator_test.New()
-					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, ekCalculator, testClock)
-					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, ekCalculator, 1, false, fixerInterval, testClock)
+					nodeSizeCalculator := calculator_test.New()
+					nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, nodeSizeCalculator, testClock)
+					ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, nodeSizeCalculator, 1, false, fixerInterval, testClock, nil)
 					ot.balloonPodResizer = mockBalloonPodResizer
-					if tc.cachedCurrentEkVmStates != nil {
-						ot.vmStateCache.vmStates = tc.cachedCurrentEkVmStates
+					if tc.cachedCurrentResizableVmStates != nil {
+						ot.vmStateCache.vmStates = tc.cachedCurrentResizableVmStates
 					}
 
 					ot.onAddNode(tc.node)
@@ -388,11 +393,11 @@ func TestOnAddNode(t *testing.T) {
 					ot.waitingOnAdd.Wait()
 
 					nodes := nodeStateManager.snapshot(true)
-					assert.Equal(t, tc.expectedEkNodes, nodes)
+					assert.Equal(t, tc.expectedResizableVmNodes, nodes)
 					if tc.expectedResizeBalloonPod {
 						<-waitForBalloonPod
 					}
-					assert.Equal(t, tc.expectedCachedCurrentEkVmStates, ot.vmStateCache.vmStates)
+					assert.Equal(t, tc.expectedCachedCurrentResizableVmStates, ot.vmStateCache.vmStates)
 					assert.ElementsMatch(t, tc.expectedUnknownStateNodes, ot.nodeStateManager.getUnhealthyNodesWithStatus(UnknownResizeStatus))
 				})
 			}
@@ -401,12 +406,12 @@ func TestOnAddNode(t *testing.T) {
 }
 
 func TestOnDeleteNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
-			ekNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 2000, 8*giBToBytes)
-			node := ekvms_test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
+			testNode := test.BuildTestNode(testResizableNodeName, 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 2000, 8*giBToBytes)
+			node := ekvms_test.NewNodeBuilder(testResizableNodeName, 8000, 32).WithProvider(testResizableNodeProviderID).WithSupportedMachineType(supportedMachineType).WithReadyStatus().Build()
 			mockBalloonPodResizer := &mockBalloonPodResizer{}
 			mockBalloonPodResizer.On("init").Return(nil)
 			mockBalloonPodResizer.On("getPodForNode", mock.Anything).Return(bPod)
@@ -425,16 +430,16 @@ func TestOnDeleteNode(t *testing.T) {
 			testClock := clock.NewFakeClock(testStartTime)
 			metrics := &mockMetrics{}
 			metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-			ekCalculator := calculator_test.New()
+			nodeSizeCalculator := calculator_test.New()
 			mockBackoff := &mockBackoff{}
 			mockBackoff.On("DeleteNode", family, node.Name).Once()
-			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, ekCalculator, testClock)
+			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, nodeSizeCalculator, testClock)
 
-			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock)
+			ot := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, calculator_test.New(), 1, false, fixerInterval, testClock, nil)
 			ot.balloonPodResizer = mockBalloonPodResizer
 			ot.onAddNode(node)
 			ot.waitingOnAdd.Wait()
-			expectedEkNodes := ResizableNodesSnapshot{
+			expectedResizableVmNodes := ResizableNodesSnapshot{
 				node.Name: ResizableNode{
 					DesiredSize:     size.Allocatable{MilliCpus: 6000, KBytes: 24 * giBToKiB},
 					PhysicalMaxSize: size.Allocatable{MilliCpus: 24000, KBytes: 100663296},
@@ -444,7 +449,7 @@ func TestOnDeleteNode(t *testing.T) {
 			}
 
 			nodes := nodeStateManager.snapshot(true)
-			assert.Equal(t, expectedEkNodes, nodes)
+			assert.Equal(t, expectedResizableVmNodes, nodes)
 			cachedState, err := ot.vmStateCache.getState(node)
 			assert.NoError(t, err)
 			assert.Equal(t, vmState, cachedState)
@@ -460,7 +465,7 @@ func TestOnDeleteNode(t *testing.T) {
 }
 
 func TestResize(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			var (
 				bpResizeErr          = fmt.Errorf("BP resize error")
@@ -471,8 +476,8 @@ func TestResize(t *testing.T) {
 				gceInstanceIsBusyErr = ek_errors.NewInstanceIsBusyError(family, fmt.Errorf("gce resize error"))
 			)
 
-			ekNode := test.BuildTestNode("node1", 1000, 1024*1024)
-			bPod := mustGenerateRunningBalloonPod(t, ekNode, 10000, 32*giBToBytes)
+			testNode := test.BuildTestNode("node1", 1000, 1024*1024)
+			bPod := mustGenerateRunningBalloonPod(t, testNode, 10000, 32*giBToBytes)
 
 			testCases := []struct {
 				desc                         string
@@ -524,40 +529,32 @@ func TestResize(t *testing.T) {
 					expectedAddTaintCallCount:    1,
 				},
 				{
-					desc:                       "Upsize - vm resize non-gce error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                vmResizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize non-gce error",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  vmResizeErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedReconcileOp:          true,
 					expectedErr:                  vmResizeErr,
 				},
 				{
-					desc:                       "Upsize - vm resize gce error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                gceUpsizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize gce error",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  gceUpsizeErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedReconcileOp:          true,
 					expectedErr:                  gceUpsizeErr,
 				},
@@ -583,21 +580,17 @@ func TestResize(t *testing.T) {
 					expectedErr:                  bpResizeErr,
 				},
 				{
-					desc:                       "Upsize - vm resize gce instance is busy error - ek at starting size and status at intent",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                gceInstanceIsBusyErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size: size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-						},
-					},
+					desc:                         "Upsize - vm resize gce instance is busy error - node at starting size and status at intent",
+					startingSize:                 newSize(1000, 1024*giBToKiB),
+					desiredSize:                  newSize(2000, 2048*giBToKiB),
+					vmResizeErr:                  gceInstanceIsBusyErr,
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   1,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedBalloonResizes:       nil,
 					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
+					expectedAddTaintCallCount:    0,
 					expectedErr:                  gceUpsizeErr,
 				},
 				{
@@ -618,27 +611,6 @@ func TestResize(t *testing.T) {
 					expectedRemoveTaintCallCount: 0,
 					expectedAddTaintCallCount:    1,
 					expectedErr:                  bpResizeErr,
-				},
-				{
-					desc:                       "Upsize - both vm and balloon pod resize error",
-					startingSize:               newSize(1000, 1024*giBToKiB),
-					desiredSize:                newSize(2000, 2048*giBToKiB),
-					vmResizeErr:                vmResizeErr,
-					bpResizeErr:                bpResizeErr,
-					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusUnknownCA},
-					expectedOnFailure:          1,
-					expectedVmResizerCallCount: 1,
-					expectedPendingOperations:  1, // failure clears the queue, and we queue up fix operation.
-					expectedBalloonResizes: []balloonPodResizeArgs{
-						{
-							size:        size.Allocatable{MilliCpus: 1500, KBytes: 1536 * giBToKiB},
-							bpResizeErr: bpResizeErr,
-						},
-					},
-					expectedRemoveTaintCallCount: 0,
-					expectedAddTaintCallCount:    1,
-					expectedReconcileOp:          true,
-					expectedErr:                  vmResizeErr,
 				},
 				{
 					desc:                       "Downsize - successful",
@@ -719,7 +691,7 @@ func TestResize(t *testing.T) {
 					expectedErr:                  gceDownsizeErr,
 				},
 				{
-					desc:                       "Downsize - vm resize gce instance is busy error - ek at starting size and status at intent",
+					desc:                       "Downsize - vm resize gce instance is busy error - node at starting size and status at intent",
 					startingSize:               newSize(2000, 2048*giBToKiB),
 					desiredSize:                newSize(1000, 1024*giBToKiB),
 					vmResizeErr:                gceInstanceIsBusyErr,
@@ -775,10 +747,58 @@ func TestResize(t *testing.T) {
 					expectedErr:                  downsizeErr,
 				},
 				{
+					desc:                       "Downsize - pod requests equal to desired size",
+					startingSize:               newSize(2000, 2048*giBToKiB),
+					desiredSize:                newSize(1000, 1024*giBToKiB),
+					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					podList:                    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 750, 768*giBToBytes)}},
+					expectedOnSuccess:          1,
+					expectedVmResizerCallCount: 1,
+					expectedPendingOperations:  0,
+					expectedPodListCount:       1,
+					expectedBalloonResizes: []balloonPodResizeArgs{
+						{
+							size: size.Allocatable{MilliCpus: 750, KBytes: 768 * giBToKiB},
+						},
+					},
+					expectedRemoveTaintCallCount: 1,
+					expectedAddTaintCallCount:    1,
+				},
+				{
 					desc:                         "Downsize - pod requests bigger than desired size",
 					startingSize:                 newSize(2000, 2048*giBToKiB),
 					desiredSize:                  newSize(1000, 1024*giBToKiB),
 					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1500, 1500*giBToBytes)}},
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   0,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedPodListCount:         1,
+					expectedBalloonResizes:       []balloonPodResizeArgs{},
+					expectedRemoveTaintCallCount: 0,
+					expectedAddTaintCallCount:    1,
+					expectedErr:                  downsizeErr,
+				},
+				{
+					desc:                         "Downsize - pod CPU requests bigger than desired size, memory fits",
+					startingSize:                 newSize(2000, 2048*giBToKiB),
+					desiredSize:                  newSize(1000, 1024*giBToKiB),
+					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1500, 500*giBToBytes)}},
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   0,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedPodListCount:         1,
+					expectedBalloonResizes:       []balloonPodResizeArgs{},
+					expectedRemoveTaintCallCount: 0,
+					expectedAddTaintCallCount:    1,
+					expectedErr:                  downsizeErr,
+				},
+				{
+					desc:                         "Downsize - pod memory requests bigger than desired size, CPU fits",
+					startingSize:                 newSize(2000, 2048*giBToKiB),
+					desiredSize:                  newSize(1000, 1024*giBToKiB),
+					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 500, 1500*giBToBytes)}},
 					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
 					expectedOnFailure:            1,
 					expectedVmResizerCallCount:   0,
@@ -828,7 +848,7 @@ func TestResize(t *testing.T) {
 						}
 						vmResizerCalls = append(vmResizerCalls, vmResizerArgs{expectedSize: tc.startingSize, actualSize: actualDesiredSize})
 						return tc.vmResizeRollbackErr
-					}), nsm, mockMetrics, sizeCalc, 1, false, fixerInterval, testClock)
+					}), nsm, mockMetrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 					// Override resizer
 					mockBalloonPodResizer := &mockBalloonPodResizer{}
 					mockBalloonPodResizer.On("init").Return(nil)
@@ -895,8 +915,756 @@ func TestResize(t *testing.T) {
 	}
 }
 
+type operationTrackerHarness struct {
+	tracker       *operationTracker
+	cloudProvider *mockCloudProvider
+	resizer       *mockBalloonPodResizer
+	node          *v1.Node
+}
+
+func matchNode(nodeOrName any) any {
+	return mock.MatchedBy(func(n *v1.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch v := nodeOrName.(type) {
+		case string:
+			return n.Name == v
+		case *v1.Node:
+			return v != nil && n.Name == v.Name
+		default:
+			return false
+		}
+	})
+}
+
+func buildBaseNode() *v1.Node {
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	node := test.WithAllocatable(test.BuildTestNode("node1", nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+	node.Spec.ProviderID = "gce://project1/us-central1-b/node1"
+	node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: "e4a-standard-32"})
+	return node
+}
+
+func newTestOptionsTracker(ipprEnabled bool) *tracking.OptionsTracker {
+	expManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+		experiments.BalloonPodIpprResizeFlag: ipprEnabled,
+	}, nil)
+	return tracking.NewOptionsTracker(internalopts.AutoscalingOptions{}, expManager)
+}
+
+func newTestOperationTrackerHarness(
+	t *testing.T,
+	node *v1.Node,
+	family string,
+	ipprEnabled bool,
+	podList *v1.PodList,
+) *operationTrackerHarness {
+	t.Helper()
+
+	sizeCalc := calculator_test.New()
+	testClock := clock.NewFakeClock(testStartTime)
+	nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
+	nodeStateManager.setNode(node.Name, ResizableNode{Node: node.DeepCopy(), MachineFamily: family})
+
+	cloudProvider := &mockCloudProvider{}
+	mockResizer := &mockBalloonPodResizer{}
+	metrics := &mockMetrics{}
+	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+	metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+
+	// Guarantee mock assertions execute on test completion even if an assertion aborts early
+	t.Cleanup(func() {
+		cloudProvider.AssertExpectations(t)
+		mockResizer.AssertExpectations(t)
+	})
+
+	fakeClient := fake.NewSimpleClientset()
+	if podList != nil {
+		fakeClient.PrependReactor("list", "pods", func(_ client_testing.Action) (bool, runtime.Object, error) {
+			return true, podList.DeepCopyObject(), nil
+		})
+	}
+
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+	podInformer := informerFactory.Core().V1().Pods().Informer()
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	informerFactory.Start(stopCh)
+	if !assert.True(t, cache.WaitForCacheSync(stopCh, podInformer.HasSynced)) {
+		t.FailNow()
+	}
+
+	tracker := newOperationTracker(fakeClient, informerFactory, cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, newTestOptionsTracker(ipprEnabled))
+	tracker.balloonPodResizer = mockResizer
+
+	return &operationTrackerHarness{
+		tracker:       tracker,
+		cloudProvider: cloudProvider,
+		resizer:       mockResizer,
+		node:          node,
+	}
+}
+
+func TestUpsizeIppr(t *testing.T) {
+	t.Parallel()
+
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	startSize := newSize(nodeMilliCpu, nodeMem/size.KiB)
+	targetSize := newSize(nodeMilliCpu*2, nodeMem*2/size.KiB)
+
+	calc := calculator_test.New()
+
+	testCases := []struct {
+		desc       string
+		ipprOption bool
+		setupMocks func(h *operationTrackerHarness, targetAlloc size.Allocatable)
+		wantErr    string
+	}{
+		{
+			desc:       "IPPR enabled - in-place resize succeeds without taints",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation succeeds with taints",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback taint addition fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(nil, errors.New("failed to taint node")).Once()
+			},
+			wantErr: "adding taint failed for node",
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("recreation failed")).Once()
+			},
+			wantErr: "recreation failed",
+		},
+		{
+			desc:       "IPPR disabled - directly executes recreation with taints",
+			ipprOption: false,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+			},
+		},
+		{
+			desc:       "VM resize fails before touching balloon pod",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(errors.New("GCE resize error")).Once()
+			},
+			wantErr: "GCE resize error",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			node := buildBaseNode()
+			targetAlloc := calc.ToAllocatable(node, targetSize)
+			op := ResizeOperation{
+				NodeName:     node.Name,
+				StartingSize: startSize,
+				DesiredSize:  targetSize,
+			}
+
+			h := newTestOperationTrackerHarness(t, node, "e4a", tc.ipprOption, nil)
+			tc.setupMocks(h, targetAlloc)
+
+			err := h.tracker.upsize(op)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestDownsizeIppr(t *testing.T) {
+	t.Parallel()
+
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	startSize := newSize(nodeMilliCpu, nodeMem/size.KiB)
+	targetSize := newSize(nodeMilliCpu/2, nodeMem/2/size.KiB)
+
+	calc := calculator_test.New()
+
+	testCases := []struct {
+		desc       string
+		ipprOption bool
+		podList    *v1.PodList
+		setupMocks func(h *operationTrackerHarness, targetAlloc size.Allocatable)
+		wantErr    string
+	}{
+		{
+			desc:       "IPPR enabled - in-place resize succeeds and VM resizes",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - initial taint fails before in-place resize",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(nil, errors.New("taint error")).Once()
+			},
+			wantErr: "adding taint failed for node",
+		},
+		{
+			desc:       "IPPR enabled - in-place fails, fallback recreation succeeds and VM resizes",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - in-place fails and fallback recreation also fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("in-place timeout")).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(errors.New("recreation failed")).Once()
+			},
+			wantErr: "recreation failed",
+		},
+		{
+			desc:       "IPPR disabled - directly executes recreation and VM resizes",
+			ipprOption: false,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPod", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "IPPR enabled - balloon resize succeeds but GCE VM resize fails",
+			ipprOption: true,
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(errors.New("GCE resize quota error")).Once()
+			},
+			wantErr: "GCE resize quota error",
+		},
+		{
+			desc:       "Pod requests equal desired size - in-place resize succeeds and VM resizes",
+			ipprOption: true,
+			// {3750m, 3.75GiB} is exactly the allocatable the fake calculator derives from targetSize.
+			podList: &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 3750, 3840*size.MiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
+			desc:       "Pod requests exceed desired size - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 8000, 8*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+		{
+			desc:       "Pod CPU requests exceed desired size, memory fits - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 4000, 1*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+		{
+			desc:       "Pod memory requests exceed desired size, CPU fits - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1000, 4*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			node := buildBaseNode()
+			targetAlloc := calc.ToAllocatable(node, targetSize)
+			op := ResizeOperation{
+				NodeName:     node.Name,
+				StartingSize: startSize,
+				DesiredSize:  targetSize,
+			}
+
+			h := newTestOperationTrackerHarness(t, node, "e4a", tc.ipprOption, tc.podList)
+			tc.setupMocks(h, targetAlloc)
+
+			err := h.tracker.downsize(op)
+			if tc.wantErr != "" {
+				assert.ErrorContains(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+type testFixtures struct {
+	node    *v1.Node
+	resizer *mockBalloonPodResizer
+	metrics *recordingIpprMetrics
+}
+
+const ipprMetricsTestFamily = "e4a"
+
+// ipprEventKey identifies a single balloon pod IPPR counter series.
+type ipprEventKey struct {
+	machineFamily string
+	direction     string
+	reason        string
+	action        metrics.IpprAction
+}
+
+// ipprDurationKey identifies a single balloon pod IPPR duration series.
+type ipprDurationKey struct {
+	machineFamily string
+	direction     string
+	action        metrics.IpprAction
+}
+
+func ipprAttempt(direction string) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(metrics.IpprFallbackReasonNone), metrics.IpprActionAttempt}
+}
+
+func ipprSuccess(direction string) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(metrics.IpprFallbackReasonNone), metrics.IpprActionSuccess}
+}
+
+func ipprFallback(direction string, reason metrics.IpprFallbackReason) ipprEventKey {
+	return ipprEventKey{ipprMetricsTestFamily, direction, string(reason), metrics.IpprActionFallback}
+}
+
+func ipprDuration(direction string, action metrics.IpprAction) ipprDurationKey {
+	return ipprDurationKey{ipprMetricsTestFamily, direction, action}
+}
+
+// ipprFallbackEvents is the series an attempt that falls back to recreation produces.
+func ipprFallbackEvents(direction string, reason metrics.IpprFallbackReason) map[ipprEventKey]int {
+	return map[ipprEventKey]int{
+		ipprAttempt(direction):          1,
+		ipprFallback(direction, reason): 1,
+	}
+}
+
+// ipprFallbackDurations is the duration series an attempt that falls back to recreation produces.
+func ipprFallbackDurations(direction string) map[ipprDurationKey]int {
+	return map[ipprDurationKey]int{ipprDuration(direction, metrics.IpprActionFallback): 1}
+}
+
+// recordingIpprMetrics counts the balloon pod IPPR metric writes so that tests
+// can assert the series that came out, rather than pinning the order in which
+// the implementation happens to emit them.
+type recordingIpprMetrics struct {
+	*mockMetrics
+
+	mu        sync.Mutex
+	events    map[ipprEventKey]int
+	durations map[ipprDurationKey]int
+}
+
+func newRecordingIpprMetrics() *recordingIpprMetrics {
+	return &recordingIpprMetrics{
+		mockMetrics: &mockMetrics{},
+		events:      map[ipprEventKey]int{},
+		durations:   map[ipprDurationKey]int{},
+	}
+}
+
+func (m *recordingIpprMetrics) RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action metrics.IpprAction) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.events[ipprEventKey{machineFamily, direction, reason, action}]++
+}
+
+func (m *recordingIpprMetrics) ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action metrics.IpprAction, _ time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.durations[ipprDurationKey{machineFamily, direction, action}]++
+}
+
+func (m *recordingIpprMetrics) recordedEvents() map[ipprEventKey]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.events)
+}
+
+func (m *recordingIpprMetrics) recordedDurations() map[ipprDurationKey]int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return maps.Clone(m.durations)
+}
+
+// ipprMetricsTestCase runs one resize and asserts the metric series it produced.
+type ipprMetricsTestCase struct {
+	desc          string
+	ipprEnabled   bool
+	setupResizer  func(f *testFixtures)
+	wantEvents    map[ipprEventKey]int
+	wantDurations map[ipprDurationKey]int
+	wantErr       string
+}
+
+func runIpprMetricsTest(t *testing.T, tc ipprMetricsTestCase, resize func(tracker *operationTracker, nodeName string) error) {
+	t.Helper()
+
+	node := buildMetricsTestNode("node1", ipprMetricsTestFamily)
+	tracker, f := setupTestTracker(t, node, ipprMetricsTestFamily, tc.ipprEnabled)
+	tc.setupResizer(f)
+
+	err := resize(tracker, node.Name)
+	if tc.wantErr != "" {
+		assert.ErrorContains(t, err, tc.wantErr)
+	} else {
+		assert.NoError(t, err)
+	}
+
+	wantEvents := tc.wantEvents
+	if wantEvents == nil {
+		wantEvents = map[ipprEventKey]int{}
+	}
+	wantDurations := tc.wantDurations
+	if wantDurations == nil {
+		wantDurations = map[ipprDurationKey]int{}
+	}
+	assert.Equal(t, wantEvents, f.metrics.recordedEvents())
+	assert.Equal(t, wantDurations, f.metrics.recordedDurations())
+}
+
+// upsizeFallbackResizer makes the in-place resize fail with ipprErr so upsize
+// falls back to recreation, which in turn fails with recreateErr when set.
+func upsizeFallbackResizer(ipprErr, recreateErr error) func(f *testFixtures) {
+	return func(f *testFixtures) {
+		f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(ipprErr).Once()
+		f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+		f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(recreateErr).Once()
+		if recreateErr == nil {
+			f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+		}
+	}
+}
+
+// downsizeFallbackResizer is upsizeFallbackResizer for downsize, where the
+// taint is applied before the in-place resize rather than after it.
+func downsizeFallbackResizer(ipprErr, recreateErr error) func(f *testFixtures) {
+	return func(f *testFixtures) {
+		f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+		f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(ipprErr).Once()
+		f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(recreateErr).Once()
+		if recreateErr == nil {
+			f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+		}
+	}
+}
+
+func TestBalloonPodIpprMetrics_Upsize(t *testing.T) {
+	t.Parallel()
+
+	const direction = "upsize"
+
+	testCases := []ipprMetricsTestCase{
+		{
+			desc:        "success records attempt and success with reason none",
+			ipprEnabled: true,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(nil).Once()
+			},
+			wantEvents: map[ipprEventKey]int{
+				ipprAttempt(direction): 1,
+				ipprSuccess(direction): 1,
+			},
+			wantDurations: map[ipprDurationKey]int{
+				ipprDuration(direction, metrics.IpprActionSuccess): 1,
+			},
+		},
+		{
+			desc:          "timeout fallback records reason timeout",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "incompatible QoS fallback records reason incompatible_qos",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.IncompatibleQoSError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonIncompatibleQoS),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "concurrent resize fallback records reason concurrent_resize",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ConcurrentResizeError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonConcurrentResize),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "unexpected error falls back with generic reason",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(errors.New("unexpected socket closure"), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonOther),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "fallback recreation failure still records fallback event",
+			ipprEnabled:   true,
+			setupResizer:  upsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), errors.New("recreation failed")),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+			wantErr:       "recreation failed",
+		},
+		{
+			desc:        "IPPR disabled records no metrics and uses recreation",
+			ipprEnabled: false,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			runIpprMetricsTest(t, tc, func(tracker *operationTracker, nodeName string) error {
+				return tracker.upsize(ResizeOperation{
+					NodeName:     nodeName,
+					StartingSize: newSize(2000, 2048*giBToKiB),
+					DesiredSize:  newSize(4000, 4096*giBToKiB),
+				})
+			})
+		})
+	}
+}
+
+func TestBalloonPodIpprMetrics_Downsize(t *testing.T) {
+	t.Parallel()
+
+	const direction = "downsize"
+
+	testCases := []ipprMetricsTestCase{
+		{
+			desc:        "success records attempt and success with reason none",
+			ipprEnabled: true,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+			wantEvents: map[ipprEventKey]int{
+				ipprAttempt(direction): 1,
+				ipprSuccess(direction): 1,
+			},
+			wantDurations: map[ipprDurationKey]int{
+				ipprDuration(direction, metrics.IpprActionSuccess): 1,
+			},
+		},
+		{
+			desc:          "rejected fallback records reason rejected",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeRejectedError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonRejected),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "patch error fallback records reason patch_error",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizePatchError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonPatchError),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "no active pod fallback records reason no_active_pod",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.NoActiveBalloonPodError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonNoActivePod),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
+			desc:          "fallback recreation failure still records fallback event",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), errors.New("recreation failed")),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonTimeout),
+			wantDurations: ipprFallbackDurations(direction),
+			wantErr:       "recreation failed",
+		},
+		{
+			desc:        "IPPR disabled records no metrics and uses recreation",
+			ipprEnabled: false,
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			t.Parallel()
+
+			runIpprMetricsTest(t, tc, func(tracker *operationTracker, nodeName string) error {
+				return tracker.downsize(ResizeOperation{
+					NodeName:     nodeName,
+					StartingSize: newSize(4000, 4096*giBToKiB),
+					DesiredSize:  newSize(2000, 2048*giBToKiB),
+				})
+			})
+		})
+	}
+}
+
+func buildMetricsTestNode(name, family string) *v1.Node {
+	nodeMilliCpu := int64(10 * 1000)
+	nodeMem := int64(10 * size.GiB)
+	node := test.WithAllocatable(test.BuildTestNode(name, nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+	node.Spec.ProviderID = "gce://project1/us-central1-b/" + name
+	node.SetLabels(map[string]string{
+		v1.LabelInstanceTypeStable: fmt.Sprintf("%s-standard-32", family),
+	})
+	return node
+}
+
+func setupTestTracker(t *testing.T, node *v1.Node, family string, ipprEnabled bool) (*operationTracker, *testFixtures) {
+	t.Helper()
+
+	testClock := clock.NewFakeClock(testStartTime)
+	sizeCalc := calculator_test.New()
+	nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
+	nodeStateManager.setNode(node.Name, ResizableNode{Node: node.DeepCopy(), MachineFamily: family})
+
+	cloudProvider := &mockCloudProvider{}
+	cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	mockM := newRecordingIpprMetrics()
+	mockM.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return().Maybe()
+
+	mockResizer := &mockBalloonPodResizer{}
+
+	t.Cleanup(func() {
+		mockM.AssertExpectations(t)
+		mockResizer.AssertExpectations(t)
+		cloudProvider.AssertExpectations(t)
+	})
+
+	fakeClient := fake.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+
+	tracker := newOperationTracker(fakeClient, informerFactory, cloudProvider, nodeStateManager, mockM, sizeCalc, 1, false, fixerInterval, testClock, newTestOptionsTracker(ipprEnabled))
+	tracker.balloonPodResizer = mockResizer
+
+	fixtures := &testFixtures{
+		node:    node,
+		resizer: mockResizer,
+		metrics: mockM,
+	}
+
+	return tracker, fixtures
+}
+
 func TestUpsize_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 
@@ -906,7 +1674,7 @@ func TestUpsize_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 			// The method should not panic.
 			err := op.upsize(ResizeOperation{
 				NodeName:     "node1",
@@ -919,7 +1687,7 @@ func TestUpsize_NonExistingNode(t *testing.T) {
 }
 
 func TestDownsize_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 
@@ -929,7 +1697,7 @@ func TestDownsize_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			nodeStateManager := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 			// The method should not panic.
 			err := op.downsize(ResizeOperation{
 				NodeName:     "node1",
@@ -942,7 +1710,7 @@ func TestDownsize_NonExistingNode(t *testing.T) {
 }
 
 func TestReconcileNodeStateOperation(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			nodeMilliCpu := int64(10 * 1000)
@@ -956,7 +1724,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 			testCases := []struct {
 				desc               string
 				resizeReturnValues []error
-				ekReturnedState    ekvmtypes.ResizableVmState
+				resizableVmState   ekvmtypes.ResizableVmState
 				wantFinalOpInQueue []operation
 				wantIsUnhealthy    bool
 				wantMetricStatus   reconcileNodeStateStatus
@@ -964,7 +1732,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node already is at intent",
 					resizeReturnValues: []error{},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusAtIntent,
 					},
@@ -975,7 +1743,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node already is in progress",
 					resizeReturnValues: []error{}, // Empty array means no resize occurs.
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusInProgress,
 					},
@@ -994,7 +1762,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node is in error state - error during resize",
 					resizeReturnValues: []error{fmt.Errorf("resize error")},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusGuestAgentError,
 					},
@@ -1013,7 +1781,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 				{
 					desc:               "node is in error state - resize is successful",
 					resizeReturnValues: []error{nil},
-					ekReturnedState: ekvmtypes.ResizableVmState{
+					resizableVmState: ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
 						Status: ekvmtypes.ResizeStatusGuestAgentError,
 					},
@@ -1035,17 +1803,19 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 					for _, resizeErr := range tc.resizeReturnValues {
 						cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(resizeErr).Once()
 					}
-					cloudProvider.On("GetCurrentResizableVmState", mock.Anything).Return(tc.ekReturnedState, nil)
+					cloudProvider.On("GetCurrentResizableVmState", mock.Anything).Return(tc.resizableVmState, nil)
 					metrics := &mockMetrics{}
 					metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+					metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+					metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 					metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					metrics.On("RegisterResizableVmReconcileNodeStateEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					testClock := clock.NewFakeClock(testStartTime)
 					nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
-					// Manually cache EK size, this would normally be done during
+					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
 					err1 := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   vmCurrentSize,
@@ -1072,7 +1842,7 @@ func TestReconcileNodeStateOperation(t *testing.T) {
 }
 
 func TestFix(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			var (
 				bpResizeErr    = fmt.Errorf("BP resize error")
@@ -1252,13 +2022,15 @@ func TestFix(t *testing.T) {
 					cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 					metrics := &mockMetrics{}
 					metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+					metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+					metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 					metrics.On("RegisterResizableVmFixerEvents", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 					testClock := clock.NewFakeClock(testStartTime)
 					nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
 					nsm.setNode(node.Name, ResizableNode{Node: node, MachineFamily: family})
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
-					// Manually cache EK size, this would normally be done during
+					// Manually cache node size, this would normally be done during
 					// operation tracker initialization and after successful resizes.
 					err1 := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   *tc.targetSize,
@@ -1315,7 +2087,7 @@ func TestFix(t *testing.T) {
 }
 
 func TestFix_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 			fakeClient := &fake.Clientset{}
@@ -1323,7 +2095,7 @@ func TestFix_NonExistingNode(t *testing.T) {
 			metrics := &mockMetrics{}
 			testClock := clock.NewFakeClock(testStartTime)
 			nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, nil, sizeCalc, testClock)
-			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nsm, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 			// The method should not panic.
 			err := op.handleFixOperation(fixOperation{NodeName: "node1", MachineFamily: family})
@@ -1333,7 +2105,7 @@ func TestFix_NonExistingNode(t *testing.T) {
 }
 
 func TestFixerLoop(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			supportedMachineType := fmt.Sprintf("%s-%s-%s", family, "standard", "32")
 			nodeMilliCpu := int64(10 * 1000)
@@ -1387,7 +2159,7 @@ func TestFixerLoop(t *testing.T) {
 						},
 					}
 
-					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, tc.fixerEnabled, fixerInterval, testClock)
+					op := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, tc.fixerEnabled, fixerInterval, testClock, nil)
 
 					err := op.vmStateCache.updateState(node, ekvmtypes.ResizableVmState{
 						Size:   vmSize,
@@ -1423,7 +2195,7 @@ func TestFixerLoop(t *testing.T) {
 }
 
 func TestConcurrentWorkers(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			testCases := []struct {
 				desc                    string
@@ -1543,7 +2315,7 @@ func TestConcurrentWorkers(t *testing.T) {
 }
 
 func TestResizeTaintError(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			sizeCalc := calculator_test.New()
 			testClock := clock.NewFakeClock(testStartTime)
@@ -1556,7 +2328,9 @@ func TestResizeTaintError(t *testing.T) {
 			cloudProvider.On("ResizeVm", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 			metrics := &mockMetrics{}
 			metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
-			op := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock)
+			metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			op := newOperationTracker(&fake.Clientset{}, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, sizeCalc, 1, false, fixerInterval, testClock, nil)
 
 			testCases := []struct {
 				desc                 string
@@ -1571,7 +2345,7 @@ func TestResizeTaintError(t *testing.T) {
 					desiredSize:       newSize(4000, 4096*giBToKiB),
 					resizeDirection:   Upsize,
 					errDuringAddTaint: fmt.Errorf("add taint error"),
-					wantErr:           ek_errors.NewBalloonPodResizeTaintError(family, fmt.Errorf("adding taint failed for node \"node1\": add taint error"), ek_errors.StartingState),
+					wantErr:           ek_errors.NewBalloonPodResizeTaintError(family, fmt.Errorf("adding taint failed for node \"node1\": add taint error"), ek_errors.DesiredState),
 				},
 				{
 					desc:              "Add resize taint failed during downsize",
@@ -1645,7 +2419,7 @@ func TestOnDeleteNodeDoesNotPanic(t *testing.T) {
 }
 
 func TestRegisterResizeSuccess(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			mockMetrics := &mockMetrics{}
 			mockMetrics.On("RegisterVmResizeOperation", family, string(Downsize), "", metrics.OperationSucceeded).Once().Return()
@@ -1679,13 +2453,13 @@ func TestRegisterResizeSuccess(t *testing.T) {
 }
 
 func TestHandleResizeError(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
-			ek32FullAllocatable := size.Allocatable{
+			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,
 				KBytes:    128 * size.GiB,
 			}
-			ek32HalfAllocatable := size.Allocatable{
+			halfAllocatable := size.Allocatable{
 				MilliCpus: 16000,
 				KBytes:    64 * size.GiB,
 			}
@@ -1702,57 +2476,57 @@ func TestHandleResizeError(t *testing.T) {
 				{
 					name: "upsize: untyped error",
 					err:  fmt.Errorf("not a resize error"),
-					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
+					node: ekvms_test.NewNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "upsize: resize error with unknown VM state",
 					err:  ek_errors.NewHttp5xxError(family, fmt.Errorf("internal error")),
-					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
+					node: ekvms_test.NewNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "upsize: resize error with known VM state",
 					err:  ek_errors.NewBalloonPodResizeError(family, fmt.Errorf("balloon pod resize error"), ek_errors.DesiredState),
-					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
+					node: ekvms_test.NewNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32HalfAllocatable),
-						DesiredSize:  size.VmSize(ek32FullAllocatable),
+						StartingSize: size.VmSize(halfAllocatable),
+						DesiredSize:  size.VmSize(fullAllocatable32),
 					},
-					fallbackSize: ek32FullAllocatable,
+					fallbackSize: fullAllocatable32,
 				},
 				{
 					name: "downsize: resize error with unknown VM state",
 					err:  ek_errors.NewHttp5xxError(family, fmt.Errorf("internal error")),
-					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
+					node: ekvms_test.NewNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32FullAllocatable),
-						DesiredSize:  size.VmSize(ek32HalfAllocatable),
+						StartingSize: size.VmSize(fullAllocatable32),
+						DesiredSize:  size.VmSize(halfAllocatable),
 					},
-					fallbackSize: ek32HalfAllocatable,
+					fallbackSize: halfAllocatable,
 				},
 				{
 					name: "downsize: resize error with known VM state",
 					err:  ek_errors.NewBalloonPodResizeError(family, fmt.Errorf("balloon pod resize error"), ek_errors.StartingState),
-					node: ekvms_test.NewResizableNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
+					node: ekvms_test.NewNodeBuilder("node1", 32, 128).WithSupportedMachineType(supportedMachineType).WithProvider(providerID).Build(),
 					operation: ResizeOperation{
 						NodeName:     "node1",
-						StartingSize: size.VmSize(ek32FullAllocatable),
-						DesiredSize:  size.VmSize(ek32HalfAllocatable),
+						StartingSize: size.VmSize(fullAllocatable32),
+						DesiredSize:  size.VmSize(halfAllocatable),
 					},
-					fallbackSize: ek32FullAllocatable,
+					fallbackSize: fullAllocatable32,
 				},
 			}
 
@@ -1774,8 +2548,8 @@ func TestHandleResizeError(t *testing.T) {
 					node := ResizableNode{
 						Node:             tt.node,
 						DesiredSize:      tt.fallbackSize,
-						UpsizableMaxSize: ek32FullAllocatable,
-						PhysicalMaxSize:  ek32FullAllocatable,
+						UpsizableMaxSize: fullAllocatable32,
+						PhysicalMaxSize:  fullAllocatable32,
 						MachineFamily:    family,
 					}
 					nsm.setNode(tt.operation.NodeName, node)
@@ -1794,9 +2568,9 @@ func TestHandleResizeError(t *testing.T) {
 }
 
 func TestHandleResizeError_NonExistingNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
-			ek32FullAllocatable := size.Allocatable{
+			fullAllocatable32 := size.Allocatable{
 				MilliCpus: 32000,
 				KBytes:    128 * size.GiB,
 			}
@@ -1812,8 +2586,8 @@ func TestHandleResizeError_NonExistingNode(t *testing.T) {
 			ot.handleResizeError(ek_errors.NewBalloonPodResizeError(family, fmt.Errorf("balloon pod resize error"), ek_errors.StartingState),
 				ResizeOperation{
 					NodeName:     "node1",
-					StartingSize: size.VmSize(ek32FullAllocatable),
-					DesiredSize:  size.VmSize(ek32FullAllocatable),
+					StartingSize: size.VmSize(fullAllocatable32),
+					DesiredSize:  size.VmSize(fullAllocatable32),
 				})
 		})
 	}
@@ -1891,18 +2665,29 @@ func (m *mockBalloonPodResizer) resizeBalloonPod(node *v1.Node, desiredSize size
 }
 
 func (m *mockBalloonPodResizer) addTaint(node *v1.Node, timeAdded time.Time) (*v1.Node, error) {
-	args := m.MethodCalled("addTaint", node, timeAdded)
-	return args.Get(0).(*v1.Node), args.Error(1)
+	args := m.Called(node, timeAdded)
+	if n := args.Get(0); n != nil {
+		return n.(*v1.Node), args.Error(1)
+	}
+	return nil, args.Error(1)
 }
 
 func (m *mockBalloonPodResizer) removeTaint(node *v1.Node) (*v1.Node, error) {
-	args := m.MethodCalled("removeTaint", node)
-	return args.Get(0).(*v1.Node), args.Error(1)
+	args := m.Called(node)
+	if n := args.Get(0); n != nil {
+		return n.(*v1.Node), args.Error(1)
+	}
+	return nil, args.Error(1)
 }
 
 func (m *mockBalloonPodResizer) hasTaint(node *v1.Node) bool {
-	args := m.MethodCalled("hasTaint", node)
-	return args.Bool(0)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "hasTaint" {
+			args := m.MethodCalled("hasTaint", node)
+			return args.Bool(0)
+		}
+	}
+	return false
 }
 
 func (m *mockBalloonPodResizer) listAllBalloonPods(node *v1.Node) []*v1.Pod {
@@ -1910,7 +2695,16 @@ func (m *mockBalloonPodResizer) listAllBalloonPods(node *v1.Node) []*v1.Pod {
 }
 
 func (m *mockBalloonPodResizer) getPodForNode(node *v1.Node) *v1.Pod {
-	return m.MethodCalled("getPodForNode", node).Get(0).(*v1.Pod)
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "getPodForNode" {
+			args := m.MethodCalled("getPodForNode", node)
+			if args.Get(0) == nil {
+				return nil
+			}
+			return args.Get(0).(*v1.Pod)
+		}
+	}
+	return nil
 }
 
 type mockBalloonPodController struct {
@@ -1930,10 +2724,26 @@ func (m *mockBalloonPodController) DeleteAllBalloonPods(node *v1.Node) error {
 	return m.MethodCalled("DeleteAllBalloonPods", node).Error(0)
 }
 
+func (m *mockBalloonPodController) GetPodsForNode(node *v1.Node) []*v1.Pod {
+	args := m.MethodCalled("GetPodsForNode", node)
+	if args.Get(0) == nil {
+		return nil
+	}
+	return args.Get(0).([]*v1.Pod)
+}
+
+func (m *mockBalloonPodController) ResizeBalloonPodInPlace(node *v1.Node, cpu, mem resource.Quantity) error {
+	return m.MethodCalled("ResizeBalloonPodInPlace", node, cpu, mem).Error(0)
+}
+
 func (m *mockBalloonPodController) List() []*v1.Pod {
 	var pods []*v1.Pod
 	pods, _ = (m.MethodCalled("List").Get(0)).([]*v1.Pod)
 	return pods
+}
+
+func (m *mockBalloonPodResizer) resizeBalloonPodInPlace(node *v1.Node, desiredSize size.Allocatable) error {
+	return m.MethodCalled("resizeBalloonPodInPlace", node, desiredSize).Error(0)
 }
 
 type mockCloudProvider struct {
@@ -1995,6 +2805,14 @@ func (m *mockMetrics) RegisterResizableVmReconcileNodeStateEvents(machineFamily 
 	m.MethodCalled("RegisterResizableVmReconcileNodeStateEvents", machineFamily, attemptsNum, status, shouldRetry)
 }
 
+func (m *mockMetrics) RegisterBalloonPodIpprEvent(machineFamily, direction, reason string, action metrics.IpprAction) {
+	m.MethodCalled("RegisterBalloonPodIpprEvent", machineFamily, direction, reason, action)
+}
+
+func (m *mockMetrics) ObserveBalloonPodIpprResizeDuration(machineFamily, direction string, action metrics.IpprAction, duration time.Duration) {
+	m.MethodCalled("ObserveBalloonPodIpprResizeDuration", machineFamily, direction, action, duration)
+}
+
 func (m *mockMetrics) RegisterVmResizeOperation(machineFamily, direction, reason string, status metrics.OperationStatus) {
 	m.MethodCalled("RegisterVmResizeOperation", machineFamily, direction, reason, status)
 }
@@ -2032,8 +2850,10 @@ func setupCacheStaleTest(initialAPIServerNodes ...runtime.Object) *cacheStaleTes
 	metrics := &mockMetrics{}
 	metrics.On("RegisterVmResizeOperation", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
 	metrics.On("ObserveVmGceResizeRequestDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+	metrics.On("RegisterBalloonPodIpprEvent", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+	metrics.On("ObserveBalloonPodIpprResizeDuration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
 
-	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock)
+	ot := newOperationTracker(fakeClient, informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0), cloudProvider, nodeStateManager, metrics, &identitySizeCalculator{}, 1, false, fixerInterval, testClock, nil)
 	ot.consistencyStore = consistencyStore
 	ot.cacheStaleRequeueBackoff = 1 * time.Millisecond
 	ot.cacheStaleTimeout = 5 * time.Millisecond

@@ -337,14 +337,42 @@ func TestMTResumeInstances(t *testing.T) {
 	defer server.Close()
 	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
 	addDefaultProviderConfigs(t, mtGCEClient)
-	err := mtGCEClient.ResumeInstances(gce.GceRef{Project: "bad-project"}, nil, nil)
+	err := mtGCEClient.ResumeInstances(gce.GceRef{Project: "bad-project"}, nil)
 	if err == nil {
 		t.Error("got: nil, want: error")
 		return
 	}
-	err = mtGCEClient.ResumeInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil, nil)
+	err = mtGCEClient.ResumeInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil)
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
+		return
+	}
+}
+
+func TestMTPollUntilActionStops(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		lmiResponse := gce_api.InstanceGroupManagersListManagedInstancesResponse{}
+		b, _ := json.Marshal(lmiResponse)
+		res.WriteHeader(http.StatusOK)
+		res.Write(b)
+	}))
+	defer server.Close()
+	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
+	addDefaultProviderConfigs(t, mtGCEClient)
+
+	// The project has no client, so the lookup error is reported for the instance.
+	instRef := gce.GceRef{Project: "bad-project", Zone: "zoneA", Name: "inst1"}
+	got := collectPoll(mtGCEClient.PollUntilActionStops(t.Context(), ActionResuming, gce.GceRef{Project: "bad-project"}, []gce.GceRef{instRef}))
+	if len(got.aborted) != 1 {
+		t.Errorf("got: %v errors, want: 1", len(got.aborted))
+		return
+	}
+
+	// A known project delegates to its client, which reports the instance as gone (and so done).
+	knownRef := gce.GceRef{Project: fooProviderConfig.ProjectID, Zone: "zoneA", Name: "inst1"}
+	got = collectPoll(mtGCEClient.PollUntilActionStops(t.Context(), ActionResuming, gce.GceRef{Project: fooProviderConfig.ProjectID}, []gce.GceRef{knownRef}))
+	if len(got.aborted) != 0 {
+		t.Errorf("got: %v, want: no errors", len(got.aborted))
 		return
 	}
 }
@@ -367,6 +395,29 @@ func TestMTSuspendInstances(t *testing.T) {
 		return
 	}
 	err = mtGCEClient.SuspendInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, nil, false)
+	if err != nil {
+		t.Errorf("got: %v, want: nil", err)
+		return
+	}
+}
+
+func TestMTFetchManagedInstances(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		lmiResponse := gce_api.InstanceGroupManagersListManagedInstancesResponse{}
+		b, _ := json.Marshal(lmiResponse)
+		res.WriteHeader(http.StatusOK)
+		res.Write(b)
+	}))
+	defer server.Close()
+	mtGCEClient := createDefaultMTGCEClient(t, server.URL)
+	addDefaultProviderConfigs(t, mtGCEClient)
+
+	_, err := mtGCEClient.FetchManagedInstances(gce.GceRef{Project: "bad-project"}, "")
+	if err == nil {
+		t.Error("got: nil, want: error")
+		return
+	}
+	_, err = mtGCEClient.FetchManagedInstances(gce.GceRef{Project: fooProviderConfig.ProjectID}, "")
 	if err != nil {
 		t.Errorf("got: %v, want: nil", err)
 		return

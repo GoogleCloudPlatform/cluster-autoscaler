@@ -34,6 +34,12 @@ const (
 	// SuspendedTaintValue is the only value SuspendedTaintKey ever takes.
 	SuspendedTaintValue string = "true"
 
+	// FailedTaintKey is the key the taint marking a node whose operations failed more than
+	// its config.Dispatcher.Retry.MaxRetriesByOp allows, and therefore should be replaced by a new node.
+	FailedTaintKey string = "buffer.gke.io/standby-capacity-node-failed"
+	// FailedTaintValue is the only value FailedTaintKey ever takes
+	FailedTaintValue string = "true"
+
 	// BufferAssignmentKey labels a node with the identifier of the capacity buffer it is
 	// reserved for.
 	BufferAssignmentKey = "buffer.gke.io/standby-capacity-node-buffer"

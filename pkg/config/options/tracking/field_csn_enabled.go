@@ -34,6 +34,7 @@ var csnEnabledField = trackedField{
 		optsToModify.CSNEnabled = isCSNEnabled(optsFromFlag.AutopilotEnabled, optsFromFlag.CSNCAFlag, experimentsManager)
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
 
 func isCSNEnabled(autopilotEnabled bool, csnCAFlag options.CSNStatus, gm experiments.Manager) bool {

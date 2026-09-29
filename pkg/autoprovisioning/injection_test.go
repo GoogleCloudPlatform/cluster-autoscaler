@@ -1500,7 +1500,7 @@ func TestNodeGroupParameters(t *testing.T) {
 				WithAutoprovisioningEnabled(tc.nodeAutoprovisioningEnabled).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			em := experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag)
+			em := experiments.NewMockManager()
 			opts := AutoprovisioningNodeGroupManagerOptions{
 				CloudProvider:                  provider,
 				AllowlistedSystemLabelsMatcher: buildTestMatcher(t, "cloud.google.com/my-feature"),
@@ -4236,6 +4236,7 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 				},
 				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
 			},
+			resizableMachineTypesProvider: config.NewCommaSeparatedStringSetProvider("e4-standard-2"),
 			machineTypesPerZone: map[string][]string{
 				"zone-1": {"e2-standard-2", "e4-standard-2"},
 			},
@@ -11971,6 +11972,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		reservations      []*gce_api.Reservation
 		reservationBlocks map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 		req               *reservationRequirements
+		subBlocksDisabled bool
 		wantError         bool
 		expectedError     error
 	}{
@@ -12088,6 +12090,35 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 				gceclient.ReservationRef{Name: "rsv1", Project: projectID, BlockName: "rb1", SubBlockName: "rsb2"},
 				"reservation sub-block 'rsb2' not found"),
 		},
+		{
+			name: "sub-block specified, sub-blocks disabled",
+			reservations: []*gce_api.Reservation{
+				rsv1,
+			},
+			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
+				rsv1Key: {
+					{
+						Name:       "rb1",
+						Count:      3,
+						InUseCount: 1,
+						Status:     "READY",
+						Zone:       "zone-A",
+						SubBlocks: []*gceclient.GceReservationSubBlock{
+							{Name: "rsb1", Count: 2, Status: "READY"},
+						},
+					},
+				},
+			},
+			req: &reservationRequirements{
+				name:     "rsv1",
+				project:  projectID,
+				zone:     "zone-A",
+				block:    "rb1",
+				subBlock: "rsb2",
+			},
+			subBlocksDisabled: true,
+			wantError:         false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -12096,10 +12127,16 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 			blocksPuller := reservations.NewBlocksPuller(reservations.NewFakeBlocksPullerProvider(tc.reservationBlocks, nil), reservationsPuller)
 			blocksPuller.Loop()
 
+			var em experiments.Manager
+			if tc.subBlocksDisabled {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ReservationSubblocksTargetingEnabledFlag: false}, nil)
+			} else {
+				em = experiments.NewMockManager()
+			}
 			rg := ReservationGenerator{
 				reservationsPuller:      reservationsPuller,
 				reservationBlocksPuller: blocksPuller,
-				experimentsManager:      experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag),
+				experimentsManager:      em,
 			}
 			err := rg.matchReservationBlock(tc.req)
 
@@ -12123,7 +12160,7 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 		name                                  string
 		systemLabels                          map[string]string
 		expectedSpec                          *gkeclient.NodePoolSpec
-		subBlocksEnabled                      bool
+		subBlocksDisabled                     bool
 		reservationsAnyLocationPolicyOverride bool
 	}{
 		{
@@ -12318,10 +12355,10 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 				},
 				ReservationBlockCount: 0,
 			},
+			subBlocksDisabled: true,
 		},
 		{
-			name:             "reservation subBlock specified, subBlocks enabled",
-			subBlocksEnabled: true,
+			name: "reservation subBlock specified, subBlocks enabled",
 			systemLabels: map[string]string{
 				gkelabels.ReservationNameLabel:           "rsv1",
 				gkelabels.ReservationProjectLabel:        "prj",
@@ -12352,8 +12389,8 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := &gkeclient.NodePoolSpec{Labels: make(map[string]string)}
 			var em experiments.Manager
-			if tc.subBlocksEnabled {
-				em = experiments.NewMockManager(experiments.ReservationSubblocksTargetingEnabledFlag)
+			if tc.subBlocksDisabled {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ReservationSubblocksTargetingEnabledFlag: false}, nil)
 			} else {
 				em = experiments.NewMockManager()
 			}
@@ -13551,4 +13588,212 @@ func testOptionsTracker(modifier func(opts *internalopts.InternalOptions)) *opts
 	return optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{
 		InternalOptions: opts,
 	}, gkeclient.Cluster{}, experiments.NewMockManager())
+}
+
+// resizesAtomically relies on *gke.GkeMig satisfying nodeGroupWithAtomicResize structurally. Assert
+// it at compile time so a rename on the cloud provider side fails the build here instead of
+// silently turning the sub-block deduplication into a no-op.
+var _ nodeGroupWithAtomicResize = (*gke.GkeMig)(nil)
+
+const (
+	testReservationBlockPath = "projects/test-project/reservations/test-reservation/reservationBlocks/test-block"
+	testSubBlock25           = testReservationBlockPath + "/reservationSubBlocks/test-block-sub-block-0025"
+	testSubBlock26           = testReservationBlockPath + "/reservationSubBlocks/test-block-sub-block-0026"
+)
+
+// fakeReservationNodeGroup is a minimal node group exposing only the bits the sub-block
+// deduplication logic looks at. The embedded interface is nil on purpose - any call to a method
+// other than the two overridden below is a bug in the code under test and should panic loudly.
+type fakeReservationNodeGroup struct {
+	gke.NodeGroup
+	spec   *gkeclient.NodePoolSpec
+	atomic bool
+}
+
+func (f *fakeReservationNodeGroup) Spec() *gkeclient.NodePoolSpec { return f.spec }
+
+func (f *fakeReservationNodeGroup) ResizeAtomically() bool { return f.atomic }
+
+// nodeGroupWithoutSpec does not implement nodeGroupWithSpec, standing in for a non-GKE node group.
+type nodeGroupWithoutSpec struct {
+	cloudprovider.NodeGroup
+}
+
+func reservationSpec(consumeType string, values ...string) *gkeclient.NodePoolSpec {
+	return &gkeclient.NodePoolSpec{
+		ReservationAffinity: &gke_api_beta.ReservationAffinity{
+			ConsumeReservationType: consumeType,
+			Values:                 values,
+		},
+	}
+}
+
+func TestTargetedReservationSubBlock(t *testing.T) {
+	testCases := []struct {
+		name           string
+		clusterProject string
+		nodeGroup      cloudprovider.NodeGroup
+		want           string
+	}{
+		{
+			name:      "specific affinity scoped to a sub-block",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25)},
+			want:      testSubBlock25,
+		},
+		{
+			name:           "same-project long-form sub-block path is canonicalized to short form",
+			clusterProject: "my-cluster-project",
+			nodeGroup:      &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, "projects/my-cluster-project/reservations/"+testSubBlock25)},
+			want:           testSubBlock25,
+		},
+		{
+			name:           "cross-project long-form sub-block path retains its project prefix",
+			clusterProject: "my-cluster-project",
+			nodeGroup:      &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, "projects/other-project/reservations/"+testSubBlock25)},
+			want:           "projects/other-project/reservations/" + testSubBlock25,
+		},
+		{
+			name:      "specific affinity scoped only to a block",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testReservationBlockPath)},
+			want:      "",
+		},
+		{
+			name:      "specific affinity scoped only to a reservation",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, "test-reservation")},
+			want:      "",
+		},
+		{
+			name:      "any affinity is not pinned to a sub-block",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinityAny, testSubBlock25)},
+			want:      "",
+		},
+		{
+			name:      "none affinity is not pinned to a sub-block",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinityNone)},
+			want:      "",
+		},
+		{
+			name:      "ambiguous multi-value affinity is ignored",
+			nodeGroup: &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25, testSubBlock26)},
+			want:      "",
+		},
+		{
+			name:      "no reservation affinity",
+			nodeGroup: &fakeReservationNodeGroup{spec: &gkeclient.NodePoolSpec{}},
+			want:      "",
+		},
+		{
+			name:      "nil spec",
+			nodeGroup: &fakeReservationNodeGroup{spec: nil},
+			want:      "",
+		},
+		{
+			name:      "node group without a spec",
+			nodeGroup: &nodeGroupWithoutSpec{},
+			want:      "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := targetedReservationSubBlock(tc.nodeGroup, tc.clusterProject); got != tc.want {
+				t.Errorf("targetedReservationSubBlock() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReservationSubBlockAlreadyTaken(t *testing.T) {
+	testCases := []struct {
+		name              string
+		cliFlagEnabled    bool
+		experimentEnabled bool
+		claimed           []string
+		nodeGroup         cloudprovider.NodeGroup
+		wantSubBlock      string
+		wantTaken         bool
+	}{
+		{
+			name:              "atomic node group colliding with an existing claim is rejected",
+			cliFlagEnabled:    true,
+			experimentEnabled: true,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25), atomic: true},
+			wantSubBlock:      testSubBlock25,
+			wantTaken:         true,
+		},
+		{
+			name:              "atomic node group on a free sub-block is accepted",
+			cliFlagEnabled:    true,
+			experimentEnabled: true,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock26), atomic: true},
+			wantSubBlock:      testSubBlock26,
+			wantTaken:         false,
+		},
+		{
+			name:              "non-atomic node groups may share a sub-block",
+			cliFlagEnabled:    true,
+			experimentEnabled: true,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25), atomic: false},
+			wantTaken:         false,
+		},
+		{
+			name:              "collision is allowed when the CLI flag is disabled",
+			cliFlagEnabled:    false,
+			experimentEnabled: true,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25), atomic: true},
+			wantTaken:         false,
+		},
+		{
+			name:              "collision is allowed when the Giraffe experiment is disabled",
+			cliFlagEnabled:    true,
+			experimentEnabled: false,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25), atomic: true},
+			wantTaken:         false,
+		},
+		{
+			name:              "atomic node group not pinned to a sub-block is accepted",
+			cliFlagEnabled:    true,
+			experimentEnabled: true,
+			claimed:           []string{testSubBlock25},
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinityAny, testSubBlock25), atomic: true},
+			wantTaken:         false,
+		},
+		{
+			name:              "nothing claimed yet",
+			cliFlagEnabled:    true,
+			experimentEnabled: true,
+			claimed:           nil,
+			nodeGroup:         &fakeReservationNodeGroup{spec: reservationSpec(gkeclient.ReservationAffinitySpecific, testSubBlock25), atomic: true},
+			wantSubBlock:      testSubBlock25,
+			wantTaken:         false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			em := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ReservationSubBlockDeduplicationEnabledFlag: tc.experimentEnabled},
+				map[string]string{},
+			)
+			m := &AutoprovisioningNodeGroupManager{
+				reservationSubBlockDeduplicationEnabled: tc.cliFlagEnabled,
+				experimentsManager:                      em,
+			}
+			ctx := &injectionContext{claimedReservationSubBlocks: sets.New(tc.claimed...)}
+
+			gotSubBlock, gotTaken := m.reservationSubBlockAlreadyTaken(ctx, tc.nodeGroup)
+			if gotTaken != tc.wantTaken {
+				t.Errorf("reservationSubBlockAlreadyTaken() taken = %v, want %v", gotTaken, tc.wantTaken)
+			}
+			if gotSubBlock != tc.wantSubBlock {
+				t.Errorf("reservationSubBlockAlreadyTaken() subBlock = %q, want %q", gotSubBlock, tc.wantSubBlock)
+			}
+		})
+	}
 }

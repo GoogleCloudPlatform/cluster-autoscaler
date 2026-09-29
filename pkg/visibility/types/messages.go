@@ -74,6 +74,8 @@ const (
 	NoScaleUpMigFailingPredicate
 	// NoScaleUpMigSkipped - can't scale up a mig because it was skipped during the simulation.
 	NoScaleUpMigSkipped
+	// NoScaleUpMigCapacityConstraints - can't scale up a mig because options were constrained by capacity limits.
+	NoScaleUpMigCapacityConstraints
 	// NoScaleUpMigUnknownReason - can't scale up a mig because of an unknown reason.
 	NoScaleUpMigUnknownReason
 
@@ -86,14 +88,14 @@ const (
 
 	// NoScaleUpNapDisabled - NAP didn't provision any node groups because it was disabled.
 	NoScaleUpNapDisabled
-	// NoScaleUpNapUnexpectedError - NAP didn't provision any node groups because of an unexpected error.
-	NoScaleUpNapUnexpectedError
 	// NoScaleUpNapNoLocationsAvailable - NAP didn't provision any node groups because there weren't any NAP locations available.
 	NoScaleUpNapNoLocationsAvailable
 	// NoScaleUpNapNodeGroupsLimitReached - NAP didn't provision any node groups because maximut count of autoprovisioned node groups has been reached.
 	NoScaleUpNapNodeGroupsLimitReached
 	// NoScaleUpNapCapacityConstraints - NAP didn't provision any node groups because options were constrained by capacity limits.
 	NoScaleUpNapCapacityConstraints
+	// NoScaleUpNapUnexpectedError - NAP didn't provision any node groups because of an unexpected error.
+	NoScaleUpNapUnexpectedError
 
 	// NoScaleUpNapPodInvalidLabelValue - pod requests an invalid value for label.
 	NoScaleUpNapPodInvalidLabelValue
@@ -178,6 +180,8 @@ const (
 	NoScaleUpNapPodZonalIllegalConfig
 	// NoScaleUpNapPodZonalFailingPredicates - NAP didn't provision any node group for the pod because of failing predicates.
 	NoScaleUpNapPodZonalFailingPredicates
+	// NoScaleUpNapPodZonalCapacityConstraints - NAP didn't provision any node group for the pod because options were constrained by capacity limits.
+	NoScaleUpNapPodZonalCapacityConstraints
 	// NoScaleUpNapPodZonalUnexpectedError - NAP didn't provision any node group for the pod because of an unexpected error.
 	NoScaleUpNapPodZonalUnexpectedError
 	// NoScaleUpNapPodZonalOtherError - NAP didn't provision any node group for the pod because of an other, unspecified error.
@@ -266,11 +270,6 @@ const (
 	_maxMessageId
 )
 
-const (
-	// ReasonSkippedDueToCapacityConstraints is the reason text for a MIG skipped due to capacity limits.
-	ReasonSkippedDueToCapacityConstraints = "skipped due to capacity constraints"
-)
-
 // MessageIdToStringMap maps enum IDs to their textual representation.
 var MessageIdToStringMap = map[MessageId]string{
 	ScaleUpErrorOutOfResources:                         "scale.up.error.out.of.resources",
@@ -296,19 +295,20 @@ var MessageIdToStringMap = map[MessageId]string{
 	ScaleDownErrorFailedToDeleteNodeMinSizeReached: "scale.down.error.failed.to.delete.node.min.size.reached",
 	ScaleDownErrorFailedToDeleteNodeOther:          "scale.down.error.failed.to.delete.node.other",
 
-	NoScaleUpMigSkipped:          "no.scale.up.mig.skipped",
-	NoScaleUpMigFailingPredicate: "no.scale.up.mig.failing.predicate",
-	NoScaleUpMigUnknownReason:    "no.scale.up.mig.unknown.reason",
+	NoScaleUpMigSkipped:             "no.scale.up.mig.skipped",
+	NoScaleUpMigFailingPredicate:    "no.scale.up.mig.failing.predicate",
+	NoScaleUpMigCapacityConstraints: "no.scale.up.mig.capacity.constraints",
+	NoScaleUpMigUnknownReason:       "no.scale.up.mig.unknown.reason",
 
 	NoScaleUpUnexpectedError: "no.scale.up.unexpected.error",
 	NoScaleUpNotTried:        "no.scale.up.not.tried",
 	NoScaleUpInBackoff:       "no.scale.up.in.backoff",
 
 	NoScaleUpNapDisabled:               "no.scale.up.nap.disabled",
-	NoScaleUpNapUnexpectedError:        "no.scale.up.nap.unexpected.error",
 	NoScaleUpNapNoLocationsAvailable:   "no.scale.up.nap.no.locations.available",
 	NoScaleUpNapNodeGroupsLimitReached: "no.scale.up.nap.node.groups.limit.reached",
 	NoScaleUpNapCapacityConstraints:    "no.scale.up.nap.capacity.constraints",
+	NoScaleUpNapUnexpectedError:        "no.scale.up.nap.unexpected.error",
 
 	NoScaleUpNapPodInvalidLabelValue:                        "no.scale.up.nap.pod.invalid.label.value",
 	NoScaleUpNapPodMachineFamilyUnknown:                     "no.scale.up.nap.pod.machine.family.unknown",
@@ -352,11 +352,12 @@ var MessageIdToStringMap = map[MessageId]string{
 	NoScaleUpNapPodTpuNoLimitDefined:          "no.scale.up.nap.pod.tpu.no.limit.defined",
 	NoScaleUpNapPodTpuAcceleratorCountInvalid: "no.scale.up.nap.pod.tpu.accelerator.count.invalid",
 
-	NoScaleUpNapPodZonalResourcesExceeded: "no.scale.up.nap.pod.zonal.resources.exceeded",
-	NoScaleUpNapPodZonalUnexpectedError:   "no.scale.up.nap.pod.zonal.unexpected.error",
-	NoScaleUpNapPodZonalIllegalConfig:     "no.scale.up.nap.pod.zonal.illegal.config",
-	NoScaleUpNapPodZonalFailingPredicates: "no.scale.up.nap.pod.zonal.failing.predicates",
-	NoScaleUpNapPodZonalOtherError:        "no.scale.up.nap.pod.zonal.other.error",
+	NoScaleUpNapPodZonalResourcesExceeded:   "no.scale.up.nap.pod.zonal.resources.exceeded",
+	NoScaleUpNapPodZonalIllegalConfig:       "no.scale.up.nap.pod.zonal.illegal.config",
+	NoScaleUpNapPodZonalFailingPredicates:   "no.scale.up.nap.pod.zonal.failing.predicates",
+	NoScaleUpNapPodZonalCapacityConstraints: "no.scale.up.nap.pod.zonal.capacity.constraints",
+	NoScaleUpNapPodZonalUnexpectedError:     "no.scale.up.nap.pod.zonal.unexpected.error",
+	NoScaleUpNapPodZonalOtherError:          "no.scale.up.nap.pod.zonal.other.error",
 
 	NoScaleUpNapExtendedDurationPodCPUReqInvalid:     "no.scale.up.extended.duration.pod.cpu.req.invalid",
 	NoScaleUpNapExtendedDurationPodNonAutopilotError: "no.scale.up.extended.duration.pod.non.autopilot.error",
@@ -547,6 +548,11 @@ func NewNoScaleUpMigSkippedMsg(skippedReasons []string) *Message {
 // NewNoScaleUpMigFailingPredicateMsg creates and returns a "can't scale up a MIG because some predicate failed for it" message.
 func NewNoScaleUpMigFailingPredicateMsg(predicateName string, predicateFailureReasons []string) *Message {
 	return &Message{Id: NoScaleUpMigFailingPredicate, Params: append([]string{predicateName}, predicateFailureReasons...)}
+}
+
+// NewNoScaleUpMigCapacityConstraintsMsg creates and returns a "can't scale up a MIG because options were constrained by capacity limits" message.
+func NewNoScaleUpMigCapacityConstraintsMsg() *Message {
+	return &Message{Id: NoScaleUpMigCapacityConstraints}
 }
 
 // NewNoScaleUpMigUnknownReasonMsg creates and returns a "can't scale up a MIG because of an unknown reason" message.
@@ -766,11 +772,6 @@ func NewNoScaleUpNapPodZonalResourcesExceededMsg(zone string) *Message {
 	return &Message{Id: NoScaleUpNapPodZonalResourcesExceeded, Params: []string{zone}}
 }
 
-// NewNoScaleUpNapPodZonalUnexpectedErrorMsg creates and returns a "NAP didn't provision any node group for the pod because of an unexpected error" message.
-func NewNoScaleUpNapPodZonalUnexpectedErrorMsg(zone string) *Message {
-	return &Message{Id: NoScaleUpNapPodZonalUnexpectedError, Params: []string{zone}}
-}
-
 // NewNoScaleUpNapPodZonalIllegalConfigMsg creates and returns a "NAP didn't provision any node group for the pod because it requests an illegal MIG configuration" message.
 func NewNoScaleUpNapPodZonalIllegalConfigMsg(zone string) *Message {
 	return &Message{Id: NoScaleUpNapPodZonalIllegalConfig, Params: []string{zone}}
@@ -779,6 +780,16 @@ func NewNoScaleUpNapPodZonalIllegalConfigMsg(zone string) *Message {
 // NewNoScaleUpNapPodZonalFailingPredicatesMsg creates and returns a "NAP didn't provision any node group for the pod because of failing predicates" message.
 func NewNoScaleUpNapPodZonalFailingPredicatesMsg(zone string, predicatesFailureReasons []string) *Message {
 	return &Message{Id: NoScaleUpNapPodZonalFailingPredicates, Params: append([]string{zone}, predicatesFailureReasons...)}
+}
+
+// NewNoScaleUpNapPodZonalCapacityConstraintsMsg creates and returns a "NAP didn't provision any node group for the pod because options were constrained by capacity limits" message.
+func NewNoScaleUpNapPodZonalCapacityConstraintsMsg(zone string) *Message {
+	return &Message{Id: NoScaleUpNapPodZonalCapacityConstraints, Params: []string{zone}}
+}
+
+// NewNoScaleUpNapPodZonalUnexpectedErrorMsg creates and returns a "NAP didn't provision any node group for the pod because of an unexpected error" message.
+func NewNoScaleUpNapPodZonalUnexpectedErrorMsg(zone string) *Message {
+	return &Message{Id: NoScaleUpNapPodZonalUnexpectedError, Params: []string{zone}}
 }
 
 // NewNoScaleUpNapPodZonalOtherErrorMsg creates and returns a "NAP didn't provision any node group for the pod because of an other, unspecified error" message.

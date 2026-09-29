@@ -44,6 +44,11 @@ const RelaxedNodeGroupCreationPenalty = "RelaxedNodeGroupCreationPenalty::MinCAV
 
 const ReservationSubblocksTargetingEnabledFlag = "ReservationSubblocksTargeting::EnabledMinCAVersion"
 
+// ReservationSubBlockDeduplicationEnabledFlag controls whether NAP refuses to inject an atomically
+// resized node group candidate targeting a reservation sub-block that is already targeted by
+// another node group. See b/564377355.
+const ReservationSubBlockDeduplicationEnabledFlag = "ReservationSubBlockDeduplication::EnabledMinCAVersion"
+
 const CapacityCheckWaitTimeSecondsFlexStartEnabledFlag = "CapacityCheckWaitTimeSecondsFlexStart::EnabledMinCAVersion"
 const CapacityCheckWaitTimeSecondsMultiHostTpuEnabledFlag = "CapacityCheckWaitTimeSecondsMultiHostTpu::EnabledMinCAVersion"
 const CapacityCheckWaitTimeSecondsDefaultValueGpuFlag = "CapacityCheckWaitTimeSecondsGPU::DefaultValue"
@@ -60,6 +65,9 @@ const EkUasUpsizabilityBufferFlag = "AutopilotEk::UasUpsizabilityBuffer"
 const EkForcefulMigrationFromEkToE2MinCAVersionFlag = "AutopilotEk::ForcefulMigrationFromEkToE2MinCAVersion"
 const EkDownsizeConfigFlag = "AutopilotEk::DownsizeConfig"
 const EkDownsizeNonResizableFlag = "AutopilotEk::DownsizeNonResizableEk"
+const EkFineGrainedResizeEnabledFlag = "AutopilotEk::FineGrainedResizeEnabled"
+const EkFineGrainedResizeIncrementStepFlag = "AutopilotEk::FineGrainedResizeIncrementStep"
+const EkFineGrainedResizeMinCAVersionFlag = "AutopilotEk::FineGrainedResizeMinCAVersion"
 const EKOnManagedNodesMinCAVersionFlag = "EKOnManagedNodes::MinCaVersion"
 const ResizableClusterBackoffCustomThresholdsPerErrorTypeFlag = "EkClusterBackoff::CustomThresholdsPerErrorType"
 
@@ -74,6 +82,9 @@ const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedO
 
 const ComputeClassConfigHashEnabledFlag = "ComputeClassConfigHash::Enabled"
 const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVersion"
+
+const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
+const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
 
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
@@ -93,12 +104,14 @@ const CapacityBuffersMetricProcessor = "CapacityBuffers::MetricProcessor" // Dir
 const ColdStandbyNodesInternalMinCAVersionFlag = "ColdStandbyNodes::InternalMinCAVersion"
 const ColdStandbyNodesControllerConfigV1Flag = "ColdStandbyNodes::NodeControllerConfigV1"
 const ColdStandbyNodesMinCAVersionFlag = "ColdStandbyNodes::MinCAVersion"
-const ColdStandbyNodesAutopilotSoHWFlag = "ColdStandbyNodes::AutopilotSoHWMinCAVersion"                       // CSN in Autopilot on Slice of Hardware (SoHW)
-const ColdStandbyNodesPreventCSNScaleUpForNonCSNPodsFlag = "ColdStandbyNodes::PreventCSNScaleUpForNonCSNPods" // Direct launch.
-const ColdStandbyNodesCheckPodsOnSuspendedNodes = "ColdStandbyNodes::CheckPodsOnSuspendedNodes"               // Direct launch.
-const ColdStandbyNodesProcessTemplateNodeInfosFlag = "ColdStandbyNodes::ProcessTemplateNodeInfos"             // Direct launch.
-const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersionGuardForCAFlag"             // Direct launch style flag.
-const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                       // Direct launch.
+const ColdStandbyNodesAutopilotSoHWFlag = "ColdStandbyNodes::AutopilotSoHWMinCAVersion"                                           // CSN in Autopilot on Slice of Hardware (SoHW)
+const ColdStandbyNodesPreventCSNScaleUpForNonCSNPodsFlag = "ColdStandbyNodes::PreventCSNScaleUpForNonCSNPods"                     // Direct launch.
+const ColdStandbyNodesCheckPodsOnSuspendedNodes = "ColdStandbyNodes::CheckPodsOnSuspendedNodes"                                   // Direct launch.
+const ColdStandbyNodesProcessTemplateNodeInfosFlag = "ColdStandbyNodes::ProcessTemplateNodeInfos"                                 // Direct launch.
+const ColdStandbyNodesMinCAVersionGuardForCAFlag = "ColdStandbyNodes::MinCAVersionGuardForCAFlag"                                 // Direct launch style flag.
+const ColdStandbyNodesWaitForInstanceStatus = "ColdStandbyNodes::WaitForInstanceStatus"                                           // Direct launch.
+const ColdStandbyNodesWaitForNodeReadiness = "ColdStandbyNodes::WaitForNodeReadiness"                                             // Direct launch.
+const ColdStandbyNodesRemoveSuspensionSchedulingConstraintsEarly = "ColdStandbyNodes::RemoveSuspensionSchedulingConstraintsEarly" // Direct launch.
 const ColdStandbyNodesBackoffMinCAVersionFlag = "ColdStandbyNodes::BackoffMinCAVersion"
 const ColdStandbyNodesPodAgeFallbackThresholdSecondsFlag = "ColdStandbyNodes::PodAgeFallbackThresholdSeconds"
 const ColdStandbyNodesResumeTimeoutSecondsFlag = "ColdStandbyNodes::ResumeTimeoutSeconds"
@@ -109,6 +122,7 @@ const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTime
 // csn.defaultMinUnsupportedMemoryGB.
 const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
 const ColdStandbyNodesScaleUpStatusProcessorFlag = "ColdStandbyNodes::ScaleUpStatusProcessor"
+const ColdStandbyNodesEmitNodeControllerEventsFlag = "ColdStandbyNodes::EmitNodeControllerEvents" // Direct launch.
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"
@@ -124,11 +138,18 @@ const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion
 
 const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 
-const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
-const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
-
 const AutopilotE4ExtendedFallbacksMinCAVersionFlag = "AutopilotE4ExtendedFallbacks::MinCAVersion"
+const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
+const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
+const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
+const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
+const AutopilotE4WithResizeEnabledFlag = "AutopilotE4::CoarseGrainedResizeEnabled"
+const AutopilotE4WithResizeMinVersionFlag = "AutopilotE4::CoarseGrainedResizeMinCAVersion"
+const E4MachineTypesFlag = "AutopilotE4::MachineTypes"
+const E4DownsizeConfigFlag = "AutopilotE4::DownsizeConfig"
+const E4UasUpsizabilityBufferFlag = "AutopilotE4::UasUpsizabilityBuffer"
 const E4OnManagedNodesMinCAVersionFlag = "E4OnManagedNodes::MinCaVersion"
+const E4OnManagedNodesEnabledFlag = "E4OnManagedNodes::Enabled"
 
 const AutopilotE4aNoResizeEnabledFlag = "AutopilotE4A::EnableAllowlistFeature"
 const AutopilotE4aNoResizeMinVersionFlag = "AutopilotE4A::MinCAVersion"
@@ -139,9 +160,6 @@ const E4aDownsizeConfigFlag = "AutopilotE4A::DownsizeConfig"
 const E4aUasUpsizabilityBufferFlag = "AutopilotE4A::UasUpsizabilityBuffer"
 const E4AOnManagedNodesMinCAVersionFlag = "E4AOnManagedNodes::MinCaVersion"
 const E4AOnManagedNodesEnabledFlag = "E4AOnManagedNodes::Enabled"
-
-const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
-const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
 
 const AutopilotArmMachineFallbacksMinCAVersionFlag = "AutopilotArmPodFamilyMachineFallbacks::MinCAVersion"
 const AutopilotArmMachineFallbacksEnabledFlag = "AutopilotArmPodFamilyMachineFallbacks::Enabled"
@@ -200,6 +218,9 @@ const FleetEfficiencyStrategyMinCAVersionFlag = "FleetEfficiencyStrategy::MinCAV
 
 const ClusterDefaultAllocationStrategyFlag = "AllocationStrategy::DefaultStrategy"
 
+const DefaultAllocationStrategyEnabledFlag = "DefaultAllocationStrategy::Enabled"
+const DefaultAllocationStrategyMinCAVersionFlag = "DefaultAllocationStrategy::MinCAVersion"
+
 const SimshipAutomationApplyCRDMinCAVersionFlag = "SimshipAutomation::ApplyCRDMinCAVersion"
 const SimshipAutomationApplyCRDEnabledFlag = "SimshipAutomation::ApplyCRDEnabled"
 const SimshipAutomationBigRedButtonFlag = "SimshipAutomation::BigRedButton"
@@ -225,3 +246,8 @@ const DefaultReservedResourcesEnabledFlag = "DefaultReservedResources::Enabled"
 const DefaultReservedResourcesMinCAVersionFlag = "DefaultReservedResources::MinCAVersion"
 const AutopilotNapDefaultFallbackEnabledFlag = "AutopilotNapDefaultFallback::Enabled"
 const AutopilotNapDefaultFallbackMinCAVersionFlag = "AutopilotNapDefaultFallback::MinCAVersion"
+
+const BalloonPodIpprResizeFlag = "Autopilot::BalloonPodIpprResize"
+
+const PayPerPodFleetEfficiencyEnabledFlag = "PayPerPodFleetEfficiency::Enabled"
+const PayPerPodFleetEfficiencyMinCAVersionFlag = "PayPerPodFleetEfficiency::MinCAVersion"

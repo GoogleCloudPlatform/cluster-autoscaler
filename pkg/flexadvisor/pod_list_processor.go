@@ -18,6 +18,7 @@ import (
 	"context"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -64,10 +65,11 @@ func (p *PodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_conte
 	if !IsFlexAdvisorProcessingEnabled(p.experimentsManager) {
 		return unschedulablePods, nil
 	}
+	isAutopilot := isAutopilotEnabled(autoscalingCtx)
 	registeredKeys := make(map[string]bool)
 	failures := 0
 	for _, pod := range unschedulablePods {
-		key, found := p.flexibilityScopeKeyFromPod(pod)
+		key, found := p.flexibilityScopeKeyFromPod(pod, isAutopilot)
 		if !found || registeredKeys[key] {
 			continue
 		}
@@ -85,10 +87,21 @@ func (p *PodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_conte
 func (p *PodListProcessor) CleanUp() {
 }
 
-func (p *PodListProcessor) flexibilityScopeKeyFromPod(pod *apiv1.Pod) (string, bool) {
-	_, key, _ := p.cccLister.PodCrd(pod)
-	if key == "" {
-		return key, false
+func isAutopilotEnabled(autoscalingCtx *ca_context.AutoscalingContext) bool {
+	if autoscalingCtx == nil || autoscalingCtx.CloudProvider == nil {
+		return false
 	}
-	return key, true
+	gkeCp, ok := autoscalingCtx.CloudProvider.(interface{ IsAutopilotEnabled() bool })
+	return ok && gkeCp.IsAutopilotEnabled()
+}
+
+func (p *PodListProcessor) flexibilityScopeKeyFromPod(pod *apiv1.Pod, isAutopilot bool) (string, bool) {
+	_, key, _ := p.cccLister.PodCrd(pod)
+	if key != "" {
+		return key, true
+	}
+	if isAutopilot && experiments.IsPayPerPodFleetEfficiencyEnabled(p.experimentsManager) {
+		return billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod)
+	}
+	return "", false
 }

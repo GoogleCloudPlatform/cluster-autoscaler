@@ -1469,22 +1469,7 @@ func TestMatchingCrd(t *testing.T) {
 		if err != nil {
 			klog.Fatalf("failed to convert %s to PCC: %v", name, err)
 		}
-		var priorities []v1.Priority
-		for _, family := range pcc.MachineFamilies() {
-			familyRef := family.Name()
-			priorities = append(priorities, v1.Priority{
-				MachineFamily: &familyRef,
-			})
-		}
-		ccScaleOut := &v1.ComputeClass{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: name,
-			},
-			Spec: v1.ComputeClassSpec{
-				Priorities: priorities,
-			},
-		}
-		return ccc.NewCccCrd(ccScaleOut, "project1", provider.IsAutopilotEnabled(), provider, optionsTracker)
+		return ccc.NewPccCrd(pcc, "project1", provider.IsAutopilotEnabled(), provider, optionsTracker)
 	}
 
 	testCases := map[string]struct {
@@ -2136,6 +2121,137 @@ func TestNewPredefinedComputeClassCrd(t *testing.T) {
 				}
 			}
 			assert.ElementsMatch(t, tc.wantFamilies, families)
+		})
+	}
+}
+
+func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
+	testCases := []struct {
+		name                  string
+		flexibilityScopeKey   string
+		autopilotEnabled      bool
+		payPerPodEnabled      bool
+		wantErr               bool
+		wantPodFamily         string
+		wantGroupedRulesCount int
+		wantFleetEfficiency   bool
+	}{
+		{
+			name:                  "general-purpose on Autopilot with PayPerPodFleetEfficiency enabled",
+			flexibilityScopeKey:   rules.GeneralPurposePodFamily,
+			autopilotEnabled:      true,
+			payPerPodEnabled:      true,
+			wantPodFamily:         rules.GeneralPurposePodFamily,
+			wantGroupedRulesCount: 1,
+			wantFleetEfficiency:   true,
+		},
+		{
+			name:                  "general-purpose-arm on Autopilot with PayPerPodFleetEfficiency enabled",
+			flexibilityScopeKey:   rules.GeneralPurposeArmPodFamily,
+			autopilotEnabled:      true,
+			payPerPodEnabled:      true,
+			wantPodFamily:         rules.GeneralPurposeArmPodFamily,
+			wantGroupedRulesCount: 1,
+			wantFleetEfficiency:   true,
+		},
+		{
+			name:                "general-purpose on Autopilot with PayPerPodFleetEfficiency disabled returns error",
+			flexibilityScopeKey: rules.GeneralPurposePodFamily,
+			autopilotEnabled:    true,
+			payPerPodEnabled:    false,
+			wantErr:             true,
+		},
+		{
+			name:                "general-purpose on Standard cluster with PayPerPodFleetEfficiency enabled returns error",
+			flexibilityScopeKey: rules.GeneralPurposePodFamily,
+			autopilotEnabled:    false,
+			payPerPodEnabled:    true,
+			wantErr:             true,
+		},
+		{
+			name:                  "Balanced PCC on Autopilot with PayPerPodFleetEfficiency enabled groups rules at same priorityScore",
+			flexibilityScopeKey:   "Balanced",
+			autopilotEnabled:      true,
+			payPerPodEnabled:      true,
+			wantGroupedRulesCount: 1,
+			wantFleetEfficiency:   true,
+		},
+		{
+			name:                  "Scale-Out PCC on Autopilot with PayPerPodFleetEfficiency enabled groups rules at same priorityScore",
+			flexibilityScopeKey:   "Scale-Out",
+			autopilotEnabled:      true,
+			payPerPodEnabled:      true,
+			wantGroupedRulesCount: 1,
+			wantFleetEfficiency:   true,
+		},
+		{
+			name:                  "Balanced PCC on Autopilot with PayPerPodFleetEfficiency disabled keeps rules in separate groups",
+			flexibilityScopeKey:   "Balanced",
+			autopilotEnabled:      true,
+			payPerPodEnabled:      false,
+			wantGroupedRulesCount: 2,
+			wantFleetEfficiency:   false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := newMockInstanceConfigCloudProvider(
+				[]string{"us-west1-a", "us-west1-b"},
+				nil,
+				machinetypes.E2,
+				true,
+				nil,
+				withAutopilotEnabled(tc.autopilotEnabled),
+			)
+			boolFlags := map[string]bool{
+				experiments.FlexAdvisorPCCSupportEnabledFlag:      true,
+				experiments.FlexAdvisorPCCSupportMinCAVersionFlag: true,
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:   true,
+			}
+			if tc.payPerPodEnabled {
+				boolFlags[experiments.PayPerPodFleetEfficiencyMinCAVersionFlag] = true
+			}
+			optionsTracker := optstracking.FakeOptionsTracker(
+				options.AutoscalingOptions{},
+				gkeclient.Cluster{},
+				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
+			)
+			g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{}), provider, optionsTracker)
+			matchedCrd, err := g.matchingCrd(tc.flexibilityScopeKey)
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Nil(t, matchedCrd)
+				return
+			}
+			assert.NoError(t, err)
+			assert.NotNil(t, matchedCrd)
+			assert.Equal(t, tc.flexibilityScopeKey, matchedCrd.Name())
+			assert.Len(t, matchedCrd.GroupedRules(), tc.wantGroupedRulesCount)
+
+			for _, r := range matchedCrd.Rules() {
+				if tc.wantPodFamily != "" {
+					assert.Equal(t, tc.wantPodFamily, r.PodFamilyName())
+				}
+				if sr, ok := r.(rules.AllocationStrategyRule); ok {
+					if tc.wantFleetEfficiency {
+						assert.NotNil(t, sr.AllocationStrategy())
+						assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
+					} else {
+						assert.Nil(t, sr.AllocationStrategy())
+					}
+				}
+			}
+
+			artifacts, genErrs := g.generateInstanceConfigs(tc.flexibilityScopeKey)
+			assert.Empty(t, genErrs)
+			assert.NotNil(t, artifacts)
+			assert.NotEmpty(t, artifacts.Configs)
+			for _, cfg := range artifacts.Configs {
+				if tc.wantGroupedRulesCount == 1 {
+					assert.Equal(t, 1, cfg.Rank())
+				}
+			}
 		})
 	}
 }

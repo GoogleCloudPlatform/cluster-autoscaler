@@ -89,12 +89,14 @@ type AutoprovisioningNodeGroupManager struct {
 	reservationBlocksPuller *reservations.BlocksPuller
 	machineSelector         machineselection.Selector
 	computeClassLister      computeclass_lister.Lister
+	experimentsManager      experiments.Manager
 
-	provisioningLabelEnabled         bool
-	tpuAutoprovisioningEnabled       bool
-	asyncNodeGroupDeletionEnabled    bool
-	enableUserAnyZoneSelection       bool
-	maxAutoprovisionedNodeGroupCount int
+	provisioningLabelEnabled                bool
+	tpuAutoprovisioningEnabled              bool
+	asyncNodeGroupDeletionEnabled           bool
+	enableUserAnyZoneSelection              bool
+	reservationSubBlockDeduplicationEnabled bool
+	maxAutoprovisionedNodeGroupCount        int
 
 	specGenerators                  []NodePoolSpecGenerator
 	nodeGroupRequirementsGenerators []NodeGroupRequirementsGenerator
@@ -144,7 +146,8 @@ type ReservationFlags struct {
 	SpecificTypeReservationsEnabled     bool
 	// ReservationsAnyLocationPolicyOverride  Whether to enforce location policy ANY in NAP managed node groups using reservations.
 	// It is used e.g. to query Recommend Locations API before every scale-up, as it has the knowledge about all (even cross org) reservations."
-	ReservationsAnyLocationPolicyOverride bool
+	ReservationsAnyLocationPolicyOverride   bool
+	ReservationSubBlockDeduplicationEnabled bool
 }
 
 // NewAutoprovisioningNodeGroupManager creates a new instance of AutoprovisioningNodeGroupManager.
@@ -247,22 +250,24 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 	}
 	opts.CloudProvider.RegisterNodePoolSpecBuilders(nodePoolBuilders)
 	return &AutoprovisioningNodeGroupManager{
-		cloudProvider:                    opts.CloudProvider,
-		nodeGroupBackoff:                 opts.Backoff,
-		scaleBlockingProcessor:           opts.ScaleBlockingProcessor,
-		reservationsPuller:               opts.ReservationsPuller,
-		machineSelector:                  machineSelector,
-		provisioningLabelEnabled:         opts.Flags.ProvisioningLabelEnabled,
-		tpuAutoprovisioningEnabled:       opts.Flags.TpuAutoprovisioningEnabled,
-		asyncNodeGroupDeletionEnabled:    opts.Flags.AsyncNodeGroupsDeletionEnabled,
-		enableUserAnyZoneSelection:       opts.Flags.EnableUserAnyZoneSelection,
-		specGenerators:                   specGenerators,
-		nodeGroupRequirementsGenerators:  nodeGroupRequirementsGenerators,
-		nodeGroupOptionsGenerators:       nodeGroupOptionsGenerators,
-		computeClassLister:               opts.Lister,
-		maxAutoprovisionedNodeGroupCount: opts.MaxAutoprovisionedNodeGroupCount,
-		mutationInjector:                 opts.MutationInjector,
-		randInt:                          rand.Intn,
+		cloudProvider:                           opts.CloudProvider,
+		nodeGroupBackoff:                        opts.Backoff,
+		scaleBlockingProcessor:                  opts.ScaleBlockingProcessor,
+		reservationsPuller:                      opts.ReservationsPuller,
+		machineSelector:                         machineSelector,
+		provisioningLabelEnabled:                opts.Flags.ProvisioningLabelEnabled,
+		tpuAutoprovisioningEnabled:              opts.Flags.TpuAutoprovisioningEnabled,
+		asyncNodeGroupDeletionEnabled:           opts.Flags.AsyncNodeGroupsDeletionEnabled,
+		enableUserAnyZoneSelection:              opts.Flags.EnableUserAnyZoneSelection,
+		reservationSubBlockDeduplicationEnabled: opts.Flags.ReservationSubBlockDeduplicationEnabled,
+		specGenerators:                          specGenerators,
+		nodeGroupRequirementsGenerators:         nodeGroupRequirementsGenerators,
+		nodeGroupOptionsGenerators:              nodeGroupOptionsGenerators,
+		computeClassLister:                      opts.Lister,
+		experimentsManager:                      opts.ExperimentsManager,
+		maxAutoprovisionedNodeGroupCount:        opts.MaxAutoprovisionedNodeGroupCount,
+		mutationInjector:                        opts.MutationInjector,
+		randInt:                                 rand.Intn,
 	}
 }
 

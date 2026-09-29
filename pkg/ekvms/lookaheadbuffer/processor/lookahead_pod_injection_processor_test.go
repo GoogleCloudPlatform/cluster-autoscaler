@@ -43,6 +43,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 
@@ -97,7 +98,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "One default workload ID EK node with custom taint - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    "user-taint",
 						Value:  "true",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -112,7 +113,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "One default workload ID EK node with ignored taint",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    "status-taint",
 						Value:  "true",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -213,14 +214,14 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "Autopilot compute class nodes",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 2000, 2000)).WithTaint(apiv1.Taint{
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 2000, 2000)).WithTaint(apiv1.Taint{
 					Key:    gkelabels.ComputeClassLabel,
 					Value:  "autopilot",
 					Effect: apiv1.TaintEffectNoSchedule,
 				}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
 					test.BuildTestPod("pod-1", 2000, 2*size.GiB),
 				),
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode8("ek-node-2", 1000, 1000)).WithTaint(apiv1.Taint{
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8("ek-node-2", 1000, 1000)).WithTaint(apiv1.Taint{
 					Key:    gkelabels.ComputeClassLabel,
 					Value:  "autopilot-spot", // Pods on autopilot-spot Compute Class aren't eligible for lookahead.
 					Effect: apiv1.TaintEffectNoSchedule,
@@ -255,7 +256,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "Can combine workload separation and CCC",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
 					WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
@@ -290,7 +291,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		{
 			desc: "autopilot managed node taint doesn't prevent lookahead",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
+				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
 					WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
@@ -326,7 +327,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "spot EK node - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilder("ek-spot", 32, 128).
+					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
 						WithLabel(gkelabels.SpotLabel, gkelabels.PreemptionValue).Build(),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
@@ -338,7 +339,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "preemptible EK node - skipped",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilder("ek-spot", 32, 128).
+					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
 						WithLabel(gkelabels.PreemptibleLabel, gkelabels.PreemptionValue).Build(),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
@@ -521,7 +522,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "tainted node",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "taint-key",
 				Value:  "taint-value",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -531,7 +532,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "node with ignored taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "status-taint",
 				Value:  "true",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -541,7 +542,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -551,7 +552,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation with ignored taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -565,7 +566,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "workload separation with extra taint",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    "workload-separation",
 				Value:  "yes",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -579,7 +580,7 @@ func TestHasSupportedTaints(t *testing.T) {
 		},
 		{
 			name: "ccc is a type of workload separation",
-			node: ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
+			node: ekvms_test.NewNodeBuilder("node-1", 1000, 1000).WithTaint(apiv1.Taint{
 				Key:    gkelabels.ComputeClassLabel,
 				Value:  "autopilot",
 				Effect: apiv1.TaintEffectNoSchedule,
@@ -803,7 +804,7 @@ func TestProcess(t *testing.T) {
 
 	testCases := []struct {
 		desc                   string
-		launchStatus           lookaheadbuffer.Status
+		launchStatus           lookaheadbuffer_strategy.Status
 		maxWorkloadSeparations int
 		crds                   []crd.CRD
 		nodeInfos              []*framework.NodeInfo
@@ -815,7 +816,7 @@ func TestProcess(t *testing.T) {
 	}{
 		{
 			desc:                   "No nodes",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos:              []*framework.NodeInfo{},
 			unschedulablePods:      []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
@@ -825,7 +826,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "Non-EK nodes",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -842,7 +843,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - Not enough EK pod requests for lookahead pods",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -859,7 +860,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -878,7 +879,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID - only default chosen due to maxWorkloadSeparations limit",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 0,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -896,7 +897,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in three workload IDs - limited to default and 1 extra workload separation",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 1,
 			crds: []crd.CRD{
 				npc_crd.NewTestCrd(
@@ -915,14 +916,14 @@ func TestProcess(t *testing.T) {
 					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
 					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
@@ -939,7 +940,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - Lookahead disabled",
-			launchStatus:           lookaheadbuffer.Disabled,
+			launchStatus:           lookaheadbuffer_strategy.Disabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -953,7 +954,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - Status Unspecified",
-			launchStatus:           lookaheadbuffer.Unspecified,
+			launchStatus:           lookaheadbuffer_strategy.Unspecified,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -967,7 +968,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID - DS with 2 containers each 200 mCPU 200 bytes",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -989,7 +990,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - DS with 0 containers",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -1007,7 +1008,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - 32 default EK CPUs - DS bigger than lookahead pod - no error",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -1024,7 +1025,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "EKs in one workload ID - 32 default EK CPUs - error during fetching daemonSets",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -1039,7 +1040,7 @@ func TestProcess(t *testing.T) {
 		},
 		{
 			desc:                   "Mixed nodes - 64 default EK CPUs",
-			launchStatus:           lookaheadbuffer.Enabled,
+			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
@@ -1101,9 +1102,9 @@ func TestProcess(t *testing.T) {
 
 			laPodProvider := fakeLookaheadPodProvider{}
 			strategyProvider := &mockStrategyProvider{}
-			strategyProvider.On("Strategy").Return(lookaheadbuffer.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
+			strategyProvider.On("Strategy").Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
 
-			metrics := &lookaheadbuffer.MockMetrics{}
+			metrics := &mockMetrics{}
 			metrics.On("UpdateLookaheadPodsCount", mock.Anything).Once()
 
 			cccLister := lister.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
@@ -1132,24 +1133,24 @@ func TestProcess(t *testing.T) {
 func TestProcessMetricsOnErrors(t *testing.T) {
 	testCases := []struct {
 		desc             string
-		launchStatus     lookaheadbuffer.Status
+		launchStatus     lookaheadbuffer_strategy.Status
 		calculatorErr    error
 		listNodeInfosErr error
 		expectedErr      string
 	}{
 		{
 			desc:         "Processor Disabled - emits empty metric",
-			launchStatus: lookaheadbuffer.Disabled,
+			launchStatus: lookaheadbuffer_strategy.Disabled,
 		},
 		{
 			desc:          "Nil sampleNode - emits empty metric and returns error",
-			launchStatus:  lookaheadbuffer.Enabled,
+			launchStatus:  lookaheadbuffer_strategy.Enabled,
 			calculatorErr: errors.New("calculator error"),
 			expectedErr:   "sample node is nil",
 		},
 		{
 			desc:             "ListNodeInfos error - emits empty metric and returns error",
-			launchStatus:     lookaheadbuffer.Enabled,
+			launchStatus:     lookaheadbuffer_strategy.Enabled,
 			listNodeInfosErr: errors.New("snapshot error"),
 			expectedErr:      "failed to list nodeInfos",
 		},
@@ -1158,9 +1159,9 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			strategyProvider := &mockStrategyProvider{}
-			strategyProvider.On("Strategy").Return(lookaheadbuffer.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
+			strategyProvider.On("Strategy").Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
 
-			metrics := &lookaheadbuffer.MockMetrics{}
+			metrics := &mockMetrics{}
 			// Expect nil for empty map from UpdateLookaheadPodsCount
 			metrics.On("UpdateLookaheadPodsCount", map[size.Allocatable]int{}).Once()
 
@@ -1255,7 +1256,7 @@ func TestEmitLookaheadPodsCountMetric(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			metricsMock := &lookaheadbuffer.MockMetrics{}
+			metricsMock := &mockMetrics{}
 			p := &LookaheadPodInjectionProcessor{
 				metrics: metricsMock,
 			}
@@ -1434,7 +1435,7 @@ func (s *fakeLookaheadPodProvider) GetLookaheadPods(cpus int, workloadID string)
 }
 
 func ekNode32WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode32(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,
@@ -1442,7 +1443,7 @@ func ekNode32WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.N
 }
 
 func ekNode8WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewResizableNodeBuilderFromNode(ekvms_test.EkNode8(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,
@@ -1535,9 +1536,9 @@ func (m *mockStrategyProvider) RefreshStrategy() {}
 
 func (m *mockStrategyProvider) SetEkResizingEnabled(bool) {}
 
-func (m *mockStrategyProvider) Strategy() (lookaheadbuffer.LookaheadPodStrategy, error) {
+func (m *mockStrategyProvider) Strategy() (lookaheadbuffer_strategy.LookaheadPodStrategy, error) {
 	args := m.Called()
-	return args.Get(0).(lookaheadbuffer.LookaheadPodStrategy), args.Error(1)
+	return args.Get(0).(lookaheadbuffer_strategy.LookaheadPodStrategy), args.Error(1)
 }
 
 type mockWorkloadSeparationLimiter struct {
@@ -1564,4 +1565,12 @@ type mockSnapshot struct {
 
 func (m *mockSnapshot) ListNodeInfos() ([]*framework.NodeInfo, error) {
 	return nil, m.listNodeInfosErr
+}
+
+type mockMetrics struct {
+	mock.Mock
+}
+
+func (m *mockMetrics) UpdateLookaheadPodsCount(laPodsCount map[size.Allocatable]int) {
+	m.MethodCalled("UpdateLookaheadPodsCount", laPodsCount)
 }

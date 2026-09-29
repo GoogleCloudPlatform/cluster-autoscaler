@@ -45,6 +45,7 @@ func TestNodeSystemConfig(t *testing.T) {
 	allowedUnsafeSysctls := []string{"kernel.shm*", "kernel.msg*", "kernel.sem", "fs.mqueue.*", "net.*"}
 	maxParallelImagePulls := int64(5)
 	singleProcessOOMKill := true
+	insecureKubeletReadonlyPortEnabled := true
 	containerLogMaxWorkers := int64(4)
 	containerLogMonitorInterval := "10s"
 
@@ -309,20 +310,21 @@ func TestNodeSystemConfig(t *testing.T) {
 			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
 				MachineType: nonDefaultMachineType,
 				KubeletConfig: &gkeclient.NodeKubeletConfig{
-					CpuCfsQuota:                 cpuCfsQuota,
-					CpuCfsQuotaPeriod:           cpuCfsQuotaPeriod,
-					CpuManagerPolicy:            cpuManagerPolicy,
-					ImageGcLowThresholdPercent:  imageGcLowThresholdPercent,
-					ImageGcHighThresholdPercent: imageGcHighThresholdPercent,
-					ImageMinimumGcAge:           imageMinimumGcAge,
-					ImageMaximumGcAge:           imageMaximumGcAge,
-					ContainerLogMaxFiles:        containerLogMaxFiles,
-					ContainerLogMaxSize:         containerLogMaxSize,
-					ContainerLogMaxWorkers:      containerLogMaxWorkers,
-					ContainerLogMonitorInterval: containerLogMonitorInterval,
-					AllowedUnsafeSysctls:        allowedUnsafeSysctls,
-					MaxParallelImagePulls:       maxParallelImagePulls,
-					SingleProcessOomKill:        singleProcessOOMKill,
+					CpuCfsQuota:                        cpuCfsQuota,
+					CpuCfsQuotaPeriod:                  cpuCfsQuotaPeriod,
+					CpuManagerPolicy:                   cpuManagerPolicy,
+					ImageGcLowThresholdPercent:         imageGcLowThresholdPercent,
+					ImageGcHighThresholdPercent:        imageGcHighThresholdPercent,
+					ImageMinimumGcAge:                  imageMinimumGcAge,
+					ImageMaximumGcAge:                  imageMaximumGcAge,
+					ContainerLogMaxFiles:               containerLogMaxFiles,
+					ContainerLogMaxSize:                containerLogMaxSize,
+					ContainerLogMaxWorkers:             containerLogMaxWorkers,
+					ContainerLogMonitorInterval:        containerLogMonitorInterval,
+					AllowedUnsafeSysctls:               allowedUnsafeSysctls,
+					MaxParallelImagePulls:              maxParallelImagePulls,
+					SingleProcessOomKill:               singleProcessOOMKill,
+					InsecureKubeletReadonlyPortEnabled: insecureKubeletReadonlyPortEnabled,
 					EvictionSoft: &gkeclient.EvictionSignals{
 						MemoryAvailable:   evictionSoftMemoryAvailable,
 						NodefsAvailable:   evictionSoftNodefsAvailable,
@@ -378,6 +380,7 @@ func TestNodeSystemConfig(t *testing.T) {
 				WithAllowedUnsafeSysctlsRule(allowedUnsafeSysctls),
 				WithMaxParallelImagePullsRule(maxParallelImagePulls),
 				WithSingleProcessOOMKill(singleProcessOOMKill),
+				WithInsecureKubeletReadonlyPortEnabledRule(insecureKubeletReadonlyPortEnabled),
 				WithEvictionSoftMemoryAvailableRule(evictionSoftMemoryAvailable),
 				WithEvictionSoftNodefsAvailableRule(evictionSoftNodefsAvailable),
 				WithEvictionSoftImagefsAvailableRule(evictionSoftImagefsAvailable),
@@ -437,6 +440,48 @@ func TestNodeSystemConfig(t *testing.T) {
 				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
 			),
 			expected: true,
+		},
+		{
+			name: "rule with InsecureKubeletReadonlyPortEnabled, node group with same - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					InsecureKubeletReadonlyPortEnabled: true,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithInsecureKubeletReadonlyPortEnabledRule(true),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with InsecureKubeletReadonlyPortEnabled true, node group with false - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					InsecureKubeletReadonlyPortEnabled: false,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithInsecureKubeletReadonlyPortEnabledRule(true),
+			),
+			expected: false,
+		},
+		{
+			name: "rule with InsecureKubeletReadonlyPortEnabled false, node group with true - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					InsecureKubeletReadonlyPortEnabled: true,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithInsecureKubeletReadonlyPortEnabledRule(false),
+			),
+			expected: false,
 		},
 		{
 			name: "rule with hugepages, node group without hugepages - non matching",

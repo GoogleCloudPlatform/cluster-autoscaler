@@ -39,7 +39,7 @@ func NewClientAdapter(c clientset.Interface) *ClientAdapter {
 	return &ClientAdapter{clientSet: c}
 }
 
-func (c *ClientAdapter) IsSuspensionBlocked(ctx context.Context, nodeName string) (bool, error) {
+func (c *ClientAdapter) IsWorkloadPresent(ctx context.Context, nodeName string) (bool, error) {
 	pods, err := c.clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		FieldSelector: fmt.Sprintf("spec.nodeName=%s", nodeName),
 	})
@@ -70,6 +70,19 @@ func (c *ClientAdapter) ApplyNodePatch(ctx context.Context, node *v1.Node, desir
 		return true, nil
 	}
 	if _, err := utils.PatchNode(ctx, c.clientSet, node, patcher, true); err != nil {
+		return fmt.Errorf("k8s patch request for node %s returned error: %w", node.Name, err)
+	}
+	return nil
+}
+
+// RemoveSuspensionSchedulingConstraints removes the suspended taint from the
+// node along with the cordon that comes with it.
+// K8s patch request is not sent if the node doesn't have the taint.
+func (c *ClientAdapter) RemoveSuspensionSchedulingConstraints(ctx context.Context, node *v1.Node) error {
+	patcher := func(n *v1.Node) (bool, error) {
+		return csn.RemoveSuspensionSchedulingConstraints(n), nil
+	}
+	if _, err := utils.PatchNode(ctx, c.clientSet, node, patcher, false); err != nil {
 		return fmt.Errorf("k8s patch request for node %s returned error: %w", node.Name, err)
 	}
 	return nil

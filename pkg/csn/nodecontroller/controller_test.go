@@ -34,7 +34,9 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
+	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
@@ -177,6 +179,14 @@ func TestReconciliation(t *testing.T) {
 			withCloudProvider(&test.MockCloudProvider{
 				NodeNameToMIG: map[string]*gke.GkeMig{chillingNode.Name: mig, suspendedNode.Name: mig},
 				Instances:     instanceForRef,
+				// Consumption only runs once resumeNode is set, by which point
+				// GCE reports the instance as running again.
+				ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					mig.GceRef(): {
+						test.ManagedInstance(chillingNode.Name, "RUNNING"),
+						test.ManagedInstance(suspendedNode.Name, "RUNNING"),
+					},
+				},
 			}),
 			withSkipCacheSync(),
 		)
@@ -307,6 +317,9 @@ func TestList_PendingOperations(t *testing.T) {
 				Instances: func(gce.GceRef) *gce.GceInstance {
 					return &gce.GceInstance{GCEStatus: "RUNNING"}
 				},
+				ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					mig.GceRef(): {test.ManagedInstance(node.Name, "RUNNING")},
+				},
 			}),
 			withSkipCacheSync(),
 		)
@@ -364,16 +377,19 @@ func TestConsume(t *testing.T) {
 				mig := gke.NewTestGkeMigBuilder().
 					SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}).
 					Build()
+				instanceStatus := "RUNNING"
+				if tc.expectResume {
+					instanceStatus = "SUSPENDED"
+				}
 				c, suite := createSuite(t,
 					withInitialNodes(tc.node),
 					withCloudProvider(&test.MockCloudProvider{
 						NodeNameToMIG: map[string]*gke.GkeMig{tc.node.Name: mig},
 						Instances: func(gce.GceRef) *gce.GceInstance {
-							status := "RUNNING"
-							if tc.expectResume {
-								status = "SUSPENDED"
-							}
-							return &gce.GceInstance{GCEStatus: status}
+							return &gce.GceInstance{GCEStatus: instanceStatus}
+						},
+						ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+							mig.GceRef(): {test.ManagedInstance(tc.node.Name, instanceStatus)},
 						},
 					}),
 					withSkipCacheSync(),
@@ -388,7 +404,9 @@ func TestConsume(t *testing.T) {
 				assert.Equal(t, nodes[0].Name, tc.node.Name)
 
 				// Consume the node
-				patchChan := mustGetPatchWaitChannel(t, suite.ClientSet, 1)
+				// The suspended taint and cordon may be removed in a patch of their own before
+				// the consume patch, so wait for the state rather than for a patch count.
+				patchChan := mustGetNodeStateWaitChannel(t, suite.ClientSet, tc.node.Name, csn.NodeStateConsumed)
 				consumed := c.Consume([]string{tc.node.Name})
 				assert.ElementsMatch(t, []string{tc.node.Name}, consumed.UnsortedList())
 
@@ -548,6 +566,9 @@ func TestMarkAsSuspendable(t *testing.T) {
 						Instances: func(gce.GceRef) *gce.GceInstance {
 							return &gce.GceInstance{GCEStatus: "RUNNING"}
 						},
+						ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+							mig.GceRef(): {test.ManagedInstance(tc.node.Name, "RUNNING")},
+						},
 					}),
 				)
 				synctest.Wait()
@@ -667,6 +688,7 @@ type controllerTestSuite struct {
 	ClientSet            kubernetes.Interface
 	CloudProvider        *test.MockCloudProvider
 	Backoff              handler.CSNCompositeBackoff
+	Recorder             *kube_record.FakeRecorder
 	skipCacheSync        bool
 	csnBackoffExperiment bool
 }
@@ -709,10 +731,11 @@ func withSkipCacheSync() suiteOpt {
 
 // createSuite configures and runs a CSN Node Controller. The controller
 // makes use of dependencies destined to be used in unit tests.
-func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controllerTestSuite) {
+func createSuite(t *testing.T, opts ...suiteOpt) (*CSNNodeController, controllerTestSuite) {
 	suite := controllerTestSuite{
 		ClientSet:     fake.NewSimpleClientset(),
 		CloudProvider: &test.MockCloudProvider{},
+		Recorder:      kube_record.NewFakeRecorder(100),
 	}
 	for _, opt := range opts {
 		opt(&suite)
@@ -721,14 +744,15 @@ func createSuite(t *testing.T, opts ...suiteOpt) (*csnNodeController, controller
 	experimentsManager := experiments.NewMockManagerWithOptions(
 		version.Version{},
 		map[string]bool{
-			experiments.ColdStandbyNodesBackoffMinCAVersionFlag: suite.csnBackoffExperiment,
+			experiments.ColdStandbyNodesBackoffMinCAVersionFlag:      suite.csnBackoffExperiment,
+			experiments.ColdStandbyNodesEmitNodeControllerEventsFlag: true,
 		},
 		map[string]string{
 			experiments.ColdStandbyNodesControllerConfigV1Flag: cfg.ExampleControllerJSON,
 		},
 	)
 	factory := informers.NewSharedInformerFactory(suite.ClientSet, 0)
-	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager, suite.Backoff)
+	c := NewCSNNodeController(factory, suite.ClientSet, suite.CloudProvider, experimentsManager, suite.Backoff, suite.Recorder)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		cancel()
@@ -768,6 +792,37 @@ func mustGetPatchWaitChannel(t *testing.T, client kubernetes.Interface, patchCou
 		patchChan <- true
 	}()
 	return patchChan
+}
+
+// mustGetNodeStateWaitChannel returns a channel that receives true once the
+// node is updated into the given state, however many patches it takes.
+func mustGetNodeStateWaitChannel(t *testing.T, client kubernetes.Interface, nodeName string, state csn.NodeState) <-chan bool {
+	stateChan := make(chan bool, 1)
+	watcher, err := client.CoreV1().Nodes().Watch(t.Context(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("failed to setup watch: %v", err)
+	}
+
+	go func() {
+		defer close(stateChan)
+		defer watcher.Stop()
+		for {
+			select {
+			case event, ok := <-watcher.ResultChan():
+				if !ok {
+					return
+				}
+				node, isNode := event.Object.(*v1.Node)
+				if event.Type == watch.Modified && isNode && node.Name == nodeName && csn.ClassifyNode(node) == state {
+					stateChan <- true
+					return
+				}
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+	return stateChan
 }
 
 func mustWaitForPatches(t *testing.T, patchChan <-chan bool) {
@@ -941,4 +996,109 @@ func TestCustomCallerFilters(t *testing.T) {
 		}
 		assert.ElementsMatch(t, []string{"n3"}, names)
 	})
+}
+
+func TestInitWithMaxRetriesByOp(t *testing.T) {
+	experimentsManager := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		nil,
+		map[string]string{
+			experiments.ColdStandbyNodesControllerConfigV1Flag: `{
+				"dispatcher": {
+					"workerCount": 10,
+					"retry": {
+						"maxRetries": 6,
+						"maxRetriesByOp": {
+							"CONSUME": 0,
+							"SUSPEND": 3,
+							"INVALID_OP": 5
+						}
+					}
+				}
+			}`,
+		},
+	)
+	factory := informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0)
+	c := NewCSNNodeController(factory, fake.NewSimpleClientset(), &test.MockCloudProvider{}, experimentsManager, &test.MockBackoff{}, kube_record.NewFakeRecorder(100))
+
+	assert.NotNil(t, c.dispatcher)
+	// We can't easily inspect c.dispatcher.backoffManager.config because it's private/unexported
+	// from the dispatcher pkg. But we can assert the config parsed by Provider matches what we expect
+	// and was passed through.
+	assert.Equal(t, 6, c.cfg.Dispatcher.Retry.MaxRetries)
+	assert.Equal(t, map[string]int{
+		"CONSUME":    0,
+		"SUSPEND":    3,
+		"INVALID_OP": 5,
+	}, c.cfg.Dispatcher.Retry.MaxRetriesByOp)
+}
+
+func TestPermanentFailure(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		node := test.CreateNode("node-to-suspend", test.StateOpt(csn.NodeStateChilling), func(n *v1.Node) {
+			n.CreationTimestamp = metav1.Time{Time: time.Now().Add(-15 * time.Minute)}
+		})
+		mig := gke.NewTestGkeMigBuilder().
+			SetGceRef(gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}).
+			Build()
+
+		c, suite := createSuite(t,
+			withInitialNodes(node),
+			withCloudProvider(&test.MockCloudProvider{
+				NodeNameToMIG: map[string]*gke.GkeMig{node.Name: mig},
+				Instances: func(gce.GceRef) *gce.GceInstance {
+					return &gce.GceInstance{GCEStatus: "RUNNING"}
+				},
+				SuspendErr: fmt.Errorf("injected suspend error"),
+			}),
+			withSkipCacheSync(),
+		)
+		synctest.Wait()
+
+		// Trigger suspension
+		nodes := []*framework.NodeInfo{framework.NewTestNodeInfo(node)}
+		_ = c.MarkAsSuspendable(nodes)
+
+		// Wait for dispatcher to execute all retries and fail permanently,
+		// which should enqueue FailNodeOp and patch the node to FAILED.
+		waitForNodeState(t, suite.ClientSet, node.Name, csn.NodeStateFailed)
+		synctest.Wait()
+
+		// Verify the node is marked FAILED in K8s
+		updatedNode, err := suite.ClientSet.CoreV1().Nodes().Get(t.Context(), node.Name, metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.Equal(t, csn.NodeStateFailed, csn.ClassifyNode(updatedNode))
+
+		// Verify it appears in GetFailedNodes()
+		failedNodes := c.GetFailedNodes()
+		assert.ElementsMatch(t, []string{node.Name}, failedNodes)
+	})
+}
+
+func waitForNodeState(t *testing.T, client kubernetes.Interface, nodeName string, expectedState csn.NodeState) {
+	t.Helper()
+	watcher, err := client.CoreV1().Nodes().Watch(t.Context(), metav1.ListOptions{
+		FieldSelector: "metadata.name=" + nodeName,
+	})
+	if err != nil {
+		t.Fatalf("failed to setup watch: %v", err)
+	}
+	defer watcher.Stop()
+
+	for {
+		select {
+		case event, ok := <-watcher.ResultChan():
+			if !ok {
+				t.Fatalf("watcher closed before reaching expected state")
+			}
+			if event.Type == watch.Modified {
+				node := event.Object.(*v1.Node)
+				if csn.ClassifyNode(node) == expectedState {
+					return
+				}
+			}
+		case <-t.Context().Done():
+			t.Fatalf("timeout waiting for node state %s", expectedState)
+		}
+	}
 }

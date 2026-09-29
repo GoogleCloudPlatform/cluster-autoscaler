@@ -16,9 +16,11 @@ package main
 
 import (
 	ctx "context"
+	"flag"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -104,6 +106,10 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 		klog.Fatalf("Failed to create manager: %v", err)
 	}
 
+	if err := mgr.Add(optsTracker.ExperimentsManager()); err != nil {
+		klog.Fatalf("Failed to add experiments manager to manager: %v", err)
+	}
+
 	builder := initBuilder(context, optsTracker, mgr)
 	autoscaler, trigger, err := builder.Build(context, gkeDebuggingSnapshotter, config.OsReservedContent)
 
@@ -134,7 +140,17 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 			default:
 				trigger.Wait(lastRun)
 				lastRun = time.Now()
+
 				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun, iteration)
+
+				// Recompute options only once, at the end of the loop to keep them consistent during the loop execution
+				if err := optsTracker.RecomputeOptions(); err != nil {
+					klog.Fatalf("Failed to recompute autoscaling options: %v", err)
+				}
+				// Sync dynamically updated options from OptionsTracker to the OSS AutoscalingOptions in AutoscalingContext.
+				// This propagation is strictly for fields explicitly configured in OptionsTracker to support dynamic updates without a restart.
+				optsTracker.PropagateDynamicOptions(&autoscaler.AutoscalingOptions)
+
 				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
 				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
 					// TODO(b/409515258): We could just return here, but the cleanup takes ~15 min, exiting with an error is faster.
@@ -171,15 +187,13 @@ func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConf
 		RenewDeadline: metav1.Duration{Duration: defaultRenewDeadline},
 		RetryPeriod:   metav1.Duration{Duration: defaultRetryPeriod},
 		ResourceLock:  resourcelock.LeasesResourceLock,
+		ResourceName:  "cluster-autoscaler",
 	}
 }
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	klog.InitFlags(nil)
-	// Contextual logging is hard-coded to be enabled
-	// This overwrites the default value
-	klog.EnableContextualLogging(false)
 	ctrl.SetLogger(klog.NewKlogr())
 	featureGate := utilfeature.DefaultMutableFeatureGate
 
@@ -205,6 +219,8 @@ func main() {
 	experimentsManager := optstracking.InitExperimentsManager(optionsFromFlags)
 	optsTracker := optstracking.NewOptionsTracker(optionsFromFlags, experimentsManager)
 	options := optsTracker.Options()
+
+	disableContextualLoggingIfHighVerbosity(options.SchedulerVerbosityOffset)
 
 	if options.InterPodAffinityHostnameFastPath != featureGate.Enabled(features.InterPodAffinityHostnameFastPath) {
 		if err := featureGate.SetFromMap(map[string]bool{string(features.InterPodAffinityHostnameFastPath): options.InterPodAffinityHostnameFastPath}); err != nil {
@@ -282,7 +298,7 @@ func main() {
 		lock, err := resourcelock.NewFromKubeconfig(
 			leaderElection.ResourceLock,
 			options.ConfigNamespace,
-			"cluster-autoscaler",
+			leaderElection.ResourceName,
 			resourcelock.ResourceLockConfig{
 				Identity:      id,
 				EventRecorder: kube_util.CreateEventRecorder(ctx.TODO(), kubeClient, options.RecordDuplicatedEvents),
@@ -310,5 +326,29 @@ func main() {
 				},
 			},
 		})
+	}
+}
+
+// disableContextualLoggingIfHighVerbosity checks if scheduler-verbosity is high and disables contextual logging if needed.
+// This is to avoid performance degradation coming from excessive scheduler logging.
+func disableContextualLoggingIfHighVerbosity(schedulerVerbosityOffset int) {
+	vFlag := flag.CommandLine.Lookup("v")
+	if vFlag == nil {
+		klog.Warningf("No flag found for -v, disabling contextual logging to avoid performance degradation")
+		klog.EnableContextualLogging(false)
+		return
+	}
+
+	verbosity, err := strconv.Atoi(vFlag.Value.String())
+	if err != nil {
+		klog.Warningf("Unable to parse -v flag value: %v, disabling contextual logging to avoid performance degradation", vFlag.Value.String())
+		klog.EnableContextualLogging(false)
+		return
+	}
+
+	schedulerVerbosity := verbosity - schedulerVerbosityOffset
+	if schedulerVerbosity > 2 {
+		klog.Warningf("Scheduler verbosity is %d (> 2), disabling contextual logging to avoid performance degradation", schedulerVerbosity)
+		klog.EnableContextualLogging(false)
 	}
 }

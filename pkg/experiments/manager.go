@@ -15,6 +15,7 @@
 package experiments
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +24,14 @@ import (
 	"k8s.io/klog/v2"
 )
 
+type Runnable interface {
+	Start(ctx context.Context) error
+}
+
 // Manager is a convenience interface for checking flag values
 // using common patterns, such as version comparison.
 type Manager interface {
+	Runnable
 	EvaluateMinimumVersionFlagOrFailsafe(flag string, failsafe bool) bool
 	EvaluateBoolFlagOrFailsafe(flag string, failsafe bool) bool
 	EvaluateDurationSecondsFlagOrFailsafe(flag string, failsafe time.Duration) time.Duration
@@ -46,6 +52,16 @@ func NewManager(version version.Version, evaluator Evaluator) *manager {
 		componentVersion: version,
 		evaluator:        evaluator,
 	}
+}
+
+// Start implements manager.Runnable by starting evaluator
+// if it needs to periodically fetch updates
+func (m *manager) Start(ctx context.Context) error {
+	if runnable, ok := m.evaluator.(Runnable); ok {
+		return runnable.Start(ctx)
+	}
+
+	return nil
 }
 
 func (m *manager) UpdateReleaseChannel(releaseChannel string) {

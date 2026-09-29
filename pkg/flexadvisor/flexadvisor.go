@@ -259,6 +259,10 @@ func (f *flexAdvisor) cccState(scope *flexibilityScope) metrics.CccState {
 	if scope == nil {
 		return metrics.CccStateEmpty
 	}
+	if f.instanceConfigGenerator.isPayPerPodPodFamilyScope(scope.flexibilityScopeKey) {
+		// Synthetic podFamily scopes are not backed by a CRD, so there is no resource version to compare against.
+		return metrics.CccStateEmpty
+	}
 	crd, err := f.cccLister.GetCrd(scope.flexibilityScopeKey)
 	if err != nil {
 		klog.Errorf("FlexAdvisor: error getting crd flexibilityScopeKey=%v, err=%v", scope.flexibilityScopeKey, err)
@@ -281,6 +285,10 @@ func (f *flexAdvisor) cccState(scope *flexibilityScope) metrics.CccState {
 func (f *flexAdvisor) isScaleUpAnyway(scope *flexibilityScope) *bool {
 	if scope == nil {
 		return nil
+	}
+	if f.instanceConfigGenerator.isPayPerPodPodFamilyScope(scope.flexibilityScopeKey) {
+		// Synthetic podFamily scopes never use ScaleUpAnyway.
+		return ptr.To(false)
 	}
 	crd, err := f.cccLister.GetCrd(scope.flexibilityScopeKey)
 	if err != nil {

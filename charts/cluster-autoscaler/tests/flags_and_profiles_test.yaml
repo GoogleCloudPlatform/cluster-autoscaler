@@ -101,3 +101,55 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --dry-run
+
+  - it: should dynamically generate experiments-config-map flag by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --experiments-config-map=RELEASE-NAME-cluster-autoscaler-experiments
+
+  - it: should dynamically generate experiments-config-map flag with fullnameOverride
+    set:
+      fullnameOverride: custom-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --experiments-config-map=custom-ca-experiments
+
+  - it: should respect explicitly configured experiments-config-map in flags
+    set:
+      config.flags:
+        experiments-config-map: custom-cm-name
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --experiments-config-map=custom-cm-name
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --experiments-config-map=RELEASE-NAME-cluster-autoscaler-experiments
+
+  - it: should dynamically set namespace flag to Release.Namespace by default
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace=NAMESPACE
+
+  - it: should dynamically set namespace flag with custom Release.Namespace
+    release:
+      namespace: custom-namespace
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace=custom-namespace
+
+  - it: should respect explicitly configured namespace in flags
+    set:
+      config.flags:
+        namespace: explicit-namespace
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace=explicit-namespace
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --namespace=NAMESPACE

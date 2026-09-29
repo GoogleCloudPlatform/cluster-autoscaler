@@ -22,13 +22,14 @@ import (
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 )
 
 func TestGetLookaheadPods(t *testing.T) {
 	for _, tc := range []struct {
 		desc            string
-		laStrategy      LookaheadPodStrategy
+		laStrategy      strategy.LookaheadPodStrategy
 		laStrategyError error
 		targetNodesCPUs int
 		want            []*apiv1.Pod
@@ -36,10 +37,10 @@ func TestGetLookaheadPods(t *testing.T) {
 		{
 			desc:            "enabled status",
 			targetNodesCPUs: 100,
-			laStrategy: LookaheadPodStrategy{
-				Status: Enabled,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Enabled,
+				TieredStrategy: &strategy.TieredStrategy{
+					Tiers: []strategy.Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 8000,
@@ -54,10 +55,10 @@ func TestGetLookaheadPods(t *testing.T) {
 		{
 			desc:            "disabled status",
 			targetNodesCPUs: 100,
-			laStrategy: LookaheadPodStrategy{
-				Status: Disabled,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Disabled,
+				TieredStrategy: &strategy.TieredStrategy{
+					Tiers: []strategy.Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 8000,
@@ -72,10 +73,10 @@ func TestGetLookaheadPods(t *testing.T) {
 		{
 			desc:            "unspecified status",
 			targetNodesCPUs: 100,
-			laStrategy: LookaheadPodStrategy{
-				Status: Unspecified,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Unspecified,
+				TieredStrategy: &strategy.TieredStrategy{
+					Tiers: []strategy.Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 8000,
@@ -96,27 +97,27 @@ func TestGetLookaheadPods(t *testing.T) {
 		{
 			desc:            "no tiered strategy",
 			targetNodesCPUs: 100,
-			laStrategy: LookaheadPodStrategy{
-				Status: Enabled,
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Enabled,
 			},
 			want: nil,
 		},
 		{
 			desc:            "tiered strategy has no tiers",
 			targetNodesCPUs: 100,
-			laStrategy: LookaheadPodStrategy{
-				Status:         Enabled,
-				TieredStrategy: &TieredStrategy{},
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status:         strategy.Enabled,
+				TieredStrategy: &strategy.TieredStrategy{},
 			},
 			want: nil,
 		},
 		{
 			desc:            "1 la pod in first tier",
 			targetNodesCPUs: 50,
-			laStrategy: LookaheadPodStrategy{
-				Status: Enabled,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Enabled,
+				TieredStrategy: &strategy.TieredStrategy{
+					Tiers: []strategy.Tier{
 						{
 							NumLookaheadPods:     2,
 							LookaheadPodMilliCPU: 32000,
@@ -137,10 +138,10 @@ func TestGetLookaheadPods(t *testing.T) {
 		{
 			desc:            "2 la pods in second tier",
 			targetNodesCPUs: 200,
-			laStrategy: LookaheadPodStrategy{
-				Status: Enabled,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
+			laStrategy: strategy.LookaheadPodStrategy{
+				Status: strategy.Enabled,
+				TieredStrategy: &strategy.TieredStrategy{
+					Tiers: []strategy.Tier{
 						{
 							NumLookaheadPods:     2,
 							LookaheadPodMilliCPU: 32000,
@@ -174,13 +175,13 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 	for _, tc := range []struct {
 		desc            string
 		targetNodesCPUs int
-		tier            Tier
+		tier            strategy.Tier
 		want            int
 	}{
 		{
 			desc:            "numLookaheadPods>0_lookaheadPodPercentage>0",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       5,
 				LookaheadPodPercentage: 10,
 				LookaheadPodMilliCPU:   1000,
@@ -190,7 +191,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "numLookaheadPods>0_lookaheadPodPercentage=0",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       5,
 				LookaheadPodPercentage: 0,
 				LookaheadPodMilliCPU:   1000,
@@ -200,7 +201,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "numLookaheadPods=0_lookaheadPodPercentage>0",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       0,
 				LookaheadPodPercentage: 10,
 				LookaheadPodMilliCPU:   1000,
@@ -210,7 +211,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "numLookaheadPods=0_lookaheadPodPercentage=0",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       0,
 				LookaheadPodPercentage: 0,
 				LookaheadPodMilliCPU:   1000,
@@ -220,7 +221,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "pod_calculation_is_rounded_down",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       0,
 				LookaheadPodPercentage: 15,
 				LookaheadPodMilliCPU:   4000,
@@ -230,7 +231,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "maxLookaheadCpu=0",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       0,
 				LookaheadPodPercentage: 50,
 				LookaheadPodMilliCPU:   1000,
@@ -241,7 +242,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "maxLookaheadCpu_doesn't_bound_lookahead_pod_number",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       5,
 				LookaheadPodPercentage: 20,
 				LookaheadPodMilliCPU:   1000,
@@ -252,7 +253,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		{
 			desc:            "maxLookaheadCpu_bounds_lookahead_pod_number",
 			targetNodesCPUs: 100,
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       5,
 				LookaheadPodPercentage: 20,
 				LookaheadPodMilliCPU:   1000,
@@ -262,7 +263,7 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 		},
 		{
 			desc: "lookaheadPodMilliCpu=0_cpu_fields_ignored",
-			tier: Tier{
+			tier: strategy.Tier{
 				NumLookaheadPods:       5,
 				LookaheadPodPercentage: 10,
 				LookaheadPodMilliCPU:   0,
@@ -287,7 +288,7 @@ func (m *mockStrategyProvider) SetEkResizingEnabled(bool) {}
 
 func (m *mockStrategyProvider) RefreshStrategy() {}
 
-func (m *mockStrategyProvider) Strategy() (LookaheadPodStrategy, error) {
+func (m *mockStrategyProvider) Strategy() (strategy.LookaheadPodStrategy, error) {
 	args := m.Called()
-	return args.Get(0).(LookaheadPodStrategy), args.Error(1)
+	return args.Get(0).(strategy.LookaheadPodStrategy), args.Error(1)
 }

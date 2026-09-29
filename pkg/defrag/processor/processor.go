@@ -196,11 +196,29 @@ func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.Autos
 
 	if p.pickedCandidateInfo != nil {
 		klog.V(4).Infof("Defrag candidate %v picked", p.pickedCandidateInfo)
-		return pods, nil
+		// Tag the pods we surface to scale-up, so that status reporting can
+		// attribute the resulting node provisioning to active migration.
+		return markActiveMigrationPods(pods), nil
 	}
 
 	klog.V(4).Infof("No defrag candidates, restoring unschedulable pods")
 	return unschedulablePods, nil
+}
+
+// markActiveMigrationPods returns copies of pods annotated as active migration
+// pods. The input pods and the annotation maps they share with the cluster
+// snapshot are left untouched.
+func markActiveMigrationPods(pods []*apiv1.Pod) []*apiv1.Pod {
+	marked := make([]*apiv1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		markedPod := pod.DeepCopy()
+		if markedPod.Annotations == nil {
+			markedPod.Annotations = make(map[string]string, 1)
+		}
+		markedPod.Annotations[defrag.ActiveMigrationPodAnnotation] = "true"
+		marked = append(marked, markedPod)
+	}
+	return marked
 }
 
 // DefragPickedCandidate returns true if defrag picked a candidate during the last Process call.

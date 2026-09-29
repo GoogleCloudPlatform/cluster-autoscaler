@@ -48,6 +48,17 @@ func WithoutPendingOperationsFilter(tn *TrackedNode) (bool, string) {
 	return true, ""
 }
 
+// FailedNodesFilter matches nodes that are in FAILED state or transitioning to FAILED state.
+func FailedNodesFilter(tn *TrackedNode) (bool, string) {
+	if tn == nil {
+		return false, "FailedNodes"
+	}
+	if tn.State == csn.NodeStateFailed || tn.DesiredState == csn.NodeStateFailed || tn.PendingOperations.Contains(ops.FailNodeOp) {
+		return true, ""
+	}
+	return false, "FailedNodes"
+}
+
 // PendingOperationOpt can be added to modify SetPendingOperation calls.
 type PendingOperationOpt string
 

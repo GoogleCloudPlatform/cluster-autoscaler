@@ -109,7 +109,7 @@ func (b *reservationsBackoff) Backoff(nodeGroup cloudprovider.NodeGroup, nodeInf
 		return currentTime
 	}
 	nodeLabels := nodeInfo.Node().GetLabels()
-	key, ok := b.createReservationKey(nodeLabels)
+	key, ok := b.createReservationKey(nodeGroup, nodeLabels)
 	if !ok {
 		klog.Warningf("Not backing off nodeGroup %q due to invalid reservation: could not create backoff key from labels", nodeGroup.Id())
 		return currentTime
@@ -180,7 +180,7 @@ func (b *reservationsBackoff) BackoffStatus(nodeGroup cloudprovider.NodeGroup, n
 		return base_backoff.Status{IsBackedOff: false}
 	}
 	nodeLabels := nodeInfo.Node().GetLabels()
-	key, ok := b.createReservationKey(nodeLabels)
+	key, ok := b.createReservationKey(nodeGroup, nodeLabels)
 	if !ok {
 		return base_backoff.Status{IsBackedOff: false}
 	}
@@ -201,7 +201,7 @@ func (b *reservationsBackoff) RemoveBackoff(nodeGroup cloudprovider.NodeGroup, n
 		return
 	}
 	nodeLabels := nodeInfo.Node().GetLabels()
-	key, ok := b.createReservationKey(nodeLabels)
+	key, ok := b.createReservationKey(nodeGroup, nodeLabels)
 	if !ok {
 		klog.Warningf("Not removing reservation backoff for nodeGroup %v: could not create backoff key from labels", nodeGroup.Id())
 		return
@@ -223,7 +223,7 @@ func (b *reservationsBackoff) RemoveStaleBackoffData(currentTime time.Time) {
 
 // createReservationKey constructs a key from node labels. It returns the key
 // and a boolean indicating if the essential reservation labels were present.
-func (b *reservationsBackoff) createReservationKey(nodeLabels map[string]string) (reservationKey, bool) {
+func (b *reservationsBackoff) createReservationKey(nodeGroup cloudprovider.NodeGroup, nodeLabels map[string]string) (reservationKey, bool) {
 	reservationName := nodeLabels[labels.ReservationNameLabel]
 	if reservationName == "" {
 		return reservationKey{}, false
@@ -246,6 +246,19 @@ func (b *reservationsBackoff) createReservationKey(nodeLabels map[string]string)
 		return key, true
 	}
 
+	tpuTopology := nodeLabels[labels.TPUTopologyLabel]
+	if tpuTopology == "" {
+		// Incremental provisioning (PROVISION_ONLY) TPU node pools intentionally omit
+		// cloud.google.com/gke-tpu-topology from kube-env so the slice controller can apply it
+		// dynamically later. Fall back to the node pool spec so Backoff() on an existing
+		// PROVISION_ONLY pool computes the same isMultiHost key as BackoffStatus() on a NAP
+		// candidate.
+		if gkeMig, ok := nodeGroup.(*gke.GkeMig); ok {
+			key.isMultiHost = gkeMig.IsMultiHostTpuMig()
+		}
+		return key, true
+	}
+
 	machineType := nodeLabels[apiv1.LabelInstanceTypeStable]
 	tpuCount, err := b.provider.MachineConfigProvider().GetTpuCountForMachineType(machineType)
 	if err != nil {
@@ -253,10 +266,9 @@ func (b *reservationsBackoff) createReservationKey(nodeLabels map[string]string)
 		return key, true
 	}
 
-	tpuTopology := nodeLabels[labels.TPUTopologyLabel]
 	isMultiHost, err := b.provider.MachineConfigProvider().IsMultiHostTpuPodslice(tpuType, tpuTopology, tpuCount)
 	if err != nil {
-		klog.Warningf("Couldn't get whether MultiHost or SingleHost of configuration: (TpuType=%v, TpuTopology=%v, TpuCount=%v): %v", tpuType, nodeLabels[labels.TPUTopologyLabel], tpuCount, err)
+		klog.Warningf("Couldn't get whether MultiHost or SingleHost of configuration: (TpuType=%v, TpuTopology=%v, TpuCount=%v): %v", tpuType, tpuTopology, tpuCount, err)
 		return key, true
 	}
 	key.isMultiHost = isMultiHost

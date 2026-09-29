@@ -54,9 +54,9 @@ func newMockResizingProvider(resizingEnabled func(string) bool) mockResizingProv
 }
 
 func TestSnapshotCreatesCopy(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
-			node := ekvms_test.NewResizableNodeBuilder("node", 32, 128).Build()
+			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
 				clock: clock.NewFakeClock(testStartTime),
 				nodes: ResizableNodesSnapshot{
@@ -88,9 +88,9 @@ func TestSnapshotCreatesCopy(t *testing.T) {
 }
 
 func TestSnapshotCache(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
-			node := ekvms_test.NewResizableNodeBuilder("node", 32, 128).Build()
+			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			testClock := clock.NewFakeClock(testStartTime)
 
 			fullAllocatable := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
@@ -178,9 +178,9 @@ func TestSnapshotCache(t *testing.T) {
 }
 
 func TestUpdateSnapshot(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
-			node := ekvms_test.NewResizableNodeBuilder("node", 32, 128).Build()
+			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
 				nodes: ResizableNodesSnapshot{
 					node.Name: ResizableNode{
@@ -210,15 +210,15 @@ func TestUpdateSnapshot(t *testing.T) {
 }
 
 func TestFilteredNodesSnapshot(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
 			halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
 			downsizedAllocatable32 := size.Allocatable{MilliCpus: 1, KBytes: 1}
 			nonResizableAllocatable := size.Allocatable{MilliCpus: 0, KBytes: 0}
 
-			node := ekvms_test.NewResizableNodeBuilder("node", 32, 128).Build()
-			node2 := ekvms_test.NewResizableNodeBuilder("node-2", 32, 128).Build()
+			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
+			node2 := ekvms_test.NewNodeBuilder("node-2", 32, 128).Build()
 
 			tests := []struct {
 				name string
@@ -652,7 +652,7 @@ func TestFilteredNodesSnapshot(t *testing.T) {
 }
 
 func TestNodesCount(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				description       string
@@ -720,11 +720,11 @@ func TestNodesCount(t *testing.T) {
 }
 
 func TestSetGetNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			fullAllocatable32 := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
 			halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
-			node := ekvms_test.NewResizableNodeBuilder("node", 32, 128).Build()
+			node := ekvms_test.NewNodeBuilder("node", 32, 128).Build()
 			mockNodeSizeRecommender := &mockNodeSizeRecommender{}
 			mockNodeSizeRecommender.On("MaxSize", node).Once().Return(&nodesizerecommender.MaxSizeRecommendation{VmSize: size.VmSize(halfAllocatable32), CreationTime: testStartTime})
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
@@ -767,7 +767,7 @@ func TestSetGetNode(t *testing.T) {
 }
 
 func TestSetNodeAsHealthyAndUnhealthy(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			nsm := &nodeStateManagerImpl{provider: newMockResizingProvider(func(string) bool { return true }),
 				backoffManager: &mockBackoff{},
@@ -804,7 +804,7 @@ func TestSetNodeAsHealthyAndUnhealthy(t *testing.T) {
 }
 
 func TestGetUnhealthyNodesWithStatus(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				name           string
@@ -939,7 +939,7 @@ func TestGetUnhealthyNodesWithStatus(t *testing.T) {
 }
 
 func TestDeleteNode(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tc := []struct {
 				description    string
@@ -1018,7 +1018,7 @@ func TestDeleteNode(t *testing.T) {
 }
 
 func TestEkNodeMissingRecommendationLogging(t *testing.T) {
-	for _, family := range []string{"ek", "e4a"} {
+	for _, family := range []string{"ek", "e4a", "e4"} {
 		t.Run(family, func(t *testing.T) {
 			tests := []struct {
 				name                     string
@@ -1108,9 +1108,9 @@ func TestMultiFamilyNodesCount(t *testing.T) {
 	mockBackoff.On("DeleteNode", mock.Anything, mock.Anything).Return()
 	nsm := NewNodeStateManager(newMockResizingProvider(func(string) bool { return true }), nil, mockBackoff, &identitySizeCalculator{}, testClock)
 
-	nodeEK1 := ekvms_test.NewResizableNodeBuilder("ek-node-1", 32, 128).Build()
-	nodeEK2 := ekvms_test.NewResizableNodeBuilder("ek-node-2", 32, 128).Build()
-	nodeE4A1 := ekvms_test.NewResizableNodeBuilder("e4a-node-1", 32, 128).Build()
+	nodeEK1 := ekvms_test.NewNodeBuilder("ek-node-1", 32, 128).Build()
+	nodeEK2 := ekvms_test.NewNodeBuilder("ek-node-2", 32, 128).Build()
+	nodeE4A1 := ekvms_test.NewNodeBuilder("e4a-node-1", 32, 128).Build()
 
 	nsm.setNode(nodeEK1.Name, ResizableNode{Node: nodeEK1, MachineFamily: "ek"})
 	nsm.setNode(nodeEK2.Name, ResizableNode{Node: nodeEK2, MachineFamily: "ek"})
@@ -1129,15 +1129,11 @@ func TestMultiFamilyNodesCount(t *testing.T) {
 	assert.Equal(t, 0, nsm.nodesCount("e4a"))
 }
 
-func createEkSnapshot(nodeNames []string) ResizableNodesSnapshot {
-	return createTestSnapshotByNames(nodeNames, "ek")
-}
-
 func createTestSnapshotByNames(nodeNames []string, family string) ResizableNodesSnapshot {
 	snapshot := ResizableNodesSnapshot{}
 	for _, nodeName := range nodeNames {
 		snapshot[nodeName] = ResizableNode{
-			Node:              ekvms_test.NewResizableNodeBuilder(nodeName, 32, 128).Build(),
+			Node:              ekvms_test.NewNodeBuilder(nodeName, 32, 128).Build(),
 			MachineFamily:     family,
 			DesiredSize:       size.Allocatable{},
 			UpsizableMaxSize:  size.Allocatable{},

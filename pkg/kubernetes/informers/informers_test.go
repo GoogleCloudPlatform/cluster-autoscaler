@@ -74,7 +74,7 @@ func (p *fakeCloudProvider) Refresh(ctx context.Context) error {
 	// to mock the refresh here for test purposes though - no concurrency needed in the test.
 	optstracking.ChangeTestExperimentsManager(p.optsTracker, experiments.NewMockManagerWithOptions(version.Version{}, refreshResult.experiments, nil))
 
-	p.optsTracker.RecomputeOptions(refreshResult.cluster)
+	p.optsTracker.StoreCluster(refreshResult.cluster)
 	return nil
 }
 

@@ -32,6 +32,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
@@ -60,6 +61,10 @@ type limiter interface {
 	Limit() int
 }
 
+type metrics interface {
+	UpdateLookaheadPodsCount(laPodsCount map[size.Allocatable]int)
+}
+
 type workloadIDRequestsPair struct {
 	workloadID string
 	resources  apiv1.ResourceList
@@ -68,11 +73,11 @@ type workloadIDRequestsPair struct {
 // LookaheadPodInjectionProcessor injects lookahead pods to unschedulable pods.
 type LookaheadPodInjectionProcessor struct {
 	laPodProvider        lookaheadbuffer.PodProvider
-	strategyProvider     lookaheadbuffer.StrategyProvider
+	strategyProvider     lookaheadbuffer_strategy.Provider
 	limiter              limiter
 	systemPodsClassifier systempods.Classifier
 	cccLister            lister.Lister
-	metrics              lookaheadbuffer.Metrics
+	metrics              metrics
 	// We use this node to simulate which daemonSets can be scheduled on this node (e.g. match nodeSelector and taints criteria).
 	// It won't be perfect (in fact it is impossible to make it perfect), but it doesn't need to be perfect since it is an optimization.
 	// Since the node creation is idempotent, it is only ran once at the beginning and cached.
@@ -80,7 +85,7 @@ type LookaheadPodInjectionProcessor struct {
 }
 
 // NewLookaheadPodInjectionProcessor return an instance of LookaheadPodInjectionProcessor.
-func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider lookaheadbuffer.StrategyProvider, limiter limiter, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics lookaheadbuffer.Metrics) *LookaheadPodInjectionProcessor {
+func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider lookaheadbuffer_strategy.Provider, limiter limiter, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics metrics) *LookaheadPodInjectionProcessor {
 	sampleNode, err := getSampleDefaultBiggestEkNode(calc)
 	if err != nil {
 		klog.Errorf("Failed to get sample node in LookaheadPodInjectionProcessor pod list processor: %v", err)
@@ -100,9 +105,9 @@ func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider
 // Process updates unschedulablePods by injecting lookahead pods.
 func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	// Return early when not launched to avoid leaking any errors.
-	if status := p.launchStatus(); status != lookaheadbuffer.Enabled {
+	if status := p.launchStatus(); status != lookaheadbuffer_strategy.Enabled {
 		klog.V(4).Infof("Skipping lookahead buffer. Status: %q", status)
-		// We still need to call update metric to clear  since it is gauge metric, otherwise disabling LA will keep the metric value to the last updated value.
+		// We still need to call update metric to clear it since it is gauge metric, otherwise disabling LA will keep the metric value to the last updated value.
 		p.emitLookaheadPodsCountMetric(nil)
 		return unschedulablePods, nil
 	}
@@ -132,11 +137,11 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 	return slices.Concat(lookaheadPods, unschedulablePods), nil
 }
 
-func (p *LookaheadPodInjectionProcessor) launchStatus() lookaheadbuffer.Status {
+func (p *LookaheadPodInjectionProcessor) launchStatus() lookaheadbuffer_strategy.Status {
 	strategy, err := p.strategyProvider.Strategy()
 	if err != nil {
 		klog.Errorf("Error while fetching lookahead buffer strategy: %v", err)
-		return lookaheadbuffer.Unspecified
+		return lookaheadbuffer_strategy.Unspecified
 	}
 	return strategy.Status
 }

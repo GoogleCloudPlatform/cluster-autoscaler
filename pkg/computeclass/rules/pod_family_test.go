@@ -243,3 +243,11 @@ func TestPodFamilyMachineFamilies(t *testing.T) {
 		})
 	}
 }
+
+func TestIsPodFamily(t *testing.T) {
+	assert.True(t, IsPodFamily(GeneralPurposePodFamily))
+	assert.True(t, IsPodFamily(GeneralPurposeArmPodFamily))
+	assert.False(t, IsPodFamily("Balanced"))
+	assert.False(t, IsPodFamily("custom-ccc"))
+	assert.False(t, IsPodFamily(""))
+}

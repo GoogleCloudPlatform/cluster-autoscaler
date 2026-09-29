@@ -49,6 +49,7 @@ type InternalOptions struct {
 	E4aMachineTypes                              string
 	EkDownsizeConfig                             string
 	E4aDownsizeConfig                            string
+	E4DownsizeConfig                             string
 	IsClusterUsingDPV1                           bool
 	GceEndpoint                                  string
 	ClusterScaleToZeroEnabled                    bool
@@ -74,6 +75,7 @@ type InternalOptions struct {
 	ReservationsAnyLocationPolicyOverride        bool
 	ExtendedDurationPodsUpgradeNodesTaintPerLoop int
 	ReservationBlocksEnabled                     bool
+	ReservationSubBlockDeduplicationEnabled      bool
 	GCEFlexAdvisorEnabled                        bool
 	CSNEnabled                                   bool
 	CSNCAFlag                                    CSNStatus
@@ -108,6 +110,8 @@ type InternalOptions struct {
 	EnableConsumablePuller                       bool
 	ParentProduct                                string
 	ClusterHash                                  string
+	EnableKwokGceReconciler                      bool
+	KwokGceReconcilerInterval                    time.Duration
 	EkvmsMinVmSize                               apiv1.ResourceList
 	EkvmsIncrementStep                           apiv1.ResourceList
 	EkvmsAllocationSafetyBuffer                  apiv1.ResourceList
@@ -118,6 +122,7 @@ type InternalOptions struct {
 	MetricsPerCccEnabled                         bool
 	PendingPodsPerCccMetricEnabled               bool
 	ScaleUpPerCccMetricsEnabled                  bool
+	ProvisioningErrorDetailsEnabled              bool
 	EnhancedCrdStatusReporting                   bool
 	ZoneTypesEnabled                             bool
 	EnableComputeClassMinCapacity                bool
@@ -129,7 +134,9 @@ type InternalOptions struct {
 	PodWatchLabelSelector                        string
 	PodWatchFieldSelector                        string
 	DaemonSetMutationEnabled                     bool
+	BalloonPodIpprResizeEnabled                  bool
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
+	ExperimentsConfigMap                         string
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.

@@ -1155,12 +1155,41 @@ func (g *GceClient) FetchNetwork(projectId, name string) (*gcev1.Network, error)
 	return nil, nil
 }
 
-func (g *GceClient) ResumeInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef, errHandler gceclient.NonBlockingErrorsHandler) error {
+func (g *GceClient) ResumeInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
 	return nil
+}
+
+func (g *GceClient) PollUntilActionStops(_ context.Context, action gceclient.InstanceAction, migRef gceinternal.GceRef, instances []gceinternal.GceRef) gceclient.ActionPollSeq {
+	return gceclient.AllReady(instances)
 }
 
 func (g *GceClient) SuspendInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef, forceSuspend bool) error {
 	return nil
+}
+
+// FetchManagedInstances returns the ManagedInstance view of the instances the
+// fake holds for migRef. The fake tracks a single status per instance, so it is
+// reported as both InstanceStatus and TargetStatus.
+func (g *GceClient) FetchManagedInstances(migRef gceinternal.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	// Filtering happens server-side in the real client. Rather than silently
+	// returning unfiltered results, make the gap obvious to the caller.
+	if filter != "" {
+		return nil, fmt.Errorf("fake gce: FetchManagedInstances does not implement filtering, got filter %q", filter)
+	}
+
+	g.Lock()
+	defer g.Unlock()
+	instances := g.instances[fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)]
+	res := make([]*gceclient.ManagedInstance, 0, len(instances))
+	for name, inst := range instances {
+		res = append(res, &gceclient.ManagedInstance{
+			Name:           name,
+			InstanceStatus: inst.GCEStatus,
+			TargetStatus:   inst.GCEStatus,
+			CurrentAction:  "NONE",
+		})
+	}
+	return res, nil
 }
 
 // --- Behavior modifier functions ---

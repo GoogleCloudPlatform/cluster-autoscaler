@@ -37,6 +37,12 @@ const (
 	MinCapacityOwnerKind         = "ComputeClass"
 )
 
+// IsMinCapacityFakePod returns true if the pod was injected to keep a
+// ComputeClass rule at its target node count.
+func IsMinCapacityFakePod(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[MinCapacityFakePodAnnotation] == "true"
+}
+
 // processNodeGroup processes a nodegroup considered for scaleup.
 func getRuleIndexForMetrics(nodeGroup cloudprovider.NodeGroup, lister lister.Lister, matcher computeclass.Matcher) (int, crd.CRD, error) {
 	c, cName, err := lister.NodeGroupCrd(nodeGroup)

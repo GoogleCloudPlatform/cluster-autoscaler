@@ -34,6 +34,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -1532,6 +1533,86 @@ func TestIsFlexAdvisorReservationSpecificMigsProcessingEnabled(t *testing.T) {
 			}
 			got := isFlexAdvisorReservationSpecificMigsProcessingEnabled(manager)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
+	staleGeneralPurposeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            rules.GeneralPurposePodFamily,
+			ResourceVersion: "rv-1",
+		},
+		Spec: v1.ComputeClassSpec{
+			WhenUnsatisfiable: "ScaleUpAnyway",
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	updatedGeneralPurposeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            rules.GeneralPurposePodFamily,
+			ResourceVersion: "rv-2",
+		},
+		Spec: v1.ComputeClassSpec{
+			WhenUnsatisfiable: "ScaleUpAnyway",
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	testCases := []struct {
+		name                string
+		autopilotEnabled    bool
+		payPerPodEnabled    bool
+		wantCccState        metrics.CccState
+		wantIsScaleUpAnyway *bool
+	}{
+		{
+			name:                "Autopilot with PayPerPodFleetEfficiency enabled treats general-purpose as synthetic podFamily scope",
+			autopilotEnabled:    true,
+			payPerPodEnabled:    true,
+			wantCccState:        metrics.CccStateEmpty,
+			wantIsScaleUpAnyway: ptr.To(false),
+		},
+		{
+			name:                "Standard cluster with PayPerPodFleetEfficiency enabled uses custom general-purpose CRD from lister",
+			autopilotEnabled:    false,
+			payPerPodEnabled:    true,
+			wantCccState:        metrics.CccStateStale,
+			wantIsScaleUpAnyway: ptr.To(true),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockProvider := &mockAdviceProvider{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil, withAutopilotEnabled(tc.autopilotEnabled))
+			boolFlags := map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag: true,
+			}
+			if tc.payPerPodEnabled {
+				boolFlags[experiments.PayPerPodFleetEfficiencyMinCAVersionFlag] = true
+			}
+			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil))
+			fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{updatedGeneralPurposeCrd}), instanceConfigCloudProvider, optionsTracker, nil)
+			assert.NoError(t, err)
+
+			scope := newFlexibilityScope(nil, rules.GeneralPurposePodFamily, func() {})
+			scope.generatedUsing = staleGeneralPurposeCrd
+
+			assert.Equal(t, tc.wantCccState, fa.cccState(scope))
+			assert.Equal(t, tc.wantIsScaleUpAnyway, fa.isScaleUpAnyway(scope))
 		})
 	}
 }

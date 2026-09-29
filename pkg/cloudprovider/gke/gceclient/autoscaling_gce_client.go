@@ -17,6 +17,7 @@ package gceclient
 import (
 	"context"
 	"fmt"
+	"iter"
 	"net/http"
 	"regexp"
 	"strings"
@@ -49,15 +50,120 @@ const (
 	// DefaultSuspendInstanceActionTimeout is the default timeout waiting for instances to suspend.
 	DefaultSuspendInstanceActionTimeout = 20 * time.Minute
 
-	// resumingGCEAction indicates that instances are resuming.
-	resumingGCEAction = "RESUMING"
-	// suspendingGCEAction indicates that instances are suspending.
-	suspendingGCEAction = "SUSPENDING"
+	// nonBlockingErrorReportInterval is how long an identical non-blocking error
+	// is suppressed for a given instance before being reported again.
+	nonBlockingErrorReportInterval = 5 * time.Minute
 )
 
-// NonBlockingErrorsHandler is a function that handles per-instance errors encountered while polling for instance actions.
-// Those errors do not block the whole operation or make the operation fail.
-type NonBlockingErrorsHandler func(ref gce.GceRef, code, msg, instanceStatus string)
+// ManagedInstance represents a GCE managed instance with the fields needed
+// by the autoscaler.
+type ManagedInstance struct {
+	Name           string
+	InstanceStatus string
+	TargetStatus   string
+	CurrentAction  string
+}
+
+// InstanceAction is an action GCE reports as currently in flight for a managed instance, as seen in
+// ManagedInstance.CurrentAction.
+type InstanceAction string
+
+const (
+	// ActionNone indicates that the MIG is not currently acting on the instances.
+	ActionNone InstanceAction = "NONE"
+	// ActionResuming indicates that instances are resuming.
+	ActionResuming InstanceAction = "RESUMING"
+	// ActionSuspending indicates that instances are suspending.
+	ActionSuspending InstanceAction = "SUSPENDING"
+)
+
+// actionPollingVerb names the latency metric emitted for each instance polled for action, e.g.
+// "resuming_instance_action_polling".
+func actionPollingVerb(action InstanceAction) string {
+	return strings.ToLower(string(action)) + "_instance_action_polling"
+}
+
+// NonBlockingInstanceError is a per-instance error encountered while polling for an instance
+// action. It does not fail the whole operation: GCE keeps retrying the action until it succeeds or
+// the instance is deleted, so polling continues after one is reported.
+type NonBlockingInstanceError struct {
+	// Code and Message are the GCE error code and message from the MIG's last attempt.
+	Code    string
+	Message string
+	// InstanceStatus is the status GCE reported for the instance alongside the error.
+	InstanceStatus string
+}
+
+// Error implements error.
+func (e *NonBlockingInstanceError) Error() string {
+	return fmt.Sprintf("non-blocking error (status %q): code %q, message %q", e.InstanceStatus, e.Code, e.Message)
+}
+
+// PollUpdate is a single observation about one instance, as reported by PollUntilActionStops. It is
+// always one of PollCompleted, PollRetrying or PollAborted, so consumers can tell the outcomes apart with
+// a type switch, and each of them carries the data that only makes sense for that outcome.
+type PollUpdate interface {
+	// isPollUpdate keeps the set of outcomes closed to this package, so that a type switch
+	// handling the three types below covers everything a poll can report.
+	isPollUpdate()
+}
+
+// PollCompleted reports that the instance is no longer running the action: it either finished it or
+// disappeared. Reported at most once per instance, and nothing is reported for that instance
+// afterwards.
+type PollCompleted struct{}
+
+func (PollCompleted) isPollUpdate() {}
+
+// PollRetrying reports that the instance is still running the action and that GCE reported a
+// recoverable failure on its last attempt. GCE keeps retrying until the action succeeds or the
+// instance is deleted, so polling continues and an instance that keeps failing is reported several
+// times.
+type PollRetrying struct {
+	// Err is the recoverable failure GCE reported for the instance. Never nil.
+	Err *NonBlockingInstanceError
+}
+
+func (PollRetrying) isPollUpdate() {}
+
+// PollAborted reports that waiting stopped before the action did, e.g. on timeout or because the
+// caller's context was cancelled. Reported at most once per instance, and nothing is reported for
+// that instance afterwards.
+type PollAborted struct {
+	// Err says why polling is aborted. Never nil. It wraps context.DeadlineExceeded when the wait
+	// timed out and context.Canceled when the caller cancelled it, so the two can be told apart
+	// with errors.Is.
+	Err error
+}
+
+func (PollAborted) isPollUpdate() {}
+
+// ActionPollSeq is the stream of per-instance updates returned by PollUntilActionStops.
+type ActionPollSeq = iter.Seq2[gce.GceRef, PollUpdate]
+
+// AllReady returns an ActionPollSeq that reports every instance as PollCompleted straight away, for
+// the callers and fakes that know the wait is over before it starts.
+func AllReady(instances []gce.GceRef) ActionPollSeq {
+	return allWithUpdate(instances, PollCompleted{})
+}
+
+// AllAborted returns an ActionPollSeq that reports every instance as PollAborted with err, for the
+// callers and fakes that cannot poll at all and so fail the whole batch for the same reason.
+func AllAborted(instances []gce.GceRef, err error) ActionPollSeq {
+	return allWithUpdate(instances, PollAborted{Err: err})
+}
+
+// allWithUpdate returns an ActionPollSeq that reports update once for each instance, stopping as
+// soon as the consumer breaks out of the range loop.
+func allWithUpdate(instances []gce.GceRef, update PollUpdate) ActionPollSeq {
+	return func(yield func(gce.GceRef, PollUpdate) bool) {
+		for _, ref := range instances {
+			if !yield(ref, update) {
+				return
+			}
+		}
+	}
+}
 
 var (
 	requireShieldedVmConstraint = regexp.MustCompile("Constraint constraints/compute.requireShieldedVm violated")
@@ -90,10 +196,20 @@ type AutoscalingInternalGceClient interface {
 	// GetHttpTimeout exposes internal HTTP client timeout
 	GetHttpTimeout() time.Duration
 
-	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error
-	// SuspendInstances suspends instances
+	// ResumeInstances resumes instances. It returns once GCE has accepted the request, which is
+	// before the instances actually reach RUNNING: use PollUntilActionStops with ActionResuming
+	// to wait for that.
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	// PollUntilActionStops polls instances until each one has stopped running action, the poll
+	// times out, or ctx is cancelled. An update is yielded only when something happened to an
+	// instance: see PollUpdate for the three outcomes and for how often each of them is reported.
+	PollUntilActionStops(ctx context.Context, action InstanceAction, migRef gce.GceRef, instances []gce.GceRef) ActionPollSeq
+	// SuspendInstances suspends instances. It returns once GCE has accepted the request, which is
+	// before the instances actually reach SUSPENDED: use PollUntilActionStops with
+	// ActionSuspending to wait for that.
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
+	// FetchManagedInstances fetches ManagedInstances for a given MIG.
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*ManagedInstance, error)
 
 	// SetRecommendationApplier sets the recommendation applier
 	SetRecommendationApplier(applier RecommendationApplier)
@@ -167,6 +283,13 @@ func WithInstanceActionPollingFrequency(d time.Duration) Option {
 		if d > 0 {
 			c.instanceActionPollingFrequency = d
 		}
+	}
+}
+
+// WithExperimentsManager sets the experiments manager on the client.
+func WithExperimentsManager(em experiments.Manager) Option {
+	return func(c *autoscalingInternalGceClient) {
+		c.experimentsManager = em
 	}
 }
 
@@ -326,7 +449,7 @@ func (client *autoscalingInternalGceClient) FetchAcceleratorTypes(zone string) (
 func (client *autoscalingInternalGceClient) FetchMigInstances(ctx context.Context, migRef gce.GceRef) ([]gce.GceInstance, error) {
 	ignoreStockouts, capacityCheckTimeoutExpired := client.ignoreInstanceCreationStockoutErrors(migRef)
 	b := newInstanceListBuilder(migRef, client.migInfoProvider.QueuedProvisioning(migRef), ignoreStockouts, capacityCheckTimeoutExpired)
-	return fetchMigInstancesBeta[gce.GceInstance](client, b, migRef, "")
+	return fetchManagedInstances(ctx, client, b, migRef, "")
 }
 
 func (client *autoscalingInternalGceClient) FetchFutureReservationsInProject(projectID string) ([]*GceFutureReservation, error) {
@@ -385,7 +508,7 @@ type listBuilder[T any] interface {
 	build() []T
 }
 
-func fetchMigInstancesBeta[T any](client *autoscalingInternalGceClient, b listBuilder[T], migRef gce.GceRef, filter string) ([]T, error) {
+func fetchManagedInstances[T any](ctx context.Context, client *autoscalingInternalGceClient, b listBuilder[T], migRef gce.GceRef, filter string) ([]T, error) {
 	start := time.Now()
 	lastRequestStart := start
 	call := client.gceBetaService.InstanceGroupManagers.ListManagedInstances(migRef.Project, migRef.Zone, migRef.Name)
@@ -393,7 +516,7 @@ func fetchMigInstancesBeta[T any](client *autoscalingInternalGceClient, b listBu
 		call = call.Filter(filter)
 	}
 	err := call.Pages(
-		context.Background(),
+		ctx,
 		func(page *gce_api_beta.InstanceGroupManagersListManagedInstancesResponse) error {
 			gke_metrics.EmitGceLatency("instance_group_managers", "list_managed_instances_page", page, nil, lastRequestStart)
 			err := b.loadPage(page)
@@ -648,7 +771,7 @@ func (client *autoscalingInternalGceClient) FetchNetwork(projectId, name string)
 	return network, nil
 }
 
-func (client *autoscalingInternalGceClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) error {
+func (client *autoscalingInternalGceClient) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
 	ctx, cancel := context.WithTimeout(context.Background(), client.operationPerCallTimeout)
 	defer cancel()
 
@@ -667,11 +790,6 @@ func (client *autoscalingInternalGceClient) ResumeInstances(migRef gce.GceRef, i
 	gke_metrics.EmitGceLatency("instance_group_managers", "resume_instances_polling", nil, err, start)
 	if err != nil {
 		return fmt.Errorf("failed to wait for ResumeInstances operation %s for mig %q: %v", op.Name, migRef.String(), err)
-	}
-	err = client.waitForActionToStopRunning(resumingGCEAction, migRef, instances, nonBlockingErrorsHandler)
-	gke_metrics.EmitGceLatency("instance_group_managers", "resume_instances_action_polling", nil, err, start)
-	if err != nil {
-		return fmt.Errorf("failed to wait for instances %v to have status RUNNING: %w", instances, err)
 	}
 	return nil
 }
@@ -696,20 +814,15 @@ func (client *autoscalingInternalGceClient) SuspendInstances(migRef gce.GceRef, 
 	if err != nil {
 		return fmt.Errorf("failed to wait for SuspendInstances operation %s for mig %q: %v", op.Name, migRef.String(), err)
 	}
-	err = client.waitForActionToStopRunning(suspendingGCEAction, migRef, instances, nil)
-	gke_metrics.EmitGceLatency("instance_group_managers", "suspend_instances_action_polling", nil, err, start)
-	if err != nil {
-		return fmt.Errorf("failed to wait for instances %v to have status SUSPENDED: %w", instances, err)
-	}
 	return nil
 }
 
-// InstanceActionTimeout returns the timeout for waiting for the given instance action (e.g. RESUMING or SUSPENDING) to finish.
+// instanceActionTimeout returns the timeout for waiting for the given instance action (e.g. RESUMING or SUSPENDING) to finish.
 // It evaluates Giraffe flags (ColdStandbyNodes::ResumeTimeoutSeconds, ColdStandbyNodes::SuspendTimeoutSeconds)
 // and falls back to DefaultResumeInstanceActionTimeout (5m) or DefaultSuspendInstanceActionTimeout (20m).
-func (client *autoscalingInternalGceClient) InstanceActionTimeout(action string) time.Duration {
+func (client *autoscalingInternalGceClient) instanceActionTimeout(action InstanceAction) time.Duration {
 	switch action {
-	case resumingGCEAction:
+	case ActionResuming:
 		if client.experimentsManager != nil {
 			timeout := client.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(
 				experiments.ColdStandbyNodesResumeTimeoutSecondsFlag, DefaultResumeInstanceActionTimeout)
@@ -718,7 +831,7 @@ func (client *autoscalingInternalGceClient) InstanceActionTimeout(action string)
 			}
 		}
 		return DefaultResumeInstanceActionTimeout
-	case suspendingGCEAction:
+	case ActionSuspending:
 		if client.experimentsManager != nil {
 			timeout := client.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(
 				experiments.ColdStandbyNodesSuspendTimeoutSecondsFlag, DefaultSuspendInstanceActionTimeout)
@@ -732,85 +845,147 @@ func (client *autoscalingInternalGceClient) InstanceActionTimeout(action string)
 	}
 }
 
-func (client *autoscalingInternalGceClient) waitForActionToStopRunning(action string, migRef gce.GceRef, instanceRefs []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) (err error) {
-	if !client.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesWaitForInstanceStatus) {
-		return nil
+// PollUntilActionStops polls instances until each one has stopped running action, the poll
+// times out, or ctx is cancelled. An update is yielded only when something happened to an
+// instance: see PollUpdate for the three outcomes and for how often each of them is reported.
+func (client *autoscalingInternalGceClient) PollUntilActionStops(ctx context.Context, action InstanceAction, migRef gce.GceRef, instanceRefs []gce.GceRef) ActionPollSeq {
+	waitEnabled := client.experimentsManager != nil && client.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesWaitForInstanceStatus)
+	if len(instanceRefs) == 0 || !waitEnabled {
+		// There is nothing to wait for, or waiting is disabled: optimistically treat every
+		// instance as done. On an empty slice this reports nothing at all.
+		return AllReady(instanceRefs)
 	}
-	pollTimer := time.NewTimer(client.instanceActionPollingFrequency)
-	timeout := time.NewTimer(client.InstanceActionTimeout(action))
-	defer func() {
-		pollTimer.Stop()
-		timeout.Stop()
-	}()
 
-	var actualHandler NonBlockingErrorsHandler
-	if nonBlockingErrorsHandler != nil {
-		// Avoid spamming nonBlockingErrorsHandler with same error message, limiting to one report every 5 minutes unless error changes.
-		// Otherwise there will be a lot of unnecessary calls to nonBlockingErrorsHandler for each instance which may congest the mutexes and may be expensive.
-		lastReportTime := make(map[string]time.Time)
-		actualHandler = func(ref gce.GceRef, code, msg, instanceStatus string) {
-			key := fmt.Sprintf("%s|%s|%s", ref.Name, code, msg)
-			if last, exists := lastReportTime[key]; exists && time.Since(last) < 5*time.Minute {
-				return
-			}
-			lastReportTime[key] = time.Now()
-			nonBlockingErrorsHandler(ref, code, msg, instanceStatus)
+	return func(yield func(gce.GceRef, PollUpdate) bool) {
+		start := time.Now()
+
+		// Instances are dropped from pending as soon as they are reported ready, so it doubles as
+		// the set still being waited on and as the set to report as failed when waiting stops.
+		pending := make(map[string]gce.GceRef, len(instanceRefs))
+		for _, inst := range instanceRefs {
+			pending[inst.Name] = inst
 		}
-	}
 
-	for {
-		select {
-		case <-timeout.C:
-			return fmt.Errorf("timeout waiting for instances %v to finish action %q", instanceRefs, action)
-		case <-pollTimer.C:
-			if client.actionFinishedForAllInstances(action, migRef, instanceRefs, actualHandler) {
-				return nil
+		// Deriving the timeout from ctx puts the deadline and the caller's cancellation on a
+		// single termination path, and makes ctx.Err() tell the two apart. This also makes the
+		// timeout errors emitted as timeout instead of internal_error.
+		ctx, cancel := context.WithTimeout(ctx, client.instanceActionTimeout(action))
+		defer cancel()
+
+		pollTimer := time.NewTimer(client.instanceActionPollingFrequency)
+		defer pollTimer.Stop()
+
+		shouldReport := newNonBlockingErrorDeduper()
+
+		for {
+			select {
+			case <-ctx.Done():
+				for _, ref := range pending {
+					// Wrapping ctx.Err() keeps the cause recognizable by errors.Is, which
+					// is what the latency metric relies on to report a timeout as such
+					// rather than as an unclassified internal error.
+					err := fmt.Errorf("stopped waiting for instance %v to finish action %q: %w", ref, action, ctx.Err())
+					gke_metrics.EmitGceLatency("instance_group_managers", actionPollingVerb(action), nil, err, start)
+					if !yield(ref, PollAborted{Err: err}) {
+						return
+					}
+				}
+				return
+			case <-pollTimer.C:
+				stopped, err := client.reapFinishedInstances(ctx, action, migRef, pending, shouldReport, start, yield)
+				if stopped {
+					return
+				}
+				if err != nil {
+					// A failed poll is transient: keep polling until ctx is done.
+					klog.Errorf("Fetching instances for MIG %v failed: %v", migRef, err)
+				}
+				if len(pending) == 0 {
+					return
+				}
+				pollTimer.Reset(client.instanceActionPollingFrequency)
 			}
-			pollTimer.Reset(client.instanceActionPollingFrequency)
 		}
 	}
 }
 
-func (client *autoscalingInternalGceClient) actionFinishedForAllInstances(action string, migRef gce.GceRef, targetInstances []gce.GceRef, nonBlockingErrorsHandler NonBlockingErrorsHandler) bool {
+// reapFinishedInstances polls the MIG once and reports every instance of pending that is no longer
+// running action as PollCompleted, removing it from pending, plus a PollRetrying update for every
+// recoverable failure shouldReport lets through for the instances that are still running it.
+// pollStart is when the wait began, and is used to measure the latency of each instance that
+// stopped running action.
+//
+// It reports stopped=true when the consumer abandoned the iteration, in which case the caller must
+// stop polling immediately and yield nothing more.
+func (client *autoscalingInternalGceClient) reapFinishedInstances(ctx context.Context, action InstanceAction, migRef gce.GceRef, pending map[string]gce.GceRef, shouldReport func(ref gce.GceRef, code, msg string) bool, pollStart time.Time, yield func(gce.GceRef, PollUpdate) bool) (stopped bool, err error) {
 	var filter string
 	if action != "" {
 		filter = fmt.Sprintf("currentAction = %s", action)
 	}
-	instances, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, filter)
+	instances, err := fetchManagedInstances(ctx, client, newIdentityListBuilder(), migRef, filter)
 	if err != nil {
-		klog.Errorf("Fetching instances %v failed: %v", targetInstances, err)
-		return false
+		return false, fmt.Errorf("failed to fetch managed instances for MIG %v: %w", migRef, err)
 	}
-
-	// name -> instance mapping
-	instancesMap := make(map[string]*gce_api_beta.ManagedInstance, len(instances))
+	instancesByName := make(map[string]*gce_api_beta.ManagedInstance, len(instances))
 	for _, inst := range instances {
 		if inst != nil {
-			instancesMap[inst.Name] = inst
+			instancesByName[inst.Name] = inst
 		}
 	}
 
-	for _, targetInst := range targetInstances {
-		inst, found := instancesMap[targetInst.Name]
-		if !found {
-			// If the instance is not found then it could have been deleted or finished the action,
-			// which is why it's not desired to return false in that case.
+	// Deleting from a map while ranging over it is safe: deleted entries are simply not produced.
+	for name, targetInst := range pending {
+		inst, found := instancesByName[name]
+		// A missing instance was most likely deleted or finished the action, so treat it as done.
+		// Any errors from its last attempt are stale by now and deliberately not reported: an
+		// instance that made it is not worth backing off.
+		if !found || inst.CurrentAction != string(action) {
+			delete(pending, name)
+			gke_metrics.EmitGceLatency("instance_group_managers", actionPollingVerb(action), nil, nil, pollStart)
+			if !yield(targetInst, PollCompleted{}) {
+				return true, nil
+			}
 			continue
 		}
-		// inst.LastAttempt contains details about the MIG's most recent attempt to perform an action on the GCE instance.
-		// inst.LastAttempt.Errors contains non-blocking errors (e.g., stockout, quota issues, or instance configuration failures)
-		// encountered during that attempt, allowing caller handlers to track or back off failing instances.
-		// GCE will keep retrying the action until success or deletion of the node.
-		if nonBlockingErrorsHandler != nil && inst.LastAttempt != nil && inst.LastAttempt.Errors != nil {
-			for _, e := range inst.LastAttempt.Errors.Errors {
-				nonBlockingErrorsHandler(targetInst, e.Code, e.Message, inst.InstanceStatus)
+		// inst.LastAttempt.Errors holds the non-blocking errors (e.g., stockout, quota issues, or
+		// instance configuration failures) of the MIG's most recent attempt on the instance,
+		// allowing consumers to track or back off failing instances. GCE keeps retrying the action
+		// until success or deletion of the node.
+		for _, e := range getLastAttemptErrors(inst) {
+			if !shouldReport(targetInst, e.Code, e.Message) {
+				continue
+			}
+			nonBlockingErr := &NonBlockingInstanceError{
+				Code:           e.Code,
+				Message:        e.Message,
+				InstanceStatus: inst.InstanceStatus,
+			}
+			if !yield(targetInst, PollRetrying{Err: nonBlockingErr}) {
+				return true, nil
 			}
 		}
-		if inst.CurrentAction == action {
+	}
+	return false, nil
+}
+
+type deduperKey struct {
+	name, code, msg string
+}
+
+// newNonBlockingErrorDeduper returns a predicate that lets an identical error for the same instance
+// through at most once per nonBlockingErrorReportInterval. Without it every poll would re-report
+// the same error for every failing instance, which may congest the consumer's mutexes. The returned
+// predicate is stateful and not safe for concurrent use.
+func newNonBlockingErrorDeduper() func(ref gce.GceRef, code, msg string) bool {
+	lastReportTime := make(map[deduperKey]time.Time)
+	return func(ref gce.GceRef, code, msg string) bool {
+		key := deduperKey{name: ref.Name, code: code, msg: msg}
+		if last, exists := lastReportTime[key]; exists && time.Since(last) < nonBlockingErrorReportInterval {
 			return false
 		}
+		lastReportTime[key] = time.Now()
+		return true
 	}
-	return true
 }
 
 type identityListBuilder struct {
@@ -833,6 +1008,40 @@ func (i *identityListBuilder) loadPage(page *gce_api_beta.InstanceGroupManagersL
 
 func (i *identityListBuilder) build() []*gce_api_beta.ManagedInstance {
 	return i.infos
+}
+
+type managedInstanceListBuilder struct {
+	instances []*ManagedInstance
+}
+
+func newManagedInstanceListBuilder() *managedInstanceListBuilder {
+	return &managedInstanceListBuilder{}
+}
+
+func (b *managedInstanceListBuilder) loadPage(page *gce_api_beta.InstanceGroupManagersListManagedInstancesResponse) error {
+	if b.instances == nil {
+		b.instances = make([]*ManagedInstance, 0, len(page.ManagedInstances))
+	}
+	for _, inst := range page.ManagedInstances {
+		if inst == nil {
+			continue
+		}
+		b.instances = append(b.instances, &ManagedInstance{
+			Name:           inst.Name,
+			InstanceStatus: inst.InstanceStatus,
+			TargetStatus:   inst.TargetStatus,
+			CurrentAction:  inst.CurrentAction,
+		})
+	}
+	return nil
+}
+
+func (b *managedInstanceListBuilder) build() []*ManagedInstance {
+	return b.instances
+}
+
+func (client *autoscalingInternalGceClient) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*ManagedInstance, error) {
+	return fetchManagedInstances(context.Background(), client, newManagedInstanceListBuilder(), migRef, filter)
 }
 
 func (client *autoscalingInternalGceClient) FetchStandardZones(region string) ([]string, error) {

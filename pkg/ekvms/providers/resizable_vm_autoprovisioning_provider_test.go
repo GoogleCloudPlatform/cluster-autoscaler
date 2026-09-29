@@ -255,41 +255,78 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 		expectedResult   bool
 	}{
 		{
-			name:             "Autopilot cluster with stateful enabled",
+			name:             "Autopilot cluster with no resize, stateful enabled",
 			autopilotEnabled: true,
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: true,
 		},
 		{
-			name:             "Autopilot cluster with stateful disabled",
+			name:             "Autopilot cluster with coarse grained resize, stateful enabled",
+			autopilotEnabled: true,
+			managedNodesFlag: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Autopilot cluster with no resize, stateful disabled",
 			autopilotEnabled: true,
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
 			},
 			expectedResult: false,
 		},
 		{
-			name:             "Standard cluster with Managed Nodes and stateful enabled",
+			name:             "Standard cluster with Managed Nodes and no resize, stateful enabled",
 			autopilotEnabled: false,
 			managedNodesFlag: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: true,
 		},
 		{
-			name:             "Standard cluster with Managed Nodes and stateful disabled",
+			name:             "Standard cluster with Managed Nodes and coarse grained resize, stateful enabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
+			},
+			expectedResult: true,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and no resize, stateful disabled",
 			autopilotEnabled: false,
 			managedNodesFlag: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
+				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
+			},
+			expectedResult: false,
+		},
+		{
+			name:             "Standard cluster with Managed Nodes and coarse grained resize, stateful disabled",
+			autopilotEnabled: false,
+			managedNodesFlag: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: false,
 			},
 			expectedResult: false,
@@ -300,6 +337,7 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 			managedNodesFlag: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
 				experiments.AutopilotE4StatefulMinCAVersionFlag: true,
 			},
 			expectedResult: false,
@@ -326,4 +364,117 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 			assert.Equal(t, tc.expectedResult, provider.IsE4StatefulEnabledInAutopilot())
 		})
 	}
+}
+
+func TestResizingEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		machineFamily     string
+		ekLaunchPhase     launchPhase
+		e4aLaunchPhase    launchPhase
+		autopilotEnabled  bool
+		e4aOnManagedNodes bool
+		want              bool
+	}{
+		{
+			name:          "ekvms_resizing_should_be_disabled_with_ek_launch_disabled",
+			machineFamily: "ek",
+			ekLaunchPhase: launchDisabled,
+			want:          false,
+		},
+		{
+			name:          "ekvms_resizing_should_be_disabled_with_ek_launch_disabled_cgroupv1",
+			machineFamily: "ek",
+			ekLaunchPhase: launchDisabledCgroupv1,
+			want:          false,
+		},
+		{
+			name:          "ekvms_resizing_should_be_disabled_with_ek_launch_init_downsizing",
+			machineFamily: "ek",
+			ekLaunchPhase: launchEnabledNoResize,
+			want:          false,
+		},
+		{
+			name:          "ekvms_resizing_should_be_disabled_with_ek_launch_not_enabled",
+			machineFamily: "ek",
+			ekLaunchPhase: launchNotEnabled,
+			want:          false,
+		},
+		{
+			name:             "ekvms_resizing_should_be_disabled_with_standard_mode",
+			machineFamily:    "ek",
+			ekLaunchPhase:    launchCoarseGrainedResize,
+			autopilotEnabled: false,
+			want:             false,
+		},
+		{
+			name:             "ekvms_resizing_should_be_enabled_with_autopilot_mode_and_ek_launch_coarse_grained_resize",
+			machineFamily:    "ek",
+			ekLaunchPhase:    launchCoarseGrainedResize,
+			autopilotEnabled: true,
+			want:             true,
+		},
+		{
+			name:             "e4a_resizing_should_be_enabled_with_autopilot_mode_and_e4a_launch_coarse_grained_resize",
+			machineFamily:    "e4a",
+			e4aLaunchPhase:   launchCoarseGrainedResize,
+			autopilotEnabled: true,
+			want:             true,
+		},
+		{
+			name:              "e4a_resizing_should_be_enabled_with_managed_nodes_and_e4a_launch_coarse_grained_resize",
+			machineFamily:     "e4a",
+			e4aLaunchPhase:    launchCoarseGrainedResize,
+			e4aOnManagedNodes: true,
+			want:              true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ekAutoprovisioningProvider := &ekAutoprovisioningProvider{
+				status: LaunchStatus{
+					phase:  tc.ekLaunchPhase,
+					source: "",
+				},
+				autopilotEnabled: tc.autopilotEnabled,
+			}
+			e4aAutoprovisioningProvider := &e4aAutoprovisioningProvider{
+				status: LaunchStatus{
+					phase:  tc.e4aLaunchPhase,
+					source: "",
+				},
+				autopilotEnabled:      tc.autopilotEnabled,
+				enabledOnManagedNodes: tc.e4aOnManagedNodes,
+			}
+			p := &ResizableVmAutoprovisioningProvider{
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+				autoprovisioningProviders: map[string]autoprovisioningProvider{
+					machinetypes.EK.Name():  ekAutoprovisioningProvider,
+					machinetypes.E4A.Name(): e4aAutoprovisioningProvider,
+				},
+			}
+
+			assert.Equal(t, tc.want, p.ResizingEnabled(tc.machineFamily))
+		})
+	}
+}
+
+type mockResizableVmMetrics struct {
+	mock.Mock
+}
+
+func (mekp *mockResizableVmMetrics) UpdateResizableVmLaunchStatus(machineFamily, phase, source string) {
+	mekp.Called(machineFamily, phase, source)
+}
+
+func (mekp *mockResizableVmMetrics) UpdateResizableVmAutopilotComputeClassStatus(machineFamily string, enabled bool) {
+	mekp.Called(machineFamily, enabled)
+}
+
+type mockNodesCountProvider struct {
+	mock.Mock
+}
+
+func (mecp *mockNodesCountProvider) NodesCount(machineFamily string) int {
+	args := mecp.Called(machineFamily)
+	return args.Int(0)
 }

@@ -23,33 +23,16 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/resource/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
-	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	fakenodeprediction "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodeprediction/fake"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
-// fakeMig implements the Mig interface for GceRef().
-type fakeMig struct {
-	cloudprovider.NodeGroup
-	ref gce.GceRef
-}
-
-func (m *fakeMig) GceRef() gce.GceRef {
-	return m.ref
-}
-
-func (m *fakeMig) IsStable() (bool, error) {
-	return true, nil
-}
-
 // buildNodeFromTemplate creates a fake v1.Node object using machine type and template info.
-// It uses the production `GceTemplateBuilder` to ensure consistency.
+// It uses nodeprediction.BuildNodeFromTemplate to ensure consistency.
 // TODO(b/496548045): refactor this function to deduplicate TPU and DRA prediction logics.
 func buildNodeFromTemplate(
 	mig *gcev1.InstanceGroupManager,
@@ -62,65 +45,10 @@ func buildNodeFromTemplate(
 		return nil, err
 	}
 
-	builder := &gce.GceTemplateBuilder{}
-
-	migOsInfo, err := builder.MigOsInfo(context.TODO(), nodeName, ke)
-	if err != nil {
-		return nil, err
-	}
-
 	fakeMigRef := gce.GceRef{Name: mig.Name, Zone: mig.Zone}
-	fMig := &fakeMig{ref: fakeMigRef}
-
-	reserved := &gce.GceReserved{}
-	localSSDSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
-
-	memoryBytes := mt.MemoryMb * 1024 * 1024
-
-	node, err := builder.BuildNodeFromTemplate(context.TODO(), fMig, migOsInfo, template, ke, mt.GuestCpus, memoryBytes, nil, reserved, localSSDSizeProvider)
+	node, err := fakenodeprediction.BuildNodeFromTemplate(context.TODO(), fakeMigRef, mt, template, ke, nodeName)
 	if err != nil {
 		return nil, err
-	}
-
-	node.Name = nodeName
-
-	if node.Labels == nil {
-		node.Labels = map[string]string{}
-	}
-	node.Labels["cloud.google.com/gke-nodepool"] = mig.Name
-
-	if mfName, err := gce.GetMachineFamily(mt.Name); err == nil {
-		node.Labels[gkelabels.MachineFamilyLabel] = mfName
-	}
-
-	if node.Annotations == nil {
-		node.Annotations = map[string]string{}
-	}
-	// Needed to avoid Cluster is not ready for autoscaling warning.
-	node.Annotations["node.gke.io/last-applied-node-labels"] = "fake-node-label"
-	// Kubelet version is used by custom_resources_processor.go while calling nodetemplate.BuildKeyForNAP
-	// as the nodeVersion argument. While not being set, causes tests using NAP node pools to panic.
-	node.Status.NodeInfo.KubeletVersion = "v1.30.0"
-
-	for _, acc := range mt.Accelerators {
-		if !strings.HasPrefix(acc.GuestAcceleratorType, "nvidia") {
-			tpuResourceName := apiv1.ResourceName("google.com/tpu")
-			tpuQuantity := resource.MustParse(fmt.Sprintf("%d", acc.GuestAcceleratorCount))
-			if node.Status.Capacity == nil {
-				node.Status.Capacity = apiv1.ResourceList{}
-			}
-			node.Status.Capacity[tpuResourceName] = tpuQuantity
-			node.Labels[gkelabels.TPULabel] = acc.GuestAcceleratorType
-			node.Spec.Taints = append(node.Spec.Taints, apiv1.Taint{
-				Key:    "google.com/tpu",
-				Value:  "present",
-				Effect: apiv1.TaintEffectNoSchedule,
-			})
-			if node.Status.Allocatable == nil {
-				node.Status.Allocatable = apiv1.ResourceList{}
-			}
-			node.Status.Allocatable[tpuResourceName] = tpuQuantity
-		}
 	}
 
 	test.SetNodeReadyState(node, true, time.Now())

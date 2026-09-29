@@ -438,6 +438,9 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 							},
 						},
 					},
+					Status: apiv1.NodeStatus{
+						Conditions: []apiv1.NodeCondition{{Type: csn.NodeConditionSuspended, Status: apiv1.ConditionTrue}},
+					},
 				},
 			},
 			expectedErr: false,
@@ -452,6 +455,14 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					Spec: apiv1.NodeSpec{
 						Unschedulable: false,
 						Taints:        []apiv1.Taint{},
+					},
+					Status: apiv1.NodeStatus{
+						Conditions: []apiv1.NodeCondition{{
+							Type:    csn.NodeConditionSuspended,
+							Status:  apiv1.ConditionFalse,
+							Message: csn.NodeResumedMessage,
+							Reason:  csn.NodeConditionReason,
+						}},
 					},
 				},
 			},
@@ -729,7 +740,13 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 				assert.NoError(t, err)
 				resultNodes := []*apiv1.Node{}
 				for _, ni := range nodeInfos {
-					resultNodes = append(resultNodes, ni.Node())
+					node := ni.Node()
+					// SetNodeAs sets the condition timestamps to the current time.
+					for i := range node.Status.Conditions {
+						node.Status.Conditions[i].LastTransitionTime = metav1.Time{}
+						node.Status.Conditions[i].LastHeartbeatTime = metav1.Time{}
+					}
+					resultNodes = append(resultNodes, node)
 				}
 				assert.Equal(t, tc.expectedNodes, resultNodes)
 			}
@@ -824,12 +841,34 @@ func TestSetNodeAsForProcessors(t *testing.T) {
 			expectedCSNPodSchdulable:      false,
 			expectedBufferAssignmentExist: false,
 		},
+		{
+			description:                   "Chilling to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
+		{
+			description:                   "Suspended to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateSuspended, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
+		{
+			description:                   "Failed to Failed",
+			node:                          create8CPUTestNode(t, "node-1", csn.NodeStateFailed, withBufferAssignmentMutator("ns/buffer")),
+			desiredState:                  csn.NodeStateFailed,
+			expectedCSNPodSchdulable:      false,
+			expectedBufferAssignmentExist: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			node, err := setNodeAsForProcessors(tc.node, tc.desiredState)
 			assert.NoError(t, err)
 			assert.Equal(t, tc.desiredState, csn.ClassifyNode(node))
+			assert.False(t, node.Spec.Unschedulable, "Expected node to be schedulable in snapshot")
 
 			hasBufferAssignmentTaint := taints.HasTaint(node, metadata.BufferAssignmentKey)
 			if tc.expectedBufferAssignmentExist {
@@ -869,7 +908,7 @@ func TestSuspendedNodesBecomesReadySuccessfully(t *testing.T) {
 		{Type: apiv1.NodePIDPressure, Status: apiv1.ConditionUnknown},
 	}
 
-	makeSuspendedNodeReady(suspendedNode)
+	makeNodeReadyInSnapshot(suspendedNode)
 
 	readiness, err := kubernetes.GetNodeReadiness(suspendedNode)
 	assert.NoError(t, err)

@@ -29,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -39,7 +38,7 @@ import (
 )
 
 const (
-	conditionsFlushInterval = status.BatchFlushInterval + 10*time.Second
+	conditionsFlushInterval = ccc.ConditionsFlushInterval
 )
 
 // TestNodeProvisioningCooldownConditions verifies that when a priority rule enters backoff

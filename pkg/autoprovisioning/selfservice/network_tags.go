@@ -77,11 +77,16 @@ func (nt *networkTags) FromPriority(_ v1.Priority) Metadata {
 func (nt *networkTags) ToNodePoolLabels(_ map[string]string, _ Metadata) {}
 
 func (nt *networkTags) ToNodepool(np *container.NodePool, m Metadata) {
+	if np == nil {
+		return
+	}
 	var tags []string
 	for k, v := range m {
 		if strings.HasPrefix(k, networkTagsPrefix) && v == "true" {
 			tag := strings.TrimPrefix(k, networkTagsPrefix)
-			tags = append(tags, tag)
+			if tag != "" {
+				tags = append(tags, tag)
+			}
 		}
 	}
 	if len(tags) == 0 {

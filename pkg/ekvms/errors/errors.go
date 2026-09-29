@@ -103,6 +103,25 @@ const (
 	UntypedError ResizeErrorType = "untypedError"
 )
 
+var (
+	// ResizeTimeoutError indicates timeout waiting for Kubelet to apply in-place resize.
+	ResizeTimeoutError = errors.New("balloon pod resize timed out")
+	// ResizeRejectedError indicates Kubelet rejected in-place resize.
+	ResizeRejectedError = errors.New("balloon pod resize rejected")
+	// ResizePatchError indicates failure to in-place patch balloon pod.
+	ResizePatchError = errors.New("balloon pod resize patch failed")
+	// IncompatibleQoSError indicates the balloon pod cannot be resized in place because the resize would change its QoS class.
+	IncompatibleQoSError = errors.New("balloon pod is not eligible for in-place resize")
+	// ConcurrentResizeError indicates an in-place resize of the balloon pod was already in flight.
+	ConcurrentResizeError = errors.New("balloon pod resize already in progress")
+	// NoActiveBalloonPodError indicates no active balloon pod found on the node.
+	NoActiveBalloonPodError = errors.New("no active balloon pod found")
+)
+
+func (e ResizeErrorType) Error() string {
+	return string(e)
+}
+
 type GceClientResizeErrorSource string
 
 const (

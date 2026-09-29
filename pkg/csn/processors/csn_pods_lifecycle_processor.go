@@ -226,23 +226,16 @@ func (p *CSNPodsLifecycleProcessor) isNodeOutdated(node *apiv1.Node, buffer *v1b
 		return false
 	}
 
-	var suspendedTime time.Time
-	for _, taint := range node.Spec.Taints {
-		if !taint.MatchTaint(&csn.SuspendedTaint) {
-			continue
-		}
-		if taint.TimeAdded == nil {
-			klog.Warningf("%s node %q has suspended taint but no time added", csnPodsLifecycleLogPrefix, node.Name)
-			return false
-		}
-		suspendedTime = taint.TimeAdded.Time
-		break
+	suspendedSince, suspended := csn.SuspendedSince(node)
+	if !suspended {
+		return false
 	}
-	if suspendedTime.IsZero() {
+	if suspendedSince.IsZero() {
+		klog.Warningf("%s node %q has Suspended condition but no transition time", csnPodsLifecycleLogPrefix, node.Name)
 		return false
 	}
 
-	return time.Since(suspendedTime) > refreshFrequency
+	return time.Since(suspendedSince) > refreshFrequency
 }
 
 // getRefreshFrequency returns the frequency at which CSN nodes should be refreshed for a given buffer and a boolean indicating if refreshing is enabled.

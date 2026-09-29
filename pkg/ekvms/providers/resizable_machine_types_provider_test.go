@@ -34,35 +34,43 @@ func TestNewAllResizableMachineTypesProvider(t *testing.T) {
 		expected           sets.Set[string]
 	}{
 		{
-			name:             "overrides provided",
-			machineTypeFlags: map[string]string{machinetypes.EK.Name(): "ek-standard-8", machinetypes.E4A.Name(): "e4a-standard-8"},
-			expected:         sets.New("ek-standard-8", "e4a-standard-8"),
+			name: "overrides provided",
+			machineTypeFlags: map[string]string{
+				machinetypes.EK.Name():  "ek-standard-8",
+				machinetypes.E4A.Name(): "e4a-standard-8",
+				machinetypes.E4.Name():  "e4-standard-8",
+			},
+			expected: sets.New("ek-standard-8", "e4a-standard-8", "e4-standard-8"),
 		},
 		{
-			name:            "experiment provided",
-			experimentFlags: map[string]string{machinetypes.EK.Name(): "experiment-ek-flag", machinetypes.E4A.Name(): "experiment-e4a-flag"},
+			name: "experiment provided",
+			experimentFlags: map[string]string{
+				machinetypes.EK.Name():  "experiment-ek-flag",
+				machinetypes.E4A.Name(): "experiment-e4a-flag",
+				machinetypes.E4.Name():  "experiment-e4-flag",
+			},
 			experimentsManager: experiments.NewMockManagerWithOptions(
 				version.Version{},
 				map[string]bool{},
-				map[string]string{"experiment-ek-flag": "ek-standard-4", "experiment-e4a-flag": "e4a-standard-4"},
+				map[string]string{"experiment-ek-flag": "ek-standard-4", "experiment-e4a-flag": "e4a-standard-4", "experiment-e4-flag": "e4-standard-4"},
 			),
-			expected: sets.New("ek-standard-4", "e4a-standard-4"),
+			expected: sets.New("ek-standard-4", "e4a-standard-4", "e4-standard-4"),
 		},
 		{
 			name:             "overrides and experiment both provided",
-			machineTypeFlags: map[string]string{machinetypes.EK.Name(): "ek-standard-8", machinetypes.E4A.Name(): "e4a-standard-8"},
-			experimentFlags:  map[string]string{machinetypes.EK.Name(): "experiment-ek-flag", machinetypes.E4A.Name(): "experiment-e4a-flag"},
+			machineTypeFlags: map[string]string{machinetypes.EK.Name(): "ek-standard-8", machinetypes.E4A.Name(): "e4a-standard-8", machinetypes.E4.Name(): "e4-standard-8"},
+			experimentFlags:  map[string]string{machinetypes.EK.Name(): "experiment-ek-flag", machinetypes.E4A.Name(): "experiment-e4a-flag", machinetypes.E4.Name(): "experiment-e4-flag"},
 			experimentsManager: experiments.NewMockManagerWithOptions(
 				version.Version{},
 				map[string]bool{},
-				map[string]string{"experiment-ek-flag": "ek-standard-4", "experiment-e4a-flag": "e4a-standard-4"},
+				map[string]string{"experiment-ek-flag": "ek-standard-4", "experiment-e4a-flag": "e4a-standard-4", "experiment-e4-flag": "e4-standard-4"},
 			),
-			expected: sets.New("ek-standard-8", "e4a-standard-8"),
+			expected: sets.New("ek-standard-8", "e4a-standard-8", "e4-standard-8"),
 		},
 		{
 			name:             "defaults",
 			machineTypeFlags: map[string]string{},
-			expected:         sets.New("ek-standard-16", "ek-standard-32", "e4a-standard-8", "e4a-standard-16", "e4a-standard-32"),
+			expected:         sets.New("ek-standard-16", "ek-standard-32", "e4a-standard-8", "e4a-standard-16", "e4a-standard-32", "e4-standard-8", "e4-standard-16", "e4-standard-32"),
 		},
 	}
 

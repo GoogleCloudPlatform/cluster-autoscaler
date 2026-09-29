@@ -15,6 +15,7 @@
 package util
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -104,4 +105,12 @@ func ExtractOsDistributionFromImageType(image string) gce.OperatingSystemDistrib
 		klog.Errorf("Unknown OperatingSystemDistribution for %s", image)
 		return gce.OperatingSystemDistributionUnknown
 	}
+}
+
+// GetZonesFromLocation returns a slice of zones for a given location (which can be a zone or a region).
+func GetZonesFromLocation(ctx context.Context, location string, gceClient gce.AutoscalingGceClient) ([]string, error) {
+	if strings.Count(location, "-") >= 2 {
+		return []string{location}, nil
+	}
+	return gceClient.FetchZones(ctx, location)
 }

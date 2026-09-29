@@ -23,15 +23,29 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
+
+type mockAutopilotCloudProvider struct {
+	cloudprovider.CloudProvider
+	autopilotEnabled bool
+}
+
+func (m *mockAutopilotCloudProvider) IsAutopilotEnabled() bool {
+	return m.autopilotEnabled
+}
 
 func TestProcess(t *testing.T) {
 	pod1 := testPod("ccc-1")
@@ -108,6 +122,119 @@ func TestProcess(t *testing.T) {
 			got, err := processor.Process(context.TODO(), nil, tc.unschedulablePods)
 
 			assert.ElementsMatch(t, tc.want, got)
+			assert.NoError(t, err)
+			provider.AssertExpectations(t)
+		})
+	}
+}
+
+func TestProcess_PayPerPodAutopilotWorkloads(t *testing.T) {
+	defaultX86Pod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-x86"},
+	}
+	defaultArmPod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-arm"},
+		Spec: apiv1.PodSpec{
+			NodeSelector: map[string]string{
+				apiv1.LabelArchStable: "arm64",
+			},
+		},
+	}
+	machineFamilyExcludedPod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "excluded-machine-family"},
+		Spec: apiv1.PodSpec{
+			NodeSelector: map[string]string{
+				labels.MachineFamilyLabel: "n2",
+			},
+		},
+	}
+	gpuExcludedPod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "excluded-gpu"},
+		Spec: apiv1.PodSpec{
+			Containers: []apiv1.Container{
+				{
+					Resources: apiv1.ResourceRequirements{
+						Requests: apiv1.ResourceList{
+							gpu.ResourceNvidiaGPU: resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+	pccPod := testPod("Balanced")
+
+	testCases := []struct {
+		name              string
+		autopilotEnabled  bool
+		experimentEnabled bool
+		unschedulablePods []*apiv1.Pod
+		expectedScopes    []string
+	}{
+		{
+			name:              "Autopilot with experiment enabled registers general-purpose for default x86 pod",
+			autopilotEnabled:  true,
+			experimentEnabled: true,
+			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultX86Pod},
+			expectedScopes:    []string{rules.GeneralPurposePodFamily},
+		},
+		{
+			name:              "Autopilot with experiment enabled registers general-purpose-arm for default ARM pod",
+			autopilotEnabled:  true,
+			experimentEnabled: true,
+			unschedulablePods: []*apiv1.Pod{defaultArmPod},
+			expectedScopes:    []string{rules.GeneralPurposeArmPodFamily},
+		},
+		{
+			name:              "Autopilot with experiment enabled registers both x86 and ARM scopes and PCC",
+			autopilotEnabled:  true,
+			experimentEnabled: true,
+			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultArmPod, pccPod},
+			expectedScopes:    []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily, "Balanced"},
+		},
+		{
+			name:              "Autopilot with experiment enabled skips pods with VM-based billing exclusions",
+			autopilotEnabled:  true,
+			experimentEnabled: true,
+			unschedulablePods: []*apiv1.Pod{machineFamilyExcludedPod, gpuExcludedPod},
+			expectedScopes:    nil,
+		},
+		{
+			name:              "Autopilot with experiment disabled does not register general-purpose scope",
+			autopilotEnabled:  true,
+			experimentEnabled: false,
+			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultArmPod},
+			expectedScopes:    nil,
+		},
+		{
+			name:              "Standard cluster with experiment enabled does not register general-purpose scope",
+			autopilotEnabled:  false,
+			experimentEnabled: true,
+			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultArmPod},
+			expectedScopes:    nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &instanceavailability.MockProvider{}
+			for _, scope := range tc.expectedScopes {
+				provider.On("RegisterFlexibilityScope", scope).Return(nil).Once()
+			}
+			mockLister := lister.NewMockCrdListerWithLabel(nil, labels.ComputeClassLabel)
+			var em experiments.Manager
+			if tc.experimentEnabled {
+				em = experiments.NewMockManager(experiments.PayPerPodFleetEfficiencyMinCAVersionFlag)
+			} else {
+				em = experiments.NewMockManager()
+			}
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				CloudProvider: &mockAutopilotCloudProvider{autopilotEnabled: tc.autopilotEnabled},
+			}
+			processor := NewPodListProcessor(provider, mockLister, em)
+			got, err := processor.Process(context.Background(), autoscalingCtx, tc.unschedulablePods)
+
+			assert.ElementsMatch(t, tc.unschedulablePods, got)
 			assert.NoError(t, err)
 			provider.AssertExpectations(t)
 		})

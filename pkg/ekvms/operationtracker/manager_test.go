@@ -35,7 +35,7 @@ func TestUpsize(t *testing.T) {
 	halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
 	downsizedAllocatableEk32 := size.Allocatable{MilliCpus: 1, KBytes: 1}
 	upsizeTime := testStartTime.Add(5 * time.Second)
-	node := test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).Build()
+	node := test.NewNodeBuilder(testResizableNodeName, 8000, 32).Build()
 
 	for _, family := range []string{"ek", "e4a"} {
 		mockBackoff := &mockBackoff{}
@@ -333,7 +333,7 @@ func TestUpsize(t *testing.T) {
 
 func TestDownsize(t *testing.T) {
 	sizeCalc := &identitySizeCalculator{}
-	node := test.NewResizableNodeBuilder(testResizableNodeName, 8000, 32).Build()
+	node := test.NewNodeBuilder(testResizableNodeName, 8000, 32).Build()
 	fullAllocatable32 := size.Allocatable{MilliCpus: 32000, KBytes: 128 * 1024 * 1024}
 	halfAllocatable32 := size.Allocatable{MilliCpus: 16000, KBytes: 64 * 1024 * 1024}
 	nonReziableSize := size.Allocatable{MilliCpus: 0, KBytes: 0}

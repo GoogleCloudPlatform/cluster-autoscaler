@@ -41,7 +41,6 @@ type ScaleUpStatusVisibilityProcessor struct {
 	idGen                    visibility.EventIDGenerator
 	noScaleUp                noscaleup.NoScaleUp
 	failedScaleUpEventLogger events.FailedScaleUpEventLogger
-	scaleUpLimiterTracker    flexadvisor.ScaleUpLimiterTracker
 }
 
 // NewScaleUpStatusVisibilityProcessor creates and returns a default instance of ScaleUpStatusVisibilityProcessor.
@@ -53,7 +52,6 @@ func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts vis
 		idGen:                    new(visibility.UuidEventIDGenerator),
 		noScaleUp:                noscaleup.NewNoScaleUp(visibility.NegativeEventsStalenessThreshold, opts.ScaleUpSimulationForSkippedNodeGroupsEnabled, scaleUpLimiterTracker),
 		failedScaleUpEventLogger: eventLogger,
-		scaleUpLimiterTracker:    scaleUpLimiterTracker,
 	}
 }
 
@@ -61,9 +59,6 @@ func NewScaleUpStatusVisibilityProcessor(logger visibility.EventLogger, opts vis
 func (p *ScaleUpStatusVisibilityProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, originalScaleUpStatus *status.ScaleUpStatus) {
 	startTime := time.Now()
 	defer metrics.UpdateDurationFromStart(ctx, internalmetrics.CaVizScaleUp, startTime)
-	if p.scaleUpLimiterTracker != nil {
-		defer p.scaleUpLimiterTracker.Reset()
-	}
 
 	scaleUpStatus, err := vistypes.ConvertScaleUpStatus(originalScaleUpStatus)
 	if err != nil {

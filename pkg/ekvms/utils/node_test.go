@@ -95,7 +95,7 @@ func TestIsEkMachine(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			node := ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1024).Build()
+			node := ekvms_test.NewNodeBuilder("node-1", 1000, 1024).Build()
 			if tc.instanceTypeLabel != "" {
 				node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: tc.instanceTypeLabel})
 			}
@@ -164,7 +164,7 @@ func TestGetMaxResizableVmSize(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			node := ekvms_test.NewResizableNodeBuilder("node-1", 1000, 1024).Build()
+			node := ekvms_test.NewNodeBuilder("node-1", 1000, 1024).Build()
 			if tc.instanceTypeLabel != "" {
 				node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: tc.instanceTypeLabel})
 			}
@@ -279,6 +279,11 @@ func TestIsResizableMachineType(t *testing.T) {
 		{
 			desc:        "E4A standard 8 is resizable",
 			machineType: "e4a-standard-8",
+			wantResult:  true,
+		},
+		{
+			desc:        "E4 standard 16 is resizable",
+			machineType: "e4-standard-16",
 			wantResult:  true,
 		},
 		{

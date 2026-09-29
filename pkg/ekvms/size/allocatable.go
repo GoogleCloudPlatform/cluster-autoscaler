@@ -36,15 +36,16 @@ func (s Allocatable) IsUpsizeFrom(other Allocatable) bool {
 	return s.isGreaterOrEqual(other) && s != other
 }
 
-// isLessOrEqual checks if s is less or equal than other is all dimensions.
-func (s Allocatable) isLessOrEqual(other Allocatable) bool {
+// IsLessOrEqual checks if s is less or equal than other in all dimensions, i.e. whether s fits
+// within other. Unlike IsDownsizeFrom, it is true for equal sizes.
+func (s Allocatable) IsLessOrEqual(other Allocatable) bool {
 	return s.MilliCpus <= other.MilliCpus && s.KBytes <= other.KBytes
 }
 
 // IsDownsizeFrom checks that s is less or equal than other (in all dimensions),
 // and s is less than other in some dimension.
 func (s Allocatable) IsDownsizeFrom(other Allocatable) bool {
-	return s.isLessOrEqual(other) && s != other
+	return s.IsLessOrEqual(other) && s != other
 }
 
 // Add increases the size by the other size

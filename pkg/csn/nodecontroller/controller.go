@@ -23,6 +23,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
+	kube_record "k8s.io/client-go/tools/record"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/bluegreen"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -85,6 +86,12 @@ var (
 		}
 		return true, ""
 	}
+	WithoutFailedNodesFilter CSNFilter = func(n CSNNode) (bool, string) {
+		if n.State == csn.NodeStateFailed || n.DesiredState == csn.NodeStateFailed {
+			return false, "WithoutFailedNodes"
+		}
+		return true, ""
+	}
 )
 
 // CloudProvider allows for the retrieval of additional node information.
@@ -92,14 +99,19 @@ var (
 type CloudProvider interface {
 	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
 	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	// PollUntilActionStops polls instances until each one has stopped running action, the poll times
+	// out, or ctx is cancelled. See gceclient.AutoscalingInternalGceClient for the full contract.
+	PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	// InstanceByRef allows for retrieval of GCE instances to get their status
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
+	// FetchManagedInstances fetches ManagedInstances for a given MIG.
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
 }
 
-type csnNodeController struct {
+type CSNNodeController struct {
 	nodeStateManager *state.NodeStateManager
 	cloudProvider    CloudProvider
 	k8sClient        *k8s.ClientAdapter
@@ -117,15 +129,10 @@ func NewCSNNodeController(
 	cp CloudProvider,
 	experimentsManager experiments.Manager,
 	backoff handler.CSNCompositeBackoff,
-) *csnNodeController {
+	recorder kube_record.EventRecorder,
+) *CSNNodeController {
 	config := cfg.NewProvider(experimentsManager).GetConfig()
-	var nodeEventHandlers []state.EventHandler
 	nsm := state.NewNodeStateManagerFromInformer(informerFactory,
-		state.WithEventHandler(func(event state.NodeEvent) {
-			for _, f := range nodeEventHandlers {
-				f(event)
-			}
-		}),
 		state.WithStopTrackingDelay(config.StateManager.StopTrackingDelay.Duration),
 		state.WithMetricsSyncInterval(config.StateManager.MetricsSyncInterval.Duration),
 		state.WithBackoff(backoff),
@@ -133,23 +140,44 @@ func NewCSNNodeController(
 		state.WithExperimentsManager(experimentsManager),
 	)
 	wq := queue.NewWorkQueue(config.WorkQueue.MaxSize, nsm)
+	var maxRetriesByOp map[ops.OperationType]int
+	if config.Dispatcher.Retry.MaxRetriesByOp != nil {
+		maxRetriesByOp = make(map[ops.OperationType]int)
+		for k, v := range config.Dispatcher.Retry.MaxRetriesByOp {
+			if opType, err := ops.ParseOperationType(k); err == nil {
+				maxRetriesByOp[opType] = v
+			} else {
+				klog.Warningf("%s error parsing MaxRetriesByOp: %v", logPrefix, err)
+			}
+		}
+	}
 	d := dispatch.NewDispatcher(config.Dispatcher.WorkerCount, retry.Config{
-		MaxRetries:   config.Dispatcher.Retry.MaxRetries,
-		InitialDelay: config.Dispatcher.Retry.InitialDelay.Duration,
-		MaxDelay:     config.Dispatcher.Retry.MaxDelay.Duration,
+		MaxRetries:     config.Dispatcher.Retry.MaxRetries,
+		MaxRetriesByOp: maxRetriesByOp,
+		InitialDelay:   config.Dispatcher.Retry.InitialDelay.Duration,
+		MaxDelay:       config.Dispatcher.Retry.MaxDelay.Duration,
 	}, wq, func(op ops.OperationType, nodeNames set.Set[string]) {
-		// best-effort clear operation.
 		nsm.SetPendingOperation(op, false, nodeNames)
-	})
+	}, func(op ops.OperationType, nodeNames set.Set[string]) {
+		if op == ops.FailNodeOp {
+			return
+		}
+		if err := wq.Enqueue(ops.Operation{
+			Type:      ops.FailNodeOp,
+			NodeNames: nodeNames,
+		}); err != nil {
+			klog.Errorf("%s failed to enqueue FailNodeOp on permanent failure of %s: %v", logPrefix, op, err)
+		}
+	}, dispatch.NewEventEmitter(recorder, nsm, experimentsManager))
 	tracker := taints.NewTracker(wq)
-	nodeEventHandlers = append(nodeEventHandlers, tracker.HandleNodeEvent)
+	nsm.AddEventHandler(tracker.HandleNodeEvent)
 	k8sAdapter := k8s.NewClientAdapter(clientSet)
 	r := reconciliation.NewReconciler(nsm, cp, wq,
 		reconciliation.Config{
 			MaxInvalidCount: config.Reconciliation.MaxInvalidCount,
 		},
 	)
-	c := &csnNodeController{
+	c := &CSNNodeController{
 		cloudProvider:    cp,
 		nodeStateManager: nsm,
 		k8sClient:        k8sAdapter,
@@ -159,23 +187,28 @@ func NewCSNNodeController(
 		cfg:              config,
 	}
 
+	// The node lister reads the same informer cache as the state manager, but
+	// keeps reporting a node after the consume patch takes it out of CSN, which
+	// is exactly when the handler needs its readiness.
+	nodeLister := informerFactory.Core().V1().Nodes().Lister()
 	d.RegisterHandler(ops.SuspendOp, handler.NewSuspendHandler(nsm, cp, k8sAdapter, wq.Enqueue, config.Suspend.PreSuspendDelay.Duration).Handle)
-	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter, backoff).Handle)
+	d.RegisterHandler(ops.ConsumeOp, handler.NewConsumeHandler(nsm, cp, k8sAdapter, nodeLister, backoff, experimentsManager).Handle)
 	d.RegisterHandler(ops.AssignBufferOp, handler.NewAssignBufferHandler(nsm, k8sAdapter).Handle)
 	d.RegisterHandler(ops.AssignSoftTaintOp, handler.NewAssignSoftTaintHandler(nsm, k8sAdapter, tracker).Handle)
+	d.RegisterHandler(ops.FailNodeOp, handler.NewFailNodeHandler(nsm, k8sAdapter).Handle)
 
 	return c
 }
 
 // Run initializes all background processes of the node controller.
-func (c *csnNodeController) Run(ctx context.Context) {
+func (c *CSNNodeController) Run(ctx context.Context) {
 	if err := c.nodeStateManager.Run(ctx); err != nil {
 		klog.Errorf("%s failed to run node state manager: %v", logPrefix, err)
 	}
 	go c.dispatcher.Run(ctx)
 }
 
-func (c *csnNodeController) Consume(nodes []string) set.Set[string] {
+func (c *CSNNodeController) Consume(nodes []string) set.Set[string] {
 	var nodesToConsume []*v1.Node
 	for _, nodeName := range nodes {
 		tn, ok := c.nodeStateManager.Get(nodeName)
@@ -213,7 +246,7 @@ func (c *csnNodeController) Consume(nodes []string) set.Set[string] {
 // MarkAsSuspendable receives a list of nodeInfos that can be suspended, and
 // the node controller will decide which one to be suspended based on
 // multiple criteria and return names of nodes it decided to suspend.
-func (c *csnNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.Set[string] {
+func (c *CSNNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.Set[string] {
 	var nodesToSuspend []*v1.Node
 
 	for _, node := range nodes {
@@ -225,7 +258,7 @@ func (c *csnNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.S
 		if tn.State != csn.NodeStateChilling {
 			continue
 		}
-		if nodeLifetime, minLifetime := time.Now().Sub(node.Node().CreationTimestamp.Time), c.minLifetimeForSuspend(&tn); nodeLifetime <= minLifetime {
+		if nodeLifetime, minLifetime := time.Since(node.Node().CreationTimestamp.Time), c.minLifetimeForSuspend(&tn); nodeLifetime <= minLifetime {
 			continue
 		}
 		if tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp) {
@@ -266,15 +299,15 @@ func (c *csnNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.S
 // Reconcile triggers internal cleanup mechanisms that enqueue
 // consumption operations for nodes with states that deviate from
 // the actual suspension status.
-func (c *csnNodeController) Reconcile() {
+func (c *CSNNodeController) Reconcile() {
 	c.reconciler.Reconcile()
 }
 
-func (c *csnNodeController) UpdateBackoffStatus() {
+func (c *CSNNodeController) UpdateBackoffStatus() {
 	c.nodeStateManager.UpdateBackoffStatus()
 }
 
-func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
+func (c *CSNNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
 	desiredState := tn.DesiredState
 	if desiredState == "" {
 		desiredState = tn.State
@@ -291,13 +324,13 @@ func (c *csnNodeController) toCSNNode(tn *state.TrackedNode) CSNNode {
 		Name:                 node.Name,
 		State:                tn.State,
 		DesiredState:         desiredState,
-		HasPendingOperations: tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp),
+		HasPendingOperations: tn.PendingOperations.HasAny(ops.SuspendOp | ops.ConsumeOp | ops.FailNodeOp),
 		Buffer:               buffer,
 		IsBackedOff:          tn.IsBackedOff,
 	}
 }
 
-func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, map[string]int, error) {
+func (c *CSNNodeController) List(filters ...CSNFilter) ([]CSNNode, map[string]int, error) {
 	stateFilters := make([]state.NodeFilter, 0, len(filters))
 	for _, filter := range filters {
 		if filter == nil {
@@ -316,7 +349,17 @@ func (c *csnNodeController) List(filters ...CSNFilter) ([]CSNNode, map[string]in
 	return result, counts, nil
 }
 
-func (c *csnNodeController) ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer) {
+// GetFailedNodes returns a list of node names that are in permanently failed state.
+func (c *CSNNodeController) GetFailedNodes() []string {
+	trackedNodes, _ := c.nodeStateManager.List(state.FailedNodesFilter)
+	result := make([]string, 0, len(trackedNodes))
+	for _, tn := range trackedNodes {
+		result = append(result, tn.Node.Name)
+	}
+	return result
+}
+
+func (c *CSNNodeController) ProcessBufferAssignment(nodeNameToBuffer map[string]*v1beta1.CapacityBuffer) {
 	if len(nodeNameToBuffer) == 0 {
 		return
 	}
@@ -355,7 +398,7 @@ type migWithNodes struct {
 	nodes set.Set[string]
 }
 
-func (c *csnNodeController) groupByMig(nodes []*v1.Node) map[gce.GceRef]migWithNodes {
+func (c *CSNNodeController) groupByMig(nodes []*v1.Node) map[gce.GceRef]migWithNodes {
 	migNodes := make(map[gce.GceRef]migWithNodes)
 	for _, n := range nodes {
 		mig, err := c.cloudProvider.GkeMigForNode(n)
@@ -388,7 +431,7 @@ func isMigSuspendable(mig *gke.GkeMig) bool {
 	return true
 }
 
-func (c *csnNodeController) minLifetimeForSuspend(tn *state.TrackedNode) time.Duration {
+func (c *CSNNodeController) minLifetimeForSuspend(tn *state.TrackedNode) time.Duration {
 	minLifetime := c.cfg.Suspend.MinNodeLifetime.Duration
 	if tn.Buffer == nil || tn.Buffer.Annotations == nil {
 		return minLifetime

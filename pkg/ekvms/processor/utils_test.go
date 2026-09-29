@@ -103,7 +103,7 @@ func TestAdjustBalloonPodSize(t *testing.T) {
 	}{
 		{
 			desc: "Balloon pod grows",
-			node: ekvms_test.NewResizableNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
+			node: ekvms_test.NewNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
 			podsOnNode: []*v1.Pod{
 				userPod("pod1", 1000, 1*size.GiB),
 				balloonPod(t, "ek-node", 2000, 2*size.GiB),
@@ -121,7 +121,7 @@ func TestAdjustBalloonPodSize(t *testing.T) {
 		},
 		{
 			desc: "Balloon pod shrinks",
-			node: ekvms_test.NewResizableNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
+			node: ekvms_test.NewNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
 			podsOnNode: []*v1.Pod{
 				userPod("pod1", 1000, 1*size.GiB),
 				balloonPod(t, "ek-node", 31000, 127*size.GiB),
@@ -139,7 +139,7 @@ func TestAdjustBalloonPodSize(t *testing.T) {
 		},
 		{
 			desc: "Balloon pod doesn't shrink below 50MiB memory",
-			node: ekvms_test.NewResizableNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
+			node: ekvms_test.NewNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
 			podsOnNode: []*v1.Pod{
 				userPod("pod1", 1000, 1*size.GiB),
 				balloonPod(t, "ek-node", 31000, 127*size.GiB),
@@ -157,7 +157,7 @@ func TestAdjustBalloonPodSize(t *testing.T) {
 		},
 		{
 			desc: "Balloon pod is added when missing",
-			node: ekvms_test.NewResizableNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
+			node: ekvms_test.NewNodeBuilder(testEkNodeName, 32000, 128).WithSupportedMachineType(machineType).WithReadyStatus().Build(),
 			podsOnNode: []*v1.Pod{
 				userPod("pod1", 1000, 1*size.GiB),
 			},

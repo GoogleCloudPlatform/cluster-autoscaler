@@ -49,7 +49,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvm_provider_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers/interfaces"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
@@ -367,13 +367,24 @@ func (p *gkeCloudProviderImpl) GetMigInstanceTemplateSelfLink(mig *GkeMig) (stri
 }
 
 // ResumeInstances resumes instances
-func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
-	return p.gkeManager.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
+func (p *gkeCloudProviderImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+	return p.gkeManager.ResumeInstances(migRef, instances)
+}
+
+// PollUntilActionStops polls instances until each one has stopped running action, the poll times
+// out, or ctx is cancelled. See gceclient.AutoscalingInternalGceClient for the full contract.
+func (p *gkeCloudProviderImpl) PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq {
+	return p.gkeManager.PollUntilActionStops(ctx, action, migRef, instances)
 }
 
 // SuspendInstances suspends instances
 func (p *gkeCloudProviderImpl) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
 	return p.gkeManager.SuspendInstances(migRef, instances, forceSuspend)
+}
+
+// FetchManagedInstances fetches ManagedInstances for a given MIG.
+func (p *gkeCloudProviderImpl) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	return p.gkeManager.FetchManagedInstances(migRef, filter)
 }
 
 // NodeGroupForNode returns the node group for the given node.
@@ -1030,6 +1041,12 @@ func (p *gkeCloudProviderImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
 
 func (p *gkeCloudProviderImpl) TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string {
 	return p.gkeManager.TrimLocationsForMachineConfig(locations, machineType, acceleratorConfig, minCpuPlatform, diskType)
+}
+
+// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+// would span. It uses the same computation as node pool creation.
+func (p *gkeCloudProviderImpl) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	return p.gkeManager.PlannedNodePoolLocations(mig)
 }
 
 // MigUpdateColor is the color of a MIG during a Blue/Green update.
@@ -2323,7 +2340,7 @@ type Config struct {
 	AutoscalingOptsProvider             AutoscalingOptionsProvider
 	AutoprovisioningEligibility         AutoprovisioningEligibility
 	ResizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
-	LookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
+	LookaheadBufferStrategyProvider     lookaheadbuffer_strategy.Provider
 	ProviderConfigObserver              multitenancy.ProviderConfigObserver
 	ProvisioningCache                   *provreqcache.QueuedProvisioningCache
 	DraResourcePredictor                *dynamicresources.ResourcePredictor

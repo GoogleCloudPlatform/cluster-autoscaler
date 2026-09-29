@@ -1946,6 +1946,136 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "NodePoolSpec with resourceLabels sets ResourceLabels on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"resource-labels.cloud.google.com/team": "data-infra",
+					"resource-labels.cloud.google.com/env":  "prod",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ResourceLabels: map[string]string{
+							"env":  "prod",
+							"team": "data-infra",
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with oauthScopes sets OauthScopes on NodeConfig",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/logging.write":  "true",
+					"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						OauthScopes: []string{
+							"https://www.googleapis.com/auth/cloud-platform",
+							"https://www.googleapis.com/auth/logging.write",
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with disablePodCidrOverprovisionConfig sets PodCidrOverprovisionConfig on NodeNetworkConfig (true)",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"PodCIDROverprovisionConfigDisable": "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						PodCidrOverprovisionConfig: &gke_api_beta.PodCIDROverprovisionConfig{
+							Disable:         true,
+							ForceSendFields: []string{"Disable"},
+						},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "NodePoolSpec with disablePodCidrOverprovisionConfig sets PodCidrOverprovisionConfig on NodeNetworkConfig (false)",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"PodCIDROverprovisionConfigDisable": "false",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						PodCidrOverprovisionConfig: &gke_api_beta.PodCIDROverprovisionConfig{
+							Disable:         false,
+							ForceSendFields: []string{"Disable"},
+						},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "NodePoolSpec with maintenance exclusion on static cluster enables EoS native setting",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{
@@ -2098,6 +2228,101 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						PodRange:        "custom-pod-range",
 						ForceSendFields: []string{"Subnetwork", "PodRange"},
 					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service ContainerdConfig specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					labels.ContainerdWritableCgroupsKey: "true",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ContainerdConfig: &gke_api_beta.ContainerdConfig{
+							WritableCgroups: &gke_api_beta.WritableCgroups{
+								Enabled:         true,
+								ForceSendFields: []string{"Enabled"},
+							},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service local SSD encryption mode specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service performance monitoring unit specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					selfservice.PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						AdvancedMachineFeatures: &gke_api_beta.AdvancedMachineFeatures{
+							PerformanceMonitoringUnit: "ARCHITECTURAL",
+							ForceSendFields:           []string{"PerformanceMonitoringUnit"},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
 					PlacementPolicy: &gke_api_beta.PlacementPolicy{
 						Type: "TYPE_UNSPECIFIED",
 					},
@@ -5294,6 +5519,91 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 				"internal.private-node-from-ccc":   "false",
 				"internal.private-node-from-label": "false",
 				labels.GvnicLabelKey:               "false",
+			},
+		},
+		{
+			name: "CCC self service ContainerdConfig on nodepool",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "default-pool",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "containerdConfig": {
+					    "writableCgroups": {
+					      "enabled": true
+					    }
+					  }
+					},
+					"autoscaling": {
+					  "enabled": true,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				labels.ContainerdWritableCgroupsKey: "true",
+				labels.GvnicLabelKey:                "true",
+			},
+		},
+		{
+			name: "Nodepool with localSsdEncryptionMode set",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "pool-1",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "localSsdEncryptionMode": "EPHEMERAL_KEY_ENCRYPTION"
+					},
+					"autoscaling": {
+					  "enabled": false,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				labels.GvnicLabelKey:                          "true",
+			},
+		},
+		{
+			name: "Nodepool with performanceMonitoringUnit set",
+			apiClusterResponse: `{
+				"createTime": "2024-04-25T12:20:00+00:00",
+				"nodePools": [
+				  {
+					"initialNodeCount": 4,
+					"name": "pool-1",
+					"config": {
+					  "machineType": "ct4p-hightpu-4t",
+					  "advancedMachineFeatures": {
+						"performanceMonitoringUnit": "ARCHITECTURAL"
+					  }
+					},
+					"autoscaling": {
+					  "enabled": false,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"AdvancedMachineFeaturesEnableNestedVirtualization": "false",
+				selfservice.PerformanceMonitoringUnitMetadataKey:    "ARCHITECTURAL",
+				labels.GvnicLabelKey:                                "true",
 			},
 		},
 	}

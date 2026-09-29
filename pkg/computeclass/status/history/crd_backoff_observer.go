@@ -16,7 +16,9 @@ package history
 
 import (
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -32,6 +34,12 @@ import (
 const (
 	ConditionTypeNodeProvisioningInCooldown        = "ProvisioningSuspended"
 	ConditionTypeNodeProvisioningInPartialCooldown = "ProvisioningConstrained"
+
+	// maxErrorDetailLength caps how much of the verbatim cloud provider error is copied into a
+	// condition message. The apiserver allows up to 32KiB in Condition.Message, but these
+	// messages are shown in `kubectl describe` and are re-sent on every status flush, so a much
+	// shorter cap keeps the status readable and the patches small.
+	maxErrorDetailLength = 512
 )
 
 type ruleBackoffKey struct {
@@ -50,7 +58,17 @@ type CrdBackoffObserver struct {
 	matcher   computeclass.Matcher
 
 	// backedOffRules maps ruleBackoffKey to backoffData.
+	//
+	// This map is not guarded by a mutex of its own. Async node pool creation reports its
+	// failures from a background goroutine (asyncGkeManager.runNodePoolInitalizer), so OnBackoff
+	// can be called off the main autoscaling loop while RemoveExpiredBackoffs iterates this map
+	// from it. That is safe only because enabling async node groups also forces the synchronized
+	// composite backoff (see isSynchronizedBackoffEnabled), which serializes Backoff() and
+	// RemoveStaleBackoffData() under a single mutex. Any new caller of the BackoffObserver
+	// methods must preserve that serialization.
 	backedOffRules map[ruleBackoffKey]backoffData
+
+	includeErrorDetails bool
 
 	now func() time.Time
 }
@@ -66,13 +84,14 @@ type backoffCloudProvider interface {
 	IsAutopilotEnabled() bool
 }
 
-func NewCrdBackoffObserver(updatesCh chan<- npc_status.UpdateMessage, lister npc_lister.Lister, provider backoffCloudProvider) *CrdBackoffObserver {
+func NewCrdBackoffObserver(updatesCh chan<- npc_status.UpdateMessage, lister npc_lister.Lister, provider backoffCloudProvider, includeErrorDetails bool) *CrdBackoffObserver {
 	return &CrdBackoffObserver{
-		updatesCh:      updatesCh,
-		lister:         lister,
-		matcher:        computeclass.NewMatcher(lister, provider),
-		backedOffRules: make(map[ruleBackoffKey]backoffData),
-		now:            time.Now,
+		updatesCh:           updatesCh,
+		lister:              lister,
+		matcher:             computeclass.NewMatcher(lister, provider),
+		backedOffRules:      make(map[ruleBackoffKey]backoffData),
+		includeErrorDetails: includeErrorDetails,
+		now:                 time.Now,
 	}
 }
 
@@ -119,7 +138,7 @@ func (i *CrdBackoffObserver) OnNpcBackoff(npcCrd crd.CRD, ruleIdx int, errorInfo
 				Type:               ConditionTypeNodeProvisioningInCooldown,
 				Status:             metav1.ConditionTrue,
 				Reason:             translatedReason,
-				Message:            fmt.Sprintf("NodeProvisioning associated with this priority failed due to the %v error. Backing off the priority until %v.", translatedReason, until.Format("2006-01-02 15:04:05 MST")),
+				Message:            i.withErrorDetails(fmt.Sprintf("NodeProvisioning associated with this priority failed due to the %v error. Backing off the priority until %v.", translatedReason, until.Format("2006-01-02 15:04:05 MST")), errorInfo),
 				LastTransitionTime: metav1.NewTime(i.now()),
 			})
 
@@ -187,7 +206,7 @@ func (i *CrdBackoffObserver) OnBackoff(nodeGroup cloudprovider.NodeGroup, errorI
 					Type:               ConditionTypeNodeProvisioningInPartialCooldown,
 					Status:             metav1.ConditionTrue,
 					Reason:             translatedReason,
-					Message:            fmt.Sprintf("NodeProvisioning of the node pools associated with this priority failed due to the %v error. In backoff until %v.", translatedReason, until.Format("2006-01-02 15:04:05 MST")),
+					Message:            i.withErrorDetails(fmt.Sprintf("NodeProvisioning of the node pools associated with this priority failed due to the %v error. In backoff until %v.", translatedReason, until.Format("2006-01-02 15:04:05 MST")), errorInfo),
 					LastTransitionTime: metav1.NewTime(i.now()),
 				})
 			}
@@ -233,6 +252,38 @@ func (i *CrdBackoffObserver) RemoveExpiredBackoffs(currentTime time.Time) {
 			}, ruleIdxStr)
 		}
 	}
+}
+
+// withErrorDetails appends the verbatim cloud provider (GCE/GKE) error message to a condition
+// message, if reporting error details is enabled for this cluster.
+//
+// translateErrorCode collapses every cloud provider error into one of a handful of reasons, which
+// tells a user what kind of failure occurred but not why. The underlying message usually carries
+// the actionable part (which quota, which reservation, which IP range), so it is appended verbatim
+// rather than being parsed.
+func (i *CrdBackoffObserver) withErrorDetails(message string, errorInfo cloudprovider.InstanceErrorInfo) string {
+	if !i.includeErrorDetails {
+		return message
+	}
+	detail := strings.TrimSpace(errorInfo.ErrorMessage)
+	if detail == "" {
+		return message
+	}
+	return message + " Cloud provider error: " + truncateErrorDetail(detail)
+}
+
+// truncateErrorDetail shortens detail to maxErrorDetailLength without splitting a multi-byte
+// UTF-8 character. Invalid UTF-8 is replaced up front, as Condition.Message has to be valid UTF-8.
+func truncateErrorDetail(detail string) string {
+	detail = strings.ToValidUTF8(detail, string(utf8.RuneError))
+	if len(detail) <= maxErrorDetailLength {
+		return detail
+	}
+	truncated := detail[:maxErrorDetailLength]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + "..."
 }
 
 // translateErrorCode maps cloud provider error codes to human-readable reasons

@@ -15,10 +15,12 @@
 package tracking
 
 import (
+	kube_client "k8s.io/client-go/kubernetes"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/cli"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
+	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 )
 
 // InitExperimentsManager initializes experiments Manager.
@@ -32,6 +34,16 @@ func InitExperimentsManager(o internalopts.AutoscalingOptions) experiments.Manag
 var experimentsEvaluator = newDefaultExperimentsEvaluator
 
 func newDefaultExperimentsEvaluator(o internalopts.AutoscalingOptions) experiments.Evaluator {
+	if o.ExperimentsConfigMap != "" {
+		kubeConfig := kube_util.GetKubeConfig(o.KubeClientOpts)
+		kubeClient, err := kube_client.NewForConfig(kubeConfig)
+		if err != nil {
+			klog.Errorf("Failed to create client for experiments evaluator: %v", err)
+			return experiments.NewNoopEvaluator()
+		}
+		return experiments.NewConfigMapEvaluatorFromClient(kubeClient, o.ConfigNamespace, o.ExperimentsConfigMap)
+	}
+
 	return experiments.NewNoopEvaluator()
 }
 

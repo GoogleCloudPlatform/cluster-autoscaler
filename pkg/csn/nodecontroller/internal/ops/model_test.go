@@ -15,10 +15,12 @@
 package ops
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/utils/set"
 )
 
 func TestOperationType_HasAny(t *testing.T) {
@@ -226,6 +228,11 @@ func TestOperationType_String(t *testing.T) {
 			want: "NO_OP",
 		},
 		{
+			name: "fail_node_op",
+			op:   FailNodeOp,
+			want: "FAIL_NODE",
+		},
+		{
 			name: "unknown_op",
 			op:   OperationType(3),
 			want: "UNKNOWN",
@@ -235,6 +242,132 @@ func TestOperationType_String(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, fmt.Sprintf("%s", tc.op))
+		})
+	}
+}
+
+func TestResult_AddResult(t *testing.T) {
+	errA := errors.New("err-a")
+	errB := errors.New("err-b")
+
+	tests := []struct {
+		name        string
+		result      Result
+		other       Result
+		wantSuccess []string
+		wantErrs    map[string]error
+	}{
+		{
+			name:        "add_into_empty_result",
+			result:      NewResult(),
+			other:       Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_empty_result",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       NewResult(),
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_zero_value_result",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errA},
+		},
+		{
+			name:        "add_disjoint_results",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{Success: set.New("node-3"), Errs: map[string]error{"node-4": errB}},
+			wantSuccess: []string{"node-1", "node-3"},
+			wantErrs:    map[string]error{"node-2": errA, "node-4": errB},
+		},
+		{
+			name:        "add_keeps_single_entry_per_node",
+			result:      Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errA}},
+			other:       Result{Success: set.New("node-1"), Errs: map[string]error{"node-2": errB}},
+			wantSuccess: []string{"node-1"},
+			wantErrs:    map[string]error{"node-2": errB},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.result.AddResult(tc.other)
+			assert.ElementsMatch(t, tc.wantSuccess, tc.result.Success.UnsortedList())
+			assert.Equal(t, tc.wantErrs, tc.result.Errs)
+		})
+	}
+}
+
+func TestParseOperationType(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantOp  OperationType
+		wantErr bool
+	}{
+		{
+			name:    "suspend",
+			input:   "SUSPEND",
+			wantOp:  SuspendOp,
+			wantErr: false,
+		},
+		{
+			name:    "consume",
+			input:   "CONSUME",
+			wantOp:  ConsumeOp,
+			wantErr: false,
+		},
+		{
+			name:    "assign_buffer",
+			input:   "ASSIGN_BUFFER",
+			wantOp:  AssignBufferOp,
+			wantErr: false,
+		},
+		{
+			name:    "assign_soft_taint",
+			input:   "ASSIGN_SOFT_TAINT",
+			wantOp:  AssignSoftTaintOp,
+			wantErr: false,
+		},
+		{
+			name:    "no_op",
+			input:   "NO_OP",
+			wantOp:  NoOp,
+			wantErr: false,
+		},
+		{
+			name:    "fail_node",
+			input:   "FAIL_NODE",
+			wantOp:  FailNodeOp,
+			wantErr: false,
+		},
+		{
+			name:    "empty",
+			input:   "",
+			wantOp:  NoOp,
+			wantErr: true,
+		},
+		{
+			name:    "unknown",
+			input:   "UNKNOWN_OP",
+			wantOp:  NoOp,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotOp, err := ParseOperationType(tc.input)
+			assert.Equal(t, tc.wantOp, gotOp)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
 		})
 	}
 }

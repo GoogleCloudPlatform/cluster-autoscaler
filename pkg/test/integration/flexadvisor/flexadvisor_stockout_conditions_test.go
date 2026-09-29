@@ -25,7 +25,6 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
@@ -40,7 +39,7 @@ import (
 const (
 	// conditionsFlushInterval is set slightly higher than the status Aggregator's BatchFlushInterval
 	// to ensure virtual time advances enough for the background status aggregator to flush dirty status updates.
-	conditionsFlushInterval = status.BatchFlushInterval + 10*time.Second
+	conditionsFlushInterval = ccc.ConditionsFlushInterval
 )
 
 // TestStockOutConditionsEmitted verifies that when GCE Flex Advisor reports capacity stockouts or

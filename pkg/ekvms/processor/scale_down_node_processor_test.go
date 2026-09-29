@@ -93,6 +93,7 @@ var (
 		Value: map[string]*processor_proto.DownsizeConfig{
 			machinetypes.EK.Name():  testDownsizeConfig,
 			machinetypes.E4A.Name(): testDownsizeConfig,
+			machinetypes.E4.Name():  testDownsizeConfig,
 		},
 	}
 )
@@ -108,7 +109,7 @@ func TestScaleDownProcess(t *testing.T) {
 	testCases := map[string]struct {
 		nodes             []*testNodeWithPodsInfo
 		updateInfo        []*v1alpha1.UpdateInfo
-		ekSnapshot        operationtracker.ResizableNodesSnapshot
+		allNodesSnapshot  operationtracker.ResizableNodesSnapshot
 		resizableSnapshot operationtracker.ResizableNodesSnapshot
 		maxWindowsSamples map[string][]struct {
 			addTime     time.Time
@@ -128,24 +129,24 @@ func TestScaleDownProcess(t *testing.T) {
 	}{
 		"no nodes": {
 			nodes:                         []*testNodeWithPodsInfo{},
-			ekSnapshot:                    map[string]operationtracker.ResizableNode{},
+			allNodesSnapshot:              map[string]operationtracker.ResizableNode{},
 			isResizingEnabled:             true,
 			expectedNodesScaleDownAllowed: map[string]bool{},
 			expectedCandidates:            []string{},
 			expectedDownsizes:             []string{},
 		},
-		"missing config for family - abort": {
+		"missing downsize config for family - abort": {
 			nodes: []*testNodeWithPodsInfo{
 				{
-					node: ekvms_test.EkNode32("node-e4a", 8000, 32*size.GiB),
+					node: ekvms_test.E4aNode32("node-e4a", 8000, 32*size.GiB),
 					pods: []*v1.Pod{
 						userPod("pod1", 1000, 6*size.GiB),
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-e4a": {
-					MachineFamily:     "E4A",
+					MachineFamily:     "E4A", // machine family doesn't match machinetypes.E4A.Name()
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
 					PhysicalMaxSize:   resizable32MaxSize,
 					UpsizableMaxSize:  resizable32MaxSize,
@@ -159,24 +160,15 @@ func TestScaleDownProcess(t *testing.T) {
 			expectedCandidates: []string{"node-e4a"},
 			expectedDownsizes:  []string{},
 		},
-		"non-EK nodes": {
+		"non-resizable nodes": {
 			nodes: []*testNodeWithPodsInfo{
 				{
-					node: nonEkNode("non-ek", 8000, 32*size.GiB),
+					node: nonResizableNode("non-resizable-node", 8000, 32*size.GiB),
 					pods: []*v1.Pod{
 						userPod("pod1", 1000, 6*size.GiB),
 						systemPod("pod2", 2000, 7*size.GiB),
 						daemonsetPod("pod3", 3000, 8*size.GiB),
-						balloonPod(t, "non-ek", 2000, 11*size.GiB),
-					},
-				},
-				{
-					node: nonEkNode("resizable-non-ek", 8000, 32*size.GiB),
-					pods: []*v1.Pod{
-						userPod("pod1", 1000, 6*size.GiB),
-						systemPod("pod2", 2000, 7*size.GiB),
-						daemonsetPod("pod3", 3000, 8*size.GiB),
-						balloonPod(t, "resizable-non-ek", 2000, 11*size.GiB),
+						balloonPod(t, "non-resizable-node", 2000, 11*size.GiB),
 					},
 				},
 				{
@@ -197,14 +189,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
-				"resizable-non-ek": {
-					MachineFamily:     machinetypes.EK.Name(),
-					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
-					PhysicalMaxSize:   resizable32MaxSize,
-					UpsizableMaxSize:  resizable32MaxSize,
-					LastOperationTime: testStartTime.Add(-2 * time.Hour),
-				},
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"ek": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -214,20 +199,18 @@ func TestScaleDownProcess(t *testing.T) {
 				},
 			},
 			downsizePossibleSince: map[string]time.Time{
-				"non-ek":           testStartTime.Add(-2 * time.Hour),
-				"resizable-non-ek": testStartTime.Add(-2 * time.Hour),
-				"unresizable-ek":   testStartTime.Add(-2 * time.Hour),
-				"ek":               testStartTime.Add(-2 * time.Hour),
+				"non-resizable-node": testStartTime.Add(-2 * time.Hour),
+				"unresizable-ek":     testStartTime.Add(-2 * time.Hour),
+				"ek":                 testStartTime.Add(-2 * time.Hour),
 			},
 			isResizingEnabled:     true,
 			nodesScaleDownAllowed: map[string]bool{},
 			expectedNodesScaleDownAllowed: map[string]bool{
-				"ek":               false,
-				"non-ek":           true,
-				"resizable-non-ek": true,
-				"unresizable-ek":   true,
+				"ek":                 false,
+				"non-resizable-node": true,
+				"unresizable-ek":     true,
 			},
-			expectedCandidates: []string{"non-ek", "resizable-non-ek", "unresizable-ek"},
+			expectedCandidates: []string{"non-resizable-node", "unresizable-ek"},
 			expectedDownsizes:  []string{"ek"},
 		},
 		"empty EK node with possible downsize - downsize allowed": {
@@ -241,7 +224,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -279,7 +262,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-e4a-32": {
 					MachineFamily:     machinetypes.E4A.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -306,6 +289,44 @@ func TestScaleDownProcess(t *testing.T) {
 				},
 			},
 		},
+		"empty E4 node with possible downsize - downsize allowed": {
+			nodes: []*testNodeWithPodsInfo{
+				{
+					node: ekvms_test.E4Node32("node-e4-32", 8000, 32*size.GiB),
+					pods: []*v1.Pod{
+						systemPod("pod2", 3000, 13*size.GiB),
+						daemonsetPod("pod3", 3000, 8*size.GiB),
+						balloonPod(t, "node-e4-32", 1000, 1*size.GiB),
+					},
+				},
+			},
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
+				"node-e4-32": {
+					MachineFamily:     machinetypes.E4.Name(),
+					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
+					PhysicalMaxSize:   resizable32MaxSize,
+					UpsizableMaxSize:  resizable32MaxSize,
+					LastOperationTime: testStartTime.Add(-2 * time.Hour),
+				},
+			},
+			downsizePossibleSince: map[string]time.Time{
+				"node-e4-32": testStartTime.Add(-2 * time.Hour),
+			},
+			isResizingEnabled:     true,
+			nodesScaleDownAllowed: map[string]bool{},
+			expectedNodesScaleDownAllowed: map[string]bool{
+				"node-e4-32": false,
+			},
+			expectedCandidates: []string{},
+			expectedDownsizes:  []string{"node-e4-32"},
+			expectedPods: map[string][]*v1.Pod{
+				"node-e4-32": {
+					systemPod("pod2", 3000, 13*size.GiB),
+					daemonsetPod("pod3", 3000, 8*size.GiB),
+					balloonPod(t, "node-e4-32", 2000, 11*size.GiB),
+				},
+			},
+		},
 		"empty EK node downsized to limit - scale down allowed": {
 			nodes: []*testNodeWithPodsInfo{
 				{
@@ -317,7 +338,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -355,7 +376,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -405,7 +426,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"surge-node": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -470,7 +491,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node1": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 34000, KBytes: 132 * giBToKiB},
@@ -513,7 +534,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -570,7 +591,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node1": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -616,7 +637,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -681,7 +702,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -742,7 +763,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       resizable32MaxSize,
@@ -804,7 +825,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 6000, KBytes: 21 * giBToKiB},
@@ -870,7 +891,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32-cpu-downsize-limited": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 20000, KBytes: 100 * giBToKiB},
@@ -943,7 +964,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32-downsize-limited-cpu-under-limit": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 10000, KBytes: 100 * giBToKiB},
@@ -1000,7 +1021,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"sample-outside-does-not-block-the-downsize": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1067,7 +1088,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node1": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1103,7 +1124,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node1": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1144,7 +1165,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1215,7 +1236,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1283,7 +1304,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"node-32": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1351,7 +1372,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"unresizable-ek": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1417,7 +1438,7 @@ func TestScaleDownProcess(t *testing.T) {
 					},
 				},
 			},
-			ekSnapshot: map[string]operationtracker.ResizableNode{
+			allNodesSnapshot: map[string]operationtracker.ResizableNode{
 				"non-upsizable-ek": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1480,9 +1501,9 @@ func TestScaleDownProcess(t *testing.T) {
 				tc.nodesScaleDownAllowed = map[string]bool{}
 			}
 			resizableVmManager.nodesScaleDownAllowed = tc.nodesScaleDownAllowed
-			resizableVmManager.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.ekSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(tc.allNodesSnapshot)
 			if tc.resizableSnapshot == nil {
-				tc.resizableSnapshot = tc.ekSnapshot
+				tc.resizableSnapshot = tc.allNodesSnapshot
 			}
 
 			if tc.downsizeNonResizable {
@@ -1760,7 +1781,7 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			ekSnapshot := operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot := operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily:     machinetypes.EK.Name(),
 					DesiredSize:       size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1774,8 +1795,8 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 			resizableVmManager.On("IsResizingEnabled", mock.Anything).Return(
 				true)
 			resizableVmManager.On("GetNodesScaleDownAllowedFromCache", mock.AnythingOfType("[]string"))
-			resizableVmManager.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(ekSnapshot)
-			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.ResizableOnly).Return(ekSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", true, operationtracker.AllNodes).Return(resizableNodesSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.ResizableOnly).Return(resizableNodesSnapshot)
 			resizableVmManager.On("Downsize", mock.AnythingOfType("*v1.Node"), mock.AnythingOfType("size.Allocatable")).Return(nil)
 			resizableVmManager.On("UpdateNodesScaleDownAllowedCache", mock.AnythingOfType("map[string]bool"))
 			resizableVmManager.On("InvalidateNodesScaleDownAllowedCache")
@@ -1810,9 +1831,9 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 
 				testClock.Sleep(step.sleep)
 				if step.updateLastOperation {
-					entry := ekSnapshot["node1"]
+					entry := resizableNodesSnapshot["node1"]
 					entry.LastOperationTime = testClock.Now()
-					ekSnapshot["node1"] = entry
+					resizableNodesSnapshot["node1"] = entry
 				}
 
 				// simulate cache expiration
@@ -1838,17 +1859,17 @@ func TestScaleDownProcess_DownsizeDelay(t *testing.T) {
 
 func TestEmitMetrics(t *testing.T) {
 	testCases := []struct {
-		name           string
-		nodeInfos      []*framework.NodeInfo
-		ekSnapshot     operationtracker.ResizableNodesSnapshot
-		expectedToCall bool
-		expectedShape  []metrics.LAPodNodeShape
+		name                   string
+		nodeInfos              []*framework.NodeInfo
+		resizableNodesSnapshot operationtracker.ResizableNodesSnapshot
+		expectedToCall         bool
+		expectedShape          []metrics.LAPodNodeShape
 	}{
 		{
-			name:           "no nodes",
-			nodeInfos:      []*framework.NodeInfo{},
-			ekSnapshot:     operationtracker.ResizableNodesSnapshot{},
-			expectedToCall: false,
+			name:                   "no nodes",
+			nodeInfos:              []*framework.NodeInfo{},
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
+			expectedToCall:         false,
 		},
 		{
 			name: "no lookahead pods",
@@ -1856,7 +1877,7 @@ func TestEmitMetrics(t *testing.T) {
 				framework.NewTestNodeInfo(ekvms_test.EkNode32("node1", 8000, 32*size.GiB),
 					userPod("pod1", 1000, 6*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1871,7 +1892,7 @@ func TestEmitMetrics(t *testing.T) {
 					userPod("pod1", 1000, 6*size.GiB),
 					lookaheadPod("la-pod1", 2000, 10*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1892,7 +1913,7 @@ func TestEmitMetrics(t *testing.T) {
 					userPod("pod1", 1000, 6*size.GiB),
 					lookaheadPod("la-pod1", 2000, 10*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 4000, KBytes: 16 * giBToKiB},
@@ -1917,7 +1938,7 @@ func TestEmitMetrics(t *testing.T) {
 					lookaheadPod("la-pod2", 1000, 5*size.GiB),
 					userPod("pod3", 250, 1*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1950,7 +1971,7 @@ func TestEmitMetrics(t *testing.T) {
 					lookaheadPod("la-pod2", 1000, 5*size.GiB),
 					userPod("pod3", 250, 1*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
@@ -1972,12 +1993,12 @@ func TestEmitMetrics(t *testing.T) {
 					lookaheadPod("la-pod1", 2000, 10*size.GiB)),
 				framework.NewTestNodeInfo(upcomingNode("node2", 4000, 16*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"node1": {
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 8000, KBytes: 32 * giBToKiB},
 				},
-				"node2": { // this idealy should not exists in ekSnpashot, but to make sure that we test the upcoming condition
+				"node2": { // this ideally should not exists in resizableNodesSnapshot, but to make sure that we test the upcoming condition
 					MachineFamily: machinetypes.EK.Name(),
 					DesiredSize:   size.Allocatable{MilliCpus: 4000, KBytes: 16 * giBToKiB},
 				},
@@ -1998,7 +2019,7 @@ func TestEmitMetrics(t *testing.T) {
 			defer mockCtrl.Finish()
 
 			resizableVmManager := newManagerMock()
-			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.AllNodes).Return(tc.ekSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.AllNodes).Return(tc.resizableNodesSnapshot)
 
 			mockMetrics := &mockScaleDownMetrics{}
 			mockMetrics.On("UpdateNodesWithLookaheadPodsShape", mock.Anything).Return()
@@ -2042,19 +2063,19 @@ func TestUpdateRequestedResources(t *testing.T) {
 		name                         string
 		nodeNames                    []string
 		nodeInfos                    []*framework.NodeInfo
-		ekSnapshot                   operationtracker.ResizableNodesSnapshot
+		resizableNodesSnapshot       operationtracker.ResizableNodesSnapshot
 		initialMaxResources          map[string]resourcePair
 		wantMaxResources             map[string]resourcePair
 		initialDownsizePossibleSince map[string]time.Time
 		wantDownsizePossibleSince    map[string]time.Time
 	}{
 		{
-			name:                "empty",
-			nodeNames:           []string{},
-			nodeInfos:           []*framework.NodeInfo{},
-			ekSnapshot:          operationtracker.ResizableNodesSnapshot{},
-			initialMaxResources: map[string]resourcePair{},
-			wantMaxResources:    map[string]resourcePair{},
+			name:                   "empty",
+			nodeNames:              []string{},
+			nodeInfos:              []*framework.NodeInfo{},
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
+			initialMaxResources:    map[string]resourcePair{},
+			wantMaxResources:       map[string]resourcePair{},
 		},
 		{
 			name: "empty snapshot - no changes",
@@ -2063,12 +2084,12 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
-			ekSnapshot:          operationtracker.ResizableNodesSnapshot{},
-			initialMaxResources: map[string]resourcePair{},
-			wantMaxResources:    map[string]resourcePair{},
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
+			initialMaxResources:    map[string]resourcePair{},
+			wantMaxResources:       map[string]resourcePair{},
 		},
 		{
 			name: "ek in snapshot - updated max windows",
@@ -2077,10 +2098,10 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-8": {
 					MachineFamily: machinetypes.EK.Name(),
 				},
@@ -2097,10 +2118,10 @@ func TestUpdateRequestedResources(t *testing.T) {
 				"ek-8",
 			},
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(nonEkNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
+				framework.NewTestNodeInfo(nonResizableNode("node-8", 8000, 32*size.GiB), userPod("pod1", 1000, 6*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{},
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{},
 			initialMaxResources: map[string]resourcePair{
 				"ek-8": {cpu: 1000, mem: 6 * giBToKiB},
 			},
@@ -2120,7 +2141,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("unresizable-ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB), lookaheadPod("la-pod2", 2000, 10*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB), lookaheadPod("la-pod2", 2000, 10*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-8": {
 					MachineFamily:    machinetypes.EK.Name(),
 					UpsizableMaxSize: resizable8MaxSize,
@@ -2146,7 +2167,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("non-upsizable-ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB), lookaheadPod("la-pod2", 2000, 10*size.GiB)),
 				framework.NewTestNodeInfo(ekvms_test.EkNode8("ek-8", 8000, 32*size.GiB), userPod("pod2", 1000, 6*size.GiB), lookaheadPod("la-pod2", 2000, 10*size.GiB)),
 			},
-			ekSnapshot: operationtracker.ResizableNodesSnapshot{
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
 				"ek-8": {
 					MachineFamily:    machinetypes.EK.Name(),
 					UpsizableMaxSize: resizable8MaxSize,
@@ -2199,7 +2220,7 @@ func TestUpdateRequestedResources(t *testing.T) {
 				ClusterSnapshot: snapshot,
 			}
 
-			processor.updateRequestedResources(ctx, testDownsizeConfigProvider.Provide(), nodes, tc.ekSnapshot)
+			processor.updateRequestedResources(ctx, testDownsizeConfigProvider.Provide(), nodes, tc.resizableNodesSnapshot)
 
 			assert.Len(t, processor.requestedResourcesMaxWindows, len(tc.wantMaxResources))
 			for nodeName, resources := range tc.wantMaxResources {
@@ -2241,10 +2262,9 @@ func resizingPod(name string, fromCpu, fromMem, toCpu, toMem int64) *v1.Pod {
 	})
 }
 
-func nonEkNode(name string, cpu, mem int64) *v1.Node {
-	node := ekvms_test.EkNode32(name, cpu, mem)
-	node.Labels[v1.LabelInstanceTypeStable] = "e2-standard-32"
-	return node
+func nonResizableNode(name string, cpu, mem int64) *v1.Node {
+	b := ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode(name, cpu, mem))
+	return b.WithStandard32Capacity().WithSupportedMachineType("e2-standard-32").WithMachineFamily("e2").Build()
 }
 
 func upcomingNode(name string, cpu, mem int64) *v1.Node {

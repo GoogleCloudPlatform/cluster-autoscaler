@@ -95,3 +95,45 @@ func TestIsFleetEfficiencyEnabled(t *testing.T) {
 		assert.True(t, IsFleetEfficiencyEnabled(true, manager))
 	})
 }
+
+func TestIsDefaultAllocationStrategyEnabled(t *testing.T) {
+	tests := []struct {
+		name      string
+		boolFlags map[string]bool
+		expected  bool
+	}{
+		{
+			name:     "flags not set - enabled by default",
+			expected: true,
+		},
+		{
+			name: "both flags true",
+			boolFlags: map[string]bool{
+				experiments.DefaultAllocationStrategyEnabledFlag:      true,
+				experiments.DefaultAllocationStrategyMinCAVersionFlag: true,
+			},
+			expected: true,
+		},
+		{
+			name:      "Enabled flag false",
+			boolFlags: map[string]bool{experiments.DefaultAllocationStrategyEnabledFlag: false},
+			expected:  false,
+		},
+		{
+			name:      "MinCAVersion flag false",
+			boolFlags: map[string]bool{experiments.DefaultAllocationStrategyMinCAVersionFlag: false},
+			expected:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, nil)
+			assert.Equal(t, tc.expected, IsDefaultAllocationStrategyEnabled(manager))
+		})
+	}
+
+	t.Run("nil manager", func(t *testing.T) {
+		assert.True(t, IsDefaultAllocationStrategyEnabled(nil))
+	})
+}

@@ -23,7 +23,9 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/utils/ptr"
 )
 
 func TestResourcePoliciesPuller(t *testing.T) {
@@ -36,51 +38,53 @@ func TestResourcePoliciesPuller(t *testing.T) {
 	ppExpired := &gceclient.GceResourcePolicy{Name: "ppExpired", Status: "EXPIRED", PlacementPolicy: gceclient.PlacementPolicy{MaxDistance: 2, TpuTopology: "2x2"}}
 	ppInvalid := &gceclient.GceResourcePolicy{Name: "ppInvalid", Status: "INVALID", PlacementPolicy: gceclient.PlacementPolicy{MaxDistance: 2, TpuTopology: "2x2"}}
 
-	testCases := []struct {
-		name                 string
-		disabledExperiment   bool
+	testCases := map[string]struct {
+		experimentState      *bool
 		returnPolicies       []*gceclient.GceResourcePolicy
 		returnError          error
 		wantResourcePolicies map[string]*gceclient.GceResourcePolicy
 	}{
-		{
-			name:                 "ResourcePoliciesAvailable",
+		"DefaultEnabled_ResourcePoliciesAvailable": {
 			returnPolicies:       []*gceclient.GceResourcePolicy{wpReady, ppReady, ppCreating, ppDeleting, ppExpired, ppInvalid},
 			returnError:          nil,
 			wantResourcePolicies: map[string]*gceclient.GceResourcePolicy{wpReady.Name: wpReady, ppReady.Name: ppReady},
 		},
-		{
-			name:                 "ExpDisabled_ResourcePoliciesAvailable",
-			disabledExperiment:   true,
+		"ExplicitlyEnabled_ResourcePoliciesAvailable": {
+			experimentState:      ptr.To(true),
+			returnPolicies:       []*gceclient.GceResourcePolicy{wpReady, ppReady, ppCreating, ppDeleting, ppExpired, ppInvalid},
+			returnError:          nil,
+			wantResourcePolicies: map[string]*gceclient.GceResourcePolicy{wpReady.Name: wpReady, ppReady.Name: ppReady},
+		},
+		"ExplicitlyDisabled_ResourcePoliciesAvailable": {
+			experimentState:      ptr.To(false),
 			returnPolicies:       []*gceclient.GceResourcePolicy{wpReady, ppReady, ppCreating, ppDeleting, ppExpired, ppInvalid},
 			returnError:          nil,
 			wantResourcePolicies: map[string]*gceclient.GceResourcePolicy{},
 		},
-		{
-			name:           "NoResourcePoliciesAvailable",
+		"NoResourcePoliciesAvailable": {
 			returnPolicies: []*gceclient.GceResourcePolicy{},
 			returnError:    nil,
 		},
-		{
-			name:           "ResourcePoliciesError",
+		"ResourcePoliciesError": {
 			returnPolicies: []*gceclient.GceResourcePolicy{wpReady, ppReady, ppCreating, ppDeleting, ppExpired, ppInvalid},
 			returnError:    fmt.Errorf("api error"),
 		},
-		{
-			name:           "DeadlineExceededError",
+		"DeadlineExceededError": {
 			returnPolicies: []*gceclient.GceResourcePolicy{wpReady, ppReady, ppCreating, ppDeleting, ppExpired, ppInvalid},
 			returnError:    context.DeadlineExceeded,
 		},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			enabledExperiments := []string{experiments.ResourcePolicyPullerFlag}
-			if tc.disabledExperiment {
-				enabledExperiments = []string{}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var expManager experiments.Manager
+			if tc.experimentState == nil {
+				expManager = experiments.NewMockManager()
+			} else {
+				expManager = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ResourcePolicyPullerFlag: *tc.experimentState}, nil)
 			}
 			fakeProvider := NewFakeResourcePolicyPullerProvider(tc.returnPolicies, tc.returnError)
-			rpPuller := NewResourcePolicyPuller(experiments.NewMockManager(enabledExperiments...), fakeProvider, projectID)
+			rpPuller := NewResourcePolicyPuller(expManager, fakeProvider, projectID)
 			rpPuller.Loop()
 
 			// test rpPuller.Loop()
@@ -105,20 +109,28 @@ func TestResourcePoliciesPullerExperiment(t *testing.T) {
 	wp := &gceclient.GceResourcePolicy{Name: "wpReady", Status: "READY", WorkloadPolicy: gceclient.WorkloadPolicy{MaxTopologyDistance: "3", AcceleratorTopology: "4x4", Type: "HIGH_THROUGHPUT"}}
 	returnPolicies := []*gceclient.GceResourcePolicy{wp}
 
-	// enable the experiment
+	// enable by default (not defined in giraffe)
 	fakeProvider := NewFakeResourcePolicyPullerProvider(returnPolicies, nil)
-	rpPuller := NewResourcePolicyPuller(experiments.NewMockManager(experiments.ResourcePolicyPullerFlag), fakeProvider, projectID)
+	rpPuller := NewResourcePolicyPuller(experiments.NewMockManager(), fakeProvider, projectID)
 
 	// pull and save the policies
 	rpPuller.Loop()
 	assert.Equal(t, map[string]*gceclient.GceResourcePolicy{wp.Name: wp}, rpPuller.resourcePolicies)
 	assert.Equal(t, wp, rpPuller.GetResourcePolicy(wp.Name))
 
-	// disable the experiment
-	rpPuller.experimentsManager = experiments.NewMockManager()
+	// explicitly disable the experiment
+	rpPuller.experimentsManager = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ResourcePolicyPullerFlag: false}, nil)
 
 	// policies are cleared
 	rpPuller.Loop()
 	assert.Empty(t, rpPuller.resourcePolicies)
 	assert.Nil(t, rpPuller.GetResourcePolicy(wp.Name))
+
+	// explicitly enable the experiment
+	rpPuller.experimentsManager = experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.ResourcePolicyPullerFlag: true}, nil)
+
+	// pull and save the policies
+	rpPuller.Loop()
+	assert.Equal(t, map[string]*gceclient.GceResourcePolicy{wp.Name: wp}, rpPuller.resourcePolicies)
+	assert.Equal(t, wp, rpPuller.GetResourcePolicy(wp.Name))
 }

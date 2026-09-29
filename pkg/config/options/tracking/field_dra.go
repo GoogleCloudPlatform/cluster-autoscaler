@@ -73,6 +73,7 @@ var dynamicResourceAllocationEnabledField = trackedField{
 		optsToModify.DynamicResourceAllocationEnabled = flagValue && noVersionBasedMitigation && noBoolMitigation
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
 
 // draApiAvailable returns whether the v1 DRA API is available based on the provided Cluster proto.

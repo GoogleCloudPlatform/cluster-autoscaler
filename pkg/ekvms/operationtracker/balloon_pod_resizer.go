@@ -44,6 +44,8 @@ type balloonPodController interface {
 	List() []*v1.Pod
 	// GetPodsForNode return Balloon Pod for a given Node.
 	GetPodsForNode(node *v1.Node) []*v1.Pod
+	// ResizeBalloonPodInPlace patches the pod for a given Node to desired CPU and memory and waits for Kubelet confirmation.
+	ResizeBalloonPodInPlace(node *v1.Node, cpu, mem resource.Quantity) error
 }
 
 type defaultBalloonPodResizer struct {
@@ -75,6 +77,15 @@ func (b *defaultBalloonPodResizer) resizeBalloonPod(node *v1.Node, desiredSize s
 
 func (b *defaultBalloonPodResizer) listAllBalloonPods(node *v1.Node) []*v1.Pod {
 	return b.bPController.GetPodsForNode(node)
+}
+
+func (b *defaultBalloonPodResizer) resizeBalloonPodInPlace(node *v1.Node, desiredSize size.Allocatable) error {
+	if node.Status.Allocatable == nil {
+		return fmt.Errorf("cannot resize balloon pod for node %q with no allocatable set", node.Name)
+	}
+
+	bPodCpu, bPodMem := getBalloonPodSize(node, desiredSize)
+	return b.bPController.ResizeBalloonPodInPlace(node, bPodCpu, bPodMem)
 }
 
 func (b *defaultBalloonPodResizer) addTaint(node *v1.Node, timeAdded time.Time) (*v1.Node, error) {
@@ -141,7 +152,11 @@ func (b *defaultBalloonPodResizer) getPodForNode(node *v1.Node) *v1.Pod {
 	case 1:
 		return pods[0]
 	default:
-		klog.Warningf("More than one balloon pod is found: %v", pods)
+		podNames := make([]string, 0, len(pods))
+		for _, p := range pods {
+			podNames = append(podNames, p.Name)
+		}
+		klog.Warningf("More than one balloon pod found for node %q: %v", node.Name, podNames)
 		return pods[0]
 	}
 }

@@ -15,7 +15,6 @@
 package backoff
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -24,8 +23,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
 	gke_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
@@ -35,19 +32,14 @@ import (
 	resizable_vm_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	clock "k8s.io/utils/clock/testing"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 var caVersion = getCaVersion("35.197.0")
-var defaultEkBackoffCustomThresholdsProvider = ekvms_customthresholds.NewCustomThresholdsProvider(nil, caVersion)
+var defaultCustomThresholdsProvider = ekvms_customthresholds.NewCustomThresholdsProvider(nil, caVersion)
 
-func TestEkBackoff(t *testing.T) {
+func TestBackoff(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	for _, tt := range []struct {
 		name string
@@ -85,7 +77,7 @@ func TestEkBackoff(t *testing.T) {
 			family, err := resizable_vm_utils.GetMachineFamilyName(tt.node)
 			assert.NoError(t, err)
 
-			backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+			backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 			assert.False(t, backoffManager.isClusterBackedOff(family))
 			backoffManager.Backoff(tt.node, tt.resizeError)
 			got := backoffManager.IsBackedOff(family, tt.node.Name)
@@ -96,18 +88,14 @@ func TestEkBackoff(t *testing.T) {
 
 func TestClusterLevelErrorTriggersClusterLevelBackoff(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode8("node2", 1, 1)
 	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
 	assert.NoError(t, err)
 
-	backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 	assert.False(t, backoffManager.isClusterBackedOff(family))
 
 	clusterLevelError := ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("New error")}
@@ -121,11 +109,7 @@ func TestClusterLevelErrorTriggersClusterLevelBackoff(t *testing.T) {
 
 func TestNodeLevelBackoffTriggersClusterLevelBackoff(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode8("node2", 1, 1)
@@ -226,11 +210,7 @@ func TestNodeLevelBackoffTriggersClusterLevelBackoff(t *testing.T) {
 
 func TestExpiredNodesDoNotTriggerClusterLevelBackoff(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode32("node2", 1, 1)
@@ -238,7 +218,7 @@ func TestExpiredNodesDoNotTriggerClusterLevelBackoff(t *testing.T) {
 	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
 	assert.NoError(t, err)
 
-	backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 	assert.False(t, backoffManager.isClusterBackedOff(family))
 
 	nodeLevelError := ek_errors.ResizeError{Backoff: ek_errors.NodeLevel, ErrType: ek_errors.NotEnoughResourceOnHostError, OriginalError: errors.New("New error")}
@@ -262,18 +242,14 @@ func TestExpiredNodesDoNotTriggerClusterLevelBackoff(t *testing.T) {
 
 func TestExpiredClusterLevelBackoff(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode8("node2", 1, 1)
 	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
 	assert.NoError(t, err)
 
-	backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 	assert.False(t, backoffManager.isClusterBackedOff(family))
 
 	clusterLevelError := ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("New error")}
@@ -408,7 +384,7 @@ func TestIsClusterBackedOff_StoresEarliestExpiration(t *testing.T) {
 func TestUpdateBackoffMetrics(t *testing.T) {
 	fakeClock := clock.NewFakeClock(time.Now())
 	mockCP := &mockCloudProvider{}
-	manager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+	manager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 
 	mockMetrics := &mockMetrics{}
 	// For all resizable machine types, we expect UpdateResizeBackoffStatus to be called.
@@ -427,7 +403,7 @@ func TestBackoffIsolation(t *testing.T) {
 	mockCP := &mockCloudProvider{}
 
 	t.Run("Node-level backoff isolation between families", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 		ekNode := test.EkNode32("ek-node", 1, 1)
 		e4aNode := test.E4aNode32("e4a-node", 1, 1)
 
@@ -437,7 +413,7 @@ func TestBackoffIsolation(t *testing.T) {
 	})
 
 	t.Run("Cluster-level backoff isolation between families", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 		ekNode := test.EkNode32("ek-node", 1, 1)
 
 		backoffManager.Backoff(ekNode, ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("error")})
@@ -446,7 +422,7 @@ func TestBackoffIsolation(t *testing.T) {
 	})
 
 	t.Run("Node-level backoff isolation within the same family", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 		ekNode1 := test.EkNode32("node1", 1, 1)
 		ekNode2 := test.EkNode32("node2", 1, 1)
 
@@ -456,7 +432,7 @@ func TestBackoffIsolation(t *testing.T) {
 	})
 
 	t.Run("DeleteNode isolation", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultEkBackoffCustomThresholdsProvider, fakeClock)
+		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
 		ekNode1 := test.EkNode32("node1", 1, 1)
 		ekNode2 := test.EkNode32("node2", 1, 1)
 
@@ -598,11 +574,7 @@ func TestRefreshCustomThresholds(t *testing.T) {
 
 func TestNodeLevelBackoffTriggersClusterLevelBackoffWithExperimentManager(t *testing.T) {
 	fakeClock := clock.NewFakePassiveClock(time.Now())
-	ekNg := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-		MachineType: "ek-standard-32",
-	}).Build()
 	mockCP := &mockCloudProvider{}
-	mockCP.On("NodeGroupForNode").Return(ekNg, nil)
 
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode8("node2", 1, 1)
@@ -780,11 +752,6 @@ func TestNodeLevelBackoffTriggersClusterLevelBackoffWithExperimentManager(t *tes
 type mockCloudProvider struct {
 	mock.Mock
 	cloudProvider
-}
-
-func (m *mockCloudProvider) NodeGroupForNode(ctx context.Context, _ *v1.Node) (cloudprovider.NodeGroup, error) {
-	args := m.MethodCalled("NodeGroupForNode")
-	return args.Get(0).(cloudprovider.NodeGroup), args.Error(1)
 }
 
 func (m *mockCloudProvider) MachineConfigProvider() *machinetypes.MachineConfigProvider {

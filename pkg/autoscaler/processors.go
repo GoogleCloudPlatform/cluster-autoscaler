@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	ctrl "sigs.k8s.io/controller-runtime"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
@@ -96,6 +98,7 @@ import (
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	lookaheadbuffer_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/processor"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvms_recommender "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	ekvms_operationtracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	ekvms_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
@@ -163,7 +166,8 @@ type GkeCloudProvider interface {
 	GetCurrentResizableVmState(*apiv1.Node) (ekvmtypes.ResizableVmState, error)
 	BulkFetchCurrentResizableVmStates() (map[gce.GceRef]ekvmtypes.ResizableVmState, error)
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	PollUntilActionStops(pollCtx ctx.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	CalculatePhysicalEphemeralStorageGiB(mig *gke.GkeMig, allocatableBytes int64) int64
 	ResizingEnabled(machineFamily string) bool
@@ -172,6 +176,7 @@ type GkeCloudProvider interface {
 	InvalidateNodesScaleDownAllowedCache()
 	ValidateMachineTypeConfig(machineType string, zone string) error
 
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 }
 
@@ -234,9 +239,10 @@ func initAutoprovisioningProcessors(
 			ProvisioningLabelEnabled:   options.ProvisioningLabelEnabled,
 			TpuAutoprovisioningEnabled: options.TpuAutoprovisioningEnabled,
 			ReservationFlags: autoprovisioning.ReservationFlags{
-				SpecificTypeReservationMatchEnabled:   options.SpecificTypeReservationMatchEnabled,
-				SpecificTypeReservationsEnabled:       options.SpecificTypeReservationMatchEnabled || options.SpecificTypeReservationWithoutMatchEnabled,
-				ReservationsAnyLocationPolicyOverride: options.ReservationsAnyLocationPolicyOverride,
+				SpecificTypeReservationMatchEnabled:     options.SpecificTypeReservationMatchEnabled,
+				SpecificTypeReservationsEnabled:         options.SpecificTypeReservationMatchEnabled || options.SpecificTypeReservationWithoutMatchEnabled,
+				ReservationsAnyLocationPolicyOverride:   options.ReservationsAnyLocationPolicyOverride,
+				ReservationSubBlockDeduplicationEnabled: options.ReservationSubBlockDeduplicationEnabled,
 			},
 			MultiNetworkingEnabled:         options.MultiNetworkSupportEnabled,
 			BootDiskConfigEnabled:          options.BootDiskSelectorEnabled,
@@ -323,6 +329,7 @@ func buildScaleDownSetProcessors(
 
 func setUpProcessors(
 	context ctx.Context,
+	manager ctrl.Manager,
 	caVersion version.Version,
 	optionsTracker *optstracking.OptionsTracker,
 	options *internalopts.AutoscalingOptions,
@@ -356,7 +363,7 @@ func setUpProcessors(
 	prCache *provreqcache.QueuedProvisioningCache,
 	provreqProcessor pods.PodListProcessor,
 	resizableVmAutoprovisioningProvider *ekvms_providers.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
+	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
 	reservationBlocksPuller *reservations.BlocksPuller,
 	instanceAvailabilityProvider instanceavailability.Provider,
 	resourcePolicyPuller placement.ResourcePolicyPuller,
@@ -375,11 +382,7 @@ func setUpProcessors(
 	}
 
 	limitProvider := calculator.NewResizeLimitProvider(provider)
-	limitProvider.RegisterConfig(machinetypes.EK.Name(), calculator.LimitConfig{
-		MinVmSize:     options.EkvmsMinVmSize,
-		IncrementStep: options.EkvmsIncrementStep,
-		SafetyBuffer:  options.EkvmsAllocationSafetyBuffer,
-	})
+	limitProvider.RegisterConfigs(internalmetrics.Metrics, *options)
 	resizeCalculator := calculator.New(vmreservation.New(gkeReserved, options.DefaultReservedResourcesV2Enabled), provider, options.IsClusterUsingDPV1, limitProvider)
 	autoscalingProcessors := processors.DefaultProcessors(options.AutoscalingOptions)
 
@@ -411,7 +414,9 @@ func setUpProcessors(
 		} else {
 			fakePodsResolver = fakepods.NewDefaultingResolver()
 		}
-		capacitybuffers.InitializeAndRunBufferController(context, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled)
+		if err := capacitybuffers.InitializeAndRunBufferController(context, manager, capacitybufferClient, fakePodsResolver, ccLister, options.AutopilotEnabled, options.CSNEnabled); err != nil {
+			return nil, fmt.Errorf("failed to initialize and run Capacity Buffer controller: %w", err)
+		}
 	}
 
 	if cbReady {
@@ -533,7 +538,7 @@ func setUpProcessors(
 	if options.EkvmsFixerEnabled {
 		resizableVmBackoffManager := ekvms_backoff.NewManager(provider, resizableVmCustomThresholdsProvider, clock.RealClock{})
 		nodeStateManager := ekvms_operationtracker.NewNodeStateManager(provider, nodeSizeRecommender, resizableVmBackoffManager, resizeCalculator, clock.RealClock{})
-		opTracker := ekvms_operationtracker.New(kubeClient, informerFactory, provider, nodeStateManager, internalmetrics.Metrics, resizeCalculator, options.EkvmsConcurrentResizeWorkers, options.EkvmsFixerEnabled, options.EkvmsFixerInterval)
+		opTracker := ekvms_operationtracker.New(kubeClient, informerFactory, provider, nodeStateManager, internalmetrics.Metrics, resizeCalculator, options.EkvmsConcurrentResizeWorkers, options.EkvmsFixerEnabled, options.EkvmsFixerInterval, optionsTracker)
 		resizableVmManager = ekvms_operationtracker.NewManager(provider, opTracker, resizeCalculator, nodeSizeRecommender, internalmetrics.Metrics, nodeStateManager)
 
 		// ResizableVmAutoprovisioningProvider needs to know the NodesCount
@@ -548,10 +553,12 @@ func setUpProcessors(
 		downsizeConfigFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkDownsizeConfig,
 			machinetypes.E4A.Name(): options.E4aDownsizeConfig,
+			machinetypes.E4.Name():  options.E4DownsizeConfig,
 		}
 		downsizeExperimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkDownsizeConfigFlag,
 			machinetypes.E4A.Name(): experiments.E4aDownsizeConfigFlag,
+			machinetypes.E4.Name():  experiments.E4DownsizeConfigFlag,
 		}
 		configProvider := ekvms_processor.NewDownsizeConfigProvider(provider.MachineConfigProvider(), experimentsManager, downsizeConfigFlags, downsizeExperimentFlags)
 		scaleDownNodeProcessors = append(scaleDownNodeProcessors, ekvms_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), resizableVmManager, experimentsManager, fetcher, configProvider, resizeCalculator, internalmetrics.Metrics, clock.RealClock{}))
@@ -564,6 +571,7 @@ func setUpProcessors(
 		experimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkMachineTypesFlag,
 			machinetypes.E4A.Name(): experiments.E4aMachineTypesFlag,
+			machinetypes.E4.Name():  experiments.E4MachineTypesFlag,
 		}
 		resizableMachineTypesProvider = ekvms_providers.NewAllResizableMachineTypesProvider(provider.MachineConfigProvider(), experimentsManager, machineTypeFlags, experimentFlags)
 
@@ -597,6 +605,25 @@ func setUpProcessors(
 
 	sharedFairnessManager := fairness.NewSharedEnforcerManager(options.MaxLoopsBeforeAdmission)
 
+	var csnPodsInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
+	var csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor
+	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
+	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
+	var csnNodeController *nodecontroller.CSNNodeController
+	if options.CSNEnabled && cbReady {
+		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
+		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
+		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
+		csnNodeController = nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
+		go csnNodeController.Run(context)
+		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
+		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
+		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
+		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
+			return nil, err
+		}
+	}
+
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
 			CandidateLimit:   options.DefragCandidateLimit,
@@ -611,6 +638,7 @@ func setUpProcessors(
 			Provider:              provider,
 			Autopilot:             options.AutopilotEnabled,
 			ResizableVmManager:    resizableVmManager,
+			CSNFailedNodeProvider: csnNodeController,
 			ExperimentsManager:    experimentsManager,
 		})
 		plugins, err := defrag_plugins.BuildPlugins(strings.Split(options.DefragPlugins, ","), pluginsConfig)
@@ -670,25 +698,6 @@ func setUpProcessors(
 		podtopologyspread.NewNodeBasedDomainDiscovery(experimentsManager, clusterSnapshot, provider),
 	}
 	podTopologySpreadProcessor := podtopologyspread.NewPodTopologySpreadProcessor(ptsDomainDiscoveries)
-
-	var csnPodsInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
-	var csnNodeReconcilationProcessor *csn_processors.NodeReconcilationProcessor
-	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
-	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
-	if options.CSNEnabled && cbReady {
-		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
-		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
-		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
-		csnNodeController := nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff)
-		go csnNodeController.Run(context)
-		csnNodeReconcilationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
-		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
-		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
-		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
-			return nil, err
-		}
-	}
-
 	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled && cbReady)
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
@@ -707,7 +716,7 @@ func setUpProcessors(
 	storageNodeAffinityProcessor := internal_processors.NewStorageNodeAffinityPodListProcessor(pvcLister, scLister, pvLister)
 
 	autoscalingProcessors.PodListProcessor =
-		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconcilationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, storageNodeAffinityProcessor, experimentsManager)
+		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconciliationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, storageNodeAffinityProcessor, experimentsManager)
 
 	autoscalingProcessors.ScaleStateNotifier.Register(metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter))
 
@@ -779,7 +788,11 @@ func setUpProcessors(
 	// processing order, it's initialized as the final NodeGroupListProcessor.
 	npcProcessor := npc_processors.NewNodeGroupListProcessor(ccLister, autoscalingProcessors.NodeGroupListProcessor, internalmetrics.Metrics, provider)
 	autoscalingProcessors.NodeGroupListProcessor = npcProcessor
-	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter([]binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor})
+	binpackingLimiters := []binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor}
+	if options.GCEFlexAdvisorEnabled {
+		binpackingLimiters = append(binpackingLimiters, flexadvisor.NewBinpackingLimiter(scaleUpLimiterTracker))
+	}
+	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter(binpackingLimiters)
 	npcCrdScaleUpStatusProcessor := npc_processors.NewCrdScaleUpStatusProcessor(ccLister, provider, internalmetrics.Metrics)
 	if err := scaleUpProcessorChain.AddProcessor(npcCrdScaleUpStatusProcessor); err != nil {
 		return nil, err

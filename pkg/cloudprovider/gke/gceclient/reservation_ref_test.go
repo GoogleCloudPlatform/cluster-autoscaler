@@ -161,3 +161,49 @@ func TestReservationRef_ShortenSelfLink(t *testing.T) {
 		})
 	}
 }
+
+func TestTargetsReservationSubBlock(t *testing.T) {
+	tests := []struct {
+		name            string
+		reservationPath string
+		expected        bool
+	}{
+		{
+			name:            "sub_block_path",
+			reservationPath: ReservationRef{Name: "res", BlockName: "block", SubBlockName: "sub-block"}.Path(),
+			expected:        true,
+		},
+		{
+			name:            "sub_block_path_in_other_project",
+			reservationPath: ReservationRef{Project: "other", Name: "res", BlockName: "block", SubBlockName: "sub-block"}.RelativePath("cluster"),
+			expected:        true,
+		},
+		{
+			name:            "block_path_only",
+			reservationPath: ReservationRef{Name: "res", BlockName: "block"}.Path(),
+			expected:        false,
+		},
+		{
+			name:            "reservation_path_only",
+			reservationPath: ReservationRef{Name: "res"}.Path(),
+			expected:        false,
+		},
+		{
+			name:            "empty_path",
+			reservationPath: "",
+			expected:        false,
+		},
+		{
+			name:            "reservation_named_like_the_path_segment",
+			reservationPath: ReservationRef{Name: "reservationSubBlocks"}.Path(),
+			expected:        false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := TargetsReservationSubBlock(tt.reservationPath); got != tt.expected {
+				t.Errorf("TargetsReservationSubBlock(%q) got %v, want %v", tt.reservationPath, got, tt.expected)
+			}
+		})
+	}
+}

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package lookaheadbuffer
+package experiments
 
-import "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
-
-type Metrics interface {
-	UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string)
-	UpdateResizableVmUnschedulableLookaheadPodsCount(machineFamily string, laPods int)
-	UpdateLookaheadPodsCount(laPodsCount map[size.Allocatable]int)
+// IsPayPerPodFleetEfficiencyEnabled returns whether fleet-efficiency allocation strategy for pay-per-pod autopilot workloads is enabled.
+func IsPayPerPodFleetEfficiencyEnabled(manager Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateMinimumVersionFlagOrFailsafe(PayPerPodFleetEfficiencyMinCAVersionFlag, false) &&
+		manager.EvaluateBoolFlagOrFailsafe(PayPerPodFleetEfficiencyEnabledFlag, true)
 }

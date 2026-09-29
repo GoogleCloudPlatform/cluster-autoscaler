@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/noderesources"
@@ -54,9 +55,10 @@ func (div skippedMigsDivision) resourceConstraintsOnlyOrEmpty() bool {
 }
 
 type rejectedMigsDivision struct {
-	all        []migReasonsInfo
-	notFitting []migReasonsInfo
-	remaining  []migReasonsInfo
+	all                []migReasonsInfo
+	notFitting         []migReasonsInfo
+	remaining          []migReasonsInfo
+	flexAdvisorRemoved []migReasonsInfo
 }
 
 func (div rejectedMigsDivision) empty() bool {
@@ -65,6 +67,10 @@ func (div rejectedMigsDivision) empty() bool {
 
 func (div rejectedMigsDivision) hasRemaining() bool {
 	return len(div.remaining) > 0
+}
+
+func (div rejectedMigsDivision) hasFlexAdvisorRemoved() bool {
+	return len(div.flexAdvisorRemoved) > 0
 }
 
 func (div rejectedMigsDivision) hasResourceConstraints() bool {
@@ -117,11 +123,21 @@ func divideSkippedMigs(skippedMigInfos []migReasonsInfo) skippedMigsDivision {
 	}
 }
 
-func divideRejectedMigs(rejectedMigInfos []migReasonsInfo) rejectedMigsDivision {
+// divideRejectedMigs categorizes rejected theoretical NAP MIGs in a zone into:
+//   - notFitting: MIGs that failed the PodFitsResources predicate.
+//   - remaining: MIGs that failed any other scheduling predicate (e.g. NodeAffinity, TaintToleration).
+//   - flexAdvisorRemoved: candidate MIGs cut by FlexAdvisor during bin-packing
+//     (marked with NoScaleUpOptionsAvailableReason by OSS CA when 0 expansion options remained).
+func divideRejectedMigs(rejectedMigInfos []migReasonsInfo, faLimiter flexadvisor.ScaleUpLimiterTracker) rejectedMigsDivision {
 	notFitting := make([]migReasonsInfo, 0)
 	remaining := make([]migReasonsInfo, 0)
+	flexAdvisorRemoved := make([]migReasonsInfo, 0)
 
 	for _, info := range rejectedMigInfos {
+		if isRemovedByFlexAdvisor(info.mig.Id, info.reasons, faLimiter) {
+			flexAdvisorRemoved = append(flexAdvisorRemoved, info)
+			continue
+		}
 		schedErr, ok := info.reasons.(clustersnapshot.SchedulingError)
 		if ok && schedErr.Type() == clustersnapshot.FailingPredicateError {
 			if schedErr.FailingPredicateName() == noderesources.Name {
@@ -133,9 +149,10 @@ func divideRejectedMigs(rejectedMigInfos []migReasonsInfo) rejectedMigsDivision 
 	}
 
 	return rejectedMigsDivision{
-		all:        rejectedMigInfos,
-		notFitting: notFitting,
-		remaining:  remaining,
+		all:                rejectedMigInfos,
+		notFitting:         notFitting,
+		remaining:          remaining,
+		flexAdvisorRemoved: flexAdvisorRemoved,
 	}
 }
 

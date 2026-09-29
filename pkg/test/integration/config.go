@@ -1196,3 +1196,11 @@ func WithCompactPlacementEnabled(enabled bool) Option[*config.AutoscalingOptions
 		return o
 	}
 }
+
+// WithProvisioningErrorDetailsEnabled enables or disables ProvisioningErrorDetailsEnabled.
+func WithProvisioningErrorDetailsEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ProvisioningErrorDetailsEnabled = enabled
+		return o
+	}
+}

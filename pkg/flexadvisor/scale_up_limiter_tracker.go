@@ -15,6 +15,8 @@
 package flexadvisor
 
 import (
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -25,22 +27,23 @@ import (
 type ScaleUpLimiterTracker interface {
 	// MarkScaleUpOptionRemoved records that a scale-up option was removed due to capacity constraints for the given node group and flexibility scope.
 	MarkScaleUpOptionRemoved(nodeGroupId string, flexibilityScope string)
-	// GetFlexibilityScopesWithRemovedScaleUpOptions returns a sorted list of flexibility scopes that had scale-up options removed during the current iteration.
-	GetFlexibilityScopesWithRemovedScaleUpOptions() []string
-	// GetRemovedNodeGroupIds returns a sorted list of node group IDs that had scale-up options removed during the current iteration.
-	GetRemovedNodeGroupIds() []string
-	// HasRemovedScaleUpOptions returns true if any scale-up options were removed during the current evaluation iteration.
-	HasRemovedScaleUpOptions() bool
+	// GetFlexibilityScopesForNodeGroupIfRemoved returns a sorted list of flexibility scopes for which the specified node group had scale-up options removed during the current iteration.
+	GetFlexibilityScopesForNodeGroupIfRemoved(nodeGroupId string) []string
+	// WasNodeGroupRemovedByFlexAdvisor returns true if the specified node group had scale-up options removed during the current iteration.
+	WasNodeGroupRemovedByFlexAdvisor(nodeGroupId string) bool
 	// Reset clears the tracked scale-up option removal state for the next evaluation iteration.
 	Reset()
 }
 
+type nodeGroupId = string
+type flexibilityScopeId = string
+
 type scaleUpLimiterTracker struct {
-	mu                           sync.RWMutex
-	gceFlexAdvisorEnabled        bool
-	experimentsManager           experiments.Manager
-	constrainedFlexibilityScopes map[string]bool
-	constrainedNodeGroupIds      map[string]bool
+	mu                    sync.RWMutex
+	gceFlexAdvisorEnabled bool
+	experimentsManager    experiments.Manager
+	// removedNodeGroupsToScopes maps removed node groups to which scopes they used {nodeGroupId: {scope1: true scope2: true}}
+	removedNodeGroupsToScopes map[nodeGroupId]map[flexibilityScopeId]bool
 }
 
 // IsFlexAdvisorScaleUpLimiterTrackerEnabled returns whether FlexAdvisor ScaleUpLimiterTracker is enabled.
@@ -59,10 +62,9 @@ func IsFlexAdvisorScaleUpLimiterTrackerEnabled(gceFlexAdvisorEnabled bool, manag
 // NewScaleUpLimiterTracker initializes and returns a thread-safe ScaleUpLimiterTracker.
 func NewScaleUpLimiterTracker(gceFlexAdvisorEnabled bool, experimentsManager experiments.Manager) ScaleUpLimiterTracker {
 	return &scaleUpLimiterTracker{
-		gceFlexAdvisorEnabled:        gceFlexAdvisorEnabled,
-		experimentsManager:           experimentsManager,
-		constrainedFlexibilityScopes: make(map[string]bool),
-		constrainedNodeGroupIds:      make(map[string]bool),
+		gceFlexAdvisorEnabled:     gceFlexAdvisorEnabled,
+		experimentsManager:        experimentsManager,
+		removedNodeGroupsToScopes: make(map[string]map[string]bool),
 	}
 }
 
@@ -71,62 +73,43 @@ func (t *scaleUpLimiterTracker) MarkScaleUpOptionRemoved(nodeGroupId string, fle
 	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
 		return
 	}
-	if nodeGroupId == "" && flexibilityScope == "" {
+	if nodeGroupId == "" {
 		return
 	}
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if flexibilityScope != "" {
-		t.constrainedFlexibilityScopes[flexibilityScope] = true
+	if t.removedNodeGroupsToScopes[nodeGroupId] == nil {
+		t.removedNodeGroupsToScopes[nodeGroupId] = make(map[string]bool)
 	}
-	if nodeGroupId != "" {
-		t.constrainedNodeGroupIds[nodeGroupId] = true
+	if flexibilityScope != "" {
+		t.removedNodeGroupsToScopes[nodeGroupId][flexibilityScope] = true
 	}
 }
 
-// HasRemovedScaleUpOptions returns true if any scale-up options were removed during the current evaluation iteration.
-func (t *scaleUpLimiterTracker) HasRemovedScaleUpOptions() bool {
+// GetFlexibilityScopesForNodeGroupIfRemoved returns a sorted list of flexibility scopes for which the specified node group had scale-up options removed during the current iteration.
+func (t *scaleUpLimiterTracker) GetFlexibilityScopesForNodeGroupIfRemoved(nodeGroupId string) []string {
+	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
+		return nil
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	scopes := slices.Collect(maps.Keys(t.removedNodeGroupsToScopes[nodeGroupId]))
+	sort.Strings(scopes)
+	return scopes
+}
+
+// WasNodeGroupRemovedByFlexAdvisor returns true if the specified node group had scale-up options removed during the current iteration.
+func (t *scaleUpLimiterTracker) WasNodeGroupRemovedByFlexAdvisor(nodeGroupId string) bool {
 	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
 		return false
 	}
 
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return len(t.constrainedFlexibilityScopes) > 0 || len(t.constrainedNodeGroupIds) > 0
-}
-
-// GetFlexibilityScopesWithRemovedScaleUpOptions returns a sorted list of flexibility scopes that had scale-up options removed during the current iteration.
-// Technically, in a single CA loop we won't process more than one CCC, so the list should contain at most 1 item.
-func (t *scaleUpLimiterTracker) GetFlexibilityScopesWithRemovedScaleUpOptions() []string {
-	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
-		return nil
-	}
-
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	scopes := make([]string, 0, len(t.constrainedFlexibilityScopes))
-	for scope := range t.constrainedFlexibilityScopes {
-		scopes = append(scopes, scope)
-	}
-	sort.Strings(scopes)
-	return scopes
-}
-
-// GetRemovedNodeGroupIds returns a sorted list of node group IDs that had scale-up options removed during the current iteration.
-func (t *scaleUpLimiterTracker) GetRemovedNodeGroupIds() []string {
-	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
-		return nil
-	}
-
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	groupIds := make([]string, 0, len(t.constrainedNodeGroupIds))
-	for groupId := range t.constrainedNodeGroupIds {
-		groupIds = append(groupIds, groupId)
-	}
-	sort.Strings(groupIds)
-	return groupIds
+	_, removed := t.removedNodeGroupsToScopes[nodeGroupId]
+	return removed
 }
 
 // Reset clears the tracked scale-up option removal state for the next evaluation iteration.
@@ -136,6 +119,5 @@ func (t *scaleUpLimiterTracker) Reset() {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.constrainedFlexibilityScopes = make(map[string]bool)
-	t.constrainedNodeGroupIds = make(map[string]bool)
+	t.removedNodeGroupsToScopes = make(map[string]map[string]bool)
 }

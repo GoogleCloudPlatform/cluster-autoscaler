@@ -119,6 +119,7 @@ type kubeletConfig struct {
 	allowedUnsafeSysctls                   []string
 	maxParallelImagePulls                  *int64
 	singleProcessOOMKill                   *bool
+	insecureKubeletReadonlyPortEnabled     *bool
 	evictionSoft                           *evictionThresholds
 	evictionSoftGracePeriod                *evictionThresholds
 	evictionMinimumReclaim                 *evictionThresholds
@@ -155,6 +156,7 @@ type NodeSystemConfigRule interface {
 	AllowedUnsafeSysctls() []string
 	MaxParallelImagePulls() *int64
 	SingleProcessOOMKill() *bool
+	InsecureKubeletReadonlyPortEnabled() *bool
 	EvictionSoftMemoryAvailable() *string
 	EvictionSoftNodefsAvailable() *string
 	EvictionSoftImagefsAvailable() *string
@@ -425,6 +427,9 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 			return false
 		}
 		if ruleKubeletConfig.singleProcessOOMKill != nil && *ruleKubeletConfig.singleProcessOOMKill != npKubeletConfig.SingleProcessOomKill {
+			return false
+		}
+		if ruleKubeletConfig.insecureKubeletReadonlyPortEnabled != nil && *ruleKubeletConfig.insecureKubeletReadonlyPortEnabled != npKubeletConfig.InsecureKubeletReadonlyPortEnabled {
 			return false
 		}
 		if ruleKubeletConfig.evictionSoft != nil && !compareEvictionSoft(ruleKubeletConfig.evictionSoft, npKubeletConfig.EvictionSoft) {
@@ -710,6 +715,13 @@ func (r *nodeSystemConfigRule) SingleProcessOOMKill() *bool {
 		return nil
 	}
 	return r.kubeletConfig.singleProcessOOMKill
+}
+
+func (r *nodeSystemConfigRule) InsecureKubeletReadonlyPortEnabled() *bool {
+	if r.kubeletConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.insecureKubeletReadonlyPortEnabled
 }
 
 func (r *nodeSystemConfigRule) EvictionSoftMemoryAvailable() *string {
@@ -1160,6 +1172,15 @@ func WithSingleProcessOOMKill(singleProcessOOMKill bool) RuleOption {
 			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
 		}
 		r.nodeSystemConfigRule.kubeletConfig.singleProcessOOMKill = &singleProcessOOMKill
+	}
+}
+
+func WithInsecureKubeletReadonlyPortEnabledRule(insecureKubeletReadonlyPortEnabled bool) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.kubeletConfig == nil {
+			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
+		}
+		r.nodeSystemConfigRule.kubeletConfig.insecureKubeletReadonlyPortEnabled = &insecureKubeletReadonlyPortEnabled
 	}
 }
 

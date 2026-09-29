@@ -63,3 +63,10 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+Create the name of the experiments configmap to use
+*/}}
+{{- define "cluster-autoscaler.experimentsConfigMap" -}}
+{{- include "cluster-autoscaler.fullname" . }}-experiments
+{{- end }}

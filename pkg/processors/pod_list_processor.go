@@ -80,7 +80,7 @@ type GkeInternalPodListProcessor struct {
 	podTopologySpreadProcessor     *safeguard.SafeguardedPodListProcessor
 	flexAdvisorPodListProcessor    *flexadvisor.PodListProcessor
 	cbPodInjectionProcessor        *cbprocessors.CapacityBufferPodListProcessor
-	csnNodeReconcilationProcessor  *csn_processors.NodeReconcilationProcessor
+	csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor
 	csnBufferConsumptionProcessor  pods.PodListProcessor
 	csnCSNPodsLifecycleProcessor   *csn_processors.CSNPodsLifecycleProcessor
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor
@@ -107,7 +107,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	podTopologySpreadProcessor *podtopologyspread.Processor,
 	flexAdvisorPodListProcessor *flexadvisor.PodListProcessor,
 	cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor,
-	csnNodeReconcilationProcessor *csn_processors.NodeReconcilationProcessor,
+	csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor,
 	csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor,
 	csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor,
 	capacityBufferMetricsProcessor *capacitybuffers.MetricProcessor,
@@ -135,7 +135,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		lookaheadPodsInjection:         lookaheadPodsInjection,
 		flexAdvisorPodListProcessor:    flexAdvisorPodListProcessor,
 		cbPodInjectionProcessor:        cbPodInjectionProcessor,
-		csnNodeReconcilationProcessor:  csnNodeReconcilationProcessor,
+		csnNodeReconciliationProcessor: csnNodeReconciliationProcessor,
 		csnCSNPodsLifecycleProcessor:   csnCSNPodsLifecycleProcessor,
 		capacityBufferMetricsProcessor: capacityBufferMetricsProcessor,
 		podStateObserver:               podStateObserver,
@@ -203,9 +203,9 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 		}
 	}
 
-	if p.csnNodeReconcilationProcessor != nil {
+	if p.csnNodeReconciliationProcessor != nil {
 		// Updates context before processing.
-		err = p.csnNodeReconcilationProcessor.Preprocess(autoscalingCtx)
+		err = p.csnNodeReconciliationProcessor.Preprocess(autoscalingCtx)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}

@@ -30,7 +30,8 @@ import (
 // K8sClient is responsible for performing actions on nodes.
 type K8sClient interface {
 	ApplyNodePatch(ctx context.Context, node *v1.Node, desiredState csn.NodeState) error
-	IsSuspensionBlocked(ctx context.Context, nodeName string) (bool, error)
+	RemoveSuspensionSchedulingConstraints(ctx context.Context, node *v1.Node) error
+	IsWorkloadPresent(ctx context.Context, nodeName string) (bool, error)
 	ApplyNodeToBufferAssignmentPatch(ctx context.Context, node *v1.Node, buffer *v1beta1.CapacityBuffer) error
 	ApplyAdditionalSoftTaintsPatch(ctx context.Context, node *v1.Node, taintCount int) error
 }
@@ -38,9 +39,19 @@ type K8sClient interface {
 // CloudProvider defines the cloud provider operations needed by the handlers.
 type CloudProvider interface {
 	GkeMigForNode(node *v1.Node) (*gke.GkeMig, error)
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
 	InstanceByRef(ref gce.GceRef) *gce.GceInstance
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
+}
+
+// NodeLister gives read-only access to the cluster nodes as Kubernetes last
+// reported them, including the nodes the state manager no longer tracks. It is
+// satisfied by a shared informer's node lister, whose cache costs no API call
+// to read.
+type NodeLister interface {
+	Get(nodeName string) (*v1.Node, error)
 }
 
 // StateManager is an abstraction for the node state manager.

@@ -1410,11 +1410,16 @@ func TestNewNodePoolSpec(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			spec, err := g.NewNodePoolSpec(tc.mig)
+			planned, plannedErr := g.PlannedNodePoolLocations(tc.mig)
 			if tc.expectedErr != nil {
 				assert.Error(t, err)
 				assert.Equal(t, tc.expectedErr, err)
+				assert.Equal(t, tc.expectedErr, plannedErr)
 			} else {
 				assert.Equal(t, tc.expectedSpec, spec)
+				// Planned locations must be exactly the locations the node pool is created with.
+				assert.NoError(t, plannedErr)
+				assert.Equal(t, tc.expectedSpec.Locations, planned)
 			}
 		})
 	}
@@ -5051,6 +5056,65 @@ func (m *mockMatcher) GetNetworkConfigFromResources(_ map[string]resource.Quanti
 	return nil, nil
 }
 
+func TestNodeTemplateFromMigSpec_MultiNetworking(t *testing.T) {
+	quantity10 := resource.NewQuantity(10, resource.DecimalSI)
+	netResName := apiv1.ResourceName("networking.gke.io.networks/red-net.IP")
+
+	for desc, tc := range map[string]struct {
+		networkConfigs   []gkeclient.AdditionalNetworkConfig
+		matcherResources map[string]resource.Quantity
+		wantQuantity     *resource.Quantity
+	}{
+		"empty network config, no multi-network capacity added": {
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{},
+			wantQuantity:   nil,
+		},
+		"multi-networking network config, multi-network capacity added": {
+			networkConfigs: []gkeclient.AdditionalNetworkConfig{
+				gkeclient.TestAdditionalNetworkConfig("net1", "subnet", "", 0),
+			},
+			matcherResources: map[string]resource.Quantity{
+				string(netResName): *quantity10,
+			},
+			wantQuantity: quantity10,
+		},
+	} {
+		t.Run(desc, func(t *testing.T) {
+			server := NewHttpServerMock()
+			defer server.Close()
+			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			addDefaultListMigsMocks(server, g.cache)
+
+			g.managerOptions.MultiNetworkSupportEnabled = true
+			g.matcher = &mockMatcher{resources: tc.matcherResources}
+
+			mig := &GkeMig{
+				gceRef:          gce.GceRef{Name: "nap-mig", Zone: zoneB, Project: projectId},
+				gkeManager:      g,
+				exist:           false,
+				autoprovisioned: true,
+				spec: &gkeclient.NodePoolSpec{
+					MachineType:        machineTypeA,
+					SystemArchitecture: &arch,
+					NetworkConfigs:     tc.networkConfigs,
+				},
+			}
+
+			node, err := g.nodeTemplateFromMigSpec(mig)
+			assert.NoError(t, err)
+			assert.NotNil(t, node)
+
+			if tc.wantQuantity != nil {
+				assert.Equal(t, *tc.wantQuantity, node.Status.Capacity[netResName])
+				assert.Equal(t, *tc.wantQuantity, node.Status.Allocatable[netResName])
+			} else {
+				assert.NotContains(t, node.Status.Capacity, netResName)
+				assert.NotContains(t, node.Status.Allocatable, netResName)
+			}
+		})
+	}
+}
+
 func TestGkeManagerImplQueuedProvisioningMigGceRefs(t *testing.T) {
 	bulkMigSpec := &gkeclient.NodePoolSpec{MachineType: "a4x-highgpu-4g", FlexStart: true, PlacementGroup: placement.Spec{Policy: "a4x-policy"}}
 	gceRefGen := func(id int) *gce.GceRef {
@@ -6687,17 +6751,6 @@ func TestSuspendInstances(t *testing.T) {
 	server.On("handle", suspendUrl).Return(suspendResponse).Once()
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
-	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := fmt.Sprintf(`{
-        "managedInstances": [
-            {
-                "name": "inst-1",
-                "instanceStatus": "SUSPENDED"
-            }
-        ]
-    }`)
-	server.On("handle", listUrl).Return(listResponse).Once()
-
 	mig := &GkeMig{
 		gceRef: gce.GceRef{
 			Project: projectId,
@@ -6758,17 +6811,6 @@ func TestResumeInstances(t *testing.T) {
 	server.On("handle", resumeUrl).Return(resumeResponse).Once()
 	server.On("handle", opWaitUrl).Return(opResponse).Once()
 
-	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", projectId, zone, migName)
-	listResponse := `{
-        "managedInstances": [
-            {
-                "name": "inst-1",
-                "instanceStatus": "RUNNING"
-            }
-        ]
-    }`
-	server.On("handle", listUrl).Return(listResponse).Once()
-
 	mig := &GkeMig{
 		gceRef: gce.GceRef{
 			Project: projectId,
@@ -6782,9 +6824,67 @@ func TestResumeInstances(t *testing.T) {
 		{Project: projectId, Zone: zone, Name: "inst-1"},
 	}
 
-	err := g.ResumeInstances(mig.gceRef, instances, nil)
+	err := g.ResumeInstances(mig.gceRef, instances)
 	assert.NoError(t, err)
 	mock.AssertExpectationsForObjects(t, server)
+}
+
+// newSingleInstanceMigManager builds a manager whose mig-1 in zoneB holds a single running
+// instance, inst-1, and returns it alongside the refs of both. It is the shared fixture of the two
+// listManagedInstances-backed tests below, which differ only in the call they make. Every mocked
+// call is asserted to have happened once the test ends.
+func newSingleInstanceMigManager(t *testing.T) (*gkeManagerImpl, gce.GceRef, gce.GceRef) {
+	t.Helper()
+	server := NewHttpServerMock()
+	// Registered before the manager is built, so that it runs after the manager's own cleanup.
+	t.Cleanup(func() {
+		mock.AssertExpectationsForObjects(t, server)
+		server.Close()
+	})
+
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	migRef := gce.GceRef{Project: projectId, Zone: zoneB, Name: "mig-1"}
+	instanceRef := gce.GceRef{Project: projectId, Zone: zoneB, Name: "inst-1"}
+
+	listUrl := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+	listResponse := `{
+        "managedInstances": [
+            {
+                "name": "inst-1",
+                "instance": "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneB/instances/inst-1",
+                "currentAction": "NONE",
+                "instanceStatus": "RUNNING"
+            }
+        ]
+    }`
+	server.On("handle", listUrl).Return(listResponse).Once()
+
+	return g, migRef, instanceRef
+}
+
+func TestPollUntilActionStops(t *testing.T) {
+	g, migRef, instanceRef := newSingleInstanceMigManager(t)
+
+	var ready []gce.GceRef
+	for ref, update := range g.PollUntilActionStops(t.Context(), gceclient.ActionResuming, migRef, []gce.GceRef{instanceRef}) {
+		assert.Equal(t, gceclient.PollCompleted{}, update)
+		ready = append(ready, ref)
+	}
+
+	assert.Equal(t, []gce.GceRef{instanceRef}, ready)
+}
+
+func TestFetchManagedInstances(t *testing.T) {
+	g, migRef, instanceRef := newSingleInstanceMigManager(t)
+
+	instances, err := g.FetchManagedInstances(migRef, "")
+
+	assert.NoError(t, err)
+	if assert.Len(t, instances, 1) {
+		assert.Equal(t, instanceRef.Name, instances[0].Name)
+	}
 }
 
 type AutoscalingGkeClientMock struct {
@@ -7028,7 +7128,7 @@ func TestTrimLocationsForMachineConfig(t *testing.T) {
 	}
 }
 
-func TestRefreshGkeResourcesCSNMetrics(t *testing.T) {
+func TestRefreshCSNMetrics(t *testing.T) {
 	testCases := []struct {
 		desc      string
 		csnStatus internalopts.CSNStatus
@@ -7048,33 +7148,19 @@ func TestRefreshGkeResourcesCSNMetrics(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			server := NewHttpServerMock()
-			defer server.Close()
-
 			mockMetrics := &mockGkeMetrics{}
 			mockMetrics.On("UpdateCSNEnabled", tc.expected).Return()
-			mockMetrics.On("UpdateNapEnabled", mock.Anything).Return()
 
-			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			g := &gkeManagerImpl{
+				gkeMetrics: mockMetrics,
+				optsTracker: optstracking.NewOptionsTracker(internalopts.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						CSNCAFlag: tc.csnStatus,
+					},
+				}, experiments.NewMockManager()),
+			}
 
-			addDefaultListMigsMocks(server, g.cache)
-			g.gkeMetrics = mockMetrics
-			g.optsTracker = optstracking.NewOptionsTracker(internalopts.AutoscalingOptions{
-				InternalOptions: internalopts.InternalOptions{
-					CSNCAFlag: tc.csnStatus,
-				},
-			}, experiments.NewMockManager())
-
-			getClusterResponse := fmt.Sprintf(getClusterResponseTemplate, allNodePools1, napDisabled, false, "")
-			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster1").Return(getClusterResponse).Maybe()
-			server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers").Return(buildListInstanceGroupManagersResponse(
-				buildListInstanceGroupManagersResponsePart("gke-cluster-1-default-pool", zoneB, 3),
-			)).Maybe()
-			server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Maybe()
-			server.On("handle", "/projects/project1/global/instanceTemplates/gke-blah-default-pool-67b773a0").Return(instanceTemplate).Maybe()
-
-			err := g.refreshGkeResources()
-			assert.NoError(t, err)
+			g.refreshCSNMetrics()
 
 			mockMetrics.AssertExpectations(t)
 		})

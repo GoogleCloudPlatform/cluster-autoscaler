@@ -37,4 +37,5 @@ var fastpathBinpackingEnabledField = trackedField{
 		optsToModify.FastpathBinpackingEnabled = flagValue && enabled && currentVersionSupported
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }

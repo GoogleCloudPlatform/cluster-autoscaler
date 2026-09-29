@@ -423,6 +423,37 @@ func TestReconcile(t *testing.T) {
 			reconcileCalls:  1,
 			maxInvalidCount: 1,
 		},
+		{
+			name: "drift_detected_failed_node",
+			trackedNodes: []state.TrackedNode{
+				{Node: node1, State: csn.NodeStateChilling, DesiredState: csn.NodeStateFailed},
+			},
+			cpNodeToMig: map[string]*gke.GkeMig{
+				node1.Name: gkeMig1,
+			},
+			instances:       instances(map[*v1.Node]string{node1: "RUNNING"}),
+			reconcileCalls:  1,
+			maxInvalidCount: 1,
+			expectedOps: []ops.Operation{
+				{
+					MIG:       mig1,
+					Type:      ops.FailNodeOp,
+					NodeNames: set.New(node1.Name),
+				},
+			},
+		},
+		{
+			name: "no_drift_failed_node",
+			trackedNodes: []state.TrackedNode{
+				{Node: node1, State: csn.NodeStateFailed, DesiredState: csn.NodeStateFailed},
+			},
+			cpNodeToMig: map[string]*gke.GkeMig{
+				node1.Name: gkeMig1,
+			},
+			instances:       instances(map[*v1.Node]string{node1: "RUNNING"}),
+			reconcileCalls:  1,
+			maxInvalidCount: 1,
+		},
 	}
 
 	for _, tc := range testCases {

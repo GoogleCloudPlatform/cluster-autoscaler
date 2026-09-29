@@ -434,6 +434,15 @@ const (
 	// Self-service metadata key for nodepool's logging variant config.
 	LoggingConfigVariant = "cloud.google.com/gke-logging-variant"
 
+	// ContainerdPrivateRegistryEnabledKey is the self-service metadata key for containerd private registry access enabled.
+	ContainerdPrivateRegistryEnabledKey = "ContainerdPrivateRegistryEnabled"
+	// ContainerdPrivateRegistryCAKey is the self-service metadata key for containerd private registry access CA domain config.
+	ContainerdPrivateRegistryCAKey = "ContainerdPrivateRegistryCA"
+	// ContainerdWritableCgroupsKey is the self-service metadata key for containerd writable cgroups config.
+	ContainerdWritableCgroupsKey = "ContainerdWritableCgroups"
+	// ContainerdRegistryHostsKey is the self-service metadata key for containerd registry hosts config.
+	ContainerdRegistryHostsKey = "ContainerdRegistryHosts"
+
 	// ProvisioningRequestLabelKey - QueuedProvisioning node label key used to identify the related Resize Request,
 	// and thus the corresponding Provisioning Request.
 	// For more see: go/ca-pr-dd

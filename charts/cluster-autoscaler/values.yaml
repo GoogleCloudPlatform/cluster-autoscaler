@@ -143,7 +143,20 @@ config:
     machine-serenity-labels-enabled: "true"
     enable-reservation-blocks: "true"
     enable-reservation-match: "true"
-    enable-consumable-reservations-puller: "true"
+
+    # ==========================================================================
+    # Disabled Internal & Unavailable APIs
+    # ==========================================================================
+    ek-autoprovisioning: EK_AUTOPROVISIONING_DISABLED
+    e4a-autoprovisioning: E4A_AUTOPROVISIONING_DISABLED
+    enable-ek-on-managed-nodes: "false"
+    enable-e4a-on-managed-nodes: "false"
+    enable-ekvms-fixer: "false"
+    boot-disk-nap-enabled: "false"
+    enable-autopilot: "false"
+    enable-gce-flexadvisor: "false"
+    enable-consumable-reservations-puller: "false"
+    enable-reservations-any-location-policy-override: "false"
 
     # ==========================================================================
     # Autoprovisioning (NAP/CCC)
@@ -177,7 +190,7 @@ config:
     # ==========================================================================
     enable-defrag: "true"
     defrag-candidate-node-limit: "20"
-    defrag-plugins: "daemonset,recycling,high-priority-migration,resizable-vm-consolidation,failed-nodes"
+    defrag-plugins: "daemonset,recycling,high-priority-migration,failed-nodes"
 
     # ==========================================================================
     # Metrics
@@ -189,6 +202,25 @@ config:
     scaleup-per-ccc-metrics-enabled: "true"
     enable-pending-pods-metric: "true"
     metrics-per-ccc-enabled: "true"
+
+  # Experimental settings for autoscaler, usually these flags
+  # are controlling whether to enable certain feature or not
+  experiments:
+    AutopilotSliceOfHardware::ReservationSteerLocalSSD: "true"
+    AutopilotSliceOfHardware::ReservationSteerLocalSSD2: "true"
+    NodePoolConsolidationDelay::MinCAVersion: 34.187.0
+    NodeProvisionTime::SingleHostTPU: "900"
+    PodTopologySpreadCCC::MinCAVersion: 34.188.0
+    PodTopologySpreadNodeBased::MinCAVersion: 36.217.0
+    PodTopologySpreadZonal::MinCAVersion: 36.223.0
+    ColdStandbyNodes::BackoffMinCAVersion: 36.223.0
+    ColdStandbyNodes::MinCAVersion: 36.203.0
+    CapacityCheckWaitTimeSecondsFlexStart::EnabledMinCAVersion: 33.178.0
+    CapacityCheckWaitTimeSecondsGPU::DefaultValue: "180"
+    CapacityCheckWaitTimeSecondsMultiHostTpu::EnabledMinCAVersion: 33.179.5
+    CapacityCheckWaitTimeSecondsMultiHostTpu::NonFlexValue: "900"
+    FlexStartNonQueued::EnabledMinCAVersion: 32.167.0
+    FlexStartNonQueuedNAP::NAPMinCAVersion: 32.167.0
 
 # ==============================================================================
 # WORKLOAD & DEPLOYMENT SPEC

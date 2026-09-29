@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -30,6 +31,20 @@ const HardTaint = "autoscaling.gke.io/defrag-candidate"
 // SoftTaint is applied to candidate nodes to minimize the risk of pods with
 // wildcard tolerations from scheduling when HardTaint is ignored.
 const SoftTaint = "autoscaling.gke.io/defrag-soft-candidate"
+
+// ActiveMigrationPodAnnotation marks a pod that defrag surfaced to the scale-up
+// loop in order to migrate it off a candidate node. Such a pod is a copy of a
+// real, running pod, so it is only set on the copies handed over to scale-up,
+// never on the pods stored in the cluster snapshot. Consumers use it to
+// attribute the resulting node provisioning to active migration rather than to
+// regular pending pods.
+const ActiveMigrationPodAnnotation = "autoscaling.gke.io/active-migration-pod"
+
+// IsActiveMigrationPod returns true if the pod is a copy of a running pod that
+// defrag handed over to the scale-up loop to migrate it off a candidate node.
+func IsActiveMigrationPod(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[ActiveMigrationPodAnnotation] == "true"
+}
 
 // Mode describes requirements for scaling-down the defrag candidate nodes.
 type Mode int

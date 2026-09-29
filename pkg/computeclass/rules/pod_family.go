@@ -34,6 +34,12 @@ var podFamilyMachineFamilies = map[string][]machinetypes.MachineFamily{
 	GeneralPurposeArmPodFamily: {machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
 }
 
+// IsPodFamily returns true if name is a valid pod family name (e.g. general-purpose, general-purpose-arm).
+func IsPodFamily(name string) bool {
+	_, ok := podFamilyMachineFamilies[name]
+	return ok
+}
+
 // ExtendedFallbacks is a list of machine families used as fallbacks when extended fallbacks are enabled.
 // The order of families in this list matters as it defines the priority tiers for fallback.
 // Cluster Autoscaler evaluates these sequentially; if valid candidates are found in a higher-priority

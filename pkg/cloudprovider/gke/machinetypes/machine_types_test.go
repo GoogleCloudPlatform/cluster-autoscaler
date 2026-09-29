@@ -181,6 +181,10 @@ func TestValidateMachineFamilyConfig(t *testing.T) {
 			// Check if the family has at least one machine type
 			assert.NotEmpty(t, machineFamily.AllMachineTypes(NoConstraints))
 
+			// Check if the family defines supported boot and attach disk types.
+			assert.NotEmpty(t, machineFamily.supportedBootDiskTypes, "Family %s must define supportedBootDiskTypes", machineFamily.name)
+			assert.NotEmpty(t, machineFamily.supportedAttachDiskTypes, "Family %s must define supportedAttachDiskTypes", machineFamily.name)
+
 			// Check if all autoprovisioned machine types are contained in all machine types.
 			assert.Subset(t, machineFamily.AllMachineTypes(NoConstraints), machineFamily.AutoprovisionedMachineTypes(NoConstraints))
 			assert.Contains(t, machineFamily.AllMachineTypes(NoConstraints), machineFamily.LargestMachineType(NoConstraints).Name)
@@ -2719,6 +2723,16 @@ func TestN2SupportedDisks(t *testing.T) {
 	assert.Contains(t, nonConfDisks, DiskTypePDExtreme)
 	assert.Contains(t, nonConfDisks, DiskTypeSSD)
 	assert.Contains(t, nonConfDisks, DiskTypeStandard)
+}
+
+func TestN4DSupportedDisks(t *testing.T) {
+	nonConfDisks := N4D.ListSupportedDisks(false /* isConfidentialNode */)
+	assert.ElementsMatch(t, []string{
+		DiskTypeHyperdiskBalanced,
+		DiskTypeHyperdiskBalancedHighAvailability,
+		DiskTypeHyperdiskThroughput,
+		DiskTypeHyperdiskMl,
+	}, nonConfDisks)
 }
 
 func TestGetMachineGeneration(t *testing.T) {

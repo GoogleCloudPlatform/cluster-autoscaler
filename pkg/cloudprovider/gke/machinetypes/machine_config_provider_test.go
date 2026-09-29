@@ -384,3 +384,19 @@ func TestMachineConfigProvider_Refresh(t *testing.T) {
 	assert.True(t, mcp.Refresh(), "Refresh after existing family removal should return true")
 
 }
+
+func TestResizableFamilyNames(t *testing.T) {
+	mcp := NewMachineConfigProvider(nil)
+	names := mcp.ResizableFamilyNames()
+
+	// Verify all resizable families are included.
+	assert.Contains(t, names, "ek")
+	assert.Contains(t, names, "e4a")
+	assert.Contains(t, names, "e4")
+
+	// Verify non-resizable machine families are not included.
+	assert.NotContains(t, names, "e2")
+	assert.NotContains(t, names, "n1")
+	assert.NotContains(t, names, "n2")
+	assert.NotContains(t, names, "c2")
+}

@@ -212,12 +212,12 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
-			name: "ccc max node disruption set",
+			name: "ccc disruption budget set",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
 					ActiveMigration: &v1.ActiveMigration{
 						ReconciliationPolicy: &v1.ReconciliationPolicy{
-							MaxNodeDisruption: ptr.To(int32(3)),
+							DisruptionBudgets: []v1.DisruptionBudget{{MaxNodes: 3}},
 						},
 					},
 				},
@@ -228,12 +228,27 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
-			name: "ccc max node disruption nil",
+			name: "ccc disruption budgets nil",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
 					ActiveMigration: &v1.ActiveMigration{
 						ReconciliationPolicy: &v1.ReconciliationPolicy{
-							MaxNodeDisruption: nil,
+							DisruptionBudgets: nil,
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+			),
+		},
+		{
+			name: "ccc disruption budgets empty",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					ActiveMigration: &v1.ActiveMigration{
+						ReconciliationPolicy: &v1.ReconciliationPolicy{
+							DisruptionBudgets: []v1.DisruptionBudget{},
 						},
 					},
 				},
@@ -2681,6 +2696,52 @@ func TestPrioritySelfService(t *testing.T) {
 				selfservice.Metadata{"location-policy": "ANY"},
 			},
 		},
+		{
+			name: "Priority contains LocalSSDEncryptionMode",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily: proto.String("n2"),
+							Storage: &v1.Storage{
+								LocalSSDEncryptionMode: proto.String("EPHEMERAL_KEY_ENCRYPTION"),
+							},
+						},
+						{
+							MachineFamily: proto.String("n2"),
+							Storage: &v1.Storage{
+								LocalSSDEncryptionMode: proto.String("STANDARD_ENCRYPTION"),
+							},
+						},
+					},
+				},
+			},
+			wantLabels: []map[string]string{
+				selfservice.Metadata{selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION"},
+				selfservice.Metadata{selfservice.LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION"},
+			},
+		},
+		{
+			name: "Priority contains PerformanceMonitoringUnit",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineFamily:             proto.String("n2"),
+							PerformanceMonitoringUnit: proto.String("ARCHITECTURAL"),
+						},
+						{
+							MachineFamily:             proto.String("n2"),
+							PerformanceMonitoringUnit: proto.String("STANDARD"),
+						},
+					},
+				},
+			},
+			wantLabels: []map[string]string{
+				selfservice.Metadata{selfservice.PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL"},
+				selfservice.Metadata{selfservice.PerformanceMonitoringUnitMetadataKey: "STANDARD"},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		gotCrd := NewCccCrd(tc.ccc, "", false, nil, testOptionsTracker(nil))
@@ -3198,4 +3259,87 @@ func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
 
 	// Ensure the original slice within the struct is untouched.
 	assert.Equal(t, "label1", ccc.(*cccCrd).Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels[0], "The original slice was mutated, defensive copy is missing!")
+}
+
+func TestNewPodFamilyCrd(t *testing.T) {
+	for _, podFamily := range []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily} {
+		t.Run(podFamily, func(t *testing.T) {
+			c := NewPodFamilyCrd(podFamily, "test-project", true, crd.TestDefaultDataProvider(), testOptionsTracker(nil))
+			assert.NotNil(t, c)
+			assert.Equal(t, podFamily, c.Name())
+			assert.Equal(t, CrdType, c.CrdType())
+			assert.Len(t, c.Rules(), 1)
+			assert.Len(t, c.GroupedRules(), 1)
+			rule := c.Rules()[0]
+			assert.Equal(t, podFamily, rule.PodFamilyName())
+			if sr, ok := rule.(rules.AllocationStrategyRule); assert.True(t, ok) {
+				assert.NotNil(t, sr.AllocationStrategy())
+				assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
+			}
+		})
+	}
+}
+
+func TestNewPccCrd(t *testing.T) {
+	balancedPcc, err := machinetypes.ToPredefinedComputeClass("Balanced")
+	assert.NoError(t, err)
+	performancePcc, err := machinetypes.ToPredefinedComputeClass("Performance")
+	assert.NoError(t, err)
+
+	enabledTracker := optstracking.FakeOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{},
+		experiments.NewMockManager(experiments.PayPerPodFleetEfficiencyMinCAVersionFlag),
+	)
+	disabledTracker := optstracking.FakeOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{},
+		experiments.NewMockManager(),
+	)
+
+	t.Run("Pay-per-pod PCC on Autopilot with experiment enabled uses fleet-efficiency and priorityScore 100", func(t *testing.T) {
+		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), enabledTracker)
+		assert.Equal(t, "Balanced", c.Name())
+		assert.False(t, c.(*cccCrd).autopilotEnabled)
+		assert.Len(t, c.GroupedRules(), 1)
+		for _, r := range c.Rules() {
+			sr, ok := r.(rules.AllocationStrategyRule)
+			assert.True(t, ok)
+			assert.NotNil(t, sr.AllocationStrategy())
+			assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
+		}
+	})
+
+	t.Run("Slice of Hardware PCC on Autopilot with experiment enabled does not set fleet-efficiency", func(t *testing.T) {
+		c := NewPccCrd(performancePcc, "test-project", true, crd.TestDefaultDataProvider(), enabledTracker)
+		assert.Equal(t, "Performance", c.Name())
+		assert.True(t, c.(*cccCrd).autopilotEnabled)
+		for _, r := range c.Rules() {
+			sr, ok := r.(rules.AllocationStrategyRule)
+			assert.True(t, ok)
+			assert.Nil(t, sr.AllocationStrategy())
+		}
+	})
+
+	t.Run("Pay-per-pod PCC with experiment disabled does not set fleet-efficiency", func(t *testing.T) {
+		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), disabledTracker)
+		assert.Equal(t, "Balanced", c.Name())
+		assert.Len(t, c.GroupedRules(), 2)
+		for _, r := range c.Rules() {
+			sr, ok := r.(rules.AllocationStrategyRule)
+			assert.True(t, ok)
+			assert.Nil(t, sr.AllocationStrategy())
+		}
+	})
+
+	t.Run("Nil optionsTracker does not panic and does not set fleet-efficiency", func(t *testing.T) {
+		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), nil)
+		assert.Equal(t, "Balanced", c.Name())
+		assert.Len(t, c.GroupedRules(), 2)
+		for _, r := range c.Rules() {
+			sr, ok := r.(rules.AllocationStrategyRule)
+			assert.True(t, ok)
+			assert.Nil(t, sr.AllocationStrategy())
+		}
+	})
 }

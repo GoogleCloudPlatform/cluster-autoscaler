@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	resourceapi "k8s.io/api/resource/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	mt "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/utils/ptr"
@@ -202,7 +201,7 @@ func buildGpuDevice(deviceName, architecture, productName string, index, capacit
 		},
 		Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
 			"memory": {
-				Value: *resource.NewQuantity(capacity*2^30, resource.BinarySI),
+				Value: *memoryGbToQuantity(capacity),
 			},
 		},
 	}

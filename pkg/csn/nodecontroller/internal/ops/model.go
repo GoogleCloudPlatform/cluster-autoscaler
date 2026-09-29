@@ -16,6 +16,8 @@ package ops
 
 import (
 	"context"
+	"fmt"
+	"maps"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/utils/set"
@@ -39,6 +41,12 @@ const (
 	AssignBufferOp
 	// AssignSoftTaintOp means the addition of soft taints to nodes via k8s api.
 	AssignSoftTaintOp
+	// FailNodeOp applies the permanent failed taint (buffer.gke.io/standby-capacity-node-failed:NoSchedule)
+	// and cordons nodes whose operation retries have been exhausted (e.g. repeated GCE suspension API failures).
+	// This prevents CSN fake pods from scheduling on the node (triggering capacity buffer replenishment via scale-up)
+	// and flags the node for the Defrag engine to delete. (If user workloads schedule on the node before the taint
+	// takes effect, it falls back to patching the node state to CONSUMED to preserve those workloads).
+	FailNodeOp
 )
 
 // String returns the string representation of the operation type.
@@ -52,10 +60,32 @@ func (ot OperationType) String() string {
 		return "ASSIGN_BUFFER"
 	case AssignSoftTaintOp:
 		return "ASSIGN_SOFT_TAINT"
+	case FailNodeOp:
+		return "FAIL_NODE"
 	case NoOp:
 		return "NO_OP"
 	default:
 		return "UNKNOWN"
+	}
+}
+
+// ParseOperationType parses a string into an OperationType.
+func ParseOperationType(s string) (OperationType, error) {
+	switch s {
+	case "SUSPEND":
+		return SuspendOp, nil
+	case "CONSUME":
+		return ConsumeOp, nil
+	case "ASSIGN_BUFFER":
+		return AssignBufferOp, nil
+	case "ASSIGN_SOFT_TAINT":
+		return AssignSoftTaintOp, nil
+	case "NO_OP":
+		return NoOp, nil
+	case "FAIL_NODE":
+		return FailNodeOp, nil
+	default:
+		return NoOp, fmt.Errorf("unknown operation type: %q", s)
 	}
 }
 
@@ -118,10 +148,14 @@ func (r *Result) AddSuccessForNodeSet(nodeNames set.Set[string]) {
 	}
 }
 
-func (r *Result) AddSuccessForRefSlice(nodeRefs []gce.GceRef) {
-	for _, ref := range nodeRefs {
-		r.Success.Insert(ref.Name)
-	}
+// AddResult folds other into r, which is useful when a handler builds part of
+// its result separately, e.g. on another goroutine.
+//
+// Both results reporting on the same node is a caller error: the node would end
+// up reported as successful and failed at the same time.
+func (r *Result) AddResult(other Result) {
+	r.AddSuccessForNodeSet(other.Success)
+	maps.Copy(r.Errs, other.Errs)
 }
 
 // OperationHandler performs the logic for a specific operation type.

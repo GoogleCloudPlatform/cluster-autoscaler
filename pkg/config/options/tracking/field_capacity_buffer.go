@@ -22,7 +22,7 @@ import (
 )
 
 var capacityBuffersControllerEnabledField = trackedField{
-	name: "capacityBuffersControllerEnabledField",
+	name: "CapacitybufferControllerEnabled",
 	valueEqual: func(optsA, optsB internalopts.AutoscalingOptions) bool {
 		return optsA.CapacitybufferControllerEnabled == optsB.CapacitybufferControllerEnabled
 	},
@@ -33,10 +33,11 @@ var capacityBuffersControllerEnabledField = trackedField{
 		optsToModify.CapacitybufferControllerEnabled = isCapacityBufferEnabled(optsFromFlags.CapacitybufferControllerEnabled, experimentsManager)
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
 
 var capacityBuffersPodInjectionEnabledField = trackedField{
-	name: "capacityBuffersPodInjectionEnabledField",
+	name: "CapacitybufferPodInjectionEnabled",
 	valueEqual: func(optsA, optsB internalopts.AutoscalingOptions) bool {
 		return optsA.CapacitybufferPodInjectionEnabled == optsB.CapacitybufferPodInjectionEnabled
 	},
@@ -47,6 +48,7 @@ var capacityBuffersPodInjectionEnabledField = trackedField{
 		optsToModify.CapacitybufferPodInjectionEnabled = isCapacityBufferEnabled(optsFromFlags.CapacitybufferPodInjectionEnabled, experimentsManager)
 		return nil
 	},
+	caRestartNeededOnValueChange: true,
 }
 
 func isCapacityBufferEnabled(capacityBufferFlag bool, em experiments.Manager) bool {

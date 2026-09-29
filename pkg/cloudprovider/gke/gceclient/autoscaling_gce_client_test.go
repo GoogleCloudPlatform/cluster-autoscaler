@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -34,6 +35,8 @@ import (
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/component-base/metrics/legacyregistry"
+	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/utils/ptr"
@@ -1723,11 +1726,7 @@ func TestResumeInstances(t *testing.T) {
 				WithInstanceActionPollingFrequency(1*time.Millisecond),
 			)
 
-			if tt.wantErr == nil {
-				makeServerReturnInstancesWithStatus(t, server, "RUNNING", tt.migRef, tt.instances)
-			}
-
-			err := gceInternalService.ResumeInstances(tt.migRef, tt.instances, nil)
+			err := gceInternalService.ResumeInstances(tt.migRef, tt.instances)
 
 			if tt.wantErr == nil {
 				assert.NoError(t, err)
@@ -1735,6 +1734,549 @@ func TestResumeInstances(t *testing.T) {
 				assert.ErrorContains(t, err, *tt.wantErr, fmt.Sprintf("got %v", err.Error()))
 			}
 			assert.True(t, server.AssertExpectations(t), "Not all expected calls were made to server")
+		})
+	}
+}
+
+// instanceError pairs a terminal error with the instance it was yielded for.
+type instanceError struct {
+	Ref gce.GceRef
+	Err error
+}
+
+// nonBlockingError pairs a recoverable failure with the instance it was reported for.
+type nonBlockingError struct {
+	Ref gce.GceRef
+	Err NonBlockingInstanceError
+}
+
+// pollReport is everything a PollUntilActionStops iterator reported, split by the outcome of the
+// yielded update so tests can assert on each part independently. Each part is in report order.
+type pollReport struct {
+	// completed holds the instances reported PollCompleted, in the order they were reported.
+	completed []gce.GceRef
+	// nonBlocking holds the non-blocking failures reported while the instances kept retrying.
+	nonBlocking []nonBlockingError
+	// aborted holds the instances reported PollAborted, alongside the errors explaining why.
+	aborted []instanceError
+	// unexpected holds updates with an outcome none of the above buckets covers.
+	unexpected []gce.GceRef
+}
+
+// collectPoll drains a PollUntilActionStops iterator into a pollReport.
+func collectPoll(seq ActionPollSeq) pollReport {
+	var out pollReport
+	for ref, update := range seq {
+		switch u := update.(type) {
+		case PollCompleted:
+			out.completed = append(out.completed, ref)
+		case PollRetrying:
+			out.nonBlocking = append(out.nonBlocking, nonBlockingError{Ref: ref, Err: *u.Err})
+		case PollAborted:
+			out.aborted = append(out.aborted, instanceError{Ref: ref, Err: u.Err})
+		default:
+			out.unexpected = append(out.unexpected, ref)
+		}
+	}
+	return out
+}
+
+// managedInstance builds the ManagedInstance GCE would report for ref while it is running
+// currentAction with status instanceStatus. Any lastAttemptErrors are attached as the errors of the
+// MIG's most recent attempt on the instance.
+func managedInstance(ref gce.GceRef, currentAction InstanceAction, instanceStatus string, lastAttemptErrors ...*gce_api.ManagedInstanceLastAttemptErrorsErrors) *gce_api.ManagedInstance {
+	inst := &gce_api.ManagedInstance{
+		Name:           ref.Name,
+		Instance:       fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/instances/%s", ref.Project, ref.Zone, ref.Name),
+		CurrentAction:  string(currentAction),
+		InstanceStatus: instanceStatus,
+	}
+	if len(lastAttemptErrors) > 0 {
+		inst.LastAttempt = &gce_api.ManagedInstanceLastAttempt{
+			Errors: &gce_api.ManagedInstanceLastAttemptErrors{Errors: lastAttemptErrors},
+		}
+	}
+	return inst
+}
+
+func listManagedInstancesPath(migRef gce.GceRef) string {
+	return fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
+}
+
+// pollTestResponder answers the listManagedInstances calls of a single MIG, serving one queued
+// response per poll and repeating the last one once the queue runs out, which is what the cases
+// that can only end on a timeout rely on.
+type pollTestResponder struct {
+	path   string
+	bodies [][]byte
+
+	mu    sync.Mutex
+	calls int
+}
+
+// newPollTestResponder marshals one listManagedInstances response per entry of polls.
+func newPollTestResponder(t *testing.T, migRef gce.GceRef, polls ...[]*gce_api.ManagedInstance) *pollTestResponder {
+	t.Helper()
+	responder := &pollTestResponder{path: listManagedInstancesPath(migRef)}
+	for _, instances := range polls {
+		b, err := json.Marshal(&gce_api.InstanceGroupManagersListManagedInstancesResponse{ManagedInstances: instances})
+		if err != nil {
+			t.Fatalf("Failed to marshal listManagedInstances response: %v", err)
+		}
+		responder.bodies = append(responder.bodies, b)
+	}
+	return responder
+}
+
+func (r *pollTestResponder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path != r.path {
+		http.Error(w, fmt.Sprintf("unexpected request to %q", req.URL.Path), http.StatusNotFound)
+		return
+	}
+	r.mu.Lock()
+	body := r.bodies[min(r.calls, len(r.bodies)-1)]
+	r.calls++
+	r.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
+
+// polls returns how many listManagedInstances calls have been served so far.
+func (r *pollTestResponder) polls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+// pollTestActions are the actions every PollUntilActionStops test is run against. The poll loop is
+// action agnostic, so resuming and suspending must behave identically.
+var pollTestActions = []InstanceAction{ActionResuming, ActionSuspending}
+
+// newPollTestClient builds a client whose GCE calls responder answers in process, and which gives
+// up on action after actionTimeout. Only action's own Giraffe flag is set, so a poll reading the
+// flag of another action would wait for that action's default timeout instead. boolFlags overrides
+// the Giraffe bool flags of the client, which are otherwise all enabled.
+//
+// The poll tests run inside a synctest bubble, which lets them wait out the polling interval and
+// the action timeout for free. A bubble only moves its clock once every goroutine inside it is
+// blocked, and a socket keeps one parked in the netpoller indefinitely, so the calls must not leave
+// the process: transportWithWaitGroup hands each request straight to responder on a goroutine of
+// the bubble's own.
+func newPollTestClient(t *testing.T, action InstanceAction, responder http.Handler, actionTimeout time.Duration, boolFlags map[string]bool) *autoscalingInternalGceClient {
+	t.Helper()
+	var timeoutFlag string
+	switch action {
+	case ActionResuming:
+		timeoutFlag = experiments.ColdStandbyNodesResumeTimeoutSecondsFlag
+	case ActionSuspending:
+		timeoutFlag = experiments.ColdStandbyNodesSuspendTimeoutSecondsFlag
+	default:
+		t.Fatalf("no timeout flag is known for action %q", action)
+	}
+	timeouts := map[string]string{
+		timeoutFlag: strconv.Itoa(int(actionTimeout / time.Second)),
+	}
+	return newTestAutoscalingInternalGceClientWithCustomTransport(
+		t, "project1", "", &fakeSingleMigInfoProvider{}, time.Duration(0),
+		&transportWithWaitGroup{handler: responder},
+		WithExperimentsManager(experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, timeouts)))
+}
+
+func TestPollUntilActionStops(t *testing.T) {
+	for _, action := range pollTestActions {
+		t.Run(string(action), func(t *testing.T) {
+			testPollUntilActionStops(t, action)
+		})
+	}
+}
+
+// testPollUntilActionStops runs the scenario table for a single action. It is a function of its own
+// so that the table is not indented behind the per-action subtest.
+func testPollUntilActionStops(t *testing.T, actionToTest InstanceAction) {
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+	inst2Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst2"}
+	stockout := &gce_api.ManagedInstanceLastAttemptErrorsErrors{Code: "STOCKOUT", Message: "Zone stockout"}
+	quotaExceeded := &gce_api.ManagedInstanceLastAttemptErrorsErrors{Code: "QUOTA_EXCEEDED", Message: "Quota exceeded"}
+
+	// The instance status GCE reports while the action is under way, and once it is done. The poll
+	// loop only passes the former through to the non-blocking errors it reports, but the two actions
+	// are mirror images of each other, so each gets its own pair.
+	inProgressStatus, doneStatus := "SUSPENDED", "RUNNING"
+	if actionToTest == ActionSuspending {
+		inProgressStatus, doneStatus = "RUNNING", "SUSPENDED"
+	}
+
+	// actionTimeout outlasts the longest run of polls the table queues up, so that only the case
+	// meaning to time out does. It deliberately is not a whole multiple of
+	// instanceActionPollingFrequency: on a multiple the poll timer and the timeout timer come due
+	// on the same select, which picks between them at random.
+	const actionTimeout = 5*time.Minute + 2*time.Second
+
+	// neverDone keeps both instances running the action forever, so a row that expects the wait to
+	// be skipped fails instead of quietly polling its way to the same result.
+	neverDone := [][]*gce_api.ManagedInstance{{
+		managedInstance(inst1Ref, actionToTest, ""),
+		managedInstance(inst2Ref, actionToTest, ""),
+	}}
+
+	tests := []struct {
+		name string
+		// boolFlags overrides the Giraffe bool flags of the client, which are otherwise all enabled.
+		boolFlags map[string]bool
+		// noExperimentsManager leaves the client without an experiments manager.
+		noExperimentsManager bool
+		// polls holds one listManagedInstances response per poll, answered in order. The last entry
+		// is replayed if the loop polls more often than there are entries.
+		polls     [][]*gce_api.ManagedInstance
+		wantPolls int
+		instances []gce.GceRef
+		// wantCompleted is in report order. No row may have two instances finishing on the same poll:
+		// PollUntilActionStops reports them while ranging over a map, so their relative order would
+		// be random. Staggering the completions keeps this a meaningful ordering assertion.
+		wantCompleted   []gce.GceRef
+		wantAborted     []instanceError
+		wantNonBlocking []nonBlockingError
+	}{
+		{
+			name: "early signaling for progressive instance readiness",
+			polls: [][]*gce_api.ManagedInstance{
+				// inst1 is done, inst2 is still running the action.
+				{
+					managedInstance(inst1Ref, ActionNone, ""),
+					managedInstance(inst2Ref, actionToTest, ""),
+				},
+				// inst2 is done too.
+				{
+					managedInstance(inst1Ref, ActionNone, ""),
+					managedInstance(inst2Ref, ActionNone, ""),
+				},
+			},
+			instances: []gce.GceRef{inst1Ref, inst2Ref},
+			wantPolls: 2,
+			// inst1 is reported on the first poll, without waiting for inst2.
+			wantCompleted: []gce.GceRef{inst1Ref, inst2Ref},
+		},
+		{
+			name: "non-blocking errors yielded during poll",
+			polls: [][]*gce_api.ManagedInstance{
+				{managedInstance(inst1Ref, actionToTest, inProgressStatus, stockout)},
+				// The action finished, but LastAttempt still carries a now-stale error, which must
+				// not be reported.
+				{managedInstance(inst1Ref, ActionNone, doneStatus,
+					&gce_api.ManagedInstanceLastAttemptErrorsErrors{Code: "INTERNAL_ERROR", Message: "Stale failure"})},
+			},
+			instances:       []gce.GceRef{inst1Ref},
+			wantPolls:       2,
+			wantCompleted:   []gce.GceRef{inst1Ref},
+			wantNonBlocking: []nonBlockingError{{Ref: inst1Ref, Err: NonBlockingInstanceError{Code: "STOCKOUT", Message: "Zone stockout", InstanceStatus: inProgressStatus}}},
+		},
+		{
+			name: "no errors reported for an instance that is already done",
+			// The instance finished the action but its last attempt still carries an error.
+			polls:         [][]*gce_api.ManagedInstance{{managedInstance(inst1Ref, ActionNone, doneStatus, stockout)}},
+			instances:     []gce.GceRef{inst1Ref},
+			wantPolls:     1,
+			wantCompleted: []gce.GceRef{inst1Ref},
+		},
+		{
+			// This row is also what pins the deduplication of non-blocking errors: GCE retries
+			// the action indefinitely, so without it every poll would re-report the same error.
+			// The four polls span 20 seconds of the bubble's clock, well inside the 5-minute
+			// deduplication window, and wantNonBlocking is compared as a multiset, so a repeat
+			// that slipped through would fail the case.
+			name: "no errors reported for an instance that became done on an earlier poll",
+			polls: [][]*gce_api.ManagedInstance{
+				// Both instances are still running the action and both hit a stockout.
+				{
+					managedInstance(inst1Ref, actionToTest, inProgressStatus, stockout),
+					managedInstance(inst2Ref, actionToTest, inProgressStatus, stockout),
+				},
+				// inst1 finished. inst2 repeats the same stockout, which the deduper swallows.
+				{
+					managedInstance(inst1Ref, ActionNone, doneStatus),
+					managedInstance(inst2Ref, actionToTest, inProgressStatus, stockout),
+				},
+				// A brand new error shows up for both instances. Only inst2's is reported: inst1
+				// already made it, even though GCE still lists errors for it.
+				{
+					managedInstance(inst1Ref, actionToTest, inProgressStatus, quotaExceeded),
+					managedInstance(inst2Ref, actionToTest, inProgressStatus, quotaExceeded),
+				},
+				// inst2 finishes too, ending the poll.
+				{
+					managedInstance(inst2Ref, ActionNone, doneStatus),
+				},
+			},
+			instances:     []gce.GceRef{inst1Ref, inst2Ref},
+			wantPolls:     4,
+			wantCompleted: []gce.GceRef{inst1Ref, inst2Ref},
+			wantNonBlocking: []nonBlockingError{
+				{Ref: inst1Ref, Err: NonBlockingInstanceError{Code: "STOCKOUT", Message: "Zone stockout", InstanceStatus: inProgressStatus}},
+				{Ref: inst2Ref, Err: NonBlockingInstanceError{Code: "STOCKOUT", Message: "Zone stockout", InstanceStatus: inProgressStatus}},
+				{Ref: inst2Ref, Err: NonBlockingInstanceError{Code: "QUOTA_EXCEEDED", Message: "Quota exceeded", InstanceStatus: inProgressStatus}},
+			},
+		},
+		{
+			name: "timeout reports only the instances that never became done",
+			// inst1 finishes on the first poll, inst2 stays stuck, so this single response is
+			// replayed until the wait runs out.
+			polls: [][]*gce_api.ManagedInstance{{
+				managedInstance(inst1Ref, ActionNone, ""),
+				managedInstance(inst2Ref, actionToTest, ""),
+			}},
+			instances: []gce.GceRef{inst1Ref, inst2Ref},
+			// The loop keeps polling right up to the deadline instead of giving up early.
+			wantPolls:     int(actionTimeout / instanceActionPollingFrequency),
+			wantCompleted: []gce.GceRef{inst1Ref},
+			wantAborted:   []instanceError{{Ref: inst2Ref, Err: context.DeadlineExceeded}},
+		},
+		{
+			name:      "no instances to wait for",
+			polls:     neverDone,
+			instances: nil,
+			wantPolls: 0,
+		},
+		{
+			name:      "waiting disabled by the Giraffe flag",
+			boolFlags: map[string]bool{experiments.ColdStandbyNodesWaitForInstanceStatus: false},
+			polls:     neverDone,
+			instances: []gce.GceRef{inst1Ref, inst2Ref},
+			wantPolls: 0,
+			// Without a poll the instances are reported in the order they were passed in.
+			wantCompleted: []gce.GceRef{inst1Ref, inst2Ref},
+		},
+		{
+			name:                 "no experiments manager",
+			noExperimentsManager: true,
+			polls:                neverDone,
+			instances:            []gce.GceRef{inst1Ref, inst2Ref},
+			wantPolls:            0,
+			wantCompleted:        []gce.GceRef{inst1Ref, inst2Ref},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				responder := newPollTestResponder(t, migRef, tt.polls...)
+				client := newPollTestClient(t, actionToTest, responder, actionTimeout, tt.boolFlags)
+				if tt.noExperimentsManager {
+					client.experimentsManager = nil
+				}
+
+				got := collectPoll(client.PollUntilActionStops(t.Context(), actionToTest, migRef, tt.instances))
+
+				assert.Equal(t, tt.wantCompleted, got.completed)
+				// Compared as sets: both are yielded while ranging over the pending instances, so
+				// their relative order is not part of the contract.
+				assert.ElementsMatch(t, tt.wantNonBlocking, got.nonBlocking)
+				if diff := cmp.Diff(tt.wantAborted, got.aborted, cmpopts.EquateErrors(), cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("aborted diff (-want +got):\n%s", diff)
+				}
+				for _, aborted := range got.aborted {
+					assert.ErrorContains(t, aborted.Err, fmt.Sprintf("stopped waiting for instance %v", aborted.Ref))
+				}
+				assert.Equal(t, tt.wantPolls, responder.polls())
+				assert.Empty(t, got.unexpected, "poll reported instances with an unrecognized outcome")
+			})
+		})
+	}
+}
+
+// TestPollUntilActionStopsReportsInstancesFinishingTogether is kept out of the table above because
+// both instances leave the pending set on the same poll, so their report order is unordered.
+func TestPollUntilActionStopsReportsInstancesFinishingTogether(t *testing.T) {
+	for _, actionToTest := range pollTestActions {
+		t.Run(string(actionToTest), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+				inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+				inst2Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst2"}
+
+				// A single poll settles both instances, so the iterator must not poll again.
+				responder := newPollTestResponder(t, migRef, []*gce_api.ManagedInstance{
+					managedInstance(inst1Ref, ActionNone, ""),
+					managedInstance(inst2Ref, ActionNone, ""),
+				})
+				client := newPollTestClient(t, actionToTest, responder, time.Minute, nil)
+
+				got := collectPoll(client.PollUntilActionStops(t.Context(), actionToTest, migRef, []gce.GceRef{inst1Ref, inst2Ref}))
+				assert.ElementsMatch(t, []gce.GceRef{inst1Ref, inst2Ref}, got.completed)
+				assert.Empty(t, got.aborted)
+				assert.Empty(t, got.nonBlocking)
+				assert.Equal(t, 1, responder.polls())
+			})
+		})
+	}
+}
+
+func TestPollUntilActionStops_FetchError(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		calls++
+		if calls == 1 {
+			res.WriteHeader(http.StatusRequestTimeout)
+			return
+		}
+		lmiResponse := &gce_api_beta.InstanceGroupManagersListManagedInstancesResponse{
+			ManagedInstances: []*gce_api_beta.ManagedInstance{
+				{Name: "inst1", CurrentAction: "NONE"},
+			},
+		}
+		b, err := json.Marshal(lmiResponse)
+		assert.NoError(t, err)
+		res.Write(b)
+	}))
+	defer server.Close()
+
+	client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0), WithInstanceActionPollingFrequency(time.Millisecond))
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+	got := collectPoll(client.PollUntilActionStops(t.Context(), ActionResuming, migRef, []gce.GceRef{inst1Ref}))
+	assert.Equal(t, []gce.GceRef{inst1Ref}, got.completed)
+	assert.Empty(t, got.aborted)
+	assert.Equal(t, 2, calls)
+}
+
+// TestPollUntilActionStopsStopsEarly covers the two ways of ending a wait before every instance is
+// done. It is kept out of the table above because each case drives the iterator differently.
+func TestPollUntilActionStopsStopsEarly(t *testing.T) {
+	for _, action := range pollTestActions {
+		t.Run(string(action), func(t *testing.T) {
+			testPollUntilActionStopsStopsEarly(t, action)
+		})
+	}
+}
+
+// testPollUntilActionStopsStopsEarly runs both early-stop cases for a single action. It is a
+// function of its own so that the cases are not indented behind the per-action subtest.
+func testPollUntilActionStopsStopsEarly(t *testing.T, action InstanceAction) {
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+	inst2Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst2"}
+
+	// startPoll waits on an inst1 that is done right away and an inst2 that never finishes, so
+	// without an early stop the poll would run for a whole minute.
+	startPoll := func(t *testing.T, ctx context.Context) (ActionPollSeq, *pollTestResponder) {
+		t.Helper()
+		responder := newPollTestResponder(t, migRef, []*gce_api.ManagedInstance{
+			managedInstance(inst1Ref, ActionNone, ""),
+			managedInstance(inst2Ref, action, ""),
+		})
+		client := newPollTestClient(t, action, responder, time.Minute, nil)
+		return client.PollUntilActionStops(ctx, action, migRef, []gce.GceRef{inst1Ref, inst2Ref}), responder
+	}
+
+	t.Run("consumer breaks", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			poll, responder := startPoll(t, t.Context())
+
+			var done []gce.GceRef
+			for ref := range poll {
+				done = append(done, ref)
+				break
+			}
+
+			assert.Equal(t, []gce.GceRef{inst1Ref}, done)
+			// The break has to stop the polling too, not just the reporting.
+			assert.Equal(t, 1, responder.polls())
+		})
+	})
+
+	// Cancelling the context covers what a break cannot: between two updates there is no loop body
+	// to break out of, so cancelling is the only way for the caller to stop the wait then.
+	t.Run("context is cancelled", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			poll, responder := startPoll(t, ctx)
+
+			// Cancelling between the first and the second poll catches the iterator while it is
+			// waiting, which is precisely when the consumer has no say in the matter.
+			go func() {
+				time.Sleep(instanceActionPollingFrequency + time.Second)
+				cancel()
+			}()
+
+			got := collectPoll(poll)
+
+			assert.Equal(t, []gce.GceRef{inst1Ref}, got.completed)
+			if assert.Len(t, got.aborted, 1) {
+				assert.Equal(t, inst2Ref, got.aborted[0].Ref)
+				assert.ErrorIs(t, got.aborted[0].Err, context.Canceled)
+			}
+			// The wait ended on the cancellation rather than on the timeout, so the iterator
+			// never got to poll a second time.
+			assert.Equal(t, 1, responder.polls())
+		})
+	})
+}
+
+// requestLatenciesMetricName is the fully qualified name of the histogram EmitGceLatency feeds.
+const requestLatenciesMetricName = "cluster_autoscaler_request_latencies"
+
+// registerGkeMetrics makes the GKE metrics observable: component-base metrics silently drop
+// observations until they are registered, and the default registry rejects a second registration.
+var registerGkeMetrics = sync.OnceFunc(gke_metrics.RegisterMetrics)
+
+// actionPollingLatencyCounts returns how many observations the polling latency metric of action
+// holds so far, keyed by the status label of the outcome: "200" for instances that stopped running
+// the action, "timeout" for the ones the poll gave up on.
+func actionPollingLatencyCounts(t *testing.T, action InstanceAction) map[string]uint64 {
+	t.Helper()
+	registerGkeMetrics()
+
+	families, err := legacyregistry.DefaultGatherer.Gather()
+	assert.NoError(t, err)
+
+	counts := make(map[string]uint64)
+	for _, family := range families {
+		if family.GetName() != requestLatenciesMetricName {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string, len(metric.GetLabel()))
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["service"] != "gce" || labels["resource"] != "instance_group_managers" || labels["verb"] != actionPollingVerb(action) {
+				continue
+			}
+			counts[labels["status"]] = metric.GetHistogram().GetSampleCount()
+		}
+	}
+	return counts
+}
+
+func TestPollUntilActionStopsEmitsLatencyPerInstance(t *testing.T) {
+	for _, action := range pollTestActions {
+		t.Run(string(action), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+				inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+				inst2Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst2"}
+
+				// inst1 is done on the first poll, inst2 stays stuck until the poll times out, so
+				// the two instances of a single poll end up with opposite outcomes.
+				responder := newPollTestResponder(t, migRef, []*gce_api.ManagedInstance{
+					managedInstance(inst1Ref, ActionNone, ""),
+					managedInstance(inst2Ref, action, ""),
+				})
+				client := newPollTestClient(t, action, responder, time.Minute, nil)
+
+				// Each action reports its latency on a metric of its own, so the counts are read
+				// back for the action under test.
+				before := actionPollingLatencyCounts(t, action)
+				collectPoll(client.PollUntilActionStops(t.Context(), action, migRef, []gce.GceRef{inst1Ref, inst2Ref}))
+				after := actionPollingLatencyCounts(t, action)
+
+				// One observation per instance, each carrying that instance's own outcome, rather
+				// than a single one for the whole poll.
+				assert.Equal(t, uint64(1), after["200"]-before["200"], "observations for the instance that finished the action")
+				assert.Equal(t, uint64(1), after["timeout"]-before["timeout"], "observations for the instance that timed out")
+			})
 		})
 	}
 }
@@ -1808,12 +2350,7 @@ func TestSuspendInstances(t *testing.T) {
 				server.URL,
 				false,
 				false,
-				WithInstanceActionPollingFrequency(1*time.Millisecond),
 			)
-
-			if tt.wantErr == nil {
-				makeServerReturnInstancesWithStatus(t, server, "SUSPENDED", tt.migRef, tt.instances)
-			}
 
 			err := gceInternalService.SuspendInstances(tt.migRef, tt.instances, false)
 
@@ -1825,199 +2362,6 @@ func TestSuspendInstances(t *testing.T) {
 			assert.True(t, server.AssertExpectations(t), "Not all expected calls were made to server")
 		})
 	}
-}
-
-func makeServerReturnInstancesWithStatus(t *testing.T, server *test_util.HttpServerMock, status string, migRef gce.GceRef, instances []gce.GceRef) {
-	var managedInstances []*gce_api.ManagedInstance
-	for _, inst := range instances {
-		managedInstances = append(managedInstances, &gce_api.ManagedInstance{
-			Name:           inst.Name,
-			InstanceStatus: status,
-		})
-	}
-	lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-		ManagedInstances: managedInstances,
-	}
-	b, err := json.Marshal(lmiResponse)
-	assert.NoError(t, err)
-	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
-	server.On("handle", listPath).Return(string(b)).Once()
-}
-
-func TestActionFinishedForAllInstances(t *testing.T) {
-	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
-	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
-
-	tests := []struct {
-		name         string
-		action       string
-		instances    []*gce_api.ManagedInstance
-		expectResult bool
-		expectErr    string
-	}{
-		{
-			name:   "all instances finished",
-			action: "RESUMING",
-			instances: []*gce_api.ManagedInstance{
-				{Name: "inst1", Instance: "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1", CurrentAction: "NONE"},
-			},
-			expectResult: true,
-		},
-		{
-			name:   "some instances still running action",
-			action: "RESUMING",
-			instances: []*gce_api.ManagedInstance{
-				{Name: "inst1", Instance: "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1", CurrentAction: "RESUMING"},
-			},
-			expectResult: false,
-		},
-		{
-			name:   "transient error handler invoked",
-			action: "RESUMING",
-			instances: []*gce_api.ManagedInstance{
-				{
-					Name:          "inst1",
-					Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
-					CurrentAction: "NONE",
-					LastAttempt: &gce_api.ManagedInstanceLastAttempt{
-						Errors: &gce_api.ManagedInstanceLastAttemptErrors{
-							Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
-								{Code: "RESOURCE_NOT_FOUND", Message: "Instance not found"},
-							},
-						},
-					},
-				},
-			},
-			expectResult: true,
-			expectErr:    "RESOURCE_NOT_FOUND",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := test_util.NewHttpServerMock()
-			defer server.Close()
-
-			lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-				ManagedInstances: tt.instances,
-			}
-			b, err := json.Marshal(lmiResponse)
-			assert.NoError(t, err)
-			listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
-			server.On("handle", listPath).Return(string(b)).Once()
-
-			gceInternalService := newTestAutoscalingInternalGceClient(
-				t,
-				migRef.Project,
-				server.URL,
-				false,
-				false,
-			)
-
-			var handledErrCode string
-			nonBlockingErrorsHandler := func(ref gce.GceRef, code, msg, instanceStatus string) {
-				assert.Equal(t, inst1Ref, ref)
-				handledErrCode = code
-			}
-
-			result := gceInternalService.actionFinishedForAllInstances(tt.action, migRef, []gce.GceRef{inst1Ref}, nonBlockingErrorsHandler)
-			assert.Equal(t, tt.expectResult, result)
-			assert.Equal(t, tt.expectErr, handledErrCode)
-		})
-	}
-}
-
-func TestWaitForActionToStopRunning_Deduplication(t *testing.T) {
-	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
-	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
-	action := "RESUMING"
-
-	server := test_util.NewHttpServerMock()
-	defer server.Close()
-
-	// Return a response with the same error multiple times (3 times).
-	lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-		ManagedInstances: []*gce_api.ManagedInstance{
-			{
-				Name:          "inst1",
-				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
-				CurrentAction: action,
-				LastAttempt: &gce_api.ManagedInstanceLastAttempt{
-					Errors: &gce_api.ManagedInstanceLastAttemptErrors{
-						Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
-							{Code: "RESOURCE_NOT_FOUND", Message: "Instance not found"},
-						},
-					},
-				},
-			},
-		},
-	}
-	b, err := json.Marshal(lmiResponse)
-	assert.NoError(t, err)
-
-	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
-	server.On("handle", listPath).Return(string(b)).Times(3)
-
-	// Then return a new error
-	lmiResponseNewError := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-		ManagedInstances: []*gce_api.ManagedInstance{
-			{
-				Name:          "inst1",
-				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
-				CurrentAction: action,
-				LastAttempt: &gce_api.ManagedInstanceLastAttempt{
-					Errors: &gce_api.ManagedInstanceLastAttemptErrors{
-						Errors: []*gce_api.ManagedInstanceLastAttemptErrorsErrors{
-							{Code: "INTERNAL_ERROR", Message: "Something else"},
-						},
-					},
-				},
-			},
-		},
-	}
-	bNewError, err := json.Marshal(lmiResponseNewError)
-	assert.NoError(t, err)
-	server.On("handle", listPath).Return(string(bNewError)).Once()
-
-	// Then return a success response (CurrentAction="NONE") to exit loop
-	successResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-		ManagedInstances: []*gce_api.ManagedInstance{
-			{
-				Name:          "inst1",
-				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
-				CurrentAction: "NONE",
-			},
-		},
-	}
-	bSuccess, err := json.Marshal(successResponse)
-	assert.NoError(t, err)
-	server.On("handle", listPath).Return(string(bSuccess)).Once()
-
-	gceInternalService := newTestAutoscalingInternalGceClient(
-		t,
-		migRef.Project,
-		server.URL,
-		false,
-		false,
-		WithInstanceActionPollingFrequency(time.Millisecond),
-	)
-
-	// Make sure the wait flag evaluates to true so it doesn't return immediately
-	// Note: experiments.NewMockManager() usually returns true by default for boolean flags depending on its implementation.
-	// We will rely on that or the test would timeout or pass instantly.
-
-	callCount := make(map[string]int)
-	nonBlockingErrorsHandler := func(ref gce.GceRef, code, msg, instanceStatus string) {
-		callCount[code]++
-	}
-
-	err = gceInternalService.waitForActionToStopRunning(action, migRef, []gce.GceRef{inst1Ref}, nonBlockingErrorsHandler)
-	assert.NoError(t, err)
-
-	// Due to 5-minute deduplication, the first error "RESOURCE_NOT_FOUND" should only trigger the handler once, despite polling it 3 times.
-	assert.Equal(t, 1, callCount["RESOURCE_NOT_FOUND"])
-	// The second error "INTERNAL_ERROR" should also be reported exactly once.
-	assert.Equal(t, 1, callCount["INTERNAL_ERROR"])
 }
 
 func TestGetGkeErrorCode(t *testing.T) {
@@ -2250,7 +2594,7 @@ func TestAutoscalingGceClient_CreateInstancesWithRecommendation(t *testing.T) {
 	}
 }
 
-func TestFetchMigInstancesBeta_Filter(t *testing.T) {
+func TestFetchManagedInstances_Filter(t *testing.T) {
 	tests := []struct {
 		name   string
 		filter string
@@ -2292,10 +2636,16 @@ func TestFetchMigInstancesBeta_Filter(t *testing.T) {
 			client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
 			migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
 
-			_, err := fetchMigInstancesBeta[*gce_api_beta.ManagedInstance](client, newIdentityListBuilder(), migRef, tt.filter)
+			instances, err := client.FetchManagedInstances(migRef, tt.filter)
 			assert.NoError(t, err)
 			assert.Equal(t, tt.filter, capturedFilter)
 			assert.Equal(t, tt.filter != "", hasFilter)
+			if assert.Len(t, instances, 2) {
+				assert.Equal(t, "inst1", instances[0].Name)
+				assert.Equal(t, "NONE", instances[0].CurrentAction)
+				assert.Equal(t, "inst2", instances[1].Name)
+				assert.Equal(t, "RESUMING", instances[1].CurrentAction)
+			}
 		})
 	}
 }
@@ -2303,23 +2653,23 @@ func TestFetchMigInstancesBeta_Filter(t *testing.T) {
 func TestAutoscalingGceClient_InstanceActionTimeout(t *testing.T) {
 	tests := []struct {
 		name               string
-		action             string
+		action             InstanceAction
 		experimentsManager experiments.Manager
 		want               time.Duration
 	}{
 		{
 			name:   "resume default timeout",
-			action: resumingGCEAction,
+			action: ActionResuming,
 			want:   DefaultResumeInstanceActionTimeout,
 		},
 		{
 			name:   "suspend default timeout",
-			action: suspendingGCEAction,
+			action: ActionSuspending,
 			want:   DefaultSuspendInstanceActionTimeout,
 		},
 		{
 			name:   "resume Giraffe flag configured",
-			action: resumingGCEAction,
+			action: ActionResuming,
 			experimentsManager: experiments.NewMockManagerWithOptions(
 				version.Version{},
 				nil,
@@ -2331,7 +2681,7 @@ func TestAutoscalingGceClient_InstanceActionTimeout(t *testing.T) {
 		},
 		{
 			name:   "suspend Giraffe flag configured",
-			action: suspendingGCEAction,
+			action: ActionSuspending,
 			experimentsManager: experiments.NewMockManagerWithOptions(
 				version.Version{},
 				nil,
@@ -2348,62 +2698,15 @@ func TestAutoscalingGceClient_InstanceActionTimeout(t *testing.T) {
 			client := &autoscalingInternalGceClient{
 				experimentsManager: tc.experimentsManager,
 			}
-			assert.Equal(t, tc.want, client.InstanceActionTimeout(tc.action))
+			assert.Equal(t, tc.want, client.instanceActionTimeout(tc.action))
 		})
 	}
 }
 
-func TestWaitForActionToStopRunning_Timeout(t *testing.T) {
-	server := test_util.NewHttpServerMock()
-	defer server.Close()
-
-	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
-	instRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
-
-	lmiResponse := &gce_api.InstanceGroupManagersListManagedInstancesResponse{
-		ManagedInstances: []*gce_api.ManagedInstance{
-			{
-				Name:          "inst1",
-				Instance:      "https://www.googleapis.com/compute/v1/projects/project1/zones/zoneA/instances/inst1",
-				CurrentAction: resumingGCEAction,
-			},
-		},
-	}
-	b, err := json.Marshal(lmiResponse)
-	assert.NoError(t, err)
-
-	listPath := fmt.Sprintf("/projects/%s/zones/%s/instanceGroupManagers/%s/listManagedInstances", migRef.Project, migRef.Zone, migRef.Name)
-	server.On("handle", listPath).Return(string(b))
-
-	expManager := experiments.NewMockManagerWithOptions(
-		version.Version{},
-		nil,
-		map[string]string{
-			experiments.ColdStandbyNodesResumeTimeoutSecondsFlag: "1",
-		},
-	)
-	client, err := NewCustomAutoscalingInternalGceClient(
-		&http.Client{},
-		&fakeSingleMigInfoProvider{},
-		migRef.Project,
-		"",
-		server.URL,
-		"",
-		120*time.Second,
-		time.Second,
-		expManager,
-		WithInstanceActionPollingFrequency(time.Millisecond),
-	)
-	assert.NoError(t, err)
-
-	err = client.waitForActionToStopRunning(resumingGCEAction, migRef, []gce.GceRef{instRef}, nil)
-	assert.ErrorContains(t, err, "timeout waiting for instances")
-}
-
-func TestActionFinishedForAllInstances_Filter(t *testing.T) {
+func TestReapFinishedInstances_Filter(t *testing.T) {
 	tests := []struct {
 		name           string
-		action         string
+		action         InstanceAction
 		expectedFilter string
 	}{
 		{
@@ -2413,12 +2716,12 @@ func TestActionFinishedForAllInstances_Filter(t *testing.T) {
 		},
 		{
 			name:           "resuming action",
-			action:         "RESUMING",
+			action:         ActionResuming,
 			expectedFilter: "currentAction = RESUMING",
 		},
 		{
 			name:           "suspending action",
-			action:         "SUSPENDING",
+			action:         ActionSuspending,
 			expectedFilter: "currentAction = SUSPENDING",
 		},
 	}
@@ -2446,9 +2749,58 @@ func TestActionFinishedForAllInstances_Filter(t *testing.T) {
 			migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
 			inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
 
-			_ = client.actionFinishedForAllInstances(tt.action, migRef, []gce.GceRef{inst1Ref}, nil)
+			neverDedupe := func(gce.GceRef, string, string) bool { return true }
+			discard := func(gce.GceRef, PollUpdate) bool { return true }
+			_, _ = client.reapFinishedInstances(t.Context(), tt.action, migRef, map[string]gce.GceRef{inst1Ref.Name: inst1Ref}, neverDedupe, time.Now(), discard)
 			assert.Equal(t, tt.expectedFilter, capturedFilter)
 			assert.Equal(t, tt.expectedFilter != "", hasFilter)
 		})
 	}
+}
+
+func TestReapFinishedInstances_FetchError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		res.WriteHeader(http.StatusRequestTimeout)
+	}))
+	defer server.Close()
+
+	client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+	neverDedupe := func(gce.GceRef, string, string) bool { return true }
+	yieldCalled := false
+	yield := func(gce.GceRef, PollUpdate) bool {
+		yieldCalled = true
+		return true
+	}
+	pending := map[string]gce.GceRef{inst1Ref.Name: inst1Ref}
+
+	stopped, err := client.reapFinishedInstances(t.Context(), ActionResuming, migRef, pending, neverDedupe, time.Now(), yield)
+	assert.False(t, stopped)
+	assert.ErrorContains(t, err, strconv.Itoa(http.StatusRequestTimeout))
+	assert.Len(t, pending, 1)
+	assert.False(t, yieldCalled)
+}
+
+func TestReapFinishedInstances_ContextCancelled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		res.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := newTestAutoscalingInternalGceClientWithTimeout(t, "project1", server.URL, nil, time.Duration(0))
+	migRef := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "mig1"}
+	inst1Ref := gce.GceRef{Project: "project1", Zone: "zoneA", Name: "inst1"}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	neverDedupe := func(gce.GceRef, string, string) bool { return true }
+	discard := func(gce.GceRef, PollUpdate) bool { return true }
+	pending := map[string]gce.GceRef{inst1Ref.Name: inst1Ref}
+
+	stopped, err := client.reapFinishedInstances(ctx, ActionResuming, migRef, pending, neverDedupe, time.Now(), discard)
+	assert.False(t, stopped)
+	assert.ErrorIs(t, err, context.Canceled)
 }

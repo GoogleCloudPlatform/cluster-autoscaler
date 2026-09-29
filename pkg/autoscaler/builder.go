@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
+	gce_api "google.golang.org/api/compute/v1"
+	"google.golang.org/api/option"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
@@ -78,7 +80,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	ekvms_providers "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers"
 	internalestimator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/estimator"
@@ -124,6 +126,7 @@ import (
 	cc_controller "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	cc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reconciler"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -597,12 +600,12 @@ func (b *Builder) Build(
 
 	// We need to trim single quotes from ekLookaheadPodStrategy since it's a single-line JSON string
 	// and we wrap it in single quotes for CA manifest to treat it as a string.
-	flagConfig, err := lookaheadbuffer.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
+	flagConfig, err := lookaheadbuffer_strategy.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
 	if err != nil {
 		klog.Errorf("Cannot parse lookahead pod strategy, error: %v", err)
 		return nil, nil, err
 	}
-	lookaheadBufferStrategyProvider := lookaheadbuffer.NewStrategyProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
+	lookaheadBufferStrategyProvider := lookaheadbuffer_strategy.NewProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
 
 	var provreqProcessor pods.PodListProcessor
@@ -789,7 +792,7 @@ func (b *Builder) Build(
 
 	var observers []gke_backoff.BackoffObserver
 	if autoscalingOptions.EnhancedCrdStatusReporting {
-		inf := npc_history.NewCrdBackoffObserver(cccStatusUpdatesCh, b.npcCrdLister, cloudProvider)
+		inf := npc_history.NewCrdBackoffObserver(cccStatusUpdatesCh, b.npcCrdLister, cloudProvider, autoscalingOptions.ProvisioningErrorDetailsEnabled)
 		observers = append(observers, inf)
 	}
 
@@ -915,6 +918,7 @@ func (b *Builder) Build(
 
 	autoscalingProcessors, err := setUpProcessors(
 		bgContext,
+		b.manager,
 		caVersion,
 		b.optsTracker,
 		&autoscalingOptions,
@@ -981,7 +985,8 @@ func (b *Builder) Build(
 		b.npcCrdLister,
 		autoscalingOptions.ClusterDefaultAllocationStrategy,
 		autoscalingOptions.GCEFlexAdvisorEnabled,
-		experimentsManager)
+		experimentsManager,
+		backoff)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1062,6 +1067,37 @@ func (b *Builder) Build(
 	if staticAutoscaler.AutoscalingContext != nil && staticAutoscaler.AutoscalingContext.ClusterStateRegistry != nil {
 		cloudProvider.SetScaleUpTimeProvider(staticAutoscaler.AutoscalingContext.ClusterStateRegistry)
 	}
+
+	if autoscalingOptions.EnableKwokGceReconciler {
+		if b.httpClient == nil {
+			return nil, nil, fmt.Errorf("httpClient is required for KWOK GCE reconciler")
+		}
+		if b.manager == nil {
+			return nil, nil, fmt.Errorf("manager is required for KWOK GCE reconciler")
+		}
+		var opts []option.ClientOption
+		opts = append(opts, option.WithHTTPClient(b.httpClient))
+		if autoscalingOptions.GceEndpoint != "" {
+			opts = append(opts, option.WithEndpoint(autoscalingOptions.GceEndpoint))
+		}
+		gceService, err := gce_api.NewService(bgContext, opts...)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create GCE service for KWOK reconciler: %w", err)
+		}
+		kwokReconciler := reconciler.NewKwokGceReconciler(
+			b.manager.GetClient(),
+			b.gceClient,
+			gceService,
+			b.projectID,
+			autoscalingOptions.ClusterName,
+			b.location,
+			autoscalingOptions.KwokGceReconcilerInterval,
+		)
+		if err := b.manager.Add(kwokReconciler); err != nil {
+			return nil, nil, fmt.Errorf("failed to add KWOK GCE reconciler to manager: %w", err)
+		}
+	}
+
 	return staticAutoscaler, trigger, nil
 }
 
@@ -1149,6 +1185,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.IncreasedMaxNodesPerScaleUpFeatureName, "IncreasedMaxNodesPerScaleUp", options.MaxNodesPerScaleUp > optstracking.DecreasedMaxNodesPerScaleUp)
 	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
 	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
+	logAndRecordFeatureMetric(internalmetrics.BalloonPodIpprResizeFeatureName, "BalloonPodIpprResize", options.BalloonPodIpprResizeEnabled)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

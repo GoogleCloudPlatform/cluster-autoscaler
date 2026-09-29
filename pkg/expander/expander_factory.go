@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander/factory"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups/asyncnodegroups"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
@@ -59,6 +60,7 @@ func ExpanderStrategyFromString(
 	clusterDefaultAllocationStrategy internalopts.ClusterDefaultAllocationStrategy,
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
+	scaleUpBackoff backoff.Backoff,
 ) (expander.Strategy, errors.AutoscalerError) {
 
 	var gkePriceExpander filterStrategy
@@ -94,7 +96,7 @@ func ExpanderStrategyFromString(
 		return mppn.NewFilter(r, autopilotEnabled)
 	})
 	expanderFactory.RegisterFilter(internalopts.FleetEfficiencyExpanderName, func() expander.Filter {
-		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, getGkePriceExpander(), cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager)
+		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, getGkePriceExpander(), cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager, scaleUpBackoff)
 	})
 
 	return expanderFactory.Build(expanderNames)

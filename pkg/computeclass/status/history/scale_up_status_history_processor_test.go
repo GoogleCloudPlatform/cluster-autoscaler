@@ -25,7 +25,11 @@ import (
 	"github.com/stretchr/testify/mock"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	provreqv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
+	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
+	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -35,9 +39,13 @@ import (
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	capacitybuffer "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
 )
 
 func TestScaleUpStatusHistoryProcessor(t *testing.T) {
@@ -479,64 +487,94 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 			Labels:      map[string]string{testCrdLabel: defaultTestCrd},
 		}).Build()
 
-	scaleUpStatus := &status.ScaleUpStatus{
-		Result: status.ScaleUpSuccessful,
-		ScaleUpInfos: []nodegroupset.ScaleUpInfo{
-			{
-				Group:       mig1,
-				CurrentSize: 1,
-				NewSize:     3,
-				MaxSize:     10,
-			},
-			{
-				Group:       mig2,
-				CurrentSize: 1,
-				NewSize:     2,
-				MaxSize:     10,
-			},
-			{
-				Group:       mig3,
-				CurrentSize: 0,
-				NewSize:     4,
-				MaxSize:     10,
-			},
-			{
-				Group:       mig4,
-				CurrentSize: 0,
-				NewSize:     1,
-				MaxSize:     10,
-			},
-			{
-				Group:       mig5,
-				CurrentSize: 0,
-				NewSize:     1,
-				MaxSize:     10,
-			},
+	scaleUpInfos := []nodegroupset.ScaleUpInfo{
+		{
+			Group:       mig1,
+			CurrentSize: 1,
+			NewSize:     3,
+			MaxSize:     10,
+		},
+		{
+			Group:       mig2,
+			CurrentSize: 1,
+			NewSize:     2,
+			MaxSize:     10,
+		},
+		{
+			Group:       mig3,
+			CurrentSize: 0,
+			NewSize:     4,
+			MaxSize:     10,
+		},
+		{
+			Group:       mig4,
+			CurrentSize: 0,
+			NewSize:     1,
+			MaxSize:     10,
+		},
+		{
+			Group:       mig5,
+			CurrentSize: 0,
+			NewSize:     1,
+			MaxSize:     10,
 		},
 	}
 
-	expectedMessage := "NodeProvisioning associated with this priority triggered due to pending pods. 9 new nodes will be added with config: {NodePool: nodepool-1, MachineType: n1-standard-4, Zones: us-central1-a, us-central1-b, us-central1-c}, {NodePool: nodepool-2, MachineType: a2-highgpu-1g, GPU: type: nvidia-tesla-a100, count: 1, Zones: }, {NodePool: nodepool-3, MachineType: ct5lp-hightpu-4t, TPU: type: tpu-v5-lite-podslice, topology: 2x2x1, Zones: }"
+	// A pod carrying none of the synthetic-pod annotations is a real workload pod.
+	userPod := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "user-pod"}}
+	migrationPod := annotatedPod("migration-pod", map[string]string{
+		defrag.ActiveMigrationPodAnnotation: "true",
+	})
+	minCapacityPod := annotatedPod("min-capacity-pod", map[string]string{
+		cc_processors.MinCapacityFakePodAnnotation: "true",
+	})
+	capacityBufferPod := annotatedPod("capacity-buffer-pod", map[string]string{
+		capacitybuffer.CapacityBufferFakePodAnnotationKey: capacitybuffer.CapacityBufferFakePodAnnotationValue,
+	})
+	provReqPod := annotatedPod("prov-req-pod", map[string]string{
+		provreqv1.ProvisioningRequestPodAnnotationKey: "prov-req-1",
+	})
+	crPod := newCapacityRequestPod(t)
+	// Copy of a real pod injected by the OSS proactive scale-up processor for a
+	// controller that is missing replicas. It carries the generic fake pod
+	// annotation only.
+	proactiveScaleUpPod := annotatedPod("user-pod-copy-1", map[string]string{
+		fake.FakePodAnnotationKey: fake.FakePodAnnotationValue,
+	})
+	lookaheadPod := lookaheadbuffer.GenerateLookaheadPods(1, resource.MustParse("1"), resource.MustParse("1Gi"), "workload-1")[0]
+
+	// provisioningCondition builds the condition the processor is expected to emit
+	// for the scaleUpInfos above. description is the phrase explaining the reason.
+	provisioningCondition := func(reason, description string) metav1.Condition {
+		return metav1.Condition{
+			Type:   ConditionTypeNodeProvisioningInProgress,
+			Status: metav1.ConditionTrue,
+			Reason: reason,
+			Message: "NodeProvisioning associated with this priority triggered due to " + description +
+				". 9 new nodes will be added with config: {NodePool: nodepool-1, MachineType: n1-standard-4, Zones: us-central1-a, us-central1-b, us-central1-c}, {NodePool: nodepool-2, MachineType: a2-highgpu-1g, GPU: type: nvidia-tesla-a100, count: 1, Zones: }, {NodePool: nodepool-3, MachineType: ct5lp-hightpu-4t, TPU: type: tpu-v5-lite-podslice, topology: 2x2x1, Zones: }",
+			LastTransitionTime: metav1.NewTime(now),
+		}
+	}
+	pendingPodsCondition := provisioningCondition(ConditionReasonPodPending, "pending pods")
 
 	testCases := []struct {
 		name               string
+		pods               []*apiv1.Pod
 		existingConditions []metav1.Condition
 		expectedConditions []metav1.Condition
+		// expectNoCondition asserts that the processor does not emit any status
+		// update at all for the scale-up.
+		expectNoCondition bool
 	}{
 		{
 			name:               "no existing conditions",
+			pods:               []*apiv1.Pod{userPod},
 			existingConditions: nil,
-			expectedConditions: []metav1.Condition{
-				{
-					Type:               ConditionTypeNodeProvisioningInProgress,
-					Status:             metav1.ConditionTrue,
-					Reason:             ConditionReasonPodPending,
-					Message:            expectedMessage,
-					LastTransitionTime: metav1.NewTime(now),
-				},
-			},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
 		},
 		{
 			name: "existing condition to deduplicate",
+			pods: []*apiv1.Pod{userPod},
 			existingConditions: []metav1.Condition{
 				{
 					Type:               ConditionTypeNodeProvisioningInProgress,
@@ -546,18 +584,11 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 					LastTransitionTime: metav1.NewTime(now.Add(-1 * time.Hour)),
 				},
 			},
-			expectedConditions: []metav1.Condition{
-				{
-					Type:               ConditionTypeNodeProvisioningInProgress,
-					Status:             metav1.ConditionTrue,
-					Reason:             ConditionReasonPodPending,
-					Message:            expectedMessage,
-					LastTransitionTime: metav1.NewTime(now),
-				},
-			},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
 		},
 		{
 			name: "other existing conditions are preserved",
+			pods: []*apiv1.Pod{userPod},
 			existingConditions: []metav1.Condition{
 				{
 					Type:    "OtherCondition",
@@ -580,14 +611,97 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 					Reason:  "OtherReason",
 					Message: "Other message",
 				},
-				{
-					Type:               ConditionTypeNodeProvisioningInProgress,
-					Status:             metav1.ConditionTrue,
-					Reason:             ConditionReasonPodPending,
-					Message:            expectedMessage,
-					LastTransitionTime: metav1.NewTime(now),
-				},
+				pendingPodsCondition,
 			},
+		},
+		{
+			name:               "scale-up triggered by active migration pods",
+			pods:               []*apiv1.Pod{migrationPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonActiveMigration, "active migration")},
+		},
+		{
+			name:               "scale-up triggered by minimum capacity pods",
+			pods:               []*apiv1.Pod{minCapacityPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonMinimumCapacity, "minimum capacity")},
+		},
+		{
+			name:               "scale-up triggered by capacity buffer pods",
+			pods:               []*apiv1.Pod{capacityBufferPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonCapacityBuffer, "capacity buffers")},
+		},
+		{
+			name:               "scale-up triggered by ProvisioningRequest pods",
+			pods:               []*apiv1.Pod{provReqPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonProvisioningRequest, "provisioning request")},
+		},
+		{
+			name:               "scale-up triggered by CapacityRequest pods",
+			pods:               []*apiv1.Pod{crPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonCapacityRequest, "capacity request")},
+		},
+		{
+			name:               "CapacityRequest takes precedence over active migration",
+			pods:               []*apiv1.Pod{migrationPod, crPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonCapacityRequest, "capacity request")},
+		},
+		{
+			name:               "real pending pods take precedence over CapacityRequest",
+			pods:               []*apiv1.Pod{crPod, userPod},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
+		},
+		{
+			name: "scale-up triggered by OSS proactive scale-up pods is reported as pending pods",
+			// Those pods are copies of real pods of a controller that is missing
+			// replicas, so they represent actual user demand.
+			pods:               []*apiv1.Pod{proactiveScaleUpPod},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
+		},
+		{
+			name:              "scale-up triggered only by internal lookahead pods is not surfaced",
+			pods:              []*apiv1.Pod{lookaheadPod},
+			expectNoCondition: true,
+		},
+		{
+			name:               "real pending pods take precedence over synthetic pods",
+			pods:               []*apiv1.Pod{minCapacityPod, userPod},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
+		},
+		{
+			name:               "real pending pods take precedence over capacity buffers",
+			pods:               []*apiv1.Pod{capacityBufferPod, userPod},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
+		},
+		{
+			name:               "ProvisioningRequest takes precedence over active migration",
+			pods:               []*apiv1.Pod{migrationPod, provReqPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonProvisioningRequest, "provisioning request")},
+		},
+		{
+			name:               "active migration takes precedence over minimum capacity",
+			pods:               []*apiv1.Pod{minCapacityPod, migrationPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonActiveMigration, "active migration")},
+		},
+		{
+			name:               "active migration takes precedence over capacity buffers",
+			pods:               []*apiv1.Pod{capacityBufferPod, migrationPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonActiveMigration, "active migration")},
+		},
+		{
+			name:               "minimum capacity takes precedence over capacity buffers",
+			pods:               []*apiv1.Pod{capacityBufferPod, minCapacityPod},
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonMinimumCapacity, "minimum capacity")},
+		},
+		{
+			name:               "user pods take precedence over internal pods",
+			pods:               []*apiv1.Pod{lookaheadPod, userPod},
+			expectedConditions: []metav1.Condition{pendingPodsCondition},
+		},
+		{
+			name: "no triggering pods is reported as node pool minimum size",
+			// ScaleUpToNodeGroupMinSize (--enforce-node-group-min-size) reports a
+			// successful scale-up without any triggering pod.
+			pods:               nil,
+			expectedConditions: []metav1.Condition{provisioningCondition(ConditionReasonNodePoolMinSize, "node pool minimum size")},
 		},
 	}
 
@@ -606,7 +720,20 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 			processor := NewScaleUpStatusHistoryProcessor(mockLister, mockProvider, sharedData, updatesCh, nil, mockManager)
 			processor.now = func() time.Time { return now }
 
-			processor.Process(context.TODO(), nil, scaleUpStatus)
+			processor.Process(context.TODO(), nil, &status.ScaleUpStatus{
+				Result:               status.ScaleUpSuccessful,
+				ScaleUpInfos:         scaleUpInfos,
+				PodsTriggeredScaleUp: tc.pods,
+			})
+
+			if tc.expectNoCondition {
+				select {
+				case msg := <-updatesCh:
+					t.Errorf("Expected no status update, got %v", msg)
+				case <-time.After(100 * time.Millisecond):
+				}
+				return
+			}
 
 			select {
 			case msg := <-updatesCh:
@@ -627,6 +754,34 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// annotatedPod returns a pod carrying the given annotations, mimicking the pods
+// produced by the processors that trigger each kind of scale-up.
+func annotatedPod(name string, annotations map[string]string) *apiv1.Pod {
+	return &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Annotations: annotations,
+		},
+	}
+}
+
+// newCapacityRequestPod returns the synthetic pod that the capacity request
+// processor injects for a CapacityRequest.
+func newCapacityRequestPod(t *testing.T) *apiv1.Pod {
+	t.Helper()
+	cr := &cr_types.CapacityRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "cr-1", Namespace: "default"},
+		Spec:       cr_types.CapacityRequestSpec{Capacity: apiv1.PodSpec{}},
+	}
+	state := cr_utils.NewCapacityRequestState(nil)
+	state.Update([]*cr_types.CapacityRequest{cr})
+	pod, found := state.CapacityRequestToPod(cr)
+	if !found {
+		t.Fatalf("No pod created for CapacityRequest %s/%s", cr.Namespace, cr.Name)
+	}
+	return pod
 }
 
 type mockMinCapacityObserver struct {

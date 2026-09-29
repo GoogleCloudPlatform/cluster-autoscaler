@@ -61,7 +61,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/validators"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvm_provider_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers/interfaces"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
@@ -296,9 +296,14 @@ type GkeManager interface {
 	// GetListManagedInstancesResults returns the pagination behavior of the listManagedInstances API method for a given MIG ref
 	GetListManagedInstancesResults(migRef gce.GceRef) (string, error)
 	// ResumeInstances resumes instances
-	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error
+	ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error
+	// PollUntilActionStops polls instances until each one has stopped running action, the poll times
+	// out, or ctx is cancelled. See gceclient.AutoscalingInternalGceClient for the full contract.
+	PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq
 	// SuspendInstances suspends instances
 	SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error
+	// FetchManagedInstances fetches ManagedInstances for a given MIG.
+	FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error)
 	// IsDefaultCCCEnabled returns if default CCC is enabled in cluster.
 	IsDefaultCCCEnabled() bool
 
@@ -356,6 +361,9 @@ type GkeManager interface {
 	NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.NodePoolSpec, error)
 	// TrimLocationsForMachineConfig cross-checks each location for mig specification, and rejects locations where mig cannot be created.
 	TrimLocationsForMachineConfig(locations []string, machineType string, acceleratorConfig *gke_api_beta.AcceleratorConfig, minCpuPlatform string, diskType string) []string
+	// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+	// would span. It is the same computation that is used to build the node pool spec on creation.
+	PlannedNodePoolLocations(mig *GkeMig) ([]string, error)
 	// MachineConfigProvider return the MachineConfigProvider.
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
 	// ExperimentsManager returns the experiments.Manager.
@@ -510,7 +518,7 @@ type gkeManagerImpl struct {
 	autoscalingOptsProvider             AutoscalingOptionsProvider
 	autoprovisioningEligibility         AutoprovisioningEligibility
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
-	lookaheadBufferStrategyProvider     lookaheadbuffer.StrategyProvider
+	lookaheadBufferStrategyProvider     lookaheadbuffer_strategy.Provider
 	optsTracker                         *optstracking.OptionsTracker
 	// injectedMig is set for all existing node pools created by this instance of Cluster Autoscaler
 	// and represents an injected specification of this MIG (before part of the spec was filled
@@ -579,7 +587,7 @@ func CreateGkeManager(
 	autoscalingOptsProvider AutoscalingOptionsProvider,
 	autoprovisioningEligibility AutoprovisioningEligibility,
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer.StrategyProvider,
+	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
 	draResourcePredictor *dynamicresources.ResourcePredictor,
 	reservationsPuller *gceclient.ReservationsPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
@@ -648,6 +656,14 @@ func CreateGkeManager(
 
 	if err := manager.forceRefreshResources(); err != nil {
 		return nil, err
+	}
+
+	// Computing options immediately after the initial Cluster proto is stored in forceRefreshResources()
+	// The subsequent init logic relies on OptionsTracker fields calculated based on Cluster proto
+	if optsTracker != nil {
+		if err := optsTracker.RecomputeOptions(); err != nil {
+			return nil, fmt.Errorf("failed to compute initial autoscaling options: %w", err)
+		}
 	}
 
 	go wait.Until(func() {
@@ -1237,22 +1253,19 @@ func (m *gkeManagerImpl) CreateNodePool(mig *GkeMig) (MigCreateNodePoolResult, e
 	return MigCreateNodePoolResult{}, fmt.Errorf("could not find main MIG for node pool %s", mig.NodePoolName())
 }
 
-// NewNodePoolSpec creates node-pool spec based on mig definition.
-func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, error) {
-	if err := m.validateNAPEnabled(); err != nil {
-		return nil, err
+// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing) MIG
+// would span. The MIG's zone is the main zone of the node pool. The result depends only on the MIG spec and
+// cached zonal machine configuration data; it does not account for scale-up backoff.
+func (m *gkeManagerImpl) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
+	if mig == nil {
+		return nil, fmt.Errorf("mig is nil")
 	}
-
 	if mig.spec == nil {
 		return nil, fmt.Errorf("could not find mig spec for mig %s", mig.NodePoolName())
 	}
-
 	if len(mig.spec.Accelerators) > 1 {
 		return nil, fmt.Errorf("autoprovisioning for MIG with multiple accelerators is not supported (%s)", mig.NodePoolName())
 	}
-
-	// Make copy-by-value.
-	nodePoolSpec := *mig.spec
 
 	var acceleratorConfig *gke_api_beta.AcceleratorConfig
 	if len(mig.spec.Accelerators) > 0 {
@@ -1261,11 +1274,23 @@ func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, 
 
 	// non-empty specifiedLocations can currently only be a result of CCC zonal preferences
 	specifiedLocations := mig.spec.Locations
-	locations, err := m.limitNodePoolLocations(mig.GceRef().Zone, specifiedLocations, nodePoolSpec.MachineType, nodePoolSpec.DiskType, acceleratorConfig, nodePoolSpec.MinCpuPlatform,
+	return m.limitNodePoolLocations(mig.GceRef().Zone, specifiedLocations, mig.spec.MachineType, mig.spec.DiskType, acceleratorConfig, mig.spec.MinCpuPlatform,
 		usesPlacement(mig), reservationZoneSpecified(mig))
+}
+
+// NewNodePoolSpec creates node-pool spec based on mig definition.
+func (m *gkeManagerImpl) NewNodePoolSpec(mig *GkeMig) (*gkeclient.NodePoolSpec, error) {
+	if err := m.validateNAPEnabled(); err != nil {
+		return nil, err
+	}
+
+	locations, err := m.PlannedNodePoolLocations(mig)
 	if err != nil {
 		return nil, err
 	}
+
+	// Make copy-by-value.
+	nodePoolSpec := *mig.spec
 	nodePoolSpec.Locations = locations
 
 	// Remove internal Labels and Taints.
@@ -1924,6 +1949,8 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	// TODO(b/486148603): Cleanup experiment flag for custom thresholds when the experiment is over
 	m.resizableVmCustomThresholdsProvider.RefreshCustomThresholds()
 
+	m.refreshCSNMetrics()
+
 	if m.surgeUpgradeResourceTracker != nil {
 		err := m.surgeUpgradeResourceTracker.Refresh()
 		if err != nil {
@@ -2035,8 +2062,9 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 
 	if m.optsTracker != nil {
 		m.optsTracker.ExperimentsManager().UpdateReleaseChannel(m.releaseChannel)
-		m.optsTracker.RecomputeOptions(cluster)
-		m.gkeMetrics.UpdateCSNEnabled(m.optsTracker.Options().CSNEnabled)
+		// Storing the cluster state for recomputing options at the end of the autoscaler loop.
+		// This is done so that options are consistent during loop execution.
+		m.optsTracker.StoreCluster(cluster)
 	}
 
 	return nil
@@ -2133,6 +2161,12 @@ func (m *gkeManagerImpl) refreshResizableVmEdpEnabled() {
 		return
 	}
 	m.resizableVmEdpEnabledCache = !v.LessThan(vMin)
+}
+
+func (m *gkeManagerImpl) refreshCSNMetrics() {
+	if m.optsTracker != nil {
+		m.gkeMetrics.UpdateCSNEnabled(m.optsTracker.Options().CSNEnabled)
+	}
 }
 
 func (m *gkeManagerImpl) RefreshLocalSSDSizes() {
@@ -2434,6 +2468,13 @@ func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig) (*apiv1.Node, erro
 
 	// Add an annotation to easily distinguish nodeInfos generated from real nodes from the ones generated from templates.
 	addAnnotation(node, gkelabels.NodeGeneratedFromTemplateAnnotation, "true")
+
+	if m.managerOptions.MultiNetworkSupportEnabled && m.matcher != nil {
+		node, err = addMultiNetworkCapacity(node, mig, m.matcher)
+		if err != nil {
+			return node, err
+		}
+	}
 
 	return node, nil
 }
@@ -2847,12 +2888,20 @@ func (m *gkeManagerImpl) GetListManagedInstancesResults(migRef gce.GceRef) (stri
 	return m.migInfoProvider.GetListManagedInstancesResults(migRef)
 }
 
-func (m *gkeManagerImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef, nonBlockingErrorsHandler gceclient.NonBlockingErrorsHandler) error {
-	return m.gceService.ResumeInstances(migRef, instances, nonBlockingErrorsHandler)
+func (m *gkeManagerImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
+	return m.gceService.ResumeInstances(migRef, instances)
+}
+
+func (m *gkeManagerImpl) PollUntilActionStops(ctx context.Context, action gceclient.InstanceAction, migRef gce.GceRef, instances []gce.GceRef) gceclient.ActionPollSeq {
+	return m.gceService.PollUntilActionStops(ctx, action, migRef, instances)
 }
 
 func (m *gkeManagerImpl) SuspendInstances(migRef gce.GceRef, instances []gce.GceRef, forceSuspend bool) error {
 	return m.gceService.SuspendInstances(migRef, instances, forceSuspend)
+}
+
+func (m *gkeManagerImpl) FetchManagedInstances(migRef gce.GceRef, filter string) ([]*gceclient.ManagedInstance, error) {
+	return m.gceService.FetchManagedInstances(migRef, filter)
 }
 
 // CalculateOSPhysicalEphemeralStorageGiB find minimum Physical disk size that accommodate Allocatable

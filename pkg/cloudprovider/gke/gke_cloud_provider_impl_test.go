@@ -3006,11 +3006,49 @@ func TestCloudProviderResumeInstances(t *testing.T) {
 		assert.Equal(t, SuspensionStatus{Suspended: true, ForceUsed: true}, fakeGkeManager.GetSuspensionStatus(migRef, instRef))
 	}
 
-	err = gke.ResumeInstances(migRef, instances, nil)
+	err = gke.ResumeInstances(migRef, instances)
 	assert.NoError(t, err)
 	for _, instRef := range instances {
 		assert.Equal(t, SuspensionStatus{}, fakeGkeManager.GetSuspensionStatus(migRef, instRef))
 	}
+}
+
+func TestCloudProviderPollUntilActionStops(t *testing.T) {
+	fakeGkeManager := NewFakeGkeManager([]string{"zone-a"})
+	gke := &gkeCloudProviderImpl{
+		gkeManager: fakeGkeManager,
+	}
+	migRef := gce.GceRef{Name: "mig1"}
+	instances := []gce.GceRef{{Name: "inst1"}, {Name: "inst2"}}
+
+	var ready []gce.GceRef
+	for ref, update := range gke.PollUntilActionStops(t.Context(), gceclient.ActionResuming, migRef, instances) {
+		assert.Equal(t, gceclient.PollCompleted{}, update)
+		ready = append(ready, ref)
+	}
+	assert.Equal(t, instances, ready)
+}
+
+func TestCloudProviderFetchManagedInstances(t *testing.T) {
+	fakeGkeManager := NewFakeGkeManager([]string{"zone-a"})
+	gke := &gkeCloudProviderImpl{
+		gkeManager: fakeGkeManager,
+	}
+	migRef := gce.GceRef{Name: "mig1"}
+	wantInstances := []*gceclient.ManagedInstance{
+		{Name: "inst1", InstanceStatus: "RUNNING", CurrentAction: "NONE"},
+		{Name: "inst2", InstanceStatus: "SUSPENDED", CurrentAction: "NONE"},
+	}
+	fakeGkeManager.SetManagedInstances(migRef, wantInstances)
+
+	instances, err := gke.FetchManagedInstances(migRef, "")
+	assert.NoError(t, err)
+	assert.Equal(t, wantInstances, instances)
+
+	// A MIG the manager knows nothing about has no managed instances.
+	instances, err = gke.FetchManagedInstances(gce.GceRef{Name: "mig2"}, "")
+	assert.NoError(t, err)
+	assert.Empty(t, instances)
 }
 
 func TestIsReservationCompatible(t *testing.T) {

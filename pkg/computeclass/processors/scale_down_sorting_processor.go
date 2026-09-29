@@ -52,10 +52,12 @@ func NewCrdScaleDownSortingProcessor(crdLister lister.Lister, cloudProvider clou
 	}
 }
 
-// ScaleDownEarlierThan determines whether node1 should be scaled down before node2 & vice versa
-// Also tries to keep the sorting process stable by making node2 only be scaled first
-// Iff node1 doesn't have an associated Crd but node2 does or priority index of node2 is lower than that of node1
-// This is done to not interfere with other sorters unnecessarily
+// ScaleDownEarlierThan determines whether node1 should be scaled down before node2 & vice versa.
+// It prioritizes nodes with lower priority (higher priority index) to be scaled down earlier.
+// For nodes sharing the same priority index, it tie-breaks by nodeGroup.Id() to ensure nodes
+// from the same node group (e.g. atomic TPU slices) remain contiguous in the scale-down queue,
+// preventing partial node evaluations across groups from causing scale-down livelocks when
+// simulation is bounded by ScaleDownSimulationTimeout.
 func (p *crdScaleDownSortingProcessor) ScaleDownEarlierThan(node1, node2 *apiv1.Node) bool {
 
 	crd1, nodeGroup1, err := p.getCrdForNode(node1)
@@ -74,7 +76,17 @@ func (p *crdScaleDownSortingProcessor) ScaleDownEarlierThan(node1, node2 *apiv1.
 		return false
 	}
 
-	return p.priorityIndex(nodeGroup1, crd1) > p.priorityIndex(nodeGroup2, crd2)
+	priorityIndex1 := p.priorityIndex(nodeGroup1, crd1)
+	priorityIndex2 := p.priorityIndex(nodeGroup2, crd2)
+	if priorityIndex1 != priorityIndex2 {
+		return priorityIndex1 > priorityIndex2
+	}
+
+	if nodeGroup1 != nil && nodeGroup2 != nil && nodeGroup1.Id() != nodeGroup2.Id() {
+		return nodeGroup1.Id() < nodeGroup2.Id()
+	}
+
+	return false
 }
 
 func (p *crdScaleDownSortingProcessor) priorityIndex(group cloudprovider.NodeGroup, crd crd.CRD) int {

@@ -576,6 +576,136 @@ func TestNodepoolMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{},
 		},
+		{
+			name: "Nodepool with ContainerdConfig is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ContainerdConfig: &container.ContainerdConfig{
+						WritableCgroups: &container.WritableCgroups{
+							Enabled: true,
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
+		},
+		{
+			name: "ResourceLabels feature is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ResourceLabels: map[string]string{
+						"env":  "production",
+						"team": "analytics",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				"resource-labels.cloud.google.com/env":  "production",
+				"resource-labels.cloud.google.com/team": "analytics",
+			},
+		},
+		{
+			name: "ResourceLabels feature with empty labels from nodepool returns empty metadata",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ResourceLabels: map[string]string{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
+		{
+			name: "OAuthScopes feature is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					OauthScopes: []string{
+						"https://www.googleapis.com/auth/compute",
+						"https://www.googleapis.com/auth/devstorage.read_only",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/compute":              "true",
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/devstorage.read_only": "true",
+			},
+		},
+		{
+			name: "OAuthScopes feature with empty scopes from nodepool returns empty metadata",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					OauthScopes: []string{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with Disable=true is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					PodCidrOverprovisionConfig: &container.PodCIDROverprovisionConfig{
+						Disable: true,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				disablePodCidrOverprovisionConfigMetadataKey: "true",
+				privateNodeFromLabel:                         "false",
+				privateNodeFromCcc:                           "false",
+			},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with Disable=false is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					PodCidrOverprovisionConfig: &container.PodCIDROverprovisionConfig{
+						Disable: false,
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				disablePodCidrOverprovisionConfigMetadataKey: "false",
+				privateNodeFromLabel:                         "false",
+				privateNodeFromCcc:                           "false",
+			},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with nil PodCidrOverprovisionConfig from nodepool returns empty metadata",
+			nodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					PodCidrOverprovisionConfig: nil,
+				},
+			},
+			wantMetadata: Metadata{
+				privateNodeFromLabel: "false",
+				privateNodeFromCcc:   "false",
+			},
+		},
+		{
+			name: "Nodepool with localSsdEncryptionMode is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantMetadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+			},
+		},
+		{
+			name: "Nodepool with performanceMonitoringUnit is processed correctly",
+			nodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					AdvancedMachineFeatures: &container.AdvancedMachineFeatures{
+						PerformanceMonitoringUnit: "ARCHITECTURAL",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				nestedVirtualizationMetadataKey:      "false",
+				PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1041,6 +1171,100 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			},
 			wantMetadata: Metadata{},
 		},
+		{
+			name: "ContainerdConfig in CCC is processed correctly",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					ContainerdConfig: &v1.ContainerdConfig{
+						WritableCgroups: &v1.WritableCgroups{
+							Enabled: ptr.To(true),
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
+		},
+		{
+			name: "ResourceLabels feature is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					ResourceLabels: map[string]v1.ResourceLabelValue{
+						"env":  "production",
+						"team": "analytics",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				"resource-labels.cloud.google.com/env":  "production",
+				"resource-labels.cloud.google.com/team": "analytics",
+			},
+		},
+		{
+			name: "ResourceLabels feature with empty resourceLabels from spec returns empty metadata",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					ResourceLabels: map[string]v1.ResourceLabelValue{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
+		{
+			name: "OAuthScopes feature is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					OAuthScopes: []string{
+						"https://www.googleapis.com/auth/cloud-platform",
+						"https://www.googleapis.com/auth/logging.write",
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "true",
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/logging.write":  "true",
+			},
+		},
+		{
+			name: "OAuthScopes feature with empty oauthScopes from spec returns empty metadata",
+			spec: v1.ComputeClassSpec{
+				NodePoolConfig: &v1.NodePoolConfig{
+					OAuthScopes: []string{},
+				},
+			},
+			wantMetadata: Metadata{},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with Disable=true is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{
+					DisablePodCidrOverprovisionConfig: ptr.To(true),
+				},
+			},
+			wantMetadata: Metadata{
+				disablePodCidrOverprovisionConfigMetadataKey: "true",
+			},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with Disable=false is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{
+					DisablePodCidrOverprovisionConfig: ptr.To(false),
+				},
+			},
+			wantMetadata: Metadata{
+				disablePodCidrOverprovisionConfigMetadataKey: "false",
+			},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature with nil DisablePodCidrOverprovisionConfig from spec returns empty metadata",
+			spec: v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{
+					DisablePodCidrOverprovisionConfig: nil,
+				},
+			},
+			wantMetadata: Metadata{},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1162,6 +1386,26 @@ func TestPriorityMetadata(t *testing.T) {
 				"instance-metadata.cloud.google.com/priority-key": "priority-val",
 			},
 		},
+		{
+			name: "Priority for LocalSSDEncryptionMode",
+			priority: v1.Priority{
+				Storage: &v1.Storage{
+					LocalSSDEncryptionMode: ptr.To("STANDARD_ENCRYPTION"),
+				},
+			},
+			wantMetadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "STANDARD_ENCRYPTION",
+			},
+		},
+		{
+			name: "Priority for PerformanceMonitoringUnit",
+			priority: v1.Priority{
+				PerformanceMonitoringUnit: ptr.To("ARCHITECTURAL"),
+			},
+			wantMetadata: Metadata{
+				PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1264,6 +1508,27 @@ func TestUpdateNodePoolLabels(t *testing.T) {
 			metadata: Metadata{
 				"network-tags.cloud.google.com/secure-firewall": "true",
 				"network-tags.cloud.google.com/allow-ssh":       "true",
+			},
+			wantLabels: map[string]string{},
+		},
+		{
+			name: "ResourceLabels feature does not add nodepool labels",
+			metadata: Metadata{
+				"resource-labels.cloud.google.com/env": "production",
+			},
+			wantLabels: map[string]string{},
+		},
+		{
+			name: "OAuthScopes feature does not add nodepool labels",
+			metadata: Metadata{
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "true",
+			},
+			wantLabels: map[string]string{},
+		},
+		{
+			name: "disablePodCidrOverprovisionConfig feature does not add nodepool labels",
+			metadata: Metadata{
+				disablePodCidrOverprovisionConfigMetadataKey: "true",
 			},
 			wantLabels: map[string]string{},
 		},
@@ -1724,6 +1989,84 @@ func TestUpdateNodepool(t *testing.T) {
 			},
 			wantNodepool: &container.NodePool{},
 		},
+		{
+			name: "ContainerdConfig is set correctly",
+			metadata: Metadata{
+				gkelabels.ContainerdWritableCgroupsKey: "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ContainerdConfig: &container.ContainerdConfig{
+						WritableCgroups: &container.WritableCgroups{
+							Enabled:         true,
+							ForceSendFields: []string{"Enabled"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "ResourceLabels feature sets resourceLabels on nodepool",
+			metadata: Metadata{
+				"resource-labels.cloud.google.com/env":  "production",
+				"resource-labels.cloud.google.com/team": "analytics",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					ResourceLabels: map[string]string{
+						"env":  "production",
+						"team": "analytics",
+					},
+				},
+			},
+		},
+		{
+			name: "ResourceLabels feature does not modify nodepool when metadata has no resource-labels keys",
+			metadata: Metadata{
+				"unrelated-feature.cloud.google.com/foo": "true",
+			},
+			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "OAuthScopes feature sets oauthScopes on nodepool",
+			metadata: Metadata{
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/logging.write":  "true",
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "true",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					OauthScopes: []string{
+						"https://www.googleapis.com/auth/cloud-platform",
+						"https://www.googleapis.com/auth/logging.write",
+					},
+				},
+			},
+		},
+		{
+			name: "OAuthScopes feature does not modify nodepool when metadata has no oauth-scopes keys",
+			metadata: Metadata{
+				"unrelated-feature.cloud.google.com/foo": "true",
+			},
+			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "OAuthScopes feature ignores oauth-scopes keys with non-true values",
+			metadata: Metadata{
+				"oauth-scopes.cloud.google.com/https://www.googleapis.com/auth/cloud-platform": "false",
+			},
+			wantNodepool: &container.NodePool{},
+		},
+		{
+			name: "LocalSSDEncryptionMode is set correctly",
+			metadata: Metadata{
+				LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+			},
+			wantNodepool: &container.NodePool{
+				Config: &container.NodeConfig{
+					LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1827,4 +2170,48 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestArrayFeaturesMatchingUnordered(t *testing.T) {
+	InitSelfService(defaultMockCloudProvider())
+
+	t.Run("NetworkTags matches regardless of order and reconstructs sorted", func(t *testing.T) {
+		spec := v1.ComputeClassSpec{
+			NodePoolConfig: &v1.NodePoolConfig{
+				NetworkTags: []string{"hello", "lessgo"},
+			},
+		}
+		np := &container.NodePool{
+			Config: &container.NodeConfig{
+				Tags: []string{"lessgo", "hello"},
+			},
+		}
+		specMetadata := ComputeClassSpecMetadata(spec)
+		npMetadata := NodepoolMetadata(np)
+		assert.Equal(t, specMetadata, npMetadata)
+
+		targetNp := &container.NodePool{}
+		UpdateNodepool(targetNp, specMetadata)
+		assert.Equal(t, []string{"hello", "lessgo"}, targetNp.Config.Tags)
+	})
+
+	t.Run("OAuthScopes matches regardless of order and reconstructs sorted", func(t *testing.T) {
+		spec := v1.ComputeClassSpec{
+			NodePoolConfig: &v1.NodePoolConfig{
+				OAuthScopes: []string{"https://www.googleapis.com/auth/devstorage.read_only", "https://www.googleapis.com/auth/compute"},
+			},
+		}
+		np := &container.NodePool{
+			Config: &container.NodeConfig{
+				OauthScopes: []string{"https://www.googleapis.com/auth/compute", "https://www.googleapis.com/auth/devstorage.read_only"},
+			},
+		}
+		specMetadata := ComputeClassSpecMetadata(spec)
+		npMetadata := NodepoolMetadata(np)
+		assert.Equal(t, specMetadata, npMetadata)
+
+		targetNp := &container.NodePool{}
+		UpdateNodepool(targetNp, specMetadata)
+		assert.Equal(t, []string{"https://www.googleapis.com/auth/compute", "https://www.googleapis.com/auth/devstorage.read_only"}, targetNp.Config.OauthScopes)
+	})
 }

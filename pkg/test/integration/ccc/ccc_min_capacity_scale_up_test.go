@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
@@ -63,6 +64,7 @@ func TestCCCScaleUpToMinCapacity(t *testing.T) {
 				WithOverrides(
 					integration.WithAutoProvisioningEnabled(),
 					integration.WithComputeClassMinCapacityEnabled(),
+					integration.WithEnhancedCrdStatusReportingEnabled(),
 				).
 				WithClusterOverrides(
 					integration.WithClusterAutoProvisioningEnabled(),
@@ -93,6 +95,17 @@ func TestCCCScaleUpToMinCapacity(t *testing.T) {
 
 				for _, node := range nodes.Items {
 					assert.Equal(t, "my-ccc", node.Labels["cloud.google.com/compute-class"])
+				}
+
+				if tc.experimentEnabled {
+					// Let the background status aggregator flush the queued condition.
+					time.Sleep(ccc.ConditionsFlushInterval)
+
+					updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, "my-ccc", metav1.GetOptions{})
+					assert.NoError(t, err)
+
+					// The scale-up was triggered by min capacity fake pods, not by real pending pods.
+					ccc.AssertPriorityCondition(t, updatedCCC, 0, history.ConditionTypeNodeProvisioningInProgress, history.ConditionReasonMinimumCapacity)
 				}
 			})
 		})

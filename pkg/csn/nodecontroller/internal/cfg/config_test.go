@@ -75,6 +75,19 @@ func TestRetryCfg_JSON(t *testing.T) {
 			json: `{"maxRetries":5,"initialDelay": "10m0s","maxDelay": "1h0m0s"}`,
 		},
 		{
+			name: "valid retry config with overrides",
+			cfg: Retry{
+				MaxRetries: 5,
+				MaxRetriesByOp: map[string]int{
+					"CONSUME": 3,
+					"SUSPEND": 5,
+				},
+				InitialDelay: metav1.Duration{Duration: 10 * time.Minute},
+				MaxDelay:     metav1.Duration{Duration: 1 * time.Hour},
+			},
+			json: `{"maxRetries":5, "maxRetriesByOp":{"CONSUME":3,"SUSPEND":5}, "initialDelay": "10m0s","maxDelay": "1h0m0s"}`,
+		},
+		{
 			name: "empty struct",
 			cfg:  Retry{},
 			json: `{"initialDelay":"0s", "maxDelay":"0s"}`,

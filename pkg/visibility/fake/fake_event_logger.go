@@ -65,6 +65,24 @@ func (l *EventLogger) Events() []*vispb.AutoscalerEvent {
 	return eventsCopy
 }
 
+// ScaleUpEvents returns all ScaleUpData payloads from the recorded events.
+func (l *EventLogger) ScaleUpEvents() []*vispb.ScaleUpData {
+	events := l.Events()
+	var res []*vispb.ScaleUpData
+	for _, event := range events {
+		decision := event.GetDecision()
+		if decision == nil {
+			continue
+		}
+		scaleUp := decision.GetScaleUp()
+		if scaleUp == nil {
+			continue
+		}
+		res = append(res, scaleUp)
+	}
+	return res
+}
+
 // NoScaleUpEvents returns all NoScaleUpData payloads from the recorded events.
 func (l *EventLogger) NoScaleUpEvents() []*vispb.NoScaleUpData {
 	events := l.Events()

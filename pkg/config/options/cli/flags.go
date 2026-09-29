@@ -76,6 +76,7 @@ var (
 	e4aMachineTypes                              = flag.String("e4a-machine-types", "", "A comma-separated list of E4A machine types to override E4A machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	ekDownsizeConfig                             = flag.String("ek-downsize-config", "{}", "An override for DownsizeConfig in json format for EK.")
 	e4aDownsizeConfig                            = flag.String("e4a-downsize-config", "{}", "An override for DownsizeConfig in json format for E4A.")
+	e4DownsizeConfig                             = flag.String("e4-downsize-config", "{}", "An override for DownsizeConfig in json format for E4.")
 	isClusterUsingDPV1                           = flag.Bool("is-cluster-using-dpv1", false, "Is the cluster using dataplane v1 (i.e. kube-proxy)")
 	gceEndpoint                                  = flag.String("gce-endpoint", "", "GCE endpoint address. If not set default GCE API endpoint is used.")
 	clusterScaleToZeroEnabled                    = flag.Bool("enable-cluster-scale-to-zero", false, "Whether the cluster can be scaled to 0 nodes if all pods are in kube-system namespace")
@@ -101,6 +102,7 @@ var (
 	reservationsAnyLocationPolicyOverride        = flag.Bool("enable-reservations-any-location-policy-override", false, "Whether NAP will use ANY location policy in injected node groups using reservations. It is used to query Recommend Locations API before every scale-up, as it has the knowledge about all (even cross org) reservations.")
 	extendedDurationPodsUpgradeNodesTaintPerLoop = flag.Int("extended-duration-pods-max-taint-per-loop", 10, "Number of EDP nodes that will be tainted during upgrade per loop")
 	reservationBlocksEnabled                     = flag.Bool("enable-reservation-blocks", false, "Fetch reservation blocks from GCE reservations to be used at NAP validation phase.")
+	reservationSubBlockDeduplicationEnabled      = flag.Bool("enable-reservation-subblock-deduplication", false, "Whether NAP should skip injecting atomic node group candidates targeting a reservation sub-block that is already claimed by another node group.")
 	gceFlexAdvisorEnabled                        = flag.Bool("enable-gce-flexadvisor", false, "Whether GCE Flex Advisor should be enabled.")
 	csnStatus                                    = flag.String("csn-status", string(options.CSNUnspecified), "Whether CSN is force enabled, force disabled or use experiment values (go/gke-csn-launch).")
 	csnDefaultRefreshFrequency                   = flag.Duration("csn-default-refresh-frequency", 24*time.Hour, `The default frequency for refreshing CSN nodes if not specified in the buffer annotation or an error occured during parsing.`)
@@ -158,12 +160,17 @@ var (
 	pendingPodsPerCccMetricEnabled = flag.Bool("enable-pending-pods-per-ccc-metric", false, "Whether emmiting metrics pending pods per ccc metric should be enabled.")
 	scaleUpPerCccMetricsEnabled    = flag.Bool("scaleup-per-ccc-metrics-enabled", false, "Whether emitting the scale up metrics per ccc should be enabled.")
 
-	enhancedCrdStatusReporting = flag.Bool("enhanced-crd-status-reporting", false, "Whether to enable enhanced CRD status reporting.")
+	provisioningErrorDetailsEnabled = flag.Bool("provisioning-error-details-enabled", false, "Whether the verbatim cloud provider error message may be included in surfaces visible outside the cluster operator, namely Kubernetes events and ComputeClass status conditions.")
+	enhancedCrdStatusReporting      = flag.Bool("enhanced-crd-status-reporting", false, "Whether to enable enhanced CRD status reporting.")
 
 	parentProduct = flag.String("parent-product", "", "Parent product as a division property for experiments.")
 	clusterHash   = flag.String("cluster-hash", "", "The cluster's hash")
 
 	clusterDefaultAllocationStrategy = flag.String("allocation-strategy-default", "", "Default allocation strategy to use when scaling up. Supports: lowest-cost, fleet-efficiency.")
+	experimentsConfigMap             = flag.String("experiments-config-map", "", "The name of the ConfigMap containing experiment configurations.")
+
+	enableKwokGceReconciler   = flag.Bool("enable-testonly-kwok-gce-reconciler", false, "Enable goroutine to reconcile GCE instances and K8s Nodes for KWOK integration.")
+	kwokGceReconcilerInterval = flag.Duration("testonly-kwok-gce-reconciler-interval", 10*time.Second, "Interval between KWOK GCE reconciler runs.")
 )
 
 // ComponentVersion returns cluster autoscaler component version.
@@ -313,6 +320,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		E4aMachineTypes:                              *e4aMachineTypes,
 		EkDownsizeConfig:                             *ekDownsizeConfig,
 		E4aDownsizeConfig:                            *e4aDownsizeConfig,
+		E4DownsizeConfig:                             *e4DownsizeConfig,
 		IsClusterUsingDPV1:                           *isClusterUsingDPV1,
 		GceEndpoint:                                  *gceEndpoint,
 		ClusterScaleToZeroEnabled:                    *clusterScaleToZeroEnabled,
@@ -338,6 +346,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ReservationsAnyLocationPolicyOverride:        *reservationsAnyLocationPolicyOverride,
 		ExtendedDurationPodsUpgradeNodesTaintPerLoop: *extendedDurationPodsUpgradeNodesTaintPerLoop,
 		ReservationBlocksEnabled:                     *reservationBlocksEnabled,
+		ReservationSubBlockDeduplicationEnabled:      *reservationSubBlockDeduplicationEnabled,
 		GCEFlexAdvisorEnabled:                        *gceFlexAdvisorEnabled,
 		CSNCAFlag:                                    options.CSNStatus(*csnStatus),
 		CSNDefaultRefreshFrequency:                   *csnDefaultRefreshFrequency,
@@ -370,6 +379,8 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		FutureReservationsBackoffEnabled:             *futureReservationsBackoffEnabled,
 		ClusterHash:                                  *clusterHash,
 		ParentProduct:                                *parentProduct,
+		EnableKwokGceReconciler:                      *enableKwokGceReconciler,
+		KwokGceReconcilerInterval:                    *kwokGceReconcilerInterval,
 		EkvmsMinVmSize:                               ekMinVmSize,
 		EkvmsIncrementStep:                           ekIncrementStep,
 		EkvmsAllocationSafetyBuffer:                  safetyBuffer,
@@ -379,6 +390,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ResolveInstanceRefUsingNodePoolLabel:         *resolveInstanceRefUsingNodePoolLabel,
 		MetricsPerCccEnabled:                         *metricsPerCccEnabled,
 		PendingPodsPerCccMetricEnabled:               *pendingPodsPerCccMetricEnabled,
+		ProvisioningErrorDetailsEnabled:              *provisioningErrorDetailsEnabled,
 		EnhancedCrdStatusReporting:                   *enhancedCrdStatusReporting,
 		ScaleUpPerCccMetricsEnabled:                  *scaleUpPerCccMetricsEnabled,
 		ZoneTypesEnabled:                             *zoneTypesEnabled,
@@ -392,5 +404,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		PodWatchFieldSelector:                        *podWatchFieldSelector,
 		DaemonSetMutationEnabled:                     *daemonSetMutationEnabled,
 		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
+		ExperimentsConfigMap:                         *experimentsConfigMap,
 	}
 }

@@ -337,6 +337,6 @@ func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
 	result := threshold.NodeLimit(context.TODO(), mig, estimator.NewEstimationContext(0, nil, 0))
 
 	assert.Equal(t, -1, result.Limit)
-	assert.True(t, tracker.HasRemovedScaleUpOptions())
-	assert.Equal(t, []string{"scope-1"}, tracker.GetFlexibilityScopesWithRemovedScaleUpOptions())
+	assert.True(t, tracker.WasNodeGroupRemovedByFlexAdvisor(mig.Id()))
+	assert.Equal(t, []string{"scope-1"}, tracker.GetFlexibilityScopesForNodeGroupIfRemoved(mig.Id()))
 }

@@ -15,7 +15,9 @@
 package experiments
 
 import (
+	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -51,6 +53,11 @@ func (f *fakeEvaluator) DirectLaunchBoolFlag(flag string) bool {
 }
 
 func (f *fakeEvaluator) SubscribeToUpdate(subscriber Subscriber) {
+}
+
+func (f *fakeEvaluator) Start(ctx context.Context) error {
+	<-ctx.Done()
+	return nil
 }
 
 func TestManagerVersionEvaluation(t *testing.T) {
@@ -320,6 +327,41 @@ func TestManagerDirectLaunchBoolFlag(t *testing.T) {
 			}
 			manager := NewManager(version.Version{}, evaluator)
 			assert.Equal(t, tc.want, manager.DirectLaunchBoolFlag(flag))
+		})
+	}
+}
+
+func TestManagerStart(t *testing.T) {
+	tests := map[string]struct {
+		evaluator Evaluator
+	}{
+		"StartsEvaluatorAndBlocksUntilContextDone": {
+			evaluator: &fakeEvaluator{},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				m := NewManager(version.Version{}, tc.evaluator)
+
+				done := make(chan error, 1)
+				go func() {
+					done <- m.Start(ctx)
+				}()
+
+				synctest.Wait()
+				cancel()
+				synctest.Wait()
+
+				select {
+				case err := <-done:
+					assert.NoError(t, err)
+				default:
+					t.Errorf("Start() did not return after context cancellation")
+				}
+			})
 		})
 	}
 }

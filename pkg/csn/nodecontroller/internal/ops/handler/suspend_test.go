@@ -16,7 +16,6 @@ package handler
 
 import (
 	"errors"
-	"fmt"
 	"maps"
 	"slices"
 	"testing"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state"
@@ -32,19 +32,28 @@ import (
 	"k8s.io/utils/set"
 )
 
+// TestSuspendHandler_Handle covers what the handler adds on top of the GCE
+// choreography it shares with the consume handler: the patch to Suspended that
+// states the intent up front, and the pods check that can turn the operation
+// into a consumption instead. The shared part is covered by transition_test.go.
 func TestSuspendHandler_Handle(t *testing.T) {
-	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
 	chillingNode := test.CreateNode("node-1", test.StateOpt(csn.NodeStateChilling))
 	chillingNodeRef := mustGetRef(t, chillingNode)
 	suspendedNode := test.CreateNode("node-2", test.StateOpt(csn.NodeStateSuspended))
 	suspendedNodeRef := mustGetRef(t, suspendedNode)
-	consumedNode := test.CreateNode("node-2", test.StateOpt(csn.NodeStateConsumed))
+	consumedNode := test.CreateNode("node-3", test.StateOpt(csn.NodeStateConsumed))
 	consumedNodeRef := mustGetRef(t, consumedNode)
+	suspendingNode := test.CreateNode("node-4", test.StateOpt(csn.NodeStateChilling))
+	suspendingNodeRef := mustGetRef(t, suspendingNode)
+	terminatedNode := test.CreateNode("node-5", test.StateOpt(csn.NodeStateChilling))
+	terminatedNodeRef := mustGetRef(t, terminatedNode)
 
-	defaultStatusMapping := map[gce.GceRef]*gce.GceInstance{
-		suspendedNodeRef: {GCEStatus: "SUSPENDED"},
-		consumedNodeRef:  {GCEStatus: "RUNNING"},
-		chillingNodeRef:  {GCEStatus: "RUNNING"},
+	defaultManagedInstances := map[gce.GceRef]*gceclient.ManagedInstance{
+		chillingNodeRef:   {Name: chillingNode.Name, InstanceStatus: "RUNNING", TargetStatus: "RUNNING", CurrentAction: "NONE"},
+		suspendedNodeRef:  {Name: suspendedNode.Name, InstanceStatus: "SUSPENDED", TargetStatus: "SUSPENDED", CurrentAction: "NONE"},
+		consumedNodeRef:   {Name: consumedNode.Name, InstanceStatus: "RUNNING", TargetStatus: "RUNNING", CurrentAction: "NONE"},
+		suspendingNodeRef: {Name: suspendingNode.Name, InstanceStatus: "RUNNING", TargetStatus: "SUSPENDED", CurrentAction: "SUSPENDING"},
+		terminatedNodeRef: {Name: terminatedNode.Name, InstanceStatus: "TERMINATED", TargetStatus: "STOPPED", CurrentAction: "NONE"},
 	}
 
 	tests := []struct {
@@ -58,62 +67,18 @@ func TestSuspendHandler_Handle(t *testing.T) {
 		expectedSuccessfulNodes set.Set[string]
 		expectedFailedNodes     set.Set[string]
 		expectedSuspended       []test.SuspendCall
+		expectedPolled          []test.PollUntilCall
 		expectedPatched         []test.PatchCall
 		expectedEnqueued        []ops.Operation
-		expectedDeltas          []*test.MetricDelta
 	}{
 		{
-			name: "success_single_node_safe_to_suspend",
-			op: ops.Operation{
-				MIG:       mig,
-				Type:      ops.SuspendOp,
-				NodeNames: set.New(chillingNode.Name),
-			},
-			stateManager: &statetest.MockStateManager{
-				Nodes: map[string]state.TrackedNode{
-					chillingNode.Name: {Node: chillingNode, State: csn.NodeStateChilling},
-				},
-			},
-			k8sClient: &test.MockK8sClient{
-				SuspensionBlocked: map[string]bool{chillingNode.Name: false},
-			},
-			expectError:             false,
-			expectedSuccessfulNodes: set.New(chillingNode.Name),
-			expectedSuspended:       []test.SuspendCall{{MIG: mig, Instances: []gce.GceRef{chillingNodeRef}, Force: false}},
-			expectedPatched:         []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
-			expectedDeltas: []*test.MetricDelta{
-				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{suspendCall, gceSuccess}),
-			},
-		},
-		{
-			name: "single_node_unsafe_to_suspend_enqueues_consume",
-			op: ops.Operation{
-				MIG:       mig,
-				Type:      ops.SuspendOp,
-				NodeNames: set.New(chillingNode.Name),
-			},
-			stateManager: &statetest.MockStateManager{
-				Nodes: map[string]state.TrackedNode{
-					chillingNode.Name: {Node: chillingNode, State: csn.NodeStateChilling},
-				},
-			},
-			k8sClient: &test.MockK8sClient{
-				SuspensionBlocked: map[string]bool{chillingNode.Name: true},
-			},
-			expectError:             false,
-			expectedSuccessfulNodes: set.New(chillingNode.Name),
-			expectedSuspended:       nil,
-			expectedPatched:         []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
-			expectedEnqueued: []ops.Operation{{
-				MIG:       mig,
-				Type:      ops.ConsumeOp,
-				NodeNames: set.New(chillingNode.Name),
-			}},
-		},
-		{
+			// A safe node and a node that grew pods while it was chilling, so
+			// suspending it would disrupt them. Both are patched to Suspended up
+			// front; only the safe one is handed to GCE, and the blocked one is
+			// consumed back instead.
 			name: "mixed_nodes_one_safe_one_unsafe",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New(chillingNode.Name, consumedNode.Name),
 			},
@@ -129,27 +94,29 @@ func TestSuspendHandler_Handle(t *testing.T) {
 					consumedNode.Name: true,
 				},
 			},
-			expectError:             false,
 			expectedSuccessfulNodes: set.New(chillingNode.Name, consumedNode.Name),
 			expectedSuspended: []test.SuspendCall{{
-				MIG:       mig,
+				MIG:       testMIG,
 				Instances: []gce.GceRef{chillingNodeRef},
 				Force:     false,
 			}},
+			expectedPolled: []test.PollUntilCall{{Action: gceclient.ActionSuspending, MIG: testMIG, Instances: []gce.GceRef{chillingNodeRef}}},
 			expectedPatched: []test.PatchCall{
 				{Node: chillingNode, State: csn.NodeStateSuspended},
 				{Node: consumedNode, State: csn.NodeStateSuspended},
 			},
 			expectedEnqueued: []ops.Operation{{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.ConsumeOp,
 				NodeNames: set.New(consumedNode.Name),
 			}},
 		},
 		{
+			// The intent has to be recorded before anything else happens, so a failed
+			// patch stops the operation for that node.
 			name: "patch_error",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New(chillingNode.Name),
 			},
@@ -161,14 +128,14 @@ func TestSuspendHandler_Handle(t *testing.T) {
 			k8sClient: &test.MockK8sClient{
 				PatchErr: errors.New("patch error"),
 			},
-			expectError:         false,
 			expectedFailedNodes: set.New(chillingNode.Name),
 			expectedPatched:     []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
 		},
 		{
+			// Without knowing whether pods are running, suspending is not safe.
 			name: "check_pods_error",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New(chillingNode.Name),
 			},
@@ -180,14 +147,15 @@ func TestSuspendHandler_Handle(t *testing.T) {
 			k8sClient: &test.MockK8sClient{
 				SuspensionBlockedErr: errors.New("check pods error"),
 			},
-			expectError:         false,
 			expectedFailedNodes: set.New(chillingNode.Name),
 			expectedPatched:     []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
 		},
 		{
+			// The node keeps the Suspended patch even though GCE refused, so the next
+			// reconciliation can pick the suspension back up.
 			name: "suspend_instances_error",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New(chillingNode.Name),
 			},
@@ -197,26 +165,24 @@ func TestSuspendHandler_Handle(t *testing.T) {
 				},
 			},
 			cloudProvider: &test.MockCloudProvider{
-				Instances: func(ref gce.GceRef) *gce.GceInstance {
-					return defaultStatusMapping[ref]
+				ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					testMIG: {defaultManagedInstances[chillingNodeRef]},
 				},
 				SuspendErr: errors.New("suspend error"),
 			},
 			k8sClient: &test.MockK8sClient{
 				SuspensionBlocked: map[string]bool{chillingNode.Name: false},
 			},
-			expectError:         false,
 			expectedFailedNodes: set.New(chillingNode.Name),
 			expectedPatched:     []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
-			expectedSuspended:   []test.SuspendCall{{MIG: mig, Instances: []gce.GceRef{chillingNodeRef}, Force: false}},
-			expectedDeltas: []*test.MetricDelta{
-				test.NewMetricDelta(test.ExpectedValue(1), opGceBatchSize, []string{suspendCall, gceFailure}),
-			},
+			expectedSuspended:   []test.SuspendCall{{MIG: testMIG, Instances: []gce.GceRef{chillingNodeRef}, Force: false}},
 		},
 		{
+			// The node was reverted to consumption but the queue refused it, so it
+			// would be left patched as Suspended without anything acting on it.
 			name: "enqueue_error",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New(chillingNode.Name),
 			},
@@ -226,14 +192,13 @@ func TestSuspendHandler_Handle(t *testing.T) {
 				},
 			},
 			k8sClient: &test.MockK8sClient{
-				SuspensionBlocked: map[string]bool{chillingNode.Name: true}, // Unsafe
+				SuspensionBlocked: map[string]bool{chillingNode.Name: true},
 			},
 			enqueueErr:          errors.New("enqueue error"),
-			expectError:         false,
 			expectedFailedNodes: set.New(chillingNode.Name),
 			expectedPatched:     []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
 			expectedEnqueued: []ops.Operation{{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.ConsumeOp,
 				NodeNames: set.New(chillingNode.Name),
 			}},
@@ -241,20 +206,20 @@ func TestSuspendHandler_Handle(t *testing.T) {
 		{
 			name: "node_not_found_should_be_noop",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
 				NodeNames: set.New("unknown-node"),
 			},
-			expectedSuccessfulNodes: set.New("unknown-node"),
 			stateManager: &statetest.MockStateManager{
 				Nodes: map[string]state.TrackedNode{},
 			},
-			k8sClient: &test.MockK8sClient{},
+			k8sClient:               &test.MockK8sClient{},
+			expectedSuccessfulNodes: set.New("unknown-node"),
 		},
 		{
 			name: "error_when_op_type_incorrect",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.ConsumeOp,
 				NodeNames: set.New(chillingNode.Name),
 			},
@@ -263,50 +228,38 @@ func TestSuspendHandler_Handle(t *testing.T) {
 					chillingNode.Name: {Node: chillingNode, State: csn.NodeStateChilling},
 				},
 			},
-			k8sClient: &test.MockK8sClient{
-				SuspensionBlocked: map[string]bool{chillingNode.Name: false},
-			},
+			k8sClient:   &test.MockK8sClient{},
 			expectError: true,
 		},
 		{
-			name: "instance_status_not_found",
+			// One node of each category, to check that all of them are patched to
+			// Suspended up front and that only the ones GCE can still bring down are
+			// reported as successes.
+			name: "mixed_batch_all_four_groups",
 			op: ops.Operation{
-				MIG:       mig,
+				MIG:       testMIG,
 				Type:      ops.SuspendOp,
-				NodeNames: set.New(chillingNode.Name),
+				NodeNames: set.New(chillingNode.Name, suspendingNode.Name, suspendedNode.Name, terminatedNode.Name),
 			},
 			stateManager: &statetest.MockStateManager{
 				Nodes: map[string]state.TrackedNode{
-					chillingNode.Name: {Node: chillingNode, State: csn.NodeStateChilling},
-				},
-			},
-			cloudProvider:       &test.MockCloudProvider{},
-			k8sClient:           &test.MockK8sClient{},
-			expectError:         false,
-			expectedFailedNodes: set.New(chillingNode.Name),
-			expectedPatched:     []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
-		},
-		{
-			name: "only_patch_for_suspended_instance",
-			op: ops.Operation{
-				MIG:       mig,
-				Type:      ops.SuspendOp,
-				NodeNames: set.New(chillingNode.Name),
-			},
-			stateManager: &statetest.MockStateManager{
-				Nodes: map[string]state.TrackedNode{
-					chillingNode.Name: {Node: chillingNode, State: csn.NodeStateChilling},
-				},
-			},
-			cloudProvider: &test.MockCloudProvider{
-				Instances: func(_ gce.GceRef) *gce.GceInstance {
-					return &gce.GceInstance{GCEStatus: "SUSPENDED"}
+					chillingNode.Name:   {Node: chillingNode, State: csn.NodeStateChilling},
+					suspendingNode.Name: {Node: suspendingNode, State: csn.NodeStateChilling},
+					suspendedNode.Name:  {Node: suspendedNode, State: csn.NodeStateSuspended},
+					terminatedNode.Name: {Node: terminatedNode, State: csn.NodeStateChilling},
 				},
 			},
 			k8sClient:               &test.MockK8sClient{},
-			expectError:             false,
-			expectedSuccessfulNodes: set.New(chillingNode.Name),
-			expectedPatched:         []test.PatchCall{{Node: chillingNode, State: csn.NodeStateSuspended}},
+			expectedSuccessfulNodes: set.New(chillingNode.Name, suspendingNode.Name, suspendedNode.Name),
+			expectedFailedNodes:     set.New(terminatedNode.Name),
+			expectedSuspended:       []test.SuspendCall{{MIG: testMIG, Instances: []gce.GceRef{chillingNodeRef}, Force: false}},
+			expectedPolled:          []test.PollUntilCall{{Action: gceclient.ActionSuspending, MIG: testMIG, Instances: []gce.GceRef{chillingNodeRef, suspendingNodeRef}}},
+			expectedPatched: []test.PatchCall{
+				{Node: chillingNode, State: csn.NodeStateSuspended},
+				{Node: suspendingNode, State: csn.NodeStateSuspended},
+				{Node: suspendedNode, State: csn.NodeStateSuspended},
+				{Node: terminatedNode, State: csn.NodeStateSuspended},
+			},
 		},
 	}
 
@@ -317,82 +270,28 @@ func TestSuspendHandler_Handle(t *testing.T) {
 				enqueued = append(enqueued, op)
 				return tc.enqueueErr
 			}
-			if tc.cloudProvider == nil {
-				tc.cloudProvider = &test.MockCloudProvider{Instances: func(ref gce.GceRef) *gce.GceInstance {
-					return defaultStatusMapping[ref]
+			cloudProvider := tc.cloudProvider
+			if cloudProvider == nil {
+				cloudProvider = &test.MockCloudProvider{ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{
+					testMIG: slices.Collect(maps.Values(defaultManagedInstances)),
 				}}
 			}
 
-			h := NewSuspendHandler(tc.stateManager, tc.cloudProvider, tc.k8sClient, enqueue, time.Duration(0))
-			for _, ed := range tc.expectedDeltas {
-				ed.Init(t)
-			}
+			h := NewSuspendHandler(tc.stateManager, cloudProvider, tc.k8sClient, enqueue, time.Duration(0))
+
 			res, err := h.Handle(t.Context(), tc.op)
-			for _, ed := range tc.expectedDeltas {
-				assert.NoError(t, ed.Verify(t))
-			}
+
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
 			}
 			assert.ElementsMatch(t, tc.expectedSuccessfulNodes.UnsortedList(), res.Success.UnsortedList())
-			assert.ElementsMatch(t, tc.expectedFailedNodes.UnsortedList(), slices.Collect(maps.Keys(res.Errs)))
-			assert.ElementsMatch(t, tc.expectedSuspended, tc.cloudProvider.GetSuspendCalls())
-			assert.ElementsMatch(t, tc.k8sClient.GetPatchCalls(), tc.expectedPatched)
+			assert.ElementsMatch(t, tc.expectedFailedNodes.UnsortedList(), keysOf(res.Errs))
+			assert.ElementsMatch(t, tc.expectedSuspended, cloudProvider.GetSuspendCalls())
+			assert.ElementsMatch(t, tc.expectedPolled, cloudProvider.GetPollUntilCalls())
+			assert.ElementsMatch(t, tc.expectedPatched, tc.k8sClient.GetPatchCalls())
 			assert.ElementsMatch(t, tc.expectedEnqueued, enqueued)
 		})
 	}
-}
-
-func TestSuspendHandler_HandleBatching(t *testing.T) {
-	mig := gce.GceRef{Project: "project", Zone: "zone", Name: "mig"}
-	nodeCount := maxBatchSize*2 + 1
-	var batchingNodes []string
-	batchingTrackedNodes := map[string]state.TrackedNode{}
-	var expectedRefs []gce.GceRef
-
-	for i := 0; i < nodeCount; i++ {
-		name := fmt.Sprintf("batching-node-%d", i)
-		batchingNodes = append(batchingNodes, name)
-		n := test.CreateNode(name, test.StateOpt(csn.NodeStateChilling))
-		batchingTrackedNodes[name] = state.TrackedNode{Node: n, State: csn.NodeStateChilling}
-		expectedRefs = append(expectedRefs, mustGetRef(t, n))
-	}
-
-	stateManager := &statetest.MockStateManager{Nodes: batchingTrackedNodes}
-	cloudProvider := &test.MockCloudProvider{
-		Instances: func(_ gce.GceRef) *gce.GceInstance {
-			return &gce.GceInstance{GCEStatus: "RUNNING"}
-		},
-	}
-	enqueue := func(op ops.Operation) error { return nil }
-
-	h := NewSuspendHandler(stateManager, cloudProvider, &test.MockK8sClient{}, enqueue, time.Duration(0))
-
-	op := ops.Operation{
-		MIG:       mig,
-		Type:      ops.SuspendOp,
-		NodeNames: set.New(batchingNodes...),
-	}
-
-	res, err := h.Handle(t.Context(), op)
-	assert.NoError(t, err)
-	assert.Equal(t, nodeCount, res.Success.Len())
-	assert.Equal(t, 0, len(res.Errs))
-
-	suspendCalls := cloudProvider.GetSuspendCalls()
-	assert.Equal(t, (nodeCount+maxBatchSize-1)/maxBatchSize, len(suspendCalls)) // 1000, 1000, 1
-
-	var totalSize int
-	var actualRefs []gce.GceRef
-	for _, call := range suspendCalls {
-		assert.Equal(t, mig, call.MIG)
-		assert.True(t, len(call.Instances) <= maxBatchSize)
-		assert.False(t, call.Force)
-		totalSize += len(call.Instances)
-		actualRefs = append(actualRefs, call.Instances...)
-	}
-	assert.Equal(t, nodeCount, totalSize)
-	assert.ElementsMatch(t, expectedRefs, actualRefs)
 }

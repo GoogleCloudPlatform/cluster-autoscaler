@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
@@ -29,6 +30,7 @@ import (
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podkind"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -38,6 +40,12 @@ import (
 const (
 	ConditionTypeNodeProvisioningInProgress = "NodeProvisioningInProgress"
 	ConditionReasonPodPending               = "PodPending"
+	ConditionReasonMinimumCapacity          = "MinimumCapacity"
+	ConditionReasonActiveMigration          = "ActiveMigration"
+	ConditionReasonCapacityBuffer           = "CapacityBuffer"
+	ConditionReasonProvisioningRequest      = "ProvisioningRequest"
+	ConditionReasonCapacityRequest          = "CapacityRequest"
+	ConditionReasonNodePoolMinSize          = "NodePoolMinSize"
 )
 
 type machineConfigProvider interface {
@@ -86,7 +94,11 @@ func (p *ScaleUpStatusHistoryProcessor) Process(ctx context.Context, autoscaling
 		return
 	}
 
-	p.emitConditions(deltasByRule, p.now())
+	reason, ok := determineScaleUpReason(scaleUpStatus.PodsTriggeredScaleUp)
+	if !ok {
+		return
+	}
+	p.emitConditions(deltasByRule, reason, p.now())
 }
 
 func (p *ScaleUpStatusHistoryProcessor) collectDeltas(scaleUpStatus *status.ScaleUpStatus) map[npc_status.CRDId]map[string][]ScaleUpDelta {
@@ -153,7 +165,7 @@ func (p *ScaleUpStatusHistoryProcessor) collectDeltas(scaleUpStatus *status.Scal
 	return deltasByRule
 }
 
-func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_status.CRDId]map[string][]ScaleUpDelta, now time.Time) {
+func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_status.CRDId]map[string][]ScaleUpDelta, reason string, now time.Time) {
 	for crdId, ruleDeltas := range deltasByRule {
 		for ruleIdx, deltas := range ruleDeltas {
 			var addedTotal int
@@ -181,8 +193,8 @@ func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_stat
 			cond := metav1.Condition{
 				Type:               ConditionTypeNodeProvisioningInProgress,
 				Status:             metav1.ConditionTrue,
-				Reason:             ConditionReasonPodPending,
-				Message:            fmt.Sprintf("NodeProvisioning associated with this priority triggered due to pending pods. %d new nodes will be added with config: %s", addedTotal, strings.Join(configStrs, ", ")),
+				Reason:             reason,
+				Message:            fmt.Sprintf("NodeProvisioning associated with this priority triggered due to %s. %d new nodes will be added with config: %s", reasonDescription(reason), addedTotal, strings.Join(configStrs, ", ")),
 				LastTransitionTime: metav1.NewTime(now),
 			}
 
@@ -240,4 +252,71 @@ func isAsyncNodeGroup(nodeGroup cloudprovider.NodeGroup) bool {
 		return false
 	}
 	return mig.IsUpcoming() && !mig.Exist(context.TODO())
+}
+
+// reasonDescriptions maps a NodeProvisioningInProgress condition reason to the
+// phrase used in its message.
+var reasonDescriptions = map[string]string{
+	ConditionReasonPodPending:          "pending pods",
+	ConditionReasonActiveMigration:     "active migration",
+	ConditionReasonMinimumCapacity:     "minimum capacity",
+	ConditionReasonCapacityBuffer:      "capacity buffers",
+	ConditionReasonProvisioningRequest: "provisioning request",
+	ConditionReasonCapacityRequest:     "capacity request",
+	ConditionReasonNodePoolMinSize:     "node pool minimum size",
+}
+
+// reasonDescription returns the phrase used in the condition message for the
+// given reason. It should never fall back, but an empty phrase would produce a
+// broken message ("triggered due to ."), so guard against it explicitly.
+func reasonDescription(reason string) string {
+	if description, ok := reasonDescriptions[reason]; ok {
+		return description
+	}
+	klog.Errorf("No description registered for NodeProvisioningInProgress reason %q, falling back to a generic one", reason)
+	return "autoscaling"
+}
+
+// determineScaleUpReason returns the reason to report for a scale-up triggered
+// by the given pods. The second return value is false when the scale-up should
+// not be surfaced to the user at all, which is the case when it was caused
+// solely by Cluster Autoscaler internal pods.
+func determineScaleUpReason(pods []*apiv1.Pod) (string, bool) {
+	if len(pods) == 0 {
+		// The scale-up was not triggered by any pod. Today the only path
+		// producing a successful scale-up without triggering pods is
+		// ScaleUpToNodeGroupMinSize (--enforce-node-group-min-size), which grows
+		// node pools that are below their minimum size.
+		return ConditionReasonNodePoolMinSize, true
+	}
+
+	kinds := make(map[podkind.Kind]bool, len(pods))
+	for _, pod := range pods {
+		kinds[podkind.Of(pod)] = true
+	}
+
+	// Today all of those should be exclusive, however this is not guaranteed in the future.
+	switch {
+	case kinds[podkind.PodPending] || kinds[podkind.UnrecognizedFake]:
+		// UnrecognizedFake pods come from the OSS proactive scale-up injector,
+		// which copies pods of controllers that are missing replicas. Those are
+		// real user replicas, so they are reported as pending pods.
+		return ConditionReasonPodPending, true
+	case kinds[podkind.ProvisioningRequest]:
+		return ConditionReasonProvisioningRequest, true
+	case kinds[podkind.CapacityRequest]:
+		return ConditionReasonCapacityRequest, true
+	case kinds[podkind.ActiveMigration]:
+		return ConditionReasonActiveMigration, true
+	case kinds[podkind.MinCapacity]:
+		return ConditionReasonMinimumCapacity, true
+	case kinds[podkind.CapacityBuffer]:
+		return ConditionReasonCapacityBuffer, true
+	}
+
+	// Only internal pods (e.g. EK VM lookahead buffer) triggered the scale-up.
+	// There is nothing actionable for the user here, so skip the condition
+	// rather than blaming one of the user-facing reasons.
+	klog.V(4).Infof("Skipping %s condition: scale-up triggered only by internal pods", ConditionTypeNodeProvisioningInProgress)
+	return "", false
 }
