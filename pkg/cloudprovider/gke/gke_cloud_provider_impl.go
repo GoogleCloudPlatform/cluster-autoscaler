@@ -274,6 +274,12 @@ func (p *gkeCloudProviderImpl) GetResourcePolicies(projectId string) ([]*gceclie
 	return p.gkeManager.GetResourcePolicies(projectId, p.region)
 }
 
+// SetResourcePolicyPuller makes the resource policy puller available to node groups, so they can
+// read resource policies without calling GCE. It must be called before the autoscaler starts.
+func (p *gkeCloudProviderImpl) SetResourcePolicyPuller(puller placement.ResourcePolicyPuller) {
+	p.gkeManager.SetResourcePolicyPuller(puller)
+}
+
 // GetExperimentsManager returns the experiment manager.
 func (p *gkeCloudProviderImpl) GetExperimentsManager() experiments.Manager {
 	return p.experimentsManager
@@ -2206,25 +2212,32 @@ func (mig *GkeMig) IsProvisionOnly() bool {
 	if mig.spec == nil {
 		return false
 	}
-	if mig.spec.PlacementGroup.ResourcePolicy != nil {
-		return mig.spec.PlacementGroup.ResourcePolicy.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
+	// Only NAP node groups (simulated or being created) carry the resource policy in the spec;
+	// specs of existing node pools are built from the GKE API, which only exposes the policy name.
+	// NAP embeds a placeholder without AcceleratorTopologyMode when the puller has not fetched the
+	// policy yet, so the embedded policy can only be trusted when the mode is set.
+	embedded := mig.spec.PlacementGroup.ResourcePolicy
+	if embedded != nil && embedded.WorkloadPolicy.AcceleratorTopologyMode != "" {
+		return embedded.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
 	}
-	if mig.spec.PlacementGroup.Policy != "" && mig.gkeManager != nil {
-		region, err := gkeutil.GetRegionFromLocation(mig.gceRef.Zone)
-		if err != nil {
-			klog.Warningf("IsProvisionOnly: cannot derive region from zone %q: %v", mig.gceRef.Zone, err)
-			return false
-		}
-		policies, err := mig.gkeManager.GetResourcePolicies(mig.gceRef.Project, region)
-		if err == nil {
-			for _, p := range policies {
-				if p.Name == mig.spec.PlacementGroup.Policy {
-					return p.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
-				}
-			}
-		}
+	policyName := mig.spec.PlacementGroup.Policy
+	if policyName == "" || mig.gkeManager == nil {
+		return false
 	}
-	return false
+	// CA reaches this via GetOptions from the scale-down logic. This is on the scale-down hot path
+	// and it is called separately for every node, so use GetPulledResourcePolicy, which reads the
+	// ResourcePolicyPuller cache, instead of calling GCE. Dynamic slicing therefore requires the
+	// ResourcePolicyPuller: when it is disabled by experiment its cache is empty and every MIG is
+	// treated as not PROVISION_ONLY.
+	// TODO(b/567488252): graduate ResourcePolicyPullerFlag so the puller is always on, like the
+	// reservations puller.
+	pulled := mig.gkeManager.GetPulledResourcePolicy(mig.gceRef.Project, policyName)
+	if pulled == nil {
+		// The policy was created after the last pull (refreshed every minute) or is not READY.
+		klog.V(4).Infof("IsProvisionOnly: resource policy %q of MIG %s not in puller cache, assuming not PROVISION_ONLY", policyName, mig.gceRef.String())
+		return false
+	}
+	return pulled.WorkloadPolicy.AcceleratorTopologyMode == gceclient.AcceleratorTopologyModeProvisionOnly
 }
 
 // ResizeAtomically returns whether the mig should be resized atomically.

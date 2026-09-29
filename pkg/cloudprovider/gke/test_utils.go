@@ -1824,6 +1824,12 @@ func (fake *FakeGkeManager) GetResourcePolicies(projectId, region string) ([]*gc
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) SetResourcePolicyPuller(placement.ResourcePolicyPuller) {}
+
+func (fake *FakeGkeManager) GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy {
+	return nil
+}
+
 func (fake *FakeGkeManager) GetZonesInRegion(region string) ([]string, error) {
 	panic("not implemented")
 }
@@ -2652,6 +2658,14 @@ func (m *GkeManagerMock) GetReservationSubBlocksInReservationBlock(reservationRe
 func (m *GkeManagerMock) GetResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error) {
 	args := m.Called()
 	return args.Get(0).([]*gceclient.GceResourcePolicy), args.Error(1)
+}
+
+// SetResourcePolicyPuller is a no-op.
+func (m *GkeManagerMock) SetResourcePolicyPuller(placement.ResourcePolicyPuller) {}
+
+// GetPulledResourcePolicy always misses.
+func (m *GkeManagerMock) GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy {
+	return nil
 }
 
 // GetZonesInRegion is a mocked method.

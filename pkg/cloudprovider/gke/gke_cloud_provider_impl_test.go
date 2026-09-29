@@ -49,6 +49,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	gcefake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
 	rrclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -3224,4 +3225,106 @@ func TestRefreshClearsRecommendations(t *testing.T) {
 	assert.NoError(t, err)
 
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
+}
+
+func newResourcePolicy(name, mode string) *gceclient.GceResourcePolicy {
+	return &gceclient.GceResourcePolicy{Name: name, Status: "READY", WorkloadPolicy: gceclient.WorkloadPolicy{AcceleratorTopologyMode: mode}}
+}
+
+func TestIsProvisionOnly(t *testing.T) {
+	const (
+		project    = "test-project"
+		policyName = "wp-4x4x4"
+	)
+	provisionOnly := newResourcePolicy(policyName, gceclient.AcceleratorTopologyModeProvisionOnly)
+	other := newResourcePolicy(policyName, "OTHER_MODE")
+	// NAP embeds this when the puller has not fetched the policy yet (no AcceleratorTopologyMode).
+	placeholder := &gceclient.GceResourcePolicy{Name: policyName, WorkloadPolicy: gceclient.WorkloadPolicy{AcceleratorTopology: "4x4x4"}}
+
+	testCases := []struct {
+		name       string
+		migProject string
+		spec       *gkeclient.NodePoolSpec
+		pulled     []*gceclient.GceResourcePolicy
+		want       bool
+	}{
+		{
+			name: "no spec",
+			want: false,
+		},
+		{
+			name:   "no placement policy",
+			spec:   &gkeclient.NodePoolSpec{},
+			pulled: []*gceclient.GceResourcePolicy{provisionOnly},
+			want:   false,
+		},
+		{
+			name:   "embedded PROVISION_ONLY policy wins over puller",
+			spec:   &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: provisionOnly}},
+			pulled: []*gceclient.GceResourcePolicy{other},
+			want:   true,
+		},
+		{
+			name:   "embedded non PROVISION_ONLY policy wins over puller",
+			spec:   &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: other}},
+			pulled: []*gceclient.GceResourcePolicy{provisionOnly},
+			want:   false,
+		},
+		{
+			name:   "placeholder is resolved via puller",
+			spec:   &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: placeholder}},
+			pulled: []*gceclient.GceResourcePolicy{provisionOnly},
+			want:   true,
+		},
+		{
+			name: "placeholder with puller miss",
+			spec: &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName, ResourcePolicy: placeholder}},
+			want: false,
+		},
+		{
+			name:   "existing node pool, puller hit PROVISION_ONLY",
+			spec:   &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName}},
+			pulled: []*gceclient.GceResourcePolicy{provisionOnly},
+			want:   true,
+		},
+		{
+			name:   "existing node pool, puller hit other mode",
+			spec:   &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName}},
+			pulled: []*gceclient.GceResourcePolicy{other},
+			want:   false,
+		},
+		{
+			name: "existing node pool, puller miss",
+			spec: &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName}},
+			want: false,
+		},
+		{
+			name:       "MIG in another project is not served by the puller",
+			migProject: "other-project",
+			spec:       &gkeclient.NodePoolSpec{PlacementGroup: placement.Spec{Policy: policyName}},
+			pulled:     []*gceclient.GceResourcePolicy{provisionOnly},
+			want:       false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := &gkeManagerImpl{
+				projectId: project,
+				// GCE always reports PROVISION_ONLY: any GCE call would flip the "false" results.
+				gceService: gcefake.NewGceClient(t, nil).WithResourcePolicies(provisionOnly),
+			}
+			manager.SetResourcePolicyPuller(placement.NewFakeResourcePolicyPullerProvider(tc.pulled, nil))
+			migProject := project
+			if tc.migProject != "" {
+				migProject = tc.migProject
+			}
+			mig := &GkeMig{
+				gceRef:     gce.GceRef{Project: migProject, Zone: "us-central1-c", Name: "mig"},
+				gkeManager: manager,
+				spec:       tc.spec,
+			}
+
+			assert.Equal(t, tc.want, mig.IsProvisionOnly())
+		})
+	}
 }

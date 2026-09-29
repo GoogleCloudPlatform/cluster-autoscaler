@@ -7255,3 +7255,18 @@ func TestRecommendationClear(t *testing.T) {
 	_, ok := manager.PopRecommendation("mig2")
 	assert.False(t, ok)
 }
+
+func TestGetPulledResourcePolicy(t *testing.T) {
+	rp := &gceclient.GceResourcePolicy{Name: "policy-1", WorkloadPolicy: gceclient.WorkloadPolicy{AcceleratorTopologyMode: gceclient.AcceleratorTopologyModeProvisionOnly}}
+	manager := &gkeManagerImpl{projectId: "test-project"}
+
+	// No puller set.
+	assert.Nil(t, manager.GetPulledResourcePolicy("test-project", "policy-1"))
+
+	manager.SetResourcePolicyPuller(placement.NewFakeResourcePolicyPullerProvider([]*gceclient.GceResourcePolicy{rp}, nil))
+	assert.Equal(t, rp, manager.GetPulledResourcePolicy("test-project", "policy-1"))
+	// The puller only covers the cluster project.
+	assert.Nil(t, manager.GetPulledResourcePolicy("other-project", "policy-1"))
+	assert.Nil(t, manager.GetPulledResourcePolicy("test-project", "unknown"))
+	assert.Nil(t, manager.GetPulledResourcePolicy("test-project", ""))
+}

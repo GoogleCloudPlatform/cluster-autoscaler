@@ -68,11 +68,10 @@ func (p *rpPuller) GetResourcePolicy(name string) *gceclient.GceResourcePolicy {
 	return p.resourcePolicies[name]
 }
 
-// Run starts the resource policies puller
+// Run periodically refreshes the resource policies. It does not pull immediately: call Loop()
+// first to have data before the autoscaler starts.
 func (p *rpPuller) Run(ctx context.Context) {
 	klog.V(0).Info("Enabling Resource Policies Puller")
-
-	p.Loop()
 
 	ticker := time.NewTicker(resourcePolicyPullerInterval)
 	defer ticker.Stop()

@@ -705,6 +705,11 @@ func (b *Builder) Build(
 	}
 
 	resourcePolicyPuller := placement.NewResourcePolicyPuller(experimentsManager, cloudProvider, b.projectID)
+	// Pull once synchronously: node groups of pre-existing node pools only know their resource
+	// policy name and resolve it from the puller (e.g. PROVISION_ONLY), so it must be populated
+	// before the first loop.
+	resourcePolicyPuller.Loop()
+	cloudProvider.SetResourcePolicyPuller(resourcePolicyPuller)
 	go resourcePolicyPuller.Run(bgContext)
 
 	// initializing GCE Reservation Blocks Puller
