@@ -232,6 +232,11 @@ type MockK8sClient struct {
 	PatchErr   error
 	patchCalls []PatchCall
 
+	// RemoveSuspensionSchedulingConstraintsFunc, when set, answers the
+	// RemoveSuspensionSchedulingConstraints calls.
+	RemoveSuspensionSchedulingConstraintsFunc  func(ctx context.Context, node *v1.Node) error
+	removeSuspensionSchedulingConstraintsCalls []*v1.Node
+
 	bufferAssignmentCalls    []BufferAssignmentPatchCall
 	BufferAssignmentPatchErr error
 
@@ -259,6 +264,25 @@ func (m *MockK8sClient) GetPatchCalls() []PatchCall {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	return m.patchCalls
+}
+
+func (m *MockK8sClient) RemoveSuspensionSchedulingConstraints(ctx context.Context, node *v1.Node) error {
+	m.mutex.Lock()
+	m.removeSuspensionSchedulingConstraintsCalls = append(m.removeSuspensionSchedulingConstraintsCalls, node)
+	removeFunc := m.RemoveSuspensionSchedulingConstraintsFunc
+	m.mutex.Unlock()
+	if removeFunc == nil {
+		return nil
+	}
+	return removeFunc(ctx, node)
+}
+
+// GetRemoveSuspensionSchedulingConstraintsCalls returns the nodes
+// RemoveSuspensionSchedulingConstraints was called with so far, in order.
+func (m *MockK8sClient) GetRemoveSuspensionSchedulingConstraintsCalls() []*v1.Node {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return slices.Clone(m.removeSuspensionSchedulingConstraintsCalls)
 }
 
 func (m *MockK8sClient) IsWorkloadPresent(_ context.Context, nodeName string) (bool, error) {

@@ -63,6 +63,15 @@ func withUnhelpableAnnotation() func(*apiv1.Pod) {
 	}
 }
 
+// withoutSuspensionSchedulingConstraintsMutator mimics a node being consumed whose
+// suspended taint and cordon were removed ahead of the rest of the consume patch.
+func withoutSuspensionSchedulingConstraintsMutator() nodeMutator {
+	return func(node *apiv1.Node) *apiv1.Node {
+		csn.RemoveSuspensionSchedulingConstraints(node)
+		return node
+	}
+}
+
 func TestBufferConsumptionProcess(t *testing.T) {
 	testCases := []struct {
 		name                       string
@@ -252,6 +261,22 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectErr:                 false,
 			expectedUnschedulablePods: []string{},
 			expectedAllConsumedNodes:  []string{"node-2"},
+		},
+		{
+			name: "Backed-off suspended nodes without suspended taint are filtered out by WithoutBackedOffSuspendedFilter and not consumed",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended, withoutSuspensionSchedulingConstraintsMutator()),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			backedOffNodes: []string{"node-1"},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("p1", 1000, 1*GiB),
+			},
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{"p1"},
+			expectedAllConsumedNodes:  []string{},
 		},
 		{
 			name: "Backed-off chilling nodes are NOT filtered out by WithoutBackedOffSuspendedFilter",
@@ -484,6 +509,23 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectedUnschedulablePods: []string{},
 			expectedAllConsumedNodes:  []string{"node-1"},
 			expectedMetrics:           []internalmetrics.CSNInvalidCondition{internalmetrics.SuspendedNodeWithBlockingPods},
+		},
+		{
+			// Once the suspended taint is gone, pods can legitimately land on the node.
+			name: "Metric not reported for suspended node without suspended taint with blocking pods",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended, withoutSuspensionSchedulingConstraintsMutator()),
+			},
+			podsCreatedOutsideCA: []*apiv1.Pod{
+				test.BuildTestPod("p1", 1000, 1*GiB, test.WithNodeName("node-1")),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			experimentsManager:        experiments.NewMockManager(experiments.ColdStandbyNodesCheckPodsOnSuspendedNodes),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-1"},
 		},
 		{
 			name: "Pod age fallback disabled: old pod is scheduled on suspended node",

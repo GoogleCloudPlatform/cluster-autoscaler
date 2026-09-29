@@ -29,6 +29,7 @@ import (
 	core "k8s.io/client-go/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/test"
+	"k8s.io/kubernetes/pkg/util/taints"
 )
 
 func TestNewClientAdapter(t *testing.T) {
@@ -227,6 +228,65 @@ func TestApplyNodePatch(t *testing.T) {
 			if tc.expectPatch && tc.expectedError {
 				assert.Equal(t, csn.ClassifyNode(tc.initialNode), csn.ClassifyNode(n))
 			}
+		})
+	}
+}
+
+func TestRemoveSuspensionSchedulingConstraints(t *testing.T) {
+	nodeName := "test-node"
+
+	tests := []struct {
+		name          string
+		initialNode   *v1.Node
+		clientError   error
+		expectPatch   bool
+		expectedError bool
+	}{
+		{
+			name:        "suspended_node",
+			initialNode: test.CreateNode(nodeName, test.StateOpt(csn.NodeStateSuspended)),
+			expectPatch: true,
+		},
+		{
+			name:        "no_patch_without_the_taint",
+			initialNode: test.CreateNode(nodeName, test.StateOpt(csn.NodeStateChilling)),
+			expectPatch: false,
+		},
+		{
+			name:          "patch_error",
+			initialNode:   test.CreateNode(nodeName, test.StateOpt(csn.NodeStateSuspended)),
+			clientError:   fmt.Errorf("patch error"),
+			expectPatch:   true,
+			expectedError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset(tc.initialNode.DeepCopy())
+
+			var patchCalled atomic.Bool
+			fakeClient.PrependReactor("patch", "nodes", func(action core.Action) (handled bool, ret runtime.Object, err error) {
+				patchCalled.Store(true)
+				return tc.clientError != nil, nil, tc.clientError
+			})
+
+			adapter := NewClientAdapter(fakeClient)
+			err := adapter.RemoveSuspensionSchedulingConstraints(t.Context(), tc.initialNode.DeepCopy())
+
+			assert.Equal(t, tc.expectPatch, patchCalled.Load())
+			if tc.expectedError {
+				assert.Error(t, err)
+				return
+			}
+			assert.NoError(t, err)
+
+			gotNode, err := fakeClient.CoreV1().Nodes().Get(t.Context(), nodeName, metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.False(t, taints.TaintExists(gotNode.Spec.Taints, &csn.SuspendedTaint), "the suspended taint should be removed")
+			assert.False(t, gotNode.Spec.Unschedulable, "the node should be uncordoned")
+			// Everything else is left to the consume patch.
+			assert.Equal(t, csn.ClassifyNode(tc.initialNode), csn.ClassifyNode(gotNode))
 		})
 	}
 }

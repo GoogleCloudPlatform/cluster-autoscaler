@@ -404,7 +404,9 @@ func TestConsume(t *testing.T) {
 				assert.Equal(t, nodes[0].Name, tc.node.Name)
 
 				// Consume the node
-				patchChan := mustGetPatchWaitChannel(t, suite.ClientSet, 1)
+				// The suspended taint and cordon may be removed in a patch of their own before
+				// the consume patch, so wait for the state rather than for a patch count.
+				patchChan := mustGetNodeStateWaitChannel(t, suite.ClientSet, tc.node.Name, csn.NodeStateConsumed)
 				consumed := c.Consume([]string{tc.node.Name})
 				assert.ElementsMatch(t, []string{tc.node.Name}, consumed.UnsortedList())
 
@@ -790,6 +792,37 @@ func mustGetPatchWaitChannel(t *testing.T, client kubernetes.Interface, patchCou
 		patchChan <- true
 	}()
 	return patchChan
+}
+
+// mustGetNodeStateWaitChannel returns a channel that receives true once the
+// node is updated into the given state, however many patches it takes.
+func mustGetNodeStateWaitChannel(t *testing.T, client kubernetes.Interface, nodeName string, state csn.NodeState) <-chan bool {
+	stateChan := make(chan bool, 1)
+	watcher, err := client.CoreV1().Nodes().Watch(t.Context(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("failed to setup watch: %v", err)
+	}
+
+	go func() {
+		defer close(stateChan)
+		defer watcher.Stop()
+		for {
+			select {
+			case event, ok := <-watcher.ResultChan():
+				if !ok {
+					return
+				}
+				node, isNode := event.Object.(*v1.Node)
+				if event.Type == watch.Modified && isNode && node.Name == nodeName && csn.ClassifyNode(node) == state {
+					stateChan <- true
+					return
+				}
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+	return stateChan
 }
 
 func mustWaitForPatches(t *testing.T, patchChan <-chan bool) {

@@ -18,11 +18,14 @@ import (
 	"context"
 	"fmt"
 
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -49,8 +52,9 @@ type ConsumeHandler struct {
 	nodeLister NodeLister
 	backoff    CSNCompositeBackoff
 	// experimentsManager says whether waiting for the resumed nodes to become
-	// ready is turned on. It is read on every operation, so the wait can be turned
-	// off without restarting the autoscaler.
+	// ready and removing the suspended taint and cordon early are turned on. It
+	// is read on every operation, so either can be turned off without restarting
+	// the autoscaler.
 	experimentsManager experiments.Manager
 	// resume drives the GCE side of the operation: it tells which instances still
 	// need to be resumed, resumes them and polls until they are up.
@@ -100,7 +104,10 @@ func (h *ConsumeHandler) Handle(ctx context.Context, op ops.Operation) (ops.Resu
 		queuePatch(ref.Name)
 	}
 
-	if toPoll := h.resume.start(op.MIG, categorized, &result); len(toPoll) > 0 {
+	toPoll := h.resume.start(op.MIG, categorized, &result)
+	// The nodes whose resumption GCE rejected are left out, as they stay suspended.
+	cancelSuspensionConstraintsRemoval := h.startSuspensionSchedulingConstraintsRemoval(ctx, toPoll)
+	if len(toPoll) > 0 {
 		// Each node is queued for patching as soon as its instance is up, instead of
 		// being held hostage to the slowest instance in the batch.
 		for ref, nonBlockingErr := range h.resume.pollUntilDone(ctx, op.MIG, toPoll, &result) {
@@ -119,6 +126,9 @@ func (h *ConsumeHandler) Handle(ctx context.Context, op ops.Operation) (ops.Resu
 	// Only the nodes whose patch went out are being consumed, so they are the only
 	// ones whose readiness matters.
 	consumed := waitForPatches(&result)
+	// Every node is now either patched, which removes the taint and cordon too, or
+	// failed.
+	cancelSuspensionConstraintsRemoval()
 	waitForReadiness(&result, consumed)
 	return result, nil
 }
@@ -233,6 +243,54 @@ func (h *ConsumeHandler) startReadinessWatcher(ctx context.Context, maxNodes int
 // on before being reported as consumed.
 func (h *ConsumeHandler) waitForNodeReadinessEnabled() bool {
 	return h.experimentsManager != nil && h.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesWaitForNodeReadiness)
+}
+
+// startSuspensionSchedulingConstraintsRemoval removes the suspended taint, along
+// with the cordon that comes with it, from the nodes of the instances GCE is
+// resuming, so that each node can take pods as soon as it is ready rather than
+// once its consume patch goes out. The consume patch removes them too, so
+// failures are only logged.
+//
+// cancel cancels the removals left and waits for the one under way. It must be
+// called before Handle returns, as other operations may take over the nodes
+// from then on.
+func (h *ConsumeHandler) startSuspensionSchedulingConstraintsRemoval(ctx context.Context, resuming []gce.GceRef) (cancel func()) {
+	if len(resuming) == 0 || !h.removeSuspensionSchedulingConstraintsEarlyEnabled() {
+		return func() {}
+	}
+	ctx, cancelCtx := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, ref := range resuming {
+			if ctx.Err() != nil {
+				return
+			}
+			tn, ok := h.stateManager.Get(ref.Name)
+			if !ok || tn.Node == nil {
+				continue
+			}
+			if !taints.TaintKeyExists(tn.Node.Spec.Taints, apiv1.TaintNodeUnreachable) && !taints.TaintKeyExists(tn.Node.Spec.Taints, apiv1.TaintNodeUnschedulable) {
+				klog.Infof("%s node %q is not unschedulable or unreachable, skipping early removal of suspension scheduling constraints", consumeHandlerLogPrefix, ref.Name)
+				continue
+			}
+			// Once cancelled, the removal under way is expected to fail.
+			if err := h.k8sClient.RemoveSuspensionSchedulingConstraints(ctx, tn.Node); err != nil && ctx.Err() == nil {
+				klog.Warningf("%s failed to remove the suspended taint and cordon from node %q ahead of its consume patch: %v", consumeHandlerLogPrefix, ref.Name, err)
+			}
+		}
+	}()
+	return func() {
+		cancelCtx()
+		<-done
+	}
+}
+
+// removeSuspensionSchedulingConstraintsEarlyEnabled reports whether the
+// suspended taint and cordon are to be removed while the instances resume,
+// ahead of the consume patch.
+func (h *ConsumeHandler) removeSuspensionSchedulingConstraintsEarlyEnabled() bool {
+	return h.experimentsManager != nil && h.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesRemoveSuspensionSchedulingConstraintsEarly)
 }
 
 // patchNodeToConsumed marks the node as consumed and reports whether the patch

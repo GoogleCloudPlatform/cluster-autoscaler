@@ -438,6 +438,9 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 							},
 						},
 					},
+					Status: apiv1.NodeStatus{
+						Conditions: []apiv1.NodeCondition{{Type: csn.NodeConditionSuspended, Status: apiv1.ConditionTrue}},
+					},
 				},
 			},
 			expectedErr: false,
@@ -452,6 +455,14 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 					Spec: apiv1.NodeSpec{
 						Unschedulable: false,
 						Taints:        []apiv1.Taint{},
+					},
+					Status: apiv1.NodeStatus{
+						Conditions: []apiv1.NodeCondition{{
+							Type:    csn.NodeConditionSuspended,
+							Status:  apiv1.ConditionFalse,
+							Message: csn.NodeResumedMessage,
+							Reason:  csn.NodeConditionReason,
+						}},
 					},
 				},
 			},
@@ -729,7 +740,13 @@ func TestMakeCSNNodesSchedulable(t *testing.T) {
 				assert.NoError(t, err)
 				resultNodes := []*apiv1.Node{}
 				for _, ni := range nodeInfos {
-					resultNodes = append(resultNodes, ni.Node())
+					node := ni.Node()
+					// SetNodeAs sets the condition timestamps to the current time.
+					for i := range node.Status.Conditions {
+						node.Status.Conditions[i].LastTransitionTime = metav1.Time{}
+						node.Status.Conditions[i].LastHeartbeatTime = metav1.Time{}
+					}
+					resultNodes = append(resultNodes, node)
 				}
 				assert.Equal(t, tc.expectedNodes, resultNodes)
 			}

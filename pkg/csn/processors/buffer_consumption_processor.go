@@ -30,6 +30,7 @@ import (
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
@@ -405,7 +406,7 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *cl
 		if !csn.IsPodBlockingSuspension(pod) {
 			continue
 		}
-		if nodeInfos.suspended[nodeName] != nil && hasNodeStartedSuspension(nodeName, nodeLister) {
+		if nodeInfos.suspended[nodeName] != nil && isSchedulingBlockedBySuspension(nodeName, nodeLister) {
 			unexpectedSuspendedNodesWithPods[nodeName] = true
 		}
 		blockingPods[nodeName] = podId(pod)
@@ -426,15 +427,15 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *cl
 	return nodesToConsume, nil
 }
 
-func hasNodeStartedSuspension(nodeName string, nodeLister kubernetes.NodeLister) bool {
+func isSchedulingBlockedBySuspension(nodeName string, nodeLister kubernetes.NodeLister) bool {
 	// We are getting a node from informer to ensure the node is actually suspended or started suspension (in contrast to being set to suspended during the CA loop simulation).
-	// Even if the node is being consumed/deleted, it should still have the suspended taint and condition and cordoning and shouldn't schedule pods there.
+	// The taint rather than the Suspended condition is checked, as a node being consumed loses the taint first and can then legitimately get pods.
 	node, err := nodeLister.Get(nodeName)
 	if err != nil {
 		klog.Errorf("%s failed to get node %q: %v", bufferConsumptionLogPrefix, nodeName, err)
 		return false
 	}
-	return csn.IsSuspendedNode(node)
+	return taints.TaintExists(node.Spec.Taints, &csn.SuspendedTaint)
 }
 
 func logAlreadyConsumedNodes(suspensionBlockingPods map[string]string, source string) {

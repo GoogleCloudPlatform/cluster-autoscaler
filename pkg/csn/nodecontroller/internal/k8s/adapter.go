@@ -75,6 +75,19 @@ func (c *ClientAdapter) ApplyNodePatch(ctx context.Context, node *v1.Node, desir
 	return nil
 }
 
+// RemoveSuspensionSchedulingConstraints removes the suspended taint from the
+// node along with the cordon that comes with it.
+// K8s patch request is not sent if the node doesn't have the taint.
+func (c *ClientAdapter) RemoveSuspensionSchedulingConstraints(ctx context.Context, node *v1.Node) error {
+	patcher := func(n *v1.Node) (bool, error) {
+		return csn.RemoveSuspensionSchedulingConstraints(n), nil
+	}
+	if _, err := utils.PatchNode(ctx, c.clientSet, node, patcher, false); err != nil {
+		return fmt.Errorf("k8s patch request for node %s returned error: %w", node.Name, err)
+	}
+	return nil
+}
+
 // ApplyNodeToBufferAssignmentPatch patches the node to indicate the CSN buffer to which a node is assigned.
 func (c *ClientAdapter) ApplyNodeToBufferAssignmentPatch(ctx context.Context, node *v1.Node, buffer *v1beta1.CapacityBuffer) error {
 	patcher := func(n *v1.Node) (bool, error) {

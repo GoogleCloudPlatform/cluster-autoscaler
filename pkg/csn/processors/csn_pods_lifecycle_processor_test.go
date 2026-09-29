@@ -89,17 +89,13 @@ func withNodeSelector(selector map[string]string) func(*apiv1.Pod) {
 	}
 }
 
-func withTimeAddedSuspendedTaintMutator(t time.Time) nodeMutator {
+func withSuspendedSinceMutator(t time.Time) nodeMutator {
 	return func(node *apiv1.Node) *apiv1.Node {
-		for i, taint := range node.Spec.Taints {
-			if taint.MatchTaint(&csn.SuspendedTaint) {
-				node.Spec.Taints[i].TimeAdded = &metav1.Time{Time: t}
-				return node
+		for i := range node.Status.Conditions {
+			if node.Status.Conditions[i].Type == csn.NodeConditionSuspended {
+				node.Status.Conditions[i].LastTransitionTime = metav1.NewTime(t)
 			}
 		}
-		taint := csn.SuspendedTaint
-		taint.TimeAdded = &metav1.Time{Time: t}
-		node.Spec.Taints = append(node.Spec.Taints, taint)
 		return node
 	}
 }
@@ -433,7 +429,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
@@ -463,7 +459,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
@@ -495,7 +491,33 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-25*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-25*time.Hour))),
+			},
+			csnPods: []*apiv1.Pod{
+				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
+			},
+			csnPodsBuffersNames: map[string]string{
+				"csn-p1": "buffer",
+			},
+			unschedulablePods:         []*apiv1.Pod{test.BuildTestPod("p1", 1000, 1000)},
+			expectedUnschedulablePods: []string{"p1", "csn-p1"},
+			expectedAllSuspendedNodes: []string{"node-1"},
+			expectErr:                 false,
+			expectedBufferAssignments: map[string]string{},
+			additionalNodeAssertions: func(t *testing.T, node *apiv1.Node) {
+				if node.Name == "node-1" {
+					assert.True(t, taints.TaintExists(node.Spec.Taints, &outdatedTaint))
+					assert.Equal(t, csn.NodeStateConsumed, csn.ClassifyNode(node))
+				}
+			},
+		},
+		{
+			name: "Node is outdated even if its suspended taint was removed ahead of consumption",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
+					withBufferAssignmentMutator("ns/buffer"),
+					withSuspendedSinceMutator(time.Now().Add(-25*time.Hour)),
+					withoutSuspensionSchedulingConstraintsMutator()),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
@@ -520,7 +542,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-23*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-23*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
@@ -547,7 +569,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-48*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-48*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),
@@ -577,7 +599,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended,
 					withBufferAssignmentMutator("ns/buffer"),
-					withTimeAddedSuspendedTaintMutator(time.Now().Add(-2*time.Hour))),
+					withSuspendedSinceMutator(time.Now().Add(-2*time.Hour))),
 			},
 			csnPods: []*apiv1.Pod{
 				test.BuildTestPod("csn-p1", 1000, 1000, withWorkloadSeparation(metadata.BufferAssignmentKey, "ns/buffer")),

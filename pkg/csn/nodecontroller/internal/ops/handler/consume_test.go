@@ -20,6 +20,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -610,12 +611,244 @@ func TestReadinessWatcher_LogPrefix(t *testing.T) {
 	}
 }
 
+// TestConsumeHandler_RemovesSuspensionSchedulingConstraintsWhileResuming covers
+// which nodes lose the suspended taint and cordon ahead of their consume patch,
+// and how the removal fits in the operation.
+func TestConsumeHandler_RemovesSuspensionSchedulingConstraintsWhileResuming(t *testing.T) {
+	suspendedNode := test.CreateNode("suspended-node", test.StateOpt(csn.NodeStateSuspended), withTaint(v1.TaintNodeUnreachable))
+	resumingNode := test.CreateNode("resuming-node", test.StateOpt(csn.NodeStateSuspended), withTaint(v1.TaintNodeUnschedulable))
+	// unprotectedNode is being resumed as well, but it is neither unreachable nor
+	// unschedulable, so its suspended taint and cordon are all that keeps pods
+	// off it while its instance resumes.
+	unprotectedNode := test.CreateNode("unprotected-node", test.StateOpt(csn.NodeStateSuspended))
+	runningNode := test.CreateNode("running-node", test.StateOpt(csn.NodeStateChilling))
+
+	tests := []struct {
+		name               string
+		experimentDisabled bool
+		resumeErr          error
+		// removalErr, when set, is what the removals fail with.
+		removalErr error
+		// removalHangs makes the removals hang on until they are cancelled, like
+		// requests stuck behind the client rate limiter.
+		removalHangs    bool
+		expectedRemoved []*v1.Node
+		expectedFailed  []string
+	}{
+		{
+			// The node whose instance is already up is left to its consume patch,
+			// which is right around the corner. So is the unprotected node, as
+			// nothing else would keep pods off it until its instance is up.
+			name:            "removes_the_taint_and_cordon_of_the_nodes_being_resumed",
+			expectedRemoved: []*v1.Node{suspendedNode, resumingNode},
+		},
+		{
+			// GCE rejected the resumption of the suspended node, which stays
+			// suspended, but it keeps resuming the nodes it was already resuming.
+			name:            "keeps_the_taint_and_cordon_of_the_nodes_whose_resumption_failed",
+			resumeErr:       errors.New("resume error"),
+			expectedRemoved: []*v1.Node{resumingNode},
+			expectedFailed:  []string{suspendedNode.Name},
+		},
+		{
+			name:               "removes_nothing_when_the_experiment_is_off",
+			experimentDisabled: true,
+		},
+		{
+			// The consume patch removes the taint and cordon too, so once the nodes
+			// are patched, the removal under way is cancelled and the ones left are
+			// dropped.
+			name:            "cancels_the_removals_left_once_the_nodes_are_patched",
+			removalHangs:    true,
+			expectedRemoved: []*v1.Node{suspendedNode},
+		},
+		{
+			name:            "does_not_fail_the_nodes_whose_removal_failed",
+			removalErr:      errors.New("removal error"),
+			expectedRemoved: []*v1.Node{suspendedNode, resumingNode},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sm := &statetest.MockStateManager{Nodes: map[string]state.TrackedNode{
+					suspendedNode.Name:   {Node: suspendedNode, State: csn.NodeStateSuspended},
+					resumingNode.Name:    {Node: resumingNode, State: csn.NodeStateSuspended},
+					unprotectedNode.Name: {Node: unprotectedNode, State: csn.NodeStateSuspended},
+					runningNode.Name:     {Node: runningNode, State: csn.NodeStateChilling},
+				}}
+				pollStarted := make(chan struct{})
+				cp := &test.MockCloudProvider{
+					ManagedInstances: map[gce.GceRef][]*gceclient.ManagedInstance{testMIG: {
+						test.ManagedInstance(suspendedNode.Name, instanceStatusSuspended),
+						{Name: resumingNode.Name, InstanceStatus: instanceStatusSuspended, TargetStatus: instanceStatusRunning, CurrentAction: string(gceclient.ActionResuming)},
+						{Name: unprotectedNode.Name, InstanceStatus: instanceStatusSuspended, TargetStatus: instanceStatusRunning, CurrentAction: string(gceclient.ActionResuming)},
+						test.ManagedInstance(runningNode.Name, instanceStatusRunning),
+					}},
+					ResumeErr: tc.resumeErr,
+					BlockPoll: pollStarted,
+				}
+				op := ops.Operation{MIG: testMIG, Type: ops.ConsumeOp, NodeNames: set.New(suspendedNode.Name, resumingNode.Name, unprotectedNode.Name, runningNode.Name)}
+				var removalsUnderWay atomic.Int32
+				k8sClient := &test.MockK8sClient{
+					RemoveSuspensionSchedulingConstraintsFunc: func(ctx context.Context, _ *v1.Node) error {
+						removalsUnderWay.Add(1)
+						defer removalsUnderWay.Add(-1)
+						if tc.removalHangs {
+							<-ctx.Done()
+							return ctx.Err()
+						}
+						return tc.removalErr
+					},
+				}
+				h := NewConsumeHandler(sm, cp, k8sClient, test.ReadyNodeLister(), &mockCSNCompositeBackoff{}, constraintsRemovalExperiment(!tc.experimentDisabled))
+				go func() {
+					// Holds the poll until the removals are done or stuck, as they would
+					// be long before the instances are back up.
+					synctest.Wait()
+					<-pollStarted
+				}()
+
+				res, err := h.Handle(t.Context(), op)
+
+				assert.Zero(t, removalsUnderWay.Load(), "Handle returned before the removal did")
+				assert.NoError(t, err)
+				assert.ElementsMatch(t, tc.expectedRemoved, k8sClient.GetRemoveSuspensionSchedulingConstraintsCalls())
+				// The removal is only a head start on the consume patch, so however it
+				// goes, it never fails a node.
+				assert.ElementsMatch(t, tc.expectedFailed, keysOf(res.Errs))
+			})
+		})
+	}
+}
+
+func TestSuspensionSchedulingConstraintsRemoval_OnlyTargetsTrackedNodes(t *testing.T) {
+	// The node is unreachable, like a node whose instance has been suspended for
+	// a while, so that only its tracking decides whether it is targeted.
+	node := test.CreateNode("suspended-node", test.StateOpt(csn.NodeStateSuspended), withTaint(v1.TaintNodeUnreachable))
+
+	tests := []struct {
+		name string
+		// stateManagerGet, when set, replaces the lookups of the state manager.
+		stateManagerGet func(nodeName string) (state.TrackedNode, bool)
+		expectedRemoved []*v1.Node
+	}{
+		{
+			name:            "removes_the_taint_and_cordon_of_the_tracked_nodes",
+			expectedRemoved: []*v1.Node{node},
+		},
+		{
+			name:            "skips_the_nodes_that_stopped_being_tracked",
+			stateManagerGet: func(string) (state.TrackedNode, bool) { return state.TrackedNode{}, false },
+		},
+		{
+			name: "skips_the_tracked_nodes_that_lost_their_node_object",
+			stateManagerGet: func(string) (state.TrackedNode, bool) {
+				return state.TrackedNode{State: csn.NodeStateSuspended}, true
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sm := &statetest.MockStateManager{
+					Nodes:   map[string]state.TrackedNode{node.Name: {Node: node, State: csn.NodeStateSuspended}},
+					GetFunc: tc.stateManagerGet,
+				}
+				assert.Equal(t, tc.expectedRemoved, earlyRemovals(t, sm, node))
+			})
+		})
+	}
+}
+
+// TestSuspensionSchedulingConstraintsRemoval_OnlyTargetsUnreachableOrUnschedulableNodes
+// covers the nodes whose suspended taint and cordon are all that keeps pods off
+// them: those are left to the consume patch, which only goes out once their
+// instance is up.
+func TestSuspensionSchedulingConstraintsRemoval_OnlyTargetsUnreachableOrUnschedulableNodes(t *testing.T) {
+	unreachableNode := test.CreateNode("unreachable-node", test.StateOpt(csn.NodeStateSuspended), withTaint(v1.TaintNodeUnreachable))
+	unschedulableNode := test.CreateNode("unschedulable-node", test.StateOpt(csn.NodeStateSuspended), withTaint(v1.TaintNodeUnschedulable))
+	unprotectedNode := test.CreateNode("unprotected-node", test.StateOpt(csn.NodeStateSuspended))
+
+	tests := []struct {
+		name string
+		// nodes are handed to the removal in this order.
+		nodes           []*v1.Node
+		expectedRemoved []*v1.Node
+	}{
+		{
+			name:            "removes_the_taint_and_cordon_of_the_unreachable_nodes",
+			nodes:           []*v1.Node{unreachableNode},
+			expectedRemoved: []*v1.Node{unreachableNode},
+		},
+		{
+			name:            "removes_the_taint_and_cordon_of_the_unschedulable_nodes",
+			nodes:           []*v1.Node{unschedulableNode},
+			expectedRemoved: []*v1.Node{unschedulableNode},
+		},
+		{
+			name:  "keeps_the_taint_and_cordon_of_the_nodes_that_are_neither_unreachable_nor_unschedulable",
+			nodes: []*v1.Node{unprotectedNode},
+		},
+		{
+			// Skipping a node must not cut the removal short for the nodes after it.
+			name:            "moves_on_to_the_next_nodes_after_skipping_one",
+			nodes:           []*v1.Node{unprotectedNode, unreachableNode},
+			expectedRemoved: []*v1.Node{unreachableNode},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sm := &statetest.MockStateManager{Nodes: map[string]state.TrackedNode{}}
+				for _, node := range tc.nodes {
+					sm.Nodes[node.Name] = state.TrackedNode{Node: node, State: csn.NodeStateSuspended}
+				}
+				assert.Equal(t, tc.expectedRemoved, earlyRemovals(t, sm, tc.nodes...))
+			})
+		})
+	}
+}
+
 // readinessWaitExperiment returns an experiments manager that turns the wait for
 // readiness on or off.
 func readinessWaitExperiment(enabled bool) experiments.Manager {
 	return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 		experiments.ColdStandbyNodesWaitForNodeReadiness: enabled,
 	}, nil)
+}
+
+// constraintsRemovalExperiment returns an experiments manager that turns the
+// early removal of the suspension scheduling constraints on or off. The wait for
+// readiness is turned off, as a removal that Handle did not wait for could
+// otherwise finish during it.
+func constraintsRemovalExperiment(enabled bool) experiments.Manager {
+	return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+		experiments.ColdStandbyNodesRemoveSuspensionSchedulingConstraintsEarly: enabled,
+		experiments.ColdStandbyNodesWaitForNodeReadiness:                       false,
+	}, nil)
+}
+
+// earlyRemovals runs the early removal of the suspension scheduling constraints
+// over nodes, in order, until it is done with them, and returns the nodes it
+// removed the constraints from. It must be called from within a synctest
+// bubble, which is how it tells when the removal is done.
+func earlyRemovals(t *testing.T, sm StateManager, nodes ...*v1.Node) []*v1.Node {
+	t.Helper()
+	k8sClient := &test.MockK8sClient{}
+	h := NewConsumeHandler(sm, &test.MockCloudProvider{}, k8sClient, test.ReadyNodeLister(), &mockCSNCompositeBackoff{}, constraintsRemovalExperiment(true))
+	refs := make([]gce.GceRef, 0, len(nodes))
+	for _, node := range nodes {
+		refs = append(refs, mustGetRef(t, node))
+	}
+	cancel := h.startSuspensionSchedulingConstraintsRemoval(t.Context(), refs)
+	// Lets the removal run its course, as it does while the instances resume.
+	synctest.Wait()
+	cancel()
+	return k8sClient.GetRemoveSuspensionSchedulingConstraintsCalls()
 }
 
 // consumeOperation builds the state manager and the cloud provider of a consume
@@ -741,4 +974,16 @@ func patchedNodeNames(calls []test.PatchCall) []string {
 		names = append(names, call.Node.Name)
 	}
 	return names
+}
+
+// withTaint gives the node a NoSchedule taint with the given key, like the
+// ones the node lifecycle controller adds for the conditions it reports as
+// taints.
+func withTaint(key string) func(*v1.Node) {
+	return func(n *v1.Node) {
+		n.Spec.Taints = append(n.Spec.Taints, v1.Taint{
+			Key:    key,
+			Effect: v1.TaintEffectNoSchedule,
+		})
+	}
 }

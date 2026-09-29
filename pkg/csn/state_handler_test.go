@@ -529,7 +529,7 @@ func TestClassifyNode(t *testing.T) {
 			expected:    NodeStateConsumed,
 		},
 		{
-			description: "Suspended node (CSN label and taint)",
+			description: "Suspended node (CSN label, taint and Suspended condition)",
 			node: &apiv1.Node{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -538,6 +538,9 @@ func TestClassifyNode(t *testing.T) {
 				},
 				Spec: apiv1.NodeSpec{
 					Taints: []apiv1.Taint{SuspendedTaint},
+				},
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionTrue}},
 				},
 			},
 			expected: NodeStateSuspended,
@@ -552,6 +555,57 @@ func TestClassifyNode(t *testing.T) {
 				},
 			},
 			expected: NodeStateChilling,
+		},
+		{
+			description: "Suspended node (CSN label and Suspended condition, no taint)",
+			node: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionTrue}},
+				},
+			},
+			expected: NodeStateSuspended,
+		},
+		{
+			description: "Chilling node (CSN label and taint, no Suspended condition)",
+			node: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Spec: apiv1.NodeSpec{
+					Taints: []apiv1.Taint{SuspendedTaint},
+				},
+			},
+			expected: NodeStateChilling,
+		},
+		{
+			description: "Chilling node (CSN label, Suspended condition False)",
+			node: &apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+					},
+				},
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionFalse}},
+				},
+			},
+			expected: NodeStateChilling,
+		},
+		{
+			description: "Consumed node (Suspended condition, no CSN label)",
+			node: &apiv1.Node{
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionTrue}},
+				},
+			},
+			expected: NodeStateConsumed,
 		},
 		{
 			description: "Failed_node_CSN_label_and_Failed_taint",
@@ -578,6 +632,9 @@ func TestClassifyNode(t *testing.T) {
 				Spec: apiv1.NodeSpec{
 					Taints: []apiv1.Taint{SuspendedTaint, FailedTaint},
 				},
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionTrue}},
+				},
 			},
 			expected: NodeStateFailed,
 		},
@@ -586,6 +643,65 @@ func TestClassifyNode(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			assert.Equal(t, tc.expected, ClassifyNode(tc.node))
+		})
+	}
+}
+
+func TestRemoveSuspensionSchedulingConstraints(t *testing.T) {
+	unrelatedTaint := apiv1.Taint{
+		Key:    "unrelated-taint",
+		Value:  "true",
+		Effect: apiv1.TaintEffectNoSchedule,
+	}
+
+	testCases := []struct {
+		description     string
+		node            *apiv1.Node
+		expectedNode    *apiv1.Node
+		expectedRemoved bool
+	}{
+		{
+			description: "Suspended taint is removed along with the cordon",
+			node: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Taints:        []apiv1.Taint{unrelatedTaint, SuspendedTaint},
+					Unschedulable: true,
+				},
+			},
+			expectedNode: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Taints: []apiv1.Taint{unrelatedTaint},
+				},
+			},
+			expectedRemoved: true,
+		},
+		{
+			// Without the suspended taint, the cordon comes from another entity.
+			description: "Cordoned node without suspended taint is left alone",
+			node: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Taints:        []apiv1.Taint{unrelatedTaint},
+					Unschedulable: true,
+				},
+			},
+			expectedNode: &apiv1.Node{
+				Spec: apiv1.NodeSpec{
+					Taints:        []apiv1.Taint{unrelatedTaint},
+					Unschedulable: true,
+				},
+			},
+		},
+		{
+			description:  "Node without taints is left alone",
+			node:         &apiv1.Node{},
+			expectedNode: &apiv1.Node{},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			assert.Equal(t, tc.expectedRemoved, RemoveSuspensionSchedulingConstraints(tc.node))
+			assert.Equal(t, tc.expectedNode, tc.node)
 		})
 	}
 }
@@ -894,34 +1010,48 @@ func setCommonTime(force bool, now metav1.Time, nodes ...*apiv1.Node) {
 	}
 }
 
-func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
+func TestSetNodeAs_SetsSuspensionTimes(t *testing.T) {
 	// In synctest, the clock starts at 2000-01-01 00:00:00 UTC.
 	synctestStartTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	past := metav1.NewTime(time.Date(1990, 1, 1, 0, 0, 0, 0, time.UTC))
 
 	testCases := []struct {
-		description  string
-		initialNode  *apiv1.Node
-		delay        time.Duration
-		expectedTime metav1.Time
+		description            string
+		initialNode            *apiv1.Node
+		delay                  time.Duration
+		expectedTimeAdded      time.Time
+		expectedSuspendedSince time.Time
 	}{
 		{
-			description:  "Empty node transition to Suspended",
-			initialNode:  &apiv1.Node{},
-			delay:        0,
-			expectedTime: metav1.NewTime(synctestStartTime),
+			description:            "Empty node transition to Suspended",
+			initialNode:            &apiv1.Node{},
+			expectedTimeAdded:      synctestStartTime,
+			expectedSuspendedSince: synctestStartTime,
 		},
 		{
-			description:  "Chilling node transition to Suspended after delay",
-			initialNode:  &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue}}},
-			delay:        10 * time.Minute,
-			expectedTime: metav1.NewTime(synctestStartTime.Add(10 * time.Minute)),
+			description:            "Chilling node transition to Suspended after delay",
+			initialNode:            &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue}}},
+			delay:                  10 * time.Minute,
+			expectedTimeAdded:      synctestStartTime.Add(10 * time.Minute),
+			expectedSuspendedSince: synctestStartTime.Add(10 * time.Minute),
 		},
 		{
-			description:  "Node with unrelated taint transition to Suspended after delay",
-			initialNode:  &apiv1.Node{Spec: apiv1.NodeSpec{Taints: []apiv1.Taint{{Key: "unrelated", Value: "foo", Effect: apiv1.TaintEffectNoSchedule}}}},
-			delay:        20 * time.Minute,
-			expectedTime: metav1.NewTime(synctestStartTime.Add(20 * time.Minute)),
+			description:            "Node with unrelated taint transition to Suspended after delay",
+			initialNode:            &apiv1.Node{Spec: apiv1.NodeSpec{Taints: []apiv1.Taint{{Key: "unrelated", Value: "foo", Effect: apiv1.TaintEffectNoSchedule}}}},
+			delay:                  20 * time.Minute,
+			expectedTimeAdded:      synctestStartTime.Add(20 * time.Minute),
+			expectedSuspendedSince: synctestStartTime.Add(20 * time.Minute),
+		},
+		{
+			description: "Node with Suspended condition False transition to Suspended after delay",
+			initialNode: &apiv1.Node{
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionFalse, LastTransitionTime: past}},
+				},
+			},
+			delay:                  10 * time.Minute,
+			expectedTimeAdded:      synctestStartTime.Add(10 * time.Minute),
+			expectedSuspendedSince: synctestStartTime.Add(10 * time.Minute),
 		},
 		{
 			description: "Node already has SuspendedTaint with TimeAdded, should be preserved",
@@ -937,17 +1067,27 @@ func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
 					},
 				},
 			},
-			delay:        30 * time.Minute,
-			expectedTime: past,
+			delay:                  30 * time.Minute,
+			expectedTimeAdded:      past.Time,
+			expectedSuspendedSince: synctestStartTime.Add(30 * time.Minute),
+		},
+		{
+			description: "Suspended node without SuspendedTaint keeps the time it was suspended at",
+			initialNode: &apiv1.Node{
+				Status: apiv1.NodeStatus{
+					Conditions: []apiv1.NodeCondition{{Type: NodeConditionSuspended, Status: apiv1.ConditionTrue, LastTransitionTime: past}},
+				},
+			},
+			delay:                  30 * time.Minute,
+			expectedTimeAdded:      synctestStartTime.Add(30 * time.Minute),
+			expectedSuspendedSince: past.Time,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				if tc.delay > 0 {
-					time.Sleep(tc.delay)
-				}
+				time.Sleep(tc.delay)
 
 				resultNode, err := SetNodeAs(tc.initialNode.DeepCopy(), NodeStateSuspended)
 				assert.NoError(t, err)
@@ -962,7 +1102,11 @@ func TestSetNodeAs_SetsTimeAddedOnSuspendedTaint(t *testing.T) {
 
 				assert.NotNil(t, suspendedTaint, "Suspended taint should be present")
 				assert.NotNil(t, suspendedTaint.TimeAdded, "TimeAdded should be set on the suspended taint")
-				assert.Equal(t, tc.expectedTime.UTC(), suspendedTaint.TimeAdded.UTC(), "TimeAdded should match expected virtual time")
+				assert.Equal(t, tc.expectedTimeAdded.UTC(), suspendedTaint.TimeAdded.UTC(), "TimeAdded should match expected virtual time")
+
+				suspendedSince, suspended := SuspendedSince(resultNode)
+				assert.True(t, suspended)
+				assert.Equal(t, tc.expectedSuspendedSince.UTC(), suspendedSince.UTC())
 			})
 		})
 	}
