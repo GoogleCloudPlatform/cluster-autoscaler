@@ -747,10 +747,58 @@ func TestResize(t *testing.T) {
 					expectedErr:                  downsizeErr,
 				},
 				{
+					desc:                       "Downsize - pod requests equal to desired size",
+					startingSize:               newSize(2000, 2048*giBToKiB),
+					desiredSize:                newSize(1000, 1024*giBToKiB),
+					expectedResultState:        ekvmtypes.ResizableVmState{Size: newSize(1000, 1024*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					podList:                    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 750, 768*giBToBytes)}},
+					expectedOnSuccess:          1,
+					expectedVmResizerCallCount: 1,
+					expectedPendingOperations:  0,
+					expectedPodListCount:       1,
+					expectedBalloonResizes: []balloonPodResizeArgs{
+						{
+							size: size.Allocatable{MilliCpus: 750, KBytes: 768 * giBToKiB},
+						},
+					},
+					expectedRemoveTaintCallCount: 1,
+					expectedAddTaintCallCount:    1,
+				},
+				{
 					desc:                         "Downsize - pod requests bigger than desired size",
 					startingSize:                 newSize(2000, 2048*giBToKiB),
 					desiredSize:                  newSize(1000, 1024*giBToKiB),
 					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1500, 1500*giBToBytes)}},
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   0,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedPodListCount:         1,
+					expectedBalloonResizes:       []balloonPodResizeArgs{},
+					expectedRemoveTaintCallCount: 0,
+					expectedAddTaintCallCount:    1,
+					expectedErr:                  downsizeErr,
+				},
+				{
+					desc:                         "Downsize - pod CPU requests bigger than desired size, memory fits",
+					startingSize:                 newSize(2000, 2048*giBToKiB),
+					desiredSize:                  newSize(1000, 1024*giBToKiB),
+					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1500, 500*giBToBytes)}},
+					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
+					expectedOnFailure:            1,
+					expectedVmResizerCallCount:   0,
+					expectedPendingOperations:    1, // failure clears the queue, and we queue up fix operation.
+					expectedPodListCount:         1,
+					expectedBalloonResizes:       []balloonPodResizeArgs{},
+					expectedRemoveTaintCallCount: 0,
+					expectedAddTaintCallCount:    1,
+					expectedErr:                  downsizeErr,
+				},
+				{
+					desc:                         "Downsize - pod memory requests bigger than desired size, CPU fits",
+					startingSize:                 newSize(2000, 2048*giBToKiB),
+					desiredSize:                  newSize(1000, 1024*giBToKiB),
+					podList:                      &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 500, 1500*giBToBytes)}},
 					expectedResultState:          ekvmtypes.ResizableVmState{Size: newSize(2000, 2048*giBToKiB), Status: ekvmtypes.ResizeStatusAtIntent},
 					expectedOnFailure:            1,
 					expectedVmResizerCallCount:   0,
@@ -1179,9 +1227,45 @@ func TestDownsizeIppr(t *testing.T) {
 			wantErr: "GCE resize quota error",
 		},
 		{
+			desc:       "Pod requests equal desired size - in-place resize succeeds and VM resizes",
+			ipprOption: true,
+			// {3750m, 3.75GiB} is exactly the allocatable the fake calculator derives from targetSize.
+			podList: &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 3750, 3840*size.MiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+				h.resizer.On("resizeBalloonPodInPlace", matchNode(h.node.Name), targetAlloc).
+					Return(nil).Once()
+				h.resizer.On("removeTaint", matchNode(h.node.Name)).
+					Return(h.node, nil).Once()
+				h.cloudProvider.On("ResizeVm", mock.Anything, matchNode(h.node.Name), targetSize).
+					Return(nil).Once()
+			},
+		},
+		{
 			desc:       "Pod requests exceed desired size - aborts without resizing balloon pod",
 			ipprOption: true,
 			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 8000, 8*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+		{
+			desc:       "Pod CPU requests exceed desired size, memory fits - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 4000, 1*size.GiB)}},
+			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
+				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
+					Return(h.node, nil).Once()
+			},
+			wantErr: "exceed new requested node size",
+		},
+		{
+			desc:       "Pod memory requests exceed desired size, CPU fits - aborts without resizing balloon pod",
+			ipprOption: true,
+			podList:    &v1.PodList{Items: []v1.Pod{*test.BuildTestPod("pod1", 1000, 4*size.GiB)}},
 			setupMocks: func(h *operationTrackerHarness, targetAlloc size.Allocatable) {
 				h.resizer.On("addTaint", matchNode(h.node.Name), mock.Anything).
 					Return(h.node, nil).Once()

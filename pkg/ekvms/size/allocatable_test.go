@@ -149,6 +149,46 @@ func TestSizeComparisons(t *testing.T) {
 	}
 }
 
+func TestIsLessOrEqual(t *testing.T) {
+	other := Allocatable{MilliCpus: 2000, KBytes: 2 * MiB}
+	testCases := []struct {
+		desc string
+		s    Allocatable
+		want bool
+	}{
+		{
+			desc: "less in all dimensions",
+			s:    Allocatable{MilliCpus: 1000, KBytes: 1 * MiB},
+			want: true,
+		},
+		{
+			desc: "equal in all dimensions",
+			s:    other,
+			want: true,
+		},
+		{
+			desc: "CPU bigger, memory less",
+			s:    Allocatable{MilliCpus: 2001, KBytes: 1 * MiB},
+			want: false,
+		},
+		{
+			desc: "memory bigger, CPU less",
+			s:    Allocatable{MilliCpus: 1000, KBytes: 2*MiB + 1},
+			want: false,
+		},
+		{
+			desc: "bigger in all dimensions",
+			s:    Allocatable{MilliCpus: 2001, KBytes: 2*MiB + 1},
+			want: false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.s.IsLessOrEqual(other))
+		})
+	}
+}
+
 func TestAllocatableStructsPrint(t *testing.T) {
 	tests := []struct {
 		desc        string

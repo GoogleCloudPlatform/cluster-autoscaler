@@ -81,7 +81,7 @@ func (n *ResizableNode) IsResizable() bool {
 // IsSafelyUpsizable ensures a recommended resize is not a downgrade.
 // It returns true only if both the UpsizableMaxSize CPU and memory meet or exceed the DesiredSize values.
 func (n *ResizableNode) IsSafelyUpsizable() bool {
-	return n.UpsizableMaxSize.MilliCpus >= n.DesiredSize.MilliCpus && n.UpsizableMaxSize.KBytes >= n.DesiredSize.KBytes
+	return n.DesiredSize.IsLessOrEqual(n.UpsizableMaxSize)
 }
 
 func (n ResizableNode) String() string {

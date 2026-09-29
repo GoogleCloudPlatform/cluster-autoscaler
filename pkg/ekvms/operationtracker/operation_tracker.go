@@ -840,7 +840,9 @@ func (o *operationTracker) downsize(operation ResizeOperation) error {
 	}
 
 	desiredSizeAllocatable := o.sizeCalculator.ToAllocatable(taintedNode, operation.DesiredSize)
-	if requestedResources.IsUpsizeFrom(desiredSizeAllocatable) {
+	// Pods have to fit the new size in every dimension: a shortage of any single resource
+	// is enough for Kubelet to evict pods when it admits the grown balloon pod.
+	if !requestedResources.IsLessOrEqual(desiredSizeAllocatable) {
 		return ek_errors.NewExceededPodRequestsWarning(
 			machineFamily, fmt.Errorf("requested resources (%v) exceed new requested node size (%v) for node: %q", requestedResources, desiredSizeAllocatable, taintedNode.Name),
 			ek_errors.StartingState)
