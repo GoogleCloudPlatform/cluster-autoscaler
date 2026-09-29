@@ -95,6 +95,9 @@ func TestBuildNodeFromTemplate_Basic(t *testing.T) {
 	if node.Status.NodeInfo.KubeletVersion == "" {
 		t.Errorf("expected non-empty KubeletVersion")
 	}
+	if node.CreationTimestamp.IsZero() {
+		t.Errorf("expected non-zero CreationTimestamp")
+	}
 }
 
 func TestBuildNodeFromTemplate_TPU(t *testing.T) {

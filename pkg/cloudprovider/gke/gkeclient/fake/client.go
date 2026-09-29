@@ -396,6 +396,7 @@ func (f *Client) newNodePool(np *gkeapibeta.NodePool, clusterPath string) *gkeap
 		PlacementPolicy:        np.PlacementPolicy,
 		QueuedProvisioning:     np.QueuedProvisioning,
 		BestEffortProvisioning: np.BestEffortProvisioning,
+		NetworkConfig:          np.NetworkConfig,
 	}
 }
 

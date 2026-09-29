@@ -181,6 +181,8 @@ type Builder struct {
 
 	eventLogger visibility.EventLogger
 	ctrClient   client.Client
+
+	networkMatcher networking.Matcher
 }
 
 // This helper struct is a way to deal with mutual dependency between
@@ -485,6 +487,11 @@ func (b *Builder) WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory node
 	return b
 }
 
+func (b *Builder) WithNetworkMatcher(matcher networking.Matcher) *Builder {
+	b.networkMatcher = matcher
+	return b
+}
+
 func (b *Builder) Build(
 	bgContext ctx.Context,
 	gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter,
@@ -558,18 +565,7 @@ func (b *Builder) Build(
 
 	rrer := resizerequests.NewErrorReporter(experimentsManager)
 	loopStartObservers = append(loopStartObservers, rrer)
-	var matcher networking.Matcher
-	if autoscalingOptions.MultiNetworkSupportEnabled {
-		clientset, err := networking.NewClientset(b.kubeConfigJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		lister, err := networking.NewLister(bgContext, clientset)
-		if err != nil {
-			return nil, nil, err
-		}
-		matcher = networking.GetMatcher(lister)
-	}
+	matcher := b.networkMatcher
 
 	gkeReserved, err := gke.NewGkeReserved(osReservedContent)
 	if err != nil {

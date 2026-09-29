@@ -19,6 +19,7 @@ import (
 	"math"
 	"time"
 
+	netapi "github.com/GoogleCloudPlatform/gke-networking-api/apis/network/v1"
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
@@ -74,6 +75,7 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 		ScaleDownUnreadyTime:          time.Minute,
 		ScaleDownUtilizationThreshold: 0.5,
 		MaxNodeProvisionTime:          10 * time.Second,
+		MaxNodeStartupTime:            15 * time.Minute,
 	},
 	EstimatorName:              estimator.BinpackingEstimatorName,
 	EnforceNodeGroupMinSize:    true,
@@ -150,6 +152,8 @@ type TestConfig struct {
 	ExperimentEvaluator experiments.Evaluator
 	// ProvisioningRequests to inject into the fake client.
 	ProvisioningRequests []*provreqwrapper.ProvisioningRequest
+	// GkeNetworkParamSets are populated into the networking matcher during test initialization.
+	GkeNetworkParamSets []*netapi.GKENetworkParamSet
 }
 
 // ConfigBuilder uses the Builder Pattern to create a test Config.
@@ -368,6 +372,12 @@ func (c *TestConfig) AddCccCrd(crd *cccv1.ComputeClass) *TestConfig {
 // WithCccCrds replaces the entire list of CccCrds.
 func (c *TestConfig) WithCccCrds(crds ...*cccv1.ComputeClass) *TestConfig {
 	c.CccCrds = crds
+	return c
+}
+
+// WithGkeNetworkParamSets sets the GKENetworkParamSets for multi-networking.
+func (c *TestConfig) WithGkeNetworkParamSets(paramSets ...*netapi.GKENetworkParamSet) *TestConfig {
+	c.GkeNetworkParamSets = paramSets
 	return c
 }
 
@@ -611,6 +621,14 @@ func WithAutoProvisioningEnabled() Option[*config.AutoscalingOptions] {
 		o.NapMaxNodes = math.MaxInt32
 		o.MaxAutoprovisionedNodeGroupCount = 999
 		o.NapDefaultMachineTypeFamily = "n1"
+		return o
+	}
+}
+
+// WithMultiNetworkSupportEnabled enables multi-network support in autoscaling options.
+func WithMultiNetworkSupportEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.MultiNetworkSupportEnabled = true
 		return o
 	}
 }

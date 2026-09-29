@@ -18,10 +18,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	gcev1 "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -127,6 +129,13 @@ func BuildNodeFromTemplate(
 	// Default KubeletVersion if not already populated (needed to prevent panic in NAP tests)
 	if node.Status.NodeInfo.KubeletVersion == "" {
 		node.Status.NodeInfo.KubeletVersion = "v1.30.0"
+	}
+
+	// Real nodes are stamped by the API server on registration. Without it, ClusterStateRegistry
+	// classifies any not-ready node as Unready rather than NotStarted, so it stops being counted
+	// as upcoming capacity.
+	if node.CreationTimestamp.IsZero() {
+		node.CreationTimestamp = metav1.NewTime(time.Now())
 	}
 
 	// TPU capacity and taints for non-nvidia accelerators
