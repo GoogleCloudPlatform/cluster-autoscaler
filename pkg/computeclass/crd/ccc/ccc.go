@@ -36,8 +36,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 )
 
 const (
@@ -82,6 +84,74 @@ func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, pr
 		optionsTracker:   optionsTracker,
 		provider:         provider,
 	}
+}
+
+// NewPccCrd builds a CustomComputeClass CRD from a PredefinedComputeClass object.
+func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
+	var strategy *v1.AllocationStrategy
+	var priorityScore *int
+	if optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
+		if autopilotEnabled && !pcc.IsSliceOfHardware() && !pcc.IsAcceleratorClass() {
+			strategy = ptr.To(v1.AllocationStrategyFleetEfficiency)
+			priorityScore = ptr.To(100)
+		}
+	}
+	var priorities []v1.Priority
+	for _, family := range pcc.MachineFamilies() {
+		familyRef := family.Name()
+		priority := v1.Priority{
+			MachineFamily:      &familyRef,
+			PriorityScore:      priorityScore,
+			AllocationStrategy: strategy,
+		}
+		priorities = append(priorities, priority)
+	}
+
+	var allocDefaults *v1.AllocationStrategyDefaults
+	if strategy != nil {
+		allocDefaults = &v1.AllocationStrategyDefaults{
+			OnDemand: strategy,
+			Spot:     strategy,
+		}
+	}
+
+	cc := &v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: pcc.Name(),
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities:                 priorities,
+			AllocationStrategyDefaults: allocDefaults,
+		},
+	}
+
+	return NewCccCrd(cc, projectId, autopilotEnabled && pcc.IsSliceOfHardware(), provider, optionsTracker)
+}
+
+// NewPodFamilyCrd builds a synthetic CustomComputeClass CRD for a podFamily (e.g. general-purpose, general-purpose-arm).
+func NewPodFamilyCrd(podFamily string, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
+	priorityScore := 100
+	strategy := v1.AllocationStrategyFleetEfficiency
+	priority := v1.Priority{
+		PodFamily:          &podFamily,
+		PriorityScore:      &priorityScore,
+		AllocationStrategy: &strategy,
+	}
+
+	cc := &v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: podFamily,
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{priority},
+			AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: &strategy,
+				Spot:     &strategy,
+			},
+		},
+	}
+
+	return NewCccCrd(cc, projectId, autopilotEnabled, provider, optionsTracker)
 }
 
 // ResourceVersion returns resource version

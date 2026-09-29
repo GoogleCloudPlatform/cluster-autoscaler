@@ -61,6 +61,10 @@ func (w *scopeWorker) updateRuleFilteringConditions(results map[string]*api.Inst
 	if w.statusUpdatesCh == nil || w.cccLister == nil {
 		return
 	}
+	if w.instanceConfigGenerator.isPayPerPodPodFamilyScope(w.scope.flexibilityScopeKey) {
+		// Synthetic podFamily scopes are not backed by a CRD, so there is no status to update.
+		return
+	}
 	cc, _ := w.instanceConfigGenerator.matchingCrd(w.scope.flexibilityScopeKey) // errors are logged upstream
 
 	if cc == nil {
