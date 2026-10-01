@@ -2580,28 +2580,56 @@ func (edpg ExtendedDurationGenerator) resolveExtendedDurationValue(machineType, 
 
 // ReservationGenerator enables support for GCE reservations provisioning decisions.
 type ReservationGenerator struct {
-	reservationsPuller                    *gceclient.ReservationsPuller
-	reservationBlocksPuller               *reservations.BlocksPuller
-	specificTypeReservationMatchEnabled   bool
-	specificTypeReservationsEnabled       bool
-	reservationsAnyLocationPolicyOverride bool
-	projectId                             string
-	experimentsManager                    experiments.Manager
+	reservationsPuller                        *gceclient.ReservationsPuller
+	reservationBlocksPuller                   *reservations.BlocksPuller
+	specificTypeReservationMatchEnabledFlag   bool
+	specificTypeReservationsEnabledFlag       bool
+	reservationsAnyLocationPolicyOverrideFlag bool
+	projectId                                 string
+	experimentsManager                        experiments.Manager
+	optionsTracker                            *optstracking.OptionsTracker
 }
 
-func NewReservationGenerator(reservationsPuller *gceclient.ReservationsPuller, flags ReservationFlags, projectId string, experimentsManager experiments.Manager, reservationBlocksPuller *reservations.BlocksPuller) *ReservationGenerator {
+func NewReservationGenerator(reservationsPuller *gceclient.ReservationsPuller, flags ReservationFlags, projectId string, experimentsManager experiments.Manager, reservationBlocksPuller *reservations.BlocksPuller, optionsTracker *optstracking.OptionsTracker) *ReservationGenerator {
 	return &ReservationGenerator{
-		reservationsPuller:                    reservationsPuller,
-		reservationBlocksPuller:               reservationBlocksPuller,
-		specificTypeReservationMatchEnabled:   flags.SpecificTypeReservationMatchEnabled,
-		specificTypeReservationsEnabled:       flags.SpecificTypeReservationsEnabled,
-		reservationsAnyLocationPolicyOverride: flags.ReservationsAnyLocationPolicyOverride,
-		projectId:                             projectId,
-		experimentsManager:                    experimentsManager,
+		reservationsPuller:                        reservationsPuller,
+		reservationBlocksPuller:                   reservationBlocksPuller,
+		specificTypeReservationMatchEnabledFlag:   flags.SpecificTypeReservationMatchEnabled,
+		specificTypeReservationsEnabledFlag:       flags.SpecificTypeReservationsEnabled,
+		reservationsAnyLocationPolicyOverrideFlag: flags.ReservationsAnyLocationPolicyOverride,
+		projectId:          projectId,
+		experimentsManager: experimentsManager,
+		optionsTracker:     optionsTracker,
 	}
 }
 
+func (rg ReservationGenerator) specificTypeReservationMatchEnabled() bool {
+	if rg.optionsTracker != nil {
+		return rg.optionsTracker.Options().SpecificTypeReservationMatchEnabled
+	}
+	return rg.specificTypeReservationMatchEnabledFlag
+}
+
+func (rg ReservationGenerator) specificTypeReservationsEnabled() bool {
+	if rg.optionsTracker != nil {
+		opts := rg.optionsTracker.Options()
+		return opts.SpecificTypeReservationMatchEnabled || opts.SpecificTypeReservationWithoutMatchEnabled
+	}
+	return rg.specificTypeReservationsEnabledFlag
+}
+
+func (rg ReservationGenerator) reservationsAnyLocationPolicyOverride() bool {
+	if rg.optionsTracker != nil {
+		return rg.optionsTracker.Options().ReservationsAnyLocationPolicyOverride
+	}
+	return rg.reservationsAnyLocationPolicyOverrideFlag
+}
+
 func (rg ReservationGenerator) GenerateNodeGroupOptionsForRequirements(options []NodeGroupOptions, requirements nodeGroupRequirements) []NodeGroupOptions {
+	if !rg.specificTypeReservationMatchEnabled() {
+		return options
+	}
+
 	if requirements.reservation.name == "" {
 		return options
 	}
@@ -2677,7 +2705,7 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 	}
 	// For match disabled, specific affinity and shared reservation, assume a reservation exists & matches.
 	// For local reservation we try to steer all the relevant information.
-	if !rg.specificTypeReservationMatchEnabled && ngReq.reservation.project != "" && ngReq.reservation.project != rg.projectId {
+	if !rg.specificTypeReservationMatchEnabled() && ngReq.reservation.project != "" && ngReq.reservation.project != rg.projectId {
 		ngReq.reservation.exists = true
 		return []nodeGroupRequirements{ngReq}, nil
 	}
@@ -2815,7 +2843,7 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 
 	// For match disabled, if no reservation was found, assume a reservation exists & matches.
 	// TODO(b/405036075): check if this condition is needed, if no local reservation then no reservation should be available
-	if !rg.specificTypeReservationMatchEnabled {
+	if !rg.specificTypeReservationMatchEnabled() {
 		ngReq.reservation.exists = true
 		return []nodeGroupRequirements{ngReq}, nil
 	}
@@ -2968,7 +2996,7 @@ func (rg ReservationGenerator) ValidateRequirements(r *nodeGroupRequirements) ca
 	}
 	// The user is also not using aggregate type reservation & specific type reservations are not enabled.
 	// There are no other types of reservations.
-	if !rg.specificTypeReservationsEnabled && !aggregateReservation && r.reservation.name != "" {
+	if !rg.specificTypeReservationsEnabled() && !aggregateReservation && r.reservation.name != "" {
 		// Error to end user does not leak why this combination is not supported as it is an implementation detail
 		return reservations.NewErrUnusableReservation(ref, "Specifying reservations without TPUs are not supported")
 	}
@@ -3122,7 +3150,7 @@ func (rg ReservationGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, 
 		}
 	}
 
-	if rg.reservationsAnyLocationPolicyOverride && (hasSpecificReservation || gkeReservationAffinity == gkeclient.ReservationAffinityAny) {
+	if rg.reservationsAnyLocationPolicyOverride() && (hasSpecificReservation || gkeReservationAffinity == gkeclient.ReservationAffinityAny) {
 		spec.LocationPolicy = LocationPolicyAny
 	}
 

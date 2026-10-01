@@ -251,3 +251,12 @@ const BalloonPodIpprResizeFlag = "Autopilot::BalloonPodIpprResize"
 
 const PayPerPodFleetEfficiencyEnabledFlag = "PayPerPodFleetEfficiency::Enabled"
 const PayPerPodFleetEfficiencyMinCAVersionFlag = "PayPerPodFleetEfficiency::MinCAVersion"
+
+const SpecificTypeReservationMatchMinCAVersionFlag = "SpecificTypeReservationMatch::MinCAVersion"
+const SpecificTypeReservationMatchEnabledFlag = "SpecificTypeReservationMatch::Enabled"
+
+const SpecificTypeReservationWithoutMatchMinCAVersionFlag = "SpecificTypeReservationWithoutMatch::MinCAVersion"
+const SpecificTypeReservationWithoutMatchEnabledFlag = "SpecificTypeReservationWithoutMatch::Enabled"
+
+const ReservationsAnyLocationPolicyOverrideMinCAVersionFlag = "ReservationsAnyLocationPolicyOverride::MinCAVersion"
+const ReservationsAnyLocationPolicyOverrideEnabledFlag = "ReservationsAnyLocationPolicyOverride::Enabled"

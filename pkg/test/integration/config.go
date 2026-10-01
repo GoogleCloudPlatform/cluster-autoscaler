@@ -551,6 +551,30 @@ func WithDaemonSetMutationEnabled(enabled bool) Option[*config.AutoscalingOption
 	}
 }
 
+// WithSpecificTypeReservationMatchEnabled sets SpecificTypeReservationMatchEnabled in InternalOptions.
+func WithSpecificTypeReservationMatchEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.SpecificTypeReservationMatchEnabled = enabled
+		return o
+	}
+}
+
+// WithSpecificTypeReservationWithoutMatchEnabled sets SpecificTypeReservationWithoutMatchEnabled in InternalOptions.
+func WithSpecificTypeReservationWithoutMatchEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.SpecificTypeReservationWithoutMatchEnabled = enabled
+		return o
+	}
+}
+
+// WithReservationsAnyLocationPolicyOverride sets ReservationsAnyLocationPolicyOverride in InternalOptions.
+func WithReservationsAnyLocationPolicyOverride(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.ReservationsAnyLocationPolicyOverride = enabled
+		return o
+	}
+}
+
 // WithScaleDownDelayAfterAdd overrides the ScaleDownDelayAfterAdd setting.
 func WithScaleDownDelayAfterAdd(delay time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

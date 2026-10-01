@@ -178,6 +178,33 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			}},
 			wantRestart: true,
 		},
+		{
+			testName:   "SpecificTypeReservationMatchEnabled_field_is_tracked",
+			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationMatchEnabled: false}},
+			experimentValues: map[string]bool{
+				experiments.SpecificTypeReservationMatchEnabledFlag:      true,
+				experiments.SpecificTypeReservationMatchMinCAVersionFlag: true,
+			},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationMatchEnabled: true}},
+		},
+		{
+			testName:   "SpecificTypeReservationWithoutMatchEnabled_field_is_tracked",
+			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationWithoutMatchEnabled: false}},
+			experimentValues: map[string]bool{
+				experiments.SpecificTypeReservationWithoutMatchEnabledFlag:      true,
+				experiments.SpecificTypeReservationWithoutMatchMinCAVersionFlag: true,
+			},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationWithoutMatchEnabled: true}},
+		},
+		{
+			testName:   "ReservationsAnyLocationPolicyOverride_field_is_tracked",
+			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ReservationsAnyLocationPolicyOverride: false}},
+			experimentValues: map[string]bool{
+				experiments.ReservationsAnyLocationPolicyOverrideEnabledFlag:      true,
+				experiments.ReservationsAnyLocationPolicyOverrideMinCAVersionFlag: true,
+			},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ReservationsAnyLocationPolicyOverride: true}},
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			noExperiments := experiments.NewMockManager()
