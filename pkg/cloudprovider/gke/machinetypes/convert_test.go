@@ -340,6 +340,45 @@ func TestToMachineFamilyObject_PageType(t *testing.T) {
 	}
 }
 
+func TestToMachineFamilyObject_NestedVirtualization(t *testing.T) {
+	testCases := []struct {
+		name              string
+		familyName        string
+		expectedSupported bool
+	}{
+		{
+			name:              "c3 supports nested virtualization",
+			familyName:        "c3",
+			expectedSupported: true,
+		},
+		{
+			name:              "e2 does not support nested virtualization",
+			familyName:        "e2",
+			expectedSupported: false,
+		},
+		{
+			name:              "unknown family does not support nested virtualization",
+			familyName:        "unknown-family",
+			expectedSupported: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name: tc.familyName,
+			}
+			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+			if gradedErr.Err != nil {
+				t.Fatalf("ToMachineFamilyObject() unexpected error = %v", gradedErr.Err)
+			}
+			if got.supportNestedVirtualization != tc.expectedSupported {
+				t.Errorf("ToMachineFamilyObject() supportNestedVirtualization = %v, want %v", got.supportNestedVirtualization, tc.expectedSupported)
+			}
+		})
+	}
+}
+
 func TestToMachineFamilyObject_BootDiskConfig(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -1651,6 +1690,7 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 					lowerBound: AmdGenoa,
 					upperBound: AmdGenoa,
 				},
+				supportNestedVirtualization: true,
 			},
 		},
 		{
@@ -1720,7 +1760,8 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 				autoprovisionedMachineTypes: map[string]MachineType{
 					"c3-standard-4": newTestMachineTypeInfo("c3-standard-4", 4, 16),
 				},
-				supportedCpuPlatforms: noPlatformSupported,
+				supportedCpuPlatforms:       noPlatformSupported,
+				supportNestedVirtualization: true,
 			},
 		},
 	}

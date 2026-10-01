@@ -170,6 +170,13 @@ func extractCore(result *MachineFamily, mf *mcv1.MachineFamily, cpSource *cpuPla
 	result.supportedAttachDiskTypes = extractAttachDiskTypes(mf.DefaultProperties.PersistentDiskTypeConfigs)
 	result.supportHugepageSize1g = extractSupportHugepageSize1g(mf.PageType)
 	result.numaAlignmentUnsupported = mf.DefaultProperties.NumaAlignmentUnsupported
+	// The MachineConfig CRD does not currently expose nested virtualization
+	// support, meaning converting a dynamic MachineConfig CRD always evaluates to
+	// false for supportNestedVirtualization. Once the MachineConfig CRD is
+	// extended to include nested virtualization, this fallback can be removed.
+	if deprecatedFamily, found := machineFamiliesByName[strings.ToLower(mf.Name)]; found {
+		result.supportNestedVirtualization = deprecatedFamily.supportNestedVirtualization
+	}
 
 	return warnings, nil
 }

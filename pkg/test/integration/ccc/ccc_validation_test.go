@@ -235,6 +235,31 @@ func TestCCCConfigurations(t *testing.T) {
 		}).
 		Build()
 
+	cccNestedVirtualizationPodFamily := ccc.NewComputeClassBuilder("ccc-nv-podfamily").
+		WithAutopilot(true).
+		WithNapEnabled().
+		WithWhenUnsatisfiable("DoNotScaleUp").
+		WithPriorities(v1.Priority{
+			PodFamily:                  ptr.To("general-purpose"),
+			EnableNestedVirtualization: ptr.To(true),
+		}).
+		Build()
+
+	cccNestedVirtualizationBareMetal := ccc.NewComputeClassBuilder("ccc-nv-bare-metal").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("DoNotScaleUp").
+		WithPriorities(
+			v1.Priority{
+				MachineType:                ptr.To("c3-standard-192-metal"),
+				EnableNestedVirtualization: ptr.To(true),
+			},
+			v1.Priority{
+				MachineType:                ptr.To("c3-standard-4"),
+				EnableNestedVirtualization: ptr.To(true),
+			},
+		).
+		Build()
+
 	runCCCConfigurationTest(t, "Local SSD with machine type", cccSsd, func(t *testing.T, cluster *google_api_container.Cluster) {
 		if assert.Equal(t, 1, len(cluster.NodePools)) {
 			np := cluster.NodePools[0]
@@ -310,6 +335,34 @@ func TestCCCConfigurations(t *testing.T) {
 			np := cluster.NodePools[0]
 			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
 				assert.False(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization with general-purpose pod family autoprovisions supported fallback", cccNestedVirtualizationPodFamily, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			assert.Equal(t, "n4-highcpu-2", np.Config.MachineType)
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.True(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
+			}
+		}
+	}, func(c *integration.TestConfig) {
+		c.WithOverrides(func(options *config.AutoscalingOptions) *config.AutoscalingOptions {
+			options.AutopilotEnabled = true
+			return options
+		})
+		c.WithExperiments(experiments.EnableNestedVirtualizationEnabledFlag, experiments.AutopilotE4ExtendedFallbacksMinCAVersionFlag)
+	})
+
+	runCCCConfigurationTest(t, "Enable nested virtualization skips bare-metal machine type and falls back", cccNestedVirtualizationBareMetal, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			assert.Equal(t, "c3-standard-4", np.Config.MachineType)
+			if assert.NotNil(t, np.Config.AdvancedMachineFeatures) {
+				assert.True(t, np.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
 				assert.Contains(t, np.Config.AdvancedMachineFeatures.ForceSendFields, "EnableNestedVirtualization")
 			}
 		}

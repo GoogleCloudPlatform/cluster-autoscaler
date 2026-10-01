@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -4243,6 +4244,58 @@ func TestMachineSelectionGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 			},
 			wantOptions: []NodeGroupOptions{
 				{Zone: "zone-1", MachineType: "e4-standard-2"},
+			},
+		},
+		"machine family skipped if computeClassRule requires nested virtualization": {
+			options: []NodeGroupOptions{
+				{Zone: "zone-1"},
+			},
+			requirements: nodeGroupRequirements{
+				computeClassRule: rules.NewRule(rules.WithSelfServiceRule(map[string]string{
+					selfservice.NestedVirtualizationMetadataKey: "true",
+				})),
+				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.N2}, machinetypes.AnyPlatform, "", ""),
+			},
+			machineTypesPerZone: map[string][]string{
+				"zone-1": {"e2-standard-2", "n2-standard-2"},
+			},
+			wantOptions: []NodeGroupOptions{
+				{Zone: "zone-1", MachineType: "n2-standard-2"},
+			},
+		},
+		"bare metal machine type skipped if computeClassRule requires nested virtualization": {
+			options: []NodeGroupOptions{
+				{Zone: "zone-1"},
+			},
+			requirements: nodeGroupRequirements{
+				computeClassRule: rules.NewRule(rules.WithSelfServiceRule(map[string]string{
+					selfservice.NestedVirtualizationMetadataKey: "true",
+				})),
+				machineSpec: machinetypes.NewExplicitMachineSpec([]machinetypes.MachineFamily{machinetypes.C3}, machinetypes.AnyPlatform, "", "", []string{"c3-standard-4", "c3-standard-192-metal"}),
+			},
+			machineTypesPerZone: map[string][]string{
+				"zone-1": {"c3-standard-4", "c3-standard-192-metal"},
+			},
+			wantOptions: []NodeGroupOptions{
+				{Zone: "zone-1", MachineType: "c3-standard-4"},
+			},
+		},
+		"machine family not skipped if computeClassRule does not require nested virtualization": {
+			options: []NodeGroupOptions{
+				{Zone: "zone-1"},
+			},
+			requirements: nodeGroupRequirements{
+				computeClassRule: rules.NewRule(rules.WithSelfServiceRule(map[string]string{
+					selfservice.NestedVirtualizationMetadataKey: "false",
+				})),
+				machineSpec: machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.N2}, machinetypes.AnyPlatform, "", ""),
+			},
+			machineTypesPerZone: map[string][]string{
+				"zone-1": {"e2-standard-2", "n2-standard-2"},
+			},
+			wantOptions: []NodeGroupOptions{
+				{Zone: "zone-1", MachineType: "e2-standard-2"},
+				{Zone: "zone-1", MachineType: "n2-standard-2"},
 			},
 		},
 	} {

@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	nestedVirtualizationMetadataKey = "AdvancedMachineFeaturesEnableNestedVirtualization"
+	NestedVirtualizationMetadataKey = "AdvancedMachineFeaturesEnableNestedVirtualization"
 )
 
 // nestedVirtualization is a self-service priority feature used to define
@@ -60,7 +60,7 @@ func (w *nestedVirtualization) FromNodepool(pool *container.NodePool) Metadata {
 	}
 
 	m := make(Metadata)
-	m[nestedVirtualizationMetadataKey] = strconv.FormatBool(pool.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
+	m[NestedVirtualizationMetadataKey] = strconv.FormatBool(pool.Config.AdvancedMachineFeatures.EnableNestedVirtualization)
 	return m
 }
 
@@ -81,7 +81,7 @@ func (w *nestedVirtualization) FromPriority(p v1.Priority) Metadata {
 		return nil
 	}
 	m := make(Metadata)
-	m[nestedVirtualizationMetadataKey] = strconv.FormatBool(*p.EnableNestedVirtualization)
+	m[NestedVirtualizationMetadataKey] = strconv.FormatBool(*p.EnableNestedVirtualization)
 	return m
 }
 
@@ -93,7 +93,7 @@ func (w *nestedVirtualization) ToNodepool(pool *container.NodePool, metadata Met
 		return
 	}
 
-	val, found := metadata[nestedVirtualizationMetadataKey]
+	val, found := metadata[NestedVirtualizationMetadataKey]
 	if !found {
 		return
 	}

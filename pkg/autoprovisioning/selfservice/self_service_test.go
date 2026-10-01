@@ -463,7 +463,7 @@ func TestNodepoolMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{
-				nestedVirtualizationMetadataKey: "true",
+				NestedVirtualizationMetadataKey: "true",
 			},
 		},
 		{
@@ -731,7 +731,7 @@ func TestNodepoolMetadata(t *testing.T) {
 				},
 			},
 			wantMetadata: Metadata{
-				nestedVirtualizationMetadataKey:      "false",
+				NestedVirtualizationMetadataKey:      "false",
 				PerformanceMonitoringUnitMetadataKey: "ARCHITECTURAL",
 			},
 		},
@@ -1396,7 +1396,7 @@ func TestPriorityMetadata(t *testing.T) {
 				EnableNestedVirtualization: ptr.To(true),
 			},
 			wantMetadata: Metadata{
-				nestedVirtualizationMetadataKey: "true",
+				NestedVirtualizationMetadataKey: "true",
 			},
 		},
 		{
@@ -1919,7 +1919,7 @@ func TestUpdateNodepool(t *testing.T) {
 		{
 			name: "EnableNestedVirtualization is processed correctly",
 			metadata: Metadata{
-				nestedVirtualizationMetadataKey: "true",
+				NestedVirtualizationMetadataKey: "true",
 			},
 			wantNodepool: &container.NodePool{
 				Config: &container.NodeConfig{
@@ -1941,7 +1941,7 @@ func TestUpdateNodepool(t *testing.T) {
 				},
 			},
 			metadata: Metadata{
-				nestedVirtualizationMetadataKey: "true",
+				NestedVirtualizationMetadataKey: "true",
 			},
 			wantNodepool: &container.NodePool{
 				Config: &container.NodeConfig{
@@ -1962,7 +1962,7 @@ func TestUpdateNodepool(t *testing.T) {
 				},
 			},
 			metadata: Metadata{
-				nestedVirtualizationMetadataKey: "true",
+				NestedVirtualizationMetadataKey: "true",
 			},
 			wantNodepool: &container.NodePool{
 				Config: &container.NodeConfig{
@@ -2217,8 +2217,8 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 					},
 				}
 				meta := NodepoolMetadata(np)
-				_, ok := meta[nestedVirtualizationMetadataKey]
-				assert.False(t, ok, "FromNodepool should not extract nestedVirtualizationMetadataKey when feature is disabled")
+				_, ok := meta[NestedVirtualizationMetadataKey]
+				assert.False(t, ok, "FromNodepool should not extract NestedVirtualizationMetadataKey when feature is disabled")
 			})
 
 			t.Run("FromPriority", func(t *testing.T) {
@@ -2226,8 +2226,8 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 					EnableNestedVirtualization: ptr.To(true),
 				}
 				meta := PriorityMetadata(p)
-				_, ok := meta[nestedVirtualizationMetadataKey]
-				assert.False(t, ok, "FromPriority should not extract nestedVirtualizationMetadataKey when feature is disabled")
+				_, ok := meta[NestedVirtualizationMetadataKey]
+				assert.False(t, ok, "FromPriority should not extract NestedVirtualizationMetadataKey when feature is disabled")
 			})
 
 			t.Run("ToNodepool", func(t *testing.T) {
@@ -2248,7 +2248,7 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 				assert.Equal(t, expectedNodepool, nodepool, "UpdateNodepool should not modify nodepool when feature is disabled")
 
 				fakeMetadata := Metadata{
-					nestedVirtualizationMetadataKey: "true",
+					NestedVirtualizationMetadataKey: "true",
 				}
 				UpdateNodepool(nodepool, fakeMetadata)
 				assert.Equal(t, expectedNodepool, nodepool, "UpdateNodepool should not modify nodepool even if metadata contains key when feature is disabled")

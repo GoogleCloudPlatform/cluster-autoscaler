@@ -45,7 +45,7 @@ func TestNodepoolMetadataBeforeSetCloudProvider(t *testing.T) {
 
 	assert.Equal(t, "false", got[secureBootMetadataKey])
 	assert.Equal(t, "true", got[integrityMonitoringMetadataKey])
-	assert.Equal(t, "true", got[nestedVirtualizationMetadataKey])
+	assert.Equal(t, "true", got[NestedVirtualizationMetadataKey])
 	assert.Equal(t, "true", got[privateNodeFromLabel])
 	assert.Equal(t, "true", got[privateNodeFromCcc])
 }

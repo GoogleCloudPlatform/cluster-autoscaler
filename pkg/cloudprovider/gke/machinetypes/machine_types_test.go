@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 
@@ -49,6 +50,22 @@ func TestAllResizableMachineFamilies(t *testing.T) {
 			assert.False(t, family.IsResizable(), "Family %s has no ResizableConfig but IsResizable() is true", family.Name())
 			assert.False(t, resizableMap[family.Name()], "Family %s has no ResizableConfig but was returned by AllResizableMachineFamilies", family.Name())
 		}
+	}
+}
+
+func TestIsNestedVirtualizationSupported(t *testing.T) {
+	mcp := NewMachineConfigProvider(nil)
+
+	supportedFamilies := sets.New(
+		"a2", "a3", "c2", "c3", "c3d", "c4", "c4d", "c4n",
+		"ct3", "ct3p", "ct4l", "ct5p",
+		"g2", "h3", "h4d", "n1", "n2", "n2d", "n4", "n4d",
+		"tpu7", "tpu7x",
+		"z3", "z4m", "m4",
+	)
+
+	for _, family := range mcp.AllMachineFamilies() {
+		assert.Equal(t, supportedFamilies.Has(family.Name()), family.IsNestedVirtualizationSupported(), "Family %s", family.Name())
 	}
 }
 
