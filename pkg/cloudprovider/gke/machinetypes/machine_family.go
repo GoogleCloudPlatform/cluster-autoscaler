@@ -139,6 +139,8 @@ type MachineFamily struct {
 	defaultDiskType string
 	// supportHugepageSize1g defines if the machine family supports 1-gigabyte-sized huge pages.
 	supportHugepageSize1g bool
+	// supportNestedVirtualization defines if the machine family supports nested virtualization.
+	supportNestedVirtualization bool
 	// numaAlignmentUnsupported defines if the machine family NOT support NUMA Alignment used by Kubelet Topology manager and Memory manager.
 	// SoT: http://google3/configs/cloud/cluster/vmfamilies/sot/gen_rules/gke/overrides/machine_family_overrides.textproto
 	numaAlignmentUnsupported bool
@@ -263,6 +265,11 @@ func (f MachineFamily) IsCompactPlacementSupported() bool {
 // IsHugepageSize1gSupported returns whether the given machine family supports 1-gigabyte-sized huge pages.
 func (f MachineFamily) IsHugepageSize1gSupported() bool {
 	return f.supportHugepageSize1g
+}
+
+// IsNestedVirtualizationSupported returns whether the given machine family supports nested virtualization.
+func (f MachineFamily) IsNestedVirtualizationSupported() bool {
+	return f.supportNestedVirtualization
 }
 
 // IsNumaAlignmentSupported returns whether the given machine family supports NUMA Alignment used by Kubelet Topology manager and Memory manager.

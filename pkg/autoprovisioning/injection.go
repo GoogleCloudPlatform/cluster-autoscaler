@@ -1092,7 +1092,7 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 	var minCores, minMemoryGb int64 = 0, 0
 	var hugepage1g, hugepage2m, totalHugepageSizeInMB int64
 	var evictionMemoryAvailableStr string
-	var overcommitSysctlSet, numaAlignmentNeeded bool
+	var overcommitSysctlSet, numaAlignmentNeeded, requiresNestedVirtualization bool
 	var overcommitSysctlMachineMemoryLowerBound int64 = 15 * units.GiB
 
 	if requirements.computeClassRule != nil {
@@ -1118,6 +1118,7 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 			requirements.computeClassRule.TopologyManagerScope() != nil {
 			numaAlignmentNeeded = true
 		}
+		requiresNestedVirtualization = requirements.computeClassRule.SelfServiceMetadata()[selfservice.NestedVirtualizationMetadataKey] == "true"
 	}
 
 	var evictionMemoryAvailable int64
@@ -1134,6 +1135,7 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 		supportedResizableMachineTypes = msg.resizableMachineTypesProvider.Provide()
 	}
 	requiredDiskTypes := make(map[string]bool)
+
 	for _, pod := range requirements.pods {
 		for labelKey := range pod.Spec.NodeSelector {
 			if strings.HasPrefix(labelKey, gkelabels.SupportedDiskTypeLabelPrefix) {
@@ -1151,12 +1153,13 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 				continue
 			}
 
+			mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
+			if err != nil {
+				klog.V(5).Infof("Skipping machine type %s: unable to determine machine family", machine.Name)
+				continue
+			}
+
 			if msg.cloudProvider.IsMachineSerenityLabelsEnabled() && msg.cloudProvider.IsE4StatefulEnabledInAutopilot() && len(requiredDiskTypes) > 0 {
-				mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
-				if err != nil {
-					klog.V(5).Infof("Skipping machine type %s: unable to determine family for disk compatibility check", machine.Name)
-					continue
-				}
 				supportedDisks := sets.New(mf.ListSupportedDisks(requirements.confidentialNodeType != "")...)
 				diskMismatch := false
 				for diskType := range requiredDiskTypes {
@@ -1171,24 +1174,15 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 			}
 
 			// check if hugepages are supported by this machine type.
-			if hugepage1g > 0 {
-				if mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name); err == nil && !mf.IsHugepageSize1gSupported() {
-					continue
-				}
+			if hugepage1g > 0 && !mf.IsHugepageSize1gSupported() {
+				continue
 			}
 			if totalHugepageSizeInMB > machine.MaximumAllocatableHugepageCapacityInMB() {
 				continue
 			}
 
-			if numaAlignmentNeeded {
-				mf, err := msg.cloudProvider.MachineConfigProvider().GetMachineFamilyFromMachineName(machine.Name)
-				if err != nil {
-					klog.V(5).Infof("Skipping machine type %s: unable to determine family for NUMA alignment check", machine.Name)
-					continue
-				}
-				if !mf.IsNumaAlignmentSupported() {
-					continue
-				}
+			if numaAlignmentNeeded && !mf.IsNumaAlignmentSupported() {
+				continue
 			}
 
 			if evictionMemoryAvailable > 0 {
@@ -1201,6 +1195,11 @@ func (msg MachineSelectionGenerator) GenerateNodeGroupOptionsForRequirements(opt
 				if machine.Memory < overcommitSysctlMachineMemoryLowerBound {
 					continue
 				}
+			}
+
+			if requiresNestedVirtualization && (!mf.IsNestedVirtualizationSupported() || machinetypes.IsBareMetal(machine.Name)) {
+				klog.V(5).Infof("Skipping machine type %s: machine type or family %s does not support nested virtualization", machine.Name, mf.Name())
+				continue
 			}
 
 			// check if machine type is supported.

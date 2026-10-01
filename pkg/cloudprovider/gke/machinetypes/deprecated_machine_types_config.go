@@ -130,7 +130,8 @@ var (
 			DiskTypeSSD:               UnspecifiedMode,
 			DiskTypeStandard:          UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:             DiskTypeStandard,
+		supportNestedVirtualization: true,
 	})
 	// A3 represents a3 machine family.
 	A3 = RegisterMachineFamily(MachineFamily{
@@ -238,8 +239,9 @@ var (
 			DiskTypeBalanced:                          UnspecifiedMode,
 			DiskTypeSSD:                               UnspecifiedMode,
 		},
-		defaultDiskType:       DiskTypeBalanced,
-		supportHugepageSize1g: true,
+		defaultDiskType:             DiskTypeBalanced,
+		supportHugepageSize1g:       true,
+		supportNestedVirtualization: true,
 	})
 	// A4 represents a4 machine family.
 	A4 = RegisterMachineFamily(MachineFamily{
@@ -358,7 +360,8 @@ var (
 			DiskTypeSSD:       UnspecifiedMode,
 			DiskTypeStandard:  UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
+		defaultDiskType:             DiskTypeStandard,
+		supportNestedVirtualization: true,
 	})
 	// C2D represents c2d machine family
 	C2D = RegisterMachineFamily(MachineFamily{
@@ -523,8 +526,9 @@ var (
 			DiskTypeSSD:                               UnspecifiedMode,
 			DiskTypePDExtreme:                         UnspecifiedMode,
 		},
-		defaultDiskType:       DiskTypeBalanced,
-		supportHugepageSize1g: true,
+		defaultDiskType:             DiskTypeBalanced,
+		supportHugepageSize1g:       true,
+		supportNestedVirtualization: true,
 	})
 	// C3D represents c3d machine family
 	C3D = RegisterMachineFamily(MachineFamily{
@@ -646,6 +650,7 @@ var (
 		supportConfidentialNodeTypes: map[string]bool{labels.SEVConfidentialNodeTypeValue: true},
 		defaultDiskType:              DiskTypeBalanced,
 		supportHugepageSize1g:        true,
+		supportNestedVirtualization:  true,
 	})
 
 	// C4 represents c4 machine family
@@ -919,8 +924,9 @@ var (
 			DiskTypeHyperdiskThroughput:               NonConfidentialOnlyMode,
 			DiskTypeHyperdiskMl:                       UnspecifiedMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 	// C4A represents c4a machine family
 	C4A = RegisterMachineFamily(MachineFamily{
@@ -1197,8 +1203,9 @@ var (
 			DiskTypeHyperdiskBalancedHighAvailability: NonConfidentialOnlyMode,
 			DiskTypeHyperdiskMl:                       UnspecifiedMode,
 		},
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
-		supportHugepageSize1g: true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		supportNestedVirtualization: true,
 	})
 	// C4N represents c4n machine family
 	C4N = RegisterMachineFamily(MachineFamily{
@@ -1319,8 +1326,9 @@ var (
 			DiskTypeHyperdiskMl:                       NonConfidentialOnlyMode,
 			DiskTypeHyperdiskThroughput:               NonConfidentialOnlyMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 	// TODO: add C3A, C3 metal
 	// those machine families supports only disk-type: hyperdisk
@@ -1350,8 +1358,9 @@ var (
 			DiskTypeSSD:      UnspecifiedMode,
 			DiskTypeStandard: UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
-		dwsDisabled:     true,
+		defaultDiskType:             DiskTypeStandard,
+		dwsDisabled:                 true,
+		supportNestedVirtualization: true,
 	})
 	CT3P = RegisterMachineFamily(MachineFamily{
 		name:               "ct3p",
@@ -1378,8 +1387,9 @@ var (
 			DiskTypeSSD:      UnspecifiedMode,
 			DiskTypeStandard: UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
-		dwsDisabled:     true,
+		defaultDiskType:             DiskTypeStandard,
+		dwsDisabled:                 true,
+		supportNestedVirtualization: true,
 	})
 
 	// CT4L represents ct4l machine family (TPU Device)
@@ -1420,8 +1430,9 @@ var (
 			DiskTypeSSD:               UnspecifiedMode,
 			DiskTypeStandard:          UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeStandard,
-		dwsDisabled:     true,
+		defaultDiskType:             DiskTypeStandard,
+		dwsDisabled:                 true,
+		supportNestedVirtualization: true,
 	})
 	// CT4P represents ct4p machine family (TPU PodSlice)
 	CT4P = RegisterMachineFamily(MachineFamily{
@@ -1559,7 +1570,8 @@ var (
 			DiskTypeBalanced:          UnspecifiedMode,
 			DiskTypeSSD:               UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeBalanced,
+		defaultDiskType:             DiskTypeBalanced,
+		supportNestedVirtualization: true,
 	})
 	// CT6E represents ct6e machine family (TPU PodSlice)
 	// For TPU it's a minor issue, as no decision regarding TPUs is based on pricing.
@@ -2045,7 +2057,8 @@ var (
 			DiskTypeSSD:                 UnspecifiedMode,
 			DiskTypeStandard:            UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeBalanced,
+		defaultDiskType:             DiskTypeBalanced,
+		supportNestedVirtualization: true,
 	})
 	// G4 represents g4 machine family
 	G4 = RegisterMachineFamily(MachineFamily{
@@ -2128,8 +2141,9 @@ var (
 			DiskTypeHyperdiskThroughput: UnspecifiedMode,
 			DiskTypeBalanced:            UnspecifiedMode,
 		},
-		defaultDiskType:       DiskTypeBalanced,
-		supportHugepageSize1g: true,
+		defaultDiskType:             DiskTypeBalanced,
+		supportHugepageSize1g:       true,
+		supportNestedVirtualization: true,
 	})
 	// H4D represents h4d machine family
 	H4D = RegisterMachineFamily(MachineFamily{
@@ -2166,8 +2180,9 @@ var (
 			DiskTypeHyperdiskBalanced:                 NonConfidentialOnlyMode,
 			DiskTypeHyperdiskBalancedHighAvailability: NonConfidentialOnlyMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 	// M1 represents m1 machine family
 	M1 = RegisterMachineFamily(MachineFamily{
@@ -2309,8 +2324,9 @@ var (
 			DiskTypeHyperdiskBalanced: NonConfidentialOnlyMode,
 			DiskTypeHyperdiskExtreme:  NonConfidentialOnlyMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 
 	// N1 represents n1 machine family
@@ -2420,8 +2436,9 @@ var (
 			DiskTypeSSD:       UnspecifiedMode,
 			DiskTypeStandard:  UnspecifiedMode,
 		},
-		defaultDiskType:          DiskTypeStandard,
-		numaAlignmentUnsupported: true,
+		defaultDiskType:             DiskTypeStandard,
+		numaAlignmentUnsupported:    true,
+		supportNestedVirtualization: true,
 	})
 	// N2 represents n2 machine family
 	N2 = RegisterMachineFamily(MachineFamily{
@@ -2528,8 +2545,9 @@ var (
 			DiskTypeSSD:                 UnspecifiedMode,
 			DiskTypeStandard:            UnspecifiedMode,
 		},
-		defaultDiskType:          DiskTypeStandard,
-		numaAlignmentUnsupported: true,
+		defaultDiskType:             DiskTypeStandard,
+		numaAlignmentUnsupported:    true,
+		supportNestedVirtualization: true,
 	})
 	// N2D represents n2d machine family
 	N2D = RegisterMachineFamily(MachineFamily{
@@ -2630,8 +2648,9 @@ var (
 			DiskTypeSSD:                 UnspecifiedMode,
 			DiskTypeStandard:            UnspecifiedMode,
 		},
-		defaultDiskType:          DiskTypeStandard,
-		numaAlignmentUnsupported: true,
+		defaultDiskType:             DiskTypeStandard,
+		numaAlignmentUnsupported:    true,
+		supportNestedVirtualization: true,
 	})
 	// N4 represents n4 machine family
 	N4 = RegisterMachineFamily(MachineFamily{
@@ -2678,7 +2697,8 @@ var (
 			DiskTypeHyperdiskBalancedHighAvailability: NonConfidentialOnlyMode,
 			DiskTypeHyperdiskMl:                       UnspecifiedMode,
 		},
-		defaultDiskType: DiskTypeHyperdiskBalanced,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 	// N4A represents n4a machine family
 	N4A = RegisterMachineFamily(MachineFamily{
@@ -2791,8 +2811,9 @@ var (
 		supportedBootDiskTypes: map[string]bool{
 			DiskTypeHyperdiskBalanced: true,
 		},
-		supportHugepageSize1g: false,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       false,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 	// T2A represents t2a (arm) machine family
 	T2A = RegisterMachineFamily(MachineFamily{
@@ -2899,9 +2920,10 @@ var (
 			DiskTypeHyperdiskThroughput: UnspecifiedMode,
 			DiskTypeHyperdiskMl:         UnspecifiedMode,
 		},
-		defaultDiskType:          DiskTypeHyperdiskBalanced,
-		supportHugepageSize1g:    true,
-		supportsAcceleratorSlice: true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		supportsAcceleratorSlice:    true,
+		supportNestedVirtualization: true,
 	})
 	// TPU7 represents tpu7 machine family
 	TPU7 = RegisterMachineFamily(MachineFamily{
@@ -2936,9 +2958,10 @@ var (
 			DiskTypeHyperdiskExtreme:  NonConfidentialOnlyMode,
 			DiskTypeBalanced:          NonConfidentialOnlyMode,
 		},
-		defaultDiskType:          DiskTypeHyperdiskBalanced,
-		supportHugepageSize1g:    true,
-		supportsAcceleratorSlice: true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		supportsAcceleratorSlice:    true,
+		supportNestedVirtualization: true,
 	})
 	// Z3 represents z3 machine family
 	Z3 = RegisterMachineFamily(MachineFamily{
@@ -3053,8 +3076,9 @@ var (
 			DiskTypeBalanced:                          UnspecifiedMode,
 			DiskTypeSSD:                               UnspecifiedMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeBalanced,
+		supportNestedVirtualization: true,
 	})
 
 	// Z4D represents z4d machine family
@@ -3278,8 +3302,9 @@ var (
 			DiskTypeHyperdiskMl:                       NonConfidentialOnlyMode,
 			DiskTypeHyperdiskThroughput:               NonConfidentialOnlyMode,
 		},
-		supportHugepageSize1g: true,
-		defaultDiskType:       DiskTypeHyperdiskBalanced,
+		supportHugepageSize1g:       true,
+		defaultDiskType:             DiskTypeHyperdiskBalanced,
+		supportNestedVirtualization: true,
 	})
 )
 
