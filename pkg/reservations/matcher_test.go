@@ -237,7 +237,7 @@ func TestMatchReservationShapeMigNotExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -376,7 +376,7 @@ func TestMatchReservationShapeMigExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).SetExist(true).Build()
-			actual := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -467,7 +467,7 @@ func TestMatchReservationShapeWithReservationAffinity(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -799,9 +799,8 @@ func TestMatchSpecificReservationShape(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			nodeShape := NodeShape{MachineType: tc.machineType, Zone: tc.zone, MinCpuPlatform: tc.minCpuPlatform, LocalSSDSizes: tc.localSSDs, Accelerators: tc.accelerators}
-			gotReservationMatch := MatchSpecificReservationShape(provider, tc.reservation, nodeShape, tc.acceleratorStrictRequests)
 			gotReservationNoMatchReasons := MatchSpecificReservationShapeWithReasons(provider, tc.reservation, nodeShape, tc.acceleratorStrictRequests)
-			assert.Equal(t, tc.wantReservationMatch, gotReservationMatch)
+			assert.Equal(t, tc.wantReservationMatch, len(gotReservationNoMatchReasons) == 0)
 			assert.Equal(t, tc.wantReservationNoMatchReasons, gotReservationNoMatchReasons)
 		})
 	}

@@ -26,7 +26,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 )
+
+// notMatchingLogLimit is the maximum number of "not matching" reservation logs
+// emitted per single MatchingUnusedReservations call.
+const notMatchingLogLimit = 20
 
 const (
 	ssdNVME = "NVME"
@@ -48,16 +53,23 @@ const (
 	MultiHostTPURequestedSingleHostAvailable = "requested multihost TPU, reservation has singlehost"
 	SingleHostTPURequestedMultihostAvailable = "requested singlehost TPU, reservation has multihost"
 	TpuAcceleratorMissing                    = "requested TPU accelerator %s, but it's missing from reservation"
+	NodeGroupNotConvertibleToMig             = "Nodegroup - %v cannot be converted to MIG"
 )
 
 // MatchingUnusedReservations sums up all the unused reservations that match the given node group
 func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) int {
 	availableCount := 0
+	notMatchingLogQuota := klogx.NewLoggingQuota(notMatchingLogLimit)
 	for _, rsv := range reservations {
-		if reservationMatch(provider, nodegroup, rsv, localSSDDiskSizeProvider) {
-			availableCount += int(rsv.SpecificReservation.Count - rsv.SpecificReservation.InUseCount)
+		if ok, reasons, nodeShape := reservationMatch(provider, nodegroup, rsv, localSSDDiskSizeProvider); ok {
+			reservationCount := int(rsv.SpecificReservation.Count - rsv.SpecificReservation.InUseCount)
+			availableCount += reservationCount
+			klog.V(4).Infof("Matching reservation found: nodegroup=%s, reservation=%s, availableCount=%d", nodegroup.Id(), rsv.Name, reservationCount)
+		} else {
+			klogx.V(4).UpTo(notMatchingLogQuota).Infof("Not matching node shape %+v against %v reservation: %q", nodeShape, rsv.Name, reasons)
 		}
 	}
+	klogx.V(4).Over(notMatchingLogQuota).Infof("Not matching nodegroup %s against %d other reservations", nodegroup.Id(), -notMatchingLogQuota.Left())
 
 	if availableCount > 0 {
 		klog.V(4).Infof("MatchingUnusedReservations found: nodegroup=%s, availableCount=%d", nodegroup.Id(), availableCount)
@@ -68,16 +80,13 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 
 // reservationMatch checks if the nodegroup matches reservation.
 // https://cloud.google.com/compute/docs/instances/reservations-overview#vm-properties
-func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) bool {
+func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) (bool, []string, NodeShape) {
 	mig, ok := nodegroup.(*gke.GkeMig)
-	if !ok {
-		klog.Errorf("Nodegroup - %v cannot be converted to MIG", nodegroup.Debug(context.TODO()))
-		return false
-	}
 
-	// Check if the reservation can be used by the mig.
-	if !gceclient.IsReservationUsable(rsv, false) || !mig.IsReservationCompatible(rsv) {
-		return false
+	if !ok {
+		reason := fmt.Sprintf(NodeGroupNotConvertibleToMig, nodegroup.Debug(context.TODO()))
+		klog.Error(reason)
+		return false, []string{reason}, NodeShape{}
 	}
 
 	nodeShape := NodeShape{
@@ -88,6 +97,14 @@ func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.No
 		Zone:           mig.GceRef().Zone,
 	}
 
+	if ok, reason := gceclient.IsReservationUsable(rsv, false); !ok {
+		return false, []string{string(reason)}, nodeShape
+	}
+
+	if ok, reason := mig.IsReservationCompatible(rsv); !ok {
+		return false, []string{reason}, nodeShape
+	}
+
 	for _, a := range mig.Spec().Accelerators {
 		nodeShape.Accelerators[a.AcceleratorType] = machinetypes.PhysicalGpuCount(a.AcceleratorCount)
 	}
@@ -96,7 +113,8 @@ func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.No
 	nodeShape.LocalSSDSizes[ssdSCSI] = int64(mig.GetSCSILLocalSSDCount()) * localSSDSizeInGiB
 	nodeShape.LocalSSDSizes[ssdNVME] = int64(mig.GetNVMELocalSSDCount()) * localSSDSizeInGiB
 
-	return MatchSpecificReservationShape(provider, rsv, nodeShape, true)
+	reasons := MatchSpecificReservationShapeWithReasons(provider, rsv, nodeShape, true)
+	return len(reasons) == 0, reasons, nodeShape
 }
 
 type NodeShape struct {
@@ -105,13 +123,6 @@ type NodeShape struct {
 	LocalSSDSizes  map[string]int64
 	Accelerators   map[string]machinetypes.PhysicalGpuCount
 	Zone           string
-}
-
-// MatchSpecificReservationShape determines whether reservation matches specific machine shape including accelerator and local SSD.
-func MatchSpecificReservationShape(provider machineConfigProvider, rsv *gce_api.Reservation, nodeShape NodeShape, acceleratorStrictRequests bool) bool {
-	noMatchReasons := MatchSpecificReservationShapeWithReasons(provider, rsv, nodeShape, acceleratorStrictRequests)
-	klog.V(5).Infof("Not matching node shape %+v against %v reservation: %q", nodeShape, rsv.Name, noMatchReasons)
-	return len(noMatchReasons) == 0
 }
 
 // MatchSpecificReservationShape determines whether reservation matches specific machine shape including accelerator and local SSD including reasoning when they don't match.

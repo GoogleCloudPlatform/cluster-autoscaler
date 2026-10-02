@@ -2291,7 +2291,7 @@ func (mig *GkeMig) ShallowCopyInZone(z string) *GkeMig {
 }
 
 // IsReservationCompatible checks if given reservation is compatible with the created MIG.
-func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) bool {
+func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) (bool, string) {
 	migReservationAffinity := mig.Spec().ReservationAffinity
 	migReservationAffinityType := gkeclient.ReservationAffinityAny
 	migReservationAffinityName := ""
@@ -2306,13 +2306,13 @@ func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) bool {
 	if !rsv.SpecificReservationRequired &&
 		(migReservationAffinityType == gkeclient.ReservationAffinityAny ||
 			migReservationAffinityType == gkeclient.ReservationAffinityAnyThenFail) {
-		return true
+		return true, ""
 	}
 	// Check if specific reservation is required.
 	if rsv.SpecificReservationRequired && migReservationAffinityType == gkeclient.ReservationAffinitySpecific && rsv.Name == reservationName(migReservationAffinityName) {
-		return true
+		return true, ""
 	}
-	return false
+	return false, fmt.Sprintf("reservation affinity specific=%t, mig affinity=%s, mig affinity name=%s, rsv name=%s", rsv.SpecificReservationRequired, migReservationAffinityType, migReservationAffinityName, rsv.Name)
 }
 
 // SetLocationPolicy sets location policy in mig and nodepoolspec

@@ -158,7 +158,7 @@ func filterReservations(reservations []*gce_api.Reservation, zones []string) ([]
 	result := make([]*gce_api.Reservation, 0, len(reservations))
 	for _, reservation := range reservations {
 		// Filter out unusable reservations
-		if !IsReservationUsable(reservation, true) {
+		if ok, _ := IsReservationUsable(reservation, true); !ok {
 			continue
 		}
 		// Filter out reservations from other zones

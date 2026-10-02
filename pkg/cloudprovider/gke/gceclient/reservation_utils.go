@@ -18,22 +18,38 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 )
 
-func IsReservationUsable(rsv *gce_api.Reservation, allowAggregate bool) bool {
+// ReservationComment describes why a reservation cannot be used.
+type ReservationComment string
+
+const (
+	// ReservationNotReady indicates that the reservation is not in READY status.
+	ReservationNotReady ReservationComment = "reservation is not ready"
+	// ReservationNeitherAggregateNorSpecific indicates that the reservation has neither aggregate nor specific configuration.
+	ReservationNeitherAggregateNorSpecific ReservationComment = "reservation is neither aggregate nor specific"
+	// SpecificReservationNoInstanceProperties indicates that the specific reservation has no instance properties.
+	SpecificReservationNoInstanceProperties ReservationComment = "specific reservation has no instance properties"
+	// AggregateReservationNotAllowed indicates that aggregate reservations are not allowed in this context.
+	AggregateReservationNotAllowed ReservationComment = "aggregate reservation is not allowed"
+)
+
+// IsReservationUsable checks whether the reservation can be used. If not, it
+// also returns a comment describing the reason.
+func IsReservationUsable(rsv *gce_api.Reservation, allowAggregate bool) (bool, ReservationComment) {
 	if rsv.Status != "READY" {
-		return false
+		return false, ReservationNotReady
 	}
 
 	if rsv.AggregateReservation == nil && rsv.SpecificReservation == nil {
-		return false
+		return false, ReservationNeitherAggregateNorSpecific
 	}
 
 	if rsv.SpecificReservation != nil && rsv.SpecificReservation.InstanceProperties == nil {
-		return false
+		return false, SpecificReservationNoInstanceProperties
 	}
 
 	if rsv.AggregateReservation != nil && !allowAggregate {
-		return false
+		return false, AggregateReservationNotAllowed
 	}
 
-	return true
+	return true, ""
 }

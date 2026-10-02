@@ -3182,8 +3182,13 @@ func TestIsReservationCompatible(t *testing.T) {
 				SpecificReservationRequired: tt.specificReservationReq,
 			}
 
-			got := mig.IsReservationCompatible(rsv)
+			got, reason := mig.IsReservationCompatible(rsv)
 			assert.Equal(t, tt.want, got)
+			if tt.want {
+				assert.Empty(t, reason)
+			} else {
+				assert.NotEmpty(t, reason)
+			}
 		})
 	}
 }

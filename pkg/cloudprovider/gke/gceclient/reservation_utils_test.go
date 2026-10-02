@@ -25,19 +25,22 @@ func TestIsReservationUsable(t *testing.T) {
 		name           string
 		rsv            *gce_api.Reservation
 		allowAggregate bool
-		isUsable       bool
+		wantUsable     bool
+		wantReason     ReservationComment
 	}{
 		{
 			name: "Status not READY",
 			rsv: &gce_api.Reservation{
 				Status: "CREATING",
 			},
-			isUsable: false,
+			wantUsable: false,
+			wantReason: ReservationNotReady,
 		},
 		{
-			name:     "Both specific and aggregate are nil",
-			rsv:      &gce_api.Reservation{Status: "READY"},
-			isUsable: false,
+			name:       "Both specific and aggregate are nil",
+			rsv:        &gce_api.Reservation{Status: "READY"},
+			wantUsable: false,
+			wantReason: ReservationNeitherAggregateNorSpecific,
 		},
 		{
 			name: "Specific reservation is nil, aggregate not allowed",
@@ -46,7 +49,8 @@ func TestIsReservationUsable(t *testing.T) {
 				AggregateReservation: &gce_api.AllocationAggregateReservation{},
 			},
 			allowAggregate: false,
-			isUsable:       false,
+			wantUsable:     false,
+			wantReason:     AggregateReservationNotAllowed,
 		},
 		{
 			name: "Specific reservation is nil, aggregate allowed",
@@ -55,7 +59,8 @@ func TestIsReservationUsable(t *testing.T) {
 				AggregateReservation: &gce_api.AllocationAggregateReservation{},
 			},
 			allowAggregate: true,
-			isUsable:       true,
+			wantUsable:     true,
+			wantReason:     "",
 		},
 		{
 			name: "Specific reservation with nil instance properties",
@@ -63,7 +68,8 @@ func TestIsReservationUsable(t *testing.T) {
 				Status:              "READY",
 				SpecificReservation: &gce_api.AllocationSpecificSKUReservation{},
 			},
-			isUsable: false,
+			wantUsable: false,
+			wantReason: SpecificReservationNoInstanceProperties,
 		},
 		{
 			name: "Specific reservation with non-nil instance properties",
@@ -73,13 +79,17 @@ func TestIsReservationUsable(t *testing.T) {
 					InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{},
 				},
 			},
-			isUsable: true,
+			wantUsable: true,
+			wantReason: "",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			isUsable := IsReservationUsable(tc.rsv, tc.allowAggregate)
-			if isUsable != tc.isUsable {
-				t.Errorf("IsReservationUsable() = %v, want %v", isUsable, tc.isUsable)
+			isUsable, reason := IsReservationUsable(tc.rsv, tc.allowAggregate)
+			if isUsable != tc.wantUsable {
+				t.Errorf("IsReservationUsable() = %v, want %v", isUsable, tc.wantUsable)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("IsReservationUsable() reason = %q, want %q", reason, tc.wantReason)
 			}
 		})
 	}

@@ -241,7 +241,7 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 			continue
 		}
 		for _, rsv := range reservations {
-			if reservationMatch(p.provider, ng, rsv, p.localSSDDiskSizeProvider) {
+			if ok, _, _ := reservationMatch(p.provider, ng, rsv, p.localSSDDiskSizeProvider); ok {
 				unused := int(rsv.SpecificReservation.Count) - int(rsv.SpecificReservation.InUseCount) - consumedReservations[rsv.Id]
 				if size > unused {
 					consumedReservations[rsv.Id] += unused
@@ -287,7 +287,7 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 		newReservedNodes := min(newNodes, reservedNodes)
 
 		for _, rsv := range reservations {
-			if reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider) {
+			if ok, _, _ := reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider); ok {
 				unusedNodes := int(rsv.SpecificReservation.Count - rsv.SpecificReservation.InUseCount)
 
 				if unusedNodes > 0 {
