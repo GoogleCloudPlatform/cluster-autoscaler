@@ -97,6 +97,36 @@ func TestRefreshE4aLaunchStatus(t *testing.T) {
 			expectedSource:        launchUndefined,
 		},
 		{
+			name:                  "balloon pod error - flag no resize still enabled",
+			mode:                  resizable_vm_types.E4aAutoprovisioningEnabledNoResize,
+			isBalloonPodCreatable: false,
+			experimentFlags:       map[string]bool{},
+			expectedPhase:         launchEnabledNoResize,
+			expectedSource:        launchClusterProto,
+		},
+		{
+			name:                  "balloon pod error - experiment coarse resize disabled",
+			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
+			isBalloonPodCreatable: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4aWithResizeEnabledFlag:    true,
+				experiments.AutopilotE4aWithResizeMinVersionFlag: true,
+			},
+			expectedPhase:  launchDisabledBalloonPodError,
+			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "balloon pod error - experiment no resize still enabled",
+			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
+			isBalloonPodCreatable: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4aNoResizeMinVersionFlag: true,
+				experiments.AutopilotE4aNoResizeEnabledFlag:    true,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchExperiment,
+		},
+		{
 			name:                  "flag disabled overrides experiment enabled",
 			mode:                  resizable_vm_types.E4aAutoprovisioningDisabled,
 			isBalloonPodCreatable: true,

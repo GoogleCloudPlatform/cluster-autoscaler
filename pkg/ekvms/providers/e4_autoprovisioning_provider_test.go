@@ -31,14 +31,24 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 		expectedSource        launchSource
 	}{
 		{
-			name:                  "balloon pod error - disabled",
+			name:                  "balloon pod error - coarse resize disabled",
 			isBalloonPodCreatable: false,
 			experimentFlags: map[string]bool{
-				experiments.AutopilotE4MinVersionFlag:      true,
-				experiments.AutopilotE4NoResizeEnabledFlag: false,
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
 			},
 			expectedPhase:  launchDisabledBalloonPodError,
 			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "balloon pod error - no resize enabled",
+			isBalloonPodCreatable: false,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:      true,
+				experiments.AutopilotE4NoResizeEnabledFlag: true,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchExperiment,
 		},
 		{
 			name:                  "experiment enables coarse resize",

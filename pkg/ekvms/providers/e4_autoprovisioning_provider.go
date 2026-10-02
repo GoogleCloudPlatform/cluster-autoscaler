@@ -80,12 +80,11 @@ func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
 		return
 	}
 
-	if !p.bpChecker.isBalloonPodCreatable {
-		p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
-		return
-	}
-
 	if isE4EnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4WithResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4WithResizeEnabledFlag, true); isE4EnabledWithExperiment {
+		if !p.bpChecker.isBalloonPodCreatable {
+			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
+			return
+		}
 		p.status = LaunchStatus{phase: launchCoarseGrainedResize, source: launchExperiment}
 		return
 	}
