@@ -646,7 +646,7 @@ func setUpProcessors(
 			return nil, err
 		}
 		*defragProcessor = defrag_processor.NewProcessor(defrag_processor.Options{
-			ScaleDownNodeProcessor:   autoscalingProcessors.ScaleDownNodeProcessor,
+			ScaleDownNodeProcessor:   scaledown.NewDefragScaleDownNodeProcessor(scaleDownNodeProcessors),
 			ScaleDownStatusProcessor: scaleDownProcessorChain,
 			DeleteOptions:            deleteOptions,
 			DrainabilityRules:        drainabilityRules,

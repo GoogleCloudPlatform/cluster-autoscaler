@@ -36,6 +36,7 @@ import (
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -95,6 +96,12 @@ func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.Aut
 }
 
 func (p *ScaleDownNodeProcessor) CleanUp() {}
+
+// DefragScaleDownNodeProcessor implements scaledown.DefragScaleDownNodeProcessorProvider: the
+// downsize logic of this processor is not suitable for defrag.
+func (p *ScaleDownNodeProcessor) DefragScaleDownNodeProcessor() nodes.ScaleDownNodeProcessor {
+	return NewResizableVmDefragScaleDownNodeProcessor(p.mcp, p.resizableVmManager)
+}
 
 // process executes the scaledown logic: determines for each node if it should be a source/candidate
 // for scaledown, or if it should be downsized.
