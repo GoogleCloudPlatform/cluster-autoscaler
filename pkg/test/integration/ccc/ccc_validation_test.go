@@ -167,6 +167,23 @@ func TestCCCConfigurations(t *testing.T) {
 		}).
 		Build()
 
+	cccStartupTaint := ccc.NewComputeClassBuilder("ccc-startup-taint").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType: ptr.To("n1-standard-4"),
+		}).
+		WithNodePoolConfig(&v1.NodePoolConfig{
+			Taints: []v1.TaintConfig{
+				{
+					Key:    "startup-taint.cluster-autoscaler.kubernetes.io/istio-cni-not-ready",
+					Value:  "true",
+					Effect: "NoSchedule",
+				},
+			},
+		}).
+		Build()
+
 	cccNestedVirtualizationEnabled := ccc.NewComputeClassBuilder("ccc-nv-enabled").
 		WithNapEnabled().
 		WithWhenUnsatisfiable("ScaleUpAnyway").
@@ -229,6 +246,21 @@ func TestCCCConfigurations(t *testing.T) {
 		if assert.Equal(t, 1, len(cluster.NodePools)) {
 			np := cluster.NodePools[0]
 			assert.Equal(t, int64(50), np.Config.DiskSizeGb)
+		}
+	})
+
+	runCCCConfigurationTest(t, "Startup taint in NodePoolConfig is propagated to provisioned node pool", cccStartupTaint, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			found := false
+			for _, taint := range np.Config.Taints {
+				if taint.Key == "startup-taint.cluster-autoscaler.kubernetes.io/istio-cni-not-ready" &&
+					taint.Value == "true" && taint.Effect == "NO_SCHEDULE" {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found, "Expected startup taint to be present on node pool, but got %v", np.Config.Taints)
 		}
 	})
 
