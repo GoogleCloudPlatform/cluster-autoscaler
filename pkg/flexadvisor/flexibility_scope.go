@@ -86,14 +86,15 @@ func (w *scopeWorker) run(ctx context.Context) {
 	w.refreshScope(ctx)
 	w.scope.firstFetchWG.Done()
 
-	timer := w.clock.NewTimer(refreshInterval)
+	interval := calculateRefreshInterval(w.experimentsManager)
+	timer := w.clock.NewTimer(interval)
 	defer timer.Stop()
 	for {
 		// 1. Non-blocking check for the timer first (Priority)
 		select {
 		case <-timer.C():
 			w.refreshScope(ctx)
-			timer.Reset(refreshInterval)
+			timer.Reset(calculateRefreshInterval(w.experimentsManager))
 			continue // Skip the rest, start the loop over
 		case <-ctx.Done():
 			return
@@ -104,7 +105,7 @@ func (w *scopeWorker) run(ctx context.Context) {
 		select {
 		case <-timer.C():
 			w.refreshScope(ctx)
-			timer.Reset(refreshInterval)
+			timer.Reset(calculateRefreshInterval(w.experimentsManager))
 		case decision := <-w.provisioningDecisionChan:
 			w.sendProvisioningDecision(ctx, decision)
 		case <-ctx.Done():

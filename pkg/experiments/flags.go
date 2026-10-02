@@ -196,7 +196,20 @@ const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
 const FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag = "FlexAdvisor::AwaitInstanceAvailabilityTimeoutSeconds"
 
+// FlexAdvisorMaxActiveScopes controls the maximum number of active flexibility scopes CA tracks concurrently (default: 50).
 const FlexAdvisorMaxActiveScopes = "FlexAdvisor::MaxActiveScopes"
+
+// FlexAdvisorMaxInstanceConfigsFlag controls the maximum number of instance configurations generated/capped per flexibility scope (default: 200).
+const FlexAdvisorMaxInstanceConfigsFlag = "FlexAdvisor::MaxInstanceConfigs"
+
+// FlexAdvisorScopeRefreshIntervalSecondsFlag controls the background polling interval in scopeWorker (default: 10s).
+const FlexAdvisorScopeRefreshIntervalSecondsFlag = "FlexAdvisor::ScopeRefreshIntervalSeconds"
+
+// FlexAdvisorScopeStalenessThresholdSecondsFlag controls the cache staleness threshold before guidance is considered stale (default: 30s).
+const FlexAdvisorScopeStalenessThresholdSecondsFlag = "FlexAdvisor::ScopeStalenessThresholdSeconds"
+
+// FlexAdvisorScopeKeepAliveSecondsFlag controls the duration a scope is retained before being removed (default: 10m).
+const FlexAdvisorScopeKeepAliveSecondsFlag = "FlexAdvisor::ScopeKeepAliveSeconds"
 
 const FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag = "FlexAdvisorGeneratorMachineErrorsCache::Enabled"
 const FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag = "FlexAdvisorGeneratorMachineErrorsCache::MinCAVersion"

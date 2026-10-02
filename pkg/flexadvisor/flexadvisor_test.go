@@ -1412,6 +1412,7 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 	testCases := []struct {
 		name        string
 		nilScope    bool
+		stringFlags map[string]string
 		refreshTime func(now time.Time) time.Time
 		clockStep   time.Duration
 		want        bool
@@ -1449,6 +1450,50 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 			clockStep: 31 * time.Second,
 			want:      true,
 		},
+		{
+			name: "experiment threshold 15s, checked after 10s - not stale",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "15",
+			},
+			refreshTime: func(now time.Time) time.Time {
+				return now
+			},
+			clockStep: 10 * time.Second,
+			want:      false,
+		},
+		{
+			name: "experiment threshold 15s, checked after 16s - stale",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "15",
+			},
+			refreshTime: func(now time.Time) time.Time {
+				return now
+			},
+			clockStep: 16 * time.Second,
+			want:      true,
+		},
+		{
+			name: "experiment threshold 60s, checked after 45s - not stale",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "60",
+			},
+			refreshTime: func(now time.Time) time.Time {
+				return now
+			},
+			clockStep: 45 * time.Second,
+			want:      false,
+		},
+		{
+			name: "experiment threshold 60s, checked after 65s - stale",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "60",
+			},
+			refreshTime: func(now time.Time) time.Time {
+				return now
+			},
+			clockStep: 65 * time.Second,
+			want:      true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1459,7 +1504,8 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				manager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
+				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
 				assert.NoError(t, err)
 
@@ -1613,6 +1659,228 @@ func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
 
 			assert.Equal(t, tc.wantCccState, fa.cccState(scope))
 			assert.Equal(t, tc.wantIsScaleUpAnyway, fa.isScaleUpAnyway(scope))
+		})
+	}
+}
+
+func TestCalculateRefreshInterval(t *testing.T) {
+	testCases := []struct {
+		name        string
+		nilManager  bool
+		stringFlags map[string]string
+		want        time.Duration
+	}{
+		{
+			name:       "nil manager returns default 10s",
+			nilManager: true,
+			want:       10 * time.Second,
+		},
+		{
+			name:        "no experiment returns default 10s",
+			stringFlags: nil,
+			want:        10 * time.Second,
+		},
+		{
+			name: "custom valid interval 5s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "5",
+			},
+			want: 5 * time.Second,
+		},
+		{
+			name: "custom valid interval 20s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "20",
+			},
+			want: 20 * time.Second,
+		},
+		{
+			name: "zero value falls back to default 10s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "0",
+			},
+			want: 10 * time.Second,
+		},
+		{
+			name: "negative value falls back to default 10s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "-5",
+			},
+			want: 10 * time.Second,
+		},
+		{
+			name: "invalid unparseable value falls back to default 10s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "not-a-number",
+			},
+			want: 10 * time.Second,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var manager experiments.Manager
+			if !tc.nilManager {
+				manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
+			}
+			got := calculateRefreshInterval(manager)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFlexAdvisorScopeStalenessThreshold(t *testing.T) {
+	testCases := []struct {
+		name              string
+		nilOptionsTracker bool
+		nilManager        bool
+		stringFlags       map[string]string
+		want              time.Duration
+	}{
+		{
+			name:              "nil optionsTracker returns default 30s",
+			nilOptionsTracker: true,
+			want:              30 * time.Second,
+		},
+		{
+			name:       "nil experimentsManager returns default 30s",
+			nilManager: true,
+			want:       30 * time.Second,
+		},
+		{
+			name:        "no experiment returns default 30s",
+			stringFlags: nil,
+			want:        30 * time.Second,
+		},
+		{
+			name: "custom valid threshold 45s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "45",
+			},
+			want: 45 * time.Second,
+		},
+		{
+			name: "refresh interval increased to 20s adapts default staleness threshold to 60s (3*20s)",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "20",
+			},
+			want: 60 * time.Second,
+		},
+		{
+			name: "explicit threshold smaller than or equal to refresh interval is respected",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag:    "20",
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "15",
+			},
+			want: 15 * time.Second,
+		},
+		{
+			name: "zero value falls back to default 30s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "0",
+			},
+			want: 30 * time.Second,
+		},
+		{
+			name: "negative value falls back to default 30s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "-10",
+			},
+			want: 30 * time.Second,
+		},
+		{
+			name: "invalid value falls back to default 30s",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "xyz",
+			},
+			want: 30 * time.Second,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var optionsTracker *optstracking.OptionsTracker
+			if !tc.nilOptionsTracker {
+				var manager experiments.Manager
+				if !tc.nilManager {
+					manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
+				}
+				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			}
+			fa := &flexAdvisor{
+				optionsTracker: optionsTracker,
+			}
+			got := fa.getScopeStalenessThreshold()
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestFlexAdvisorScopeTtl(t *testing.T) {
+	testCases := []struct {
+		name              string
+		nilOptionsTracker bool
+		nilManager        bool
+		stringFlags       map[string]string
+		want              time.Duration
+	}{
+		{
+			name:              "nil optionsTracker returns default 10m",
+			nilOptionsTracker: true,
+			want:              10 * time.Minute,
+		},
+		{
+			name:       "nil experimentsManager returns default 10m",
+			nilManager: true,
+			want:       10 * time.Minute,
+		},
+		{
+			name:        "no experiment returns default 10m",
+			stringFlags: nil,
+			want:        10 * time.Minute,
+		},
+		{
+			name: "custom valid interval 5m (300s)",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeKeepAliveSecondsFlag: "300",
+			},
+			want: 5 * time.Minute,
+		},
+		{
+			name: "zero value falls back to default 10m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeKeepAliveSecondsFlag: "0",
+			},
+			want: 10 * time.Minute,
+		},
+		{
+			name: "negative value falls back to default 10m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeKeepAliveSecondsFlag: "-60",
+			},
+			want: 10 * time.Minute,
+		},
+		{
+			name: "invalid value falls back to default 10m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeKeepAliveSecondsFlag: "invalid",
+			},
+			want: 10 * time.Minute,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var optionsTracker *optstracking.OptionsTracker
+			if !tc.nilOptionsTracker {
+				var manager experiments.Manager
+				if !tc.nilManager {
+					manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
+				}
+				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			}
+			fa := &flexAdvisor{
+				optionsTracker: optionsTracker,
+			}
+			got := fa.getScopeTtl()
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
