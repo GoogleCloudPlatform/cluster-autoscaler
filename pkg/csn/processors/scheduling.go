@@ -162,9 +162,9 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 	return nodesOfScheduledPods, nil
 }
 
-func schedulePodsWithBuckets(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, nodePriorities map[string]int, numBuckets int) (map[*apiv1.Pod]string, error) {
+func schedulePodsWithBuckets(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, nodePriorities map[string]int, numPriorities int) (map[*apiv1.Pod]string, error) {
 	scheduledPods := map[*apiv1.Pod]string{}
-	ordering := newBucketedNodeOrderMapping(nodePriorities, numBuckets)
+	ordering := newBucketedNodeOrderMapping(nodePriorities, numPriorities)
 
 	res, err := simulator.TrySchedulePods(context.Background(), sn, pods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: ordering.isNodeAcceptable,
