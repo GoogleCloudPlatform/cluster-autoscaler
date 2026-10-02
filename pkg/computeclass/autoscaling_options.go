@@ -17,6 +17,7 @@ package computeclass
 import (
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -32,6 +33,9 @@ type AutoscalingOptionsProvider interface {
 	// IsNodeGroupOwned returns whether the given node group is owned by this CA
 	// instance.
 	IsNodeGroupOwned(cloudprovider.NodeGroup) bool
+	// IsNodeOwned returns whether the given node is owned by this CA instance,
+	// based on its ComputeClass.
+	IsNodeOwned(*apiv1.Node) bool
 }
 
 func NewAutoscalingOptionsProvider(lister lister.Lister, experimentsManager experiments.Manager) AutoscalingOptionsProvider {
@@ -51,6 +55,13 @@ func (p *autoscalingOptionsProvider) IsNodeGroupOwned(nodeGroup cloudprovider.No
 		return true
 	}
 	return p.lister.IsNodeGroupOwned(nodeGroup)
+}
+
+func (p *autoscalingOptionsProvider) IsNodeOwned(node *apiv1.Node) bool {
+	if p.lister == nil {
+		return true
+	}
+	return p.lister.IsNodeOwned(node)
 }
 
 func (p *autoscalingOptionsProvider) getCRDConsolidationDelay(nodeGroup cloudprovider.NodeGroup) (time.Duration, bool, error) {

@@ -111,6 +111,12 @@ type AutoscalingOptionsProvider interface {
 	ScaleDownUnneededTime(cloudprovider.NodeGroup) (time.Duration, bool, error)
 	ScaleDownUtilizationThreshold(cloudprovider.NodeGroup) (float64, bool, error)
 	ScaleDownGpuUtilizationThreshold(cloudprovider.NodeGroup) (float64, bool, error)
+	// IsNodeGroupOwned returns whether the given node group is owned by this CA
+	// instance.
+	IsNodeGroupOwned(cloudprovider.NodeGroup) bool
+	// IsNodeOwned returns whether the given node is owned by this CA instance,
+	// based on its ComputeClass.
+	IsNodeOwned(*apiv1.Node) bool
 }
 
 // AutoprovisioningEligibility checks if resource is eligible for autoprovisioning related functionalities.
@@ -164,6 +170,15 @@ type GkeManager interface {
 	Cleanup() error
 	// GetGkeMigs returns a list of registered MIGs.
 	GetGkeMigs() []*GkeMig
+	// IsMigOwned returns whether a MIG is owned by this CA instance.
+	IsMigOwned(mig cloudprovider.NodeGroup) bool
+	// IsNodeOwned returns whether a node is owned by this CA instance, based on
+	// its ComputeClass. Always true if IsMigOwnershipFilteringEnabled is false.
+	IsNodeOwned(node *apiv1.Node) bool
+	// IsMigOwnershipFilteringEnabled returns whether MIGs are filtered by CA
+	// instance ownership (--autoscaler-names is set). If it returns false,
+	// IsMigOwned always returns true.
+	IsMigOwnershipFilteringEnabled() bool
 	// GetGkeMigsBlockedByServerError returns a list of irretrievable migs blocked by server error (5xx).
 	GetGkeMigsBlockedByServerError() []*GkeMig
 	// GetGkeMigsBlockedByNotFoundError returns a list of irretrievable migs blocked by not found error (404).
@@ -468,6 +483,11 @@ type ClusterLocationsObserver interface {
 
 // gkeManagerImpl handles gce communication and data caching.
 type gkeManagerImpl struct {
+	// cache stores all MIGs of autoscaled node pools, regardless of which CA
+	// instance owns them. MIGs stay registered when they get blocked (blocking
+	// only flags them). Use it for bookkeeping (register/unregister,
+	// invalidation) and node-pool-wide views; use migLister for anything that
+	// acts on MIGs.
 	cache                    *GkeCache
 	gkeConfigurationCache    gkeConfigurationCache
 	lastRefresh              time.Time
@@ -498,7 +518,11 @@ type gkeManagerImpl struct {
 	reservationsPuller         *gceclient.ReservationsPuller
 	resourcePolicyPuller       placement.ResourcePolicyPuller
 
-	migLister                     *gkeMigLister
+	// migLister is backed by cache and limits it to the MIGs this CA instance
+	// acts on: GetMigs/GetGkeMigs return unblocked MIGs, GetBlockedGkeMigs
+	// blocked ones, and with --autoscaler-names all of them are limited to MIGs
+	// owned by this instance. It also manages the blocklist (HandleMigIssue).
+	migLister                     migListerInterface
 	migInfoProvider               gce.MigInfoProvider
 	availableCpuPlatformsProvider AvailableCpuPlatformsProvider
 	availableDiskTypesProvider    AvailableDiskTypesProvider
@@ -542,6 +566,9 @@ type gkeManagerImpl struct {
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
 	lookaheadBufferStrategyProvider     *lookaheadbuffer_strategy.Provider
 	optsTracker                         *optstracking.OptionsTracker
+	// migOwnershipFilteringEnabled is set iff --autoscaler-names is set, i.e.
+	// migLister filters MIGs by ownership.
+	migOwnershipFilteringEnabled bool
 	// injectedMig is set for all existing node pools created by this instance of Cluster Autoscaler
 	// and represents an injected specification of this MIG (before part of the spec was filled
 	// on the GKE API side).
@@ -552,6 +579,13 @@ type gkeManagerImpl struct {
 	migIdToInjectedNgMutex sync.Mutex
 	draResourcePredictor   *dynamicresources.ResourcePredictor
 	machineConfigProvider  *machinetypes.MachineConfigProvider
+
+	// unownedMigsAtLastRefresh holds MIGs that were registered but not owned by
+	// this CA instance during the last refreshNodePools. It lets
+	// refreshNodePools validate templates of MIGs that become owned without
+	// otherwise changing. The map is replaced on each refresh, never mutated.
+	unownedMigsAtLastRefresh      map[gce.GceRef]bool
+	unownedMigsAtLastRefreshMutex sync.Mutex
 
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
 	churnTrackerConfigProvider          ekvms_churntracker.ConfigProvider
@@ -620,6 +654,12 @@ func CreateGkeManager(
 	// Create cache and mig lister
 	migLister := NewGkeMigLister(cache, BlockListRefreshIntervalTime, MarkedIrretrievableRefreshIntervalTime, MaxIrretrievableErrsBeforeBlocked)
 
+	var autoscalerNames []string
+	if optsTracker != nil {
+		autoscalerNames = optsTracker.Options().AutoscalerNames
+	}
+	effectiveMigLister := NewFilteredMigLister(migLister, autoscalingOptsProvider, autoscalerNames)
+
 	domainUrl := strings.TrimSuffix(gceConnectionConfig.Endpoint, "/")
 	gceService := client.GCE
 	napDefaultMachineTypeFamily, err := client.MachineConfigProvider.ToMachineFamily(managerOptions.napDefaultMachineTypeFamily)
@@ -643,8 +683,8 @@ func CreateGkeManager(
 		atomicResizeRequestService:          client.AtomicResizeRequest,
 		flexResizeRequestService:            client.FlexResizeRequest,
 		provisioningRequestManager:          client.ProvisioningRequestManager,
-		migLister:                           migLister,
-		migInfoProvider:                     gce.NewCachingMigInfoProvider(gceCache, migLister, gceService, projectId, gceConnectionConfig.ConcurrentRefreshes, gceConnectionConfig.MigInstancesMinRefreshWaitTime, managerOptions.bulkGceMigInstancesListingEnabled, managerOptions.MultitenancyEnabled),
+		migLister:                           effectiveMigLister,
+		migInfoProvider:                     gce.NewCachingMigInfoProvider(gceCache, effectiveMigLister, gceService, projectId, gceConnectionConfig.ConcurrentRefreshes, gceConnectionConfig.MigInstancesMinRefreshWaitTime, managerOptions.bulkGceMigInstancesListingEnabled, managerOptions.MultitenancyEnabled),
 		availableCpuPlatformsProvider:       NewCachingAvailableCpuPlatformsProvider(cache, gceService),
 		availableDiskTypesProvider:          NewCachingAvailableDiskTypesProvider(cache, gceService),
 		MachineConfigValidator:              validators.NewCachedMachineConfigValidator(gceService, gceService, client.MachineConfigProvider),
@@ -670,6 +710,7 @@ func CreateGkeManager(
 		resizableVmAutoprovisioningProvider: resizableVmAutoprovisioningProvider,
 		lookaheadBufferStrategyProvider:     lookaheadBufferStrategyProvider,
 		optsTracker:                         optsTracker,
+		migOwnershipFilteringEnabled:        len(autoscalerNames) > 0,
 		migIdToInjectedNg:                   map[gce.GceRef]*GkeMig{},
 		draResourcePredictor:                draResourcePredictor,
 		reservationsPuller:                  reservationsPuller,
@@ -729,6 +770,30 @@ func (m *gkeManagerImpl) ClearRecommendations() {
 	m.recommendations.Clear()
 }
 
+// IsMigOwned returns whether a MIG is owned by this CA instance. It's always
+// true if MIG ownership filtering is disabled.
+func (m *gkeManagerImpl) IsMigOwned(mig cloudprovider.NodeGroup) bool {
+	if !m.IsMigOwnershipFilteringEnabled() || m.migLister == nil {
+		return true
+	}
+	return m.migLister.IsMigOwned(mig)
+}
+
+// IsNodeOwned returns whether the node is owned by this CA instance, based on
+// its ComputeClass. It's always true if MIG ownership filtering is disabled.
+func (m *gkeManagerImpl) IsNodeOwned(node *apiv1.Node) bool {
+	if !m.IsMigOwnershipFilteringEnabled() || !m.haveAutoscalingOptionsProvider() {
+		return true
+	}
+	return m.autoscalingOptsProvider.IsNodeOwned(node)
+}
+
+// IsMigOwnershipFilteringEnabled returns whether MIGs are filtered by CA
+// instance ownership.
+func (m *gkeManagerImpl) IsMigOwnershipFilteringEnabled() bool {
+	return m != nil && m.migOwnershipFilteringEnabled
+}
+
 // Client returns the authenticated GKE http client.
 func (m *gkeManagerImpl) Client() *http.Client {
 	return m.client
@@ -759,6 +824,13 @@ func (m *gkeManagerImpl) refreshNodePools(nodePools []gkeclient.NodePool, allNod
 	nodePoolSpecs := make(map[string]*gkeclient.NodePoolSpec, len(nodePools))
 	// Invalidating the cache getting previously blocked migs
 	prevBlockedMigs := m.migLister.InvalidateIrretrievableMigsCacheIfExpired()
+	m.migLister.InvalidateOwnershipCache()
+
+	m.unownedMigsAtLastRefreshMutex.Lock()
+	prevUnownedMigs := m.unownedMigsAtLastRefresh
+	m.unownedMigsAtLastRefreshMutex.Unlock()
+	unownedMigs := map[gce.GceRef]bool{}
+
 	for _, nodePool := range nodePools {
 		nodePoolMigs, err := nodePoolMIGs(m, m.domainUrl, nodePool)
 		unblockedMigs := make([]*GkeMig, 0, len(nodePoolMigs))
@@ -793,8 +865,17 @@ func (m *gkeManagerImpl) refreshNodePools(nodePools []gkeclient.NodePool, allNod
 			AddMigsToNodePool(nodePool.Name, unblockedMigs...)
 			for _, mig := range unblockedMigs {
 				existingMigs[mig.GceRef()] = struct{}{}
-				if m.cache.RegisterMig(mig) {
+				isOwned := m.migLister.IsMigOwned(mig)
+				// Register all MIGs in cache (for ExistingMigsInNodePool), but
+				// only validate templates for owned MIGs to avoid uncached GCE
+				// template fetches. MIGs that became owned since the last
+				// refresh are validated even if they didn't change.
+				registered := m.cache.RegisterMig(mig)
+				if isOwned && (registered || prevUnownedMigs[mig.GceRef()]) {
 					newOrModifiedMigs[mig] = true
+				}
+				if !isOwned {
+					unownedMigs[mig.GceRef()] = true
 				}
 			}
 		}
@@ -807,7 +888,16 @@ func (m *gkeManagerImpl) refreshNodePools(nodePools []gkeclient.NodePool, allNod
 	for mig := range newOrModifiedMigs {
 		m.validateMigTemplateNode(mig)
 	}
-	for _, mig := range m.migLister.GetGkeMigs() {
+	m.unownedMigsAtLastRefreshMutex.Lock()
+	m.unownedMigsAtLastRefresh = unownedMigs
+	m.unownedMigsAtLastRefreshMutex.Unlock()
+
+	// Iterate over m.cache (not m.migLister) so deleted unowned MIGs are also
+	// unregistered.
+	for _, mig := range m.cache.GetGkeMigs() {
+		if m.cache.IsMigBlocked(mig.GceRef()) {
+			continue
+		}
 		if _, found := existingMigs[mig.GceRef()]; !found {
 			m.cache.UnregisterMig(mig)
 		}
@@ -2000,6 +2090,7 @@ func (m *gkeManagerImpl) Refresh() error {
 
 // refresh invalidates cache and refreshes GKE and GCE resources.
 func (m *gkeManagerImpl) refresh(force bool) error {
+	m.migLister.InvalidateOwnershipCache()
 	m.cache.InvalidateAllMigInstances(context.TODO())
 	m.refreshShortLivedUpgradeInProgress()
 	m.cache.InvalidateAllMigTargetSizes(context.TODO())

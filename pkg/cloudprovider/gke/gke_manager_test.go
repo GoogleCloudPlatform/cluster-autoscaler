@@ -4935,6 +4935,75 @@ func TestRefreshNodePoolsNonAutoscaled(t *testing.T) {
 	assert.Empty(t, manager.GetGkeMigs())
 }
 
+type mockNodeGroupOwnershipFilter struct {
+	ownedNodePool string
+}
+
+func (f *mockNodeGroupOwnershipFilter) IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool {
+	if mig, ok := nodeGroup.(*GkeMig); ok {
+		return mig.NodePoolName() == f.ownedNodePool
+	}
+	return false
+}
+
+func TestRefreshNodePools_FilteredMigListerCachesUnownedMigs(t *testing.T) {
+	migOwnedURL := "https://www.googleapis.com/compute/v1/projects/test-project/zones/test-zone/instanceGroupManagers/mig-owned"
+	migUnownedURL := "https://www.googleapis.com/compute/v1/projects/test-project/zones/test-zone/instanceGroupManagers/mig-unowned"
+	poolOwned := gkeclient.NodePool{Name: "pool-owned", InstanceGroupUrls: []string{migOwnedURL}, Autoscaled: true}
+	poolUnowned := gkeclient.NodePool{Name: "pool-unowned", InstanceGroupUrls: []string{migUnownedURL}, Autoscaled: true}
+
+	manager := newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil)
+	manager.migLister = NewFilteredMigLister(manager.migLister, &mockNodeGroupOwnershipFilter{ownedNodePool: "pool-owned"}, []string{"autoscaling.gke.io/standard"})
+	manager.migOwnershipFilteringEnabled = true
+
+	manager.refreshNodePools([]gkeclient.NodePool{poolOwned, poolUnowned}, sets.New[string]())
+
+	// Filtered GetGkeMigs() and GetMigs() only expose the owned MIG
+	assert.Len(t, manager.GetGkeMigs(), 1)
+	assert.Equal(t, "mig-owned", manager.GetGkeMigs()[0].GceRef().Name)
+
+	// Underlying GkeCache and ExistingMigsInNodePool retain both owned and
+	// unowned MIGs
+	assert.Len(t, manager.cache.GetMigs(), 2)
+	assert.Len(t, manager.ExistingMigsInNodePool("pool-unowned"), 1)
+	assert.False(t, manager.IsMigOwned(manager.ExistingMigsInNodePool("pool-unowned")[0]))
+}
+
+func TestRefreshNodePools_ValidatesMigTemplateWhenMigBecomesOwned(t *testing.T) {
+	migURL := "https://www.googleapis.com/compute/v1/projects/test-project/zones/test-zone/instanceGroupManagers/mig-a"
+	pool := gkeclient.NodePool{Name: "pool-a", InstanceGroupUrls: []string{migURL}, Autoscaled: true}
+
+	// Every GCE request made by validateMigTemplateNode is recorded by the mock
+	// server.
+	server := NewHttpServerMock(MockFieldStatusCode, MockFieldResponse)
+	defer server.Close()
+	server.On("handle", mock.Anything).Return(http.StatusNotFound, `{"error": {"code": 404, "message": "not found"}}`)
+
+	manager := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)
+	filter := &mockNodeGroupOwnershipFilter{ownedNodePool: "some-other-pool"}
+	manager.migLister = NewFilteredMigLister(manager.migLister, filter, []string{"autoscaling.gke.io/standard"})
+	manager.migOwnershipFilteringEnabled = true
+
+	// Refresh 1: MIG is registered but not owned, so its template is not
+	// validated.
+	manager.refreshNodePools([]gkeclient.NodePool{pool}, sets.New[string]())
+	assert.False(t, manager.IsMigOwned(manager.ExistingMigsInNodePool("pool-a")[0]))
+	server.AssertNumberOfCalls(t, "handle", 0)
+
+	// Refresh 2: MIG becomes owned without changing (e.g. CCC annotation
+	// change, or the default CCC being unknown during startup), so its template
+	// must be validated.
+	filter.ownedNodePool = "pool-a"
+	manager.refreshNodePools([]gkeclient.NodePool{pool}, sets.New[string]())
+	assert.True(t, manager.IsMigOwned(manager.ExistingMigsInNodePool("pool-a")[0]))
+	callsAfterOwnershipChange := len(server.Calls)
+	assert.Greater(t, callsAfterOwnershipChange, 0, "expected template validation after MIG became owned")
+
+	// Refresh 3: MIG stays owned and unchanged, so it is not validated again.
+	manager.refreshNodePools([]gkeclient.NodePool{pool}, sets.New[string]())
+	server.AssertNumberOfCalls(t, "handle", callsAfterOwnershipChange)
+}
+
 func TestInitializeOnce(t *testing.T) {
 	testCases := []struct {
 		desc              string
@@ -5407,6 +5476,65 @@ func (m *mockAutoscalingOptionsProvider) ScaleDownGpuUtilizationThreshold(cloudp
 	}
 
 	return *m.scaleDownGpuUtilizationThreshold, true, nil
+}
+
+func (m *mockAutoscalingOptionsProvider) IsNodeGroupOwned(cloudprovider.NodeGroup) bool {
+	return true
+}
+
+func (m *mockAutoscalingOptionsProvider) IsNodeOwned(*apiv1.Node) bool {
+	return true
+}
+
+type nodeOwnershipOptionsProvider struct {
+	mockAutoscalingOptionsProvider
+	nodeOwned bool
+}
+
+func (p *nodeOwnershipOptionsProvider) IsNodeOwned(*apiv1.Node) bool {
+	return p.nodeOwned
+}
+
+func TestIsNodeOwned(t *testing.T) {
+	node := BuildTestNode("node", 1000, 1000)
+	for name, tc := range map[string]struct {
+		filteringEnabled bool
+		provider         AutoscalingOptionsProvider
+		want             bool
+	}{
+		"filtering disabled ignores provider": {
+			filteringEnabled: false,
+			provider:         &nodeOwnershipOptionsProvider{nodeOwned: false},
+			want:             true,
+		},
+		"filtering enabled, owned": {
+			filteringEnabled: true,
+			provider:         &nodeOwnershipOptionsProvider{nodeOwned: true},
+			want:             true,
+		},
+		"filtering enabled, not owned": {
+			filteringEnabled: true,
+			provider:         &nodeOwnershipOptionsProvider{nodeOwned: false},
+			want:             false,
+		},
+		"filtering enabled, no provider": {
+			filteringEnabled: true,
+			provider:         nil,
+			want:             true,
+		},
+		"filtering enabled, typed nil provider": {
+			filteringEnabled: true,
+			provider:         (*nodeOwnershipOptionsProvider)(nil),
+			want:             true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &gkeManagerImpl{migOwnershipFilteringEnabled: tc.filteringEnabled, autoscalingOptsProvider: tc.provider}
+			if got := m.IsNodeOwned(node); got != tc.want {
+				t.Errorf("IsNodeOwned() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
 
 func TestScaleDownUnreadyTimeOverride(t *testing.T) {
@@ -6223,7 +6351,7 @@ func TestRefreshShortLivedUpgradeInProgress(t *testing.T) {
 				mig.GceRef(): tc.instances,
 			},
 		}
-		g.migLister.cache.gkeMigs = map[gce.GceRef]*GkeMig{mig.GceRef(): mig}
+		g.cache.gkeMigs = map[gce.GceRef]*GkeMig{mig.GceRef(): mig}
 
 		g.refreshShortLivedUpgradeInProgress()
 

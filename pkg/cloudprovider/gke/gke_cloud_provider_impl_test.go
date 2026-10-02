@@ -36,9 +36,11 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -111,6 +113,138 @@ func TestNodeGroupsBlockedByNotFoundError(t *testing.T) {
 	result := gke.NodeGroupsBlockedByNotFoundError()
 	assert.Equal(t, []cloudprovider.NodeGroup{mig[0]}, result)
 	mock.AssertExpectationsForObjects(t, gkeManagerMock)
+}
+
+func TestNodeGroupForNode_OwnershipFiltering(t *testing.T) {
+	migRef := gce.GceRef{Project: "project-123", Zone: "us-central1-c", Name: "gke-pool-47c9e542-grp"}
+	nodeName := "gke-pool-47c9e542-abcd"
+	providerID := fmt.Sprintf("gce://%s/%s/%s", migRef.Project, migRef.Zone, nodeName)
+	instanceRef := gce.GceRef{Project: migRef.Project, Zone: migRef.Zone, Name: nodeName}
+
+	realNode := func(computeClass, nodeProviderID string) *apiv1.Node {
+		node := BuildTestNode(nodeName, 1000, 1000)
+		node.Spec.ProviderID = nodeProviderID
+		node.Labels[gkelabels.GkeNodePoolLabel] = "pool"
+		node.Labels[gkelabels.ComputeClassLabel] = computeClass
+		return node
+	}
+	fakeNode := clusterstate.FakeNode(cloudprovider.Instance{Id: providerID}, cloudprovider.FakeNodeUnregistered)
+	fakeNodeWithLabels := clusterstate.FakeNode(cloudprovider.Instance{Id: providerID}, cloudprovider.FakeNodeUnregistered)
+	fakeNodeWithLabels.Labels = map[string]string{gkelabels.GkeNodePoolLabel: "pool"}
+	unlabeledNode := &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}, Spec: apiv1.NodeSpec{ProviderID: providerID}}
+
+	for _, tc := range []struct {
+		name             string
+		node             *apiv1.Node
+		filteringEnabled bool
+		isNodeOwned      bool // what IsNodeOwned returns, if called
+		isMigOwned       bool // what IsMigOwned returns for the node's MIG
+		// wantMig is whether the node resolves to its MIG, or to nil.
+		wantMig               bool
+		wantIsNodeOwnedCalled bool
+		// wantEarlyReturn is whether nil is returned before resolving the
+		// node's instance and MIG.
+		wantEarlyReturn bool
+	}{
+		{
+			name:             "filtering disabled: no ownership check",
+			node:             realNode("foreign-ccc", providerID),
+			filteringEnabled: false,
+			isNodeOwned:      false,
+			isMigOwned:       true,
+			wantMig:          true,
+		},
+		{
+			name:                  "owned node",
+			node:                  realNode("owned-ccc", providerID),
+			filteringEnabled:      true,
+			isNodeOwned:           true,
+			isMigOwned:            true,
+			wantMig:               true,
+			wantIsNodeOwnedCalled: true,
+		},
+		{
+			// With an empty ProviderID, resolving the instance goes through
+			// ExistingMigsInNodePool and GetBasenameForMig, which can call GCE.
+			name:                  "unowned node with empty ProviderID",
+			node:                  realNode("foreign-ccc", ""),
+			filteringEnabled:      true,
+			isNodeOwned:           false,
+			isMigOwned:            false,
+			wantMig:               false,
+			wantIsNodeOwnedCalled: true,
+			wantEarlyReturn:       true,
+		},
+		{
+			// The MIG ownership check is the backstop, e.g. if the node's
+			// ComputeClass label disagrees with its MIG's.
+			name:                  "owned node in an unowned MIG",
+			node:                  realNode("owned-ccc", providerID),
+			filteringEnabled:      true,
+			isNodeOwned:           true,
+			isMigOwned:            false,
+			wantMig:               false,
+			wantIsNodeOwnedCalled: true,
+		},
+		// Fake or unlabeled nodes would resolve to the default ComputeClass in
+		// IsNodeOwned, which an instance not handling unannotated ComputeClasses
+		// doesn't own. They skip the check and resolve via their MIG.
+		{
+			name:             "fake node (unregistered instance)",
+			node:             fakeNode,
+			filteringEnabled: true,
+			isNodeOwned:      false,
+			isMigOwned:       true,
+			wantMig:          true,
+		},
+		{
+			name:             "fake node with labels",
+			node:             fakeNodeWithLabels,
+			filteringEnabled: true,
+			isNodeOwned:      false,
+			isMigOwned:       true,
+			wantMig:          true,
+		},
+		{
+			name:             "node without labels",
+			node:             unlabeledNode,
+			filteringEnabled: true,
+			isNodeOwned:      false,
+			isMigOwned:       true,
+			wantMig:          true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mig := &GkeMig{gceRef: migRef}
+			gkeManagerMock := &GkeManagerMock{}
+			gkeManagerMock.On("IsMigOwnershipFilteringEnabled").Return(tc.filteringEnabled)
+			gkeManagerMock.On("IsNodeOwned", mock.Anything).Return(tc.isNodeOwned)
+			gkeManagerMock.On("GetMigForInstance", mock.AnythingOfType("gce.GceRef")).Return(mig, nil)
+			gkeManagerMock.On("IsMigBlocked", migRef).Return(false)
+			gkeManagerMock.On("IsMigOwned", mig).Return(tc.isMigOwned)
+			gke := &gkeCloudProviderImpl{gkeManager: gkeManagerMock, resolveInstanceRefUsingNodePoolLabel: true}
+
+			nodeGroup, err := gke.NodeGroupForNode(context.TODO(), tc.node)
+
+			assert.NoError(t, err)
+			if tc.wantMig {
+				assert.Equal(t, mig, nodeGroup)
+			} else {
+				assert.Nil(t, nodeGroup)
+			}
+			if tc.wantEarlyReturn {
+				gkeManagerMock.AssertNotCalled(t, "ExistingMigsInNodePool", mock.Anything)
+				gkeManagerMock.AssertNotCalled(t, "GetMigForInstance", mock.Anything)
+			} else {
+				gkeManagerMock.AssertCalled(t, "GetMigForInstance", instanceRef)
+			}
+			if tc.wantIsNodeOwnedCalled {
+				gkeManagerMock.AssertCalled(t, "IsNodeOwned", tc.node)
+			} else {
+				gkeManagerMock.AssertNotCalled(t, "IsNodeOwned", mock.Anything)
+			}
+		})
+	}
 }
 
 func TestNodeGroupForNode(t *testing.T) {
@@ -1821,6 +1955,10 @@ func (m *migForNodeGkeManagerMock) GetMigForInstance(instance gce.GceRef) (gce.M
 
 func (m *migForNodeGkeManagerMock) IsMigBlocked(migRef gce.GceRef) bool {
 	return false
+}
+
+func (m *migForNodeGkeManagerMock) IsMigOwned(mig cloudprovider.NodeGroup) bool {
+	return true
 }
 
 func TestGkeMigForNode(t *testing.T) {
