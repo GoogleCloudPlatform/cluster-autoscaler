@@ -223,7 +223,7 @@ func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.Clust
 		if isCandidate[schedulingCandidateName] {
 			return false
 		}
-		if p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodes) && processor.HasLookaheadPods(schedulingCandidateNodeInfo) {
+		if p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodesFlag) && processor.HasLookaheadPods(schedulingCandidateNodeInfo) {
 			return false
 		}
 		return schedulingCandidateName != nodeName

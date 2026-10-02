@@ -116,7 +116,11 @@ var (
 	ekAutoprovisioning                           = flag.String("ek-autoprovisioning", string(resizable_types.EkAutoprovisioningUnspecified), "Specifies if EKs are enabled and if so, which resizing mode is used. If unspecified, can be overridden by experiment.")
 	e4aAutoprovisioning                          = flag.String("e4a-autoprovisioning", string(resizable_types.E4aAutoprovisioningUnspecified), "Specifies if E4As are enabled and if so, which resizing mode is used. If unspecified, can be overridden by experiment.")
 	ekLookaheadMaxWorkloadSeparations            = flag.Int("ek-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by EK lookahead buffers.")
+	e4aLookaheadMaxWorkloadSeparations           = flag.Int("e4a-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by E4A lookahead buffers.")
+	e4LookaheadMaxWorkloadSeparations            = flag.Int("e4-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by E4 lookahead buffers.")
 	ekLookaheadPodStrategy                       = flag.String("ek-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing EK lookahead pod strategy.")
+	e4aLookaheadPodStrategy                      = flag.String("e4a-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing E4A lookahead pod strategy.")
+	e4LookaheadPodStrategy                       = flag.String("e4-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing E4 lookahead pod strategy.")
 	ekOnManagedNodesEnabled                      = flag.Bool("enable-ek-on-managed-nodes", false, "Specifies if EKs are enabled on managed nodes.")
 	e4aOnManagedNodesEnabled                     = flag.Bool("enable-e4a-on-managed-nodes", false, "Specifies if E4As are enabled on managed nodes.")
 	multiNetworkSupportEnabled                   = flag.Bool("multi-network-support-enabled", false, "Enables support for multi network pods.")
@@ -126,7 +130,7 @@ var (
 	cpMaxParallelOps                             = flag.Int("cp-max-parallel-ops", 9, "The max number of GKE CP parallel operations. Operations excceeding the limit are queued by CA in memory. It's used for async node group creations and deletions. See: go/ht-nap")
 	cpMaxQueuedOps                               = flag.Int("cp-max-queued-ops", 40, "The max number of queued GKE CP operations. It's used for async node group creations and deletions. See: go/ht-nap")
 	multitenancyEnabled                          = flag.Bool("multitenancy-enabled", false, "Enables support for GKE Multitenancy")
-	systemNamespaces                             = flag.String("system-namespaces", "", "Comma separated list of system namepsaces.")
+	systemNamespaces                             = flag.String("system-namespaces", "", "Comma separated list of system namespaces.")
 	futureReservationsBackoffEnabled             = flag.Bool("enable-future-reservations-backoff", false,
 		"Enable backoff to future reservation start time when a specific named reservation used for node-pool refers to an existing future reservation")
 	enableConsumablePuller               = flag.Bool("enable-consumable-reservations-puller", false, "Whether to pull reservations from the Beta ListConsumableReservations API.")
@@ -362,7 +366,11 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		EkOnManagedNodesEnabled:                      *ekOnManagedNodesEnabled,
 		E4aOnManagedNodesEnabled:                     *e4aOnManagedNodesEnabled,
 		EkLookaheadMaxWorkloadSeparations:            *ekLookaheadMaxWorkloadSeparations,
+		E4aLookaheadMaxWorkloadSeparations:           *e4aLookaheadMaxWorkloadSeparations,
+		E4LookaheadMaxWorkloadSeparations:            *e4LookaheadMaxWorkloadSeparations,
 		EkLookaheadPodStrategy:                       *ekLookaheadPodStrategy,
+		E4aLookaheadPodStrategy:                      *e4aLookaheadPodStrategy,
+		E4LookaheadPodStrategy:                       *e4LookaheadPodStrategy,
 		MachineConfigEnabled:                         *machineConfigEnabled,
 		CvmMachineConfigEnabled:                      *cvmMachineConfigEnabled,
 		MachineConfigRefreshInterval:                 *machineConfigRefreshInterval,

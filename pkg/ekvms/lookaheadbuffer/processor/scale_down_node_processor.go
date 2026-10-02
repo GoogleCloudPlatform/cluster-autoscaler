@@ -37,7 +37,7 @@ func NewScaleDownNodeProcessor(experimentsManager experiments.Manager) *ScaleDow
 
 // GetPodDestinationCandidates filters out nodes which contain lookahead pods.
 func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
-	if !p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodes) {
+	if !p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodesFlag) {
 		return nodes, nil
 	}
 
