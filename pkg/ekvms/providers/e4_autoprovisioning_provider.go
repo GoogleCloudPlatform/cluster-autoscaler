@@ -85,11 +85,11 @@ func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
 		return
 	}
 
-	if isE4EnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4WithResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4WithResizeEnabledFlag, false); isE4EnabledWithExperiment {
+	if isE4EnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4WithResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4WithResizeEnabledFlag, true); isE4EnabledWithExperiment {
 		p.status = LaunchStatus{phase: launchCoarseGrainedResize, source: launchExperiment}
 		return
 	}
-	if isE4NoResizeEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4MinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4NoResizeEnabledFlag, false); isE4NoResizeEnabledWithExperiment {
+	if isE4NoResizeEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4MinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4NoResizeEnabledFlag, true); isE4NoResizeEnabledWithExperiment {
 		p.status = LaunchStatus{phase: launchEnabledNoResize, source: launchExperiment}
 		return
 	}

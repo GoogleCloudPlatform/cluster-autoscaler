@@ -51,6 +51,15 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 			expectedSource: launchExperiment,
 		},
 		{
+			name:                  "coarse resize enabled flag missing - enabled (failsafe is true)",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+			},
+			expectedPhase:  launchCoarseGrainedResize,
+			expectedSource: launchExperiment,
+		},
+		{
 			name:                  "coarse resize min version not met - not enabled",
 			isBalloonPodCreatable: true,
 			experimentFlags: map[string]bool{
@@ -81,10 +90,20 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 			expectedSource: launchExperiment,
 		},
 		{
-			name:                  "no resize enabled flag missing - not enabled (failsafe is false)",
+			name:                  "no resize enabled flag missing - enabled (failsafe is true)",
 			isBalloonPodCreatable: true,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4MinVersionFlag: true,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchExperiment,
+		},
+		{
+			name:                  "no resize enabled flag false - not enabled",
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4MinVersionFlag:      true,
+				experiments.AutopilotE4NoResizeEnabledFlag: false,
 			},
 			expectedPhase:  launchNotEnabled,
 			expectedSource: launchUndefined,
