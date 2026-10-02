@@ -758,6 +758,16 @@ func WithInitialNodeGroupBackoffDuration(d time.Duration) Option[*config.Autosca
 	}
 }
 
+// WithEdpAutopilotOptions enables Autopilot with Extended Duration Pods upgrade tainting and disables EK autoprovisioning.
+func WithEdpAutopilotOptions() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.AutopilotEnabled = true
+		o.InternalOptions.EkAutoprovisioning = "EK_AUTOPROVISIONING_DISABLED"
+		o.InternalOptions.ExtendedDurationPodsUpgradeNodesTaintPerLoop = 10
+		return o
+	}
+}
+
 // --- Cluster Option Overrides ---
 
 // WithClusterZones sets the cluster's locations.
@@ -808,6 +818,22 @@ func WithClusterResourceLimits(limits []*gke_api_beta.ResourceLimit) Option[*gke
 			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
 		}
 		c.Autoscaling.ResourceLimits = limits
+		return c
+	}
+}
+
+// WithCurrentMasterVersion sets the cluster's CurrentMasterVersion.
+func WithCurrentMasterVersion(version string) Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		c.CurrentMasterVersion = version
+		return c
+	}
+}
+
+// WithCurrentEmulatedVersion sets the cluster's CurrentEmulatedVersion.
+func WithCurrentEmulatedVersion(version string) Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		c.CurrentEmulatedVersion = version
 		return c
 	}
 }

@@ -31,6 +31,7 @@ type ProcessorsCloudProvider interface {
 
 	GetClusterCreateTime() time.Time
 	GetClusterVersion() string
+	GetEmulatedClusterVersion() string
 	ClusterStarted() (bool, error)
 	GetAllZones() ([]string, error)
 	RecommendLocations(context.Context, gceclient.RecommendLocationsRequest) (*gceclient.RecommendLocationsResponse, error)

@@ -191,6 +191,9 @@ type GkeManager interface {
 	GetClusterName() string
 	// GetClusterVersion returns the version of the GKE cluster.
 	GetClusterVersion() string
+	// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
+	// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
+	GetEmulatedClusterVersion() string
 	// GetClusterNetwork returns the GCE Network resource of the cluster's VPC
 	GetClusterNetwork() (*gce_api.Network, error)
 	// RecommendLocations returns recommendation made by recommendLocations API.
@@ -1801,6 +1804,12 @@ func (m *gkeManagerImpl) GetClusterName() string {
 // GetClusterVersion returns the version of GKE cluster.
 func (m *gkeManagerImpl) GetClusterVersion() string {
 	return m.clusterVersion
+}
+
+// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
+// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
+func (m *gkeManagerImpl) GetEmulatedClusterVersion() string {
+	return m.emulatedClusterVersion
 }
 
 // GetClusterNetwork returns the GCE Network resource of the cluster's VPC

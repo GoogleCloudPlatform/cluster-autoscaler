@@ -93,6 +93,9 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 	kubeEnvStringBuilder.WriteString(fmt.Sprintf("NODE_LABELS: %s\n", kubeLabelsStr))
 	kubeEnvStringBuilder.WriteString(fmt.Sprintf("NODE_TAINTS: %s\n", taintsStr))
 	kubeEnvStringBuilder.WriteString(fmt.Sprintf("KUBELET_ARGS: %s\n", strings.Join(kubeletArgs, " ")))
+	if np.Version != "" {
+		kubeEnvStringBuilder.WriteString(fmt.Sprintf("KUBELET_VERSION: v%s\n", np.Version))
+	}
 
 	metadataItems := []*gcev1.MetadataItems{
 		{

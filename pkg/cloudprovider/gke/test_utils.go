@@ -1485,6 +1485,12 @@ func (m *GkeCloudProviderMock) GetClusterVersion() string {
 	return args.Get(0).(string)
 }
 
+// GetEmulatedClusterVersion is a mocked method.
+func (m *GkeCloudProviderMock) GetEmulatedClusterVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
 // GetAllZones returns all zones within a region that cluster is running in.
 func (m *GkeCloudProviderMock) GetAllZones() ([]string, error) {
 	args := m.Called()
@@ -1785,6 +1791,10 @@ func (fake *FakeGkeManager) GetClusterName() string {
 }
 
 func (fake *FakeGkeManager) GetClusterVersion() string {
+	panic("not implemented")
+}
+
+func (fake *FakeGkeManager) GetEmulatedClusterVersion() string {
 	panic("not implemented")
 }
 
@@ -2604,6 +2614,12 @@ func (m *GkeManagerMock) GetClusterName() string {
 
 // GetClusterVersion is a mocked method.
 func (m *GkeManagerMock) GetClusterVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+// GetEmulatedClusterVersion is a mocked method.
+func (m *GkeManagerMock) GetEmulatedClusterVersion() string {
 	args := m.Called()
 	return args.String(0)
 }

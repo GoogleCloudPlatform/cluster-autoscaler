@@ -884,6 +884,12 @@ func (p *gkeCloudProviderImpl) GetClusterVersion() string {
 	return p.gkeManager.GetClusterVersion()
 }
 
+// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
+// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
+func (p *gkeCloudProviderImpl) GetEmulatedClusterVersion() string {
+	return p.gkeManager.GetEmulatedClusterVersion()
+}
+
 // NodePoolSpecForNode returns the node pool spec for a particular node, regardless whether
 // the node pool is autoscaled or not.
 func (p *gkeCloudProviderImpl) NodePoolSpecForNode(node *apiv1.Node) (*gkeclient.NodePoolSpec, error) {

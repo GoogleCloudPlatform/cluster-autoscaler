@@ -143,6 +143,9 @@ func (f *Client) WithCluster(c *gkeapibeta.Cluster) (*Client, error) {
 	}
 
 	for _, np := range c.NodePools {
+		if np.Version == "" {
+			np.Version = f.defaultNodePoolVersion()
+		}
 		if err := validateNodePool(np); err != nil {
 			return nil, fmt.Errorf("node pool validation failed for %s: %w", np.Name, err)
 		}
@@ -233,6 +236,10 @@ func (f *Client) CreateNodePool(clusterPath string, req *gkeapibeta.CreateNodePo
 
 	if err := validateNodePool(req.NodePool); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	if req.NodePool.Version == "" {
+		req.NodePool.Version = f.defaultNodePoolVersion()
 	}
 
 	npName := req.NodePool.Name
@@ -382,12 +389,23 @@ func (f *Client) instanceGroupURLs(np *gkeapibeta.NodePool) []string {
 	return urls
 }
 
+// defaultNodePoolVersion returns the version of node pools created without an explicit version.
+// During phase 1 of a rollback-safe control plane upgrade, new node pools are created at the emulated
+// minor version; otherwise they are created at the master version.
+func (f *Client) defaultNodePoolVersion() string {
+	if f.cluster.CurrentEmulatedVersion != "" {
+		return f.cluster.CurrentEmulatedVersion + ".0-gke.0"
+	}
+	return f.cluster.CurrentMasterVersion
+}
+
 func (f *Client) newNodePool(np *gkeapibeta.NodePool, clusterPath string) *gkeapibeta.NodePool {
 	nodePoolPath := fmt.Sprintf("%s/nodePools/%s", clusterPath, np.Name)
 	return &gkeapibeta.NodePool{
 		Name:                   np.Name,
 		SelfLink:               nodePoolPath,
 		Status:                 "RUNNING",
+		Version:                np.Version,
 		Locations:              np.Locations,
 		InitialNodeCount:       np.InitialNodeCount,
 		InstanceGroupUrls:      f.instanceGroupURLs(np),

@@ -82,3 +82,36 @@ func (nv Version) LessThan(nv2 Version) bool {
 	}
 	return false
 }
+
+// MinorVersion returns the major and minor part of the version.
+func (nv Version) MinorVersion() MinorVersion {
+	return MinorVersion{nv[0], nv[1]}
+}
+
+// MinorVersion represents a "<major>.<minor>" version, e.g. the version emulated by the control plane.
+type MinorVersion [2]int
+
+// MinorVersionFromString parses a "<major>.<minor>" version, e.g. "1.34", with an optional "v" prefix.
+func MinorVersionFromString(mv string) (MinorVersion, error) {
+	parts := strings.Split(strings.TrimPrefix(mv, "v"), ".")
+	if len(parts) != 2 {
+		return MinorVersion{}, fmt.Errorf("invalid minor version: %q, want \"<major>.<minor>\"", mv)
+	}
+	var result MinorVersion
+	for i, part := range parts {
+		x, err := strconv.Atoi(part)
+		if err != nil {
+			return MinorVersion{}, fmt.Errorf("invalid minor version: %q: %v", mv, err)
+		}
+		result[i] = x
+	}
+	return result, nil
+}
+
+// LessThan compares the minor version with the input minor version.
+func (mv MinorVersion) LessThan(mv2 MinorVersion) bool {
+	if mv[0] != mv2[0] {
+		return mv[0] < mv2[0]
+	}
+	return mv[1] < mv2[1]
+}

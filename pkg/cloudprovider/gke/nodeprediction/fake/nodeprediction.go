@@ -126,9 +126,9 @@ func BuildNodeFromTemplate(
 		node.Annotations["node.gke.io/last-applied-node-labels"] = "fake-node-label"
 	}
 
-	// Default KubeletVersion if not already populated (needed to prevent panic in NAP tests)
-	if node.Status.NodeInfo.KubeletVersion == "" {
-		node.Status.NodeInfo.KubeletVersion = "v1.30.0"
+	node.Status.NodeInfo.KubeletVersion = "v1.30.0"
+	if kv, found := ke.Var("KUBELET_VERSION"); found {
+		node.Status.NodeInfo.KubeletVersion = kv
 	}
 
 	// Real nodes are stamped by the API server on registration. Without it, ClusterStateRegistry

@@ -94,6 +94,7 @@ func TestUpgradeNodeTaintingProcessor_Process(t *testing.T) {
 
 	assert.NoError(t, snapshot.SetClusterState(context.TODO(), []*v1.Node{n1, n2}, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 	cp.On("GetClusterVersion").Return("1.24.1")
+	cp.On("GetEmulatedClusterVersion").Return("")
 	edpProcessor := NewUpgradeNodeTaintingProcessor(10)
 	err := edpProcessor.Process(context.TODO(), ctx, nil, time.Now())
 	assert.NoError(t, err)

@@ -40,12 +40,15 @@ func TestEligibleNodes(t *testing.T) {
 	n2 := setVersion(setLabel(test.BuildTestNode("node2", 100, 0), labels.ExtendedDurationPodsLabel), "1.24.1")
 	n3 := setVersion(test.BuildTestNode("node3", 100, 0), "1.24.0")
 	n4 := setVersion(test.BuildTestNode("node4", 100, 0), "1.24.1")
+	n5 := setVersion(setLabel(test.BuildTestNode("node5", 100, 0), labels.ExtendedDurationPodsLabel), "1.34.9-gke.1655001")
+	n6 := setVersion(setLabel(test.BuildTestNode("node6", 100, 0), labels.ExtendedDurationPodsLabel), "1.33.9-gke.1000000")
 
 	testCases := map[string]struct {
-		nodes            []*v1.Node
-		cloudProviderNil bool
-		clusterVersion   string
-		expected         int
+		nodes                  []*v1.Node
+		cloudProviderNil       bool
+		clusterVersion         string
+		emulatedClusterVersion string
+		expected               int
 	}{
 		"nil cloud provider": {
 			nodes:            nil,
@@ -71,6 +74,18 @@ func TestEligibleNodes(t *testing.T) {
 			expected:       1,
 			clusterVersion: "1.24.1",
 		},
+		"rollback-safe upgrade: node at emulated minor is not eligible": {
+			nodes:                  []*v1.Node{n5},
+			expected:               0,
+			clusterVersion:         "1.35.6-gke.1250000",
+			emulatedClusterVersion: "1.34",
+		},
+		"rollback-safe upgrade: node below emulated minor is eligible": {
+			nodes:                  []*v1.Node{n5, n6},
+			expected:               1,
+			clusterVersion:         "1.35.6-gke.1250000",
+			emulatedClusterVersion: "1.34",
+		},
 	}
 
 	for tn, tc := range testCases {
@@ -88,6 +103,7 @@ func TestEligibleNodes(t *testing.T) {
 			}
 			if !tc.cloudProviderNil {
 				cp.On("GetClusterVersion").Return(tc.clusterVersion)
+				cp.On("GetEmulatedClusterVersion").Return(tc.emulatedClusterVersion)
 			}
 			if tc.nodes != nil {
 				err := snapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot())
@@ -162,7 +178,7 @@ func TestIsNodeEligibleForUpgrade(t *testing.T) {
 				setVersion(tc.node, tc.kubeletVersion)
 				nodeInfo.SetNode(tc.node)
 			}
-			isEligible := IsNodeEligibleForUpgrade(nodeInfo, tc.clusterVersion)
+			isEligible := IsNodeEligibleForUpgrade(nodeInfo, tc.clusterVersion, "")
 			assert.Equal(t, tc.expected, isEligible)
 		})
 	}

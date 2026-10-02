@@ -184,6 +184,7 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 	}
 	cp := &gke.GkeCloudProviderMock{}
 	cp.On("GetClusterVersion").Return("1.25.0")
+	cp.On("GetEmulatedClusterVersion").Return("")
 	for testName, testCase := range testCases {
 		t.Run(testName, func(t *testing.T) {
 			processor := NewScaleDownProcessor()
