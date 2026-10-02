@@ -278,7 +278,7 @@ func initVisibilityProcessors(options internalopts.AutoscalingOptions, provider 
 
 func initCapacityBufferMetricsProcessor(experimentsManager experiments.Manager, client *client.CapacityBufferClient, registry *fakepods.Registry, buffersEnabled bool) *capacitybuffers.MetricProcessor {
 	if buffersEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.CapacityBuffersMetricProcessor) {
-		return capacitybuffers.NewMetricProcessor(client, registry, internalmetrics.Metrics)
+		return capacitybuffers.NewMetricProcessor(client, registry, internalmetrics.Metrics, experimentsManager)
 	}
 	return nil
 }
