@@ -1665,6 +1665,10 @@ func NewFakeGkeManager(zones []string) *FakeGkeManager {
 	}
 }
 
+func (fake *FakeGkeManager) GetNodePoolSpec(nodePoolName string) (*gkeclient.NodePoolSpec, bool) {
+	return nil, false
+}
+
 func (fake *FakeGkeManager) IsNodeAutoprovisioningEnabled() bool {
 	panic("not implemented")
 }
@@ -1727,6 +1731,18 @@ func (fake *FakeGkeManager) Cleanup() error {
 
 func (fake *FakeGkeManager) GetGkeMigs() []*GkeMig {
 	panic("not implemented")
+}
+
+func (fake *FakeGkeManager) IsMigOwned(mig cloudprovider.NodeGroup) bool {
+	return true
+}
+
+func (fake *FakeGkeManager) IsMigOwnershipFilteringEnabled() bool {
+	return false
+}
+
+func (fake *FakeGkeManager) IsNodeOwned(node *apiv1.Node) bool {
+	return true
 }
 
 func (fake *FakeGkeManager) GetGkeMigsBlockedByServerError() []*GkeMig {
@@ -2321,6 +2337,16 @@ type GkeManagerMock struct {
 	m                            sync.Mutex
 }
 
+func (m *GkeManagerMock) GetNodePoolSpec(nodePoolName string) (*gkeclient.NodePoolSpec, bool) {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "GetNodePoolSpec" {
+			args := m.Called(nodePoolName)
+			return args.Get(0).(*gkeclient.NodePoolSpec), args.Bool(1)
+		}
+	}
+	return nil, false
+}
+
 // ExperimentsManager is a mocked method.
 func (m *GkeManagerMock) ExperimentsManager() experiments.Manager {
 	for _, call := range m.ExpectedCalls {
@@ -2538,6 +2564,40 @@ func (m *GkeManagerMock) Cleanup() error {
 func (m *GkeManagerMock) GetGkeMigs() []*GkeMig {
 	args := m.Called()
 	return args.Get(0).([]*GkeMig)
+}
+
+// IsMigOwned is a mocked method.
+func (m *GkeManagerMock) IsMigOwned(mig cloudprovider.NodeGroup) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "IsMigOwned" {
+			args := m.Called(mig)
+			return args.Bool(0)
+		}
+	}
+	return true
+}
+
+// IsMigOwnershipFilteringEnabled is a mocked method. Defaults to false (single
+// CA) unless mocked.
+func (m *GkeManagerMock) IsMigOwnershipFilteringEnabled() bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "IsMigOwnershipFilteringEnabled" {
+			args := m.Called()
+			return args.Bool(0)
+		}
+	}
+	return false
+}
+
+// IsNodeOwned is a mocked method. Defaults to true unless mocked.
+func (m *GkeManagerMock) IsNodeOwned(node *apiv1.Node) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "IsNodeOwned" {
+			args := m.Called(node)
+			return args.Bool(0)
+		}
+	}
+	return true
 }
 
 // GetGkeMigsBlockedByServerError is a mocked method.
@@ -3096,11 +3156,16 @@ func (m *GkeManagerMock) SetInjectedMig(real, injected *GkeMig) {
 
 // ExistingMigsInNodePool is a mocked method.
 func (m *GkeManagerMock) ExistingMigsInNodePool(nodePoolName string) []*GkeMig {
-	args := m.Called(nodePoolName)
-	if args.Get(0) == nil {
-		return nil
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "ExistingMigsInNodePool" {
+			args := m.Called(nodePoolName)
+			if args.Get(0) == nil {
+				return nil
+			}
+			return args.Get(0).([]*GkeMig)
+		}
 	}
-	return args.Get(0).([]*GkeMig)
+	return nil
 }
 
 // ResumeInstances is a mocked method.

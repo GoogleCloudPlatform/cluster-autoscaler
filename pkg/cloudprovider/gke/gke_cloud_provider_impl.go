@@ -397,6 +397,14 @@ func (p *gkeCloudProviderImpl) FetchManagedInstances(migRef gce.GceRef, filter s
 
 // NodeGroupForNode returns the node group for the given node.
 func (p *gkeCloudProviderImpl) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	// If the node's ComputeClass is not owned by this CA, return early to avoid
+	// fallback MIG scans in GetMigForInstance (and GCE calls when ProviderID is
+	// empty). MIG ownership is also based on the ComputeClass, so the node's
+	// MIG wouldn't be owned either. Fake or unlabeled nodes have no reliable
+	// ComputeClass label, so they're handled by the MIG ownership check below.
+	if p.gkeManager.IsMigOwnershipFilteringEnabled() && node != nil && !isFakeOrUnlabeledNode(node) && !p.gkeManager.IsNodeOwned(node) {
+		return nil, nil
+	}
 	ref, err := p.instanceRefForNode(node)
 	if err != nil {
 		return nil, err
@@ -417,7 +425,23 @@ func (p *gkeCloudProviderImpl) NodeGroupForNode(ctx context.Context, node *apiv1
 			return nil, nil
 		}
 	}
+	if !p.gkeManager.IsMigOwned(mig) {
+		return nil, nil
+	}
 	return mig, nil
+}
+
+// isFakeOrUnlabeledNode returns whether the node was built by the autoscaler
+// instead of read from the API server, so its labels say nothing about its
+// ComputeClass. That's the case for fake nodes, e.g. clusterstate.FakeNode for
+// unregistered instances, which carry no labels at all. A node without any
+// labels is treated the same way, since every real node has labels set by
+// kubelet.
+func isFakeOrUnlabeledNode(node *apiv1.Node) bool {
+	if _, isFake := node.Annotations[cloudprovider.FakeNodeReasonAnnotation]; isFake {
+		return true
+	}
+	return len(node.Labels) == 0
 }
 
 func (p *gkeCloudProviderImpl) instanceRefForNode(node *apiv1.Node) (gce.GceRef, error) {
