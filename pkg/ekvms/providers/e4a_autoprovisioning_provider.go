@@ -99,7 +99,7 @@ func (p *e4aAutoprovisioningProvider) refreshLaunchStatus() {
 		return
 	}
 
-	if isE4aEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4aWithResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4aWithResizeEnabledFlag, true); isE4aEnabledWithExperiment {
+	if isE4aEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4aWithResizeMinVersionFlag, true) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4aWithResizeEnabledFlag, true); isE4aEnabledWithExperiment {
 		if !p.bpChecker.isBalloonPodCreatable {
 			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 			return
@@ -107,7 +107,7 @@ func (p *e4aAutoprovisioningProvider) refreshLaunchStatus() {
 		p.status = LaunchStatus{phase: launchCoarseGrainedResize, source: launchExperiment}
 		return
 	}
-	if isE4aNoResizeEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4aNoResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4aNoResizeEnabledFlag, true); isE4aNoResizeEnabledWithExperiment {
+	if isE4aNoResizeEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4aNoResizeMinVersionFlag, true) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4aNoResizeEnabledFlag, true); isE4aNoResizeEnabledWithExperiment {
 		p.status = LaunchStatus{phase: launchEnabledNoResize, source: launchExperiment}
 		return
 	}
@@ -126,7 +126,7 @@ func (p *e4aAutoprovisioningProvider) refreshManagedNodesStatus() {
 	}
 
 	if p.experimentsManager != nil {
-		p.enabledOnManagedNodes = p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.E4AOnManagedNodesMinCAVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.E4AOnManagedNodesEnabledFlag, true)
+		p.enabledOnManagedNodes = p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.E4AOnManagedNodesMinCAVersionFlag, true) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.E4AOnManagedNodesEnabledFlag, true)
 		return
 	}
 	// Default to false if CA flag is not enabled and experimentsManager is nil

@@ -116,12 +116,13 @@ func TestRefreshE4aLaunchStatus(t *testing.T) {
 			expectedSource: launchUndefined,
 		},
 		{
-			name:                  "balloon pod error - experiment no resize still enabled",
+			name:                  "balloon pod error - experiment coarse resize disabled, no resize still enabled",
 			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
 			isBalloonPodCreatable: false,
 			experimentFlags: map[string]bool{
-				experiments.AutopilotE4aNoResizeMinVersionFlag: true,
-				experiments.AutopilotE4aNoResizeEnabledFlag:    true,
+				experiments.AutopilotE4aWithResizeMinVersionFlag: false,
+				experiments.AutopilotE4aNoResizeMinVersionFlag:   true,
+				experiments.AutopilotE4aNoResizeEnabledFlag:      true,
 			},
 			expectedPhase:  launchEnabledNoResize,
 			expectedSource: launchExperiment,
@@ -219,12 +220,33 @@ func TestRefreshE4aLaunchStatus(t *testing.T) {
 			expectedSource: launchExperiment,
 		},
 		{
-			name:                  "flag unspecified and no experiment - not enabled",
+			name:                  "flag unspecified and no experiment - enabled by default (coarse resize)",
 			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
 			isBalloonPodCreatable: true,
 			experimentFlags:       map[string]bool{},
-			expectedPhase:         launchNotEnabled,
-			expectedSource:        launchUndefined,
+			expectedPhase:         launchCoarseGrainedResize,
+			expectedSource:        launchExperiment,
+		},
+		{
+			name:                  "flag unspecified - coarse resize min version not met, no resize enabled by default",
+			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4aWithResizeMinVersionFlag: false,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchExperiment,
+		},
+		{
+			name:                  "flag unspecified - both min versions not met - not enabled",
+			mode:                  resizable_vm_types.E4aAutoprovisioningUnspecified,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4aWithResizeMinVersionFlag: false,
+				experiments.AutopilotE4aNoResizeMinVersionFlag:   false,
+			},
+			expectedPhase:  launchNotEnabled,
+			expectedSource: launchUndefined,
 		},
 		{
 			name:                  "flag unspecified and experiment mitigated - not enabled",
@@ -273,6 +295,7 @@ func TestRefreshE4aManagedNodesStatus(t *testing.T) {
 	tests := []struct {
 		name                        string
 		enabledOnManagedNodesCAFlag bool
+		nilExperimentsManager       bool
 		experimentFlags             map[string]bool
 		want                        bool
 	}{
@@ -282,8 +305,14 @@ func TestRefreshE4aManagedNodesStatus(t *testing.T) {
 			want:                        true,
 		},
 		{
-			name:                        "disabled when CA flag is false and no experiment",
+			name:                        "enabled by default when CA flag is false and no experiment",
 			enabledOnManagedNodesCAFlag: false,
+			want:                        true,
+		},
+		{
+			name:                        "disabled when CA flag is false and experimentsManager is nil",
+			enabledOnManagedNodesCAFlag: false,
+			nilExperimentsManager:       true,
 			want:                        false,
 		},
 		{
@@ -324,11 +353,14 @@ func TestRefreshE4aManagedNodesStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			experimentsManager := experiments.NewMockManagerWithOptions(
-				version.Version{},
-				tc.experimentFlags,
-				map[string]string{},
-			)
+			var experimentsManager experiments.Manager
+			if !tc.nilExperimentsManager {
+				experimentsManager = experiments.NewMockManagerWithOptions(
+					version.Version{},
+					tc.experimentFlags,
+					map[string]string{},
+				)
+			}
 
 			p := &e4aAutoprovisioningProvider{
 				enabledOnManagedNodesCAFlag: tc.enabledOnManagedNodesCAFlag,
