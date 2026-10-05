@@ -40,8 +40,6 @@ const RecommendLocationsDisabledForTPUFlag = "RecommendLocations::DisabledForTPU
 const RecommendLocationsResourcePolicyFlag = "RecommendLocationsResourcePolicy::EnabledMinCAVersion"
 const RecommendLocationsFlexAddInstancesFlag = "RecommendLocationsFlexAddInstances::EnabledMinCAVersion"
 
-const RelaxedNodeGroupCreationPenalty = "RelaxedNodeGroupCreationPenalty::MinCAVersion"
-
 const ReservationSubblocksTargetingEnabledFlag = "ReservationSubblocksTargeting::EnabledMinCAVersion"
 
 // ReservationSubBlockDeduplicationEnabledFlag controls whether NAP refuses to inject an atomically

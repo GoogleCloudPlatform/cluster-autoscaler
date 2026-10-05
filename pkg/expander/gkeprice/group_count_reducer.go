@@ -22,11 +22,6 @@ import (
 )
 
 const (
-	// Penalty given to node groups that are yet to be created.
-	notExistCoefficient = 1.5
-	// Penalty given to node groups with GPUs that are yet to be created.
-	// It is smaller as GPU node pools are dedicated so additional resources are wasted.
-	notExistGpuCoefficient = 1.1
 	// Number of MIGs per pool for pool count penalty calculations
 	// Usually there are 3 MIGs per pool in multizonal clusters, but using 3 would make
 	// our node pool creation behaviour vastly different for single and multizonal cluster.
@@ -37,10 +32,8 @@ const (
 
 // GroupCountReducer returns preferred node based on the cluster size.
 type GroupCountReducer interface {
-	// Penalty given to node groups that are yet to be created.
-	GroupCreationPenalty(hasGpu bool) float64
-	// Penalty given to node groups that are yet to be created without coefficient multiplication at the end.
-	BaseGroupCreationPenalty() float64
+	// GroupCreationPenalty returns penalty given to node groups that are yet to be created.
+	GroupCreationPenalty() float64
 }
 
 type nodePoolNameGetter interface {
@@ -59,18 +52,7 @@ func NewProgressiveGroupCountReducer(provider provider.GkeExpanderCloudProvider)
 	}
 }
 
-// GroupCreationPenalty returns penalty for creation of a new node group.
-func (pcr *progressiveGroupCountReducer) GroupCreationPenalty(hasGpu bool) float64 {
-	penalty := pcr.BaseGroupCreationPenalty()
-	if hasGpu {
-		penalty *= notExistGpuCoefficient
-	} else {
-		penalty *= notExistCoefficient
-	}
-	return penalty
-}
-
-func (pcr *progressiveGroupCountReducer) BaseGroupCreationPenalty() float64 {
+func (pcr *progressiveGroupCountReducer) GroupCreationPenalty() float64 {
 	// Make multizonal cluster behave similarly to single zonal
 	var nodeGroups []cloudprovider.NodeGroup
 

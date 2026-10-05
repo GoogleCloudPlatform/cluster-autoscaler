@@ -86,7 +86,6 @@ import (
 	internalestimator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/estimator"
 	internalexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	flexadvisorapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
@@ -973,11 +972,10 @@ func (b *Builder) Build(
 	if err != nil {
 		return nil, nil, err
 	}
-	penaltyChecker := provider.NewRelaxedNodeGroupPenaltyChecker(experimentsManager, cloudProvider.IsAutopilotEnabled())
+
 	expanderStrategy, err := internalexpander.ExpanderStrategyFromString(
 		autoscalingOptions.ExpanderNames,
 		cloudProvider,
-		penaltyChecker,
 		autoscalingKubeClients,
 		b.kubeClient,
 		defragProcessor,

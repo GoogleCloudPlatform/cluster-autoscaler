@@ -99,7 +99,6 @@ func TestExpanderComparison(t *testing.T) {
 		}},
 		{"Pick existing more expensive node pool", []testCase{
 			{2, 3, 2, 1, 1500, 3000, 0, "", "nap-n1-standard-2", "make sure that std2 is selected by default"},
-			{2, 3, 2, 1, 1000, 3000, 0, "n1-highmem-2", "n1-highmem-2", "check if mem2 is reused instead of std2"},
 			{2, 3, 2, 1, 1000, 3000, 0, "n1-standard-4", "nap-n1-standard-2", "check if std4 is reused instead of std2"},
 			{2, 3, 2, 1, 1000, 3000, 0, "n1-highmem-4", "nap-n1-standard-2", "check if more expensive mem4 is reused"},
 			{2, 3, 2, 1, 100, 1000, 0, "", "nap-n1-standard-2", "make sure that std2 is selected by default"},

@@ -77,12 +77,7 @@ func NewLegacyGroupCountReducer() GroupCountReducer {
 	return &staticGroupCountReducer{}
 }
 
-// GroupCreationPenalty returns penalty for creation of a new node group.
-func (pcr *staticGroupCountReducer) GroupCreationPenalty(hasGpu bool) float64 {
-	return 1.5
-}
-
-func (pcr *staticGroupCountReducer) BaseGroupCreationPenalty() float64 {
+func (pcr *staticGroupCountReducer) GroupCreationPenalty() float64 {
 	return 1.0004
 }
 
@@ -99,31 +94,16 @@ func (b *testMachineTypeBalancer) MachineTypeBalancingFactor(_ string, _ map[str
 	return 1.0
 }
 
-type staticRelaxedGroupPenaltyChecker struct {
-	enabled bool
-}
-
-// StaticRelaxedGroupPenaltyChecker returns a checker which decides whether
-// relaxed group penalty should be used when scoring scale-up options.
-func NewStaticRelaxedGroupPenaltyChecker(enabled bool) *staticRelaxedGroupPenaltyChecker {
-	return &staticRelaxedGroupPenaltyChecker{enabled: enabled}
-}
-
-func (tc *staticRelaxedGroupPenaltyChecker) Enabled() bool {
-	return tc.enabled
-}
-
 // NewTestStrategy returns a test expansion strategy
 func NewTestStrategy(cloudProvider provider.GkeExpanderCloudProvider, pricingModel cloudprovider.PricingModel, preferredCpuCount int64, opts ...func(*gkePriceBased)) expander.Strategy {
 	s := &gkePriceBased{
-		pricingModel:                   pricingModel,
-		clusterAnalyzer:                NewStaticClusterAnalyzer(preferredCpuCount),
-		groupCountReducer:              NewLegacyGroupCountReducer(),
-		relaxedNodeGroupPenaltyChecker: NewStaticRelaxedGroupPenaltyChecker(false),
-		machineTypeBalancer:            NewTestMachineTypeBalancer(),
-		localSSDDiskSizeProvider:       localssdsize.NewSimpleLocalSSDProvider(),
-		upcomingChecker:                &asyncnodegroups.MockAsyncNodeGroupStateChecker{IsUpcomingNodeGroup: map[string]bool{}},
-		cloudProvider:                  cloudProvider,
+		pricingModel:             pricingModel,
+		clusterAnalyzer:          NewStaticClusterAnalyzer(preferredCpuCount),
+		groupCountReducer:        NewLegacyGroupCountReducer(),
+		machineTypeBalancer:      NewTestMachineTypeBalancer(),
+		localSSDDiskSizeProvider: localssdsize.NewSimpleLocalSSDProvider(),
+		upcomingChecker:          &asyncnodegroups.MockAsyncNodeGroupStateChecker{IsUpcomingNodeGroup: map[string]bool{}},
+		cloudProvider:            cloudProvider,
 	}
 	for _, o := range opts {
 		o(s)
@@ -153,12 +133,5 @@ func WithReservations(gceReservations []*gce_api.Reservation) func(*gkePriceBase
 func WithUpcomingChecker(uc asyncnodegroups.AsyncNodeGroupStateChecker) func(*gkePriceBased) {
 	return func(g *gkePriceBased) {
 		g.upcomingChecker = uc
-	}
-}
-
-// WithRelaxedGroupPenaltyChecker overrides relaxed node group penalty checker.
-func WithRelaxedGroupPenaltyChecker(checker RelaxedNodeGroupPenaltyChecker) func(*gkePriceBased) {
-	return func(g *gkePriceBased) {
-		g.relaxedNodeGroupPenaltyChecker = checker
 	}
 }
