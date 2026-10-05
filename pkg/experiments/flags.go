@@ -58,6 +58,7 @@ const NodeProvisionTimeSingleHostTPU = "NodeProvisionTime::SingleHostTPU"
 
 const EkLookaheadPodsV1Flag = "AutopilotEk::LookaheadPodsV1"
 const EkLookaheadMaxWorkloadSeparationsFlag = "AutopilotEk::LookaheadMaxWorkloadSeparations"
+const EkPreventScheduleOnLookaheadNodesFlag = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 const ConsumableReservationExperimentName = "ClusterAutoscaler::UseConsumableReservationsApi"
 const EnableResizableVmEdpMinGKEVersionFlag = "AutopilotExtendedDuration::EnableCAMinGKEVersion"
 const EkMachineTypesFlag = "AutopilotEk::MachineTypes"
@@ -99,7 +100,9 @@ const CapacityBuffersPrivatePreviewMinCAVersion = "CapacityBuffersPrivatePreview
 const CapacityBuffersMinCAVersion = "CapacityBuffers::MinCAVersion"
 const CapacityBuffersEnabled = "CapacityBuffers::Enabled"
 
-const CapacityBuffersMetricProcessor = "CapacityBuffers::MetricProcessor" // Direct launch.
+const CapacityBuffersMetricProcessor = "CapacityBuffers::MetricProcessor"                       // Direct launch.
+const CapacityBuffersPerBufferMetrics = "CapacityBuffers::PerBufferMetrics"                     // Direct launch.
+const CapacityBuffersPerAcceleratorModelMetrics = "CapacityBuffers::PerAcceleratorModelMetrics" // Direct launch.
 
 const ColdStandbyNodesInternalMinCAVersionFlag = "ColdStandbyNodes::InternalMinCAVersion"
 const ColdStandbyNodesControllerConfigV1Flag = "ColdStandbyNodes::NodeControllerConfigV1"
@@ -136,8 +139,6 @@ const HtnapMinCAVersionFlag = "HTNAP::MinCAVersion"
 const IncreasedNapMaxNodesEnabledFlag = "IncreasedNapMaxNodes::Enabled"
 const IncreasedNapMaxNodesMinCAVersionFlag = "IncreasedNapMaxNodes::MinCAVersion"
 
-const EkPreventScheduleOnLookaheadNodes = "AutopilotEk::PreventScheduleOnLookaheadNodes"
-
 const AutopilotE4ExtendedFallbacksMinCAVersionFlag = "AutopilotE4ExtendedFallbacks::MinCAVersion"
 const AutopilotE4NoResizeEnabledFlag = "AutopilotE4::NoResizeEnabled"
 const AutopilotE4MinVersionFlag = "AutopilotE4::MinCAVersion"
@@ -145,6 +146,9 @@ const AutopilotE4StatefulMinCAVersionFlag = "AutopilotE4Stateful::MinCAVersion"
 const AutopilotE4PrioritizationMinCAVersionFlag = "AutopilotE4Prioritization::MinCAVersion"
 const AutopilotE4WithResizeEnabledFlag = "AutopilotE4::CoarseGrainedResizeEnabled"
 const AutopilotE4WithResizeMinVersionFlag = "AutopilotE4::CoarseGrainedResizeMinCAVersion"
+const E4LookaheadPodsV1Flag = "AutopilotE4::LookaheadPodsV1"
+const E4LookaheadMaxWorkloadSeparationsFlag = "AutopilotE4::LookaheadMaxWorkloadSeparations"
+const E4PreventScheduleOnLookaheadNodesFlag = "AutopilotE4::PreventScheduleOnLookaheadNodes"
 const E4MachineTypesFlag = "AutopilotE4::MachineTypes"
 const E4DownsizeConfigFlag = "AutopilotE4::DownsizeConfig"
 const E4UasUpsizabilityBufferFlag = "AutopilotE4::UasUpsizabilityBuffer"
@@ -155,6 +159,9 @@ const AutopilotE4aNoResizeEnabledFlag = "AutopilotE4A::EnableAllowlistFeature"
 const AutopilotE4aNoResizeMinVersionFlag = "AutopilotE4A::MinCAVersion"
 const AutopilotE4aWithResizeEnabledFlag = "AutopilotE4A::CoarseGrainedResizeEnabled"
 const AutopilotE4aWithResizeMinVersionFlag = "AutopilotE4A::CoarseGrainedResizeMinCAVersion"
+const E4aLookaheadPodsV1Flag = "AutopilotE4A::LookaheadPodsV1"
+const E4aLookaheadMaxWorkloadSeparationsFlag = "AutopilotE4A::LookaheadMaxWorkloadSeparations"
+const E4aPreventScheduleOnLookaheadNodesFlag = "AutopilotE4A::PreventScheduleOnLookaheadNodes"
 const E4aMachineTypesFlag = "AutopilotE4A::MachineTypes"
 const E4aDownsizeConfigFlag = "AutopilotE4A::DownsizeConfig"
 const E4aUasUpsizabilityBufferFlag = "AutopilotE4A::UasUpsizabilityBuffer"
@@ -196,7 +203,20 @@ const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
 const FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag = "FlexAdvisor::AwaitInstanceAvailabilityTimeoutSeconds"
 
+// FlexAdvisorMaxActiveScopes controls the maximum number of active flexibility scopes CA tracks concurrently (default: 50).
 const FlexAdvisorMaxActiveScopes = "FlexAdvisor::MaxActiveScopes"
+
+// FlexAdvisorMaxInstanceConfigsFlag controls the maximum number of instance configurations generated/capped per flexibility scope (default: 200).
+const FlexAdvisorMaxInstanceConfigsFlag = "FlexAdvisor::MaxInstanceConfigs"
+
+// FlexAdvisorScopeRefreshIntervalSecondsFlag controls the background polling interval in scopeWorker (default: 10s).
+const FlexAdvisorScopeRefreshIntervalSecondsFlag = "FlexAdvisor::ScopeRefreshIntervalSeconds"
+
+// FlexAdvisorScopeStalenessThresholdSecondsFlag controls the cache staleness threshold before guidance is considered stale (default: 30s).
+const FlexAdvisorScopeStalenessThresholdSecondsFlag = "FlexAdvisor::ScopeStalenessThresholdSeconds"
+
+// FlexAdvisorScopeKeepAliveSecondsFlag controls the duration a scope is retained before being removed (default: 10m).
+const FlexAdvisorScopeKeepAliveSecondsFlag = "FlexAdvisor::ScopeKeepAliveSeconds"
 
 const FlexAdvisorGeneratorMachineErrorsCacheEnabledFlag = "FlexAdvisorGeneratorMachineErrorsCache::Enabled"
 const FlexAdvisorGeneratorMachineErrorsCacheMinCAVersionFlag = "FlexAdvisorGeneratorMachineErrorsCache::MinCAVersion"
@@ -251,3 +271,12 @@ const BalloonPodIpprResizeFlag = "Autopilot::BalloonPodIpprResize"
 
 const PayPerPodFleetEfficiencyEnabledFlag = "PayPerPodFleetEfficiency::Enabled"
 const PayPerPodFleetEfficiencyMinCAVersionFlag = "PayPerPodFleetEfficiency::MinCAVersion"
+
+const SpecificTypeReservationMatchMinCAVersionFlag = "SpecificTypeReservationMatch::MinCAVersion"
+const SpecificTypeReservationMatchEnabledFlag = "SpecificTypeReservationMatch::Enabled"
+
+const SpecificTypeReservationWithoutMatchMinCAVersionFlag = "SpecificTypeReservationWithoutMatch::MinCAVersion"
+const SpecificTypeReservationWithoutMatchEnabledFlag = "SpecificTypeReservationWithoutMatch::Enabled"
+
+const ReservationsAnyLocationPolicyOverrideMinCAVersionFlag = "ReservationsAnyLocationPolicyOverride::MinCAVersion"
+const ReservationsAnyLocationPolicyOverrideEnabledFlag = "ReservationsAnyLocationPolicyOverride::Enabled"

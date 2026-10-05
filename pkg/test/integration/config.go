@@ -19,6 +19,7 @@ import (
 	"math"
 	"time"
 
+	netapi "github.com/GoogleCloudPlatform/gke-networking-api/apis/network/v1"
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
@@ -74,6 +75,7 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 		ScaleDownUnreadyTime:          time.Minute,
 		ScaleDownUtilizationThreshold: 0.5,
 		MaxNodeProvisionTime:          10 * time.Second,
+		MaxNodeStartupTime:            15 * time.Minute,
 	},
 	EstimatorName:              estimator.BinpackingEstimatorName,
 	EnforceNodeGroupMinSize:    true,
@@ -150,6 +152,8 @@ type TestConfig struct {
 	ExperimentEvaluator experiments.Evaluator
 	// ProvisioningRequests to inject into the fake client.
 	ProvisioningRequests []*provreqwrapper.ProvisioningRequest
+	// GkeNetworkParamSets are populated into the networking matcher during test initialization.
+	GkeNetworkParamSets []*netapi.GKENetworkParamSet
 }
 
 // ConfigBuilder uses the Builder Pattern to create a test Config.
@@ -371,6 +375,12 @@ func (c *TestConfig) WithCccCrds(crds ...*cccv1.ComputeClass) *TestConfig {
 	return c
 }
 
+// WithGkeNetworkParamSets sets the GKENetworkParamSets for multi-networking.
+func (c *TestConfig) WithGkeNetworkParamSets(paramSets ...*netapi.GKENetworkParamSet) *TestConfig {
+	c.GkeNetworkParamSets = paramSets
+	return c
+}
+
 // WithOkTotalUnreadyCount sets the OkTotalUnreadyCount in BaseOptions.
 func (c *TestConfig) WithOkTotalUnreadyCount(count int) *TestConfig {
 	c.BaseOptions.OkTotalUnreadyCount = count
@@ -541,6 +551,30 @@ func WithDaemonSetMutationEnabled(enabled bool) Option[*config.AutoscalingOption
 	}
 }
 
+// WithSpecificTypeReservationMatchEnabled sets SpecificTypeReservationMatchEnabled in InternalOptions.
+func WithSpecificTypeReservationMatchEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.SpecificTypeReservationMatchEnabled = enabled
+		return o
+	}
+}
+
+// WithSpecificTypeReservationWithoutMatchEnabled sets SpecificTypeReservationWithoutMatchEnabled in InternalOptions.
+func WithSpecificTypeReservationWithoutMatchEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.SpecificTypeReservationWithoutMatchEnabled = enabled
+		return o
+	}
+}
+
+// WithReservationsAnyLocationPolicyOverride sets ReservationsAnyLocationPolicyOverride in InternalOptions.
+func WithReservationsAnyLocationPolicyOverride(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.ReservationsAnyLocationPolicyOverride = enabled
+		return o
+	}
+}
+
 // WithScaleDownDelayAfterAdd overrides the ScaleDownDelayAfterAdd setting.
 func WithScaleDownDelayAfterAdd(delay time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -611,6 +645,14 @@ func WithAutoProvisioningEnabled() Option[*config.AutoscalingOptions] {
 		o.NapMaxNodes = math.MaxInt32
 		o.MaxAutoprovisionedNodeGroupCount = 999
 		o.NapDefaultMachineTypeFamily = "n1"
+		return o
+	}
+}
+
+// WithMultiNetworkSupportEnabled enables multi-network support in autoscaling options.
+func WithMultiNetworkSupportEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.MultiNetworkSupportEnabled = true
 		return o
 	}
 }
@@ -716,6 +758,16 @@ func WithInitialNodeGroupBackoffDuration(d time.Duration) Option[*config.Autosca
 	}
 }
 
+// WithEdpAutopilotOptions enables Autopilot with Extended Duration Pods upgrade tainting and disables EK autoprovisioning.
+func WithEdpAutopilotOptions() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.AutopilotEnabled = true
+		o.InternalOptions.EkAutoprovisioning = "EK_AUTOPROVISIONING_DISABLED"
+		o.InternalOptions.ExtendedDurationPodsUpgradeNodesTaintPerLoop = 10
+		return o
+	}
+}
+
 // --- Cluster Option Overrides ---
 
 // WithClusterZones sets the cluster's locations.
@@ -766,6 +818,22 @@ func WithClusterResourceLimits(limits []*gke_api_beta.ResourceLimit) Option[*gke
 			c.Autoscaling = &gke_api_beta.ClusterAutoscaling{}
 		}
 		c.Autoscaling.ResourceLimits = limits
+		return c
+	}
+}
+
+// WithCurrentMasterVersion sets the cluster's CurrentMasterVersion.
+func WithCurrentMasterVersion(version string) Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		c.CurrentMasterVersion = version
+		return c
+	}
+}
+
+// WithCurrentEmulatedVersion sets the cluster's CurrentEmulatedVersion.
+func WithCurrentEmulatedVersion(version string) Option[*gke_api_beta.Cluster] {
+	return func(c *gke_api_beta.Cluster) *gke_api_beta.Cluster {
+		c.CurrentEmulatedVersion = version
 		return c
 	}
 }

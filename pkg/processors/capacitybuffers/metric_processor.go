@@ -15,16 +15,21 @@
 package capacitybuffers
 
 import (
+	"context"
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/accelerators"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
-	"sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
+	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 const (
@@ -35,27 +40,36 @@ const (
 type Metrics interface {
 	UpdateCapacityBufferPods(counts map[metrics.CapacityBufferPodsKey]int)
 	UpdateCapacityBuffersNumber(countsByType map[string]int)
+	UpdateCapacityBufferResources(compute map[metrics.CapacityBufferResourceKey]metrics.CapacityBufferResources, accelerators map[metrics.CapacityBufferAcceleratorKey]int64)
+}
+
+type resourceAccumulator struct {
+	cpuMilli              int64
+	memoryBytes           int64
+	ephemeralStorageBytes int64
 }
 
 // MetricProcessor is a processor that emits metrics for capacity buffer pods.
 // TODO(b/494558643): Move it to OSS.
 type MetricProcessor struct {
-	client         *client.CapacityBufferClient
-	bufferRegistry *fakepods.Registry
-	m              Metrics
+	client             *client.CapacityBufferClient
+	bufferRegistry     *fakepods.Registry
+	m                  Metrics
+	experimentsManager experiments.Manager
 }
 
 // NewMetricProcessor creates a new MetricProcessor.
-func NewMetricProcessor(client *client.CapacityBufferClient, bufferRegistry *fakepods.Registry, m Metrics) *MetricProcessor {
+func NewMetricProcessor(client *client.CapacityBufferClient, bufferRegistry *fakepods.Registry, m Metrics, experimentsManager experiments.Manager) *MetricProcessor {
 	return &MetricProcessor{
-		client:         client,
-		bufferRegistry: bufferRegistry,
-		m:              m,
+		client:             client,
+		bufferRegistry:     bufferRegistry,
+		m:                  m,
+		experimentsManager: experimentsManager,
 	}
 }
 
 // ProcessMetrics emits metrics for both scheduled and unscheduled capacity buffer pods.
-func (p *MetricProcessor) ProcessMetrics(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) error {
+func (p *MetricProcessor) ProcessMetrics(ctx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) error {
 	if err := p.emitCapacityBuffersCount(); err != nil {
 		klog.Errorf("Failed to emit capacity buffers count metrics: %v", err)
 	}
@@ -85,8 +99,11 @@ func (p *MetricProcessor) emitCapacityBuffersCount() error {
 	return nil
 }
 
-func (p *MetricProcessor) emitCapacityBufferPods(ctx *context.AutoscalingContext, unschedulablePods []*apiv1.Pod) error {
-	bufferPods, err := p.allScheduledPods(ctx)
+func (p *MetricProcessor) emitCapacityBufferPods(ctx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) error {
+	perBufferMetrics := p.experimentsManager != nil && p.experimentsManager.DirectLaunchBoolFlag(experiments.CapacityBuffersPerBufferMetrics)
+	perAcceleratorModelMetrics := p.experimentsManager != nil && p.experimentsManager.DirectLaunchBoolFlag(experiments.CapacityBuffersPerAcceleratorModelMetrics)
+
+	bufferPods, computeTotals, acceleratorTotals, err := p.allScheduledPods(ctx, perBufferMetrics, perAcceleratorModelMetrics)
 	if err != nil {
 		return fmt.Errorf("failed to get all scheduled pods from cluster snapshot: %v", err)
 	}
@@ -101,20 +118,39 @@ func (p *MetricProcessor) emitCapacityBufferPods(ctx *context.AutoscalingContext
 			continue
 		}
 		bufferPods[*k]++
+
+		resKey := bufferResourceKey(pod, *k, p.bufferRegistry, perBufferMetrics)
+		accumulatePodResources(pod, resKey, "", computeTotals, acceleratorTotals)
+	}
+
+	computeResources := make(map[metrics.CapacityBufferResourceKey]metrics.CapacityBufferResources, len(computeTotals))
+	for k, acc := range computeTotals {
+		computeResources[k] = metrics.CapacityBufferResources{
+			CpuCores:              float64(acc.cpuMilli) / 1000.0,
+			MemoryBytes:           acc.memoryBytes,
+			EphemeralStorageBytes: acc.ephemeralStorageBytes,
+		}
 	}
 
 	p.m.UpdateCapacityBufferPods(bufferPods)
+	p.m.UpdateCapacityBufferResources(computeResources, acceleratorTotals)
 	return nil
 }
 
-// allScheduledPods returns a map of capacity buffer pod counts grouped by their state and strategy.
-func (p *MetricProcessor) allScheduledPods(ctx *context.AutoscalingContext) (map[metrics.CapacityBufferPodsKey]int, error) {
+// allScheduledPods returns maps of capacity buffer pod counts and resource totals grouped by their state and strategy.
+func (p *MetricProcessor) allScheduledPods(ctx *ca_context.AutoscalingContext, perBufferMetrics, perAcceleratorModelMetrics bool) (map[metrics.CapacityBufferPodsKey]int, map[metrics.CapacityBufferResourceKey]resourceAccumulator, map[metrics.CapacityBufferAcceleratorKey]int64, error) {
 	nodeInfos, err := ctx.ClusterSnapshot.NodeInfos().List()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get node infos: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to get node infos: %v", err)
 	}
 	bufferPods := map[metrics.CapacityBufferPodsKey]int{}
+	computeTotals := map[metrics.CapacityBufferResourceKey]resourceAccumulator{}
+	acceleratorTotals := map[metrics.CapacityBufferAcceleratorKey]int64{}
 	for _, nodeInfo := range nodeInfos {
+		var accelModel string
+		if perAcceleratorModelMetrics {
+			accelModel = nodeAcceleratorModel(ctx.CloudProvider, nodeInfo.Node())
+		}
 		for _, podInfo := range nodeInfo.GetPods() {
 			pod := podInfo.GetPod()
 			if !capacitybufferpodlister.IsFakeCapacityBuffersPod(pod) {
@@ -126,9 +162,47 @@ func (p *MetricProcessor) allScheduledPods(ctx *context.AutoscalingContext) (map
 				continue
 			}
 			bufferPods[*k]++
+
+			resKey := bufferResourceKey(pod, *k, p.bufferRegistry, perBufferMetrics)
+			accumulatePodResources(pod, resKey, accelModel, computeTotals, acceleratorTotals)
 		}
 	}
-	return bufferPods, nil
+	return bufferPods, computeTotals, acceleratorTotals, nil
+}
+
+// accumulatePodResources adds the pod's resource requests to computeTotals and acceleratorTotals under the given key.
+func accumulatePodResources(pod *apiv1.Pod, key metrics.CapacityBufferResourceKey, accelModel string, computeTotals map[metrics.CapacityBufferResourceKey]resourceAccumulator, acceleratorTotals map[metrics.CapacityBufferAcceleratorKey]int64) {
+	requests := podutils.PodRequests(pod)
+	acc := computeTotals[key]
+	acc.cpuMilli += requests.Cpu().MilliValue()
+	acc.memoryBytes += requests.Memory().Value()
+	acc.ephemeralStorageBytes += requests.StorageEphemeral().Value()
+	computeTotals[key] = acc
+
+	for name, qty := range requests {
+		if qty.Value() <= 0 || !accelerators.IsAccelerator(name) {
+			continue
+		}
+		accKey := metrics.CapacityBufferAcceleratorKey{
+			CapacityBufferResourceKey: key,
+			ResourceName:              string(name),
+			Model:                     accelModel,
+		}
+		acceleratorTotals[accKey] += qty.Value()
+	}
+}
+
+// nodeAcceleratorModel returns the accelerator model (e.g. nvidia-tesla-t4) of the given node,
+// or an empty string if the node is nil or doesn't have any accelerator.
+func nodeAcceleratorModel(cloudProvider cloudprovider.CloudProvider, node *apiv1.Node) string {
+	if cloudProvider == nil || node == nil {
+		return ""
+	}
+	gpuConfig := cloudProvider.GetNodeGpuConfig(context.Background(), node)
+	if gpuConfig == nil {
+		return ""
+	}
+	return gpuConfig.Type
 }
 
 // bufferKey generates a metrics key for a given capacity buffer pod.
@@ -154,6 +228,25 @@ func bufferKey(pod *apiv1.Pod, node *apiv1.Node, bufferRegistry *fakepods.Regist
 	return &metrics.CapacityBufferPodsKey{
 		ProvisioningStrategy: ps,
 		State:                state,
+	}
+}
+
+// bufferResourceKey generates a resource metrics key for a given capacity buffer pod.
+func bufferResourceKey(pod *apiv1.Pod, podKey metrics.CapacityBufferPodsKey, bufferRegistry *fakepods.Registry, perBufferMetrics bool) metrics.CapacityBufferResourceKey {
+	var entityNamespace, entityName, entityUID string
+	if perBufferMetrics {
+		if buffer := bufferRegistry.GetCapacityBuffer(pod.UID); buffer != nil {
+			entityNamespace = buffer.Namespace
+			entityName = buffer.Name
+			entityUID = string(buffer.UID)
+		}
+	}
+	return metrics.CapacityBufferResourceKey{
+		EntityNamespace:      entityNamespace,
+		EntityName:           entityName,
+		EntityUID:            entityUID,
+		ProvisioningStrategy: podKey.ProvisioningStrategy,
+		State:                podKey.State,
 	}
 }
 

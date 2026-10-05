@@ -110,3 +110,56 @@ func TestLessThan(t *testing.T) {
 		}
 	}
 }
+
+func TestMinorVersionFromString(t *testing.T) {
+	tests := []struct {
+		ver  string
+		want MinorVersion
+		err  bool
+	}{
+		{ver: "1.34", want: MinorVersion{1, 34}},
+		{ver: "v1.34", want: MinorVersion{1, 34}},
+		{ver: "1", err: true},
+		{ver: "1.34.9", err: true},
+		{ver: "1.34.9-gke.1655001", err: true},
+		{ver: "1.x", err: true},
+		{ver: "", err: true},
+	}
+	for _, test := range tests {
+		got, err := MinorVersionFromString(test.ver)
+		if gotErr := err != nil; gotErr != test.err {
+			t.Errorf("MinorVersionFromString(%q) error = %v, want error: %v", test.ver, err, test.err)
+		}
+		if diff := cmp.Diff(test.want, got); diff != "" {
+			t.Errorf("MinorVersionFromString(%q) mismatch (-want +got):\n%s", test.ver, diff)
+		}
+	}
+}
+
+func TestMinorVersionLessThan(t *testing.T) {
+	tests := []struct {
+		nodeVersion  string
+		minorVersion string
+		want         bool
+	}{
+		{nodeVersion: "1.33.9-gke.1000000", minorVersion: "1.34", want: true},
+		{nodeVersion: "1.34.0-gke.0", minorVersion: "1.34", want: false},
+		{nodeVersion: "1.34.9-gke.1655001", minorVersion: "1.34", want: false},
+		{nodeVersion: "1.35.6-gke.1250000", minorVersion: "1.34", want: false},
+		{nodeVersion: "0.99.0-gke.0", minorVersion: "1.34", want: true},
+		{nodeVersion: "2.0.0-gke.0", minorVersion: "1.34", want: false},
+	}
+	for _, test := range tests {
+		v, err := FromString(test.nodeVersion)
+		if err != nil {
+			t.Fatalf("FromString(%q) returned error: %v", test.nodeVersion, err)
+		}
+		mv, err := MinorVersionFromString(test.minorVersion)
+		if err != nil {
+			t.Fatalf("MinorVersionFromString(%q) returned error: %v", test.minorVersion, err)
+		}
+		if got := v.MinorVersion().LessThan(mv); got != test.want {
+			t.Errorf("%s.MinorVersion().LessThan(%s) = %v, want %v", test.nodeVersion, test.minorVersion, got, test.want)
+		}
+	}
+}

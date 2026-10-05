@@ -66,6 +66,8 @@ func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, 
 	prCache := internalautoscaler.MustCreatePRCache(prClient)
 	// ProviderConfig CRD (related to MultiTenancy)
 	provConfigInformer := internalautoscaler.MustCreateProviderConfigInformer(options, kubeConfigJSON)
+	// GKENetworkParamSet CRD (Multi-Networking)
+	networkMatcher := internalautoscaler.MustCreateNetworkMatcher(ctx, options, kubeConfigJSON)
 
 	// Main GCE client
 	gceClient := internalautoscaler.MustCreateGceClient(
@@ -102,7 +104,8 @@ func initBuilder(ctx context.Context, optsTracker *optstracking.OptionsTracker, 
 		WithGCEClient(gceClient).
 		WithProvReqManager(provReqManager).
 		WithAtomicResizeRequestClient(atomicRRClient).
-		WithFlexResizeRequestClient(flexRRClient)
+		WithFlexResizeRequestClient(flexRRClient).
+		WithNetworkMatcher(networkMatcher)
 
 	return configureGKEInternalClients(ctx, builder)
 }

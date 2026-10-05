@@ -46,7 +46,7 @@ func (b BlockedMigsSource) BlockedMigs() scaleblocking.BlockedMigs {
 		NoScaleDownMigs: map[string]scaleblocking.BlockedMigReasonSet{},
 	}
 	for _, mig := range b.cloudProvider.GetGkeMigs() {
-		shouldBlockScaleUp := shouldBlockScalingUp(mig, b.cloudProvider.GetClusterVersion())
+		shouldBlockScaleUp := shouldBlockScalingUp(mig, b.cloudProvider.GetClusterVersion(), b.cloudProvider.GetEmulatedClusterVersion())
 		if shouldBlockScaleUp {
 			result.NoScaleUpMigs[mig.Id()] = scaleblocking.BlockedMigReasonSet{BlockedMigEDPUpgrade: true}
 		}
@@ -56,7 +56,7 @@ func (b BlockedMigsSource) BlockedMigs() scaleblocking.BlockedMigs {
 
 // shouldBlockScalingUp returns whether a given MIG should have scaling blocked because of an ongoing EDP upgrade
 // we should block scale up of mig which are yet to upgrade.
-func shouldBlockScalingUp(mig *gke.GkeMig, clusterVersion string) (shouldBlockScaleUp bool) {
+func shouldBlockScalingUp(mig *gke.GkeMig, clusterVersion, emulatedClusterVersion string) (shouldBlockScaleUp bool) {
 	if mig == nil || mig.GetNodeConfig() == nil || mig.Spec() == nil || !mig.Exist(context.TODO()) {
 		return false
 	}
@@ -68,15 +68,12 @@ func shouldBlockScalingUp(mig *gke.GkeMig, clusterVersion string) (shouldBlockSc
 		klog.Warningf("Unable to parse mig version: %s, %q", mig.GetNodeConfig().Version, err)
 		return false
 	}
-	cVersion, err := version.FromString(clusterVersion)
+	isOlder, err := isOlderThanTargetVersion(migVersion, clusterVersion, emulatedClusterVersion)
 	if err != nil {
-		klog.Warningf("Unable to parse cluster version: %s, %q", clusterVersion, err)
+		klog.Warningf("Unable to parse target cluster version: %q", err)
 		return false
 	}
-	if migVersion.LessThan(cVersion) {
-		return true
-	}
-	return false
+	return isOlder
 }
 
 // CleanUp is a no-op.

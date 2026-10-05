@@ -53,6 +53,7 @@ import (
 	http_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/httpclient"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	provreqcache "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/cache"
 	prmanager "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/updateinfos/client/clientset/versioned"
@@ -410,4 +411,20 @@ func CreateMachineConfigProvider(ctx context.Context, opts internalopts.Autoscal
 	provider.SetExperimentsManager(experimentsManager)
 	provider.SetMetrics(internalmetrics.Metrics)
 	return provider
+}
+
+// MustCreateNetworkMatcher creates a new networking matcher if multi-network support is enabled.
+func MustCreateNetworkMatcher(ctx context.Context, opts internalopts.AutoscalingOptions, kubeConfigJSON *rest.Config) networking.Matcher {
+	if !opts.MultiNetworkSupportEnabled {
+		return nil
+	}
+	clientset, err := networking.NewClientset(kubeConfigJSON)
+	if err != nil {
+		klog.Fatalf("cannot create networking clientset: %v", err)
+	}
+	lister, err := networking.NewLister(ctx, clientset)
+	if err != nil {
+		klog.Fatalf("cannot create networking lister: %v", err)
+	}
+	return networking.GetMatcher(lister)
 }

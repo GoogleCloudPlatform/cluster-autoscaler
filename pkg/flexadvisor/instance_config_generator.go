@@ -196,6 +196,20 @@ func (g *instanceConfigGenerator) validateGeneratedConfigsForRule(flexibilitySco
 	}
 }
 
+func (g *instanceConfigGenerator) getMaxInstanceConfigs() int {
+	maxConfigs := g.maxInstanceConfigs
+	if g.optionsTracker != nil && g.optionsTracker.ExperimentsManager() != nil {
+		maxConfigs = g.optionsTracker.ExperimentsManager().EvaluateIntFlagOrFailsafe(
+			experiments.FlexAdvisorMaxInstanceConfigsFlag,
+			g.maxInstanceConfigs,
+		)
+	}
+	if maxConfigs <= 0 {
+		return g.maxInstanceConfigs
+	}
+	return maxConfigs
+}
+
 // capGeneratedInstanceConfigs returns input array limited to maxInstanceConfigs elements and cappedKeysMap (map indicating for each generated key whether it was capped from final array)
 func (g *instanceConfigGenerator) capGeneratedInstanceConfigs(allInstanceConfigs map[string]*api.InstanceConfig, flexibilityScopeKey string) (map[string]*api.InstanceConfig, map[string]bool) {
 	var instanceConfigSlice []*api.InstanceConfig
@@ -219,7 +233,8 @@ func (g *instanceConfigGenerator) capGeneratedInstanceConfigs(allInstanceConfigs
 
 	finalInstanceConfigs := make(map[string]*api.InstanceConfig)
 
-	n := min(len(instanceConfigSlice), g.maxInstanceConfigs)
+	maxConfigs := g.getMaxInstanceConfigs()
+	n := min(len(instanceConfigSlice), maxConfigs)
 	for i := 0; i < n; i += 1 {
 		finalInstanceConfigs[instanceConfigSlice[i].Signature()] = instanceConfigSlice[i]
 		cappedKeysMap[instanceConfigSlice[i].Signature()] = false
@@ -227,8 +242,8 @@ func (g *instanceConfigGenerator) capGeneratedInstanceConfigs(allInstanceConfigs
 	for i := n; i < len(instanceConfigSlice); i++ {
 		cappedKeysMap[instanceConfigSlice[i].Signature()] = true
 	}
-	if len(allInstanceConfigs) > g.maxInstanceConfigs {
-		klog.Infof("FlexAdvisor[async-worker]: capping generated instance configs for %v from %d to %d", flexibilityScopeKey, len(allInstanceConfigs), g.maxInstanceConfigs)
+	if len(allInstanceConfigs) > maxConfigs {
+		klog.Infof("FlexAdvisor[async-worker]: capping generated instance configs for %v from %d to %d", flexibilityScopeKey, len(allInstanceConfigs), maxConfigs)
 	}
 	return finalInstanceConfigs, cappedKeysMap
 }

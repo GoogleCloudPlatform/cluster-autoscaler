@@ -23,6 +23,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -75,6 +76,10 @@ func init() {
 	registry.MustRegister(podSchedulingDuration)
 	registry.MustRegister(scaleUpAttempts)
 	registry.MustRegister(failedScaleUpAttempts)
+	// Lets prom-to-sd derive the start time of the cumulative metrics exposed here (b/566293374).
+	if err := k8smetrics.RegisterProcessStartTime(registry.Register); err != nil {
+		klog.Errorf("Failed to register process_start_time_seconds in the per-CCC metrics registry: %v", err)
+	}
 }
 
 func MetricsRegistryHandler() http.Handler {

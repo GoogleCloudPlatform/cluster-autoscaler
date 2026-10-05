@@ -21,6 +21,8 @@ import (
 	"testing"
 	"time"
 
+	netapi "github.com/GoogleCloudPlatform/gke-networking-api/apis/network/v1"
+	netlister "github.com/GoogleCloudPlatform/gke-networking-api/client/network/listers/network/v1"
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	cccfake "github.com/googlecloudplatform/compute-class-api/client/clientset/versioned/fake"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
@@ -58,6 +61,7 @@ import (
 	fakeflexadvisor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodesnowflake"
 	prmanager "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/manager"
@@ -283,6 +287,11 @@ func DefaultAutoscalingBuilder(
 		t.Fatalf("failed to create ProvisioningRequestManager: %v", err)
 	}
 
+	var networkMatcher networking.Matcher
+	if len(config.GkeNetworkParamSets) > 0 {
+		networkMatcher = networking.GetMatcher(&mockNetworkParamSetLister{paramSets: config.GkeNetworkParamSets})
+	}
+
 	return autoscaler.NewBuilder(tracker).
 		WithCAVersion(fakeCAVersion).
 		WithKubeConfig(kubeConfig).
@@ -321,7 +330,8 @@ func DefaultAutoscalingBuilder(
 		WithNodeQuotaWatcher(nodequota.NewNoOpWatcher()).
 		// TODO(b/457174984): Update PodObserver usage once StartPodObserver accepts cache.ListerWatcher.
 		// This requires an OSS Kubernetes change. The current signature makes it hard to substitute with a fake informer/lister.
-		WithPodObserver(&loop.UnschedulablePodObserver{}), nil
+		WithPodObserver(&loop.UnschedulablePodObserver{}).
+		WithNetworkMatcher(networkMatcher), nil
 }
 
 // SetupAutoscaler constructs a fully functional StaticAutoscaler using the provided configuration, returning the autoscaler instance and an error if any.
@@ -381,4 +391,17 @@ func setupFakeMachineConfigClient() *mccfake.Clientset {
 	mccClient := mccfake.NewSimpleClientset()
 	reactors.SimulateInitialListStreamForWatchCalls(&mccClient.Fake, mccClient.Tracker(), "*", &mcv1.MachineConfig{})
 	return mccClient
+}
+
+type mockNetworkParamSetLister struct {
+	paramSets []*netapi.GKENetworkParamSet
+	netlister.GKENetworkParamSetListerExpansion
+}
+
+func (m *mockNetworkParamSetLister) List(_ labels.Selector) ([]*netapi.GKENetworkParamSet, error) {
+	return m.paramSets, nil
+}
+
+func (m *mockNetworkParamSetLister) Get(_ string) (*netapi.GKENetworkParamSet, error) {
+	return nil, nil
 }

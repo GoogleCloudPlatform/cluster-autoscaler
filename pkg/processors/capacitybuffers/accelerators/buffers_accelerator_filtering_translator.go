@@ -16,17 +16,13 @@ package accelerators
 
 import (
 	"fmt"
-	"slices"
-	"strings"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/accelerators"
 	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/common"
-	gpuutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
-	tpuutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/tpu"
 )
 
 type AcceleratorsFilteringTranslator struct {
@@ -102,10 +98,10 @@ func hasAccelerators(resources v1.ResourceList) (bool, string, string) {
 		return false, "", ""
 	}
 	for name := range resources {
-		if slices.Contains(gpuutils.GPUVendorResourceNames, name) {
+		if accelerators.IsGPU(name) {
 			return true, string(name), "GPU"
 		}
-		if strings.HasPrefix(string(name), tpuutils.ResourceTPUPrefix) || tpu.ResourceGoogleTPU == name {
+		if accelerators.IsTPU(name) {
 			return true, string(name), "TPU"
 		}
 	}

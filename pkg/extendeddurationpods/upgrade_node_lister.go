@@ -23,7 +23,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
-// UpgradeEligibleEdpNodes returns a list of real EDP nodes which are not yet upgraded to the new master version
+// UpgradeEligibleEdpNodes returns a list of real EDP nodes which are not yet upgraded to the target node version
 func UpgradeEligibleEdpNodes(ctx *context.AutoscalingContext) []*framework.NodeInfo {
 	var nodeList []*framework.NodeInfo
 	allNodes, err := ctx.ClusterSnapshot.ListNodeInfos()
@@ -35,7 +35,7 @@ func UpgradeEligibleEdpNodes(ctx *context.AutoscalingContext) []*framework.NodeI
 		return nodeList
 	}
 	for _, node := range allNodes {
-		if IsNodeEligibleForUpgrade(node, provider.GetClusterVersion()) {
+		if IsNodeEligibleForUpgrade(node, provider.GetClusterVersion(), provider.GetEmulatedClusterVersion()) {
 			nodeList = append(nodeList, node)
 		}
 	}
@@ -43,7 +43,7 @@ func UpgradeEligibleEdpNodes(ctx *context.AutoscalingContext) []*framework.NodeI
 }
 
 // IsNodeEligibleForUpgrade returns the eligibility of a node for an EDP upgrade criteria
-func IsNodeEligibleForUpgrade(node *framework.NodeInfo, clusterVersion string) bool {
+func IsNodeEligibleForUpgrade(node *framework.NodeInfo, clusterVersion, emulatedClusterVersion string) bool {
 	if node.Node() == nil {
 		return false
 	}
@@ -53,15 +53,15 @@ func IsNodeEligibleForUpgrade(node *framework.NodeInfo, clusterVersion string) b
 	if utils.IsNodeInfoUpcoming(node) {
 		return false
 	}
-	cVersion, err := version.FromString(clusterVersion)
-	if err != nil {
-		klog.Warningf("Unable to parse cluster version: %s, %q", clusterVersion, err)
-		return false
-	}
 	nodeVersion, err := version.FromString(node.Node().Status.NodeInfo.KubeletVersion)
 	if err != nil {
 		klog.Warningf("Unable to parse node version: %s, %q", node.Node().Status.NodeInfo.KubeletVersion, err)
 		return false
 	}
-	return nodeVersion.LessThan(cVersion)
+	isOlder, err := isOlderThanTargetVersion(nodeVersion, clusterVersion, emulatedClusterVersion)
+	if err != nil {
+		klog.Warningf("Unable to parse target cluster version: %q", err)
+		return false
+	}
+	return isOlder
 }

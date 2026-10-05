@@ -55,6 +55,7 @@ import (
 	gkelocalssdsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	gkeutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
@@ -190,6 +191,9 @@ type GkeManager interface {
 	GetClusterName() string
 	// GetClusterVersion returns the version of the GKE cluster.
 	GetClusterVersion() string
+	// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
+	// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
+	GetEmulatedClusterVersion() string
 	// GetClusterNetwork returns the GCE Network resource of the cluster's VPC
 	GetClusterNetwork() (*gce_api.Network, error)
 	// RecommendLocations returns recommendation made by recommendLocations API.
@@ -200,8 +204,17 @@ type GkeManager interface {
 	GetReservationBlocksInReservation(reservationRef gceclient.ReservationRef) ([]*gceclient.GceReservationBlock, error)
 	// GetReservationSubblocksInReservationBlock returns the reservation subblocks for a particular reservation block, in specfied reservation, project, and zone.
 	GetReservationSubBlocksInReservationBlock(reservationRef gceclient.ReservationRef) ([]*gceclient.GceReservationSubBlock, error)
-	// GetResourcePolicies returns the resource policies in the provided project and region.
+	// GetResourcePolicies lists the resource policies in the provided project and region from GCE.
+	// It is the data source of the ResourcePolicyPuller; other callers should read the pulled
+	// policies via GetPulledResourcePolicy instead of calling GCE.
 	GetResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error)
+	// SetResourcePolicyPuller sets the puller backing GetPulledResourcePolicy. It must be called
+	// before the autoscaler starts running.
+	SetResourcePolicyPuller(puller placement.ResourcePolicyPuller)
+	// GetPulledResourcePolicy returns the resource policy with the given name in the given project
+	// from the ResourcePolicyPuller cache. It returns nil if no puller is set, the project is not
+	// the cluster project, or the policy has not been pulled (yet).
+	GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy
 	// GetZonesInRegion returns all zones within a given region.
 	GetZonesInRegion(region string) ([]string, error)
 	// GetStandardZones returns all Standard zones within a given region.
@@ -475,6 +488,7 @@ type gkeManagerImpl struct {
 	provisioningRequestManager manager.ProvisioningRequestManager
 	matcher                    networking.Matcher
 	reservationsPuller         *gceclient.ReservationsPuller
+	resourcePolicyPuller       placement.ResourcePolicyPuller
 
 	migLister                     *gkeMigLister
 	migInfoProvider               gce.MigInfoProvider
@@ -1792,6 +1806,12 @@ func (m *gkeManagerImpl) GetClusterVersion() string {
 	return m.clusterVersion
 }
 
+// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
+// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
+func (m *gkeManagerImpl) GetEmulatedClusterVersion() string {
+	return m.emulatedClusterVersion
+}
+
 // GetClusterNetwork returns the GCE Network resource of the cluster's VPC
 // This function will call Network GCE API once per gkeManager instance lifecycle,
 // then retrieve the cached result on each following call.
@@ -1903,6 +1923,21 @@ func (m *gkeManagerImpl) GetReservationSubBlocksInReservationBlock(reservationRe
 // GetResourcePolicies returns the resource policies in the provided project and region.
 func (m *gkeManagerImpl) GetResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error) {
 	return m.gceService.FetchResourcePolicies(projectId, region)
+}
+
+// SetResourcePolicyPuller sets the puller backing GetPulledResourcePolicy.
+func (m *gkeManagerImpl) SetResourcePolicyPuller(puller placement.ResourcePolicyPuller) {
+	m.resourcePolicyPuller = puller
+}
+
+// GetPulledResourcePolicy returns the resource policy with the given name from the
+// ResourcePolicyPuller cache. The puller only pulls the cluster project, so policies from other
+// projects are never returned.
+func (m *gkeManagerImpl) GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy {
+	if m.resourcePolicyPuller == nil || name == "" || projectId != m.projectId {
+		return nil
+	}
+	return m.resourcePolicyPuller.GetResourcePolicy(name)
 }
 
 // GetMigInstanceTemplate returns instance template for a given mig.

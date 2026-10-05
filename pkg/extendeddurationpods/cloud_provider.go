@@ -14,11 +14,34 @@
 
 package extendeddurationpods
 
-import "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+import (
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+)
 
 // CloudProvider is declared locally to match a function existing processor.ProcessorsCloudProvider
 // since there is import cycle dependency issue since processor import parts of edps/
 type CloudProvider interface {
 	GetClusterVersion() string
+	GetEmulatedClusterVersion() string
 	GetGkeMigs() []*gke.GkeMig
+}
+
+// isOlderThanTargetVersion returns whether nodeVersion is older than the version EDP nodes are expected to run.
+// During phase 1 of a rollback-safe control plane upgrade, the control plane emulates the previous minor version
+// and new nodes are still created at that minor, so only nodes below the emulated minor version are outdated.
+// Otherwise, nodes below the cluster version are outdated.
+func isOlderThanTargetVersion(nodeVersion version.Version, clusterVersion, emulatedClusterVersion string) (bool, error) {
+	if emulatedClusterVersion != "" {
+		emulatedVersion, err := version.MinorVersionFromString(emulatedClusterVersion)
+		if err != nil {
+			return false, err
+		}
+		return nodeVersion.MinorVersion().LessThan(emulatedVersion), nil
+	}
+	cVersion, err := version.FromString(clusterVersion)
+	if err != nil {
+		return false, err
+	}
+	return nodeVersion.LessThan(cVersion), nil
 }

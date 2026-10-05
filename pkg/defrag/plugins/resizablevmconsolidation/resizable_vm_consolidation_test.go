@@ -348,7 +348,7 @@ func TestNewCandidate(t *testing.T) {
 				},
 			},
 			experimentFlags: map[string]bool{
-				experiments.EkPreventScheduleOnLookaheadNodes: false,
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: false,
 			},
 			nodeNames:                 []string{"ek-node-1"},
 			wantCandidateNodeNames:    []string{"ek-node-1"},
@@ -618,7 +618,7 @@ func TestValidCandidateNodes(t *testing.T) {
 			nodeNames:               []string{"ek-node-1"},
 			wantValidCandidateNodes: []string{"ek-node-1"},
 			experimentFlags: map[string]bool{
-				experiments.EkPreventScheduleOnLookaheadNodes: false,
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: false,
 			},
 		},
 	}

@@ -30,7 +30,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	InitSelfService(defaultMockCloudProvider())
+	initDefaultSelfService()
 	os.Exit(m.Run())
 }
 
@@ -2084,7 +2084,7 @@ func TestUpdateNodepool(t *testing.T) {
 func TestNestedVirtualizationDisabled(t *testing.T) {
 	t.Cleanup(func() {
 		// Reset InitSelfService for other tests
-		InitSelfService(defaultMockCloudProvider())
+		initDefaultSelfService()
 	})
 
 	testCases := []struct {
@@ -2117,10 +2117,7 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cp := &mockCloudProvider{
-				experimentsManager: tc.experimentsManager,
-			}
-			InitSelfService(cp)
+			InitSelfService(tc.experimentsManager)
 
 			t.Run("FromNodepool", func(t *testing.T) {
 				np := &container.NodePool{
@@ -2173,7 +2170,7 @@ func TestNestedVirtualizationDisabled(t *testing.T) {
 }
 
 func TestArrayFeaturesMatchingUnordered(t *testing.T) {
-	InitSelfService(defaultMockCloudProvider())
+	initDefaultSelfService()
 
 	t.Run("NetworkTags matches regardless of order and reconstructs sorted", func(t *testing.T) {
 		spec := v1.ComputeClassSpec{

@@ -67,3 +67,23 @@ func (p *GkeInternalAutoscalingScaleDownNodeProcessor) CleanUp() {
 func NewGkeInternalAutoscalingScaleDownNodeProcessor(processors []nodes.ScaleDownNodeProcessor) *GkeInternalAutoscalingScaleDownNodeProcessor {
 	return &GkeInternalAutoscalingScaleDownNodeProcessor{processors: processors}
 }
+
+// DefragScaleDownNodeProcessorProvider is implemented by ScaleDownNodeProcessors whose regular
+// behavior is not suitable for defrag, and which offer a defrag-specific variant instead.
+type DefragScaleDownNodeProcessorProvider interface {
+	DefragScaleDownNodeProcessor() nodes.ScaleDownNodeProcessor
+}
+
+// NewDefragScaleDownNodeProcessor builds the defrag chain out of the regular scale-down chain,
+// swapping every processor implementing DefragScaleDownNodeProcessorProvider for its defrag
+// variant. Deriving both chains from a single slice keeps them from drifting apart.
+func NewDefragScaleDownNodeProcessor(processors []nodes.ScaleDownNodeProcessor) *GkeInternalAutoscalingScaleDownNodeProcessor {
+	defragProcessors := make([]nodes.ScaleDownNodeProcessor, 0, len(processors))
+	for _, processor := range processors {
+		if provider, ok := processor.(DefragScaleDownNodeProcessorProvider); ok {
+			processor = provider.DefragScaleDownNodeProcessor()
+		}
+		defragProcessors = append(defragProcessors, processor)
+	}
+	return NewGkeInternalAutoscalingScaleDownNodeProcessor(defragProcessors)
+}

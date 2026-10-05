@@ -24,17 +24,17 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	selfservice.InitSelfService(&mockCloudProvider{
+	selfservice.InitSelfService(experiments.NewMockManagerWithOptions(
+		version.Version{1, 30, 0, 0},
+		map[string]bool{
+			experiments.EnableNestedVirtualizationEnabledFlag: true,
+		},
+		map[string]string{},
+	))
+	selfservice.SetCloudProvider(&mockCloudProvider{
 		isPSC:              true,
 		defaultPrivateNode: false,
 		isAutopilot:        false,
-		experimentsManager: experiments.NewMockManagerWithOptions(
-			version.Version{1, 30, 0, 0},
-			map[string]bool{
-				experiments.EnableNestedVirtualizationEnabledFlag: true,
-			},
-			map[string]string{},
-		),
 	})
 	os.Exit(m.Run())
 }
@@ -43,7 +43,6 @@ type mockCloudProvider struct {
 	isPSC              bool
 	defaultPrivateNode bool
 	isAutopilot        bool
-	experimentsManager experiments.Manager
 }
 
 func (m *mockCloudProvider) IsClusterUsingPSCInfrastructure() bool {
@@ -56,8 +55,4 @@ func (m *mockCloudProvider) GetDefaultEnablePrivateNodes() bool {
 
 func (m *mockCloudProvider) IsAutopilotEnabled() bool {
 	return m.isAutopilot
-}
-
-func (m *mockCloudProvider) GetExperimentsManager() experiments.Manager {
-	return m.experimentsManager
 }

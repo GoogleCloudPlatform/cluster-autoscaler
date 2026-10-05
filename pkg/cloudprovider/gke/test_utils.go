@@ -1485,6 +1485,12 @@ func (m *GkeCloudProviderMock) GetClusterVersion() string {
 	return args.Get(0).(string)
 }
 
+// GetEmulatedClusterVersion is a mocked method.
+func (m *GkeCloudProviderMock) GetEmulatedClusterVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
 // GetAllZones returns all zones within a region that cluster is running in.
 func (m *GkeCloudProviderMock) GetAllZones() ([]string, error) {
 	args := m.Called()
@@ -1788,6 +1794,10 @@ func (fake *FakeGkeManager) GetClusterVersion() string {
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) GetEmulatedClusterVersion() string {
+	panic("not implemented")
+}
+
 func (fake *FakeGkeManager) GetClusterNetwork() (*gce_api.Network, error) {
 	panic("not implemented")
 }
@@ -1822,6 +1832,12 @@ func (fake *FakeGkeManager) GetReservationSubBlocksInReservationBlock(reservatio
 
 func (fake *FakeGkeManager) GetResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error) {
 	panic("not implemented")
+}
+
+func (fake *FakeGkeManager) SetResourcePolicyPuller(placement.ResourcePolicyPuller) {}
+
+func (fake *FakeGkeManager) GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy {
+	return nil
 }
 
 func (fake *FakeGkeManager) GetZonesInRegion(region string) ([]string, error) {
@@ -2602,6 +2618,12 @@ func (m *GkeManagerMock) GetClusterVersion() string {
 	return args.String(0)
 }
 
+// GetEmulatedClusterVersion is a mocked method.
+func (m *GkeManagerMock) GetEmulatedClusterVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
 // GetClusterNetwork is a mocked method.
 func (m *GkeManagerMock) GetClusterNetwork() (*gce_api.Network, error) {
 	args := m.Called()
@@ -2652,6 +2674,14 @@ func (m *GkeManagerMock) GetReservationSubBlocksInReservationBlock(reservationRe
 func (m *GkeManagerMock) GetResourcePolicies(projectId, region string) ([]*gceclient.GceResourcePolicy, error) {
 	args := m.Called()
 	return args.Get(0).([]*gceclient.GceResourcePolicy), args.Error(1)
+}
+
+// SetResourcePolicyPuller is a no-op.
+func (m *GkeManagerMock) SetResourcePolicyPuller(placement.ResourcePolicyPuller) {}
+
+// GetPulledResourcePolicy always misses.
+func (m *GkeManagerMock) GetPulledResourcePolicy(projectId, name string) *gceclient.GceResourcePolicy {
+	return nil
 }
 
 // GetZonesInRegion is a mocked method.

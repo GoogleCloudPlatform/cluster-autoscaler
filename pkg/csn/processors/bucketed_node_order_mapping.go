@@ -15,35 +15,48 @@
 package processors
 
 import (
-	"slices"
-
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
 // bucketedNodeOrderMapping is a clustersnapshot.NodeOrderMapping that makes the scheduler try nodes
 // in priority order: nodes of priority 0 first, then priority 1, and so on, and nodes without a
-// priority last. Nodes with the same priority keep their order from the snapshot.
+// priority last.
 //
-// This is the order that sorting the nodes by priority for every pod would give, but cheaper: node
-// priorities are computed once per pod group, Reset groups the nodes by priority (one bucket per
-// priority) in O(n), and the result is reused for the next pods as long as the snapshot lists the
-// same nodes in the same order.
+// Inside a bucket, nodes are tried round robin: the scan of a bucket starts at the node that got the
+// last pod from that bucket, then wraps around to the nodes before it. So the next pod tries the
+// previous pod's node first, and the nodes that said no before are tried last, but still before the
+// next bucket.
+//
+// Node priorities are computed once per pod group, Reset groups the nodes by priority (one bucket
+// per priority) in O(n), and the buckets are reused for the next pods as long as the snapshot lists
+// the same nodes in the same order.
 type bucketedNodeOrderMapping struct {
 	// nodePriorities maps node names to their priority, i.e. the index of the first priority filter
 	// that matched the original node. Nodes that aren't in the map have no priority.
 	nodePriorities map[string]int
-	// numBuckets is the number of priorities. Nodes without a priority go to an extra last bucket.
-	numBuckets int
-	// order holds indices into the collection passed to Reset, in the order the nodes should be tried.
-	order []int
-	// names holds the node name at each index of the collection that order was built for.
+	// numPriorities is the number of priorities. There is one bucket per priority, plus an extra
+	// last bucket for nodes without a priority, so there are numPriorities+1 buckets.
+	numPriorities int
+	// buckets[b] holds the indices into the collection passed to Reset of the nodes with priority b,
+	// in snapshot order. The last bucket holds the nodes without a priority.
+	buckets [][]int
+	// start[b] is the position in buckets[b] where the scan of bucket b starts.
+	start []int
+	// pos[i] is the bucket of the node at index i of the collection, and its position in that bucket.
+	pos []bucketPos
+	// names holds the node name at each index of the collection that buckets were built for.
 	names []string
 }
 
-func newBucketedNodeOrderMapping(nodePriorities map[string]int, numBuckets int) *bucketedNodeOrderMapping {
+// bucketPos is where a node is in the buckets: the index of its bucket, and its position in that bucket.
+type bucketPos struct {
+	bucket, pos int
+}
+
+func newBucketedNodeOrderMapping(nodePriorities map[string]int, numPriorities int) *bucketedNodeOrderMapping {
 	return &bucketedNodeOrderMapping{
 		nodePriorities: nodePriorities,
-		numBuckets:     numBuckets,
+		numPriorities:  numPriorities,
 	}
 }
 
@@ -54,7 +67,7 @@ func (m *bucketedNodeOrderMapping) isNodeAcceptable(ni *framework.NodeInfo) bool
 	return ok
 }
 
-// sameNodeOrder reports whether collection has exactly the same nodes, in the same order, as when order was built.
+// sameNodeOrder reports whether collection has exactly the same nodes, in the same order, as when buckets were built.
 func (m *bucketedNodeOrderMapping) sameNodeOrder(collection []*framework.NodeInfo) bool {
 	if len(collection) != len(m.names) {
 		return false
@@ -68,33 +81,50 @@ func (m *bucketedNodeOrderMapping) sameNodeOrder(collection []*framework.NodeInf
 }
 
 // Reset is called by the scheduler with all nodes before it looks for a node for a pod.
-// It rebuilds the order only if the nodes in collection changed since the last rebuild.
+// It rebuilds the buckets only if the nodes in collection changed since the last rebuild.
+// After a rebuild, the scan of every bucket starts at its first node again.
 func (m *bucketedNodeOrderMapping) Reset(collection []*framework.NodeInfo) {
 	if m.sameNodeOrder(collection) {
 		return
 	}
 
 	m.names = make([]string, len(collection))
-	buckets := make([][]int, m.numBuckets+1)
+	m.buckets = make([][]int, m.numPriorities+1)
+	m.start = make([]int, m.numPriorities+1)
+	m.pos = make([]bucketPos, len(collection))
 	for i, ni := range collection {
 		m.names[i] = ni.Node().Name
 		b, ok := m.nodePriorities[m.names[i]]
-		if !ok || b < 0 || b >= m.numBuckets {
+		if !ok || b < 0 || b >= m.numPriorities {
 			// Nodes without a priority go last.
-			b = m.numBuckets
+			b = m.numPriorities
 		}
-		buckets[b] = append(buckets[b], i)
+		m.pos[i] = bucketPos{bucket: b, pos: len(m.buckets[b])}
+		m.buckets[b] = append(m.buckets[b], i)
 	}
-	m.order = slices.Concat(buckets...)
 }
 
 // At returns the index in collection of the i-th node to try, or -1 if i is out of range.
 func (m *bucketedNodeOrderMapping) At(i int) int {
-	if i < 0 || i >= len(m.order) {
+	if i < 0 {
 		return -1
 	}
-	return m.order[i]
+	for b, bucket := range m.buckets {
+		if i < len(bucket) {
+			j := (m.start[b] + i) % len(bucket)
+			return bucket[j]
+		}
+		i -= len(bucket)
+	}
+	return -1
 }
 
 // MarkMatch is called by the scheduler after it puts a pod on the node at index idx of collection.
-func (m *bucketedNodeOrderMapping) MarkMatch(idx int) {}
+// The next scan of the node's bucket starts at this node.
+func (m *bucketedNodeOrderMapping) MarkMatch(idx int) {
+	if idx < 0 || idx >= len(m.pos) {
+		return
+	}
+	p := m.pos[idx]
+	m.start[p.bucket] = p.pos
+}

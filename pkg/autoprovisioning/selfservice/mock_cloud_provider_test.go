@@ -24,7 +24,6 @@ type mockCloudProvider struct {
 	isPSC              bool
 	defaultPrivateNode bool
 	isAutopilot        bool
-	experimentsManager experiments.Manager
 }
 
 func (m *mockCloudProvider) IsClusterUsingPSCInfrastructure() bool {
@@ -39,17 +38,16 @@ func (m *mockCloudProvider) IsAutopilotEnabled() bool {
 	return m.isAutopilot
 }
 
-func (m *mockCloudProvider) GetExperimentsManager() experiments.Manager {
-	return m.experimentsManager
-}
-
-func defaultMockCloudProvider() *mockCloudProvider {
+func defaultExperimentsManager() experiments.Manager {
 	evaluator := experimentsfake.NewEvaluator(
 		map[string]bool{experiments.EnableNestedVirtualizationEnabledFlag: true},
 		map[string]string{},
 	)
-	manager := experiments.NewManager(version.Version{}, evaluator)
-	return &mockCloudProvider{
-		experimentsManager: manager,
-	}
+	return experiments.NewManager(version.Version{}, evaluator)
+}
+
+// initDefaultSelfService initializes the package the same way for all tests.
+func initDefaultSelfService() {
+	InitSelfService(defaultExperimentsManager())
+	SetCloudProvider(&mockCloudProvider{})
 }

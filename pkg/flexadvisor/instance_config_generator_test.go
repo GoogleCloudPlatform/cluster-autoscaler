@@ -1815,6 +1815,69 @@ func TestCapGeneratedInstanceConfigs(t *testing.T) {
 	}
 }
 
+func TestCapGeneratedInstanceConfigs_Experiment(t *testing.T) {
+	ig1 := api.NewInstanceConfig("c2-standard-4", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+	ig2 := api.NewInstanceConfig("c2-standard-8", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+	ig3 := api.NewInstanceConfig("c2-standard-16", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+	ig4 := api.NewInstanceConfig("c2-standard-30", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+	ig5 := api.NewInstanceConfig("c2-standard-60", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+
+	allConfigs := map[string]*api.InstanceConfig{
+		ig1.Signature(): ig1,
+		ig2.Signature(): ig2,
+		ig3.Signature(): ig3,
+		ig4.Signature(): ig4,
+		ig5.Signature(): ig5,
+	}
+
+	testCases := []struct {
+		name            string
+		experiments     map[string]string
+		wantConfigCount int
+	}{
+		{
+			name:            "experiment overrides to 2",
+			experiments:     map[string]string{experiments.FlexAdvisorMaxInstanceConfigsFlag: "2"},
+			wantConfigCount: 2,
+		},
+		{
+			name:            "experiment overrides to 4",
+			experiments:     map[string]string{experiments.FlexAdvisorMaxInstanceConfigsFlag: "4"},
+			wantConfigCount: 4,
+		},
+		{
+			name:            "experiment negative falls back to maxInstanceConfigs",
+			experiments:     map[string]string{experiments.FlexAdvisorMaxInstanceConfigsFlag: "-1"},
+			wantConfigCount: 3,
+		},
+		{
+			name:            "experiment zero falls back to maxInstanceConfigs",
+			experiments:     map[string]string{experiments.FlexAdvisorMaxInstanceConfigsFlag: "0"},
+			wantConfigCount: 3,
+		},
+		{
+			name:            "experiment invalid falls back to maxInstanceConfigs",
+			experiments:     map[string]string{experiments.FlexAdvisorMaxInstanceConfigsFlag: "not-a-number"},
+			wantConfigCount: 3,
+		},
+		{
+			name:            "no experiment uses maxInstanceConfigs",
+			experiments:     nil,
+			wantConfigCount: 3,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.experiments)
+			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			g := NewInstanceConfigGenerator(context.Background(), nil, nil, optionsTracker, WithMaxInstanceConfigs(3))
+			got, _ := g.capGeneratedInstanceConfigs(allConfigs, "")
+			assert.Equal(t, tc.wantConfigCount, len(got))
+		})
+	}
+}
+
 func TestGenerationValidation_Metrics(t *testing.T) {
 	registerOnce.Do(metrics.RegisterAll)
 

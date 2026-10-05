@@ -2707,8 +2707,12 @@ func TestComputePossibleRequirements(t *testing.T) {
 						SpecificTypeReservationsEnabled: true,
 					},
 				},
-				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				ExperimentsManager: em,
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationWithoutMatchEnabled: true,
+					},
+				}, gkeclient.Cluster{}, em),
 				Lister:               ccLister,
 				ReservationsPuller:   reservations.NewTestingReservationsPuller("12345", nil, nil),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
@@ -6078,7 +6082,7 @@ func TestReservationGenerator_UpdateNodePoolSpec(t *testing.T) {
 			f := ReservationFlags{
 				SpecificTypeReservationMatchEnabled: true,
 			}
-			rg := NewReservationGenerator(nil, f, tc.projectId, experiments.NewMockManager(), nil)
+			rg := NewReservationGenerator(nil, f, tc.projectId, experiments.NewMockManager(), nil, nil)
 			spec := &gkeclient.NodePoolSpec{
 				Labels: map[string]string{},
 			}
@@ -6842,7 +6846,11 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 					},
 					EnableUserAnyZoneSelection: true,
 				},
-				OptionsTracker:                tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationMatchEnabled: true,
+					},
+				}, gkeclient.Cluster{}, experiments.NewMockManager()),
 				PodLister:                     kube_util.NewTestPodLister(tc.req.pods),
 				ResizableMachineTypesProvider: config.NewSimpleStringSetProvider(allMachineTypes),
 				ResourcePolicyPuller:          &placement.FakeResourcePolicyPullerProvider{},
@@ -7326,8 +7334,12 @@ func TestValidateRequirements(t *testing.T) {
 						SpecificTypeReservationsEnabled: true,
 					},
 				},
-				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				ExperimentsManager: em,
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationWithoutMatchEnabled: true,
+					},
+				}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 			var err error
@@ -7994,7 +8006,12 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 				CloudProvider:      provider,
 				ReservationsPuller: reservationsPuller,
 				ExperimentsManager: em,
-				OptionsTracker:     tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationMatchEnabled:        tc.enableReservationMatch,
+						SpecificTypeReservationWithoutMatchEnabled: !tc.disableSpecificTypeReservations,
+					},
+				}, gkeclient.Cluster{}, em),
 				Flags: AutoprovisioningNodeGroupManagerFlags{
 					TpuAutoprovisioningEnabled: true,
 					ReservationFlags: ReservationFlags{
@@ -9066,7 +9083,8 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 				},
 				projectId,
 				experiments.NewMockManager(),
-				blocksPuller)
+				blocksPuller,
+				nil)
 			_, err := generator.generateRequirements(*tc.ngReq, tc.podReq)
 			if tc.expectedErr != nil {
 				assert.Error(t, err)
@@ -9160,6 +9178,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 				},
 				projectId,
 				experiments.NewManager(version, fake.NewEvaluator(map[string]bool{}, map[string]string{})),
+				nil,
 				nil)
 
 			results, err := generator.GenerateNodeGroupRequirements([]nodeGroupRequirements{tc.ngReq}, &podrequirements.Requirements{
@@ -11435,8 +11454,12 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 						SpecificTypeReservationsEnabled: true,
 					},
 				},
-				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				ExperimentsManager: em,
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationWithoutMatchEnabled: true,
+					},
+				}, gkeclient.Cluster{}, em),
 				ReservationsPuller:   reservations.NewTestingReservationsPuller("12345", nil, nil),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
@@ -12395,8 +12418,8 @@ func TestUpdateNodePoolSpecWithReservation(t *testing.T) {
 				em = experiments.NewMockManager()
 			}
 			rg := &ReservationGenerator{
-				experimentsManager:                    em,
-				reservationsAnyLocationPolicyOverride: tc.reservationsAnyLocationPolicyOverride,
+				experimentsManager:                        em,
+				reservationsAnyLocationPolicyOverrideFlag: tc.reservationsAnyLocationPolicyOverride,
 			}
 			err := rg.UpdateNodePoolSpec(spec, tc.systemLabels, nil)
 			assert.NoError(t, err)
@@ -13575,6 +13598,119 @@ func TestIsStatefulWorkload(t *testing.T) {
 		t.Run(tName, func(t *testing.T) {
 			got := isStatefulWorkload(&tc.req)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestReservationGenerator_OptionsTrackerOverride(t *testing.T) {
+	testCases := []struct {
+		name                                      string
+		flagMatchEnabled                          bool
+		flagWithoutMatchEnabled                   bool
+		flagAnyLocationOverride                   bool
+		modifier                                  func(opts *internalopts.InternalOptions)
+		wantSpecificTypeReservationMatchEnabled   bool
+		wantSpecificTypeReservationsEnabled       bool
+		wantReservationsAnyLocationPolicyOverride bool
+	}{
+		{
+			name:                                      "flags_false,_no_options_tracker_overrides_->_all_false",
+			flagMatchEnabled:                          false,
+			flagWithoutMatchEnabled:                   false,
+			flagAnyLocationOverride:                   false,
+			modifier:                                  nil,
+			wantSpecificTypeReservationMatchEnabled:   false,
+			wantSpecificTypeReservationsEnabled:       false,
+			wantReservationsAnyLocationPolicyOverride: false,
+		},
+		{
+			name:                    "flags_false,_options_tracker_overrides_all_to_true_->_all_true",
+			flagMatchEnabled:        false,
+			flagWithoutMatchEnabled: false,
+			flagAnyLocationOverride: false,
+			modifier: func(opts *internalopts.InternalOptions) {
+				opts.SpecificTypeReservationMatchEnabled = true
+				opts.SpecificTypeReservationWithoutMatchEnabled = true
+				opts.ReservationsAnyLocationPolicyOverride = true
+			},
+			wantSpecificTypeReservationMatchEnabled:   true,
+			wantSpecificTypeReservationsEnabled:       true,
+			wantReservationsAnyLocationPolicyOverride: true,
+		},
+		{
+			name:                    "flags_true,_options_tracker_overrides_all_to_false_->_all_false",
+			flagMatchEnabled:        true,
+			flagWithoutMatchEnabled: true,
+			flagAnyLocationOverride: true,
+			modifier: func(opts *internalopts.InternalOptions) {
+				opts.SpecificTypeReservationMatchEnabled = false
+				opts.SpecificTypeReservationWithoutMatchEnabled = false
+				opts.ReservationsAnyLocationPolicyOverride = false
+			},
+			wantSpecificTypeReservationMatchEnabled:   false,
+			wantSpecificTypeReservationsEnabled:       false,
+			wantReservationsAnyLocationPolicyOverride: false,
+		},
+		{
+			name:                    "only_without-match_enabled_in_options_tracker_->_match_false,_reservations_enabled_true",
+			flagMatchEnabled:        false,
+			flagWithoutMatchEnabled: false,
+			flagAnyLocationOverride: false,
+			modifier: func(opts *internalopts.InternalOptions) {
+				opts.SpecificTypeReservationMatchEnabled = false
+				opts.SpecificTypeReservationWithoutMatchEnabled = true
+			},
+			wantSpecificTypeReservationMatchEnabled:   false,
+			wantSpecificTypeReservationsEnabled:       true,
+			wantReservationsAnyLocationPolicyOverride: false,
+		},
+		{
+			name:                                      "options_tracker_nil_->_falls_back_to_flags",
+			flagMatchEnabled:                          true,
+			flagWithoutMatchEnabled:                   false,
+			flagAnyLocationOverride:                   true,
+			modifier:                                  nil,
+			wantSpecificTypeReservationMatchEnabled:   true,
+			wantSpecificTypeReservationsEnabled:       true,
+			wantReservationsAnyLocationPolicyOverride: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			flags := ReservationFlags{
+				SpecificTypeReservationMatchEnabled:   tc.flagMatchEnabled,
+				SpecificTypeReservationsEnabled:       tc.flagMatchEnabled || tc.flagWithoutMatchEnabled,
+				ReservationsAnyLocationPolicyOverride: tc.flagAnyLocationOverride,
+			}
+
+			var optsTracker *optstracking.OptionsTracker
+			if tc.name != "options_tracker_nil_->_falls_back_to_flags" {
+				optsTracker = testOptionsTracker(tc.modifier)
+			}
+
+			rg := NewReservationGenerator(nil, flags, "test-proj", experiments.NewMockManager(), nil, optsTracker)
+
+			assert.Equal(t, tc.wantSpecificTypeReservationMatchEnabled, rg.specificTypeReservationMatchEnabled())
+			assert.Equal(t, tc.wantSpecificTypeReservationsEnabled, rg.specificTypeReservationsEnabled())
+			assert.Equal(t, tc.wantReservationsAnyLocationPolicyOverride, rg.reservationsAnyLocationPolicyOverride())
+
+			options := []NodeGroupOptions{
+				{MachineType: "n2-standard-2"},
+			}
+			reqs := nodeGroupRequirements{
+				reservation: reservationRequirements{
+					name:        "res-1",
+					machineType: "different-machine-type",
+					exists:      true,
+				},
+			}
+			gotOptions := rg.GenerateNodeGroupOptionsForRequirements(options, reqs)
+			if tc.wantSpecificTypeReservationMatchEnabled {
+				assert.Empty(t, gotOptions)
+			} else {
+				assert.Equal(t, options, gotOptions)
+			}
 		})
 	}
 }

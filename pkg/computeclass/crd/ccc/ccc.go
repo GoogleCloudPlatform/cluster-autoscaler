@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 const (
@@ -773,15 +775,15 @@ func (ccc *cccCrd) UserDefinedLabels() map[string]string {
 }
 
 // UserDefinedTaints returns taints which are defined by the user in the CCC spec.nodePoolConfig.taints.
-// These taints are applied to the created node pools
+// These taints are applied to the created node pools.
 func (ccc *cccCrd) UserDefinedTaints() []apiv1.Taint {
 	if ccc == nil || ccc.ComputeClass == nil || ccc.Spec.NodePoolConfig == nil {
 		return nil
 	}
-	var taints []apiv1.Taint
+	var resTaints []apiv1.Taint
 	for _, taint := range ccc.Spec.NodePoolConfig.Taints {
-		if !gkelabels.IsSystemLabel(taint.Key) {
-			taints = append(taints, apiv1.Taint{
+		if !gkelabels.IsSystemLabel(taint.Key) || isAllowedSystemTaint(taint.Key) {
+			resTaints = append(resTaints, apiv1.Taint{
 				Key:    taint.Key,
 				Value:  taint.Value,
 				Effect: apiv1.TaintEffect(taint.Effect),
@@ -789,7 +791,12 @@ func (ccc *cccCrd) UserDefinedTaints() []apiv1.Taint {
 		}
 	}
 
-	return taints
+	return resTaints
+}
+
+func isAllowedSystemTaint(key string) bool {
+	return strings.HasPrefix(key, taints.StartupTaintPrefix) ||
+		strings.HasPrefix(key, taints.StatusTaintPrefix)
 }
 
 func (ccc *cccCrd) ResourceManagerTags() []crd.Tag {

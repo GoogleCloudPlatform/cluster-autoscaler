@@ -181,6 +181,8 @@ type Builder struct {
 
 	eventLogger visibility.EventLogger
 	ctrClient   client.Client
+
+	networkMatcher networking.Matcher
 }
 
 // This helper struct is a way to deal with mutual dependency between
@@ -485,6 +487,11 @@ func (b *Builder) WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory node
 	return b
 }
 
+func (b *Builder) WithNetworkMatcher(matcher networking.Matcher) *Builder {
+	b.networkMatcher = matcher
+	return b
+}
+
 func (b *Builder) Build(
 	bgContext ctx.Context,
 	gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter,
@@ -558,18 +565,7 @@ func (b *Builder) Build(
 
 	rrer := resizerequests.NewErrorReporter(experimentsManager)
 	loopStartObservers = append(loopStartObservers, rrer)
-	var matcher networking.Matcher
-	if autoscalingOptions.MultiNetworkSupportEnabled {
-		clientset, err := networking.NewClientset(b.kubeConfigJSON)
-		if err != nil {
-			return nil, nil, err
-		}
-		lister, err := networking.NewLister(bgContext, clientset)
-		if err != nil {
-			return nil, nil, err
-		}
-		matcher = networking.GetMatcher(lister)
-	}
+	matcher := b.networkMatcher
 
 	gkeReserved, err := gke.NewGkeReserved(osReservedContent)
 	if err != nil {
@@ -629,6 +625,11 @@ func (b *Builder) Build(
 	}
 	go reservationsPuller.Run(bgContext)
 
+	// Self-service features must be registered before the GKE cloud provider is
+	// built, because BuildGKE builds the node pool specs, including their
+	// self-service metadata. The cloud provider is set once it exists.
+	selfservice.InitSelfService(experimentsManager)
+
 	// Create GKE cloud provider.
 	cloudProvider, err := gke.BuildGKE(bgContext, gke.Config{
 		ProjectId: b.projectID,
@@ -674,7 +675,7 @@ func (b *Builder) Build(
 		b.npcCrdLister.SetCloudProvider(cloudProvider)
 	}
 
-	selfservice.InitSelfService(cloudProvider)
+	selfservice.SetCloudProvider(cloudProvider)
 
 	// Some autoscalingOptions fields depend on the Cluster proto, and are only properly initialized after it's obtained from the API for the first time
 	// as part of the BuildGKE() call above. Refresh the variable to pick up the newest state. Alternatively we could just inline optsTracker.Options()
@@ -704,6 +705,11 @@ func (b *Builder) Build(
 	}
 
 	resourcePolicyPuller := placement.NewResourcePolicyPuller(experimentsManager, cloudProvider, b.projectID)
+	// Pull once synchronously: node groups of pre-existing node pools only know their resource
+	// policy name and resolve it from the puller (e.g. PROVISION_ONLY), so it must be populated
+	// before the first loop.
+	resourcePolicyPuller.Loop()
+	cloudProvider.SetResourcePolicyPuller(resourcePolicyPuller)
 	go resourcePolicyPuller.Run(bgContext)
 
 	// initializing GCE Reservation Blocks Puller

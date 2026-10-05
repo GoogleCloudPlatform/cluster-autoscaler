@@ -92,7 +92,7 @@ func TestShouldBlockScaling(t *testing.T) {
 		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			gotShouldBlockScaleUp := shouldBlockScalingUp(tc.mig, tc.clusterVersion)
+			gotShouldBlockScaleUp := shouldBlockScalingUp(tc.mig, tc.clusterVersion, "")
 			if gotShouldBlockScaleUp != tc.wantShouldBlockScaleUp {
 				t.Errorf("shouldBlockScaleUp: want %v, got %v", tc.wantShouldBlockScaleUp, gotShouldBlockScaleUp)
 			}
@@ -101,8 +101,9 @@ func TestShouldBlockScaling(t *testing.T) {
 }
 
 type mockCloudProvider struct {
-	migs           []*gke.GkeMig
-	clusterVersion string
+	migs                   []*gke.GkeMig
+	clusterVersion         string
+	emulatedClusterVersion string
 }
 
 func (p *mockCloudProvider) GetGkeMigs() []*gke.GkeMig {
@@ -113,23 +114,30 @@ func (p *mockCloudProvider) GetClusterVersion() string {
 	return p.clusterVersion
 }
 
+func (p *mockCloudProvider) GetEmulatedClusterVersion() string {
+	return p.emulatedClusterVersion
+}
+
 func TestBlockedMigs(t *testing.T) {
 	var (
 		version1 = "1.24.0-gke.1000"
 		version2 = "1.24.1-gke.1000"
 
-		badConfiguredMig   = gke.NewTestGkeMigBuilder().SetGceRefName("badConfigured").Build()
-		nonRealEdpMig      = gke.NewTestGkeMigBuilder().SetGceRefName("nonEdpMig").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).Build()
-		nonEdpMig          = gke.NewTestGkeMigBuilder().SetGceRefName("nonEdpMig").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetExist(true).Build()
-		lowVersionEDPMig1  = gke.NewTestGkeMigBuilder().SetGceRefName("mig-1").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
-		lowVersionEDPMig2  = gke.NewTestGkeMigBuilder().SetGceRefName("mig-2").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
-		highVersionEDPMig1 = gke.NewTestGkeMigBuilder().SetGceRefName("mig-high-1").SetNodeConfig(&gke.NodeConfig{Version: version2}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
-		highVersionEDPMig2 = gke.NewTestGkeMigBuilder().SetGceRefName("mig-high-2").SetNodeConfig(&gke.NodeConfig{Version: version2}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		badConfiguredMig    = gke.NewTestGkeMigBuilder().SetGceRefName("badConfigured").Build()
+		nonRealEdpMig       = gke.NewTestGkeMigBuilder().SetGceRefName("nonEdpMig").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).Build()
+		nonEdpMig           = gke.NewTestGkeMigBuilder().SetGceRefName("nonEdpMig").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetExist(true).Build()
+		lowVersionEDPMig1   = gke.NewTestGkeMigBuilder().SetGceRefName("mig-1").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		lowVersionEDPMig2   = gke.NewTestGkeMigBuilder().SetGceRefName("mig-2").SetNodeConfig(&gke.NodeConfig{Version: version1}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		highVersionEDPMig1  = gke.NewTestGkeMigBuilder().SetGceRefName("mig-high-1").SetNodeConfig(&gke.NodeConfig{Version: version2}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		highVersionEDPMig2  = gke.NewTestGkeMigBuilder().SetGceRefName("mig-high-2").SetNodeConfig(&gke.NodeConfig{Version: version2}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		emulatedMinorEDPMig = gke.NewTestGkeMigBuilder().SetGceRefName("mig-1-34").SetNodeConfig(&gke.NodeConfig{Version: "1.34.9-gke.1655001"}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
+		belowEmulatedEDPMig = gke.NewTestGkeMigBuilder().SetGceRefName("mig-1-33").SetNodeConfig(&gke.NodeConfig{Version: "1.33.9-gke.1000000"}).SetSpec(&gkeclient.NodePoolSpec{ExtendedDurationPods: "1"}).SetExist(true).Build()
 	)
 	for tn, tc := range map[string]struct {
-		migs            []*gke.GkeMig
-		clusterVersion  string
-		wantBlockedMigs scaleblocking.BlockedMigs
+		migs                   []*gke.GkeMig
+		clusterVersion         string
+		emulatedClusterVersion string
+		wantBlockedMigs        scaleblocking.BlockedMigs
 	}{
 		"no MIGs -> no blocked MIGs": {
 			migs:            nil,
@@ -194,9 +202,25 @@ func TestBlockedMigs(t *testing.T) {
 				},
 			},
 		},
+		"rollback-safe upgrade: edp mig at emulated minor is not blocked": {
+			migs:                   []*gke.GkeMig{emulatedMinorEDPMig},
+			clusterVersion:         "1.35.6-gke.1250000",
+			emulatedClusterVersion: "1.34",
+			wantBlockedMigs:        scaleblocking.BlockedMigs{},
+		},
+		"rollback-safe upgrade: edp mig below emulated minor is blocked": {
+			migs:                   []*gke.GkeMig{emulatedMinorEDPMig, belowEmulatedEDPMig},
+			clusterVersion:         "1.35.6-gke.1250000",
+			emulatedClusterVersion: "1.34",
+			wantBlockedMigs: scaleblocking.BlockedMigs{
+				NoScaleUpMigs: map[string]scaleblocking.BlockedMigReasonSet{
+					belowEmulatedEDPMig.Id(): {BlockedMigEDPUpgrade: true},
+				},
+			},
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			provider := &mockCloudProvider{migs: tc.migs, clusterVersion: tc.clusterVersion}
+			provider := &mockCloudProvider{migs: tc.migs, clusterVersion: tc.clusterVersion, emulatedClusterVersion: tc.emulatedClusterVersion}
 			source := NewBlockedMigsSource(provider)
 			gotBlockedMigs := source.BlockedMigs()
 			if diff := cmp.Diff(tc.wantBlockedMigs, gotBlockedMigs, cmpopts.EquateEmpty()); diff != "" {

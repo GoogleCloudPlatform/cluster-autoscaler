@@ -156,7 +156,7 @@ func createNode(name string, machineType string) *apiv1.Node {
 
 func createExpManager(expEnabled bool) experiments.Manager {
 	if !expEnabled {
-		return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.EkPreventScheduleOnLookaheadNodes: expEnabled}, nil)
+		return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{experiments.EkPreventScheduleOnLookaheadNodesFlag: expEnabled}, nil)
 	}
 	return experiments.NewMockManager()
 }

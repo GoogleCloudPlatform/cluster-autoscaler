@@ -224,6 +224,37 @@ func (f *flexAdvisor) calculateFirstFetchTimeout() time.Duration {
 	return time.Duration(parsedSeconds) * time.Second
 }
 
+func calculateRefreshInterval(manager experiments.Manager) time.Duration {
+	if manager == nil {
+		return refreshInterval
+	}
+	duration := manager.EvaluateDurationSecondsFlagOrFailsafe(
+		experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag,
+		refreshInterval,
+	)
+	if duration <= 0 {
+		return refreshInterval
+	}
+	return duration
+}
+
+func (f *flexAdvisor) getScopeStalenessThreshold() time.Duration {
+	if f.optionsTracker == nil || f.optionsTracker.ExperimentsManager() == nil {
+		return scopeStalenessThreshold
+	}
+	manager := f.optionsTracker.ExperimentsManager()
+	refInterval := calculateRefreshInterval(manager)
+	defaultThreshold := max(scopeStalenessThreshold, 3*refInterval)
+	threshold := manager.EvaluateDurationSecondsFlagOrFailsafe(
+		experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag,
+		defaultThreshold,
+	)
+	if threshold <= 0 {
+		return defaultThreshold
+	}
+	return threshold
+}
+
 // isStale returns whether scope has not been updated within required threshold. If not initial fetch has been done yet returns false
 func (f *flexAdvisor) isStale(scope *flexibilityScope) bool {
 	if scope == nil {
@@ -234,7 +265,7 @@ func (f *flexAdvisor) isStale(scope *flexibilityScope) bool {
 		// There was no single successful fetch, data array should be empty
 		return false
 	}
-	return f.clock.Since(lastRefresh) > scopeStalenessThreshold
+	return f.clock.Since(lastRefresh) > f.getScopeStalenessThreshold()
 }
 
 // IncrementFlexAdvisorCacheQueryCount gathers additional debugging info and calls underlying prometheus' IncrementFlexAdvisorCacheQueryCount
@@ -379,13 +410,29 @@ func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, b
 	return scope, scopeFound, isAtCapacity
 }
 
+func (f *flexAdvisor) getScopeTtl() time.Duration {
+	if f.optionsTracker == nil || f.optionsTracker.ExperimentsManager() == nil {
+		return keepAliveInterval
+	}
+	duration := f.optionsTracker.ExperimentsManager().EvaluateDurationSecondsFlagOrFailsafe(
+		experiments.FlexAdvisorScopeKeepAliveSecondsFlag,
+		keepAliveInterval,
+	)
+	if duration <= 0 {
+		return keepAliveInterval
+	}
+	return duration
+}
+
 func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) (*flexibilityScope, error) {
+	scopeTtl := f.getScopeTtl()
+
 	f.rwMutex.Lock()
 	defer f.rwMutex.Unlock()
 
 	scope, found := f.scopes[flexibilityScopeKey]
 	if found {
-		f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(keepAliveInterval)
+		f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
 		return scope, nil
 	}
 
@@ -398,7 +445,7 @@ func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) 
 	scope = newFlexibilityScope(f, flexibilityScopeKey, cancel)
 
 	f.scopes[flexibilityScopeKey] = scope
-	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(keepAliveInterval)
+	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
 
 	metrics.Metrics.UpdateFlexAdvisorActiveScopes(len(f.scopes))
 

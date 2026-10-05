@@ -92,7 +92,11 @@ type InternalOptions struct {
 	EkOnManagedNodesEnabled                      bool
 	E4aOnManagedNodesEnabled                     bool
 	EkLookaheadMaxWorkloadSeparations            int
+	E4aLookaheadMaxWorkloadSeparations           int
+	E4LookaheadMaxWorkloadSeparations            int
 	EkLookaheadPodStrategy                       string
+	E4aLookaheadPodStrategy                      string
+	E4LookaheadPodStrategy                       string
 	MachineConfigEnabled                         bool
 	CvmMachineConfigEnabled                      bool
 	MachineConfigRefreshInterval                 time.Duration

@@ -38,6 +38,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
 func TestMain(m *testing.M) {
@@ -2915,6 +2916,107 @@ func TestUserDefinedTaints(t *testing.T) {
 			wantTaints: []apiv1.Taint{
 				{
 					Key: "taint-key-1",
+				},
+			},
+		},
+		{
+			name: "user defined taints with startup taints",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						Taints: []v1.TaintConfig{
+							{
+								Key:    taints.StartupTaintPrefix + "istio-cni-not-ready",
+								Value:  "true",
+								Effect: "NoSchedule",
+							},
+						},
+					},
+				},
+			},
+			wantTaints: []apiv1.Taint{
+				{
+					Key:    taints.StartupTaintPrefix + "istio-cni-not-ready",
+					Value:  "true",
+					Effect: "NoSchedule",
+				},
+			},
+		},
+		{
+			name: "user defined taints with status taints",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						Taints: []v1.TaintConfig{
+							{
+								Key:    taints.StatusTaintPrefix + "my-status-taint",
+								Value:  "val",
+								Effect: "NoSchedule",
+							},
+						},
+					},
+				},
+			},
+			wantTaints: []apiv1.Taint{
+				{
+					Key:    taints.StatusTaintPrefix + "my-status-taint",
+					Value:  "val",
+					Effect: "NoSchedule",
+				},
+			},
+		},
+		{
+			name: "user defined taints with ignore taints is filtered out",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						Taints: []v1.TaintConfig{
+							{
+								Key:    taints.IgnoreTaintPrefix + "my-ignore-taint",
+								Value:  "val",
+								Effect: "NoSchedule",
+							},
+						},
+					},
+				},
+			},
+			wantTaints: nil,
+		},
+		{
+			name: "user defined taints with system label and startup taint",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						Taints: []v1.TaintConfig{
+							{
+								Key:    labels.MachineFamilyLabel,
+								Value:  "compute-class",
+								Effect: "NoSchedule",
+							},
+							{
+								Key:    taints.StartupTaintPrefix + "daemon-not-ready",
+								Value:  "true",
+								Effect: "NoSchedule",
+							},
+							{
+								Key:    "custom-taint",
+								Value:  "foo",
+								Effect: "NoExecute",
+							},
+						},
+					},
+				},
+			},
+			wantTaints: []apiv1.Taint{
+				{
+					Key:    taints.StartupTaintPrefix + "daemon-not-ready",
+					Value:  "true",
+					Effect: "NoSchedule",
+				},
+				{
+					Key:    "custom-taint",
+					Value:  "foo",
+					Effect: "NoExecute",
 				},
 			},
 		},

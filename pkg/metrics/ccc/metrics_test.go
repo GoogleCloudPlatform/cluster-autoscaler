@@ -15,10 +15,18 @@
 package ccc
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 )
+
+const processStartTimeMetricName = "process_start_time_seconds"
 
 func TestCccMetricName(t *testing.T) {
 	testCases := []struct {
@@ -48,4 +56,49 @@ func TestCccMetricName(t *testing.T) {
 			assert.Equal(t, tc.expected, cccMetricName(tc.baseName))
 		})
 	}
+}
+
+// prom-to-sd needs process_start_time_seconds as a single-series gauge in the
+// same scrape to set the start time of cumulative metrics (b/566293374).
+func TestRegistryExposesProcessStartTime(t *testing.T) {
+	families, err := registry.Gatherer().Gather()
+	if err != nil {
+		t.Fatalf("Gather() returned unexpected error: %v", err)
+	}
+
+	var family *dto.MetricFamily
+	for _, f := range families {
+		if f.GetName() == processStartTimeMetricName {
+			family = f
+			break
+		}
+	}
+	if family == nil {
+		t.Fatalf("metric family %q not found in the per-CCC registry", processStartTimeMetricName)
+	}
+	assert.Equal(t, dto.MetricType_GAUGE, family.GetType())
+	if len(family.GetMetric()) != 1 {
+		t.Fatalf("metric family %q has %d series, want exactly 1", processStartTimeMetricName, len(family.GetMetric()))
+	}
+
+	metric := family.GetMetric()[0]
+	assert.Empty(t, metric.GetLabel())
+	startTime := metric.GetGauge().GetValue()
+	assert.Greater(t, startTime, float64(0))
+	assert.LessOrEqual(t, startTime, float64(time.Now().UnixNano())/float64(time.Second))
+}
+
+func TestMetricsRegistryHandlerServesProcessStartTime(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	MetricsRegistryHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/metrics/ccc", nil))
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("unexpected status code %d, want %d", recorder.Code, http.StatusOK)
+	}
+	body, err := io.ReadAll(recorder.Body)
+	if err != nil {
+		t.Fatalf("failed to read response body: %v", err)
+	}
+	assert.True(t, strings.Contains(string(body), "\n"+processStartTimeMetricName+" "),
+		"expected %q in response body:\n%s", processStartTimeMetricName, body)
 }

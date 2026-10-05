@@ -40,6 +40,7 @@ import (
 	computeclass_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
@@ -1378,10 +1379,15 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 						SpecificTypeReservationsEnabled:     tc.reservationEnabled,
 					},
 				},
-				PodLister:            kubernetes.NewTestPodLister([]*apiv1.Pod{tc.pod}),
-				Lister:               computeClassLister,
-				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				PodLister:          kubernetes.NewTestPodLister([]*apiv1.Pod{tc.pod}),
+				Lister:             computeClassLister,
+				ExperimentsManager: em,
+				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+					InternalOptions: internalopts.InternalOptions{
+						SpecificTypeReservationMatchEnabled:        tc.reservationEnabled,
+						SpecificTypeReservationWithoutMatchEnabled: tc.reservationEnabled,
+					},
+				}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			}
 			m := NewAutoprovisioningNodeGroupManager(opts)

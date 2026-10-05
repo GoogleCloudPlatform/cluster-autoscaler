@@ -187,14 +187,12 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 	}
 
 	projectId, _, _ := opts.CloudProvider.GetClusterInfo()
-	rg := NewReservationGenerator(opts.ReservationsPuller, opts.Flags.ReservationFlags, projectId, opts.ExperimentsManager, opts.ReservationBlocksPuller)
+	rg := NewReservationGenerator(opts.ReservationsPuller, opts.Flags.ReservationFlags, projectId, opts.ExperimentsManager, opts.ReservationBlocksPuller, opts.OptionsTracker)
 	// b/355142536 relies on the fact that reservation generator is added to the front of the list.
 	// Order of the list determines in which order the generators are executed, for example, in
 	// func (m *AutoprovisioningNodeGroupManager) extractRequirements
 	specGenerators = append([]NodePoolSpecGenerator{rg}, specGenerators...)
-	if opts.Flags.SpecificTypeReservationMatchEnabled {
-		nodeGroupOptionsGenerators = append(nodeGroupOptionsGenerators, rg)
-	}
+	nodeGroupOptionsGenerators = append(nodeGroupOptionsGenerators, rg)
 	if opts.Flags.TpuAutoprovisioningEnabled {
 		// we want TPURequestGenerator to be run before others - e.g. reservations
 		// generator, so that TPU config is known upfront.

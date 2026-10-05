@@ -1563,7 +1563,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewBootDiskConfigGenerator(provider),
 		NewReservationGenerator(nil, ReservationFlags{
 			SpecificTypeReservationMatchEnabled: true,
-		}, "", nil, nil),
+		}, "", nil, nil, nil),
 		NewWorkloadSeparationGenerator(slMatcher),
 		NewCSNGenerator(true),
 		NewMachineSelectionGenerator(nil, machineselection.Selector{}, nil),
