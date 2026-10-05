@@ -23,11 +23,14 @@ import (
 	"strconv"
 	"time"
 
+	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/spf13/pflag"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	cqv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacityquota/autoscaling.x-k8s.io/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -53,6 +56,7 @@ import (
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/cli"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
@@ -79,6 +83,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(cbv1beta1.AddToScheme(scheme))
 	utilruntime.Must(cqv1beta1.AddToScheme(scheme))
+	utilruntime.Must(ccc_api.AddToScheme(scheme))
 }
 
 func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter) {
@@ -94,6 +99,18 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 		Scheme: scheme,
 		Cache: cache.Options{
 			DefaultTransform: cache.TransformStripManagedFields(),
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.PodTemplate{}: {
+					Namespaces: map[string]cache.Config{
+						capacitybuffers.NamespaceGkeManagedCCC: {},
+					},
+				},
+				&cbv1beta1.CapacityBuffer{}: {
+					Namespaces: map[string]cache.Config{
+						capacitybuffers.NamespaceGkeManagedCCC: {},
+					},
+				},
+			},
 		},
 		// TODO: migrate leader election, metrics, healthcheck, pprof servers to Manager
 		LeaderElection:          false,

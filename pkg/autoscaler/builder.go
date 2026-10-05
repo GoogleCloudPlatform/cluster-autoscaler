@@ -25,6 +25,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 	"k8s.io/apimachinery/pkg/runtime"
+	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -44,7 +45,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+
 	"sigs.k8s.io/cluster-autoscaler/pkg/builder"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
@@ -52,7 +55,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
-	ca_utils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
 	"sigs.k8s.io/cluster-autoscaler/pkg/observers/loopstart"
@@ -728,6 +730,7 @@ func (b *Builder) Build(
 			s := runtime.NewScheme()
 			_ = scheme.AddToScheme(s)
 			_ = ccc_api.AddToScheme(s)
+			_ = cbv1beta1.AddToScheme(s)
 
 			var err error
 			ctrClient, err = client.New(b.kubeConfig, client.Options{
@@ -772,6 +775,13 @@ func (b *Builder) Build(
 		if err := minCapacityController.Start(bgContext); err != nil {
 			klog.Errorf("Failed to start MinCapacityController: %v", err)
 			return nil, nil, err
+		}
+	}
+
+	if b.manager != nil && computeclass.IsComputeClassCapacityBuffersEnabled(experimentsManager) {
+		if err := capacitybuffers.SetupWithManager(b.manager); err != nil {
+			klog.Errorf("Failed to setup CapacityBuffer reconciler: %v", err)
+			return nil, nil, fmt.Errorf("failed to setup CapacityBuffer reconciler: %w", err)
 		}
 	}
 
@@ -877,7 +887,7 @@ func (b *Builder) Build(
 			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager, cloudProvider, true /* exemptAtomicNodeGroups */),
 		}),
 		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
-			ca_utils.VirtualKubeletNodeFilter{},
+			utils.VirtualKubeletNodeFilter{},
 			gke_utils.TerminatingNodeFilter{},
 			surgeUpgradeResourceTracker,
 		}),

@@ -18,9 +18,12 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/kubernetes/pkg/util/taints"
@@ -53,8 +56,9 @@ func allOfPriorityFilters(priorities ...priorityFilter) priorityFilter {
 }
 
 type schedulePodsOnCSNNodesOptions struct {
-	ignoreBufferAssignment bool
-	startFromLastMatch     bool
+	ignoreBufferAssignment               bool
+	startFromLastMatch                   bool
+	ignoreManagedByCCCAntiAffinityForCSN bool
 }
 
 type podGroup struct {
@@ -129,12 +133,30 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 			}
 		}
 
-		scheduled, err := schedulePodsWithBuckets(sn, simulator, g.pods, nodePriorities, len(g.priorities), opts.startFromLastMatch)
+		podsToSchedule := g.pods
+		var podMap map[*apiv1.Pod]*apiv1.Pod
+		if opts.ignoreManagedByCCCAntiAffinityForCSN {
+			// TODO(b/564793765): check if this can be achieved more cleanly
+			// we do this in order to allow CCC-CB integration to have wildcard toleration
+			// this forces us to prevent initial scheduling of ASN pods on CSN which causes
+			// consumption to break and requires this fix
+			podsToSchedule, podMap = clonePodsWithoutCSNAntiAffinity(g.pods)
+		}
+
+		scheduled, err := schedulePodsWithBuckets(sn, simulator, podsToSchedule, nodePriorities, len(g.priorities), opts.startFromLastMatch)
 		if err != nil {
 			sn.Revert()
 			return nil, fmt.Errorf("failed to schedule pods: %v", err)
 		}
-		maps.Copy(nodesOfScheduledPods, scheduled)
+		if podMap != nil {
+			for cp, nodeName := range scheduled {
+				if origPod, ok := podMap[cp]; ok {
+					nodesOfScheduledPods[origPod] = nodeName
+				}
+			}
+		} else {
+			maps.Copy(nodesOfScheduledPods, scheduled)
+		}
 	}
 
 	// We revert the changes since we adjusted nodes to make them schedulable, we should revert them back as we already got the scheduling info.
@@ -278,4 +300,92 @@ func removeBufferAssignmentForProcessors(node *apiv1.Node) {
 
 	node.Spec.Taints, _ = taints.DeleteTaintsByKey(node.Spec.Taints, metadata.BufferAssignmentKey)
 	delete(node.Labels, metadata.BufferAssignmentKey)
+}
+
+func isManagedByCCC(pod *apiv1.Pod) bool {
+	if pod == nil || pod.Namespace != capacitybuffers.NamespaceGkeManagedCCC {
+		return false
+	}
+	if _, exists := pod.Labels[gkelabels.ComputeClassLabel]; exists {
+		return true
+	}
+	return false
+}
+
+func isCSNAntiAffinityRequirement(req apiv1.NodeSelectorRequirement) bool {
+	return req.Key == metadata.SoftWorkloadSeparationKey &&
+		req.Operator == apiv1.NodeSelectorOpNotIn &&
+		len(req.Values) == 1 &&
+		req.Values[0] == "true"
+}
+
+func getNodeSelectorTerms(pod *apiv1.Pod) []apiv1.NodeSelectorTerm {
+	if pod == nil || pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil || pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return nil
+	}
+	return pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+}
+
+func hasCSNAntiAffinity(pod *apiv1.Pod) bool {
+	for _, term := range getNodeSelectorTerms(pod) {
+		if slices.ContainsFunc(term.MatchExpressions, isCSNAntiAffinityRequirement) {
+			return true
+		}
+	}
+	return false
+}
+
+func stripCSNAntiAffinity(pod *apiv1.Pod) {
+	terms := getNodeSelectorTerms(pod)
+	if terms == nil {
+		return
+	}
+
+	var newTerms []apiv1.NodeSelectorTerm
+	for _, term := range terms {
+		if !slices.ContainsFunc(term.MatchExpressions, isCSNAntiAffinityRequirement) {
+			newTerms = append(newTerms, term)
+			continue
+		}
+
+		term.MatchExpressions = slices.DeleteFunc(term.MatchExpressions, isCSNAntiAffinityRequirement)
+		if len(term.MatchExpressions) > 0 || len(term.MatchFields) > 0 {
+			newTerms = append(newTerms, term)
+		}
+	}
+
+	if len(newTerms) > 0 {
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = newTerms
+	} else {
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = nil
+	}
+}
+
+func clonePodsWithoutCSNAntiAffinity(pods []*apiv1.Pod) ([]*apiv1.Pod, map[*apiv1.Pod]*apiv1.Pod) {
+	hasMatchingPods := false
+	for _, p := range pods {
+		if isManagedByCCC(p) && hasCSNAntiAffinity(p) {
+			hasMatchingPods = true
+			break
+		}
+	}
+	if !hasMatchingPods {
+		return pods, nil
+	}
+
+	result := make([]*apiv1.Pod, 0, len(pods))
+	podMap := make(map[*apiv1.Pod]*apiv1.Pod, len(pods))
+	for _, p := range pods {
+		var targetPod *apiv1.Pod
+		if isManagedByCCC(p) && hasCSNAntiAffinity(p) {
+			targetPod = p.DeepCopy()
+			stripCSNAntiAffinity(targetPod)
+		} else {
+			targetPod = p
+		}
+		result = append(result, targetPod)
+		podMap[targetPod] = p
+	}
+
+	return result, podMap
 }

@@ -168,3 +168,61 @@ func TestIsComputeClassConfigHashEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsComputeClassCapacityBuffersEnabled(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		manager  experiments.Manager
+		expected bool
+	}{
+		{
+			name:     "nil manager",
+			manager:  nil,
+			expected: false,
+		},
+		{
+			name: "flags not configured (defaults to false)",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{},
+				map[string]string{},
+			),
+			expected: false,
+		},
+		{
+			name: "flags configured true and version meets minimum",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 30, 0, 0},
+				map[string]bool{experiments.ComputeClassCapacityBuffersFlag: true},
+				map[string]string{experiments.ComputeClassCapacityBuffersMinCAVersionFlag: "1.29.0"},
+			),
+			expected: true,
+		},
+		{
+			name: "enabled flag false",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 30, 0, 0},
+				map[string]bool{experiments.ComputeClassCapacityBuffersFlag: false},
+				map[string]string{experiments.ComputeClassCapacityBuffersMinCAVersionFlag: "1.29.0"},
+			),
+			expected: false,
+		},
+		{
+			name: "cluster version too old",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 28, 0, 0},
+				map[string]bool{experiments.ComputeClassCapacityBuffersFlag: true},
+				map[string]string{experiments.ComputeClassCapacityBuffersMinCAVersionFlag: "1.29.0"},
+			),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, IsComputeClassCapacityBuffersEnabled(tc.manager))
+		})
+	}
+}
