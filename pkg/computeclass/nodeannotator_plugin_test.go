@@ -48,6 +48,16 @@ func (m *mockLister) ListCrds() ([]crd.CRD, error) {
 	return nil, args.Error(1)
 }
 
+func (m *mockLister) IsNodeOwned(node *apiv1.Node) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "IsNodeOwned" {
+			args := m.Called(node)
+			return args.Bool(0)
+		}
+	}
+	return true
+}
+
 type mockAnnotationCloudProvider struct {
 	mock.Mock
 }
@@ -178,6 +188,17 @@ func TestCCCPluginGetAnnotation(t *testing.T) {
 			name:                "Node has predefined ComputeClassLabel",
 			node:                createNodeWithLabel(testNodeName, predefinedCCName),
 			mockListerSetup:     func(ml *mockLister) {},
+			mockProviderSetup:   func(mp *mockAnnotationCloudProvider) {},
+			mockMatcherSetup:    func(mm *mockMatcher) {},
+			expectedAnnotations: nil,
+			expectErr:           false,
+		},
+		{
+			name: "Node is not owned by this autoscaler",
+			node: createNodeWithLabel(testNodeName, testCCCName),
+			mockListerSetup: func(ml *mockLister) {
+				ml.On("IsNodeOwned", mock.AnythingOfType("*v1.Node")).Return(false).Once()
+			},
 			mockProviderSetup:   func(mp *mockAnnotationCloudProvider) {},
 			mockMatcherSetup:    func(mm *mockMatcher) {},
 			expectedAnnotations: nil,

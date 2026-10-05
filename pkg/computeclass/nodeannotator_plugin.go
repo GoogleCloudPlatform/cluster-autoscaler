@@ -58,6 +58,7 @@ type annotationCloudprovider interface {
 // lister defines the subset of lister.Lister interface.
 type annotationCRDLister interface {
 	ListCrds() ([]crd.CRD, error)
+	IsNodeOwned(node *apiv1.Node) bool
 }
 
 // cccNodeAnnotatorPlugin implements the nodeannotator.Plugin interface.
@@ -87,6 +88,10 @@ func (p *cccNodeAnnotatorPlugin) GetAnnotation(node *apiv1.Node) (map[string]str
 	found, cccName := cccNameFromNode(node)
 	if !found {
 		// No relevant CCC label found, no annotation needed from this plugin.
+		return nil, nil
+	}
+	if !p.lister.IsNodeOwned(node) {
+		// Node is not managed by this autoscaler instance. Do not annotate.
 		return nil, nil
 	}
 
