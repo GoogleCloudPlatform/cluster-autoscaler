@@ -63,6 +63,11 @@ type Rule interface {
 	AllocationStrategyRule
 }
 
+type baseRuleEntry struct {
+	name string
+	rule BaseRule
+}
+
 // rule is an implementations grouping all the supported rule features.
 type rule struct {
 	nodePoolsRule
@@ -85,6 +90,32 @@ type rule struct {
 	placementPolicyRule
 	minimumCapacityRule
 	allocationStrategyRule
+
+	baseRules []baseRuleEntry
+}
+
+func (r *rule) initBaseRules() {
+	r.baseRules = []baseRuleEntry{
+		{"locationRule", &r.locationRule},
+		{"locationZoneTypesRule", &r.locationZoneTypesRule},
+		{"machineSpecRule", &r.machineSpecRule},
+		{"tpuRule", &r.tpuRule},
+		{"gpuRule", &r.gpuRule},
+		{"podFamilyRule", &r.podFamilyRule},
+		{"minCpuPlatformRule", &r.minCpuPlatformRule},
+		{"reservationsRule", &r.reservationsRule},
+		{"flexStartRule", &r.flexStartRule},
+		{"maxPodsPerNodeRule", &r.maxPodsPerNodeRule},
+		{"maxRunDurationRule", &r.maxRunDurationRule},
+		{"labelsRule", &r.labelsRule},
+		{"taintsRule", &r.taintsRule},
+		{"placementPolicyRule", &r.placementPolicyRule},
+		{"minimumCapacityRule", &r.minimumCapacityRule},
+		{"allocationStrategyRule", &r.allocationStrategyRule},
+		{"selfServiceRule", &r.selfServiceRule},
+		{"storageRule", &r.storageRule},
+		{"nodeSystemConfigRule", &r.nodeSystemConfigRule},
+	}
 }
 
 func (r *rule) Matches(group cloudprovider.NodeGroup) bool {
@@ -98,39 +129,18 @@ func (r *rule) Matches(group cloudprovider.NodeGroup) bool {
 		return matched
 	}
 
-	matchResults := []struct {
-		name    string
-		matched bool
-	}{
-		{"locationRule", r.locationRule.Matches(group)},
-		{"locationZoneTypesRule", r.locationZoneTypesRule.Matches(group)},
-		{"machineSpecRule", r.machineSpecRule.Matches(group)},
-		{"reservationsRule", r.reservationsRule.Matches(group)},
-		{"storageRule", r.storageRule.Matches(group)},
-		{"gpuRule", r.gpuRule.Matches(group)},
-		{"tpuRule", r.tpuRule.Matches(group)},
-		{"nodeSystemConfigRule", r.nodeSystemConfigRule.Matches(group)},
-		{"maxPodsPerNodeRule", r.maxPodsPerNodeRule.Matches(group)},
-		{"maxRunDurationRule", r.maxRunDurationRule.Matches(group)},
-		{"flexStartRule", r.flexStartRule.Matches(group)},
-		{"selfServiceRule", r.selfServiceRule.Matches(group)},
-		{"podFamilyRule", r.podFamilyRule.Matches(group)},
-		{"minCpuPlatformRule", r.minCpuPlatformRule.Matches(group)},
-		{"labelsRule", r.labelsRule.Matches(group)},
-		{"taintsRule", r.taintsRule.Matches(group)},
-		{"placementPolicyRule", r.placementPolicyRule.Matches(group)},
-		{"minimumCapacityRule", r.minimumCapacityRule.Matches(group)},
-		{"allocationStrategyRule", r.allocationStrategyRule.Matches(group)},
+	if len(r.baseRules) == 0 {
+		r.initBaseRules()
 	}
 
-	allMatched := true
-	for _, res := range matchResults {
-		klog.V(5).Infof("%s.Matches(%v): %v", res.name, group.Id(), res.matched)
-		if !res.matched {
-			allMatched = false
+	for _, br := range r.baseRules {
+		matched := br.rule.Matches(group)
+		klog.V(5).Infof("%s.Matches(%v): %v", br.name, group.Id(), matched)
+		if !matched {
+			return false
 		}
 	}
-	return allMatched
+	return true
 }
 
 // RuleOption is a method modifying the underlying rule
@@ -141,6 +151,7 @@ func NewRule(options ...RuleOption) Rule {
 	for _, option := range options {
 		option(r)
 	}
+	r.initBaseRules()
 	return r
 }
 

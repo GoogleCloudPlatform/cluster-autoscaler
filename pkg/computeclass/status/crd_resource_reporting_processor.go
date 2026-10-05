@@ -121,6 +121,17 @@ func (m *CrdResourceReportingProcessor) Process(ctx context.Context, autoscaling
 
 	resourceMap := make(map[resourceKey]nodeGroupResources)
 
+	type nodeGroupCrdMatch struct {
+		crd     crd.CRD
+		cccName string
+		ruleIdx string
+		hasCrd  bool
+	}
+	// Multiple nodes typically belong to the same NodeGroup, and CRD/rule matching depends only
+	// on the NodeGroup. Cache the match result (including negative matches) by NodeGroup ID so
+	// we only look up the CRD and evaluate rules once per NodeGroup rather than once per node.
+	nodeGroupMatchCache := make(map[string]nodeGroupCrdMatch)
+
 	for _, node := range allNodes {
 		if node.Node() == nil {
 			continue
@@ -135,21 +146,37 @@ func (m *CrdResourceReportingProcessor) Process(ctx context.Context, autoscaling
 		}
 		nodeGroupId := nodeGroup.Id()
 
-		crd, cccName, err := m.npcCrdLister.NodeGroupCrd(nodeGroup)
-		if err != nil {
-			klog.Errorf("Failed to get CRD for nodeGroup %q: %v", nodeGroupId, err)
-			continue
-		}
-		if crd == nil {
-			continue
+		matchInfo, cached := nodeGroupMatchCache[nodeGroupId]
+		if !cached {
+			crd, cccName, err := m.npcCrdLister.NodeGroupCrd(nodeGroup)
+			if err != nil {
+				klog.Errorf("Failed to get CRD for nodeGroup %q: %v", nodeGroupId, err)
+				nodeGroupMatchCache[nodeGroupId] = nodeGroupCrdMatch{hasCrd: false}
+				continue
+			}
+			if crd == nil {
+				nodeGroupMatchCache[nodeGroupId] = nodeGroupCrdMatch{hasCrd: false}
+				continue
+			}
+
+			found, priority, _ := m.matcher.FirstMatchedRule(nodeGroup, crd)
+			var ruleIdx string
+			if found {
+				ruleIdx = fmt.Sprintf("%d", priority)
+			} else {
+				ruleIdx = "ScaleUpAnyway"
+			}
+			matchInfo = nodeGroupCrdMatch{
+				crd:     crd,
+				cccName: cccName,
+				ruleIdx: ruleIdx,
+				hasCrd:  true,
+			}
+			nodeGroupMatchCache[nodeGroupId] = matchInfo
 		}
 
-		found, priority, _ := m.matcher.FirstMatchedRule(nodeGroup, crd)
-		var ruleIdx string
-		if found {
-			ruleIdx = fmt.Sprintf("%d", priority)
-		} else {
-			ruleIdx = "ScaleUpAnyway"
+		if !matchInfo.hasCrd {
+			continue
 		}
 
 		resourceNames := []apiv1.ResourceName{apiv1.ResourceCPU, apiv1.ResourceMemory}
@@ -167,9 +194,9 @@ func (m *CrdResourceReportingProcessor) Process(ctx context.Context, autoscaling
 			}
 			requestedByPods, err := CalculatePodsRequestedResources(node, resourceName)
 			ruleResourceKey := resourceKey{
-				crdLabel:     crd.Label(),
-				crdName:      cccName,
-				ruleIdx:      ruleIdx,
+				crdLabel:     matchInfo.crd.Label(),
+				crdName:      matchInfo.cccName,
+				ruleIdx:      matchInfo.ruleIdx,
 				resourceName: resourceName,
 			}
 			ruleResourceInfo := resourceMap[ruleResourceKey]

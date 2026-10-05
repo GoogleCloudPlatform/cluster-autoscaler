@@ -16,9 +16,8 @@ package rules
 
 import (
 	"fmt"
+	"sort"
 
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -101,23 +100,14 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 
 	// Check for secondary boot disk.
 	if len(r.secondaryBootDisks) > 0 {
-		if !cmp.Equal(mig.Spec().SecondaryBootDisks, r.secondaryBootDisks,
-			cmpopts.SortSlices(func(disk1, disk2 *gke_api_beta.SecondaryBootDisk) bool {
-				if disk1.DiskImage != disk2.DiskImage {
-					return disk1.DiskImage < disk2.DiskImage
-				}
-				return disk1.Mode < disk2.Mode
-			})) {
+		if !matchSecondaryBootDisks(mig.Spec().SecondaryBootDisks, r.secondaryBootDisks) {
 			return false
 		}
 	}
 
 	// Check for boot disk storage pools.
 	if len(r.bootDiskStoragePools) > 0 {
-		if !cmp.Equal(mig.Spec().StoragePools, r.bootDiskStoragePools,
-			cmpopts.SortSlices(func(p1, p2 string) bool {
-				return p1 < p2
-			})) {
+		if !matchStoragePools(mig.Spec().StoragePools, r.bootDiskStoragePools) {
 			return false
 		}
 	}
@@ -253,4 +243,84 @@ func GenerateGkeApiSecondaryBootDisk(diskImageName string, project string, mode 
 	}
 
 	return gkeApisecondaryBootDisk
+}
+
+func equalSecondaryBootDisk(d1, d2 *gke_api_beta.SecondaryBootDisk) bool {
+	if d1 == nil || d2 == nil {
+		return d1 == d2
+	}
+	return d1.DiskImage == d2.DiskImage && d1.Mode == d2.Mode
+}
+
+// matchSecondaryBootDisks performs an order-independent comparison of two SecondaryBootDisk slices.
+// We use a custom implementation instead of cmp.Equal with cmpopts.SortSlices because storageRule.Matches
+// is called on the rule-matching hot path, and go-cmp relies on reflection and heap allocations that
+// cause significant CPU and memory overhead.
+// This implementation avoids allocations entirely for 0, 1, or 2 elements (covering ~90% of cases) and
+// copies before sorting for >2 elements to avoid mutating the input slices.
+func matchSecondaryBootDisks(disks1, disks2 []*gke_api_beta.SecondaryBootDisk) bool {
+	if len(disks1) != len(disks2) {
+		return false
+	}
+	switch len(disks1) {
+	case 0:
+		return true
+	case 1:
+		return equalSecondaryBootDisk(disks1[0], disks2[0])
+	case 2:
+		return (equalSecondaryBootDisk(disks1[0], disks2[0]) && equalSecondaryBootDisk(disks1[1], disks2[1])) ||
+			(equalSecondaryBootDisk(disks1[0], disks2[1]) && equalSecondaryBootDisk(disks1[1], disks2[0]))
+	}
+
+	s1 := make([]*gke_api_beta.SecondaryBootDisk, len(disks1))
+	s2 := make([]*gke_api_beta.SecondaryBootDisk, len(disks2))
+	copy(s1, disks1)
+	copy(s2, disks2)
+
+	sortSecondaryBootDisks := func(slice []*gke_api_beta.SecondaryBootDisk) {
+		sort.Slice(slice, func(i, j int) bool {
+			if slice[i] == nil || slice[j] == nil {
+				return slice[i] != nil
+			}
+			if slice[i].DiskImage != slice[j].DiskImage {
+				return slice[i].DiskImage < slice[j].DiskImage
+			}
+			return slice[i].Mode < slice[j].Mode
+		})
+	}
+	sortSecondaryBootDisks(s1)
+	sortSecondaryBootDisks(s2)
+
+	for i := range s1 {
+		if !equalSecondaryBootDisk(s1[i], s2[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// matchStoragePools performs an order-independent comparison of two storage pool slices without
+// the reflection and allocation overhead of cmp.Equal/cmpopts.SortSlices (see matchSecondaryBootDisks).
+func matchStoragePools(pools1, pools2 []string) bool {
+	if len(pools1) != len(pools2) {
+		return false
+	}
+	if len(pools1) == 0 {
+		return true
+	}
+	if len(pools1) == 1 {
+		return pools1[0] == pools2[0]
+	}
+	s1 := make([]string, len(pools1))
+	s2 := make([]string, len(pools2))
+	copy(s1, pools1)
+	copy(s2, pools2)
+	sort.Strings(s1)
+	sort.Strings(s2)
+	for i := range s1 {
+		if s1[i] != s2[i] {
+			return false
+		}
+	}
+	return true
 }
