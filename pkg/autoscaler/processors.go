@@ -96,6 +96,7 @@ import (
 	ekvms_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	ekvms_churntracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/churntracker"
 	lookaheadbuffer_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/processor"
 	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvms_recommender "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
@@ -366,6 +367,7 @@ func (b *Builder) setUpProcessors(
 	instanceAvailabilityProvider instanceavailability.Provider,
 	resourcePolicyPuller placement.ResourcePolicyPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
+	churnTrackerConfigProvider ekvms_churntracker.ConfigProvider,
 	snowflakeWatcher nodesnowflake.Watcher,
 	nodeQuotaWatcher nodequota.Watcher,
 	eventLogger visibility.EventLogger,
@@ -553,9 +555,12 @@ func (b *Builder) setUpProcessors(
 		// So we had to use a callback function to register the NodesCountProvider to ResizableVmAutoprovisioningProvider.
 		resizableVmAutoprovisioningProvider.RegisterNodesCountProvider(resizableVmManager)
 
+		// laChurnTracker records per-node lookahead history, updated by the EK scale-up processor.
+		laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), clock.RealClock{})
+
 		// Scale Up and Scale Down processors will be added by default but will be executed only if resize is enabled
 		npcCrdBackoff := gke_backoff.GetNpcCrdBackoff(backoff)
-		ekvmsProcessor = ekvms_processor.NewScaleUpNodeProcessor(provider, resizableVmManager, resizeCalculator, internalmetrics.Metrics, npcCrdBackoff, ccLister, resizableVmCustomThresholdsProvider)
+		ekvmsProcessor = ekvms_processor.NewScaleUpNodeProcessor(provider, resizableVmManager, resizeCalculator, internalmetrics.Metrics, npcCrdBackoff, ccLister, resizableVmCustomThresholdsProvider, laChurnTracker)
 
 		downsizeConfigFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkDownsizeConfig,
