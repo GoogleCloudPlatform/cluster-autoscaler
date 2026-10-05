@@ -267,6 +267,10 @@ func main() {
 				cccMetricsHandler(w, req)
 			})
 		}
+		capacityBuffersMetricsHandler := internalmetrics.CapacityBuffersMetricsRegistryHandler(options.CapacityBuffersMetricsEndpointEnabled).ServeHTTP
+		pathRecorderMux.HandleFunc("/metrics/capacitybuffers", func(w http.ResponseWriter, req *http.Request) {
+			capacityBuffersMetricsHandler(w, req)
+		})
 		if options.DebuggingSnapshotEnabled {
 			pathRecorderMux.HandleFunc("/snapshotz", gkeDebuggingSnapshotter.ResponseHandler)
 		}

@@ -67,10 +67,15 @@ func GetFilteredFalsePositiveSchedulablePodsEventsForTest(reason FilteredFalsePo
 }
 
 // ResetAllForTest resets all metrics that support it, preventing cross-test
-// state contamination. It iterates the same allMetrics slice used by RegisterAll,
-// so any newly added metric is automatically handled.
+// state contamination. It iterates the same allMetrics and capacityBuffersMetrics
+// slices used for registration, so any newly added metric is automatically handled.
 func ResetAllForTest() {
 	for _, m := range allMetrics {
+		if r, ok := m.(interface{ Reset() }); ok {
+			r.Reset()
+		}
+	}
+	for _, m := range capacityBuffersMetrics {
 		if r, ok := m.(interface{ Reset() }); ok {
 			r.Reset()
 		}

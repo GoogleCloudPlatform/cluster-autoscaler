@@ -51,6 +51,21 @@ var capacityBuffersPodInjectionEnabledField = trackedField{
 	caRestartNeededOnValueChange: true,
 }
 
+var capacityBuffersMetricsEndpointEnabledField = trackedField{
+	name: "CapacityBuffersMetricsEndpointEnabled",
+	valueEqual: func(optsA, optsB internalopts.AutoscalingOptions) bool {
+		return optsA.CapacityBuffersMetricsEndpointEnabled == optsB.CapacityBuffersMetricsEndpointEnabled
+	},
+	getValueStr: func(opts internalopts.AutoscalingOptions) string {
+		return fmt.Sprintf("%v", opts.CapacityBuffersMetricsEndpointEnabled)
+	},
+	setValue: func(optsFromFlags internalopts.AutoscalingOptions, experimentsManager experiments.Manager, optsToModify *internalopts.AutoscalingOptions) error {
+		optsToModify.CapacityBuffersMetricsEndpointEnabled = experimentsManager.DirectLaunchBoolFlag(experiments.CapacityBuffersMetricsEndpoint)
+		return nil
+	},
+	caRestartNeededOnValueChange: true,
+}
+
 func isCapacityBufferEnabled(capacityBufferFlag bool, em experiments.Manager) bool {
 	isEnabledForCluster := em.DirectLaunchBoolFlag(experiments.CapacityBuffersEnabled)
 	if !isEnabledForCluster {

@@ -245,3 +245,52 @@ func TestCapacityBuffersPodInjectionEnabledFieldSetValue(t *testing.T) {
 		})
 	}
 }
+
+func TestCapacityBuffersMetricsEndpointEnabledFieldSetValue(t *testing.T) {
+	testCases := []struct {
+		testName         string
+		experimentValues map[string]bool
+		wantValue        bool
+	}{
+		{
+			testName:         "no experiments, expect default true",
+			experimentValues: nil,
+			wantValue:        true,
+		},
+		{
+			testName: "experiment true, expect true",
+			experimentValues: map[string]bool{
+				experiments.CapacityBuffersMetricsEndpoint: true,
+			},
+			wantValue: true,
+		},
+		{
+			testName: "experiment false, expect false",
+			experimentValues: map[string]bool{
+				experiments.CapacityBuffersMetricsEndpoint: false,
+			},
+			wantValue: false,
+		},
+		{
+			testName: "unrelated experiment present, expect default true",
+			experimentValues: map[string]bool{
+				"some-unrelated-experiment": true,
+			},
+			wantValue: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.testName, func(t *testing.T) {
+			t.Parallel()
+
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentValues, nil)
+			optsToModify := internalopts.AutoscalingOptions{}
+
+			err := capacityBuffersMetricsEndpointEnabledField.setValue(internalopts.AutoscalingOptions{}, experimentsManager, &optsToModify)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantValue, optsToModify.CapacityBuffersMetricsEndpointEnabled)
+			assert.Equal(t, fmt.Sprintf("%v", tc.wantValue), capacityBuffersMetricsEndpointEnabledField.getValueStr(optsToModify))
+		})
+	}
+}

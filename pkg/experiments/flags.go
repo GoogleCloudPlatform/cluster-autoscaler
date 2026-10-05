@@ -103,6 +103,7 @@ const CapacityBuffersEnabled = "CapacityBuffers::Enabled"
 const CapacityBuffersMetricProcessor = "CapacityBuffers::MetricProcessor"                       // Direct launch.
 const CapacityBuffersPerBufferMetrics = "CapacityBuffers::PerBufferMetrics"                     // Direct launch.
 const CapacityBuffersPerAcceleratorModelMetrics = "CapacityBuffers::PerAcceleratorModelMetrics" // Direct launch.
+const CapacityBuffersMetricsEndpoint = "CapacityBuffers::MetricsEndpoint"                       // Direct launch.
 
 const ColdStandbyNodesInternalMinCAVersionFlag = "ColdStandbyNodes::InternalMinCAVersion"
 const ColdStandbyNodesControllerConfigV1Flag = "ColdStandbyNodes::NodeControllerConfigV1"

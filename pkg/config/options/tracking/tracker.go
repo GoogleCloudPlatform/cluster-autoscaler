@@ -65,6 +65,7 @@ var allTrackedFields = []trackedField{
 	dynamicResourceAllocationEnabledField,
 	capacityBuffersControllerEnabledField,
 	capacityBuffersPodInjectionEnabledField,
+	capacityBuffersMetricsEndpointEnabledField,
 	zoneTypesEnabledField,
 	fastpathBinpackingEnabledField,
 	maxNodePerScaleUpField,
