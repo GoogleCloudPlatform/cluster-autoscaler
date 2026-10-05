@@ -1036,6 +1036,7 @@ func (b *Builder) Build(
 		flexAdvisor,
 		resourcePolicyPuller,
 		resizableVmCustomThresholdsProvider,
+		churnTrackerConfigProvider,
 		b.snowflakeWatcher,
 		b.nodeQuotaWatcher,
 		b.eventLogger,

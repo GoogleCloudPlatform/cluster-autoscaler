@@ -852,7 +852,7 @@ func TestProcess(t *testing.T) {
 
 				cp := &gke.GkeCloudProviderMock{}
 				cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-				p := NewScaleUpNodeProcessor(cp, manager, calculator, metrics, nil, cccLister, nil)
+				p := NewScaleUpNodeProcessor(cp, manager, calculator, metrics, nil, cccLister, nil, nil)
 				unschedulable, err := p.Process(context.TODO(), autoscalingCtx, tc.unschedulable)
 				assert.NoError(t, err)
 
@@ -1234,7 +1234,7 @@ func TestScheduleLookaheadPods(t *testing.T) {
 				cccLister := lister.NewMockCrdListerWithLabel([]crd.CRD{}, gkelabels.ComputeClassLabel)
 				cp := &gke.GkeCloudProviderMock{}
 				cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-				p := NewScaleUpNodeProcessor(cp, m, calc, metrics, nil, cccLister, nil)
+				p := NewScaleUpNodeProcessor(cp, m, calc, metrics, nil, cccLister, nil, nil)
 				unschedulable, err := p.ScheduleLookaheadPods(autoscalingCtx, tc.unschedulable)
 				assert.NoError(t, err)
 				nodeInfos, err := snapshot.ListNodeInfos()
@@ -1604,7 +1604,7 @@ func TestSchedulePods(t *testing.T) {
 				cccLister := lister.NewMockCrdListerWithLabel(tc.cccCrds, gkelabels.ComputeClassLabel)
 				cloudProvider := &gke.GkeCloudProviderMock{}
 				cloudProvider.On("IsAutopilotEnabled", mock.Anything).Return(true)
-				p := NewScaleUpNodeProcessor(cloudProvider, m, calculator_test.New(), nil, b, cccLister, nil)
+				p := NewScaleUpNodeProcessor(cloudProvider, m, calculator_test.New(), nil, b, cccLister, nil, nil)
 
 				snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 				for _, nodeWithPods := range tc.nodes {
@@ -1794,7 +1794,7 @@ func TestPreprocess(t *testing.T) {
 			}
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
+			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil, nil)
 			err = p.Preprocess(autoscalingCtx)
 			assert.NoError(t, err)
 			nodeInfos, err := snapshot.ListNodeInfos()
@@ -1862,7 +1862,7 @@ func TestPreprocessRemovesBPResizeTaint(t *testing.T) {
 
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
+			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil, nil)
 
 			err := p.Preprocess(ctx)
 			assert.NoError(t, err)
@@ -1906,7 +1906,7 @@ func TestPreprocessInjectsDefaultBalloonPods(t *testing.T) {
 		true)
 	cp := &gke.GkeCloudProviderMock{}
 	cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-	p := NewScaleUpNodeProcessor(cp, m, calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil)), nil, nil, nil, nil)
+	p := NewScaleUpNodeProcessor(cp, m, calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil)), nil, nil, nil, nil, nil)
 	err = p.Preprocess(autoscalingCtx)
 	assert.NoError(t, err)
 
@@ -2092,7 +2092,7 @@ func TestTryScheduleCCCPods(t *testing.T) {
 			})
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-			p := NewScaleUpNodeProcessor(cp, m, nil, nil, b, nil, nil)
+			p := NewScaleUpNodeProcessor(cp, m, nil, nil, b, nil, nil, nil)
 
 			snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 			for _, nodeWithPods := range tc.nodes {
@@ -2246,7 +2246,7 @@ func TestTrySchedulePodsOnSpecifiedNodes(t *testing.T) {
 			m.On("IsNodeInProcess", mock.AnythingOfType("string")).Return(false)
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil)
+			p := NewScaleUpNodeProcessor(cp, m, calculator_test.New(), nil, nil, nil, nil, nil)
 			nodeFilter := p.createNodeFilterForPodNodeState(tc.resizableNodesSnapshot, tc.nodesStateForSchedule)
 
 			var podsStatuses []scheduling.Status
@@ -2350,7 +2350,7 @@ func TestTrySchedulePods(t *testing.T) {
 			m.On("IsNodeInProcess", mock.AnythingOfType("string")).Return(false)
 			cp := &gke.GkeCloudProviderMock{}
 			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
-			p := NewScaleUpNodeProcessor(cp, m, nil, nil, nil, nil, nil)
+			p := NewScaleUpNodeProcessor(cp, m, nil, nil, nil, nil, nil, nil)
 			snapshot := testsnapshot.NewCustomTestSnapshotOrDie(t, store.NewDeltaSnapshotStore())
 			for _, nodeWithPods := range tc.nodes {
 				err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(nodeWithPods.node, nodeWithPods.pods...))
@@ -2540,7 +2540,7 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			}
 
 			cccLister := lister.NewMockCrdListerWithLabel(cccCrds, gkelabels.ComputeClassLabel)
-			p := NewScaleUpNodeProcessor(cloudProvider, nil, nil, nil, nil, cccLister, nil)
+			p := NewScaleUpNodeProcessor(cloudProvider, nil, nil, nil, nil, cccLister, nil, nil)
 
 			resizableNodesSnapshots := p.organizeByCCCByRule(resizableNodesSnapshot)
 			assert.Equal(t, tc.expectedResizableNodesSnapshots, resizableNodesSnapshots)
@@ -2755,6 +2755,56 @@ func TestFilterPodsForcingScaleUp(t *testing.T) {
 			unschedulablePods, filteredPods := filterPodsForcingScaleUp(tc.initialUnschedulablePods, tc.numberOfAttemptsPerPod, tc.threshold)
 			assert.Equal(t, tc.expectedUnschedulablePods, unschedulablePods)
 			assert.Equal(t, tc.expectedFilteredPods, filteredPods)
+		})
+	}
+}
+
+func TestUpdateChurnTrackerNodeHistory(t *testing.T) {
+	ekNode := createNodeForFamily(machinetypes.EK.Name(), "ek-node", 1000, 1000)
+	e4aNode := createNodeForFamily(machinetypes.E4A.Name(), "e4a-node", 1000, 1000)
+	e4Node := createNodeForFamily(machinetypes.E4.Name(), "e4-node", 1000, 1000)
+	n2Node := createNodeForFamily("n2", "n2-node", 1000, 1000)
+
+	for _, tc := range []struct {
+		desc          string
+		nodes         []*v1.Node
+		wantFuncCalls int
+		wantNodeNames []string
+	}{
+		{
+			desc:          "no nodes",
+			nodes:         nil,
+			wantFuncCalls: 1,
+			wantNodeNames: nil,
+		},
+		{
+			desc:          "all nodes are resizable",
+			nodes:         []*v1.Node{ekNode, e4aNode, e4Node},
+			wantFuncCalls: 1,
+			wantNodeNames: []string{ekNode.Name, e4aNode.Name, e4Node.Name},
+		},
+		{
+			desc:          "non-resizable nodes are passed to the churn tracker, which filters them itself",
+			nodes:         []*v1.Node{ekNode, n2Node, e4aNode},
+			wantFuncCalls: 1,
+			wantNodeNames: []string{ekNode.Name, n2Node.Name, e4aNode.Name},
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			for _, node := range tc.nodes {
+				assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+			}
+			autoscalingCtx := &autoscalingctx.AutoscalingContext{ClusterSnapshot: snapshot}
+			fakeTracker := &fakeChurnTracker{}
+			cp := &gke.GkeCloudProviderMock{}
+			cp.On("MachineConfigProvider").Return(machinetypes.NewMachineConfigProvider(nil))
+			p := NewScaleUpNodeProcessor(cp, nil, nil, nil, nil, nil, nil, fakeTracker)
+
+			p.updateChurnTrackerNodeHistory(autoscalingCtx)
+
+			assert.Equal(t, tc.wantFuncCalls, fakeTracker.calls)
+			assert.ElementsMatch(t, tc.wantNodeNames, fakeTracker.nodeNames)
 		})
 	}
 }
@@ -2987,4 +3037,17 @@ func (m *mockCustomThresholdsProvider) IsForceScaleUpFeatureEnabled() bool {
 
 func (m *mockCustomThresholdsProvider) GetUpsizeTriesThreshold() int {
 	return m.Called().Int(0)
+}
+
+// fakeChurnTracker counts ProcessNodeInfos calls and collects names of the nodes passed to it.
+type fakeChurnTracker struct {
+	calls     int
+	nodeNames []string
+}
+
+func (f *fakeChurnTracker) ProcessNodeInfos(nodeInfos []*framework.NodeInfo) {
+	f.calls++
+	for _, ni := range nodeInfos {
+		f.nodeNames = append(f.nodeNames, ni.Node().Name)
+	}
 }

@@ -88,6 +88,10 @@ type cloudProvider interface {
 type resizableNodesSnapshotsByRule map[int]operationtracker.ResizableNodesSnapshot
 type resizableNodesSnapshotsByCCC map[string]resizableNodesSnapshotsByRule
 
+type nodeHistoryTracker interface {
+	ProcessNodeInfos(nodeInfos []*framework.NodeInfo)
+}
+
 // ScaleUpNodeProcessor is responsible for resizable VM computation in scale-up algorithm.
 type ScaleUpNodeProcessor struct {
 	resizableVmManager         operationtracker.Manager
@@ -101,10 +105,12 @@ type ScaleUpNodeProcessor struct {
 	matcher                    computeclass.Matcher
 	customThresholdsProvider   ekvms_customthresholds.CustomThresholdsProvider
 	attemptsToScheduleOnUpsize map[podId]int
+	// churnTracker records per-node lookahead history. Optional, may be nil.
+	churnTracker nodeHistoryTracker
 }
 
 // NewScaleUpNodeProcessor returns a new instance of the ScaleUpNodeProcessor.
-func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager operationtracker.Manager, sizeCalculator calculator.Calculator, metrics scaleUpMetrics, cccRuleBackoff CCCRuleBackoff, cccCrdLister lister.Lister, customThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider) *ScaleUpNodeProcessor {
+func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager operationtracker.Manager, sizeCalculator calculator.Calculator, metrics scaleUpMetrics, cccRuleBackoff CCCRuleBackoff, cccCrdLister lister.Lister, customThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider, churnTracker nodeHistoryTracker) *ScaleUpNodeProcessor {
 	return &ScaleUpNodeProcessor{
 		resizableVmManager:         resizableVmManager,
 		simulator:                  scheduling.NewHintingSimulator(),
@@ -117,6 +123,7 @@ func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager ope
 		matcher:                    computeclass.NewMatcher(cccCrdLister, cloudProvider),
 		customThresholdsProvider:   customThresholdsProvider,
 		attemptsToScheduleOnUpsize: make(map[podId]int),
+		churnTracker:               churnTracker,
 	}
 }
 
@@ -124,7 +131,12 @@ func NewScaleUpNodeProcessor(cloudProvider cloudProvider, resizableVmManager ope
 // It readjusts the balloon pod size for simulation purposes and requests upsizes in Manager.
 func (p *ScaleUpNodeProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
 	resizableFamilies := p.mcp.AllResizableMachineFamilies()
-	return p.process(autoscalingCtx, unschedulablePods, true, resizableFamilies)
+	remainingPods, err := p.process(autoscalingCtx, unschedulablePods, true, resizableFamilies)
+	// Process runs once per loop and similarly we want to update nodeHistories only once per loop.
+	// We can run updateChurnTrackerNodeHistory even if process() failed - if some pods that were simulated on some nodes (but not bound yet) in the previous loop, we might not update the nodeHistory.
+	// It will eventually be updated once we have a successful process(), but since the map update is lightweight, it won't add much overhead.
+	p.updateChurnTrackerNodeHistory(autoscalingCtx)
+	return remainingPods, err
 }
 
 func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod, emitMetrics bool, resizableFamilies []machinetypes.MachineFamily) ([]*v1.Pod, error) {
@@ -334,6 +346,20 @@ func (p *ScaleUpNodeProcessor) ScheduleLookaheadPods(ctx *ca_context.Autoscaling
 
 	p.updateUnschedulableLAPodsMetrics(unscheduledLAPods, resizableFamilies)
 	return append(remainingPods, unscheduledLAPods...), nil
+}
+
+// updateChurnTrackerNodeHistory refreshes the churn tracker's per-node history from the current cluster snapshot.
+// Filtering of the nodes (e.g. non-resizable ones) is done by the churn tracker itself.
+func (p *ScaleUpNodeProcessor) updateChurnTrackerNodeHistory(ctx *ca_context.AutoscalingContext) {
+	if p.churnTracker == nil {
+		return
+	}
+	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	if err != nil {
+		klog.Warningf("Failed to list node infos for lookahead churn tracking: %v", err)
+		return
+	}
+	p.churnTracker.ProcessNodeInfos(nodeInfos)
 }
 
 func (p *ScaleUpNodeProcessor) updateUnschedulableLAPodsMetrics(unscheduledLAPods []*v1.Pod, resizableFamilies []machinetypes.MachineFamily) {
