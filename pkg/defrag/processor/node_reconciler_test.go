@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -47,6 +48,7 @@ func TestReconcileCandidates(t *testing.T) {
 		candidates        []*defrag.Candidate
 		nodes             []*apiv1.Node
 		deletedNodes      []string
+		unownedNodes      []string
 		patchErrs         map[string]error
 		wantTaintedNodes  []string
 		wantErrSubstrings []string
@@ -175,6 +177,15 @@ func TestReconcileCandidates(t *testing.T) {
 			},
 			wantTaintedNodes: []string{"n2"},
 		},
+		{
+			name: "skip untainting unowned nodes",
+			nodes: []*apiv1.Node{
+				setDefragTaints(buildReadyNode("n1", 1000, 1)),
+				setDefragTaints(buildReadyNode("n2", 1000, 1)),
+			},
+			unownedNodes:     []string{"n2"},
+			wantTaintedNodes: []string{"n2"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -190,7 +201,11 @@ func TestReconcileCandidates(t *testing.T) {
 					ClientSet: client,
 				},
 			}
-			reconciler := newNodeReconciler(nodeReconcilerOptions{})
+			var ccLister lister.Lister
+			if len(tc.unownedNodes) > 0 {
+				ccLister = &testNodeOwnershipLister{unownedNodes: tc.unownedNodes}
+			}
+			reconciler := newNodeReconciler(nodeReconcilerOptions{CcLister: ccLister})
 			assert.NoError(t, ctx.ClusterSnapshot.SetClusterState(context.TODO(), tc.nodes, nil, drasnapshot.NewEmptySnapshot(), csisnapshot.NewEmptySnapshot()))
 
 			client.PrependReactor("patch", "nodes", func(action ktesting.Action) (bool, runtime.Object, error) {
@@ -537,4 +552,13 @@ func newNode(nodeName string) *apiv1.Node {
 	node := buildReadyNode(nodeName, 1000, 1)
 	node.Annotations = make(map[string]string)
 	return node
+}
+
+type testNodeOwnershipLister struct {
+	lister.Lister
+	unownedNodes []string
+}
+
+func (l *testNodeOwnershipLister) IsNodeOwned(node *apiv1.Node) bool {
+	return !slices.Contains(l.unownedNodes, node.Name)
 }
