@@ -37,26 +37,32 @@ type bucketedNodeOrderMapping struct {
 	// numPriorities is the number of priorities. There is one bucket per priority, plus an extra
 	// last bucket for nodes without a priority, so there are numPriorities+1 buckets.
 	numPriorities int
+	// startFromLastMatch controls whether At starts the scan of a bucket at m.start (the last
+	// matched node in that bucket) or always from the beginning of the bucket.
+	startFromLastMatch bool
 	// buckets[b] holds the indices into the collection passed to Reset of the nodes with priority b,
 	// in snapshot order. The last bucket holds the nodes without a priority.
 	buckets [][]int
 	// start[b] is the position in buckets[b] where the scan of bucket b starts.
 	start []int
+	// steps[i] is the bucket tried at step i, and the step offset within that bucket.
+	steps []bucketPos
 	// pos[i] is the bucket of the node at index i of the collection, and its position in that bucket.
 	pos []bucketPos
 	// names holds the node name at each index of the collection that buckets were built for.
 	names []string
 }
 
-// bucketPos is where a node is in the buckets: the index of its bucket, and its position in that bucket.
+// bucketPos is a bucket index and a position or offset within that bucket.
 type bucketPos struct {
 	bucket, pos int
 }
 
-func newBucketedNodeOrderMapping(nodePriorities map[string]int, numPriorities int) *bucketedNodeOrderMapping {
+func newBucketedNodeOrderMapping(nodePriorities map[string]int, numPriorities int, startFromLastMatch bool) *bucketedNodeOrderMapping {
 	return &bucketedNodeOrderMapping{
-		nodePriorities: nodePriorities,
-		numPriorities:  numPriorities,
+		nodePriorities:     nodePriorities,
+		numPriorities:      numPriorities,
+		startFromLastMatch: startFromLastMatch,
 	}
 }
 
@@ -102,27 +108,35 @@ func (m *bucketedNodeOrderMapping) Reset(collection []*framework.NodeInfo) {
 		m.pos[i] = bucketPos{bucket: b, pos: len(m.buckets[b])}
 		m.buckets[b] = append(m.buckets[b], i)
 	}
+	m.steps = make([]bucketPos, 0, len(collection))
+	for b, bucket := range m.buckets {
+		for pos := range bucket {
+			m.steps = append(m.steps, bucketPos{bucket: b, pos: pos})
+		}
+	}
 }
 
 // At returns the index in collection of the i-th node to try, or -1 if i is out of range.
 func (m *bucketedNodeOrderMapping) At(i int) int {
-	if i < 0 {
+	if i < 0 || i >= len(m.steps) {
 		return -1
 	}
-	for b, bucket := range m.buckets {
-		if i < len(bucket) {
-			j := (m.start[b] + i) % len(bucket)
-			return bucket[j]
-		}
-		i -= len(bucket)
+	s := m.steps[i]
+	bucket := m.buckets[s.bucket]
+	if !m.startFromLastMatch {
+		return bucket[s.pos]
 	}
-	return -1
+	j := m.start[s.bucket] + s.pos
+	if j >= len(bucket) {
+		j -= len(bucket)
+	}
+	return bucket[j]
 }
 
 // MarkMatch is called by the scheduler after it puts a pod on the node at index idx of collection.
 // The next scan of the node's bucket starts at this node.
 func (m *bucketedNodeOrderMapping) MarkMatch(idx int) {
-	if idx < 0 || idx >= len(m.pos) {
+	if idx < 0 || idx >= len(m.pos) || !m.startFromLastMatch {
 		return
 	}
 	p := m.pos[idx]

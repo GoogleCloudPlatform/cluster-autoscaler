@@ -54,6 +54,7 @@ func allOfPriorityFilters(priorities ...priorityFilter) priorityFilter {
 
 type schedulePodsOnCSNNodesOptions struct {
 	ignoreBufferAssignment bool
+	startFromLastMatch     bool
 }
 
 type podGroup struct {
@@ -128,7 +129,7 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 			}
 		}
 
-		scheduled, err := schedulePodsWithBuckets(sn, simulator, g.pods, nodePriorities, len(g.priorities))
+		scheduled, err := schedulePodsWithBuckets(sn, simulator, g.pods, nodePriorities, len(g.priorities), opts.startFromLastMatch)
 		if err != nil {
 			sn.Revert()
 			return nil, fmt.Errorf("failed to schedule pods: %v", err)
@@ -162,9 +163,9 @@ func schedulePodGroupsOnCSNNodes(sn clustersnapshot.ClusterSnapshot, simulator *
 	return nodesOfScheduledPods, nil
 }
 
-func schedulePodsWithBuckets(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, nodePriorities map[string]int, numPriorities int) (map[*apiv1.Pod]string, error) {
+func schedulePodsWithBuckets(sn clustersnapshot.ClusterSnapshot, simulator *scheduling.HintingSimulator, pods []*apiv1.Pod, nodePriorities map[string]int, numPriorities int, startFromLastMatch bool) (map[*apiv1.Pod]string, error) {
 	scheduledPods := map[*apiv1.Pod]string{}
-	ordering := newBucketedNodeOrderMapping(nodePriorities, numPriorities)
+	ordering := newBucketedNodeOrderMapping(nodePriorities, numPriorities, startFromLastMatch)
 
 	res, err := simulator.TrySchedulePods(context.Background(), sn, pods, false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: ordering.isNodeAcceptable,
