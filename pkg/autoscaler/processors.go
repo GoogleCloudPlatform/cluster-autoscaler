@@ -765,6 +765,11 @@ func setUpProcessors(
 		if options.ComputeClassConfigDriftReporting && options.DefragEnabled {
 			crdConfigDriftProcessor = npc_status.NewConfigDriftReportingProcessor(ccLister, updatesCh, computeclass.NewMatcher(ccLister, provider), *defragProcessor, experimentsManager)
 		}
+
+		if options.EnableComputeClassScaleDownStatus {
+			crdScaleDownBlockedProcessor := history.NewScaleDownBlockedStatusProcessor(ccLister, provider, updatesCh, experimentsManager, options.ScaleDownBlockingNodeLabels)
+			scaleDownProcessorChain.AddProcessor(crdScaleDownBlockedProcessor)
+		}
 	}
 
 	var mutationInjector *daemonsetmutation.Injector

@@ -82,6 +82,9 @@ const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedO
 const ComputeClassConfigHashEnabledFlag = "ComputeClassConfigHash::Enabled"
 const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVersion"
 
+const ComputeClassScaleDownStatusEnabledFlag = "ComputeClassScaleDownStatus::Enabled"
+const ComputeClassScaleDownStatusMinCAVersionFlag = "ComputeClassScaleDownStatus::MinCAVersion"
+
 const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
 const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
 

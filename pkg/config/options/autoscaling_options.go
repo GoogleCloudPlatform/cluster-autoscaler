@@ -132,6 +132,7 @@ type InternalOptions struct {
 	EnableComputeClassMinCapacity                bool
 	EnableComputeClassConfigHash                 bool
 	ComputeClassConfigDriftReporting             bool
+	EnableComputeClassScaleDownStatus            bool
 	ScaleDownBlockingNodeLabels                  []string
 	NapMaxNodes                                  int
 	NodeWatchLabelSelector                       string

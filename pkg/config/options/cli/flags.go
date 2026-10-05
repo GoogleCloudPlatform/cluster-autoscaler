@@ -143,6 +143,7 @@ var (
 	enableComputeClassMinCapacity        = flag.Bool("enable-compute-class-min-capacity", false, "Enables Compute Class minimum capacity support.")
 	enableComputeClassConfigHash         = flag.Bool("enable-compute-class-config-hash", false, "Enables Compute Class configuration hashing.")
 	computeClassConfigDriftReporting     = flag.Bool("compute-class-config-drift-reporting", false, "Whether to report the progress of migrating nodes that no longer match their Compute Class configuration in the Compute Class status. Requires --enhanced-crd-status-reporting and --defrag-enabled; the status is additionally gated per cluster by the ComputeClassConfigDriftStatus::Enabled experiment.")
+	enableComputeClassScaleDownStatus    = flag.Bool("enable-compute-class-scale-down-status", false, "Enables reporting of the per-priority consolidation (scale-down) status on the ComputeClass CRD. Requires --enhanced-crd-status-reporting.")
 	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
@@ -406,6 +407,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		EnableComputeClassMinCapacity:                *enableComputeClassMinCapacity,
 		EnableComputeClassConfigHash:                 *enableComputeClassConfigHash,
 		ComputeClassConfigDriftReporting:             *computeClassConfigDriftReporting,
+		EnableComputeClassScaleDownStatus:            *enableComputeClassScaleDownStatus,
 		ScaleDownBlockingNodeLabels:                  parsedScaleDownBlockingNodeLabels,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,

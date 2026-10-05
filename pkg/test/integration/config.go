@@ -527,6 +527,15 @@ func WithScaleDownBlockingNodeLabels(blockingLabels ...string) Option[*config.Au
 	}
 }
 
+// WithComputeClassScaleDownStatusEnabled enables reporting the consolidation (scale-down)
+// status on the ComputeClass CRD. Only effective together with WithEnhancedCrdStatusReporting.
+func WithComputeClassScaleDownStatusEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EnableComputeClassScaleDownStatus = true
+		return o
+	}
+}
+
 // WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
 func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
