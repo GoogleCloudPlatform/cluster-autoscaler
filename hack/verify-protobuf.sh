@@ -22,22 +22,6 @@ set -o pipefail
 SCRIPT_DIR=$(readlink -f "$(dirname "${BASH_SOURCE[0]}")")
 PROJECT_ROOT="$(readlink -f "${SCRIPT_DIR}/..")"
 
-function getFileHash() {
-  local file="$1"
-
-  if [[ ! -e "${file}" ]]; then
-    echo "MISSING"
-    return 0
-  fi
-
-  if [[ ! -r "${file}" ]]; then
-    printf 'Error: Cannot read file "%s"\n' "${file}" >&2
-    exit 1
-  fi
-
-  cksum "${file}" | awk '{print $1 ":" $2}'
-}
-
 cd "${PROJECT_ROOT}"
 
 mapfile -t PROTO_FILES < <(find . -name "*.proto" -not -path "*/vendor/*")
@@ -47,34 +31,44 @@ if [[ ${#PROTO_FILES[@]} -eq 0 ]]; then
   exit 1
 fi
 
-PB_GO_FILES=("${PROTO_FILES[@]/%.proto/.pb.go}")
-
-HASHES_BEFORE=()
-for i in "${!PB_GO_FILES[@]}"; do
-  HASHES_BEFORE[i]=$(getFileHash "${PB_GO_FILES[i]}")
-done
-
 echo ">>> Protoc version: $(protoc --version)"
 echo ">>> Protoc-gen-go version: $(protoc-gen-go --version)"
 
+# Generate into a temporary directory and compare with the working tree instead of regenerating
+# in place.
+GEN_DIR=$(mktemp -d)
+trap 'rm -rf "${GEN_DIR}"' EXIT
+
 # We are using --go_opt=paths=source_relative to guarantee a specific file path resolution
-# strategy as this holds for all the existing proto messages in the repository in case this
-# assumption needs to be broken for whatever reason - this script needs to be changed to
-# simulate dry runs in other ways
+# strategy as this holds for all the existing proto messages in the repository. If this
+# assumption needs to be broken for whatever reason, this script needs to be changed to
+# locate the generated files in other ways.
 for proto in "${PROTO_FILES[@]}"; do
-  protoc "${proto}" --go_out=. --go_opt=paths=source_relative
+  protoc "${proto}" --go_out="${GEN_DIR}" --go_opt=paths=source_relative
 done
 
+# PROTO_FILES holds paths relative to PROJECT_ROOT (e.g. ./pkg/foo/foo.proto), because `find .`
+# runs after `cd "${PROJECT_ROOT}"`. With paths=source_relative, protoc mirrors these relative
+# paths under --go_out, so prefixing GEN_DIR yields the generated counterpart directly and the
+# working-tree file is resolved against PROJECT_ROOT. If PROTO_FILES ever contains absolute
+# paths, this mapping breaks and needs to be updated.
 MODIFIED_COUNT=0
-for i in "${!PB_GO_FILES[@]}"; do
-    pb_file="${PB_GO_FILES[i]}"
-    hash_before=${HASHES_BEFORE[i]}
-    hash_after=$(getFileHash "${PB_GO_FILES[i]}")
+for proto in "${PROTO_FILES[@]}"; do
+  pb_file="${proto%.proto}.pb.go"
+  generated_file="${GEN_DIR}/${pb_file}"
 
-    if [[ "${hash_before}" != "${hash_after}" ]]; then
-        echo ">>> ${pb_file} differs from existing working tree"
-        MODIFIED_COUNT=$((MODIFIED_COUNT + 1))
-    fi
+  if [[ ! -e "${generated_file}" ]]; then
+    printf 'Error: protoc did not generate "%s" for "%s"\n' "${pb_file}" "${proto}" >&2
+    exit 1
+  fi
+
+  if [[ ! -e "${pb_file}" ]]; then
+    echo ">>> ${pb_file} is missing from the working tree"
+    MODIFIED_COUNT=$((MODIFIED_COUNT + 1))
+  elif ! cmp -s "${generated_file}" "${pb_file}"; then
+    echo ">>> ${pb_file} differs from existing working tree"
+    MODIFIED_COUNT=$((MODIFIED_COUNT + 1))
+  fi
 done
 
 if [[ ${MODIFIED_COUNT} -gt 0 ]]; then
