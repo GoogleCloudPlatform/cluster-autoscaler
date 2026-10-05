@@ -55,6 +55,10 @@ func (m *testMaxDisruptionLister) NodeCrd(node *apiv1.Node) (crdtest.CRD, string
 	return m.crd, m.crdName, nil
 }
 
+func (m *testMaxDisruptionLister) IsNodeOwned(node *apiv1.Node) bool {
+	return true
+}
+
 func TestFilterNodesViolatingMaxDisruption(t *testing.T) {
 	provider := testprovider.NewTestCloudProviderBuilder().Build()
 	ng1Nodes := buildNodeGroup(provider, "ng1", 0, 3)

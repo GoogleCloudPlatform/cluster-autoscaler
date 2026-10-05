@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/util/workqueue"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -35,6 +36,7 @@ const defaultParallelism = 100
 // nodeReconciler manages taints and annotations on nodes.
 type nodeReconciler struct {
 	parallelism int
+	ccLister    lister.Lister
 }
 
 type operation interface {
@@ -46,6 +48,7 @@ type operation interface {
 type nodeReconcilerOptions struct {
 	// Parallelism is the number of concurrent workers for node updates.
 	Parallelism int
+	CcLister    lister.Lister
 }
 
 func newNodeReconciler(opts nodeReconcilerOptions) *nodeReconciler {
@@ -55,6 +58,7 @@ func newNodeReconciler(opts nodeReconcilerOptions) *nodeReconciler {
 	}
 	return &nodeReconciler{
 		parallelism: parallelism,
+		ccLister:    opts.CcLister,
 	}
 }
 
@@ -117,6 +121,9 @@ func (nr *nodeReconciler) cleanUpNonCandidates(ctx *cacontext.AutoscalingContext
 	var operations []operation
 	for _, nodeInfo := range allNodeInfos {
 		node := nodeInfo.Node()
+		if nr.ccLister != nil && !nr.ccLister.IsNodeOwned(node) {
+			continue
+		}
 		if allCandidateNodeNames.Has(node.Name) {
 			continue
 		}

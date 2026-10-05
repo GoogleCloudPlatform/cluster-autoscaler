@@ -188,7 +188,7 @@ func NewProcessor(opts Options) *Processor {
 		nodeFilterFactory:    newDefragNodeFilterFactory(opts.ScaleDownNodeProcessor, opts.DeleteOptions, opts.DrainabilityRules, opts.MinQuotasTrackerFactory, opts.CcLister),
 		simulator:            newSimulator(simulatorOptions{DeleteOptions: opts.DeleteOptions, DrainabilityRules: opts.DrainabilityRules}),
 		fairnessEnforcer:     opts.FairnessEnforcer,
-		nodeReconciler:       newNodeReconciler(nodeReconcilerOptions{}),
+		nodeReconciler:       newNodeReconciler(nodeReconcilerOptions{CcLister: opts.CcLister}),
 		pdbTracker:           pdb.NewBasicRemainingPdbTracker(),
 		scaleDownNodesFilter: opts.ScaleDownNodesFilter,
 		config:               opts.Config,
