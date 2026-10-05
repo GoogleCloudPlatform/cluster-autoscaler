@@ -24,6 +24,7 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
@@ -31,14 +32,14 @@ import (
 
 // SetupHistoryResetObserver watches for ComputeClass updates and resets scaling
 // history if the priorities list changes or CA was restarted.
-func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh chan<- npc_status.UpdateMessage, manager experiments.Manager) {
+func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh chan<- npc_status.UpdateMessage, manager experiments.Manager, autoscalerNames ...string) {
 	informer.AddEventHandler(cache.ResourceEventHandlerDetailedFuncs{
 		AddFunc: func(obj interface{}, isInInitialList bool) {
 			if !computeclass.IsComputeClassEnhancedObservabilityEnabled(manager) {
 				return
 			}
 			cc, ok := obj.(*cccv1.ComputeClass)
-			if !ok {
+			if !ok || !lister.IsOwned(cc.Annotations, autoscalerNames) {
 				return
 			}
 			// Only reset history on the initial add event during the informer's first sync. This covers CA restarts.
@@ -59,7 +60,7 @@ func SetupHistoryResetObserver(informer cache.SharedIndexInformer, updatesCh cha
 			}
 			oldCC, okOld := oldObj.(*cccv1.ComputeClass)
 			newCC, okNew := newObj.(*cccv1.ComputeClass)
-			if !okOld || !okNew {
+			if !okOld || !okNew || !lister.IsOwned(newCC.Annotations, autoscalerNames) {
 				return
 			}
 
