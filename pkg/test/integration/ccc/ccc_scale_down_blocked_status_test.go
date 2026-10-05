@@ -18,6 +18,7 @@ package ccc_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -31,7 +32,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 const (
@@ -42,7 +45,9 @@ const (
 
 	// The reason strings are spelled out rather than imported: they are part of the CCC API
 	// contract (a closed enum in the CRD), so a rename upstream must break these tests.
-	reasonUsedByFormedSlice = "UsedByFormedSlice"
+	reasonUsedByFormedSlice  = "UsedByFormedSlice"
+	reasonBlockingPods       = "BlockingPods"
+	reasonMinCapacityReached = "MinCapacityReached"
 
 	// firstPriority is the identifier the CCC status uses for the first priority of a CCC.
 	firstPriority = "0"
@@ -110,16 +115,134 @@ func TestCCCScaleDownBlockedStatusReportsSliceBoundCube(t *testing.T) {
 		updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, cccName, metav1.GetOptions{})
 		assert.NoError(t, err)
 
-		consolidation := consolidationForPriority(t, updatedCCC, firstPriority)
-		if !assert.NotNil(t, consolidation, "expected a Consolidation status block on priority %s", firstPriority) {
+		consolidationStatus := consolidationForPriority(t, updatedCCC, firstPriority)
+		if !assert.NotNil(t, consolidationStatus, "expected a Consolidation status block on priority %s", firstPriority) {
 			return
 		}
 		assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
 			{Reason: reasonUsedByFormedSlice, Count: nodesPerCube},
-		}, consolidation.BlockedNodes, "expected the whole slice-bound cube to be reported blocked")
-		assert.Equal(t, 0, ptr.Deref(consolidation.NotProcessed, 0), "expected no unprocessed nodes")
-		assert.Equal(t, 0, ptr.Deref(consolidation.ActuationInProgress, 0), "expected no deletion in flight")
+		}, consolidationStatus.BlockedNodes, "expected the whole slice-bound cube to be reported blocked")
+		assert.Equal(t, 0, ptr.Deref(consolidationStatus.NotProcessed, 0), "expected no unprocessed nodes")
+		assert.Equal(t, 0, ptr.Deref(consolidationStatus.ActuationInProgress, 0), "expected no deletion in flight")
 	})
+}
+
+// TestCCCScaleDownBlockedStatusReportsStandardNodePool asserts that the consolidation status
+// is reported for ordinary node pools too, not only for atomic TPU ones.
+func TestCCCScaleDownBlockedStatusReportsStandardNodePool(t *testing.T) {
+	const (
+		standardCCC  = "standard-ccc"
+		standardPool = "standard-pool"
+	)
+
+	testCases := []struct {
+		name          string
+		poolSize      int
+		poolMin       int
+		pinnedNodes   int
+		wantRemaining int
+		wantBlocked   []v1.ConsolidationBlockedNodesInfo
+	}{
+		{
+			// The pool stays above its minimum, so CA keeps considering the pinned nodes. With
+			// the recheck timeout set, loops 2 and 3 only report them as RecentlyUnremovable
+			// without re-running the drain simulation; the status must keep attributing them
+			// to their pods rather than to a phantom failed removal.
+			name:          "nodes pinned by pods that cannot be evicted",
+			poolSize:      3,
+			poolMin:       1,
+			pinnedNodes:   2,
+			wantRemaining: 2,
+			wantBlocked: []v1.ConsolidationBlockedNodesInfo{
+				{Reason: reasonBlockingPods, Count: 2},
+			},
+		},
+		{
+			// Once the pool sits at its minimum, CA drops its nodes before evaluating them at
+			// all, pinned or not, so the minimum is what keeps every one of them.
+			name:          "node pool at its minimum size",
+			poolSize:      3,
+			poolMin:       2,
+			pinnedNodes:   1,
+			wantRemaining: 2,
+			wantBlocked: []v1.ConsolidationBlockedNodesInfo{
+				{Reason: reasonMinCapacityReached, Count: 2},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cccObj := ccc.NewComputeClassBuilder(standardCCC).
+				WithPriorities(v1.Priority{
+					Nodepools: []string{standardPool},
+				}).
+				Build()
+
+			testConfig := integration.NewTestConfig().
+				WithNodePools(
+					integration.EmptyNodePool(standardPool).
+						WithSize(int64(tc.poolSize)).
+						WithMin(int64(tc.poolMin)).
+						WithLocations("us-central1-b").
+						WithCCCLabel(standardCCC).
+						Build(),
+				).
+				WithCccCrds(cccObj).
+				WithOverrides(
+					integration.WithScaleDownUnneededTime(time.Second),
+					integration.WithUnremovableNodeRecheckTimeout(5*time.Minute),
+					integration.WithEnhancedCrdStatusReporting(true),
+					integration.WithComputeClassScaleDownStatusEnabled(),
+				)
+
+			synctest.Test(t, func(t *testing.T) {
+				// Given: an idle standard node pool with pods that cannot be evicted pinning
+				// some of its nodes.
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+				defer integration_synctest.TearDown(cancel)
+
+				nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+				assert.NoError(t, err)
+				assert.Len(t, nodes.Items, tc.poolSize, "unexpected initial node count")
+
+				for i := range tc.pinnedNodes {
+					// Small enough to leave the node underutilized, so that the drain
+					// simulation runs and the pod, not the utilization, is what keeps the node.
+					pinningPod := tu.BuildTestPod(fmt.Sprintf("pinning-pod-%d", i), 100, 100,
+						pod.WithAnnotation("cluster-autoscaler.kubernetes.io/safe-to-evict", "false"))
+					pinningPod.Spec.NodeName = nodes.Items[i].Name
+					_, err = infra.Fakes.KubeClient.CoreV1().Pods(pinningPod.Namespace).Create(ctx, pinningPod, metav1.CreateOptions{})
+					assert.NoError(t, err)
+				}
+
+				// When: the autoscaler consolidates the idle capacity and the status is flushed.
+				for range caLoops {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+				}
+				time.Sleep(consolidationFlushInterval)
+
+				// Then: the free nodes are gone, down to whatever the pins and the minimum keep.
+				assert.Equal(t, tc.wantRemaining, countNodes(ctx, t, infra), "unexpected node count after consolidation")
+
+				// Then: every remaining node is attributed to what keeps it.
+				updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, standardCCC, metav1.GetOptions{})
+				assert.NoError(t, err)
+
+				consolidationStatus := consolidationForPriority(t, updatedCCC, firstPriority)
+				if !assert.NotNil(t, consolidationStatus, "expected a Consolidation status block on priority %s", firstPriority) {
+					return
+				}
+				assert.Equal(t, tc.wantBlocked, consolidationStatus.BlockedNodes)
+				assert.Equal(t, 0, ptr.Deref(consolidationStatus.NotProcessed, 0), "expected no unprocessed nodes")
+				assert.Equal(t, 0, ptr.Deref(consolidationStatus.ActuationInProgress, 0), "expected no deletion in flight")
+			})
+		})
+	}
 }
 
 // consolidationForPriority returns the Consolidation block reported for the given CCC priority,

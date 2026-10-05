@@ -593,6 +593,15 @@ func WithReservationsAnyLocationPolicyOverride(enabled bool) Option[*config.Auto
 	}
 }
 
+// WithUnremovableNodeRecheckTimeout overrides how long CA caches a failed drain simulation
+// before re-evaluating the node. The default of zero re-evaluates every loop.
+func WithUnremovableNodeRecheckTimeout(d time.Duration) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.UnremovableNodeRecheckTimeout = d
+		return o
+	}
+}
+
 // WithScaleDownDelayAfterAdd overrides the ScaleDownDelayAfterAdd setting.
 func WithScaleDownDelayAfterAdd(delay time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

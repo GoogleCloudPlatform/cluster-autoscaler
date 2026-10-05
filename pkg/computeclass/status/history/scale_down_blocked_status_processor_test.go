@@ -131,13 +131,6 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 			want:        crd.ConsolidationReasonMinCapacityReached,
 		},
 		{
-			// CA caches a failed drain simulation for a few minutes and reports the node as
-			// RecentlyUnremovable in between. That is not a failed removal attempt.
-			name:        "recently unremovable is a cached verdict, not a failure",
-			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.RecentlyUnremovable},
-			want:        crd.ConsolidationReasonConsolidationBlocked,
-		},
-		{
 			name:        "scale down disabled annotation on a slice bound node",
 			unremovable: &scaledownstatus.UnremovableNode{Node: sliceNode, Reason: simulator.ScaleDownDisabledAnnotation},
 			want:        crd.ConsolidationReasonUsedByFormedSlice,
@@ -161,12 +154,12 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 			want:        crd.ConsolidationReasonNodeConsolidationDisabled,
 		},
 		{
-			name:        "per loop removal cap reached is not a verdict",
+			name:        "per loop removal cap reached is not a blocked reason",
 			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.NodeGroupMaxDeletionCountReached},
 			want:        "",
 		},
 		{
-			name:        "never inspected is not a verdict",
+			name:        "never inspected is not a blocked reason",
 			unremovable: &scaledownstatus.UnremovableNode{Node: plainNode, Reason: simulator.NotUnneededOtherReason},
 			want:        "",
 		},
@@ -214,7 +207,7 @@ func TestScaleDownBlockedStatusProcessor_CountsActuatedNodeOnce(t *testing.T) {
 		},
 	})
 
-	consolidation := reportedConsolidation(t, updatesCh)
+	consolidation := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, 2, consolidation.ActuationInProgress, "each node being deleted must be counted exactly once")
 	assert.Empty(t, consolidation.BlockedNodes)
 }
@@ -231,7 +224,7 @@ func TestScaleDownBlockedStatusProcessor_GroupsBlockedNodesByReasonInEvaluationO
 		},
 	})
 
-	consolidation := reportedConsolidation(t, updatesCh)
+	consolidation := getConsolidationStatus(t, updatesCh)
 	// Blocking labels are checked before utilization, which is checked before the drain
 	// simulation: the status lists the reasons in that order, not alphabetically.
 	assert.Equal(t, []crd.BlockedNodesByReason{
@@ -241,7 +234,7 @@ func TestScaleDownBlockedStatusProcessor_GroupsBlockedNodesByReasonInEvaluationO
 	}, consolidation.BlockedNodes)
 }
 
-func TestScaleDownBlockedStatusProcessor_LeavesNodesWithoutVerdictOut(t *testing.T) {
+func TestScaleDownBlockedStatusProcessor_LeavesNodesWithoutBlockedReasonOut(t *testing.T) {
 	processor, updatesCh, mig := newTestProcessor(t)
 
 	processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{
@@ -253,16 +246,17 @@ func TestScaleDownBlockedStatusProcessor_LeavesNodesWithoutVerdictOut(t *testing
 
 	// Neither node counts as blocked, and without a cluster snapshot there is no node total to
 	// derive notProcessed from, so there is nothing to report for the priority at all.
-	assert.Empty(t, drainUpdates(t, updatesCh))
+	assert.Empty(t, getConsolidationStatuses(t, updatesCh))
 }
 
 func TestScaleDownBlockedStatusProcessor_DerivesNotProcessedFromSnapshot(t *testing.T) {
-	processor, updatesCh, mig := newTestProcessor(t)
+	processor, updatesCh, _ := newTestProcessor(t)
+	mig := sizedMig(t, 3, 1)
 
 	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
-	for _, n := range []*apiv1.Node{node("real-1"), node("real-2"), node("real-3")} {
-		assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(n, nil)))
-	}
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("real-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("real-2"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("real-3"), nil)))
 	// Generated from the node group template for simulation purposes: not a node the user
 	// has, so it must not inflate notProcessed.
 	templateNode := node("template-1")
@@ -283,11 +277,119 @@ func TestScaleDownBlockedStatusProcessor_DerivesNotProcessedFromSnapshot(t *test
 		},
 	})
 
-	consolidation := reportedConsolidation(t, updatesCh)
+	consolidation := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
 		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
 	}, consolidation.BlockedNodes)
-	assert.Equal(t, 2, consolidation.NotProcessed, "3 real nodes in the priority, 1 with a verdict")
+	assert.Equal(t, 2, consolidation.NotProcessed, "3 real nodes in the priority, 1 with a blocked reason")
+}
+
+func TestScaleDownBlockedStatusProcessor_AttributesMinSizeNodesToFloor(t *testing.T) {
+	processor, updatesCh, _ := newTestProcessor(t)
+	mig := sizedMig(t, 4, 4)
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("idle-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("uninspected-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("pinned-1"), nil)))
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node("deleting-1"), nil)))
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: snapshot,
+		CloudProvider: &nodeGroupForNodeStub{nodeGroups: map[string]cloudprovider.NodeGroup{
+			"idle-1": mig, "uninspected-1": mig, "pinned-1": mig, "deleting-1": mig,
+		}},
+	}
+	processor.Process(t.Context(), autoscalingCtx, &scaledownstatus.ScaleDownStatus{
+		UnremovableNodes: []*scaledownstatus.UnremovableNode{
+			// No blocked reason: the pool minimum is what keeps the node, so the user must see
+			// that rather than a node CA never got to.
+			{NodeGroup: mig, Node: node("uninspected-1"), Reason: simulator.NotUnneededOtherReason},
+			// The user can act on a pod pinning the node, not on the pool minimum, so the
+			// reason CA gave is the more useful one to report.
+			{NodeGroup: mig, Node: node("pinned-1"), Reason: simulator.BlockedByPod},
+			// The node is going away whatever the pool size, so it is not held by the minimum.
+			{NodeGroup: mig, Node: node("deleting-1"), Reason: simulator.CurrentlyBeingDeleted},
+		},
+	})
+
+	consolidation := getConsolidationStatus(t, updatesCh)
+	assert.Equal(t, []crd.BlockedNodesByReason{
+		{Reason: crd.ConsolidationReasonBlockingPods, Count: 1},
+		{Reason: crd.ConsolidationReasonMinCapacityReached, Count: 2},
+	}, consolidation.BlockedNodes)
+	assert.Equal(t, 1, consolidation.ActuationInProgress)
+	assert.Equal(t, 0, consolidation.NotProcessed, "every node must be accounted for")
+}
+
+func TestScaleDownBlockedStatusProcessor_RecentlyUnremovable(t *testing.T) {
+	pdbBlocked := func(name string) *scaledownstatus.UnremovableNode {
+		return &scaledownstatus.UnremovableNode{
+			Node:        node(name),
+			Reason:      simulator.BlockedByPod,
+			BlockingPod: &drain.BlockingPod{Reason: drain.NotEnoughPdb},
+		}
+	}
+	withReason := func(name string, reason simulator.UnremovableReason) *scaledownstatus.UnremovableNode {
+		return &scaledownstatus.UnremovableNode{Node: node(name), Reason: reason}
+	}
+
+	// CA re-runs the drain simulation of a node that failed it only every
+	// UnremovableNodeRecheckTimeout and reports RecentlyUnremovable in between. Nothing changed
+	// for the node in the meantime, so the user must keep seeing what blocked it.
+	testCases := []struct {
+		name  string
+		loops [][]*scaledownstatus.UnremovableNode
+		want  []crd.BlockedNodesByReason
+	}{
+		{
+			name: "continues reporting previous reason when current reason is RecentlyUnremovable",
+			loops: [][]*scaledownstatus.UnremovableNode{
+				{pdbBlocked("node-1")},
+				{withReason("node-1", simulator.RecentlyUnremovable)},
+			},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonPodDisruptionBudget, Count: 1}},
+		},
+		{
+			name: "updates reported reason when CA reports a different reason",
+			loops: [][]*scaledownstatus.UnremovableNode{
+				{pdbBlocked("node-1")},
+				{withReason("node-1", simulator.NotUnderutilized)},
+				{withReason("node-1", simulator.RecentlyUnremovable)},
+			},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1}},
+		},
+		{
+			// The previous reason may no longer hold once the node left the unremovable set,
+			// so it must not come back with a later RecentlyUnremovable.
+			name: "stops reporting previous reason when there is no scale-down status at all",
+			loops: [][]*scaledownstatus.UnremovableNode{
+				{pdbBlocked("node-1")},
+				{},
+				{withReason("node-1", simulator.RecentlyUnremovable)},
+			},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1}},
+		},
+		{
+			name: "falls back to the catch all for a node never seen with a blocked reason",
+			loops: [][]*scaledownstatus.UnremovableNode{
+				{withReason("node-1", simulator.RecentlyUnremovable)},
+			},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1}},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			processor, updatesCh, mig := newTestProcessor(t)
+			for _, unremovable := range tc.loops {
+				for _, un := range unremovable {
+					un.NodeGroup = mig
+				}
+				getConsolidationStatuses(t, updatesCh)
+				processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{UnremovableNodes: unremovable})
+			}
+			assert.Equal(t, tc.want, getConsolidationStatus(t, updatesCh).BlockedNodes)
+		})
+	}
 }
 
 func TestScaleDownBlockedStatusProcessor_ClearsPriorityNoLongerBlocked(t *testing.T) {
@@ -298,7 +400,7 @@ func TestScaleDownBlockedStatusProcessor_ClearsPriorityNoLongerBlocked(t *testin
 			{NodeGroup: mig, Node: sliceNode("slice-1"), Reason: simulator.ScaleDownDisabledAnnotation},
 		},
 	})
-	first := reportedConsolidation(t, updatesCh)
+	first := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
 		{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 1},
 	}, first.BlockedNodes)
@@ -308,7 +410,7 @@ func TestScaleDownBlockedStatusProcessor_ClearsPriorityNoLongerBlocked(t *testin
 	// and its stale measuredAt - on the CRD.
 	processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{})
 
-	second := reportedConsolidation(t, updatesCh)
+	second := getConsolidationStatus(t, updatesCh)
 	assert.Empty(t, second.BlockedNodes)
 	assert.Equal(t, 0, second.ActuationInProgress)
 }
@@ -321,14 +423,14 @@ func TestScaleDownBlockedStatusProcessor_StopsReportingOnceCleared(t *testing.T)
 			{NodeGroup: mig, Node: sliceNode("slice-1"), Reason: simulator.ScaleDownDisabledAnnotation},
 		},
 	})
-	drainUpdates(t, updatesCh)
+	getConsolidationStatuses(t, updatesCh)
 
 	processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{})
-	drainUpdates(t, updatesCh)
+	getConsolidationStatuses(t, updatesCh)
 
 	// Nothing changed and nothing is left to clear, so no further updates are produced.
 	processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{})
-	assert.Empty(t, drainUpdates(t, updatesCh), "a quiet cluster must not keep generating status patches")
+	assert.Empty(t, getConsolidationStatuses(t, updatesCh), "a quiet cluster must not keep generating status patches")
 }
 
 func TestScaleDownBlockedStatusProcessor_RetriesDroppedClearingUpdate(t *testing.T) {
@@ -339,7 +441,7 @@ func TestScaleDownBlockedStatusProcessor_RetriesDroppedClearingUpdate(t *testing
 			{NodeGroup: mig, Node: sliceNode("slice-1"), Reason: simulator.ScaleDownDisabledAnnotation},
 		},
 	})
-	drainUpdates(t, updatesCh)
+	getConsolidationStatuses(t, updatesCh)
 
 	// The channel is full, so the clearing update is dropped. The priority must stay due.
 	processor.updatesCh = make(chan status.UpdateMessage)
@@ -349,7 +451,7 @@ func TestScaleDownBlockedStatusProcessor_RetriesDroppedClearingUpdate(t *testing
 	// With room in the channel again the clear goes through, and only then is it done.
 	processor.updatesCh = updatesCh
 	processor.Process(t.Context(), nil, &scaledownstatus.ScaleDownStatus{})
-	cleared := reportedConsolidation(t, updatesCh)
+	cleared := getConsolidationStatus(t, updatesCh)
 	assert.Empty(t, cleared.BlockedNodes)
 	assert.Empty(t, processor.lastReported)
 }
@@ -365,7 +467,7 @@ func TestScaleDownBlockedStatusProcessor_DoesNothingWhenExperimentOff(t *testing
 			{NodeGroup: mig, Node: sliceNode("slice-1"), Reason: simulator.ScaleDownDisabledAnnotation},
 		},
 	})
-	assert.Empty(t, drainUpdates(t, updatesCh))
+	assert.Empty(t, getConsolidationStatuses(t, updatesCh))
 }
 
 // sliceNode returns a node bound to a TPU slice.
@@ -403,22 +505,35 @@ func newTestProcessor(t *testing.T) (*ScaleDownBlockedStatusProcessor, chan stat
 			Labels: map[string]string{testCrdLabel: testCrdName},
 		}).Build()
 
-	mockProvider := NewMockCloudProvider()
-	mockProvider.On("IsAutopilotEnabled").Return(false)
-
 	updatesCh := make(chan status.UpdateMessage, 10)
 	mockManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 		experiments.ComputeClassScaleDownStatusEnabledFlag: true,
 	}, map[string]string{})
 
-	processor := NewScaleDownBlockedStatusProcessor(mockLister, mockProvider, updatesCh, mockManager, []string{gke_labels.TPUSliceLabel})
+	processor := NewScaleDownBlockedStatusProcessor(mockLister, standardClusterProvider{}, updatesCh, mockManager, []string{gke_labels.TPUSliceLabel})
 	processor.now = func() time.Time { return time.Unix(0, 0) }
 	return processor, updatesCh, mig
 }
 
-// drainUpdates applies every buffered update to a fake status and returns what was reported,
+// sizedMig returns a MIG of the test priority with the given target and minimum size.
+func sizedMig(t *testing.T, targetSize int64, minSize int) *gke.GkeMig {
+	t.Helper()
+	manager := gke.NewFakeGkeManagerBuilder().WithMigSize(targetSize).Build()
+	return gke.NewTestGkeMigBuilder().
+		SetNodePoolName("nodepool-1").
+		SetGceRefName("nodepool-1-mig").
+		SetSpec(&gkeclient.NodePoolSpec{
+			Labels: map[string]string{testCrdLabel: testCrdName},
+		}).
+		SetGkeManager(manager).
+		SetExist(true).
+		SetMinSize(minSize).
+		Build()
+}
+
+// getConsolidationStatuses applies every buffered update to a fake status and returns what was reported,
 // keyed by priority.
-func drainUpdates(t *testing.T, updatesCh chan status.UpdateMessage) map[string]crd.ConsolidationStatus {
+func getConsolidationStatuses(t *testing.T, updatesCh chan status.UpdateMessage) map[string]crd.ConsolidationStatus {
 	t.Helper()
 	reported := make(map[string]crd.ConsolidationStatus)
 	recorder := &consolidationRecorder{reported: reported}
@@ -433,15 +548,22 @@ func drainUpdates(t *testing.T, updatesCh chan status.UpdateMessage) map[string]
 	}
 }
 
-// reportedConsolidation drains the buffered updates and returns the status reported for the
+// getConsolidationStatus drains the buffered updates and returns the status reported for the
 // test priority, failing the test if there is none.
-func reportedConsolidation(t *testing.T, updatesCh chan status.UpdateMessage) crd.ConsolidationStatus {
+func getConsolidationStatus(t *testing.T, updatesCh chan status.UpdateMessage) crd.ConsolidationStatus {
 	t.Helper()
-	consolidation, ok := drainUpdates(t, updatesCh)[testPriority]
+	consolidation, ok := getConsolidationStatuses(t, updatesCh)[testPriority]
 	if !ok {
 		t.Fatalf("expected a consolidation status for priority %s", testPriority)
 	}
 	return consolidation
+}
+
+// standardClusterProvider is a machineConfigProvider of a Standard cluster.
+type standardClusterProvider struct{}
+
+func (standardClusterProvider) IsAutopilotEnabled() bool {
+	return false
 }
 
 // nodeGroupForNodeStub is a cloudprovider.CloudProvider that only knows which node group each

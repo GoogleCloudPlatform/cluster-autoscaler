@@ -1660,6 +1660,7 @@ type FakeGkeManager struct {
 	migTemplateNode                   *framework.NodeInfo
 	injectedMigs                      map[string]*GkeMig
 	isUpcoming                        bool
+	migSize                           int64
 	instances                         []gce.GceInstance
 	resizableVmInAutopilotEnabled     map[string]bool
 	resizableVmWithinPodFamilyEnabled map[string]bool
@@ -1695,7 +1696,7 @@ func (fake *FakeGkeManager) GetAutoprovisioningDefaultFamily() machinetypes.Mach
 }
 
 func (fake *FakeGkeManager) GetMigSize(mig gce.Mig) (int64, error) {
-	panic("not implemented")
+	return fake.migSize, nil
 }
 
 func (fake *FakeGkeManager) SetMigSize(mig gce.Mig, size int64) error {
@@ -2016,19 +2017,19 @@ func (fake *FakeGkeManager) CalculatePhysicalEphemeralStorageGiB(mig *GkeMig, al
 }
 
 func (fake *FakeGkeManager) ScaleDownUnreadyTimeOverride(mig *GkeMig) (time.Duration, bool) {
-	panic("not implemented")
+	return 0, false
 }
 
 func (fake *FakeGkeManager) ScaleDownUnneededTimeOverride(cloudprovider.NodeGroup) (time.Duration, bool, error) {
-	panic("not implemented")
+	return 0, false, nil
 }
 
 func (fake *FakeGkeManager) ScaleDownUtilizationThresholdOverride(cloudprovider.NodeGroup) (float64, bool, error) {
-	panic("not implemented")
+	return 0, false, nil
 }
 
 func (fake *FakeGkeManager) ScaleDownGpuUtilizationThresholdOverride(cloudprovider.NodeGroup) (float64, bool, error) {
-	panic("not implemented")
+	return 0, false, nil
 }
 
 func (fake *FakeGkeManager) ValidateLocationForDiskType(location string, requestedDiskType string) (ok bool, reason string, err error) {
@@ -2114,7 +2115,7 @@ func (fake *FakeGkeManager) CapacityCheckWaitTimeSeconds(mig *GkeMig) (time.Dura
 }
 
 func (fake *FakeGkeManager) GetMaxNodeProvisioningTimeOverride(mig *GkeMig) (time.Duration, bool) {
-	panic("not implemented")
+	return 0, false
 }
 
 func (fake *FakeGkeManager) SetScaleUpTimeProvider(provider ScaleUpTimeProvider) {
@@ -2234,6 +2235,7 @@ type FakeGkeManagerBuilder struct {
 	migTemplateNode                   *framework.NodeInfo
 	injectedMigs                      map[string]*GkeMig
 	isUpcoming                        bool
+	migSize                           int64
 	instances                         []gce.GceInstance
 	machineConfigProvider             *machinetypes.MachineConfigProvider
 	resizableVmInAutopilotEnabled     map[string]bool
@@ -2286,6 +2288,12 @@ func (b *FakeGkeManagerBuilder) WithIsUpcoming(isUpcoming bool) *FakeGkeManagerB
 	return b
 }
 
+// WithMigSize sets the size returned by GetMigSize.
+func (b *FakeGkeManagerBuilder) WithMigSize(migSize int64) *FakeGkeManagerBuilder {
+	b.migSize = migSize
+	return b
+}
+
 func (b *FakeGkeManagerBuilder) WithResizableVmInAutopilotEnabled(machineFamily string, enabled bool) *FakeGkeManagerBuilder {
 	b.resizableVmInAutopilotEnabled[machineFamily] = enabled
 	return b
@@ -2303,6 +2311,7 @@ func (b *FakeGkeManagerBuilder) Build() *FakeGkeManager {
 		dataplaneV2Enabled:                b.dataplaneV2Enabled,
 		migTemplateNode:                   b.migTemplateNode,
 		isUpcoming:                        b.isUpcoming,
+		migSize:                           b.migSize,
 		injectedMigs:                      b.injectedMigs,
 		machineConfigProvider:             b.machineConfigProvider,
 		resizableVmInAutopilotEnabled:     b.resizableVmInAutopilotEnabled,

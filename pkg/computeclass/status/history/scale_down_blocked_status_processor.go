@@ -81,6 +81,8 @@ type ScaleDownBlockedStatusProcessor struct {
 	// lastReported holds the priorities with a non-empty status, which have to be cleared
 	// explicitly once they have nothing to report.
 	lastReported sets.Set[priorityKey]
+	// lastReason holds the reason reported for each node in the previous pass.
+	lastReason map[string]string
 	// loggedUnresolved holds the node groups already logged as matching no CCC priority.
 	loggedUnresolved sets.Set[string]
 }
@@ -95,6 +97,7 @@ func NewScaleDownBlockedStatusProcessor(lister lister.Lister, provider machineCo
 		now:                time.Now,
 		blockingLabels:     blockingLabels,
 		lastReported:       sets.New[priorityKey](),
+		lastReason:         make(map[string]string),
 		loggedUnresolved:   sets.New[string](),
 	}
 }
@@ -108,21 +111,21 @@ func (p *ScaleDownBlockedStatusProcessor) Process(ctx context.Context, autoscali
 		return
 	}
 
-	// The scale-down status only lists the nodes CA reached a verdict on, the rest of the
-	// picture comes from the nodes in the cluster snapshot.
+	// The scale-down status only lists the nodes CA inspected, the rest of the picture comes
+	// from the nodes in the cluster snapshot.
 	var nodeInfos []*framework.NodeInfo
 	var cloudProvider cloudprovider.CloudProvider
 	if autoscalingCtx != nil && autoscalingCtx.ClusterSnapshot != nil {
 		cloudProvider = autoscalingCtx.CloudProvider
 		var err error
 		if nodeInfos, err = autoscalingCtx.ClusterSnapshot.ListNodeInfos(); err != nil {
-			klog.Errorf("Failed to list nodes, the consolidation status will miss the nodes without a verdict: %v", err)
+			klog.Errorf("Failed to list nodes, the consolidation status will miss the nodes CA did not inspect: %v", err)
 		}
 	}
-	nodeCounts := p.countNodesPerPriority(ctx, cloudProvider, nodeInfos)
+	snapshot := p.getSnapshotInfo(ctx, cloudProvider, nodeInfos)
 
-	blockedCounts, deletionsInProgress := p.groupByReason(scaleDownStatus)
-	p.lastReported = p.reportConsolidation(blockedCounts, deletionsInProgress, nodeCounts)
+	blockedCounts, deletionsInProgress := p.groupByReason(scaleDownStatus, snapshot)
+	p.lastReported = p.reportConsolidation(blockedCounts, deletionsInProgress, snapshot.nodeCounts)
 }
 
 // CleanUp implements status.ScaleDownStatusProcessor.
@@ -130,8 +133,10 @@ func (p *ScaleDownBlockedStatusProcessor) CleanUp() {
 }
 
 // groupByReason returns, per CCC priority, the number of blocked nodes per reason and the
-// number of nodes being deleted. Nodes without a verdict are left out.
-func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledownstatus.ScaleDownStatus) (map[priorityKey]map[string]int, map[priorityKey]int) {
+// number of nodes being deleted. Nodes with no scale-down blocked reason are left out, unless
+// their node group is at its minimum size, in which case they are reported under
+// MinCapacityReached.
+func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledownstatus.ScaleDownStatus, snapshot snapshotInfo) (map[priorityKey]map[string]int, map[priorityKey]int) {
 	blockedCounts := make(map[priorityKey]map[string]int)
 	addBlocked := func(key priorityKey, reason string) {
 		if blockedCounts[key] == nil {
@@ -140,9 +145,12 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 		blockedCounts[key][reason]++
 	}
 	deletionsInProgress := make(map[priorityKey]int)
-	// A node is counted once: a node being deleted shows up in ScaledDownNodes and, on later
-	// loops, as CurrentlyBeingDeleted.
+	// counted holds the nodes already reported, either as being deleted or as blocked, so that
+	// none is reported twice: a node being deleted shows up in ScaledDownNodes and, on later
+	// loops, as CurrentlyBeingDeleted, and a blocked node in a node group at its minimum size
+	// must keep the reason CA gave for it.
 	counted := sets.New[string]()
+	reasons := make(map[string]string, len(p.lastReason))
 
 	for _, scaledDown := range scaleDownStatus.ScaledDownNodes {
 		if scaledDown == nil || scaledDown.Node == nil || scaledDown.NodeGroup == nil {
@@ -170,19 +178,60 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 			}
 			continue
 		}
-		if reason := p.mapReason(unremovable); reason != "" {
-			addBlocked(key, reason)
+		reason := p.blockedReason(unremovable)
+		if reason == "" {
+			continue
 		}
+		reasons[unremovable.Node.Name] = reason
+		counted.Insert(unremovable.Node.Name)
+		addBlocked(key, reason)
 	}
+
+	// The nodes of a node group at its minimum size are never inspected by CA (see
+	// PreFilteringScaleDownNodeProcessor.GetScaleDownCandidates), so they have no reason in the
+	// scale-down status. Nodes that do have one were counted above and keep it.
+	for nodeName, key := range snapshot.minSizeNodesToPriority {
+		if counted.Has(nodeName) {
+			continue
+		}
+		addBlocked(key, crd.ConsolidationReasonMinCapacityReached)
+	}
+	p.lastReason = reasons
 	return blockedCounts, deletionsInProgress
 }
 
-// countNodesPerPriority returns the number of nodes in the cluster per CCC priority.
-func (p *ScaleDownBlockedStatusProcessor) countNodesPerPriority(ctx context.Context, cloudProvider cloudprovider.CloudProvider, nodeInfos []*framework.NodeInfo) map[priorityKey]int {
-	nodeCounts := make(map[priorityKey]int)
-	if cloudProvider == nil {
-		return nodeCounts
+// blockedReason returns the reason to report for an unremovable node. CA reports
+// RecentlyUnremovable while it skips re-running the drain simulation of a node that failed it
+// recently, so the node keeps the reason reported last time.
+func (p *ScaleDownBlockedStatusProcessor) blockedReason(un *scaledownstatus.UnremovableNode) string {
+	if un.Reason != simulator.RecentlyUnremovable {
+		return p.mapReason(un)
 	}
+	if reason, ok := p.lastReason[un.Node.Name]; ok {
+		return reason
+	}
+	return crd.ConsolidationReasonConsolidationBlocked
+}
+
+type snapshotInfo struct {
+	// nodeCounts is the number of nodes per CCC priority.
+	nodeCounts map[priorityKey]int
+	// minSizeNodesToPriority maps the nodes of node groups at their minimum size to their
+	// CCC priority.
+	minSizeNodesToPriority map[string]priorityKey
+}
+
+// getSnapshotInfo collects, for the nodes in the cluster that belong to a CCC priority, their
+// priority and whether their node group is at its minimum size.
+func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, cloudProvider cloudprovider.CloudProvider, nodeInfos []*framework.NodeInfo) snapshotInfo {
+	info := snapshotInfo{
+		nodeCounts:             make(map[priorityKey]int),
+		minSizeNodesToPriority: make(map[string]priorityKey),
+	}
+	if cloudProvider == nil {
+		return info
+	}
+	atMinByNodeGroup := make(map[string]bool)
 	for _, nodeInfo := range nodeInfos {
 		node := nodeInfo.Node()
 		if node == nil || isGeneratedNode(node) {
@@ -192,17 +241,38 @@ func (p *ScaleDownBlockedStatusProcessor) countNodesPerPriority(ctx context.Cont
 		if err != nil || nodeGroup == nil {
 			continue
 		}
-		if key, ok := p.resolvePriority(nodeGroup); ok {
-			nodeCounts[key]++
+		key, ok := p.resolvePriority(nodeGroup)
+		if !ok {
+			continue
+		}
+		info.nodeCounts[key]++
+		atMin, ok := atMinByNodeGroup[nodeGroup.Id()]
+		if !ok {
+			atMin = isAtMinSize(ctx, nodeGroup)
+			atMinByNodeGroup[nodeGroup.Id()] = atMin
+		}
+		if atMin {
+			info.minSizeNodesToPriority[node.Name] = key
 		}
 	}
-	return nodeCounts
+	return info
 }
 
 // isGeneratedNode reports whether CA generated the node from a node group template.
 func isGeneratedNode(node *apiv1.Node) bool {
 	_, generated := node.Annotations[gke_labels.NodeGeneratedFromTemplateAnnotation]
 	return generated
+}
+
+// TODO(b/570549559): Share this check with PreFilteringScaleDownNodeProcessor once it is a
+// method of the node group in the OSS cloudprovider.
+func isAtMinSize(ctx context.Context, nodeGroup cloudprovider.NodeGroup) bool {
+	size, err := nodeGroup.TargetSize(ctx)
+	if err != nil {
+		klog.Warningf("Failed to get the target size of node group %v: %v", nodeGroup.Id(), err)
+		return false
+	}
+	return size <= nodeGroup.MinSize(ctx)
 }
 
 // reportConsolidation sends the Consolidation status of every priority that needs one and
@@ -293,8 +363,12 @@ func (p *ScaleDownBlockedStatusProcessor) resolvePriority(nodeGroup cloudprovide
 }
 
 // mapReason maps a CA unremovable reason to the reason reported on the CCC status, or "" when
-// CA reached no verdict. Every reason returned must be in crd.ConsolidationReasons, the API
+// CA did not inspect the node. Every reason returned must be in crd.ConsolidationReasons, the API
 // server rejects the whole status otherwise.
+//
+// TODO(b/570549559): RecentConsolidationFailure is never produced, as no per-node reason maps
+// to it. Derive it from the scale-down status instead (a non-OK Result, or the cooldown after
+// a failed deletion).
 func (p *ScaleDownBlockedStatusProcessor) mapReason(un *scaledownstatus.UnremovableNode) string {
 	switch un.Reason {
 	case simulator.NotUnderutilized:
@@ -316,9 +390,6 @@ func (p *ScaleDownBlockedStatusProcessor) mapReason(un *scaledownstatus.Unremova
 		return crd.ConsolidationReasonAtomicGroupBlocked
 	case simulator.NodeGroupMinSizeReached, simulator.MinimalResourceLimitExceeded:
 		return crd.ConsolidationReasonMinCapacityReached
-	case simulator.RecentlyUnremovable:
-		// A cached drain simulation verdict, not a failed removal.
-		return crd.ConsolidationReasonConsolidationBlocked
 	case simulator.ScaleDownDisabledAnnotation:
 		// BlockingLabelsFilteringProcessor reports blocking labels under this reason too.
 		if p.hasBlockingLabel(un.Node) {
