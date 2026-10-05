@@ -22,10 +22,12 @@ import (
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/cache"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
@@ -709,4 +711,114 @@ func TestOnScaleUpDecision_PriorityConditions(t *testing.T) {
 	assert.Len(t, conds, 2)
 	assert.Equal(t, status.MinCapacityProvisioning, conds[0].Type)
 	assert.Equal(t, metav1.ConditionTrue, conds[0].Status)
+}
+
+type mockSharedIndexInformer struct {
+	cache.SharedIndexInformer
+	handler cache.ResourceEventHandler
+}
+
+func (m *mockSharedIndexInformer) AddEventHandler(handler cache.ResourceEventHandler) (cache.ResourceEventHandlerRegistration, error) {
+	m.handler = handler
+	return nil, nil
+}
+
+func TestSubscribeToComputeClassInformer_AutoscalerFiltering(t *testing.T) {
+	metrics := computeclass.NewMockMetrics()
+	observer := NewMinCapacityObserver(metrics, make(chan status.UpdateMessage, 10))
+	mockInformer := &mockSharedIndexInformer{}
+
+	SubscribeToComputeClassInformer(mockInformer, observer, options.UnannotatedAutoscalerName, options.StandardAutoscalerName)
+
+	unownedCC := &cccv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "solver-cc",
+			Annotations: map[string]string{options.AutoscalerNameAnnotation: options.SolverAutoscalerName},
+		},
+		Spec: cccv1.ComputeClassSpec{
+			MinimumCapacity: &cccv1.MinimumCapacity{TargetNodeCount: intPtr(2)},
+		},
+	}
+	ownedCC := &cccv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "standard-cc",
+		},
+		Spec: cccv1.ComputeClassSpec{
+			MinimumCapacity: &cccv1.MinimumCapacity{TargetNodeCount: intPtr(2)},
+		},
+	}
+
+	mockInformer.handler.OnAdd(unownedCC, false)
+	mockInformer.handler.OnAdd(ownedCC, false)
+
+	impl := observer.(*minCapacityObserver)
+	assert.NotContains(t, impl.ccStates, "solver-cc")
+	assert.Contains(t, impl.ccStates, "standard-cc")
+}
+
+func TestSubscribeToComputeClassInformer_OwnershipChanges(t *testing.T) {
+	standardNames := []string{options.UnannotatedAutoscalerName, options.StandardAutoscalerName}
+	minCapacityCC := func(owner string) *cccv1.ComputeClass {
+		cc := &cccv1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "cc"},
+			Spec: cccv1.ComputeClassSpec{
+				MinimumCapacity: &cccv1.MinimumCapacity{TargetNodeCount: intPtr(2)},
+			},
+		}
+		if owner != "" {
+			cc.Annotations = map[string]string{options.AutoscalerNameAnnotation: owner}
+		}
+		return cc
+	}
+
+	testCases := []struct {
+		name            string
+		autoscalerNames []string
+		added           *cccv1.ComputeClass
+		updated         *cccv1.ComputeClass // nil means no update event.
+		wantTracked     bool
+	}{
+		{
+			name:            "owned ComputeClass handed over to another autoscaler is no longer tracked",
+			autoscalerNames: standardNames,
+			added:           minCapacityCC(""),
+			updated:         minCapacityCC(options.SolverAutoscalerName),
+			wantTracked:     false,
+		},
+		{
+			name:            "ComputeClass handed over from another autoscaler starts being tracked",
+			autoscalerNames: standardNames,
+			added:           minCapacityCC(options.SolverAutoscalerName),
+			updated:         minCapacityCC(""),
+			wantTracked:     true,
+		},
+		{
+			name:            "resync of an unowned ComputeClass doesn't start tracking it",
+			autoscalerNames: standardNames,
+			added:           minCapacityCC(options.SolverAutoscalerName),
+			updated:         minCapacityCC(options.SolverAutoscalerName),
+			wantTracked:     false,
+		},
+		{
+			name:        "all ComputeClasses are tracked when autoscaler names are not set",
+			added:       minCapacityCC(options.SolverAutoscalerName),
+			wantTracked: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			observer := NewMinCapacityObserver(computeclass.NewMockMetrics(), make(chan status.UpdateMessage, 10))
+			mockInformer := &mockSharedIndexInformer{}
+			SubscribeToComputeClassInformer(mockInformer, observer, tc.autoscalerNames...)
+
+			mockInformer.handler.OnAdd(tc.added, false)
+			if tc.updated != nil {
+				mockInformer.handler.OnUpdate(tc.added, tc.updated)
+			}
+
+			_, tracked := observer.(*minCapacityObserver).ccStates["cc"]
+			assert.Equal(t, tc.wantTracked, tracked)
+		})
+	}
 }

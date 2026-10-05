@@ -26,6 +26,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
@@ -138,11 +139,11 @@ func NewMinCapacityObserver(metrics minCapacityMetrics, updatesCh chan status.Up
 }
 
 // SubscribeToComputeClassInformer registers event handlers on the informer to update the MinCapacityObserver.
-func SubscribeToComputeClassInformer(informer cache.SharedIndexInformer, observer MinCapacityObserver) {
+func SubscribeToComputeClassInformer(informer cache.SharedIndexInformer, observer MinCapacityObserver, autoscalerNames ...string) {
 	informer.AddEventHandler(cache.ResourceEventHandlerDetailedFuncs{
 		AddFunc: func(obj interface{}, isInInitialList bool) {
 			cc, ok := obj.(*cc_api.ComputeClass)
-			if !ok {
+			if !ok || !lister.IsOwned(cc.Annotations, autoscalerNames) {
 				return
 			}
 			observer.OnComputeClassAdded(cc, time.Now())
@@ -151,6 +152,10 @@ func SubscribeToComputeClassInformer(informer cache.SharedIndexInformer, observe
 			oldCC, okOld := oldObj.(*cc_api.ComputeClass)
 			newCC, okNew := newObj.(*cc_api.ComputeClass)
 			if !okOld || !okNew {
+				return
+			}
+			if !lister.IsOwned(newCC.Annotations, autoscalerNames) {
+				observer.OnComputeClassDeleted(newCC.Name)
 				return
 			}
 			observer.OnComputeClassUpdated(oldCC, newCC, time.Now())
