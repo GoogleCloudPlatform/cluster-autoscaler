@@ -142,3 +142,10 @@ func (m *bucketedNodeOrderMapping) MarkMatch(idx int) {
 	p := m.pos[idx]
 	m.start[p.bucket] = p.pos
 }
+
+// PreferProcessingInOrder reports that the passing node at the smallest step is preferred.
+// Buckets are tried in priority order, so a passing node from a higher priority bucket must win
+// over passing nodes from lower priority buckets.
+func (m *bucketedNodeOrderMapping) PreferProcessingInOrder() bool {
+	return true
+}
