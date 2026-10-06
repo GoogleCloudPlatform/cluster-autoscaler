@@ -3065,13 +3065,13 @@ func TestH4DMegamemMachineTypes(t *testing.T) {
 			name:             "h4d-megamem-192",
 			wantCPU:          192,
 			wantMem:          3024 * 1024 * 1024 * 1024,
-			wantExplicitOnly: true,
+			wantExplicitOnly: false,
 		},
 		{
 			name:             "h4d-megamem-192-lssd",
 			wantCPU:          192,
 			wantMem:          3024 * 1024 * 1024 * 1024,
-			wantExplicitOnly: true,
+			wantExplicitOnly: false,
 			wantEphemeralSsd: 32,
 		},
 	} {
