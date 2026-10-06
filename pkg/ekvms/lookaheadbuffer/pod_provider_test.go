@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 )
@@ -163,9 +164,9 @@ func TestGetLookaheadPods(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 
 			mockStrategyProvider := &mockStrategyProvider{}
-			mockStrategyProvider.On("Strategy").Return(tc.laStrategy, tc.laStrategyError)
+			mockStrategyProvider.On("Strategy", machinetypes.EK.Name()).Return(tc.laStrategy, tc.laStrategyError)
 			p := NewPodProvider(mockStrategyProvider)
-			got := p.GetLookaheadPods(tc.targetNodesCPUs, "")
+			got := p.GetLookaheadPods(tc.targetNodesCPUs, "", machinetypes.EK.Name())
 			assert.Equal(t, tc.want, got)
 		})
 	}
@@ -279,16 +280,12 @@ func TestGetLookaheadPodNumber(t *testing.T) {
 	}
 }
 
-// mockStrategyProvider is a mock implementation of StrategyProvider.
+// mockStrategyProvider is a mock implementation of strategyProvider.
 type mockStrategyProvider struct {
 	mock.Mock
 }
 
-func (m *mockStrategyProvider) SetEkResizingEnabled(bool) {}
-
-func (m *mockStrategyProvider) RefreshStrategy() {}
-
-func (m *mockStrategyProvider) Strategy() (strategy.LookaheadPodStrategy, error) {
-	args := m.Called()
+func (m *mockStrategyProvider) Strategy(machineFamily string) (strategy.LookaheadPodStrategy, error) {
+	args := m.Called(machineFamily)
 	return args.Get(0).(strategy.LookaheadPodStrategy), args.Error(1)
 }

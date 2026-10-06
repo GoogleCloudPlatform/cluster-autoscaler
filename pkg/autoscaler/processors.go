@@ -363,7 +363,7 @@ func setUpProcessors(
 	prCache *provreqcache.QueuedProvisioningCache,
 	provreqProcessor pods.PodListProcessor,
 	resizableVmAutoprovisioningProvider *ekvms_providers.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
+	lookaheadBufferStrategyProvider *lookaheadbuffer_strategy.Provider,
 	reservationBlocksPuller *reservations.BlocksPuller,
 	instanceAvailabilityProvider instanceavailability.Provider,
 	resourcePolicyPuller placement.ResourcePolicyPuller,
@@ -680,7 +680,15 @@ func setUpProcessors(
 		enforceFakePodsLimitProcessor = podinjection.NewEnforceInjectedPodsLimitProcessor(options.PodInjectionLimit)
 	}
 	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
-	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(laPodProvider, lookaheadBufferStrategyProvider, lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion), systemPodsClassifier, ccLister, resizeCalculator, internalmetrics.Metrics)
+	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(
+		laPodProvider,
+		lookaheadBufferStrategyProvider,
+		lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion),
+		provider.MachineConfigProvider(),
+		systemPodsClassifier,
+		ccLister,
+		resizeCalculator,
+		internalmetrics.Metrics)
 
 	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {

@@ -38,8 +38,6 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
-
-	npc_crd "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
@@ -66,118 +64,31 @@ import (
 )
 
 func TestPodRequestsPerWorkloadID(t *testing.T) {
+	allFamilies := map[string]bool{
+		machinetypes.EK.Name():  true,
+		machinetypes.E4A.Name(): true,
+		machinetypes.E4.Name():  true,
+	}
+
 	testCases := []struct {
-		desc                    string
-		nodeInfos               []*framework.NodeInfo
-		ignoredTaints           []string
-		crds                    []crd.CRD
-		expectedResourcesPerWID map[string]apiv1.ResourceList
+		desc                         string
+		nodeInfos                    []*framework.NodeInfo
+		ignoredTaints                []string
+		crds                         []crd.CRD
+		machineFamiliesWithLAEnabled map[string]bool
+		expectedResourcesPerWID      map[string]map[string]apiv1.ResourceList
 	}{
 		{
-			desc:                    "No nodes",
-			nodeInfos:               []*framework.NodeInfo{},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{},
+			desc:                         "No nodes",
+			nodeInfos:                    []*framework.NodeInfo{},
+			machineFamiliesWithLAEnabled: allFamilies,
+			expectedResourcesPerWID:      map[string]map[string]apiv1.ResourceList{},
 		},
 		{
-			desc: "One default workload ID EK node",
+			desc: "Pods on non-resizable nodes are ignored",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
-				),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(3000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(3*size.GiB, resource.DecimalSI),
-				},
-			},
-		},
-		{
-			desc: "One default workload ID EK node with custom taint - skipped",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
-						Key:    "user-taint",
-						Value:  "true",
-						Effect: apiv1.TaintEffectNoSchedule,
-					}).Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
-				),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{},
-		},
-		{
-			desc: "One default workload ID EK node with ignored taint",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).WithTaint(apiv1.Taint{
-						Key:    "status-taint",
-						Value:  "true",
-						Effect: apiv1.TaintEffectNoSchedule,
-					}).Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-				),
-			},
-			ignoredTaints: []string{"status-taint"},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
-				},
-			},
-		},
-		{
-			desc: "One workload separated EK node",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB)),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"NoSchedule:workload-separation:yes": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
-				},
-			},
-		},
-		{
-			desc: "Multiple EK nodes",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-				),
-				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-1", 2000, 2000),
-					test.BuildTestPod("pod-1", 2000, 2*size.GiB),
-				),
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-2", 4000, 4000),
-					test.BuildTestPod("pod-1", 4000, 4*size.GiB),
-				),
-				framework.NewTestNodeInfo(ekNode8WithWorkloadSeparation("ek-node-1", 8000, 8000),
-					test.BuildTestPod("pod-1", 8000, 8*size.GiB),
-				),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(5000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(5*size.GiB, resource.DecimalSI),
-				},
-				"NoSchedule:workload-separation:yes": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(10000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(10*size.GiB, resource.DecimalSI),
-				},
-			},
-		},
-		{
-			desc: "Pods on non-EK nodes are ignored",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
+					ekvms_test.EkNode32("node-1", 1000, 1000),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 				),
 				framework.NewTestNodeInfo(
@@ -185,18 +96,21 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 				),
 				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-1", 1000, 1000),
+					node32WithWorkloadSeparation(machinetypes.EK.Name(), "node-3", 1000, 1000),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 				),
 			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
-				},
-				"NoSchedule:workload-separation:yes": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+			machineFamiliesWithLAEnabled: allFamilies,
+			expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+					},
+					"NoSchedule:workload-separation:yes": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+					},
 				},
 			},
 		},
@@ -204,238 +118,437 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			desc: "System pods are not considered",
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
+					ekvms_test.EkNode32("node-1", 1000, 1000),
 					lookaheadbuffer.BuildTestLookaheadPod("la-pod-1", 1000, 1*size.GiB),
 					test.BuildTestPod("system-pod-1", 1000, 1*size.GiB, func(p *apiv1.Pod) { p.Namespace = metav1.NamespaceSystem }),
 				),
 			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{},
+			machineFamiliesWithLAEnabled: allFamilies,
+			expectedResourcesPerWID:      map[string]map[string]apiv1.ResourceList{},
 		},
 		{
-			desc: "Autopilot compute class nodes",
+			desc: "Multiple nodes with different machine families",
 			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 2000, 2000)).WithTaint(apiv1.Taint{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "autopilot",
-					Effect: apiv1.TaintEffectNoSchedule,
-				}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
-					test.BuildTestPod("pod-1", 2000, 2*size.GiB),
-				),
-				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8("ek-node-2", 1000, 1000)).WithTaint(apiv1.Taint{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "autopilot-spot", // Pods on autopilot-spot Compute Class aren't eligible for lookahead.
-					Effect: apiv1.TaintEffectNoSchedule,
-				}).WithLabel(gkelabels.ComputeClassLabel, "autopilot-spot").Build(),
+				framework.NewTestNodeInfo(
+					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
 					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
 				),
+				framework.NewTestNodeInfo(
+					node32WithWorkloadSeparation(machinetypes.EK.Name(), "ek-node-2", 2000, 2000),
+					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+				),
+				framework.NewTestNodeInfo(
+					ekvms_test.E4aNode32("e4a-node-1", 1000, 1000),
+					test.BuildTestPod("pod-3", 1000, 1*size.GiB),
+				),
+				framework.NewTestNodeInfo(
+					ekvms_test.E4Node32("e4-node-1", 4000, 4000),
+					test.BuildTestPod("pod-4", 4000, 4*size.GiB),
+				),
 			},
-			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
-					})),
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot-spot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose")), rules.WithSpotRule(ptr.To(true))),
-						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
-					})),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"NoSchedule:cloud.google.com/compute-class:autopilot": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(2*size.GiB, resource.DecimalSI),
+			machineFamiliesWithLAEnabled: allFamilies,
+			expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+					},
+					"NoSchedule:workload-separation:yes": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(2*size.GiB, resource.DecimalSI),
+					},
+				},
+				machinetypes.E4A.Name(): {
+					"": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+					},
+				},
+				machinetypes.E4.Name(): {
+					"": {
+						apiv1.ResourceCPU:    *resource.NewMilliQuantity(4000, resource.DecimalSI),
+						apiv1.ResourceMemory: *resource.NewQuantity(4*size.GiB, resource.DecimalSI),
+					},
 				},
 			},
 		},
-		{
-			desc: "Can combine workload separation and CCC",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
-					WithTaint(apiv1.Taint{
+	}
+
+	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
+		testCases = append(testCases, []struct {
+			desc                         string
+			nodeInfos                    []*framework.NodeInfo
+			ignoredTaints                []string
+			crds                         []crd.CRD
+			machineFamiliesWithLAEnabled map[string]bool
+			expectedResourcesPerWID      map[string]map[string]apiv1.ResourceList
+		}{
+			{
+				desc: fmt.Sprintf("%s: One default workload ID node", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+						test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+					),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(3000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(3*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
+			},
+			{
+				desc: fmt.Sprintf("%s: One default workload ID node with custom taint - skipped", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+							Key:    "user-taint",
+							Value:  "true",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+						test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+					),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID:      map[string]map[string]apiv1.ResourceList{},
+			},
+			{
+				desc: fmt.Sprintf("%s: One default workload ID node with ignored taint", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 1000, 1000)).WithTaint(apiv1.Taint{
+							Key:    "status-taint",
+							Value:  "true",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+				},
+				ignoredTaints:                []string{"status-taint"},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
+			},
+			{
+				desc: fmt.Sprintf("%s: One workload separated node", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB)),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"NoSchedule:workload-separation:yes": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
+			},
+			{
+				desc: fmt.Sprintf("%s: Multiple nodes", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-1", 2000, 2000),
+						test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+					),
+					framework.NewTestNodeInfo(
+						node8(family, "node-2", 4000, 4000),
+						test.BuildTestPod("pod-1", 4000, 4*size.GiB),
+					),
+					framework.NewTestNodeInfo(
+						node8WithWorkloadSeparation(family, "node-1", 8000, 8000),
+						test.BuildTestPod("pod-1", 8000, 8*size.GiB),
+					),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(5000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(5*size.GiB, resource.DecimalSI),
+						},
+						"NoSchedule:workload-separation:yes": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(10000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(10*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
+			},
+			{
+				desc: fmt.Sprintf("%s: Autopilot compute class nodes", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 2000, 2000)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
-					}).
-					WithLabel(gkelabels.ComputeClassLabel, "autopilot").
-					WithTaint(apiv1.Taint{
-						Key:    "workload-separation",
-						Value:  "yes",
-						Effect: apiv1.TaintEffectNoSchedule,
-					}).
-					WithLabel("workload-separation", "yes").Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-				),
-			},
-			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
-					})),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"NoSchedule:cloud.google.com/compute-class:autopilot,NoSchedule:workload-separation:yes": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
-				},
-			},
-		},
-		{
-			desc: "autopilot managed node taint doesn't prevent lookahead",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-1", 1000, 1000)).
-					WithTaint(apiv1.Taint{
+					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 2000, 2*size.GiB),
+					),
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node8(family, "node-2", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
-						Value:  "autopilot",
+						Value:  "autopilot-spot", // Pods on autopilot-spot Compute Class aren't eligible for lookahead.
 						Effect: apiv1.TaintEffectNoSchedule,
-					}).
-					WithLabel(gkelabels.ComputeClassLabel, "autopilot").
-					WithTaint(apiv1.Taint{
-						Key:    "cloud.google.com/autopilot-managed-node",
-						Value:  "true",
-						Effect: apiv1.TaintEffectNoSchedule,
-					}).
-					WithLabel("cloud.google.com/autopilot-managed-node", "true").Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-				),
-			},
-			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
-						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
-					})),
-			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{
-				"NoSchedule:cloud.google.com/autopilot-managed-node:true,NoSchedule:cloud.google.com/compute-class:autopilot": {
-					apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
-					apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot-spot").Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+				},
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+					crd.NewTestCrd(
+						crd.WithName("autopilot-spot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose")), rules.WithSpotRule(ptr.To(true))),
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"NoSchedule:cloud.google.com/compute-class:autopilot": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(2*size.GiB, resource.DecimalSI),
+						},
+					},
 				},
 			},
-		},
-		{
-			desc: "spot EK node - skipped",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
-						WithLabel(gkelabels.SpotLabel, gkelabels.PreemptionValue).Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
-				),
+			{
+				desc: fmt.Sprintf("%s: Autopilot-arm compute class nodes", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 2000, 2000)).WithTaint(apiv1.Taint{
+						Key:    gkelabels.ComputeClassLabel,
+						Value:  "autopilot-arm",
+						Effect: apiv1.TaintEffectNoSchedule,
+					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot-arm").Build(),
+						test.BuildTestPod("pod-1", 2000, 2*size.GiB),
+					),
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node8(family, "node-2", 1000, 1000)).WithTaint(apiv1.Taint{
+						Key:    gkelabels.ComputeClassLabel,
+						Value:  "autopilot-arm-spot", // Pods on autopilot-spot Compute Class aren't eligible for lookahead.
+						Effect: apiv1.TaintEffectNoSchedule,
+					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot-arm-spot").Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+				},
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot-arm"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
+						})),
+					crd.NewTestCrd(
+						crd.WithName("autopilot-arm-spot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm")), rules.WithSpotRule(ptr.To(true))),
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
+						})),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"NoSchedule:cloud.google.com/compute-class:autopilot-arm": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(2000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(2*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
 			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{},
-		},
-		{
-			desc: "preemptible EK node - skipped",
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilder("ek-spot", 32, 128).
-						WithLabel(gkelabels.PreemptibleLabel, gkelabels.PreemptionValue).Build(),
-					test.BuildTestPod("pod-1", 1000, 1*size.GiB),
-					test.BuildTestPod("pod-2", 2000, 2*size.GiB),
-				),
+			{
+				desc: fmt.Sprintf("%s: Can combine workload separation and CCC", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 1000, 1000)).
+						WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).
+						WithLabel(gkelabels.ComputeClassLabel, "autopilot").
+						WithTaint(apiv1.Taint{
+							Key:    "workload-separation",
+							Value:  "yes",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).
+						WithLabel("workload-separation", "yes").Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+				},
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"NoSchedule:cloud.google.com/compute-class:autopilot,NoSchedule:workload-separation:yes": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
 			},
-			expectedResourcesPerWID: map[string]apiv1.ResourceList{},
-		},
+			{
+				desc: fmt.Sprintf("%s: autopilot managed node taint doesn't prevent lookahead", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(ekvms_test.NewNodeBuilderFromNode(node32(family, "node-1", 1000, 1000)).
+						WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).
+						WithLabel(gkelabels.ComputeClassLabel, "autopilot").
+						WithTaint(apiv1.Taint{
+							Key:    "cloud.google.com/autopilot-managed-node",
+							Value:  "true",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).
+						WithLabel("cloud.google.com/autopilot-managed-node", "true").Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+					),
+				},
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID: map[string]map[string]apiv1.ResourceList{
+					family: {
+						"NoSchedule:cloud.google.com/autopilot-managed-node:true,NoSchedule:cloud.google.com/compute-class:autopilot": {
+							apiv1.ResourceCPU:    *resource.NewMilliQuantity(1000, resource.DecimalSI),
+							apiv1.ResourceMemory: *resource.NewQuantity(1*size.GiB, resource.DecimalSI),
+						},
+					},
+				},
+			},
+			{
+				desc: fmt.Sprintf("%s: spot node - skipped", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "spot", 32000, 128*size.GiB)).
+							WithLabel(gkelabels.SpotLabel, gkelabels.PreemptionValue).Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+						test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+					),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID:      map[string]map[string]apiv1.ResourceList{},
+			},
+			{
+				desc: fmt.Sprintf("%s: preemptible node - skipped", family),
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "spot", 32000, 128*size.GiB)).
+							WithLabel(gkelabels.PreemptibleLabel, gkelabels.PreemptionValue).Build(),
+						test.BuildTestPod("pod-1", 1000, 1*size.GiB),
+						test.BuildTestPod("pod-2", 2000, 2*size.GiB),
+					),
+				},
+				machineFamiliesWithLAEnabled: map[string]bool{family: true},
+				expectedResourcesPerWID:      map[string]map[string]apiv1.ResourceList{},
+			},
+		}...)
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			cccLister := lister.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
-			p := NewLookaheadPodInjectionProcessor(nil, nil, &mockWorkloadSeparationLimiter{limit: 10}, systempods.NewClassifier([]string{"kube-system"}), cccLister, calculator_test.New(), nil)
+			mcp := machinetypes.NewMachineConfigProvider(nil)
+			p := NewLookaheadPodInjectionProcessor(nil, nil, &mockWorkloadSeparationLimiter{limit: 10}, mcp, systempods.NewClassifier([]string{"kube-system"}), cccLister, calculator_test.NewWithProvider(mcp), nil)
 			taintsConfig := newTaintsConfig(tc.ignoredTaints)
-			cxWorkloadRequest := p.podRequestsPerWorkloadID(tc.nodeInfos, &taintsConfig)
+			cxWorkloadRequest := p.podRequestsPerMachineFamilyPerWorkloadID(tc.nodeInfos, &taintsConfig, tc.machineFamiliesWithLAEnabled)
 			assert.Equal(t, tc.expectedResourcesPerWID, cxWorkloadRequest)
 		})
 	}
 }
 
-func TestHasElligibleComputeClass(t *testing.T) {
+func TestHasEligibleComputeClass(t *testing.T) {
 	tests := []struct {
-		name   string
-		labels map[string]string
-		taints []apiv1.Taint
-		crds   []crd.CRD
-		want   bool
+		name string
+		node *apiv1.Node
+		crds []crd.CRD
+		want bool
 	}{
 		{
-			name:   "no compute class",
-			labels: map[string]string{},
-			taints: []apiv1.Taint{},
-			crds:   []crd.CRD{},
-			want:   true,
+			name: "no compute class",
+			node: test.BuildTestNode("node-1", 1000, 1000),
+			crds: []crd.CRD{},
+			want: true,
 		},
 		{
-			name: "inelligible compute class - not autopilot managed",
-			labels: map[string]string{
-				gkelabels.ComputeClassLabel: "custom",
-			},
-			taints: []apiv1.Taint{
-				{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "custom",
-					Effect: apiv1.TaintEffectNoSchedule,
-				},
-			},
+			name: "ineligible compute class - not autopilot managed",
+			node: ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode("node-1", 1000, 1000)).
+				WithLabel(gkelabels.ComputeClassLabel, "custom").Build(),
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("custom"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithRules([]rules.Rule{
+				crd.NewTestCrd(
+					crd.WithName("custom"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithRules([]rules.Rule{
 						rules.NewRule(rules.WithMachineFamilyRule(ptr.To("ek"))),
 					})),
 			},
 			want: false,
 		},
 		{
-			name: "inelligible compute class - no rules",
-			labels: map[string]string{
-				gkelabels.ComputeClassLabel: "custom",
-			},
-			taints: []apiv1.Taint{
-				{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "custom",
-					Effect: apiv1.TaintEffectNoSchedule,
-				},
-			},
+			name: "ineligible compute class - no rules",
+			node: ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode("node-1", 1000, 1000)).
+				WithLabel(gkelabels.ComputeClassLabel, "custom").Build(),
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("custom"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{})),
+				crd.NewTestCrd(
+					crd.WithName("custom"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithAutopilotManaged(),
+					crd.WithRules([]rules.Rule{})),
 			},
 			want: false,
 		},
 		{
-			name: "inelligible compute class - lookahead not allowed for spot autopilot class",
-			labels: map[string]string{
-				gkelabels.ComputeClassLabel: "autopilot-spot",
-			},
-			taints: []apiv1.Taint{
-				{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "autopilot-spot",
-					Effect: apiv1.TaintEffectNoSchedule,
-				},
-			},
+			name: "ineligible compute class - lookahead not allowed for spot autopilot class",
+			node: ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode("node-1", 1000, 1000)).
+				WithLabel(gkelabels.ComputeClassLabel, "autopilot-spot").Build(),
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot-spot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
+				crd.NewTestCrd(
+					crd.WithName("autopilot-spot"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithAutopilotManaged(),
+					crd.WithRules([]rules.Rule{
 						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose")), rules.WithSpotRule(ptr.To(true))),
 						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
 					})),
@@ -443,23 +556,15 @@ func TestHasElligibleComputeClass(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "inelligible compute class - unsupported pod family",
-			labels: map[string]string{
-				gkelabels.ComputeClassLabel: "custom",
-			},
-			taints: []apiv1.Taint{
-				{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "custom",
-					Effect: apiv1.TaintEffectNoSchedule,
-				},
-			},
+			name: "ineligible compute class - unsupported pod family",
+			node: ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode("node-1", 1000, 1000)).
+				WithLabel(gkelabels.ComputeClassLabel, "custom").Build(),
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("custom"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
+				crd.NewTestCrd(
+					crd.WithName("custom"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithAutopilotManaged(),
+					crd.WithRules([]rules.Rule{
 						rules.NewRule(rules.WithPodFamilyRule(ptr.To("unsupported"))),
 					}),
 				),
@@ -467,23 +572,15 @@ func TestHasElligibleComputeClass(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "elligible compute class",
-			labels: map[string]string{
-				gkelabels.ComputeClassLabel: "autopilot",
-			},
-			taints: []apiv1.Taint{
-				{
-					Key:    gkelabels.ComputeClassLabel,
-					Value:  "autopilot",
-					Effect: apiv1.TaintEffectNoSchedule,
-				},
-			},
+			name: "eligible compute class",
+			node: ekvms_test.NewNodeBuilderFromNode(test.BuildTestNode("node-1", 1000, 1000)).
+				WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
+				crd.NewTestCrd(
+					crd.WithName("autopilot"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithAutopilotManaged(),
+					crd.WithRules([]rules.Rule{
 						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
 					}),
 				),
@@ -493,13 +590,9 @@ func TestHasElligibleComputeClass(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			node := ekvms_test.EkNode32("node-1", 1000, 1000)
-			node.ObjectMeta.Labels = tc.labels
-			node.Spec.Taints = tc.taints
 			lister := lister.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
-
-			if got := hasEligibleComputeClass(node, lister); got != tc.want {
-				t.Errorf("hasElligibleComputeClass() = %v, want %v", got, tc.want)
+			if got := hasEligibleComputeClass(tc.node, lister); got != tc.want {
+				t.Errorf("hasEligibleComputeClass() = %v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -784,9 +877,10 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				},
 			}
 
-			calculator := calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil))
-			p := NewLookaheadPodInjectionProcessor(&fakeLookaheadPodProvider{}, nil, &mockWorkloadSeparationLimiter{limit: 10}, nil, nil, calculator, nil)
-			got, err := p.createLookaheadPodsForWorkloadID(tt.workloadID, tt.requests, ctx)
+			mcp := machinetypes.NewMachineConfigProvider(nil)
+			calculator := calculator_test.NewWithProvider(mcp)
+			p := NewLookaheadPodInjectionProcessor(&fakeLookaheadPodProvider{}, nil, nil, mcp, nil, nil, calculator, nil)
+			got, err := p.createLookaheadPodsForWorkloadID(tt.workloadID, tt.requests, machinetypes.EK.Name(), ctx)
 			if tt.wantErr {
 				assert.Error(t, err)
 				return
@@ -825,7 +919,7 @@ func TestProcess(t *testing.T) {
 			},
 		},
 		{
-			desc:                   "Non-EK nodes",
+			desc:                   "Non-resizable nodes",
 			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
@@ -842,33 +936,16 @@ func TestProcess(t *testing.T) {
 			},
 		},
 		{
-			desc:                   "EKs in one workload ID - Not enough EK pod requests for lookahead pods",
+			desc:                   "Multiple machine families - EK in default workload ID and E4A with workload separation",
 			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					test.BuildTestNode("node-2", 2000, 2000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				test.BuildTestPod("pod-1", 100, 100),
-			},
-		},
-		{
-			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
+					node32(machinetypes.EK.Name(), "node-1", 1000, 1000),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
+					node32WithWorkloadSeparation(machinetypes.E4A.Name(), "node-2", 1000, 1000),
+					test.BuildTestPod("pod-2", 32000, 100)),
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
@@ -878,127 +955,55 @@ func TestProcess(t *testing.T) {
 			},
 		},
 		{
-			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID - only default chosen due to maxWorkloadSeparations limit",
+			desc:                   "Multiple machine families - EK, E4A, E4 with CCC, workload separation, and non-resizable nodes",
 			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 0,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-				test.BuildTestPod("pod-1", 100, 100),
-			},
-		},
-		{
-			desc:                   "EKs in three workload IDs - limited to default and 1 extra workload separation",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 1,
+			maxWorkloadSeparations: 10,
 			crds: []crd.CRD{
-				npc_crd.NewTestCrd(
-					npc_crd.WithName("autopilot"),
-					npc_crd.WithLabel(gkelabels.ComputeClassLabel),
-					npc_crd.WithAutopilotManaged(),
-					npc_crd.WithRules([]rules.Rule{
+				crd.NewTestCrd(
+					crd.WithName("autopilot"),
+					crd.WithLabel(gkelabels.ComputeClassLabel),
+					crd.WithAutopilotManaged(),
+					crd.WithRules([]rules.Rule{
 						rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
 					})),
 			},
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
+					node32(machinetypes.EK.Name(), "node-1", 1000, 1000),
 					test.BuildTestPod("pod-1", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
+					node32WithWorkloadSeparation(machinetypes.E4A.Name(), "node-2", 1000, 1000),
+					test.BuildTestPod("pod-2", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+					ekvms_test.NewNodeBuilderFromNode(node32(machinetypes.E4.Name(), "node-3", 1000, 1000)).WithTaint(apiv1.Taint{
 						Key:    gkelabels.ComputeClassLabel,
 						Value:  "autopilot",
 						Effect: apiv1.TaintEffectNoSchedule,
 					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
-					test.BuildTestPod("pod-1", 32000, 100)),
+					test.BuildTestPod("pod-3", 32000, 100)),
 				framework.NewTestNodeInfo(
-					ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32("ek-node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
-						Key:    gkelabels.ComputeClassLabel,
-						Value:  "autopilot",
-						Effect: apiv1.TaintEffectNoSchedule,
-					}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
-					test.BuildTestPod("pod-1", 32000, 100)),
+					test.BuildTestNode("node-4", 2000, 2000),
+					test.BuildTestPod("pod-4", 2000, 100)),
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
 				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(0)),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(1)),
-				test.BuildTestPod("pod-1", 100, 100),
-			},
-		},
-		{
-			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - Lookahead disabled",
-			launchStatus:           lookaheadbuffer_strategy.Disabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				test.BuildTestPod("pod-1", 100, 100),
-			},
-		},
-		{
-			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - Status Unspecified",
-			launchStatus:           lookaheadbuffer_strategy.Unspecified,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				test.BuildTestPod("pod-1", 100, 100),
-			},
-		},
-		{
-			desc:                   "EKs in two workload IDs - 32 EK CPUs per workload ID - DS with 2 containers each 200 mCPU 200 bytes",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-2", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-			},
-			daemonSets: []*appsv1.DaemonSet{
-				newDaemonSet("ds-1", 2, 200, 200, nil),
-			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 600, 600),
 				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000),
 				test.BuildTestPod("pod-1", 100, 100),
 			},
 		},
 		{
-			desc:                   "EKs in one workload ID - 32 EK CPUs per workload ID - DS with 0 containers",
+			desc:                   "Multiple machine families - not enough requests on one family",
 			launchStatus:           lookaheadbuffer_strategy.Enabled,
 			maxWorkloadSeparations: 10,
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
+					node32(machinetypes.EK.Name(), "node-1", 1000, 1000),
 					test.BuildTestPod("pod-1", 32000, 100)),
-			},
-			daemonSets: []*appsv1.DaemonSet{
-				newDaemonSet("ds-1", 0, 250, 200, nil),
+				framework.NewTestNodeInfo(
+					node8(machinetypes.E4A.Name(), "node-2", 1000, 1000),
+					test.BuildTestPod("pod-2", 8000, 100)),
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
@@ -1006,76 +1011,257 @@ func TestProcess(t *testing.T) {
 				test.BuildTestPod("pod-1", 100, 100),
 			},
 		},
-		{
-			desc:                   "EKs in one workload ID - 32 default EK CPUs - DS bigger than lookahead pod - no error",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
+	}
+
+	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
+		testCases = append(testCases, []struct {
+			desc                   string
+			launchStatus           lookaheadbuffer_strategy.Status
+			maxWorkloadSeparations int
+			crds                   []crd.CRD
+			nodeInfos              []*framework.NodeInfo
+			unschedulablePods      []*apiv1.Pod
+			daemonSets             []*appsv1.DaemonSet
+			fetchingDaemonSetsErr  error
+			expectedPods           []*apiv1.Pod
+			expectedErr            bool
+		}{
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - Not enough %s pod requests for lookahead pods", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node8(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						test.BuildTestNode("node-2", 2000, 2000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-			daemonSets: []*appsv1.DaemonSet{
-				newDaemonSet("ds-1", 1, 2000, 2000, nil),
+			{
+				desc:                   fmt.Sprintf("%ss in two workload IDs - 32 %s CPUs per workload ID", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				test.BuildTestPod("pod-1", 100, 100),
+			{
+				desc:                   fmt.Sprintf("%ss in two workload IDs - 32 %s CPUs per workload ID - only default chosen due to maxWorkloadSeparations limit", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 0,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-		},
-		{
-			desc:                   "EKs in one workload ID - 32 default EK CPUs - error during fetching daemonSets",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
+			{
+				desc:                   fmt.Sprintf("%ss in three workload IDs - limited to default and 1 extra workload separation", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 1,
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(1)),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-			fetchingDaemonSetsErr: errors.New("error fetching daemonSets"),
-			unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				test.BuildTestPod("pod-1", 100, 100),
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - 32 %s CPUs per workload ID - Lookahead disabled", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Disabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-		},
-		{
-			desc:                   "Mixed nodes - 64 default EK CPUs",
-			launchStatus:           lookaheadbuffer_strategy.Enabled,
-			maxWorkloadSeparations: 10,
-			nodeInfos: []*framework.NodeInfo{
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode32("ek-node-1", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-2", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-3", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-4", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					ekvms_test.EkNode8("ek-node-5", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					ekNode32WithWorkloadSeparation("ek-node-6", 1000, 1000),
-					test.BuildTestPod("pod-1", 32000, 100)),
-				framework.NewTestNodeInfo(
-					ekNode8WithWorkloadSeparation("ek-node-7", 1000, 1000),
-					test.BuildTestPod("pod-1", 8000, 100)),
-				framework.NewTestNodeInfo(
-					test.BuildTestNode("node-1", 2000, 2000),
-					test.BuildTestPod("pod-1", 2000, 100)),
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - 32 %s CPUs per workload ID - Status Unspecified", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Unspecified,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
-			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(0)),
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(1)),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
-				test.BuildTestPod("pod-1", 100, 100),
+			{
+				desc:                   fmt.Sprintf("%ss in two workload IDs - 32 %s CPUs per workload ID - DS with 2 containers each 200 mCPU 200 bytes", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				daemonSets: []*appsv1.DaemonSet{
+					newDaemonSet("ds-1", 2, 200, 200, nil),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 600, 600),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
 			},
-		},
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - 32 %s CPUs per workload ID - DS with 0 containers", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				daemonSets: []*appsv1.DaemonSet{
+					newDaemonSet("ds-1", 0, 250, 200, nil),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - 32 default %s CPUs - DS bigger than lookahead pod - no error", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				daemonSets: []*appsv1.DaemonSet{
+					newDaemonSet("ds-1", 1, 2000, 2000, nil),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss in one workload ID - 32 default %s CPUs - error during fetching daemonSets", family, family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				fetchingDaemonSetsErr: errors.New("error fetching daemonSets"),
+				unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss: Mixed nodes - 64 default CPUs", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node8(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						node8(family, "node-3", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						node8(family, "node-4", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						node8(family, "node-5", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-6", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node8WithWorkloadSeparation(family, "node-7", 1000, 1000),
+						test.BuildTestPod("pod-1", 8000, 100)),
+					framework.NewTestNodeInfo(
+						test.BuildTestNode("node-8", 2000, 2000),
+						test.BuildTestPod("pod-1", 2000, 100)),
+				},
+				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(1)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+		}...)
 	}
 
 	for _, tc := range testCases {
@@ -1102,19 +1288,21 @@ func TestProcess(t *testing.T) {
 
 			laPodProvider := fakeLookaheadPodProvider{}
 			strategyProvider := &mockStrategyProvider{}
-			strategyProvider.On("Strategy").Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
+			strategyProvider.On("Strategy", mock.Anything).Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
 
 			metrics := &mockMetrics{}
 			metrics.On("UpdateLookaheadPodsCount", mock.Anything).Once()
 
 			cccLister := lister.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
+			mcp := machinetypes.NewMachineConfigProvider(nil)
 			p := NewLookaheadPodInjectionProcessor(
 				&laPodProvider,
 				strategyProvider,
 				&mockWorkloadSeparationLimiter{limit: tc.maxWorkloadSeparations},
+				mcp,
 				systempods.NewClassifier([]string{"kube-system"}),
 				cccLister,
-				calculator_test.NewWithProvider(machinetypes.NewMachineConfigProvider(nil)),
+				calculator_test.NewWithProvider(mcp),
 				metrics)
 
 			actualPods, actualErr := p.Process(context.TODO(), ctx, tc.unschedulablePods)
@@ -1159,20 +1347,22 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
 			strategyProvider := &mockStrategyProvider{}
-			strategyProvider.On("Strategy").Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
+			strategyProvider.On("Strategy", mock.Anything).Return(lookaheadbuffer_strategy.LookaheadPodStrategy{Status: tc.launchStatus}, nil)
 
 			metrics := &mockMetrics{}
 			// Expect nil for empty map from UpdateLookaheadPodsCount
 			metrics.On("UpdateLookaheadPodsCount", map[size.Allocatable]int{}).Once()
 
+			mcp := machinetypes.NewMachineConfigProvider(nil)
 			mockCalc := &mockCalculator{
-				Calculator:               calculator_test.New(),
+				Calculator:               calculator_test.NewWithProvider(mcp),
 				getMaxResizableVmSizeErr: tc.calculatorErr,
 			}
 			p := NewLookaheadPodInjectionProcessor(
 				nil,
 				strategyProvider,
 				&mockWorkloadSeparationLimiter{limit: 10},
+				mcp,
 				nil,
 				nil,
 				mockCalc,
@@ -1420,8 +1610,11 @@ func TestLimitMaxWorkloadSeparations(t *testing.T) {
 			p := &LookaheadPodInjectionProcessor{
 				limiter: &mockWorkloadSeparationLimiter{limit: tt.maxWorkloadSeparations},
 			}
-			got := p.limitMaxWorkloadSeparations(tt.requests)
-			assert.Equal(t, tt.want, got)
+			requests := map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): tt.requests,
+			}
+			got := p.limitMaxWorkloadSeparations(requests)
+			assert.Equal(t, tt.want, got[machinetypes.EK.Name()])
 		})
 	}
 }
@@ -1429,21 +1622,47 @@ func TestLimitMaxWorkloadSeparations(t *testing.T) {
 type fakeLookaheadPodProvider struct{}
 
 // GetLookaheadPods returns lookahead pods number equal to floor(cpus/32).
-func (s *fakeLookaheadPodProvider) GetLookaheadPods(cpus int, workloadID string) []*apiv1.Pod {
+func (s *fakeLookaheadPodProvider) GetLookaheadPods(cpus int, workloadID, machineFamily string) []*apiv1.Pod {
 	laNum := cpus / 32
 	return lookaheadbuffer.GenerateLookaheadPods(laNum, *resource.NewMilliQuantity(1000, resource.DecimalSI), *resource.NewQuantity(1000, resource.BinarySI), workloadID)
 }
 
-func ekNode32WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode32(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+func node32(family, name string, milliCpu, bytes int64) *apiv1.Node {
+	switch family {
+	case machinetypes.EK.Name():
+		return ekvms_test.EkNode32(name, milliCpu, bytes)
+	case machinetypes.E4A.Name():
+		return ekvms_test.E4aNode32(name, milliCpu, bytes)
+	case machinetypes.E4.Name():
+		return ekvms_test.E4Node32(name, milliCpu, bytes)
+	default:
+		panic("unknown machine family: " + family)
+	}
+}
+
+func node8(family, name string, milliCpu, bytes int64) *apiv1.Node {
+	switch family {
+	case machinetypes.EK.Name():
+		return ekvms_test.EkNode8(name, milliCpu, bytes)
+	case machinetypes.E4A.Name():
+		return ekvms_test.E4aNode8(name, milliCpu, bytes)
+	case machinetypes.E4.Name():
+		return ekvms_test.E4Node8(name, milliCpu, bytes)
+	default:
+		panic("unknown machine family: " + family)
+	}
+}
+
+func node32WithWorkloadSeparation(family, name string, milliCpu, bytes int64) *apiv1.Node {
+	return ekvms_test.NewNodeBuilderFromNode(node32(family, name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,
 	}).WithLabel("workload-separation", "yes").Build()
 }
 
-func ekNode8WithWorkloadSeparation(name string, milliCpu, bytes int64) *apiv1.Node {
-	return ekvms_test.NewNodeBuilderFromNode(ekvms_test.EkNode8(name, milliCpu, bytes)).WithTaint(apiv1.Taint{
+func node8WithWorkloadSeparation(family, name string, milliCpu, bytes int64) *apiv1.Node {
+	return ekvms_test.NewNodeBuilderFromNode(node8(family, name, milliCpu, bytes)).WithTaint(apiv1.Taint{
 		Key:    "workload-separation",
 		Value:  "yes",
 		Effect: apiv1.TaintEffectNoSchedule,
@@ -1527,17 +1746,13 @@ func (m *mockDSLister) GetHistoryDaemonSets(history *appsv1.ControllerRevision) 
 	return args.Get(0).([]*appsv1.DaemonSet), args.Error(1)
 }
 
-// mockStrategyProvider is a mock implementation of StrategyProvider.
+// mockStrategyProvider is a mock implementation of strategyProvider.
 type mockStrategyProvider struct {
 	mock.Mock
 }
 
-func (m *mockStrategyProvider) RefreshStrategy() {}
-
-func (m *mockStrategyProvider) SetEkResizingEnabled(bool) {}
-
-func (m *mockStrategyProvider) Strategy() (lookaheadbuffer_strategy.LookaheadPodStrategy, error) {
-	args := m.Called()
+func (m *mockStrategyProvider) Strategy(machineFamily string) (lookaheadbuffer_strategy.LookaheadPodStrategy, error) {
+	args := m.Called(machineFamily)
 	return args.Get(0).(lookaheadbuffer_strategy.LookaheadPodStrategy), args.Error(1)
 }
 
@@ -1554,8 +1769,11 @@ type mockCalculator struct {
 	getMaxResizableVmSizeErr error
 }
 
-func (m *mockCalculator) GetMaxResizableVmSizeByMachineType(string) (size.VmSize, error) {
-	return size.VmSize{}, m.getMaxResizableVmSizeErr
+func (m *mockCalculator) GetMaxResizableVmSizeByMachineType(machineType string) (size.VmSize, error) {
+	if m.getMaxResizableVmSizeErr != nil {
+		return size.VmSize{}, m.getMaxResizableVmSizeErr
+	}
+	return m.Calculator.GetMaxResizableVmSizeByMachineType(machineType)
 }
 
 type mockSnapshot struct {

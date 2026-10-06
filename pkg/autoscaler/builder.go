@@ -47,7 +47,7 @@ import (
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/builder"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
@@ -595,14 +595,28 @@ func (b *Builder) Build(
 	clusterLocationsObserverImpl := &delegatingClusterLocationsObserver{}
 	var clusterLocationsObserver gke.ClusterLocationsObserver = clusterLocationsObserverImpl
 
-	// We need to trim single quotes from ekLookaheadPodStrategy since it's a single-line JSON string
-	// and we wrap it in single quotes for CA manifest to treat it as a string.
-	flagConfig, err := lookaheadbuffer_strategy.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
+	manifestFlagStrategies := map[string]string{
+		machinetypes.EK.Name():  autoscalingOptions.EkLookaheadPodStrategy,
+		machinetypes.E4A.Name(): autoscalingOptions.E4aLookaheadPodStrategy,
+		machinetypes.E4.Name():  autoscalingOptions.E4LookaheadPodStrategy,
+	}
+	experimentFlags := map[string]string{
+		machinetypes.EK.Name():  experiments.EkLookaheadPodsV1Flag,
+		machinetypes.E4A.Name(): experiments.E4aLookaheadPodsV1Flag,
+		machinetypes.E4.Name():  experiments.E4LookaheadPodsV1Flag,
+	}
+
+	lookaheadBufferStrategyProvider, err := lookaheadbuffer_strategy.NewProvider(
+		experimentsManager,
+		manifestFlagStrategies,
+		experimentFlags,
+		internalmetrics.Metrics,
+		caVersion,
+	)
 	if err != nil {
-		klog.Errorf("Cannot parse lookahead pod strategy, error: %v", err)
+		klog.Errorf("Cannot create LookaheadBufferStrategyProvider, error: %v", err)
 		return nil, nil, err
 	}
-	lookaheadBufferStrategyProvider := lookaheadbuffer_strategy.NewProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
 
 	var provreqProcessor pods.PodListProcessor

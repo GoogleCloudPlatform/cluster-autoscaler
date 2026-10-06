@@ -58,6 +58,13 @@ func E4aNode8(name string, milliCpu, bytes int64) *v1.Node {
 	return b.WithStandard8Capacity().WithSupportedMachineType("e4a-standard-8").WithMachineFamily("e4a").Build()
 }
 
+// E4Node8 creates an E4 node with specified allocatable, capacity
+// and instance label set to standard-8.
+func E4Node8(name string, milliCpu, bytes int64) *v1.Node {
+	b := NodeBuilder{node: test.BuildTestNode(name, milliCpu, bytes)}
+	return b.WithStandard8Capacity().WithSupportedMachineType("e4-standard-8").WithMachineFamily("e4").Build()
+}
+
 // NodeBuilder builds nodes for test purposes.
 type NodeBuilder struct {
 	node *v1.Node

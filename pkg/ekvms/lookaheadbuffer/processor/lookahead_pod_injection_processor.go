@@ -30,7 +30,9 @@ import (
 	quota "k8s.io/apiserver/pkg/quota/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -47,9 +49,7 @@ import (
 )
 
 const (
-	// BiggestMachineTypeForEkvm defines the biggest machine type for EKVMs.
-	BiggestMachineTypeForEkvm = "ek-standard-32"
-	sampleNodeName            = "ca-sample-default-biggest-ek"
+	sampleNodeName = "ca-sample-default-biggest-node"
 
 	milliCpuMetricIncrement  = 1000
 	memoryKiBMetricIncrement = 4 * giBToKiB
@@ -57,12 +57,22 @@ const (
 	giBToKiB = size.GiB / size.KiB
 )
 
+var biggestMachineTypeForMachineFamily = map[string]string{
+	machinetypes.EK.Name():  "ek-standard-32",
+	machinetypes.E4A.Name(): "e4a-standard-32",
+	machinetypes.E4.Name():  "e4-standard-32",
+}
+
 type limiter interface {
 	Limit() int
 }
 
 type metrics interface {
 	UpdateLookaheadPodsCount(laPodsCount map[size.Allocatable]int)
+}
+
+type strategyProvider interface {
+	Strategy(machineFamily string) (lookaheadbuffer_strategy.LookaheadPodStrategy, error)
 }
 
 type workloadIDRequestsPair struct {
@@ -73,7 +83,8 @@ type workloadIDRequestsPair struct {
 // LookaheadPodInjectionProcessor injects lookahead pods to unschedulable pods.
 type LookaheadPodInjectionProcessor struct {
 	laPodProvider        lookaheadbuffer.PodProvider
-	strategyProvider     lookaheadbuffer_strategy.Provider
+	strategyProvider     strategyProvider
+	mcp                  *machinetypes.MachineConfigProvider
 	limiter              limiter
 	systemPodsClassifier systempods.Classifier
 	cccLister            lister.Lister
@@ -81,40 +92,52 @@ type LookaheadPodInjectionProcessor struct {
 	// We use this node to simulate which daemonSets can be scheduled on this node (e.g. match nodeSelector and taints criteria).
 	// It won't be perfect (in fact it is impossible to make it perfect), but it doesn't need to be perfect since it is an optimization.
 	// Since the node creation is idempotent, it is only ran once at the beginning and cached.
-	sampleNode *apiv1.Node
+	sampleNodesPerMachineFamily map[string]*apiv1.Node
 }
 
 // NewLookaheadPodInjectionProcessor return an instance of LookaheadPodInjectionProcessor.
-func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider lookaheadbuffer_strategy.Provider, limiter limiter, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics metrics) *LookaheadPodInjectionProcessor {
-	sampleNode, err := getSampleDefaultBiggestEkNode(calc)
-	if err != nil {
-		klog.Errorf("Failed to get sample node in LookaheadPodInjectionProcessor pod list processor: %v", err)
+func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider strategyProvider, limiter limiter, mcp *machinetypes.MachineConfigProvider, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics metrics) *LookaheadPodInjectionProcessor {
+	sampleNodesPerMachineFamily := map[string]*apiv1.Node{}
+	for _, family := range mcp.ResizableFamilyNames() {
+		sampleNode, err := getSampleDefaultBiggestNode(calc, family)
+		if err != nil {
+			klog.Errorf("Failed to get sample node in LookaheadPodInjectionProcessor pod list processor: %v", err)
+			continue
+		}
+		sampleNodesPerMachineFamily[family] = sampleNode
 	}
 
 	return &LookaheadPodInjectionProcessor{
-		laPodProvider:        laPodProvider,
-		strategyProvider:     strategyProvider,
-		limiter:              limiter,
-		systemPodsClassifier: systemPodsClassifier,
-		cccLister:            cccLister,
-		metrics:              metrics,
-		sampleNode:           sampleNode,
+		laPodProvider:               laPodProvider,
+		strategyProvider:            strategyProvider,
+		mcp:                         mcp,
+		limiter:                     limiter,
+		systemPodsClassifier:        systemPodsClassifier,
+		cccLister:                   cccLister,
+		metrics:                     metrics,
+		sampleNodesPerMachineFamily: sampleNodesPerMachineFamily,
 	}
 }
 
 // Process updates unschedulablePods by injecting lookahead pods.
 func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
-	// Return early when not launched to avoid leaking any errors.
-	if status := p.launchStatus(); status != lookaheadbuffer_strategy.Enabled {
-		klog.V(4).Infof("Skipping lookahead buffer. Status: %q", status)
-		// We still need to call update metric to clear it since it is gauge metric, otherwise disabling LA will keep the metric value to the last updated value.
+	machineFamiliesWithLAEnabled := map[string]bool{}
+	for _, family := range p.mcp.ResizableFamilyNames() {
+		status := p.launchStatus(family)
+		if status != lookaheadbuffer_strategy.Enabled {
+			klog.V(4).Infof("Skipping lookahead buffer for %s machine family. Status: %q", family, status)
+			continue
+		}
+		machineFamiliesWithLAEnabled[family] = true
+
+		if p.sampleNodesPerMachineFamily[family] == nil {
+			p.emitLookaheadPodsCountMetric(nil)
+			return unschedulablePods, errors.New("sample node is nil in LookaheadPodInjectionProcessor pod list processor, it should be initialized correctly during the initialization of the processor")
+		}
+	}
+	if len(machineFamiliesWithLAEnabled) == 0 {
 		p.emitLookaheadPodsCountMetric(nil)
 		return unschedulablePods, nil
-	}
-
-	if p.sampleNode == nil {
-		p.emitLookaheadPodsCountMetric(nil)
-		return unschedulablePods, errors.New("sample node is nil in LookaheadPodInjectionProcessor pod list processor, it should be initialized correctly during the initialization of the processor")
 	}
 
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
@@ -124,7 +147,7 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 	}
 
 	taintConfig := taintutils.NewTaintConfig(autoscalingCtx.AutoscalingOptions)
-	requests := p.podRequestsPerWorkloadID(nodeInfos, &taintConfig)
+	requests := p.podRequestsPerMachineFamilyPerWorkloadID(nodeInfos, &taintConfig, machineFamiliesWithLAEnabled)
 	topRequests := p.limitMaxWorkloadSeparations(requests)
 	lookaheadPods := p.createLookaheadPods(autoscalingCtx, topRequests)
 
@@ -137,8 +160,8 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 	return slices.Concat(lookaheadPods, unschedulablePods), nil
 }
 
-func (p *LookaheadPodInjectionProcessor) launchStatus() lookaheadbuffer_strategy.Status {
-	strategy, err := p.strategyProvider.Strategy()
+func (p *LookaheadPodInjectionProcessor) launchStatus(machineFamily string) lookaheadbuffer_strategy.Status {
+	strategy, err := p.strategyProvider.Strategy(machineFamily)
 	if err != nil {
 		klog.Errorf("Error while fetching lookahead buffer strategy: %v", err)
 		return lookaheadbuffer_strategy.Unspecified
@@ -146,64 +169,76 @@ func (p *LookaheadPodInjectionProcessor) launchStatus() lookaheadbuffer_strategy
 	return strategy.Status
 }
 
-func (p *LookaheadPodInjectionProcessor) podRequestsPerWorkloadID(nodeInfos []*framework.NodeInfo, taintConfig *taintutils.TaintConfig) map[string]apiv1.ResourceList {
-	requests := map[string]apiv1.ResourceList{}
+func (p *LookaheadPodInjectionProcessor) podRequestsPerMachineFamilyPerWorkloadID(nodeInfos []*framework.NodeInfo, taintConfig *taintutils.TaintConfig, machineFamiliesWithLAEnabled map[string]bool) map[string]map[string]apiv1.ResourceList {
+	requests := map[string]map[string]apiv1.ResourceList{}
 	for _, ni := range nodeInfos {
-		if !isNodeEligibleForLookahead(ni, p, taintConfig) {
+		machineFamily, err := utils.GetMachineFamilyName(ni.Node())
+		if err != nil || !machineFamiliesWithLAEnabled[machineFamily] {
+			continue
+		}
+
+		if !p.isNodeEligibleForLookahead(ni.Node(), taintConfig) {
 			continue
 		}
 		podRequests := sumNonSystemPodRequests(ni, p.systemPodsClassifier)
 		if len(podRequests) > 0 {
 			id := podrequirements.ExtractWorkloadID(ni.Node())
-			requests[id] = quota.Add(requests[id], podRequests)
+			if requests[machineFamily] == nil {
+				requests[machineFamily] = map[string]apiv1.ResourceList{}
+			}
+			requests[machineFamily][id] = quota.Add(requests[machineFamily][id], podRequests)
 		}
 	}
 	return requests
 }
 
-func (p *LookaheadPodInjectionProcessor) limitMaxWorkloadSeparations(requests map[string]apiv1.ResourceList) map[string]apiv1.ResourceList {
+func (p *LookaheadPodInjectionProcessor) limitMaxWorkloadSeparations(requestsPerMachineFamily map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList {
 	// Default workload ID should always have lookahead enabled.
 	// This is in case default workload ID isn't in the top `maxWorkloadSeparations` by pod requests.
-	defaultWID, defaultExists := requests[""]
-	delete(requests, "")
+	limitedRequests := map[string]map[string]apiv1.ResourceList{}
+	for machineFamily, requests := range requestsPerMachineFamily {
+		defaultWID, defaultExists := requests[""]
+		delete(requests, "")
 
-	// TODO(b/421106616): Set of workload IDs with lookahead is recomputed every loop. A cluster
-	// with more workload IDs than `maxWorkloadSeparations` might have some groups moving between having lookahead and not having it.
-	// This could lead to extra node churn. This is an edge-case and probably not worth handling right now.
-	requests = selectLargestRequests(requests, p.limiter.Limit())
-
-	if defaultExists {
-		// Add default workload ID back, if it existed in the first place.
-		requests[""] = defaultWID
+		// TODO(b/421106616): Set of workload IDs with lookahead is recomputed every loop. A cluster
+		// with more workload IDs than `maxWorkloadSeparations` might have some groups moving between having lookahead and not having it.
+		// This could lead to extra node churn. This is an edge-case and probably not worth handling right now.
+		limitedRequests[machineFamily] = selectLargestRequests(requests, p.limiter.Limit())
+		if defaultExists {
+			// Add default workload ID back, if it existed in the first place.
+			limitedRequests[machineFamily][""] = defaultWID
+		}
 	}
-	return requests
+	return limitedRequests
 }
 
-func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *ca_context.AutoscalingContext, requestsPerWorkloadID map[string]apiv1.ResourceList) []*apiv1.Pod {
+func (p *LookaheadPodInjectionProcessor) createLookaheadPods(ctx *ca_context.AutoscalingContext, requestsPerMachineFamilyPerWorkloadID map[string]map[string]apiv1.ResourceList) []*apiv1.Pod {
 	lookaheadPods := []*apiv1.Pod{}
-	for id, requests := range requestsPerWorkloadID {
-		pods, err := p.createLookaheadPodsForWorkloadID(id, requests, ctx)
-		if err != nil {
-			klog.Warningf("Couldn't create lookahead pods for workload ID %q: %v", id, err)
-			continue
-		}
+	for family, requestsPerWorkloadID := range requestsPerMachineFamilyPerWorkloadID {
+		for id, requests := range requestsPerWorkloadID {
+			pods, err := p.createLookaheadPodsForWorkloadID(id, requests, family, ctx)
+			if err != nil {
+				klog.Warningf("Couldn't create lookahead pods for workload ID %q and machine family %q: %v", id, family, err)
+				continue
+			}
 
-		logLookaheadPods(pods, id)
-		lookaheadPods = append(lookaheadPods, pods...)
+			logLookaheadPods(pods, id, family)
+			lookaheadPods = append(lookaheadPods, pods...)
+		}
 	}
 	return lookaheadPods
 }
 
 // createLookaheadPodsForWorkloadID creates lookahead pods for single workload ID.
-func (p *LookaheadPodInjectionProcessor) createLookaheadPodsForWorkloadID(workloadID string, requests apiv1.ResourceList, ctx *ca_context.AutoscalingContext) ([]*apiv1.Pod, error) {
-	pods := p.laPodProvider.GetLookaheadPods(int(requests.Cpu().Value()), workloadID)
-	pods, err := p.subtractDaemonSet(ctx, pods, workloadID)
+func (p *LookaheadPodInjectionProcessor) createLookaheadPodsForWorkloadID(workloadID string, requests apiv1.ResourceList, machineFamily string, ctx *ca_context.AutoscalingContext) ([]*apiv1.Pod, error) {
+	pods := p.laPodProvider.GetLookaheadPods(int(requests.Cpu().Value()), workloadID, machineFamily)
+	pods, err := p.subtractDaemonSet(ctx, pods, workloadID, machineFamily)
 	return pods, err
 }
 
 // subtractDaemonSet subtracts DaemonSet resource usage from lookahead pods to avoid overprovisioning and avoid having unschedulable lookahead pod indefinitely.
-func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *ca_context.AutoscalingContext, pods []*apiv1.Pod, workloadID string) ([]*apiv1.Pod, error) {
-	dsSize, err := p.getTargetDaemonSetSize(ctx, podrequirements.WorkloadIDToTolerations(workloadID))
+func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *ca_context.AutoscalingContext, pods []*apiv1.Pod, workloadID, machineFamily string) ([]*apiv1.Pod, error) {
+	dsSize, err := p.getTargetDaemonSetSize(ctx, podrequirements.WorkloadIDToTolerations(workloadID), machineFamily)
 	if err != nil {
 		return nil, err
 	}
@@ -224,11 +259,15 @@ func (p *LookaheadPodInjectionProcessor) subtractDaemonSet(ctx *ca_context.Autos
 	return newPods, nil
 }
 
-// getTargetDaemonSetSize estimates the aggregate resource requests of DaemonSets schedulable on a default, biggest EK node.
-func (p *LookaheadPodInjectionProcessor) getTargetDaemonSetSize(ctx *ca_context.AutoscalingContext, tolerations []apiv1.Toleration) (apiv1.ResourceList, error) {
+// getTargetDaemonSetSize estimates the aggregate resource requests of DaemonSets schedulable on a default, biggest node.
+func (p *LookaheadPodInjectionProcessor) getTargetDaemonSetSize(ctx *ca_context.AutoscalingContext, tolerations []apiv1.Toleration, machineFamily string) (apiv1.ResourceList, error) {
 	logger := klog.FromContext(context.Background())
 	requests := apiv1.ResourceList{}
-	node := updateNodeWithWorkloadID(p.sampleNode.DeepCopy(), tolerations)
+	sampleNode := p.sampleNodesPerMachineFamily[machineFamily]
+	if sampleNode == nil {
+		return nil, fmt.Errorf("sample node for machine family %s is nil", machineFamily)
+	}
+	node := updateNodeWithWorkloadID(sampleNode.DeepCopy(), tolerations)
 	daemonSets, err := ctx.ListerRegistry.DaemonSetLister().List(apilabels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list daemon sets: %v", err)
@@ -260,17 +299,17 @@ func (p *LookaheadPodInjectionProcessor) emitLookaheadPodsCountMetric(pods []*ap
 }
 
 // logLookaheadPods logs important information about lookahead pods.
-func logLookaheadPods(pods []*apiv1.Pod, workloadID string) {
+func logLookaheadPods(pods []*apiv1.Pod, workloadID string, machineFamily string) {
 	var podsLogs []string
 	for _, pod := range pods {
 		requests := utils.PodRequestsAsSize(pod)
 		podsLogs = append(podsLogs, fmt.Sprintf("(pod name: %q, pod requests: %v)", pod.Name, requests))
 	}
-	klog.V(4).Infof("Injected %d lookahead pods for workload ID %q: %s", len(pods), workloadID, strings.Join(podsLogs, ", "))
+	klog.V(4).Infof("Injected %d lookahead pods for workload ID %q and machine family %q: %s", len(pods), workloadID, machineFamily, strings.Join(podsLogs, ", "))
 }
 
-func getSampleDefaultBiggestEkNode(calc calculator.Calculator) (*apiv1.Node, error) {
-	vmSize, err := calc.GetMaxResizableVmSizeByMachineType(BiggestMachineTypeForEkvm)
+func getSampleDefaultBiggestNode(calc calculator.Calculator, machineFamily string) (*apiv1.Node, error) {
+	vmSize, err := calc.GetMaxResizableVmSizeByMachineType(biggestMachineTypeForMachineFamily[machineFamily])
 	if err != nil {
 		return nil, err
 	}
@@ -279,8 +318,9 @@ func getSampleDefaultBiggestEkNode(calc calculator.Calculator) (*apiv1.Node, err
 			Name:     sampleNodeName,
 			SelfLink: fmt.Sprintf("/api/v1/nodes/%s", sampleNodeName),
 			Labels: map[string]string{
-				apiv1.LabelInstanceTypeStable:    BiggestMachineTypeForEkvm,
-				gkelabels.MachineFamilyLabel:     "ek",
+				apiv1.LabelInstanceTypeStable: biggestMachineTypeForMachineFamily[machineFamily],
+				gkelabels.MachineFamilyLabel:  machineFamily,
+				// TODO(b/510661032): Specify gce.SystemArchitecture for E4A machine family
 				apiv1.LabelArchStable:            string(gce.DefaultArch),
 				apiv1.LabelOSStable:              string(gce.OperatingSystemDefault),
 				gkelabels.GkeOsDistributionLabel: string(gce.OperatingSystemDistributionDefault),
@@ -329,24 +369,24 @@ func sumNonSystemPodRequests(nodeInfo *framework.NodeInfo, classifier systempods
 }
 
 // isNodeEligibleForLookahead checks if pods running on this node should be included in the calculation for lookahead buffer.
-func isNodeEligibleForLookahead(ni *framework.NodeInfo, p *LookaheadPodInjectionProcessor, taintConfig *taintutils.TaintConfig) bool {
-	isEk, err := utils.IsEkMachine(ni.Node())
-	if err != nil || !isEk {
+func (p *LookaheadPodInjectionProcessor) isNodeEligibleForLookahead(n *apiv1.Node, taintConfig *taintutils.TaintConfig) bool {
+	isResizable, err := utils.IsResizableNode(n, p.mcp)
+	if err != nil || !isResizable {
 		return false
 	}
 
-	if _, usesCC := ni.Node().Labels[gkelabels.ComputeClassLabel]; usesCC && !hasEligibleComputeClass(ni.Node(), p.cccLister) {
+	if _, usesCC := n.Labels[gkelabels.ComputeClassLabel]; usesCC && !hasEligibleComputeClass(n, p.cccLister) {
 		return false
 	}
 
-	// Lookahead buffer is only supported on on-demand EKs.
+	// Lookahead buffer is only supported on on-demand nodes.
 	// NAP creates a workload separation for spot VMs without compute class,
 	// which would pass hasSupportedTaints check
-	if utils.IsPreemptible(ni.Node()) {
+	if utils.IsPreemptible(n) {
 		return false
 	}
 
-	if !hasSupportedTaints(ni.Node(), taintConfig) {
+	if !hasSupportedTaints(n, taintConfig) {
 		return false
 	}
 	return true
@@ -355,9 +395,11 @@ func isNodeEligibleForLookahead(ni *framework.NodeInfo, p *LookaheadPodInjection
 // hasEligibleComputeClass checks if the compute class associated with this node
 // supports lookahead buffer. No compute class results in `true`.
 //
-// Currently, EKs are only consumable through two predefined compute classes:
-// `autopilot` and `autopilot-spot`. Since lookahead buffer is a latency optimization,
-// we decided to only support lookahead on pod-billed compute classes where on-demand EKs are the highest priority.
+// Currently, resizable VM nodes are only consumable through following compute classes:
+// `autopilot`, `autopilot-spot`, `autopilot-arm`, `autopilot-arm-spot`.
+// Since lookahead buffer is a latency optimization,
+// we decided to only support lookahead on pod-billed compute classes where on-demand
+// resizable VM nodes are the highest priority.
 func hasEligibleComputeClass(node *apiv1.Node, lister lister.Lister) bool {
 	crd, _, err := lister.NodeCrd(node)
 	if err != nil {
@@ -374,11 +416,11 @@ func hasEligibleComputeClass(node *apiv1.Node, lister lister.Lister) bool {
 		return false
 	}
 	/*
-		We only support lookahead if the highest priority is a non-spot EK node.
+		We only support lookahead if the highest priority is a non-spot resizable node.
 		* It makes little sense to support lookahead for any but the highest priority.
 		* Spot VMs don't warrant the same latency requirements.
 	*/
-	if topRule := crd.Rules()[0]; topRule.PodFamilyName() != "general-purpose" || topRule.Spot() {
+	if topRule := crd.Rules()[0]; !rules.IsPodFamily(topRule.PodFamilyName()) || topRule.Spot() {
 		return false
 	}
 	return true
