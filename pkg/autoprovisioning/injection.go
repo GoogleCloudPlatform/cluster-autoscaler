@@ -58,7 +58,6 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/machineselection"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/napcloudprovider"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -141,45 +140,6 @@ type injectionContext struct {
 
 func (c *injectionContext) allNodeGroups() []cloudprovider.NodeGroup {
 	return append(c.existingNodeGroups, c.injectedNodeGroups...)
-}
-
-// nodeGroupWithAtomicResize is implemented by cloud provider node groups that are resized
-// atomically (ZeroOrMaxNodeScaling), e.g. multi-host TPU node pools. Matched structurally because
-// ResizeAtomically is not part of the exported gke.NodeGroup interface.
-type nodeGroupWithAtomicResize interface {
-	ResizeAtomically() bool
-}
-
-// targetedReservationSubBlock returns the canonicalized reservation path of the sub-block that ng
-// specifically targets, or "" if ng does not target a single reservation sub-block. Paths are
-// canonicalized against clusterProject so that long-form and short-form paths within it match.
-func targetedReservationSubBlock(ng cloudprovider.NodeGroup, clusterProject string) string {
-	gkeNg, ok := ng.(gke.NodeGroup)
-	if !ok {
-		return ""
-	}
-	spec := gkeNg.Spec()
-	if spec == nil || spec.ReservationAffinity == nil {
-		return ""
-	}
-	affinity := spec.ReservationAffinity
-	// Only a specific reservation pins the node group to one sub-block. ANY/NONE affinities let
-	// GCE place the nodes anywhere, so they cannot collide by construction.
-	if affinity.ConsumeReservationType != gkeclient.ReservationAffinitySpecific || len(affinity.Values) != 1 {
-		return ""
-	}
-	val := affinity.Values[0]
-	if !gceclient.TargetsReservationSubBlock(val) {
-		return ""
-	}
-	return gceclient.CanonicalizeReservationPath(val, clusterProject)
-}
-
-// resizesAtomically reports whether ng is scaled all-or-nothing. Such a node group consumes a whole
-// reservation sub-block, so it cannot share one with another node group.
-func resizesAtomically(ng cloudprovider.NodeGroup) bool {
-	atomicNg, ok := ng.(nodeGroupWithAtomicResize)
-	return ok && atomicNg.ResizeAtomically()
 }
 
 // NodeGroupRequirementsGenerator generates multiple nodeGroupRequirements for a given pod requirements
@@ -4178,15 +4138,13 @@ func (m *AutoprovisioningNodeGroupManager) clusterProject() string {
 // reservationSubBlockAlreadyTaken reports whether injecting nodeGroup would double-book a
 // reservation sub-block that another node group already targets, and the sub-block in question.
 //
-// This only applies to atomically resized node groups (e.g. multi-host TPU node pools). Such a node
-// group must reach its full size to be usable, and a 1:1 mapping is assumed between it and the
-// sub-block it consumes, so two of them can never share one. Node groups that scale incrementally
-// may legitimately share a sub-block and are never rejected here.
-//
 // Without this check NAP generates one indistinguishable candidate per sub-block listed in a
 // ComputeClass priority and the expander chain, unable to break the tie, falls through to picking
 // one at random - with replacement, since previously created node pools are not taken into account.
 // The result is repeated collisions on the same sub-block. See b/564377355.
+//
+// This only applies to dynamic slicing node groups, see reservations.RequiresWholeSubBlock. Which
+// node groups count as already occupying a sub-block is decided by reservations.ClaimedSubBlocks.
 //
 // Note that this only gates the node pools NAP is about to create. Node pools that already exist
 // and happen to share a sub-block (e.g. created manually, or by an earlier NAP run predating this
@@ -4199,10 +4157,10 @@ func (m *AutoprovisioningNodeGroupManager) reservationSubBlockAlreadyTaken(ctx *
 	if m.experimentsManager != nil && !m.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ReservationSubBlockDeduplicationEnabledFlag, true) {
 		return "", false
 	}
-	if !resizesAtomically(nodeGroup) {
+	if !reservations.RequiresWholeSubBlock(nodeGroup) {
 		return "", false
 	}
-	subBlock := targetedReservationSubBlock(nodeGroup, m.clusterProject())
+	subBlock := reservations.TargetedSubBlock(nodeGroup, m.clusterProject())
 	if subBlock == "" {
 		return "", false
 	}
@@ -4490,17 +4448,6 @@ func (m *AutoprovisioningNodeGroupManager) prepareInjectionContext(ctx *ca_conte
 
 	taintConfig := taintutils.NewTaintConfig(ctx.AutoscalingOptions)
 
-	// Seed the set of reservation sub-blocks that are already spoken for. nodeGroups includes node
-	// pools whose creation is still in flight, which is what stops NAP from targeting the same
-	// sub-block again on the next loop before the first pool's nodes have registered.
-	clusterProject := m.clusterProject()
-	claimedReservationSubBlocks := sets.New[string]()
-	for _, nodeGroup := range nodeGroups {
-		if subBlock := targetedReservationSubBlock(nodeGroup, clusterProject); subBlock != "" {
-			claimedReservationSubBlocks.Insert(subBlock)
-		}
-	}
-
 	return &injectionContext{
 		status:                          status,
 		nodeInfos:                       nodeInfos,
@@ -4513,7 +4460,10 @@ func (m *AutoprovisioningNodeGroupManager) prepareInjectionContext(ctx *ca_conte
 		zones:                           zones,
 		applyReducedZoneSetOptimisation: applyReducedZoneSetOptimisation,
 		injectedNodeGroupSignatures:     sets.New[string](),
-		claimedReservationSubBlocks:     claimedReservationSubBlocks,
+		// nodeGroups includes node pools whose creation is still in flight, which is what stops NAP
+		// from targeting the same sub-block again on the next loop before the first pool's nodes
+		// have registered.
+		claimedReservationSubBlocks: reservations.ClaimedSubBlocks(nodeGroups, m.clusterProject()),
 	}, nil
 }
 

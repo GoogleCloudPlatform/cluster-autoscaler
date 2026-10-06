@@ -1272,3 +1272,11 @@ func WithProvisioningErrorDetailsEnabled(enabled bool) Option[*config.Autoscalin
 		return o
 	}
 }
+
+// WithReservationSubBlockDeduplicationEnabled enables or disables ReservationSubBlockDeduplicationEnabled.
+func WithReservationSubBlockDeduplicationEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.InternalOptions.ReservationSubBlockDeduplicationEnabled = enabled
+		return o
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 
@@ -391,4 +392,34 @@ func New(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
 func NewAny(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
 	opts = append([]ReservationOption{WithSpecificReservationRequired(false)}, opts...)
 	return New(name, zone, opts...)
+}
+
+// NewTestSubBlockMig builds a *gke.GkeMig with the given spec and optional workload policy
+// topology mode (e.g. gceclient.AcceleratorTopologyModeProvisionOnly).
+func NewTestSubBlockMig(spec *gkeclient.NodePoolSpec, topologyMode string) *gke.GkeMig {
+	if spec != nil && topologyMode != "" {
+		cp := *spec
+		cp.PlacementGroup.ResourcePolicy = &gceclient.GceResourcePolicy{
+			WorkloadPolicy: gceclient.WorkloadPolicy{
+				AcceleratorTopologyMode: topologyMode,
+			},
+		}
+		spec = &cp
+	}
+	return gke.NewTestGkeMigBuilder().SetSpec(spec).Build()
+}
+
+// SpecificSubBlockSpec returns a node pool spec with a SPECIFIC reservation affinity to the given values.
+func SpecificSubBlockSpec(values ...string) *gkeclient.NodePoolSpec {
+	return ReservationAffinitySpec(gkeclient.ReservationAffinitySpecific, values...)
+}
+
+// ReservationAffinitySpec returns a node pool spec with the given reservation affinity.
+func ReservationAffinitySpec(consumeType string, values ...string) *gkeclient.NodePoolSpec {
+	return &gkeclient.NodePoolSpec{
+		ReservationAffinity: &gke_api.ReservationAffinity{
+			ConsumeReservationType: consumeType,
+			Values:                 values,
+		},
+	}
 }
