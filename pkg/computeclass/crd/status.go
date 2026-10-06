@@ -129,8 +129,12 @@ type BlockedNodesByReason struct {
 	// Reason is the reason why the nodes can't be removed. It must be one of the
 	// ConsolidationReason* constants below.
 	Reason string
-	// Count is the number of nodes blocked for this reason.
-	Count int
+	// NodeCount is the number of nodes blocked for this reason.
+	NodeCount int
+	// TopologyUnitCount is the number of topology units (atomic node groups, e.g. TPU cubes or
+	// multi-host slices) with at least one node blocked for this reason. 0 if none of the
+	// blocked nodes is in such a unit.
+	TopologyUnitCount int
 }
 
 // Consolidation blocked reasons reported on the ComputeClass status. Each one must be a member of

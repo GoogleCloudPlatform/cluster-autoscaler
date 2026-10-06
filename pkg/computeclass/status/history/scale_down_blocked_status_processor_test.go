@@ -34,6 +34,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -249,9 +250,51 @@ func TestScaleDownBlockedStatusProcessor_GroupsBlockedNodesByReasonInEvaluationO
 	// Blocking labels are checked before utilization, which is checked before the drain
 	// simulation: the status lists the reasons in that order, not alphabetically.
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 2},
-		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
-		{Reason: crd.ConsolidationReasonNoPlaceToMovePods, Count: 1},
+		{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 2},
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 1},
+		{Reason: crd.ConsolidationReasonNoPlaceToMovePods, NodeCount: 1},
+	}, consolidation.BlockedNodes)
+}
+
+func TestScaleDownBlockedStatusProcessor_CountsTopologyUnits(t *testing.T) {
+	processor, updatesCh, _ := newTestProcessor(t)
+	cubeA := &atomicNodeGroup{GkeMig: sizedMig(t, 2, 0), id: "cube-a"}
+	cubeB := &atomicNodeGroup{GkeMig: sizedMig(t, 2, 0), id: "cube-b"}
+	standard := sizedMig(t, 2, 0)
+	nodeGroups := map[string]cloudprovider.NodeGroup{
+		"a-1": cubeA, "a-2": cubeA,
+		"b-1": cubeB, "b-2": cubeB,
+		"std-1": standard, "std-2": standard,
+	}
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	for name := range nodeGroups {
+		assert.NoError(t, snapshot.AddNodeInfo(framework.NewNodeInfo(node(name), nil)))
+	}
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: snapshot,
+		CloudProvider:   &nodeGroupForNodeStub{nodeGroups: nodeGroups},
+	}
+	processor.Process(t.Context(), autoscalingCtx, &scaledownstatus.ScaleDownStatus{
+		UnremovableNodes: []*scaledownstatus.UnremovableNode{
+			// Both nodes of cube A are blocked by the same reason: 1 unit.
+			{NodeGroup: cubeA, Node: node("a-1"), Reason: simulator.NotUnderutilized},
+			{NodeGroup: cubeA, Node: node("a-2"), Reason: simulator.NotUnderutilized},
+			// Cube B is held by one node, the other is blocked by the atomic group: the unit
+			// shows up under both reasons.
+			{NodeGroup: cubeB, Node: node("b-1"), Reason: simulator.NotUnderutilized},
+			{NodeGroup: cubeB, Node: node("b-2"), Reason: simulator.AtomicScaleDownFailed},
+			// Nodes outside an atomic node group are in no topology unit.
+			{NodeGroup: standard, Node: node("std-1"), Reason: simulator.NotUnderutilized},
+			{NodeGroup: standard, Node: node("std-2"), Reason: simulator.NoPlaceToMovePods},
+		},
+	})
+
+	consolidation := getConsolidationStatus(t, updatesCh)
+	assert.Equal(t, []crd.BlockedNodesByReason{
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 4, TopologyUnitCount: 2},
+		{Reason: crd.ConsolidationReasonNoPlaceToMovePods, NodeCount: 1},
+		{Reason: crd.ConsolidationReasonAtomicGroupBlocked, NodeCount: 1, TopologyUnitCount: 1},
 	}, consolidation.BlockedNodes)
 }
 
@@ -300,7 +343,7 @@ func TestScaleDownBlockedStatusProcessor_DerivesNotProcessedFromSnapshot(t *test
 
 	consolidation := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 1},
 	}, consolidation.BlockedNodes)
 	assert.Equal(t, 2, consolidation.NotProcessed, "3 real nodes in the priority, 1 with a blocked reason")
 }
@@ -335,8 +378,8 @@ func TestScaleDownBlockedStatusProcessor_AttributesMinSizeNodesToFloor(t *testin
 
 	consolidation := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonBlockingPods, Count: 1},
-		{Reason: crd.ConsolidationReasonMinCapacityReached, Count: 2},
+		{Reason: crd.ConsolidationReasonBlockingPods, NodeCount: 1},
+		{Reason: crd.ConsolidationReasonMinCapacityReached, NodeCount: 2},
 	}, consolidation.BlockedNodes)
 	assert.Equal(t, 1, consolidation.ActuationInProgress)
 	assert.Equal(t, 0, consolidation.NotProcessed, "every node must be accounted for")
@@ -368,7 +411,7 @@ func TestScaleDownBlockedStatusProcessor_RecentlyUnremovable(t *testing.T) {
 				{pdbBlocked("node-1")},
 				{withReason("node-1", simulator.RecentlyUnremovable)},
 			},
-			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonPodDisruptionBudget, Count: 1}},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonPodDisruptionBudget, NodeCount: 1}},
 		},
 		{
 			name: "updates reported reason when CA reports a different reason",
@@ -377,7 +420,7 @@ func TestScaleDownBlockedStatusProcessor_RecentlyUnremovable(t *testing.T) {
 				{withReason("node-1", simulator.NotUnderutilized)},
 				{withReason("node-1", simulator.RecentlyUnremovable)},
 			},
-			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1}},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 1}},
 		},
 		{
 			// The previous reason may no longer hold once the node left the unremovable set,
@@ -388,14 +431,14 @@ func TestScaleDownBlockedStatusProcessor_RecentlyUnremovable(t *testing.T) {
 				{},
 				{withReason("node-1", simulator.RecentlyUnremovable)},
 			},
-			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1}},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 1}},
 		},
 		{
 			name: "falls back to the catch all for a node never seen with a blocked reason",
 			loops: [][]*scaledownstatus.UnremovableNode{
 				{withReason("node-1", simulator.RecentlyUnremovable)},
 			},
-			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1}},
+			want: []crd.BlockedNodesByReason{{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 1}},
 		},
 	}
 	for _, tc := range testCases {
@@ -453,9 +496,9 @@ func TestScaleDownBlockedStatusProcessor_KeepsRememberedReasonDuringCooldown(t *
 	})
 	cooldown := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
-		{Reason: crd.ConsolidationReasonNotUnneededLongEnough, Count: 1},
-		{Reason: crd.ConsolidationReasonAtomicGroupBlocked, Count: 1},
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 1},
+		{Reason: crd.ConsolidationReasonNotUnneededLongEnough, NodeCount: 1},
+		{Reason: crd.ConsolidationReasonAtomicGroupBlocked, NodeCount: 1},
 	}, cooldown.BlockedNodes)
 	assert.Equal(t, 1, cooldown.ActuationInProgress)
 	assert.Equal(t, 0, cooldown.NotProcessed, "nodes without a reason keep their previous one")
@@ -470,7 +513,7 @@ func TestScaleDownBlockedStatusProcessor_KeepsRememberedReasonDuringCooldown(t *
 	})
 	after := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, Count: 1},
+		{Reason: crd.ConsolidationReasonAboveUtilizationThreshold, NodeCount: 1},
 	}, after.BlockedNodes)
 	assert.Equal(t, 3, after.NotProcessed)
 }
@@ -485,7 +528,7 @@ func TestScaleDownBlockedStatusProcessor_ClearsPriorityNoLongerBlocked(t *testin
 	})
 	first := getConsolidationStatus(t, updatesCh)
 	assert.Equal(t, []crd.BlockedNodesByReason{
-		{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 1},
+		{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 1},
 	}, first.BlockedNodes)
 
 	// The slice is gone and nothing is blocked anymore. The status is cumulative, so the
@@ -658,6 +701,20 @@ type nodeGroupForNodeStub struct {
 
 func (s *nodeGroupForNodeStub) NodeGroupForNode(_ context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
 	return s.nodeGroups[node.Name], nil
+}
+
+// atomicNodeGroup is a node group that scales atomically (ZeroOrMaxNodeScaling), like a TPU cube.
+type atomicNodeGroup struct {
+	*gke.GkeMig
+	id string
+}
+
+func (g *atomicNodeGroup) Id() string {
+	return g.id
+}
+
+func (g *atomicNodeGroup) GetOptions(context.Context, config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+	return &config.NodeGroupAutoscalingOptions{ZeroOrMaxNodeScaling: true}, nil
 }
 
 // consolidationRecorder is a crd.CRDStatus that records the consolidation statuses written to it.

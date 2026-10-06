@@ -281,24 +281,33 @@ func toCccConsolidationStatus(status crd.ConsolidationStatus) *ccc_api.Consolida
 // writing one through would take the rest of the status down with it. Counts are merged per
 // reason, because blockedNodes is a map-typed list keyed by reason and a folded entry may collide
 // with an existing catch-all entry; the merged entry keeps the position of its first occurrence.
+// Merged topology unit counts are summed, so they may count a unit shared by the merged reasons
+// more than once.
 func toCccBlockedNodes(blocked []crd.BlockedNodesByReason) []ccc_api.ConsolidationBlockedNodesInfo {
 	blockedNodes := make([]ccc_api.ConsolidationBlockedNodesInfo, 0, len(blocked))
 	indexByReason := make(map[string]int, len(blocked))
 	for _, b := range blocked {
-		if b.Count <= 0 {
+		if b.NodeCount <= 0 {
 			continue
 		}
 		reason := b.Reason
 		if !slices.Contains(crd.ConsolidationReasons, reason) {
-			klog.Warningf("Unknown consolidation blocked reason %q (%d nodes), reporting it as %s", reason, b.Count, crd.ConsolidationReasonConsolidationBlocked)
+			klog.Warningf("Unknown consolidation blocked reason %q (%d nodes), reporting it as %s", reason, b.NodeCount, crd.ConsolidationReasonConsolidationBlocked)
 			reason = crd.ConsolidationReasonConsolidationBlocked
 		}
-		if i, ok := indexByReason[reason]; ok {
-			blockedNodes[i].NodeCount += b.Count
-			continue
+		i, ok := indexByReason[reason]
+		if !ok {
+			i = len(blockedNodes)
+			indexByReason[reason] = i
+			blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason})
 		}
-		indexByReason[reason] = len(blockedNodes)
-		blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason, NodeCount: b.Count})
+		blockedNodes[i].NodeCount += b.NodeCount
+		if b.TopologyUnitCount > 0 {
+			if blockedNodes[i].TopologyUnitCount == nil {
+				blockedNodes[i].TopologyUnitCount = new(int)
+			}
+			*blockedNodes[i].TopologyUnitCount += b.TopologyUnitCount
+		}
 	}
 	return blockedNodes
 }

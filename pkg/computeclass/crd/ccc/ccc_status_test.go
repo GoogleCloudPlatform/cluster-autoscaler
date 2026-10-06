@@ -731,13 +731,13 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 		want   *ccc_api.ConsolidationStatus
 	}{
 		{
-			name: "known reasons are reported verbatim in the producer's order",
+			name: "known reasons are reported verbatim in the producer's order, topology units only when set",
 			status: crd.ConsolidationStatus{
 				ActuationInProgress: 2,
 				NotProcessed:        1,
 				BlockedNodes: []crd.BlockedNodesByReason{
-					{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 16},
-					{Reason: crd.ConsolidationReasonBlockingPods, Count: 3},
+					{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 16, TopologyUnitCount: 1},
+					{Reason: crd.ConsolidationReasonBlockingPods, NodeCount: 3},
 				},
 				MeasuredAt: measuredAt,
 			},
@@ -745,7 +745,7 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 				ActuationInProgress: ptr.To(2),
 				NotProcessed:        ptr.To(1),
 				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
-					{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 16},
+					{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 16, TopologyUnitCount: ptr.To(1)},
 					{Reason: crd.ConsolidationReasonBlockingPods, NodeCount: 3},
 				},
 				MeasuredAt: &measuredAt,
@@ -757,9 +757,9 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 			name: "unknown reasons are folded into the catch-all and merged with it",
 			status: crd.ConsolidationStatus{
 				BlockedNodes: []crd.BlockedNodesByReason{
-					{Reason: "SomethingNew", Count: 2},
-					{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 1},
-					{Reason: "SomethingElse", Count: 4},
+					{Reason: "SomethingNew", NodeCount: 2, TopologyUnitCount: 1},
+					{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 1},
+					{Reason: "SomethingElse", NodeCount: 4, TopologyUnitCount: 2},
 				},
 				MeasuredAt: measuredAt,
 			},
@@ -767,7 +767,7 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 				ActuationInProgress: ptr.To(0),
 				NotProcessed:        ptr.To(0),
 				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
-					{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 7},
+					{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 7, TopologyUnitCount: ptr.To(3)},
 				},
 				MeasuredAt: &measuredAt,
 			},
@@ -776,8 +776,8 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 			name: "entries without nodes are dropped",
 			status: crd.ConsolidationStatus{
 				BlockedNodes: []crd.BlockedNodesByReason{
-					{Reason: crd.ConsolidationReasonBlockingPods, Count: 0},
-					{Reason: "SomethingNew", Count: -1},
+					{Reason: crd.ConsolidationReasonBlockingPods, NodeCount: 0},
+					{Reason: "SomethingNew", NodeCount: -1},
 				},
 				MeasuredAt: measuredAt,
 			},

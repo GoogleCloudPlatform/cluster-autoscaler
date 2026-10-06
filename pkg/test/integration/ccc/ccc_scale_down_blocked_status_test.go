@@ -125,7 +125,7 @@ func TestCCCScaleDownBlockedStatusReportsSliceBoundCube(t *testing.T) {
 			return
 		}
 		assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
-			{Reason: reasonUsedByFormedSlice, NodeCount: nodesPerCube},
+			{Reason: reasonUsedByFormedSlice, NodeCount: nodesPerCube, TopologyUnitCount: ptr.To(1)},
 		}, consolidationStatus.BlockedNodes, "expected the whole slice-bound cube to be reported blocked")
 		assert.Equal(t, 0, ptr.Deref(consolidationStatus.NotProcessed, 0), "expected no unprocessed nodes")
 		assert.Equal(t, 0, ptr.Deref(consolidationStatus.ActuationInProgress, 0), "expected no deletion in flight")
@@ -309,7 +309,7 @@ func TestCCCScaleDownBlockedStatusReportsMinCapacityFloor(t *testing.T) {
 			return
 		}
 		assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
-			{Reason: reasonMinCapacityReached, NodeCount: nodesPerCube},
+			{Reason: reasonMinCapacityReached, NodeCount: nodesPerCube, TopologyUnitCount: ptr.To(1)},
 		}, consolidation.BlockedNodes, "expected the whole node pool to be reported blocked by the floor")
 		assert.Equal(t, 0, ptr.Deref(consolidation.NotProcessed, 0), "expected no unprocessed nodes")
 		assert.Equal(t, 0, ptr.Deref(consolidation.ActuationInProgress, 0), "expected no deletion in flight")

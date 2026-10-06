@@ -33,6 +33,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	cloudprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	scaledownstatus "sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
@@ -117,35 +118,50 @@ func (p *ScaleDownBlockedStatusProcessor) Process(ctx context.Context, autoscali
 	// from the nodes in the cluster snapshot.
 	var nodeInfos []*framework.NodeInfo
 	var cloudProvider cloudprovider.CloudProvider
+	var nodeGroupDefaults config.NodeGroupAutoscalingOptions
 	if autoscalingCtx != nil && autoscalingCtx.ClusterSnapshot != nil {
 		cloudProvider = autoscalingCtx.CloudProvider
+		nodeGroupDefaults = autoscalingCtx.NodeGroupDefaults
 		var err error
 		if nodeInfos, err = autoscalingCtx.ClusterSnapshot.ListNodeInfos(); err != nil {
 			klog.Errorf("Failed to list nodes, the consolidation status will miss the nodes CA did not inspect: %v", err)
 		}
 	}
-	snapshot := p.getSnapshotInfo(ctx, cloudProvider, nodeInfos)
+	snapshot := p.getSnapshotInfo(ctx, cloudProvider, nodeGroupDefaults, nodeInfos)
 
-	blockedCounts, deletionsInProgress := p.groupByReason(scaleDownStatus, snapshot)
-	p.lastReported = p.reportConsolidation(blockedCounts, deletionsInProgress, snapshot.nodeCounts)
+	blocked, deletionsInProgress := p.groupByReason(scaleDownStatus, snapshot)
+	p.lastReported = p.reportConsolidation(blocked, deletionsInProgress, snapshot.nodeCounts)
 }
 
 // CleanUp implements status.ScaleDownStatusProcessor.
 func (p *ScaleDownBlockedStatusProcessor) CleanUp() {
 }
 
-// groupByReason returns, per CCC priority, the number of blocked nodes per reason and the
-// number of nodes being deleted. Nodes with no scale-down blocked reason are left out, unless
-// their node group is at its minimum size, in which case they are reported under
-// MinCapacityReached, or scale-down is in cooldown, in which case they keep the reason
-// reported in the previous pass.
-func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledownstatus.ScaleDownStatus, snapshot snapshotInfo) (map[priorityKey]map[string]int, map[priorityKey]int) {
-	blockedCounts := make(map[priorityKey]map[string]int)
-	addBlocked := func(key priorityKey, reason string) {
-		if blockedCounts[key] == nil {
-			blockedCounts[key] = make(map[string]int)
+// blockedNodes are the nodes blocked by a single reason.
+type blockedNodes struct {
+	nodeCount int
+	// topologyUnits are the IDs of the topology units the nodes belong to.
+	topologyUnits sets.Set[string]
+}
+
+// groupByReason returns, per CCC priority, the nodes blocked by each reason and the number of
+// nodes being deleted. Nodes with no scale-down
+// blocked reason are left out, unless their node group is at its minimum size, in which case
+// they are reported under MinCapacityReached, or scale-down is in cooldown, in which case they
+// keep the reason reported in the previous pass.
+func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledownstatus.ScaleDownStatus, snapshot snapshotInfo) (map[priorityKey]map[string]*blockedNodes, map[priorityKey]int) {
+	blocked := make(map[priorityKey]map[string]*blockedNodes)
+	addBlocked := func(key priorityKey, reason, nodeName string) {
+		if blocked[key] == nil {
+			blocked[key] = make(map[string]*blockedNodes)
 		}
-		blockedCounts[key][reason]++
+		if blocked[key][reason] == nil {
+			blocked[key][reason] = &blockedNodes{topologyUnits: sets.New[string]()}
+		}
+		blocked[key][reason].nodeCount++
+		if unit, ok := snapshot.nodeToTopologyUnitID[nodeName]; ok {
+			blocked[key][reason].topologyUnits.Insert(unit)
+		}
 	}
 	deletionsInProgress := make(map[priorityKey]int)
 	// counted holds the nodes already reported, either as being deleted or as blocked, so that
@@ -187,7 +203,7 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 		}
 		reasons[unremovable.Node.Name] = reason
 		counted.Insert(unremovable.Node.Name)
-		addBlocked(key, reason)
+		addBlocked(key, reason, unremovable.Node.Name)
 	}
 
 	// The nodes of a node group at its minimum size are never inspected by CA (see
@@ -199,7 +215,7 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 			continue
 		}
 		counted.Insert(nodeName)
-		addBlocked(key, crd.ConsolidationReasonMinCapacityReached)
+		addBlocked(key, crd.ConsolidationReasonMinCapacityReached, nodeName)
 	}
 
 	// In cooldown CA skips NodesToDelete, so the reasons it gives there (unneeded time, atomic
@@ -212,11 +228,11 @@ func (p *ScaleDownBlockedStatusProcessor) groupByReason(scaleDownStatus *scaledo
 			}
 			reasons[nodeName] = reason
 			counted.Insert(nodeName)
-			addBlocked(key, reason)
+			addBlocked(key, reason, nodeName)
 		}
 	}
 	p.lastReason = reasons
-	return blockedCounts, deletionsInProgress
+	return blocked, deletionsInProgress
 }
 
 // blockedReason returns the reason to report for an unremovable node. CA reports
@@ -242,21 +258,27 @@ type snapshotInfo struct {
 	minSizeNodesToPriority map[string]priorityKey
 	// nodeInfos holds the snapshot NodeInfo of every node.
 	nodeInfos map[string]*framework.NodeInfo
+	// nodeToTopologyUnitID maps the name of each node of an atomic node group to the ID of that
+	// node group. CA removes such a node group only as a whole (e.g. a TPU cube or multi-host
+	// slice), which makes it the topology unit reported on the status.
+	nodeToTopologyUnitID map[string]string
 }
 
 // getSnapshotInfo collects, for the nodes in the cluster that belong to a CCC priority, their
-// priority and whether their node group is at its minimum size.
-func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, cloudProvider cloudprovider.CloudProvider, nodeInfos []*framework.NodeInfo) snapshotInfo {
+// priority, whether their node group is at its minimum size and their topology unit.
+func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, cloudProvider cloudprovider.CloudProvider, nodeGroupDefaults config.NodeGroupAutoscalingOptions, nodeInfos []*framework.NodeInfo) snapshotInfo {
 	info := snapshotInfo{
 		nodeCounts:             make(map[priorityKey]int),
 		nodePriority:           make(map[string]priorityKey),
 		minSizeNodesToPriority: make(map[string]priorityKey),
 		nodeInfos:              make(map[string]*framework.NodeInfo),
+		nodeToTopologyUnitID:   make(map[string]string),
 	}
 	if cloudProvider == nil {
 		return info
 	}
 	atMinByNodeGroup := make(map[string]bool)
+	atomicByNodeGroup := make(map[string]bool)
 	for _, nodeInfo := range nodeInfos {
 		node := nodeInfo.Node()
 		if node == nil || isGeneratedNode(node) {
@@ -280,9 +302,28 @@ func (p *ScaleDownBlockedStatusProcessor) getSnapshotInfo(ctx context.Context, c
 		if atMin {
 			info.minSizeNodesToPriority[node.Name] = key
 		}
+		atomic, ok := atomicByNodeGroup[nodeGroup.Id()]
+		if !ok {
+			atomic = isAtomic(ctx, nodeGroup, nodeGroupDefaults)
+			atomicByNodeGroup[nodeGroup.Id()] = atomic
+		}
+		if atomic {
+			info.nodeToTopologyUnitID[node.Name] = nodeGroup.Id()
+		}
 		info.nodeInfos[node.Name] = nodeInfo
 	}
 	return info
+}
+
+// isAtomic reports whether the node group scales atomically (ZeroOrMaxNodeScaling). On GKE this
+// is GkeMig.ResizeAtomically(): multi-host TPU, GPU accelerator slice and bulk provisioned node
+// pools.
+func isAtomic(ctx context.Context, nodeGroup cloudprovider.NodeGroup, defaults config.NodeGroupAutoscalingOptions) bool {
+	opts, err := nodeGroup.GetOptions(ctx, defaults)
+	if err != nil && err != cloudprovider.ErrNotImplemented {
+		klog.Warningf("Failed to get the options of node group %v: %v", nodeGroup.Id(), err)
+	}
+	return err == nil && opts != nil && opts.ZeroOrMaxNodeScaling
 }
 
 // isGeneratedNode reports whether CA generated the node from a node group template.
@@ -330,16 +371,16 @@ func heldOnlyByMinCapacity(nodeInfo *framework.NodeInfo) bool {
 
 // reportConsolidation sends the Consolidation status of every priority that needs one and
 // returns the priorities left with a non-empty status.
-func (p *ScaleDownBlockedStatusProcessor) reportConsolidation(blockedCounts map[priorityKey]map[string]int, deletionsInProgress, nodeCounts map[priorityKey]int) sets.Set[priorityKey] {
+func (p *ScaleDownBlockedStatusProcessor) reportConsolidation(blocked map[priorityKey]map[string]*blockedNodes, deletionsInProgress, nodeCounts map[priorityKey]int) sets.Set[priorityKey] {
 	// Priorities reported last pass are included to clear a status that no longer holds.
-	toReport := sets.KeySet(blockedCounts).
+	toReport := sets.KeySet(blocked).
 		Union(sets.KeySet(deletionsInProgress)).
 		Union(sets.KeySet(nodeCounts)).
 		Union(p.lastReported)
 
 	reported := sets.New[priorityKey]()
 	for key := range toReport {
-		consolidation := p.consolidationStatus(blockedCounts[key], deletionsInProgress[key], nodeCounts[key])
+		consolidation := p.consolidationStatus(blocked[key], deletionsInProgress[key], nodeCounts[key])
 		sent := status.TrySendRuleUpdate(p.updatesCh, status.UpdateMessage{
 			Id: key.crdID,
 			Mutate: func(s crd.CRDStatus) {
@@ -355,10 +396,10 @@ func (p *ScaleDownBlockedStatusProcessor) reportConsolidation(blockedCounts map[
 }
 
 // consolidationStatus builds the Consolidation status of a single priority.
-func (p *ScaleDownBlockedStatusProcessor) consolidationStatus(blockedByReason map[string]int, deletionsInProgress, totalNodes int) crd.ConsolidationStatus {
+func (p *ScaleDownBlockedStatusProcessor) consolidationStatus(blockedByReason map[string]*blockedNodes, deletionsInProgress, totalNodes int) crd.ConsolidationStatus {
 	blocked := 0
-	for _, n := range blockedByReason {
-		blocked += n
+	for _, b := range blockedByReason {
+		blocked += b.nodeCount
 	}
 	return crd.ConsolidationStatus{
 		ActuationInProgress: deletionsInProgress,
@@ -375,10 +416,10 @@ func isEmptyConsolidation(cs crd.ConsolidationStatus) bool {
 }
 
 // sortByEvaluationOrder sorts the reasons in the order CA checks them, see reasonRank.
-func sortByEvaluationOrder(blockedByReason map[string]int) []crd.BlockedNodesByReason {
+func sortByEvaluationOrder(blockedByReason map[string]*blockedNodes) []crd.BlockedNodesByReason {
 	blocked := make([]crd.BlockedNodesByReason, 0, len(blockedByReason))
-	for reason, count := range blockedByReason {
-		blocked = append(blocked, crd.BlockedNodesByReason{Reason: reason, Count: count})
+	for reason, b := range blockedByReason {
+		blocked = append(blocked, crd.BlockedNodesByReason{Reason: reason, NodeCount: b.nodeCount, TopologyUnitCount: b.topologyUnits.Len()})
 	}
 	rank := func(reason string) int {
 		if r, ok := reasonRank[reason]; ok {
