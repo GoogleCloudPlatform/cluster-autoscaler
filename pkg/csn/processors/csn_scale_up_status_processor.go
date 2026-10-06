@@ -33,13 +33,14 @@ import (
 // whose CSN scale-up is blocked by constraints specific to CSNs.
 const csnScaleUpFailedReason = "StandbyBufferScaleUpFailed"
 
-// CSNScaleUpStatusProcessor surfaces standby buffer scale-up failures caused by the GCE VM
-// Suspend/Resume memory limit as events on the owning CapacityBuffer.
+// CSNScaleUpStatusProcessor surfaces standby buffer scale-up failures caused by GCE VM
+// Suspend/Resume constraints (such as the memory limit or Local SSD restriction) as events on the
+// owning CapacityBuffer.
 //
-// Standby buffer fake pods carry a node affinity restricting them to nodes small enough to be
-// suspended (see csn.MakePodCSN). When that affinity is what blocks the scale-up, the upstream
-// eventing processor drops the reason, because it only reports rejections for node groups that
-// already exist, and node autoprovisioning candidates do not. The buffer would then be left with no
+// Standby buffer fake pods carry node affinities restricting them to nodes that can be suspended
+// (see csn.MakePodCSN). When those affinities are what block the scale-up, the upstream eventing
+// processor drops the reason, because it only reports rejections for node groups that already
+// exist, and node autoprovisioning candidates do not. The buffer would then be left with no
 // capacity and no explanation if it wasn't for this processor.
 type CSNScaleUpStatusProcessor struct {
 	buffersRegistry    *fakepods.Registry
@@ -54,6 +55,11 @@ func NewCSNScaleUpStatusProcessor(buffersRegistry *fakepods.Registry, experiment
 	}
 }
 
+type blockedBuffer struct {
+	buffer  *v1beta1.CapacityBuffer
+	message string
+}
+
 // Process implements status.ScaleUpStatusProcessor.
 func (p *CSNScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	// Evaluated per loop so the launch can be turned off without restarting the autoscaler.
@@ -65,15 +71,19 @@ func (p *CSNScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx 
 	// ConsideredNodeGroups is nil on the early error paths, which just leaves the node-level
 	// check with nothing to inspect.
 	consideredNodeGroups := cloudprovider.NodeGroupListToMapById(scaleUpStatus.ConsideredNodeGroups)
-	memoryLimit := csn.NewMemoryLimit(p.experimentsManager)
+	constraints := csn.NewSuspensionConstraints(p.experimentsManager)
 
-	affectedBuffers := map[types.UID]*v1beta1.CapacityBuffer{}
+	blockedBuffers := map[types.UID]blockedBuffer{}
 	for _, info := range scaleUpStatus.PodsRemainUnschedulable {
 		if !csn.IsCSNPod(info.Pod) {
 			continue
 		}
 		buffer := p.buffersRegistry.GetCapacityBuffer(info.Pod.UID)
 		if buffer == nil {
+			continue
+		}
+		// A buffer with several replicas produces several unschedulable pods, but only one event.
+		if _, seen := blockedBuffers[buffer.UID]; seen {
 			continue
 		}
 		strat := buffer.Status.ProvisioningStrategy
@@ -83,19 +93,13 @@ func (p *CSNScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx 
 		if strat == nil || *strat != capacitybuffers.ColdProvisioningStrategy {
 			continue
 		}
-		// A buffer with several replicas produces several unschedulable pods, but only one event.
-		if _, seen := affectedBuffers[buffer.UID]; seen {
-			continue
-		}
-		if blockedByMemoryLimit(ctx, info, consideredNodeGroups, memoryLimit) {
-			affectedBuffers[buffer.UID] = buffer
+		if message, blocked := blockedBySuspensionConstraints(ctx, info, consideredNodeGroups, constraints); blocked {
+			blockedBuffers[buffer.UID] = blockedBuffer{buffer: buffer, message: message}
 		}
 	}
 
-	for _, buffer := range affectedBuffers {
-		autoscalingCtx.Recorder.Eventf(buffer, apiv1.EventTypeWarning, csnScaleUpFailedReason,
-			"Standby buffers don't support nodes with %d GB of memory or more. Make sure the buffer configuration doesn't prevent the buffer from using nodes with less memory.",
-			memoryLimit.GB())
+	for _, b := range blockedBuffers {
+		autoscalingCtx.Recorder.Eventf(b.buffer, apiv1.EventTypeWarning, csnScaleUpFailedReason, "%s", b.message)
 	}
 }
 
@@ -103,17 +107,17 @@ func (p *CSNScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx 
 func (p *CSNScaleUpStatusProcessor) CleanUp() {
 }
 
-// blockedByMemoryLimit reports whether the memory limit is provably why this standby buffer pod
-// could not be scheduled. Both checks are conservative: a pod blocked by the user's own
-// constraints, or by anything else, does not qualify.
-func blockedByMemoryLimit(ctx context.Context, info status.NoScaleUpInfo, consideredNodeGroups map[string]cloudprovider.NodeGroup, memoryLimit csn.MemoryLimit) bool {
-	// The pod is too big for any suspendable node, whatever node shapes are available.
-	if memoryLimit.ExceededByPodRequest(info.Pod) {
-		return true
+// blockedBySuspensionConstraints checks whether info.Pod's spec directly violates a CSN suspension
+// constraint or whether any node group in info.RejectedNodeGroups was rejected by a CSN suspension
+// constraint despite matching the pod's remaining required node affinity, returning the
+// corresponding warning message.
+func blockedBySuspensionConstraints(ctx context.Context, info status.NoScaleUpInfo, consideredNodeGroups map[string]cloudprovider.NodeGroup, constraints csn.SuspensionConstraints) (string, bool) {
+	// The pod's own requests/selectors directly violate a suspension constraint, whatever node shapes are available.
+	if message, blocked := constraints.BlocksPodRequest(info.Pod); blocked {
+		return message, true
 	}
-	// Or it would have fit on a node that was rejected only because it is too large to suspend.
-	// This covers buffers that fit on a big node but on no node small enough to be suspended.
-	return memoryLimit.BlocksPodOnAnyNode(info.Pod, rejectedNodes(ctx, info, consideredNodeGroups)...)
+	// Or it would have fit on a node that was rejected only because of a suspension constraint.
+	return constraints.BlocksPodOnAnyNode(info.Pod, rejectedNodes(ctx, info, consideredNodeGroups)...)
 }
 
 // rejectedNodes returns the node group templates that rejected the pod.

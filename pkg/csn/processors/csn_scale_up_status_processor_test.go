@@ -43,8 +43,10 @@ import (
 
 const (
 	// smallNodeGroup is small enough to be suspended, largeNodeGroup is not.
-	smallNodeGroupID = "small-node-group"
-	largeNodeGroupID = "large-node-group"
+	smallNodeGroupID         = "small-node-group"
+	largeNodeGroupID         = "large-node-group"
+	localSSDNodeGroupID      = "local-ssd-node-group"
+	largeLocalSSDNodeGroupID = "large-local-ssd-node-group"
 
 	// defaultBufferName is the buffer most cases use. Node templates carry its buffer assignment
 	// label so that only the memory limit term can reject them.
@@ -54,6 +56,7 @@ const (
 	nodeGroupLabel = "example.com/node-group"
 
 	memoryLimitMessageFragment = "nodes with less memory"
+	localSSDMessageFragment    = "nodes without Local SSDs"
 )
 
 // testEnv holds the fixtures shared by the processor test cases.
@@ -68,12 +71,20 @@ type testEnv struct {
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
+	localSSDNode := nodeWithMemoryScalingLevel(t, localSSDNodeGroupID, 64)
+	localSSDNode.Labels[labels.EphemeralLocalSsdLabel] = labels.EphemeralLocalSsdEnabledValue
+	largeLocalSSDNode := nodeWithMemoryScalingLevel(t, largeLocalSSDNodeGroupID, 256)
+	largeLocalSSDNode.Labels[labels.EphemeralLocalSsdLabel] = labels.EphemeralLocalSsdEnabledValue
 	provider := testprovider.NewTestCloudProviderBuilder().WithMachineTemplates(map[string]*framework.NodeInfo{
-		smallNodeGroupID: framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, smallNodeGroupID, 64)),
-		largeNodeGroupID: framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, largeNodeGroupID, 256)),
+		smallNodeGroupID:         framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, smallNodeGroupID, 64)),
+		largeNodeGroupID:         framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, largeNodeGroupID, 256)),
+		localSSDNodeGroupID:      framework.NewTestNodeInfo(localSSDNode),
+		largeLocalSSDNodeGroupID: framework.NewTestNodeInfo(largeLocalSSDNode),
 	}).Build()
 	provider.AddNodeGroup(smallNodeGroupID, 0, 10, 0)
 	provider.AddNodeGroup(largeNodeGroupID, 0, 10, 0)
+	provider.AddNodeGroup(localSSDNodeGroupID, 0, 10, 0)
+	provider.AddNodeGroup(largeLocalSSDNodeGroupID, 0, 10, 0)
 
 	fakeRecorder := kube_record.NewFakeRecorder(20)
 	return &testEnv{
@@ -172,6 +183,55 @@ func TestCSNScaleUpStatusProcessor(t *testing.T) {
 					Result:                  status.ScaleUpNoOptionsAvailable,
 					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
 					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, largeNodeGroupID, "NodeAffinity")}},
+				}
+			},
+		},
+		{
+			name: "pod directly requests Local SSD",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-lssd", smallMemory, e.buffer, withNodeSelector(map[string]string{labels.EphemeralLocalSsdLabel: labels.EphemeralLocalSsdEnabledValue}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: localSSDMessageFragment,
+		},
+		{
+			name: "request blocked only by the injected Local SSD affinity",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-lssd-group", smallMemory, e.buffer, withNodeSelector(map[string]string{nodeGroupLabel: localSSDNodeGroupID}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, localSSDNodeGroupID, "NodeAffinity")}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: localSSDMessageFragment,
+		},
+		{
+			name: "request blocked by both memory limit and Local SSD affinity",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-large-lssd-group", smallMemory, e.buffer, withNodeSelector(map[string]string{nodeGroupLabel: largeLocalSSDNodeGroupID}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, largeLocalSSDNodeGroupID, "NodeAffinity")}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: memoryLimitMessageFragment,
+		},
+		{
+			name: "Local SSD node group the pod's own selector also rejects",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-label", smallMemory, e.buffer, withNodeSelector(map[string]string{"example.com/unavailable": "true"}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, localSSDNodeGroupID, "NodeAffinity")}},
 				}
 			},
 		},
