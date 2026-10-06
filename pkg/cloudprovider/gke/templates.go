@@ -34,6 +34,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 
 	networkingutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
+	"k8s.io/klog/v2"
+	"k8s.io/utils/cpuset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 
@@ -146,15 +148,24 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		osDistribution = migOsInfo.OsDistribution()
 	}
 	var effectiveCpu, effectiveMemory int64
-	if mig.Spec().KubeletConfig != nil && mig.Spec().KubeletConfig.ReservedResourcesConfig != nil {
-		rrc := mig.Spec().KubeletConfig.ReservedResourcesConfig
-		effectiveCpu = rrc.EffectiveCpuReservedMillicore
-		if effectiveCpu == 0 {
-			effectiveCpu = rrc.CpuReservedMillicore
+	if kc := mig.Spec().KubeletConfig; kc != nil {
+		if rrc := kc.ReservedResourcesConfig; rrc != nil {
+			effectiveCpu = rrc.EffectiveCpuReservedMillicore
+			if effectiveCpu == 0 {
+				effectiveCpu = rrc.CpuReservedMillicore
+			}
+			effectiveMemory = rrc.EffectiveMemoryReservedMib
+			if effectiveMemory == 0 {
+				effectiveMemory = rrc.MemoryReservedMib
+			}
 		}
-		effectiveMemory = rrc.EffectiveMemoryReservedMib
-		if effectiveMemory == 0 {
-			effectiveMemory = rrc.MemoryReservedMib
+		// kubelet overrides kube/system-reserved cpu with the size of --reserved-cpus (whole cores).
+		if kc.ReservedSystemCpus != "" {
+			if set, err := cpuset.Parse(kc.ReservedSystemCpus); err == nil {
+				effectiveCpu = int64(set.Size()) * 1000
+			} else {
+				klog.Warningf("Ignoring unparsable reservedSystemCpus %q for %s: %v", kc.ReservedSystemCpus, mig.GceRef().Name, err)
+			}
 		}
 	}
 	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, gcfsEnabled, ephemeralLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)

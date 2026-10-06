@@ -606,8 +606,9 @@ func TestKubeletConfigSignature(t *testing.T) {
 				CrashLoopBackOff: &gkeclient.CrashLoopBackOffConfig{
 					MaxContainerRestartPeriod: "10s",
 				},
+				ReservedSystemCpus: "0-3",
 			},
-			expected: "kubelet-config: <CpuCfsQuota: true, CpuCfsQuotaPeriod: \"100ms\", CpuManagerPolicy: \"static\", PodPidsLimit: 10000, ImageGcLowThresholdPercent: 80, ImageGcHighThresholdPercent: 90, ImageMinimumGcAge: \"2m\", ImageMaximumGcAge: \"1h\", ContainerLogMaxSize: \"10M\", ContainerLogMaxFiles: 5, ContainerLogMaxWorkers: 4, ContainerLogMonitorInterval: \"10s\", AllowedUnsafeSysctls: [net.ipv4.tcp_max_syn_backlog], MaxParallelImagePulls: 5, SingleProcessOomKill: true, InsecureKubeletReadonlyPortEnabled: true, EvictionSoft: <MemoryAvailable: \"2Gi\", NodefsAvailable: \"10%\", ImagefsAvailable: \"15%\", ImagefsInodesFree: \"5%\", NodefsInodesFree: \"5%\", PidAvailable: \"10%\">, EvictionSoftGracePeriod: <MemoryAvailable: \"2m\", NodefsAvailable: \"90s\", ImagefsAvailable: \"90s\", ImagefsInodesFree: \"90s\", NodefsInodesFree: \"90s\", PidAvailable: \"90s\">, EvictionMinimumReclaim: <MemoryAvailable: \"5%\", NodefsAvailable: \"5%\", ImagefsAvailable: \"5%\", ImagefsInodesFree: \"1%\", NodefsInodesFree: \"1%\", PidAvailable: \"1%\">, EvictionMaxPodGracePeriodSeconds: 60, TopologyManagerPolicy: \"best-effort\", TopologyManagerScope: \"container\", MemoryManagerPolicy: \"Static\", ShutdownGracePeriodSeconds: 120, ShutdownGracePeriodCriticalPodsSeconds: 30, CrashLoopBackOff: <maxContainerRestartPeriod: \"10s\">>",
+			expected: "kubelet-config: <CpuCfsQuota: true, CpuCfsQuotaPeriod: \"100ms\", CpuManagerPolicy: \"static\", PodPidsLimit: 10000, ImageGcLowThresholdPercent: 80, ImageGcHighThresholdPercent: 90, ImageMinimumGcAge: \"2m\", ImageMaximumGcAge: \"1h\", ContainerLogMaxSize: \"10M\", ContainerLogMaxFiles: 5, ContainerLogMaxWorkers: 4, ContainerLogMonitorInterval: \"10s\", AllowedUnsafeSysctls: [net.ipv4.tcp_max_syn_backlog], MaxParallelImagePulls: 5, SingleProcessOomKill: true, InsecureKubeletReadonlyPortEnabled: true, EvictionSoft: <MemoryAvailable: \"2Gi\", NodefsAvailable: \"10%\", ImagefsAvailable: \"15%\", ImagefsInodesFree: \"5%\", NodefsInodesFree: \"5%\", PidAvailable: \"10%\">, EvictionSoftGracePeriod: <MemoryAvailable: \"2m\", NodefsAvailable: \"90s\", ImagefsAvailable: \"90s\", ImagefsInodesFree: \"90s\", NodefsInodesFree: \"90s\", PidAvailable: \"90s\">, EvictionMinimumReclaim: <MemoryAvailable: \"5%\", NodefsAvailable: \"5%\", ImagefsAvailable: \"5%\", ImagefsInodesFree: \"1%\", NodefsInodesFree: \"1%\", PidAvailable: \"1%\">, EvictionMaxPodGracePeriodSeconds: 60, TopologyManagerPolicy: \"best-effort\", TopologyManagerScope: \"container\", MemoryManagerPolicy: \"Static\", ShutdownGracePeriodSeconds: 120, ShutdownGracePeriodCriticalPodsSeconds: 30, CrashLoopBackOff: <maxContainerRestartPeriod: \"10s\">, ReservedSystemCpus: \"0-3\">",
 		},
 		"config with insecureKubeletReadonlyPortEnabled=false in forcesendfields": {
 			kubeletConfig: &gkeclient.NodeKubeletConfig{
@@ -675,6 +676,7 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 				rules.WithShutdownGracePeriodCriticalPodsSecondsRule(0),
 				rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule("10s"),
 				rules.WithReservedResourcesConfigRule(int64Ptr(100), int64Ptr(200)),
+				rules.WithReservedSystemCpusRule("0-3"),
 			),
 			expected: &gkeclient.NodeKubeletConfig{
 				CpuCfsQuota:                        true,
@@ -732,7 +734,8 @@ func TestKubeletConfigFromCCRule(t *testing.T) {
 					CpuReservedMillicore: 100,
 					MemoryReservedMib:    200,
 				},
-				ForceSendFields: []string{"CpuCfsQuota", "InsecureKubeletReadonlyPortEnabled", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
+				ReservedSystemCpus: "0-3",
+				ForceSendFields:    []string{"CpuCfsQuota", "InsecureKubeletReadonlyPortEnabled", "ShutdownGracePeriodSeconds", "ShutdownGracePeriodCriticalPodsSeconds"},
 			},
 		},
 	} {
