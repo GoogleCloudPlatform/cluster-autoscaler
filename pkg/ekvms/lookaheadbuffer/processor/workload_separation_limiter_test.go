@@ -18,121 +18,150 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 )
+
+type fakeResizableVmLimitProvider struct {
+	limit int
+}
+
+func (f *fakeResizableVmLimitProvider) provide() int {
+	return f.limit
+}
 
 func TestLimit(t *testing.T) {
 	tests := []struct {
-		name            string
-		caVersion       string
-		experimentFlags map[string]string
-		defaultLimit    int
-		want            int
+		name     string
+		requests map[string]map[string]apiv1.ResourceList
+		limits   map[string]int
+		want     map[string]map[string]apiv1.ResourceList
 	}{
 		{
-			name:         "no experiment, use default",
-			caVersion:    "33.0.0",
-			defaultLimit: 0,
-			want:         0,
+			name:     "empty requests",
+			requests: map[string]map[string]apiv1.ResourceList{},
+			want:     map[string]map[string]apiv1.ResourceList{},
 		},
 		{
-			name:         "invalid flag",
-			caVersion:    "33.0.0",
-			defaultLimit: 0,
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "1.2.3",
+			name: "default doesn't exist",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+				},
 			},
-			want: 0,
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {},
+			},
 		},
 		{
-			name:         "invalid flag, non-int limit",
-			caVersion:    "33.0.0",
-			defaultLimit: 0,
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "abc,1.2.3",
+			name: "default workload ID is always included",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
 			},
-			want: 0,
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+				},
+			},
 		},
 		{
-			name:         "empty flag",
-			caVersion:    "33.0.0",
-			defaultLimit: 0,
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "",
+			name: "default workload ID is prioritized over non-default",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+					"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
+				},
 			},
-			want: 0,
+			limits: map[string]int{
+				machinetypes.EK.Name(): 1,
+			},
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"":  {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
+				},
+			},
 		},
 		{
-			name:      "old CA version",
-			caVersion: "32.0.0",
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "5,33.0.0",
+			name: "under limit",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
 			},
-			defaultLimit: 0,
-			want:         0,
+			limits: map[string]int{
+				machinetypes.EK.Name(): 10,
+			},
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
+			},
 		},
 		{
-			name:      "valid version, use experimental limit",
-			caVersion: "33.0.0",
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "5,33.0.0",
+			name: "equal cpu, fallback to sorting by name",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+					"b": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
 			},
-			defaultLimit: 0,
-			want:         5,
+			limits: map[string]int{
+				machinetypes.EK.Name(): 1,
+			},
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"a": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
+			},
 		},
 		{
-			name:      "valid version, negative limit",
-			caVersion: "33.0.0",
-			experimentFlags: map[string]string{
-				experiments.EkLookaheadMaxWorkloadSeparationsFlag: "-1,33.0.0",
+			name: "multiple machine families with separate limits",
+			requests: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"":     {apiv1.ResourceCPU: *resource.NewMilliQuantity(50, resource.DecimalSI)},
+					"ek-1": {apiv1.ResourceCPU: *resource.NewMilliQuantity(100, resource.DecimalSI)},
+					"ek-2": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
+				machinetypes.E4A.Name(): {
+					"e4a-1": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
+					"e4a-2": {apiv1.ResourceCPU: *resource.NewMilliQuantity(400, resource.DecimalSI)},
+				},
 			},
-			defaultLimit: 0,
-			want:         0,
+			limits: map[string]int{
+				machinetypes.EK.Name():  1,
+				machinetypes.E4A.Name(): 2,
+			},
+			want: map[string]map[string]apiv1.ResourceList{
+				machinetypes.EK.Name(): {
+					"":     {apiv1.ResourceCPU: *resource.NewMilliQuantity(50, resource.DecimalSI)},
+					"ek-2": {apiv1.ResourceCPU: *resource.NewMilliQuantity(200, resource.DecimalSI)},
+				},
+				machinetypes.E4A.Name(): {
+					"e4a-1": {apiv1.ResourceCPU: *resource.NewMilliQuantity(300, resource.DecimalSI)},
+					"e4a-2": {apiv1.ResourceCPU: *resource.NewMilliQuantity(400, resource.DecimalSI)},
+				},
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			v, err := version.FromString(tt.caVersion)
-			if err != nil {
-				t.Fatalf("component version %s is not a correct version %v", tt.caVersion, err)
+			resizableVmLimiters := map[string]resizableVmLimitProvider{}
+			for family, limit := range tt.limits {
+				resizableVmLimiters[family] = &fakeResizableVmLimitProvider{limit: limit}
 			}
-
-			w := NewWorkloadSeparationLimiter(
-				experiments.NewMockManagerWithOptions(v, nil, tt.experimentFlags),
-				tt.defaultLimit,
-				v,
-			)
-			assert.Equal(t, tt.want, w.Limit())
-		})
-	}
-}
-
-func TestNewWorkloadSeparationLimiter(t *testing.T) {
-	tests := []struct {
-		name         string
-		defaultLimit int
-		want         *workloadSeparationLimiter
-	}{
-		{
-			name:         "negative default limit is set to 0",
-			defaultLimit: -1,
-			want:         &workloadSeparationLimiter{defaultLimit: 0},
-		},
-		{
-			name:         "zero default limit is unmodified",
-			defaultLimit: 0,
-			want:         &workloadSeparationLimiter{defaultLimit: 0},
-		},
-		{
-			name:         "positive default limit is unmodified",
-			defaultLimit: 1,
-			want:         &workloadSeparationLimiter{defaultLimit: 1},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, NewWorkloadSeparationLimiter(nil, tt.defaultLimit, version.Version{}))
+			w := &workloadSeparationLimiter{
+				resizableVmLimiters: resizableVmLimiters,
+			}
+			got := w.Limit(tt.requests)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }

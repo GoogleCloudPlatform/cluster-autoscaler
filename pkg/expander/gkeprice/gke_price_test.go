@@ -820,9 +820,13 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 	node32 := BuildTestNode("n32", 32000, 32000)
 	node32.Labels[apiv1.LabelInstanceType] = "standard-32"
 
+	node64 := BuildTestNode("n64", 64000, 64000)
+	node64.Labels[apiv1.LabelInstanceType] = "standard-64"
+
 	nodeInfo2 := framework.NewTestNodeInfo(node2)
 	nodeInfo16 := framework.NewTestNodeInfo(node16)
 	nodeInfo32 := framework.NewTestNodeInfo(node32)
+	nodeInfo64 := framework.NewTestNodeInfo(node64)
 
 	pod := BuildTestPod("p", 1000, 1000)
 
@@ -831,6 +835,7 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 			"n2":  2,
 			"n16": 16,
 			"n32": 32,
+			"n64": 64,
 		},
 		podPrice: map[string]float64{
 			"p": 1,
@@ -854,7 +859,7 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 		{
 			name:            "no reservations, 2 < 32",
 			cheaperNodeInfo: nodeInfo2,
-			otherNodeInfo:   nodeInfo16,
+			otherNodeInfo:   nodeInfo32,
 		},
 		{
 			name: "16 core reservation, non-existing 16 < existing 2",
@@ -877,13 +882,23 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 			otherNodeGroupExists:   true,
 		},
 		{
-			name: "32 core reservation, existing 2 < non-existing 32",
+			name: "32 core reservation, non-existing 32 < existing 2",
 			reservations: []*gce_api.Reservation{
 				reservations.BuildMultipleMachineReservation("standard-32", zone, 0, 1),
 			},
+			cheaperNodeInfo:        nodeInfo32,
+			cheaperNodeGroupExists: false,
+			otherNodeInfo:          nodeInfo2,
+			otherNodeGroupExists:   true,
+		},
+		{
+			name: "64 core reservation, non-reserved 2 < reserved 64 due to unfitness",
+			reservations: []*gce_api.Reservation{
+				reservations.BuildMultipleMachineReservation("standard-64", zone, 0, 1),
+			},
 			cheaperNodeInfo:        nodeInfo2,
 			cheaperNodeGroupExists: true,
-			otherNodeInfo:          nodeInfo32,
+			otherNodeInfo:          nodeInfo64,
 			otherNodeGroupExists:   false,
 		},
 	}
@@ -951,74 +966,34 @@ func TestBestOption_NewNodeGroup(t *testing.T) {
 	}
 	tests := []struct {
 		name                   string
-		relaxedGroupPenalty    bool
 		cheaperNodeInfo        *framework.NodeInfo
 		cheaperNodeGroupExists bool
 		otherNodeInfo          *framework.NodeInfo
 		otherNodeGroupExists   bool
-		wantExpensive          bool
 	}{
 		{
-			name:                   "cheaper preferred when relaxed group penalty is disabled and both NGs exist",
-			relaxedGroupPenalty:    false,
+			name:                   "cheaper preferred when both NGs exist",
 			cheaperNodeInfo:        nodeInfo10,
 			cheaperNodeGroupExists: true,
 			otherNodeInfo:          nodeInfo11,
 			otherNodeGroupExists:   true,
 		},
 		{
-			name:                   "cheaper preferred when relaxed group penalty is enabled and both NGs exist",
-			relaxedGroupPenalty:    true,
-			cheaperNodeInfo:        nodeInfo10,
-			cheaperNodeGroupExists: true,
-			otherNodeInfo:          nodeInfo11,
-			otherNodeGroupExists:   true,
-		},
-		{
-			name:                   "cheaper preferred when relaxed group penalty is disabled and neither NG exists",
-			relaxedGroupPenalty:    false,
+			name:                   "cheaper preferred when neither NG exists",
 			cheaperNodeInfo:        nodeInfo10,
 			cheaperNodeGroupExists: false,
 			otherNodeInfo:          nodeInfo11,
 			otherNodeGroupExists:   false,
 		},
 		{
-			name:                   "expensive preferred when relaxed group penalty is disabled and cheaper NG doesn't exist",
-			relaxedGroupPenalty:    false,
-			cheaperNodeInfo:        nodeInfo10,
-			cheaperNodeGroupExists: false,
-			otherNodeInfo:          nodeInfo11,
-			otherNodeGroupExists:   true,
-			wantExpensive:          true,
-		},
-		{
-			name:                   "non-existing cheaper preferred over when relaxed group penalty is enabled and only expensive NG exists",
-			relaxedGroupPenalty:    true,
-			cheaperNodeInfo:        nodeInfo10,
-			cheaperNodeGroupExists: false,
-			otherNodeInfo:          nodeInfo11,
-			otherNodeGroupExists:   true,
-			wantExpensive:          false,
-		},
-		{
-			name:                   "cheaper preferred when relaxed group penalty is enabled and only expensive NG exists",
-			relaxedGroupPenalty:    true,
+			name:                   "non-existing cheaper preferred when only expensive NG exists",
 			cheaperNodeInfo:        nodeInfo10,
 			cheaperNodeGroupExists: false,
 			otherNodeInfo:          nodeInfo11,
 			otherNodeGroupExists:   true,
 		},
 		{
-			name:                   "existing identical preferred when relaxed group penalty is enabled over non-existing",
-			relaxedGroupPenalty:    true,
-			cheaperNodeInfo:        nodeInfo10,
-			cheaperNodeGroupExists: true,
-			otherNodeInfo:          nodeInfo10,
-			otherNodeGroupExists:   false,
-		},
-		{
-			name:                   "existing identical preferred when relaxed group penalty is disabled over non-existing",
-			relaxedGroupPenalty:    false,
+			name:                   "existing identical preferred over non-existing",
 			cheaperNodeInfo:        nodeInfo10,
 			cheaperNodeGroupExists: true,
 			otherNodeInfo:          nodeInfo10,
@@ -1062,14 +1037,8 @@ func TestBestOption_NewNodeGroup(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 
-			bestOption := NewTestStrategy(provider, pricingModel, 1, WithRelaxedGroupPenaltyChecker(NewStaticRelaxedGroupPenaltyChecker(tc.relaxedGroupPenalty))).BestOption(context.TODO(), options, nodeInfos)
-			var want string
-			if tc.wantExpensive {
-				want = "expensive"
-			} else {
-				want = "cheaper"
-			}
-			assert.Contains(t, bestOption.Debug, want)
+			bestOption := NewTestStrategy(provider, pricingModel, 1).BestOption(context.TODO(), options, nodeInfos)
+			assert.Contains(t, bestOption.Debug, "cheaper")
 		})
 	}
 }

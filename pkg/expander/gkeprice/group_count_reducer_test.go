@@ -66,27 +66,19 @@ func TestProgressiveGroupCountReducer(t *testing.T) {
 	testCases := []struct {
 		locations      int
 		poolCount      int
-		hasGpu         bool
 		expectedResult float64
 	}{
-		{1, 1, false, 1.5 * 1},
-		{1, 10, false, 1.5 * 1.12},
-		{1, 30, false, 1.5 * 2.08},
-		{1, 50, false, 1.5 * 4.03},
-		{1, 58, false, 1.5 * 5.08},
-		{1, 1, true, 1.1 * 1},
-		{1, 10, true, 1.1 * 1.12},
-		{1, 30, true, 1.1 * 2.08},
-		{1, 50, true, 1.1 * 4.03},
-		{3, 1, false, 1.5 * 1},
-		{3, 10, false, 1.5 * 1.36},
-		{3, 30, false, 1.5 * 4.24},
-		{3, 1, true, 1.1 * 1},
-		{3, 10, true, 1.1 * 1.36},
-		{3, 30, true, 1.1 * 4.24},
+		{1, 1, 1},
+		{1, 10, 1.12},
+		{1, 30, 2.08},
+		{1, 50, 4.03},
+		{1, 58, 5.08},
+		{3, 1, 1},
+		{3, 10, 1.36},
+		{3, 30, 4.24},
 	}
 	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("locations=%d, poolCount=%d, hasGpu=%v", tc.locations, tc.poolCount, tc.hasGpu), func(t *testing.T) {
+		t.Run(fmt.Sprintf("locations=%d, poolCount=%d", tc.locations, tc.poolCount), func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().Build()
 			for i := 0; i < tc.poolCount; i++ {
 				machineType := fmt.Sprintf("n1-standard-%d", i+1)
@@ -96,10 +88,10 @@ func TestProgressiveGroupCountReducer(t *testing.T) {
 				}
 			}
 			reducer := NewProgressiveGroupCountReducer(provider)
-			result := reducer.GroupCreationPenalty(tc.hasGpu)
+			result := reducer.GroupCreationPenalty()
 			assert.InEpsilon(t, tc.expectedResult, result, 0.01,
-				"hasGpu %v, pools %v, MIGs %v, result %v, expected %v",
-				tc.hasGpu, tc.poolCount, len(provider.NodeGroups(context.TODO())), result, tc.expectedResult)
+				"pools %v, MIGs %v, result %v, expected %v",
+				tc.poolCount, len(provider.NodeGroups(context.TODO())), result, tc.expectedResult)
 		})
 	}
 }
@@ -120,18 +112,18 @@ func TestProgressiveGroupCountReducerOnAutopilot(t *testing.T) {
 			[]poolStruct{
 				{1, 10, true},
 			},
-			1.5 * 1.12,
+			1.12,
 		},
 		{
 			[]poolStruct{
 				{1, 10, true},
 				{1, 10, false},
 			},
-			1.5 * 1.12,
+			1.12,
 		},
 		{
 			[]poolStruct{{1, 30, true}},
-			1.5 * 2.08,
+			2.08,
 		},
 		{
 			[]poolStruct{
@@ -139,7 +131,7 @@ func TestProgressiveGroupCountReducerOnAutopilot(t *testing.T) {
 				{1, 10, false},
 				{2, 2, false},
 			},
-			1.5 * 2.08,
+			2.08,
 		},
 	}
 	for idx, tc := range testCases {
@@ -154,7 +146,7 @@ func TestProgressiveGroupCountReducerOnAutopilot(t *testing.T) {
 			}
 		}
 		reducer := NewProgressiveGroupCountReducer(provider)
-		result := reducer.GroupCreationPenalty(false)
+		result := reducer.GroupCreationPenalty()
 		assert.InEpsilon(t, tc.expectedResult, result, 0.01,
 			"test #%v: MIGs %v, result %v, expected %v",
 			idx, len(provider.NodeGroups(context.TODO())), result, tc.expectedResult)

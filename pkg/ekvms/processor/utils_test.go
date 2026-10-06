@@ -24,9 +24,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -605,6 +607,102 @@ func TestIsUserWorkloadPod(t *testing.T) {
 			if result != tc.expected {
 				t.Errorf("IsUserWorkloadPod(%v) = %v, expected %v", tc.pod.Name, result, tc.expected)
 			}
+		})
+	}
+}
+
+func TestPreventScheduleOnLookaheadNode(t *testing.T) {
+	testCases := []struct {
+		name               string
+		node               *v1.Node
+		experimentsEnabled map[string]bool
+		experimentsManager experiments.Manager
+		expected           bool
+	}{
+		{
+			name: "EK node with experiment enabled",
+			node: ekvms_test.EkNode8("ek-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: true,
+		},
+		{
+			name: "EK node with experiment disabled",
+			node: ekvms_test.EkNode8("ek-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: false,
+			},
+			expected: false,
+		},
+		{
+			name: "E4A node with experiment enabled",
+			node: ekvms_test.E4aNode8("e4a-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.E4aPreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: true,
+		},
+		{
+			name: "E4 node with experiment enabled",
+			node: ekvms_test.E4Node8("e4-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.E4PreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: true,
+		},
+		{
+			name: "E4 node with experiment disabled",
+			node: ekvms_test.E4Node8("e4-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.E4PreventScheduleOnLookaheadNodesFlag: false,
+			},
+			expected: false,
+		},
+		{
+			name: "Non-resizable node (n1)",
+			node: test.BuildTestNode("n1-node", 8000, 32*size.GiB),
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: false,
+		},
+		{
+			name: "Node without instance type label",
+			node: &v1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "unknown-node",
+				},
+			},
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: false,
+		},
+		{
+			name: "Nil node",
+			node: nil,
+			experimentsEnabled: map[string]bool{
+				experiments.EkPreventScheduleOnLookaheadNodesFlag: true,
+			},
+			expected: false,
+		},
+		{
+			name:               "Nil experiments manager",
+			node:               ekvms_test.EkNode8("ek-node", 8000, 32*size.GiB),
+			experimentsManager: nil,
+			expected:           false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			em := tc.experimentsManager
+			if em == nil && tc.experimentsEnabled != nil {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentsEnabled, nil)
+			}
+			result := PreventScheduleOnLookaheadNode(em, tc.node)
+			assert.Equal(t, tc.expected, result)
 		})
 	}
 }

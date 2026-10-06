@@ -18,7 +18,8 @@ import (
 	"context"
 
 	apiv1 "k8s.io/api/core/v1"
-	ek "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -27,24 +28,22 @@ import (
 
 type ScaleDownNodeProcessor struct {
 	experimentsManager experiments.Manager
+	mcp                *machinetypes.MachineConfigProvider
 }
 
-func NewScaleDownNodeProcessor(experimentsManager experiments.Manager) *ScaleDownNodeProcessor {
+func NewScaleDownNodeProcessor(mcp *machinetypes.MachineConfigProvider, experimentsManager experiments.Manager) *ScaleDownNodeProcessor {
 	return &ScaleDownNodeProcessor{
 		experimentsManager: experimentsManager,
+		mcp:                mcp,
 	}
 }
 
 // GetPodDestinationCandidates filters out nodes which contain lookahead pods.
 func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
-	if !p.experimentsManager.DirectLaunchBoolFlag(experiments.EkPreventScheduleOnLookaheadNodesFlag) {
-		return nodes, nil
-	}
-
 	var candidates []*apiv1.Node
 
 	for _, node := range nodes {
-		if isPodDestinationCandidate(ctx, node) {
+		if p.isPodDestinationCandidate(ctx, node) {
 			candidates = append(candidates, node)
 		}
 	}
@@ -52,15 +51,22 @@ func (p *ScaleDownNodeProcessor) GetPodDestinationCandidates(ctx *ca_context.Aut
 	return candidates, nil
 }
 
-func isPodDestinationCandidate(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
+func (p *ScaleDownNodeProcessor) isPodDestinationCandidate(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
 	// Filter out nil pointers.
 	if node == nil {
 		return false
 	}
-	// Lookahead pods can only be scheduled on EK machines.
-	if isEk, err := utils.IsEkMachine(node); !isEk || err != nil {
+
+	// Lookahead pods can only be scheduled on resizable machines.
+	isResizable, err := utils.IsResizableNode(node, p.mcp)
+	if err != nil || !isResizable {
 		return true
 	}
+
+	if !processor.PreventScheduleOnLookaheadNode(p.experimentsManager, node) {
+		return true
+	}
+
 	info, err := ctx.ClusterSnapshot.GetNodeInfo(node.Name)
 	// Let's consider nodes for which we fail to obtain info
 	// as potential pod destinations.
@@ -68,7 +74,7 @@ func isPodDestinationCandidate(ctx *ca_context.AutoscalingContext, node *apiv1.N
 		return true
 	}
 
-	if ek.HasLookaheadPods(info) {
+	if processor.HasLookaheadPods(info) {
 		return false
 	}
 	return true

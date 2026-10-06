@@ -24,8 +24,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-func BuildTestLookaheadPod(workloadID string, milliCpu, memBytes int64, options ...func(*apiv1.Pod)) *v1.Pod {
-	pod := GenerateLookaheadPods(1, *resource.NewMilliQuantity(milliCpu, resource.DecimalSI), *resource.NewQuantity(memBytes, resource.BinarySI), workloadID)[0]
+func BuildTestLookaheadPod(workloadID string, milliCpu, memBytes int64, machineFamily string, options ...func(*apiv1.Pod)) *v1.Pod {
+	pod := GenerateLookaheadPods(1, *resource.NewMilliQuantity(milliCpu, resource.DecimalSI), *resource.NewQuantity(memBytes, resource.BinarySI), workloadID, machineFamily)[0]
 
 	for _, o := range options {
 		o(pod)

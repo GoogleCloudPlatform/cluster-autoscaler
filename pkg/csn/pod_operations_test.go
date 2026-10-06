@@ -86,8 +86,8 @@ func TestMakePodCSN(t *testing.T) {
 			pod:      &apiv1.Pod{},
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
 			},
 		},
 		{
@@ -115,8 +115,8 @@ func TestMakePodCSN(t *testing.T) {
 			// nodeSelector is ANDed into the scheduling predicate separately, so the affinity is
 			// unaffected by it.
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
 			},
 		},
 		{
@@ -125,8 +125,8 @@ func TestMakePodCSN(t *testing.T) {
 			bufferId: "ns/buffer-3",
 			opts:     []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129")}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129"), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
 			},
 		},
 		{
@@ -134,8 +134,8 @@ func TestMakePodCSN(t *testing.T) {
 			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}}),
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement}},
 			},
 		},
 		{
@@ -146,10 +146,10 @@ func TestMakePodCSN(t *testing.T) {
 			),
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr)}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr)}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm, noLocalSSDRequirement}},
 			},
 		},
 		{
@@ -158,11 +158,11 @@ func TestMakePodCSN(t *testing.T) {
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
 				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr)},
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement},
 					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
 				},
 				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm},
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement},
 					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
 				},
 			},
@@ -201,6 +201,142 @@ func TestMakePodCSN(t *testing.T) {
 			})
 			assert.Equal(t, test.expectedTerms, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)
 			assert.True(t, IsCSNPod(test.pod))
+		})
+	}
+}
+
+func TestStripSuspensionConstraintsDeduplicatesTerms(t *testing.T) {
+	zoneRequirement := func(zone string) apiv1.NodeSelectorRequirement {
+		return apiv1.NodeSelectorRequirement{
+			Key:      "topology.kubernetes.io/zone",
+			Operator: apiv1.NodeSelectorOpIn,
+			Values:   []string{zone},
+		}
+	}
+	twentyExpressions := make([]apiv1.NodeSelectorRequirement, 20)
+	for i := range twentyExpressions {
+		idx := strconv.Itoa(i)
+		twentyExpressions[i] = apiv1.NodeSelectorRequirement{
+			Key:      "custom.label/" + idx,
+			Operator: apiv1.NodeSelectorOpIn,
+			Values:   []string{"value-" + idx},
+		}
+	}
+
+	tests := []struct {
+		name          string
+		originalTerms []apiv1.NodeSelectorTerm
+		wantExpanded  int
+		wantStripped  []apiv1.NodeSelectorTerm
+	}{
+		{
+			name:          "0 terms",
+			originalTerms: nil,
+			wantExpanded:  2,
+			wantStripped:  nil,
+		},
+		{
+			name: "1 term with 20 match expressions",
+			originalTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: twentyExpressions},
+			},
+			wantExpanded: 2,
+			wantStripped: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: twentyExpressions},
+			},
+		},
+		{
+			name: "multiple terms with a single expression",
+			originalTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-c")}},
+			},
+			wantExpanded: 6,
+			wantStripped: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b")}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-c")}},
+			},
+		},
+		{
+			name: "multiple terms with match expressions and match fields",
+			originalTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b")},
+					MatchFields: []apiv1.NodeSelectorRequirement{
+						{
+							Key:      "metadata.name",
+							Operator: apiv1.NodeSelectorOpIn,
+							Values:   []string{"node-1"},
+						},
+					},
+				},
+			},
+			wantExpanded: 4,
+			wantStripped: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b")},
+					MatchFields: []apiv1.NodeSelectorRequirement{
+						{
+							Key:      "metadata.name",
+							Operator: apiv1.NodeSelectorOpIn,
+							Values:   []string{"node-1"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "terms with expressions that exclude local SSD usage",
+			originalTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						zoneRequirement("us-central1-a"),
+						noLocalSSDRequirement,
+					},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						{
+							Key:      labels.EphemeralLocalSsdLabel,
+							Operator: apiv1.NodeSelectorOpDoesNotExist,
+						},
+					},
+				},
+			},
+			wantExpanded: 4,
+			wantStripped: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						zoneRequirement("us-central1-a"),
+					},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						{
+							Key:      labels.EphemeralLocalSsdLabel,
+							Operator: apiv1.NodeSelectorOpDoesNotExist,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			expanded := withSuspensionConstraints(tc.originalTerms, MemoryLimit{})
+			assert.Len(t, expanded, tc.wantExpanded)
+
+			stripped := stripSuspensionConstraints(expanded)
+			assert.Equal(t, tc.wantStripped, stripped)
 		})
 	}
 }

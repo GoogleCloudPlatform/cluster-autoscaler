@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -46,7 +47,8 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 	snapshotOrder := []string{"non-csn-1", "suspended-1", "chilling-1", "consumed-1", "suspended-2", "chilling-2", "non-csn-2", "consumed-2", "suspended-3"}
 
 	testCases := []struct {
-		description string
+		description        string
+		startFromLastMatch bool
 		// matches are the nodes that pods got scheduled on, in this order. For each of them
 		// the test calls MarkMatch, like the scheduler does after it places a pod on a node.
 		matches []string
@@ -54,7 +56,8 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 		wantOrder []string
 	}{
 		{
-			description: "Without matches, nodes are grouped by bucket and keep snapshot order",
+			description:        "Without matches, nodes are grouped by bucket and keep snapshot order",
+			startFromLastMatch: true,
 			wantOrder: []string{
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
@@ -64,8 +67,9 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 		},
 		{
 			// suspended-1 is still tried, just after suspended-3 and before the next bucket.
-			description: "A match makes the scan of its bucket start at the matched node",
-			matches:     []string{"suspended-2"},
+			description:        "A match makes the scan of its bucket start at the matched node",
+			startFromLastMatch: true,
+			matches:            []string{"suspended-2"},
 			wantOrder: []string{
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
@@ -74,8 +78,9 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 			},
 		},
 		{
-			description: "Each bucket remembers its own last match",
-			matches:     []string{"suspended-3", "chilling-2"},
+			description:        "Each bucket remembers its own last match",
+			startFromLastMatch: true,
+			matches:            []string{"suspended-3", "chilling-2"},
 			wantOrder: []string{
 				"consumed-1", "consumed-2",
 				"chilling-2", "chilling-1",
@@ -84,12 +89,24 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 			},
 		},
 		{
-			description: "The last match in a bucket decides where its scan starts",
-			matches:     []string{"suspended-3", "suspended-2"},
+			description:        "The last match in a bucket decides where its scan starts",
+			startFromLastMatch: true,
+			matches:            []string{"suspended-3", "suspended-2"},
 			wantOrder: []string{
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
 				"suspended-2", "suspended-3", "suspended-1",
+				"non-csn-1", "non-csn-2",
+			},
+		},
+		{
+			description:        "When startFromLastMatch is false, matches do not change scan order",
+			startFromLastMatch: false,
+			matches:            []string{"suspended-3", "chilling-2"},
+			wantOrder: []string{
+				"consumed-1", "consumed-2",
+				"chilling-1", "chilling-2",
+				"suspended-1", "suspended-2", "suspended-3",
 				"non-csn-1", "non-csn-2",
 			},
 		},
@@ -98,7 +115,7 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			nodeInfos := buildTestNodeInfos(snapshotOrder...)
-			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities)
+			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities, tc.startFromLastMatch)
 			mapping.Reset(nodeInfos)
 
 			for _, name := range tc.matches {
@@ -113,7 +130,7 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 // TestBucketedNodeOrderMappingMarkMatchOutOfRange checks that MarkMatch ignores indices outside the collection.
 func TestBucketedNodeOrderMappingMarkMatchOutOfRange(t *testing.T) {
 	nodeInfos := buildTestNodeInfos("suspended-1", "chilling-1", "suspended-2")
-	mapping := newBucketedNodeOrderMapping(map[string]int{"chilling-1": 0, "suspended-1": 1, "suspended-2": 1}, 2)
+	mapping := newBucketedNodeOrderMapping(map[string]int{"chilling-1": 0, "suspended-1": 1, "suspended-2": 1}, 2, true)
 	mapping.Reset(nodeInfos)
 
 	mapping.MarkMatch(-1)
@@ -164,7 +181,7 @@ func TestBucketedNodeOrderMappingReset(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities)
+			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities, true)
 			mapping.Reset(buildTestNodeInfos(snapshotOrder...))
 
 			newNodeInfos := buildTestNodeInfos(tc.newSnapshotOrder...)
@@ -200,7 +217,7 @@ func TestBucketedNodeOrderMappingResetAfterMatch(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities)
+			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities, true)
 			nodeInfos := buildTestNodeInfos("suspended-1", "suspended-2")
 			mapping.Reset(nodeInfos)
 			mapping.MarkMatch(testNodeIndex(t, nodeInfos, "suspended-2"))
@@ -214,7 +231,7 @@ func TestBucketedNodeOrderMappingResetAfterMatch(t *testing.T) {
 }
 
 func TestBucketedNodeOrderMappingIsNodeAcceptable(t *testing.T) {
-	mapping := newBucketedNodeOrderMapping(map[string]int{"chilling-1": 0, "suspended-1": 1}, 2)
+	mapping := newBucketedNodeOrderMapping(map[string]int{"chilling-1": 0, "suspended-1": 1}, 2, true)
 
 	// isNodeAcceptable only looks at nodePriorities, so it works before the first Reset.
 	for _, ni := range buildTestNodeInfos("chilling-1", "suspended-1") {
@@ -258,4 +275,32 @@ func scanOrder(t *testing.T, m *bucketedNodeOrderMapping, nodeInfos []*framework
 	assert.Equal(t, -1, m.At(-1), "At(-1)")
 	assert.Equal(t, -1, m.At(len(nodeInfos)), "At(len(nodeInfos))")
 	return order
+}
+
+func BenchmarkBucketedNodeOrderMapping(b *testing.B) {
+	const numNodes = 7000
+	names := make([]string, numNodes)
+	for i := range numNodes {
+		names[i] = fmt.Sprintf("node-%d", i)
+	}
+	nodeInfos := buildTestNodeInfos(names...)
+
+	for _, numPriorities := range []int{3, 100, 1000} {
+		b.Run(fmt.Sprintf("%dPriorities_%dNodes", numPriorities, numNodes), func(b *testing.B) {
+			nodePriorities := make(map[string]int, numNodes)
+			for i, name := range names {
+				nodePriorities[name] = i % numPriorities
+			}
+			mapping := newBucketedNodeOrderMapping(nodePriorities, numPriorities, true)
+			mapping.Reset(nodeInfos)
+
+			b.ResetTimer()
+			for range b.N {
+				for i := range numNodes {
+					idx := mapping.At(i)
+					mapping.MarkMatch(idx)
+				}
+			}
+		})
+	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
@@ -82,6 +83,33 @@ func TestBasicPriorityFilter(t *testing.T) {
 			assert.Equal(t, tc.expected, got)
 		})
 	}
+}
+
+func buildCCCStandbyPod(name string) *apiv1.Pod {
+	pod := test.BuildTestPod(name, 1000, 1*GiB)
+	pod.Namespace = "gke-managed-ccc"
+	pod.Labels = map[string]string{gkelabels.ComputeClassLabel: "my-ccc"}
+	pod.Spec.Tolerations = []apiv1.Toleration{
+		{Key: metadata.SoftWorkloadSeparationKey, Operator: apiv1.TolerationOpExists},
+	}
+	pod.Spec.Affinity = &apiv1.Affinity{
+		NodeAffinity: &apiv1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+				NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+					{
+						MatchExpressions: []apiv1.NodeSelectorRequirement{
+							{
+								Key:      metadata.SoftWorkloadSeparationKey,
+								Operator: apiv1.NodeSelectorOpNotIn,
+								Values:   []string{"true"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	return pod
 }
 
 func TestSchedulePodsOnCSNNodes(t *testing.T) {
@@ -241,6 +269,40 @@ func TestSchedulePodsOnCSNNodes(t *testing.T) {
 				isChillingFilter,
 			},
 			expectedScheduling: map[string]string{},
+		},
+		{
+			description: "Do not schedule CCC standby pod on suspended node if ignoreManagedByCCCAntiAffinityForCSN is false",
+			pods: []*apiv1.Pod{
+				buildCCCStandbyPod("ccc-standby-pod"),
+			},
+			nodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			options: schedulePodsOnCSNNodesOptions{
+				ignoreManagedByCCCAntiAffinityForCSN: false,
+			},
+			priorities: []priorityFilter{
+				isSuspendedFilter,
+			},
+			expectedScheduling: map[string]string{},
+		},
+		{
+			description: "Schedule CCC standby pod on suspended node if ignoreManagedByCCCAntiAffinityForCSN is true",
+			pods: []*apiv1.Pod{
+				buildCCCStandbyPod("ccc-standby-pod"),
+			},
+			nodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			options: schedulePodsOnCSNNodesOptions{
+				ignoreManagedByCCCAntiAffinityForCSN: true,
+			},
+			priorities: []priorityFilter{
+				isSuspendedFilter,
+			},
+			expectedScheduling: map[string]string{
+				"ccc-standby-pod": "node-1",
+			},
 		},
 	}
 	for _, tc := range testCases {
@@ -1063,4 +1125,560 @@ func TestRemoveBufferAssignmentForProcessors(t *testing.T) {
 			assert.ElementsMatch(t, tc.expectedTaints, node.Spec.Taints, "Taints mismatch")
 		})
 	}
+}
+
+func TestIsManagedByCCC(t *testing.T) {
+	testCases := []struct {
+		description string
+		pod         *apiv1.Pod
+		expected    bool
+	}{
+		{
+			description: "nil pod",
+			pod:         nil,
+			expected:    false,
+		},
+		{
+			description: "pod in other namespace with CCC label",
+			pod: &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "my-ccc",
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod in gke-managed-ccc without labels",
+			pod: &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "gke-managed-ccc",
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod in gke-managed-ccc with other labels",
+			pod: &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "gke-managed-ccc",
+					Labels: map[string]string{
+						"app": "nginx",
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod in gke-managed-ccc with CCC label",
+			pod: &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "gke-managed-ccc",
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "my-ccc",
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			description: "pod in gke-managed-ccc with empty CCC label value",
+			pod: &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "gke-managed-ccc",
+					Labels: map[string]string{
+						gkelabels.ComputeClassLabel: "",
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			assert.Equal(t, tc.expected, isManagedByCCC(tc.pod))
+		})
+	}
+}
+
+func TestIsCSNAntiAffinityRequirement(t *testing.T) {
+	testCases := []struct {
+		description string
+		req         apiv1.NodeSelectorRequirement
+		expected    bool
+	}{
+		{
+			description: "matching CSN anti-affinity requirement",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   []string{"true"},
+			},
+			expected: true,
+		},
+		{
+			description: "different key",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      "other-key",
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   []string{"true"},
+			},
+			expected: false,
+		},
+		{
+			description: "different operator",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpIn,
+				Values:   []string{"true"},
+			},
+			expected: false,
+		},
+		{
+			description: "different value",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   []string{"false"},
+			},
+			expected: false,
+		},
+		{
+			description: "multiple values",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   []string{"true", "false"},
+			},
+			expected: false,
+		},
+		{
+			description: "empty values slice",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   []string{},
+			},
+			expected: false,
+		},
+		{
+			description: "nil values",
+			req: apiv1.NodeSelectorRequirement{
+				Key:      metadata.SoftWorkloadSeparationKey,
+				Operator: apiv1.NodeSelectorOpNotIn,
+				Values:   nil,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			assert.Equal(t, tc.expected, isCSNAntiAffinityRequirement(tc.req))
+		})
+	}
+}
+
+func TestHasCSNAntiAffinity(t *testing.T) {
+	testCases := []struct {
+		description string
+		pod         *apiv1.Pod
+		expected    bool
+	}{
+		{
+			description: "nil pod",
+			pod:         nil,
+			expected:    false,
+		},
+		{
+			description: "pod with nil affinity",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: nil,
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod with nil node affinity",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: nil,
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod with nil RequiredDuringSchedulingIgnoredDuringExecution",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: nil,
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod with unrelated node affinity",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{
+										MatchExpressions: []apiv1.NodeSelectorRequirement{
+											{
+												Key:      "kubernetes.io/os",
+												Operator: apiv1.NodeSelectorOpIn,
+												Values:   []string{"linux"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: false,
+		},
+		{
+			description: "pod with CSN anti-affinity in single term",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{
+										MatchExpressions: []apiv1.NodeSelectorRequirement{
+											{
+												Key:      metadata.SoftWorkloadSeparationKey,
+												Operator: apiv1.NodeSelectorOpNotIn,
+												Values:   []string{"true"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			description: "pod with multiple terms, second term containing CSN anti-affinity",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{
+										MatchExpressions: []apiv1.NodeSelectorRequirement{
+											{
+												Key:      "kubernetes.io/os",
+												Operator: apiv1.NodeSelectorOpIn,
+												Values:   []string{"linux"},
+											},
+										},
+									},
+									{
+										MatchExpressions: []apiv1.NodeSelectorRequirement{
+											{
+												Key:      metadata.SoftWorkloadSeparationKey,
+												Operator: apiv1.NodeSelectorOpNotIn,
+												Values:   []string{"true"},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			assert.Equal(t, tc.expected, hasCSNAntiAffinity(tc.pod))
+		})
+	}
+}
+
+func TestStripCSNAntiAffinity(t *testing.T) {
+	otherReq := apiv1.NodeSelectorRequirement{
+		Key:      "kubernetes.io/arch",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"amd64"},
+	}
+	csnReq := apiv1.NodeSelectorRequirement{
+		Key:      metadata.SoftWorkloadSeparationKey,
+		Operator: apiv1.NodeSelectorOpNotIn,
+		Values:   []string{"true"},
+	}
+	matchFieldReq := apiv1.NodeSelectorRequirement{
+		Key:      "metadata.name",
+		Operator: apiv1.NodeSelectorOpIn,
+		Values:   []string{"node-1"},
+	}
+
+	testCases := []struct {
+		description         string
+		pod                 *apiv1.Pod
+		expectedTerms       []apiv1.NodeSelectorTerm
+		expectedRequiredNil bool
+	}{
+		{
+			description: "nil pod is safe no-op",
+			pod:         nil,
+		},
+		{
+			description: "pod with nil affinity is safe no-op",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{Affinity: nil},
+			},
+		},
+		{
+			description: "pod with nil node affinity is safe no-op",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{NodeAffinity: nil},
+				},
+			},
+		},
+		{
+			description: "pod with only CSN anti-affinity in single term cleans up Required to nil",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{MatchExpressions: []apiv1.NodeSelectorRequirement{csnReq}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedRequiredNil: true,
+		},
+		{
+			description: "pod with mixed requirements in single term removes only CSN requirement",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq, csnReq}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq}},
+			},
+		},
+		{
+			description: "pod with multiple terms drops term that becomes empty and preserves non-empty term",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq}},
+									{MatchExpressions: []apiv1.NodeSelectorRequirement{csnReq}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq}},
+			},
+		},
+		{
+			description: "pod with MatchFields preserves term even when MatchExpressions becomes empty",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{
+										MatchExpressions: []apiv1.NodeSelectorRequirement{csnReq},
+										MatchFields:      []apiv1.NodeSelectorRequirement{matchFieldReq},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{},
+					MatchFields:      []apiv1.NodeSelectorRequirement{matchFieldReq},
+				},
+			},
+		},
+		{
+			description: "pod without CSN anti-affinity is untouched",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Affinity: &apiv1.Affinity{
+						NodeAffinity: &apiv1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+								NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+									{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq}},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedTerms: []apiv1.NodeSelectorTerm{
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{otherReq}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			stripCSNAntiAffinity(tc.pod)
+			if tc.pod == nil || tc.pod.Spec.Affinity == nil || tc.pod.Spec.Affinity.NodeAffinity == nil {
+				return
+			}
+			req := tc.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+			if tc.expectedRequiredNil {
+				assert.Nil(t, req)
+			} else {
+				assert.NotNil(t, req)
+				assert.Equal(t, tc.expectedTerms, req.NodeSelectorTerms)
+			}
+			assert.False(t, hasCSNAntiAffinity(tc.pod))
+		})
+	}
+}
+
+func TestClonePodsWithoutCSNAntiAffinity(t *testing.T) {
+	t.Run("empty and nil slice", func(t *testing.T) {
+		clonedNil, mapNil := clonePodsWithoutCSNAntiAffinity(nil)
+		assert.Empty(t, clonedNil)
+		assert.Empty(t, mapNil)
+
+		clonedEmpty, mapEmpty := clonePodsWithoutCSNAntiAffinity([]*apiv1.Pod{})
+		assert.Empty(t, clonedEmpty)
+		assert.Empty(t, mapEmpty)
+	})
+
+	t.Run("cloning and stripping behaviour for mixed pods", func(t *testing.T) {
+		csnAffinity := &apiv1.Affinity{
+			NodeAffinity: &apiv1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+					NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+						{
+							MatchExpressions: []apiv1.NodeSelectorRequirement{
+								{
+									Key:      metadata.SoftWorkloadSeparationKey,
+									Operator: apiv1.NodeSelectorOpNotIn,
+									Values:   []string{"true"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		// 1. CCC pod with CSN anti-affinity (should be cloned and stripped)
+		cccPodWithAffinity := &apiv1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ccc-pod-with-affinity",
+				Namespace: "gke-managed-ccc",
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel: "my-ccc",
+				},
+			},
+			Spec: apiv1.PodSpec{
+				Affinity: csnAffinity.DeepCopy(),
+			},
+		}
+
+		// 2. CCC pod without CSN anti-affinity (should not be cloned)
+		cccPodWithoutAffinity := &apiv1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "ccc-pod-without-affinity",
+				Namespace: "gke-managed-ccc",
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel: "my-ccc",
+				},
+			},
+			Spec: apiv1.PodSpec{},
+		}
+
+		// 3. Non-CCC pod with CSN anti-affinity (should not be cloned)
+		nonCCCPodWithAffinity := &apiv1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "non-ccc-pod-with-affinity",
+				Namespace: "default",
+			},
+			Spec: apiv1.PodSpec{
+				Affinity: csnAffinity.DeepCopy(),
+			},
+		}
+
+		// 4. Non-CCC pod without affinity (should not be cloned)
+		nonCCCPodWithoutAffinity := &apiv1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "non-ccc-pod-without-affinity",
+				Namespace: "default",
+			},
+			Spec: apiv1.PodSpec{},
+		}
+
+		inputPods := []*apiv1.Pod{cccPodWithAffinity, cccPodWithoutAffinity, nonCCCPodWithAffinity, nonCCCPodWithoutAffinity}
+		clonedPods, podMap := clonePodsWithoutCSNAntiAffinity(inputPods)
+
+		assert.Len(t, clonedPods, 4)
+		assert.Len(t, podMap, 4)
+
+		// Check 1: cccPodWithAffinity was cloned and stripped, original was unmodified
+		assert.NotSame(t, cccPodWithAffinity, clonedPods[0])
+		assert.False(t, hasCSNAntiAffinity(clonedPods[0]))
+		assert.True(t, hasCSNAntiAffinity(cccPodWithAffinity))
+		assert.Same(t, cccPodWithAffinity, podMap[clonedPods[0]])
+
+		// Check 2: cccPodWithoutAffinity was not cloned
+		assert.Same(t, cccPodWithoutAffinity, clonedPods[1])
+		assert.Same(t, cccPodWithoutAffinity, podMap[clonedPods[1]])
+
+		// Check 3: nonCCCPodWithAffinity was not cloned
+		assert.Same(t, nonCCCPodWithAffinity, clonedPods[2])
+		assert.True(t, hasCSNAntiAffinity(clonedPods[2]))
+		assert.Same(t, nonCCCPodWithAffinity, podMap[clonedPods[2]])
+
+		// Check 4: nonCCCPodWithoutAffinity was not cloned
+		assert.Same(t, nonCCCPodWithoutAffinity, clonedPods[3])
+		assert.Same(t, nonCCCPodWithoutAffinity, podMap[clonedPods[3]])
+	})
 }

@@ -1082,7 +1082,7 @@ func TestFleetEfficiency_ZonalPod_FallbackReusesExistingNodePoolOverUncreatedNap
 				AllocationStrategy: &fleetEfficiency,
 			},
 			v1.Priority{
-				MachineType:        ptr.To("e2-standard-4"),
+				MachineType:        ptr.To("e2-standard-8"),
 				PriorityScore:      ptr.To(100),
 				AllocationStrategy: &fleetEfficiency,
 			},
@@ -1115,9 +1115,9 @@ func TestFleetEfficiency_ZonalPod_FallbackReusesExistingNodePoolOverUncreatedNap
 			fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithScore(0.9),
 			fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithScore(0.2),
 			fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithScore(0.9),
-			fake.NewGuidance("e2-standard-4").WithZone(ZoneA).WithScore(0.1),
-			fake.NewGuidance("e2-standard-4").WithZone(ZoneB).WithScore(0.8),
-			fake.NewGuidance("e2-standard-4").WithZone(ZoneC).WithScore(0.1),
+			fake.NewGuidance("e2-standard-8").WithZone(ZoneA).WithScore(0.1),
+			fake.NewGuidance("e2-standard-8").WithZone(ZoneB).WithScore(0.8),
+			fake.NewGuidance("e2-standard-8").WithZone(ZoneC).WithScore(0.1),
 		)
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)

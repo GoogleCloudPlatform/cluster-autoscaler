@@ -170,6 +170,11 @@ func divideDisregardedMigs(disregardedMigInfos []vistypes.DisregardedMigInfo) di
 			standardBackedOff = append(standardBackedOff, disregardedMigInfo)
 		case autoprovisioning.UnableToBuildNodeGroup:
 			unableToBuildNodeGroup = append(unableToBuildNodeGroup, disregardedMigInfo)
+		case autoprovisioning.ReservationSubBlockAlreadyTargeted:
+			// Like InStandardBackoff, this has no dedicated zonal visibility message (the caller
+			// falls back to NewNoScaleUpNapPodZonalOtherErrorMsg when no other reason applies in
+			// the zone). Handle it explicitly so it does not hit default and get logged and
+			// surfaced as an unexpected internal error.
 		case autoprovisioning.InternalError:
 			internalError = append(internalError, disregardedMigInfo)
 		case autoprovisioning.NoReason:

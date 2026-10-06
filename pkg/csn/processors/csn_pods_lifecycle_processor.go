@@ -270,8 +270,12 @@ func addTaint(node *apiv1.Node, taint apiv1.Taint) {
 
 // Note: scheduleAndMarkSuspendableNodes assumes that it is already under a forked snapshot.
 func (p *CSNPodsLifecycleProcessor) scheduleAndMarkSuspendableNodes(snapshot clustersnapshot.ClusterSnapshot, unschedulablePods []*apiv1.Pod, csnPods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	startFromLastMatch := p.experimentsManager != nil && p.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesSchedulingStartFromLastMatchFlag)
 	nodesOfScheduledPods, err := schedulePodsOnCSNNodes(snapshot, p.simulator, csnPods,
-		schedulePodsOnCSNNodesOptions{ignoreBufferAssignment: false},
+		schedulePodsOnCSNNodesOptions{
+			ignoreBufferAssignment: false,
+			startFromLastMatch:     startFromLastMatch,
+		},
 		isChillingFilter,
 		isSuspendedFilter,
 	)

@@ -16,6 +16,7 @@ package status
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -334,11 +335,13 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 			provider.On("IsAutopilotEnabled").Return(tc.isAutopilot)
 
 			var nodeInfos []*framework.NodeInfo
-			for _, ngDef := range tc.nodeGroups {
-				ng := gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
-					MachineType: ngDef.machineType,
-					Labels:      ngDef.labels,
-				}).Build()
+			for i, ngDef := range tc.nodeGroups {
+				ng := gke.NewTestGkeMigBuilder().
+					SetId(fmt.Sprintf("ng-%d", i)).
+					SetSpec(&gkeclient.NodePoolSpec{
+						MachineType: ngDef.machineType,
+						Labels:      ngDef.labels,
+					}).Build()
 
 				for _, nDef := range ngDef.nodes {
 					node := test.BuildTestNode(nDef.name, nDef.cpu, nDef.mem)
@@ -507,4 +510,78 @@ type expectedUpdateDef struct {
 	currentCount          int
 	targetCount           int
 	utilizationPercentage int
+}
+
+type countingMatcher struct {
+	computeclass.Matcher
+	callCount int
+}
+
+func (c *countingMatcher) FirstMatchedRule(ng cloudprovider.NodeGroup, crd crd.CRD) (bool, int, npc_rules.Rule) {
+	c.callCount++
+	return c.Matcher.FirstMatchedRule(ng, crd)
+}
+
+func TestCrdResourceReportingProcessor_NodeGroupMatchingMemoization(t *testing.T) {
+	testCrdLabel := "ComputeClass"
+	machineFamilyN2 := "n2"
+	testCrd := crd.NewTestCrd(
+		crd.WithCrdType("CCC"),
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("test-ccc"),
+		crd.WithRules([]npc_rules.Rule{
+			npc_rules.NewMachineSpecRule(&machineFamilyN2, nil, nil, nil),
+		}),
+	)
+
+	mockCrdLister := lister.NewMockCrdLister([]crd.CRD{testCrd})
+	mockCrdLister.SetCrdLabel(testCrdLabel)
+
+	provider := &gke.GkeCloudProviderMock{}
+	provider.On("IsAutopilotEnabled").Return(false)
+
+	ng := gke.NewTestGkeMigBuilder().
+		SetId("test-ng-1").
+		SetSpec(&gkeclient.NodePoolSpec{
+			MachineType: "n2-standard-4",
+			Labels:      map[string]string{testCrdLabel: "test-ccc"},
+		}).Build()
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	for i := 0; i < 5; i++ {
+		node := test.BuildTestNode(fmt.Sprintf("node-%d", i), 4000, 16*GB)
+		provider.On("GetNodeGpuConfig", node).Return((*cloudprovider.GpuConfig)(nil))
+		provider.On("NodeGroupForNode", node).Return(ng, nil)
+		if err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)); err != nil {
+			t.Fatalf("Failed to add node: %v", err)
+		}
+	}
+
+	baseMatcher := computeclass.NewMatcher(mockCrdLister, provider)
+	counter := &countingMatcher{Matcher: baseMatcher}
+
+	processor := &CrdResourceReportingProcessor{
+		npcCrdLister: mockCrdLister,
+		updatesCh:    make(chan UpdateMessage, 20),
+		matcher:      counter,
+		experimentsManager: experiments.NewMockManagerWithOptions(
+			version.Version{},
+			map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+			map[string]string{},
+		),
+	}
+
+	ctx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: snapshot,
+		CloudProvider:   provider,
+	}
+
+	err := processor.Process(context.TODO(), ctx, &clusterstate.ClusterStateRegistry{}, time.Now())
+	if err != nil {
+		t.Fatalf("Process failed: %v", err)
+	}
+
+	if counter.callCount != 1 {
+		t.Errorf("Expected FirstMatchedRule to be called once for the node group with 5 nodes, but got %d calls", counter.callCount)
+	}
 }

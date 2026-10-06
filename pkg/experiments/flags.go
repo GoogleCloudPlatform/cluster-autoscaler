@@ -40,8 +40,6 @@ const RecommendLocationsDisabledForTPUFlag = "RecommendLocations::DisabledForTPU
 const RecommendLocationsResourcePolicyFlag = "RecommendLocationsResourcePolicy::EnabledMinCAVersion"
 const RecommendLocationsFlexAddInstancesFlag = "RecommendLocationsFlexAddInstances::EnabledMinCAVersion"
 
-const RelaxedNodeGroupCreationPenalty = "RelaxedNodeGroupCreationPenalty::MinCAVersion"
-
 const ReservationSubblocksTargetingEnabledFlag = "ReservationSubblocksTargeting::EnabledMinCAVersion"
 
 // ReservationSubBlockDeduplicationEnabledFlag controls whether NAP refuses to inject an atomically
@@ -87,6 +85,9 @@ const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVer
 const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
 const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
 
+const ComputeClassCapacityBuffersFlag = "ComputeClassCapacityBuffers::Enabled"
+const ComputeClassCapacityBuffersMinCAVersionFlag = "ComputeClassCapacityBuffers::MinCAVersion"
+
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"
@@ -103,6 +104,7 @@ const CapacityBuffersEnabled = "CapacityBuffers::Enabled"
 const CapacityBuffersMetricProcessor = "CapacityBuffers::MetricProcessor"                       // Direct launch.
 const CapacityBuffersPerBufferMetrics = "CapacityBuffers::PerBufferMetrics"                     // Direct launch.
 const CapacityBuffersPerAcceleratorModelMetrics = "CapacityBuffers::PerAcceleratorModelMetrics" // Direct launch.
+const CapacityBuffersMetricsEndpoint = "CapacityBuffers::MetricsEndpoint"                       // Direct launch.
 
 const ColdStandbyNodesInternalMinCAVersionFlag = "ColdStandbyNodes::InternalMinCAVersion"
 const ColdStandbyNodesControllerConfigV1Flag = "ColdStandbyNodes::NodeControllerConfigV1"
@@ -125,7 +127,8 @@ const ColdStandbyNodesSuspendTimeoutSecondsFlag = "ColdStandbyNodes::SuspendTime
 // csn.defaultMinUnsupportedMemoryGB.
 const ColdStandbyNodesMinUnsupportedMemoryGBFlag = "ColdStandbyNodes::MinUnsupportedMemoryGB"
 const ColdStandbyNodesScaleUpStatusProcessorFlag = "ColdStandbyNodes::ScaleUpStatusProcessor"
-const ColdStandbyNodesEmitNodeControllerEventsFlag = "ColdStandbyNodes::EmitNodeControllerEvents" // Direct launch.
+const ColdStandbyNodesEmitNodeControllerEventsFlag = "ColdStandbyNodes::EmitNodeControllerEvents"         // Direct launch.
+const ColdStandbyNodesSchedulingStartFromLastMatchFlag = "ColdStandbyNodes::SchedulingStartFromLastMatch" // Direct launch.
 
 const SliceOfHardwareReservationSteerLocalSSDFlag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD"
 const SliceOfHardwareReservationSteerLocalSSD2Flag = "AutopilotSliceOfHardware::ReservationSteerLocalSSD2"

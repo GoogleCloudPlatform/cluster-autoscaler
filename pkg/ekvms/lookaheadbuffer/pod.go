@@ -49,16 +49,15 @@ const (
 // to ensure consistent behavior in the hinting simulator. They are placed in the "kube-system"
 // namespace so users will see it in scale-up events as part of system pods, although it is
 // worth noting that such pods block scale-down in CA (non-daemonSet non-mirrored kube-system pod without PDB).
-// All pods are configured to request the specified CPU and memory resources and target EKVMs by using the "ek"
-// machine family label. The lookaheadPodLabel is added for easy and future-proof identification.
-
-func GenerateLookaheadPods(number int, cpu, memory resource.Quantity, workloadID string) []*apiv1.Pod {
+// All pods are configured to request the specified CPU and memory resources and target resizable VMs by using
+// the corresponding machine family label. The lookaheadPodLabel is added for easy and future-proof identification.
+func GenerateLookaheadPods(number int, cpu, memory resource.Quantity, workloadID, machineFamily string) []*apiv1.Pod {
 	hash := hashWorkloadID(workloadID)
-	basename := fmt.Sprintf("%s-%s-", lookaheadPodNamePrefix, hash)
+	basename := fmt.Sprintf("%s-%s-%s-", lookaheadPodNamePrefix, machineFamily, hash)
 
 	// Controller logic: CA uses ControllerRef to group pods.
 	// We create a virtual "LookaheadBuffer" owner.
-	virtualUID := types.UID(fmt.Sprintf("%s-%s", lookaheadVUIDPrefix, hash))
+	virtualUID := types.UID(fmt.Sprintf("%s-%s-%s", lookaheadVUIDPrefix, machineFamily, hash))
 
 	pod := &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -75,7 +74,7 @@ func GenerateLookaheadPods(number int, cpu, memory resource.Quantity, workloadID
 				{
 					APIVersion: "v1",
 					Kind:       lookaheadBufferKind,
-					Name:       fmt.Sprintf("%s-%s", lookaheadBufferName, hash),
+					Name:       fmt.Sprintf("%s-%s-%s", lookaheadBufferName, machineFamily, hash),
 					UID:        virtualUID,
 					Controller: ptr.To(true),
 				},
@@ -93,7 +92,7 @@ func GenerateLookaheadPods(number int, cpu, memory resource.Quantity, workloadID
 				},
 			},
 			NodeSelector: map[string]string{
-				labels.MachineFamilyLabel: "ek",
+				labels.MachineFamilyLabel: machineFamily,
 			},
 		},
 	}

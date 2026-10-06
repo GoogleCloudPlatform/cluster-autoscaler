@@ -2148,14 +2148,12 @@ var (
 				withInstancePriceOverride(10.030586).
 				withPreemptibleInstancePriceOverride(5.776885),
 			NewMachineTypeInfo("h4d-megamem-192", 192, 3024).
-				withExplicitReqOnly(),
-			// TODO(b/538222593): Add price overrides once Ohara pricing is available.
-			// While explicit-only during Preview, missing pricing does not affect NAP selection.
-			// However, price overrides must be added before lifting the explicit-only restriction
-			// so it is properly accounted for in the Performance compute class.
+				withInstancePriceOverride(18.397536).
+				withPreemptibleInstancePriceOverride(7.358976),
 			NewMachineTypeInfo("h4d-megamem-192-lssd", 192, 3024).
 				withAutomaticEphemeralLocalSsdCount(32).
-				withExplicitReqOnly(),
+				withInstancePriceOverride(21.497444).
+				withPreemptibleInstancePriceOverride(8.598938),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
 		supportCompactPlacement:  true,

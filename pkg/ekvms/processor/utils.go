@@ -27,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
@@ -36,6 +37,14 @@ const (
 	miBToKiB = size.MiB / size.KiB
 	giBToKiB = size.GiB / size.KiB
 )
+
+// PreventScheduleOnLookaheadExperimentFlags maps machine family names to their corresponding experiment flag
+// that controls whether scheduling on lookahead nodes should be prevented.
+var PreventScheduleOnLookaheadExperimentFlags = map[string]string{
+	machinetypes.EK.Name():  experiments.EkPreventScheduleOnLookaheadNodesFlag,
+	machinetypes.E4A.Name(): experiments.E4aPreventScheduleOnLookaheadNodesFlag,
+	machinetypes.E4.Name():  experiments.E4PreventScheduleOnLookaheadNodesFlag,
+}
 
 // getRequestedResources returns the requested resources of the node as Allocatable.
 func getRequestedResources(nodeInfo *framework.NodeInfo) size.Allocatable {
@@ -161,4 +170,20 @@ func HasLookaheadPods(nodeInfo *framework.NodeInfo) bool {
 // IsUserWorkloadPod returns true if the pod is non-static non-daemonSet non-kubesystem pod.
 func IsUserWorkloadPod(pod *apiv1.Pod) bool {
 	return !isSystemPod(pod) && !podutils.IsDaemonSetPod(pod) && !podutils.IsMirrorPod(pod) && !podutils.IsStaticPod(pod)
+}
+
+// PreventScheduleOnLookaheadNode returns true if scheduling on the lookahead node should be prevented based on its machine family.
+func PreventScheduleOnLookaheadNode(experimentsManager experiments.Manager, node *apiv1.Node) bool {
+	if experimentsManager == nil || node == nil {
+		return false
+	}
+	machineFamily, err := utils.GetMachineFamilyName(node)
+	if err != nil {
+		return false
+	}
+	flag, found := PreventScheduleOnLookaheadExperimentFlags[machineFamily]
+	if !found {
+		return false
+	}
+	return experimentsManager.DirectLaunchBoolFlag(flag)
 }

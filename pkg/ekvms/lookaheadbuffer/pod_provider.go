@@ -24,25 +24,29 @@ import (
 	klog "k8s.io/klog/v2"
 )
 
+type strategyProvider interface {
+	Strategy(machineFamily string) (strategy.LookaheadPodStrategy, error)
+}
+
 type PodProvider interface {
-	GetLookaheadPods(targetNodesCPU int, workloadIDHash string) []*apiv1.Pod
+	GetLookaheadPods(targetNodesCPU int, workloadIDHash, machineFamily string) []*apiv1.Pod
 }
 
 type podProviderImpl struct {
-	strategyProvider strategy.Provider
+	strategyProvider strategyProvider
 }
 
-func NewPodProvider(strategyProvider strategy.Provider) *podProviderImpl {
+func NewPodProvider(strategyProvider strategyProvider) *podProviderImpl {
 	return &podProviderImpl{
 		strategyProvider: strategyProvider,
 	}
 }
 
-func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash string) []*apiv1.Pod {
+func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash, machineFamily string) []*apiv1.Pod {
 	if p == nil {
 		return nil
 	}
-	laStrategy, err := p.strategyProvider.Strategy()
+	laStrategy, err := p.strategyProvider.Strategy(machineFamily)
 	if err != nil {
 		klog.Errorf("Error during getting lookahead pods, assuming no lookahead pods: %v", err)
 		return nil
@@ -62,7 +66,7 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash st
 	}
 	cpu := *resource.NewMilliQuantity(int64(tier.LookaheadPodMilliCPU), resource.DecimalSI)
 	memory := *resource.NewQuantity(int64(tier.LookaheadPodMemKib*size.KiB), resource.BinarySI)
-	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash)
+	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash, machineFamily)
 }
 
 func getLookaheadPodNumber(targetNodesCPU int, tier strategy.Tier) int {

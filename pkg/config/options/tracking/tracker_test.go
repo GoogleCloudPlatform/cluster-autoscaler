@@ -161,6 +161,19 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantRestart:                 true,
 		},
 		{
+			testName:                    "CapacityBuffersMetricsEndpointEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: false}},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: true}},
+			wantRestart:                 false,
+		},
+		{
+			testName:                    "CapacityBuffersMetricsEndpointEnabled_is_tracked_when_experiment_disables_it",
+			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: true}},
+			experimentValues:            map[string]bool{experiments.CapacityBuffersMetricsEndpoint: false},
+			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: false}},
+			wantRestart:                 true,
+		},
+		{
 			testName: "EkvmsIncrementStep_field_is_tracked",
 			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{
 				EkvmsIncrementStep: apiv1.ResourceList{
@@ -228,9 +241,12 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			err = tracker.RecomputeOptions()
 			assert.NoError(t, err)
 
-			wantOpts := tc.wantOptionsAfterExperiments
-			if _, isDirectLaunchDisable := tc.experimentValues[experiments.BalloonPodIpprResizeFlag]; !isDirectLaunchDisable {
-				wantOpts = withDirectLaunchDefaults(wantOpts)
+			wantOpts := withDirectLaunchDefaults(tc.wantOptionsAfterExperiments)
+			if val, isDefined := tc.experimentValues[experiments.BalloonPodIpprResizeFlag]; isDefined && !val {
+				wantOpts.BalloonPodIpprResizeEnabled = false
+			}
+			if val, isDefined := tc.experimentValues[experiments.CapacityBuffersMetricsEndpoint]; isDefined && !val {
+				wantOpts.CapacityBuffersMetricsEndpointEnabled = false
 			}
 			assert.Equal(t, wantOpts, tracker.Options())
 			assert.Equal(t, tc.wantRestart, tracker.OptionChangesRequireRestart())
@@ -244,6 +260,7 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 // accidentally mutate any other field.
 func withDirectLaunchDefaults(opts internalopts.AutoscalingOptions) internalopts.AutoscalingOptions {
 	opts.BalloonPodIpprResizeEnabled = true
+	opts.CapacityBuffersMetricsEndpointEnabled = true
 	return opts
 }
 

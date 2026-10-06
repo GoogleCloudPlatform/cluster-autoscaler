@@ -558,3 +558,194 @@ func TestStorageRuleGetters(t *testing.T) {
 		t.Errorf("BootDiskStoragePools() mismatch (-want +got):\n%s", diff)
 	}
 }
+
+func TestMatchSecondaryBootDisks(t *testing.T) {
+	d1 := &gke_api_beta.SecondaryBootDisk{DiskImage: "image1", Mode: "MODE_A"}
+	d1Copy := &gke_api_beta.SecondaryBootDisk{DiskImage: "image1", Mode: "MODE_A"}
+	d2 := &gke_api_beta.SecondaryBootDisk{DiskImage: "image2", Mode: "MODE_B"}
+	d3 := &gke_api_beta.SecondaryBootDisk{DiskImage: "image1", Mode: "MODE_B"} // same image, diff mode
+
+	tests := []struct {
+		name     string
+		s1       []*gke_api_beta.SecondaryBootDisk
+		s2       []*gke_api_beta.SecondaryBootDisk
+		expected bool
+	}{
+		{
+			name:     "both nil",
+			s1:       nil,
+			s2:       nil,
+			expected: true,
+		},
+		{
+			name:     "one nil one empty",
+			s1:       nil,
+			s2:       []*gke_api_beta.SecondaryBootDisk{},
+			expected: true,
+		},
+		{
+			name:     "different lengths",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1, d2},
+			expected: false,
+		},
+		{
+			name:     "single element matching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1Copy},
+			expected: true,
+		},
+		{
+			name:     "single element mismatch image",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d2},
+			expected: false,
+		},
+		{
+			name:     "single element mismatch mode",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d3},
+			expected: false,
+		},
+		{
+			name:     "single element with nil in one",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{nil},
+			expected: false,
+		},
+		{
+			name:     "single element both nil",
+			s1:       []*gke_api_beta.SecondaryBootDisk{nil},
+			s2:       []*gke_api_beta.SecondaryBootDisk{nil},
+			expected: true,
+		},
+		{
+			name:     "two elements matching in order",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d2},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1Copy, d2},
+			expected: true,
+		},
+		{
+			name:     "two elements permuted",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d2},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d2, d1Copy},
+			expected: true,
+		},
+		{
+			name:     "two elements with duplicate mismatching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d1},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1, d2},
+			expected: false,
+		},
+		{
+			name:     "two elements with nil matching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, nil},
+			s2:       []*gke_api_beta.SecondaryBootDisk{nil, d1Copy},
+			expected: true,
+		},
+		{
+			name:     "two elements with nil mismatching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, nil},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1, d2},
+			expected: false,
+		},
+		{
+			name:     "multiple elements permuted",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d2, d3},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d3, d1, d2},
+			expected: true,
+		},
+		{
+			name:     "multiple elements with duplicate matching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d1Copy, d2},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d2, d1, d1},
+			expected: true,
+		},
+		{
+			name:     "multiple elements with duplicate mismatching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d1, d2},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1, d2, d2},
+			expected: false,
+		},
+		{
+			name:     "multiple elements with nil matching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d2, nil},
+			s2:       []*gke_api_beta.SecondaryBootDisk{nil, d2, d1Copy},
+			expected: true,
+		},
+		{
+			name:     "multiple elements with nil mismatching",
+			s1:       []*gke_api_beta.SecondaryBootDisk{d1, d2, nil},
+			s2:       []*gke_api_beta.SecondaryBootDisk{d1, d2, d3},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := matchSecondaryBootDisks(tc.s1, tc.s2); actual != tc.expected {
+				t.Errorf("matchSecondaryBootDisks(%v, %v) = %v; want %v", tc.s1, tc.s2, actual, tc.expected)
+			}
+		})
+	}
+}
+
+func TestMatchStoragePools(t *testing.T) {
+	tests := []struct {
+		name     string
+		s1       []string
+		s2       []string
+		expected bool
+	}{
+		{
+			name:     "both nil",
+			s1:       nil,
+			s2:       nil,
+			expected: true,
+		},
+		{
+			name:     "nil and empty",
+			s1:       nil,
+			s2:       []string{},
+			expected: true,
+		},
+		{
+			name:     "different lengths",
+			s1:       []string{"p1"},
+			s2:       []string{"p1", "p2"},
+			expected: false,
+		},
+		{
+			name:     "single match",
+			s1:       []string{"p1"},
+			s2:       []string{"p1"},
+			expected: true,
+		},
+		{
+			name:     "single mismatch",
+			s1:       []string{"p1"},
+			s2:       []string{"p2"},
+			expected: false,
+		},
+		{
+			name:     "multiple permuted match",
+			s1:       []string{"p1", "p2", "p3"},
+			s2:       []string{"p3", "p1", "p2"},
+			expected: true,
+		},
+		{
+			name:     "duplicates mismatch",
+			s1:       []string{"p1", "p1", "p2"},
+			s2:       []string{"p1", "p2", "p2"},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := matchStoragePools(tc.s1, tc.s2); actual != tc.expected {
+				t.Errorf("matchStoragePools(%v, %v) = %v; want %v", tc.s1, tc.s2, actual, tc.expected)
+			}
+		})
+	}
+}

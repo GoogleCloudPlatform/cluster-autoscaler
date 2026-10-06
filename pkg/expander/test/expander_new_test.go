@@ -44,8 +44,7 @@ func buildGKEStrategy(t *testing.T, cluster *impostor.Cluster) (expander.Strateg
 
 func buildGKEStrategyWithUpcomingChecker(t *testing.T, cluster *impostor.Cluster, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) (expander.Strategy, gkepriceexpander.ClusterAnalyzer) {
 	clusterAnalyzer := gkepriceexpander.NewGroupingClusterAnalyzer(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), nil)
-	groupPenaltyChecker := gkepriceexpander.NewStaticRelaxedGroupPenaltyChecker(cluster.Provider().IsAutopilotEnabled())
-	expanderStrategy, err := gkepriceexpander.NewStrategy(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), nil, groupPenaltyChecker, true, localssdsize.NewSimpleLocalSSDProvider(), upcomingChecker)
+	expanderStrategy, err := gkepriceexpander.NewStrategy(cluster.Provider(), cluster.NodeLister(), cluster.PodLister(), nil, true, localssdsize.NewSimpleLocalSSDProvider(), upcomingChecker)
 	assert.NoError(t, err)
 
 	return expanderStrategy, clusterAnalyzer
@@ -95,7 +94,7 @@ func TestExpanderPriceGKEBasicScenarios(t *testing.T) {
 		{4, true, 1, 100, 100, "nap-n1-standard-2", false},  // n1-standard-1 on reusability 0.5
 		{4, false, 8, 100, 100, "nap-n1-standard-2", false}, // n1-standard-1 on reusability 0.5
 		// {4, true, 8, 100, 100, "nap-n1-standard-2"},  // n1-standard-1
-		{4, true, 1, 800, 2400, "n1-standard-1", false}, // n1-standard-1 on reusability 0.5
+		{4, true, 1, 800, 2400, "nap-n1-standard-2", false}, // n1-standard-1 on reusability 0.5
 
 		{10, true, 8, 800, 2400, "nap-n1-standard-4", false},
 		{10, true, 1, 900, 1000, "nap-n1-standard-2", false},
@@ -161,7 +160,7 @@ func TestExpanderPriceGKEReserved(t *testing.T) {
 		{0, "n1-standard-1", 840, 1000, "nap-n1-standard-2", false}, // cpu over std1
 		{0, "n1-highcpu-2", 1800, 1000, "n1-highcpu-2", false},      // cpu over std1, mem just under cpu2 limits
 		{0, "n1-highcpu-2", 1800, 1025, "nap-n1-standard-2", false}, // cpu over std1, mem over cpu2
-		{0, "n1-standard-2", 840, 5402, "n1-standard-2", false},     // mem just under std2 limit
+		{0, "n1-standard-2", 840, 5402, "nap-n1-highmem-2", false},  // mem just under std2 limit
 		{0, "n1-standard-2", 840, 5430, "nap-n1-highmem-2", false},  // mem over std2 limit
 
 		{0, "n1-standard-1", 100, 2404, "n1-standard-1", true},     // mem just under std1 limit
@@ -170,7 +169,7 @@ func TestExpanderPriceGKEReserved(t *testing.T) {
 		{0, "n1-standard-1", 840, 1000, "nap-n1-standard-2", true}, // cpu over std1
 		{0, "n1-highcpu-2", 1800, 1000, "n1-highcpu-2", true},      // cpu over std1, mem just under cpu2 limits
 		{0, "n1-highcpu-2", 1800, 1025, "nap-n1-standard-2", true}, // cpu over std1, mem over cpu2
-		{0, "n1-standard-2", 840, 5402, "nap-n1-highmem-2", true},  // mem just under std2 limit but node group creation penalty is relaxed in AP
+		{0, "n1-standard-2", 840, 5402, "nap-n1-highmem-2", true},  // mem just under std2 limit
 		{0, "n1-standard-2", 840, 5430, "nap-n1-highmem-2", true},  // mem over std2 limit
 	}
 	for idx, tc := range testCases {
@@ -703,8 +702,6 @@ const nodeAlmostFullFraction = 0.82
 // It happens because:
 //   - expander is not aware of the max_pods_per_node limit
 //   - we try to choose future-proof (bigger) machines in bigger clusters.
-//
-// Expander sometimes chooses high mem machine for AP because the node pool creation penalty is relaxed for AP
 func TestExpanderPriceGKEScalabilityMem(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping simulations in short mode")
@@ -719,9 +716,9 @@ func TestExpanderPriceGKEScalabilityMem(t *testing.T) {
 		expectedNodePool string
 		enableAutopilot  bool
 	}{
-		{1, "n1-standard-16", false},
-		{20, "n1-standard-16", false},
-		{100, "n1-standard-16", false},
+		{1, "nap-n1-highmem-16", false},
+		{20, "nap-n1-highmem-16", false},
+		{100, "nap-n1-highmem-16", false},
 		// Machine size getting smaller with growing number of pods added is an artifact of
 		// how GKE price expander's suppress unfitness function works. The more nodes we add,
 		// the less we take into account the preferred machine size.
@@ -731,7 +728,7 @@ func TestExpanderPriceGKEScalabilityMem(t *testing.T) {
 
 		{1, "nap-n1-highmem-16", true},
 		{20, "nap-n1-highmem-16", true},
-		{100, "nap-n1-highmem-16", true}, // node pool creation penalty is relaxed for AP
+		{100, "nap-n1-highmem-16", true},
 		// Machine size getting smaller with growing number of pods added is an artifact of
 		// how GKE price expander's suppress unfitness function works. The more nodes we add,
 		// the less we take into account the preferred machine size.
@@ -790,8 +787,6 @@ func TestExpanderPriceGKEScalabilityMem(t *testing.T) {
 // It happens because:
 //   - expander is not aware of the max_pods_per_node limit
 //   - we try to choose future-proof (bigger) machines in bigger clusters.
-//
-// Expander sometimes chooses high mem machine for AP because the node pool creation penalty is relaxed for AP
 func TestExpanderPriceGKEScalabilityNAP(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping simulations in short mode")

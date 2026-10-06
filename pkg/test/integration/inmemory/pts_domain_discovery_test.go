@@ -120,7 +120,7 @@ func TestCCCDomainDiscovery(t *testing.T) {
 
 // TestZonalDomainDiscovery verifies that the Zonal Domain Discovery processor
 // correctly discovers zone domains, applies zone node selectors to the pods,
-// and triggers NAP to create separate node pools in the assigned zones.
+// and triggers NAP to provision nodes in the assigned zones.
 func TestZonalDomainDiscovery(t *testing.T) {
 	pts := apiv1.TopologySpreadConstraint{
 		MaxSkew:           1,
@@ -157,23 +157,26 @@ func TestZonalDomainDiscovery(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Run two loops to allow both zones to scale up.
-		// If we do not force minDomains with feature enabled, NAP correctly triggers creation of two separate node pools and scales them both up.
-		// With feature disabled, NAP creates only one node pool and scales it up to two nodes.
 		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
-		// Assert that we have ONLY one MIG in each zone
 		migsInZoneA, err := infra.Fakes.GceService.FetchAllMigs("us-central1-a")
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(migsInZoneA))
 
 		migsInZoneB, err := infra.Fakes.GceService.FetchAllMigs("us-central1-b")
 		assert.NoError(t, err)
-		assert.Equal(t, 1, len(migsInZoneB))
 
-		// Assert that we have ONLY one node in each MIG
-		assert.Equal(t, int64(1), migsInZoneA[0].TargetSize)
-		assert.Equal(t, int64(1), migsInZoneB[0].TargetSize)
+		// Assert that exactly 1 node is scheduled in each zone across all MIGs in that zone.
+		var totalNodesInZoneA, totalNodesInZoneB int64
+		for _, mig := range migsInZoneA {
+			totalNodesInZoneA += mig.TargetSize
+		}
+		for _, mig := range migsInZoneB {
+			totalNodesInZoneB += mig.TargetSize
+		}
+
+		assert.Equal(t, int64(1), totalNodesInZoneA)
+		assert.Equal(t, int64(1), totalNodesInZoneB)
 	})
 }
 

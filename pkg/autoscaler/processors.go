@@ -363,7 +363,7 @@ func setUpProcessors(
 	prCache *provreqcache.QueuedProvisioningCache,
 	provreqProcessor pods.PodListProcessor,
 	resizableVmAutoprovisioningProvider *ekvms_providers.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
+	lookaheadBufferStrategyProvider *lookaheadbuffer_strategy.Provider,
 	reservationBlocksPuller *reservations.BlocksPuller,
 	instanceAvailabilityProvider instanceavailability.Provider,
 	resourcePolicyPuller placement.ResourcePolicyPuller,
@@ -562,7 +562,7 @@ func setUpProcessors(
 		}
 		configProvider := ekvms_processor.NewDownsizeConfigProvider(provider.MachineConfigProvider(), experimentsManager, downsizeConfigFlags, downsizeExperimentFlags)
 		scaleDownNodeProcessors = append(scaleDownNodeProcessors, ekvms_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), resizableVmManager, experimentsManager, fetcher, configProvider, resizeCalculator, internalmetrics.Metrics, clock.RealClock{}))
-		scaleDownNodeProcessors = append(scaleDownNodeProcessors, lookaheadbuffer_processor.NewScaleDownNodeProcessor(experimentsManager))
+		scaleDownNodeProcessors = append(scaleDownNodeProcessors, lookaheadbuffer_processor.NewScaleDownNodeProcessor(provider.MachineConfigProvider(), experimentsManager))
 
 		machineTypeFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkMachineTypes,
@@ -680,7 +680,25 @@ func setUpProcessors(
 		enforceFakePodsLimitProcessor = podinjection.NewEnforceInjectedPodsLimitProcessor(options.PodInjectionLimit)
 	}
 	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
-	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(laPodProvider, lookaheadBufferStrategyProvider, lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, options.EkLookaheadMaxWorkloadSeparations, caVersion), systemPodsClassifier, ccLister, resizeCalculator, internalmetrics.Metrics)
+	laWorkloadSeparationsConfigFlags := map[string]int{
+		machinetypes.EK.Name():  options.EkLookaheadMaxWorkloadSeparations,
+		machinetypes.E4A.Name(): options.E4aLookaheadMaxWorkloadSeparations,
+		machinetypes.E4.Name():  options.E4LookaheadMaxWorkloadSeparations,
+	}
+	experimentFlags := map[string]string{
+		machinetypes.EK.Name():  experiments.EkLookaheadMaxWorkloadSeparationsFlag,
+		machinetypes.E4A.Name(): experiments.E4aLookaheadMaxWorkloadSeparationsFlag,
+		machinetypes.E4.Name():  experiments.E4LookaheadMaxWorkloadSeparationsFlag,
+	}
+	lookaheadPodsInjectionProcessor := lookaheadbuffer_processor.NewLookaheadPodInjectionProcessor(
+		laPodProvider,
+		lookaheadBufferStrategyProvider,
+		lookaheadbuffer_processor.NewWorkloadSeparationLimiter(experimentsManager, laWorkloadSeparationsConfigFlags, experimentFlags, caVersion),
+		provider.MachineConfigProvider(),
+		systemPodsClassifier,
+		ccLister,
+		resizeCalculator,
+		internalmetrics.Metrics)
 
 	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {

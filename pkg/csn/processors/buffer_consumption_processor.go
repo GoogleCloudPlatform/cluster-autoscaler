@@ -188,8 +188,13 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *ca_context.Autoscali
 		isChillingFilter,
 	}
 
+	startFromLastMatch := p.experimentsManager != nil && p.experimentsManager.DirectLaunchBoolFlag(experiments.ColdStandbyNodesSchedulingStartFromLastMatchFlag)
 	nodesOfScheduledPods, err = schedulePodGroupsOnCSNNodes(snapshot, p.simulator,
-		schedulePodsOnCSNNodesOptions{ignoreBufferAssignment: true},
+		schedulePodsOnCSNNodesOptions{
+			ignoreBufferAssignment:               true,
+			startFromLastMatch:                   startFromLastMatch,
+			ignoreManagedByCCCAntiAffinityForCSN: true,
+		},
 		podGroup{
 			pods:       oldPods,
 			priorities: commonSchedulingPriorities,

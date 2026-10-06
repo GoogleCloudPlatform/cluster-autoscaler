@@ -2359,7 +2359,7 @@ type Config struct {
 	AutoscalingOptsProvider             AutoscalingOptionsProvider
 	AutoprovisioningEligibility         AutoprovisioningEligibility
 	ResizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
-	LookaheadBufferStrategyProvider     lookaheadbuffer_strategy.Provider
+	LookaheadBufferStrategyProvider     *lookaheadbuffer_strategy.Provider
 	ProviderConfigObserver              multitenancy.ProviderConfigObserver
 	ProvisioningCache                   *provreqcache.QueuedProvisioningCache
 	DraResourcePredictor                *dynamicresources.ResourcePredictor

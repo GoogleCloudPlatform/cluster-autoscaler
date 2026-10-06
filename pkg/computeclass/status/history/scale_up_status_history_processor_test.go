@@ -33,6 +33,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -541,7 +542,7 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 	proactiveScaleUpPod := annotatedPod("user-pod-copy-1", map[string]string{
 		fake.FakePodAnnotationKey: fake.FakePodAnnotationValue,
 	})
-	lookaheadPod := lookaheadbuffer.GenerateLookaheadPods(1, resource.MustParse("1"), resource.MustParse("1Gi"), "workload-1")[0]
+	lookaheadPod := lookaheadbuffer.GenerateLookaheadPods(1, resource.MustParse("1"), resource.MustParse("1Gi"), "workload-1", machinetypes.EK.Name())[0]
 
 	// provisioningCondition builds the condition the processor is expected to emit
 	// for the scaleUpInfos above. description is the phrase explaining the reason.

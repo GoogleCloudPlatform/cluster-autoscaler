@@ -19,15 +19,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
-func TestSelectStrategyOnNilProvider(t *testing.T) {
-	var p *providerImpl
-	_, err := p.Strategy()
-	assert.Error(t, err)
-}
+const experimentFlag = "AutopilotTestFamily::LookaheadPodsV1"
 
 func TestStrategy(t *testing.T) {
 	protoTieredStrategy := &TieredStrategy{
@@ -60,261 +57,170 @@ func TestStrategy(t *testing.T) {
 		},
 	}
 	experimentTieredMetricStrategy := `{"tieredStrategy":{"tiers":[{"numLookaheadPods":2,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":25165824,"minTargetNodesCpu":200}]}}`
+	experimentConfigEnabled := `{"status":"STATUS_ENABLED","minCaVersion":"v9.9.9","tieredStrategy":{"tiers":[{"numLookaheadPods":2,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":25165824,"minTargetNodesCpu":200}]}}`
+	experimentConfigDisabled := `{"status":"STATUS_DISABLED","minCaVersion":"v9.9.9","tieredStrategy":{"tiers":[{"numLookaheadPods":2,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":25165824,"minTargetNodesCpu":200}]}}`
+	experimentConfigUnspecified := `{"status":"STATUS_UNSPECIFIED","minCaVersion":"v9.9.9","tieredStrategy":{"tiers":[{"numLookaheadPods":2,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":25165824,"minTargetNodesCpu":200}]}}`
 
-	testCases := []struct {
-		desc                    string
-		flagConfig              LookaheadPodStrategy
-		experimentConfig        LookaheadPodStrategy
-		ekResizingEnabled       bool
-		wantStrategy            LookaheadPodStrategy
-		wantEmitMetrics         bool
-		wantMetricsPhase        string
-		wantMetricsLaunchedFrom string
-		wantMetricsStrategy     string
-	}{
-		{
-			desc: "using proto when proto status is enabled",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Enabled,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Enabled,
-			},
-			ekResizingEnabled: true,
-			wantEmitMetrics:   true,
-			wantStrategy: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Enabled,
-			},
-			wantMetricsPhase:        string(Enabled),
-			wantMetricsLaunchedFrom: string(clusterProtoSource),
-			wantMetricsStrategy:     protoTieredMetricStrategy,
-		},
-		{
-			desc: "unspecified strategy when proto status is enabled but ekResizingEnabled is false",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Enabled,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Enabled,
-			},
-			ekResizingEnabled: false,
-			wantEmitMetrics:   false,
-			wantStrategy:      LookaheadPodStrategy{Status: Unspecified},
-		},
-		{
-			desc: "using proto when proto status is disabled",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Disabled,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Enabled,
-			},
-			ekResizingEnabled: true,
-			wantEmitMetrics:   true,
-			wantStrategy: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Disabled,
-			},
-			wantMetricsPhase:        string(Disabled),
-			wantMetricsLaunchedFrom: string(clusterProtoSource),
-		},
-		{
-			desc: "using experiment when proto status is unspecified and experiment config status is enabled",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Unspecified,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Enabled,
-			},
-			ekResizingEnabled: true,
-			wantEmitMetrics:   true,
-			wantStrategy: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Enabled,
-			},
-			wantMetricsPhase:        string(Enabled),
-			wantMetricsLaunchedFrom: string(experimentSource),
-			wantMetricsStrategy:     experimentTieredMetricStrategy,
-		},
-		{
-			desc: "using experiment when proto status is unspecified and experiment config status is disabled",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Unspecified,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Disabled,
-			},
-			ekResizingEnabled: true,
-			wantEmitMetrics:   true,
-			wantStrategy: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Disabled,
-			},
-			wantMetricsPhase:        string(Disabled),
-			wantMetricsLaunchedFrom: string(experimentSource),
-		},
-		{
-			desc: "unspecified strategy when proto status is unspecified and experiment config status is unspecified",
-			flagConfig: LookaheadPodStrategy{
-				TieredStrategy: protoTieredStrategy,
-				MinCaVersion:   "v1.2.3",
-				Status:         Unspecified,
-			},
-			experimentConfig: LookaheadPodStrategy{
-				TieredStrategy: experimentTieredStrategy,
-				MinCaVersion:   "v9.9.9",
-				Status:         Unspecified,
-			},
-			ekResizingEnabled:       true,
-			wantEmitMetrics:         true,
-			wantStrategy:            LookaheadPodStrategy{Status: Unspecified},
-			wantMetricsPhase:        string(Unspecified),
-			wantMetricsLaunchedFrom: string(undefinedSource),
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.desc, func(t *testing.T) {
-			metrics := &mockMetrics{}
-			metrics.On("UpdateLookaheadLaunchStatus", mock.Anything, mock.Anything, mock.Anything).Return()
-			p := &providerImpl{
-				flagStrategy:       tc.flagConfig,
-				experimentStrategy: tc.experimentConfig,
-				laMetrics:          metrics,
+	flagConfigEnabled := `'{"status":"STATUS_ENABLED","minCaVersion":"v1.2.3","tieredStrategy":{"tiers":[{"numLookaheadPods":0,"lookaheadPodPercentage":30,"maxLookaheadCpu":640,"lookaheadPodMilliCpu":32000,"lookaheadPodMemKib":134217728,"minTargetNodesCpu":400},{"numLookaheadPods":1,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":33554432,"minTargetNodesCpu":0}]}}'`
+	flagConfigDisabled := `'{"status":"STATUS_DISABLED","minCaVersion":"v1.2.3","tieredStrategy":{"tiers":[{"numLookaheadPods":0,"lookaheadPodPercentage":30,"maxLookaheadCpu":640,"lookaheadPodMilliCpu":32000,"lookaheadPodMemKib":134217728,"minTargetNodesCpu":400},{"numLookaheadPods":1,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":33554432,"minTargetNodesCpu":0}]}}'`
+	flagConfigUnspecified := `'{"status":"STATUS_UNSPECIFIED","minCaVersion":"v1.2.3","tieredStrategy":{"tiers":[{"numLookaheadPods":0,"lookaheadPodPercentage":30,"maxLookaheadCpu":640,"lookaheadPodMilliCpu":32000,"lookaheadPodMemKib":134217728,"minTargetNodesCpu":400},{"numLookaheadPods":1,"lookaheadPodPercentage":0,"maxLookaheadCpu":0,"lookaheadPodMilliCpu":8000,"lookaheadPodMemKib":33554432,"minTargetNodesCpu":0}]}}'`
+
+	componentVersion := version.Version{10, 0, 0}
+
+	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
+		t.Run(family, func(t *testing.T) {
+			testCases := []struct {
+				desc               string
+				flagConfig         string
+				experimentConfig   string
+				resizingEnabled    bool
+				wantStrategy       LookaheadPodStrategy
+				wantEmitMetrics    bool
+				wantLaunchPhase    string
+				wantLaunchedFrom   string
+				wantLaunchStrategy string
+			}{
+				{
+					desc:             "using proto when proto status is enabled",
+					flagConfig:       flagConfigEnabled,
+					experimentConfig: experimentConfigEnabled,
+					resizingEnabled:  true,
+					wantEmitMetrics:  true,
+					wantStrategy: LookaheadPodStrategy{
+						TieredStrategy: protoTieredStrategy,
+						MinCaVersion:   "v1.2.3",
+						Status:         Enabled,
+					},
+					wantLaunchPhase:    string(Enabled),
+					wantLaunchedFrom:   string(clusterProtoSource),
+					wantLaunchStrategy: protoTieredMetricStrategy,
+				},
+				{
+					desc:             "using proto when proto status is enabled but resizing is not enabled",
+					flagConfig:       flagConfigEnabled,
+					experimentConfig: experimentConfigEnabled,
+					resizingEnabled:  false,
+					wantEmitMetrics:  false,
+					wantStrategy:     LookaheadPodStrategy{Status: Unspecified},
+				},
+				{
+					desc:             "using proto when proto status is disabled",
+					flagConfig:       flagConfigDisabled,
+					experimentConfig: experimentConfigEnabled,
+					resizingEnabled:  true,
+					wantEmitMetrics:  true,
+					wantStrategy: LookaheadPodStrategy{
+						TieredStrategy: protoTieredStrategy,
+						MinCaVersion:   "v1.2.3",
+						Status:         Disabled,
+					},
+					wantLaunchPhase:  string(Disabled),
+					wantLaunchedFrom: string(clusterProtoSource),
+				},
+				{
+					desc:             "using experiment when proto status is unspecified and experiment config status is enabled",
+					flagConfig:       flagConfigUnspecified,
+					experimentConfig: experimentConfigEnabled,
+					resizingEnabled:  true,
+					wantEmitMetrics:  true,
+					wantStrategy: LookaheadPodStrategy{
+						TieredStrategy: experimentTieredStrategy,
+						MinCaVersion:   "v9.9.9",
+						Status:         Enabled,
+					},
+					wantLaunchPhase:    string(Enabled),
+					wantLaunchedFrom:   string(experimentSource),
+					wantLaunchStrategy: experimentTieredMetricStrategy,
+				},
+				{
+					desc:             "using experiment when proto status is unspecified and experiment config status is disabled",
+					flagConfig:       flagConfigUnspecified,
+					experimentConfig: experimentConfigDisabled,
+					resizingEnabled:  true,
+					wantEmitMetrics:  true,
+					wantStrategy: LookaheadPodStrategy{
+						TieredStrategy: experimentTieredStrategy,
+						MinCaVersion:   "v9.9.9",
+						Status:         Disabled,
+					},
+					wantLaunchPhase:  string(Disabled),
+					wantLaunchedFrom: string(experimentSource),
+				},
+				{
+					desc:             "unspecified strategy when proto status is unspecified and experiment config status is unspecified",
+					flagConfig:       flagConfigUnspecified,
+					experimentConfig: experimentConfigUnspecified,
+					resizingEnabled:  true,
+					wantEmitMetrics:  true,
+					wantStrategy:     LookaheadPodStrategy{Status: Unspecified},
+					wantLaunchPhase:  string(Unspecified),
+					wantLaunchedFrom: string(undefinedSource),
+				},
 			}
-			p.SetEkResizingEnabled(tc.ekResizingEnabled)
-			gotConfig, err := p.Strategy()
-			assert.NoError(t, err)
-			assert.Equal(t, tc.wantStrategy, gotConfig)
-			if tc.wantEmitMetrics {
-				metrics.AssertCalled(t, "UpdateLookaheadLaunchStatus", tc.wantMetricsPhase, tc.wantMetricsLaunchedFrom, tc.wantMetricsStrategy)
-			} else {
-				metrics.AssertNotCalled(t, "UpdateLookaheadLaunchStatus")
+			for _, tc := range testCases {
+				t.Run(tc.desc, func(t *testing.T) {
+					metrics := &mockMetrics{}
+					metrics.On("UpdateLookaheadLaunchStatus", mock.Anything, mock.Anything, mock.Anything).Return()
+
+					experimentFlags := map[string]string{family: experimentFlag}
+
+					manager := experiments.NewMockManagerWithOptions(
+						componentVersion,
+						nil,
+						map[string]string{experimentFlag: tc.experimentConfig},
+					)
+
+					p, err := NewProvider(
+						manager,
+						map[string]string{family: tc.flagConfig},
+						experimentFlags,
+						metrics,
+						componentVersion,
+					)
+					assert.NoError(t, err)
+					p.SetResizingEnabled(&mockAutoprovisioningProvider{resizingEnabled: tc.resizingEnabled})
+					gotStrategy, err := p.Strategy(family)
+					assert.NoError(t, err)
+					assert.Equal(t, tc.wantStrategy, gotStrategy)
+					// Currently lookahead_launch_status only tracks EK LA launch status.
+					// TODO(b/567108065): Update test when metrics are supported for all resizable VMs.
+					if tc.wantEmitMetrics && family == machinetypes.EK.Name() {
+						metrics.AssertCalled(t, "UpdateLookaheadLaunchStatus", tc.wantLaunchPhase, tc.wantLaunchedFrom, tc.wantLaunchStrategy)
+					} else {
+						metrics.AssertNotCalled(t, "UpdateLookaheadLaunchStatus")
+					}
+				})
 			}
 		})
 	}
 }
 
-func TestRefreshStrategySafeOnNil(t *testing.T) {
-	var provider *providerImpl
+func TestSelectStrategyOnNilProvider(t *testing.T) {
+	var p *Provider
+	_, err := p.Strategy(machinetypes.EK.Name())
+	assert.Error(t, err)
+}
+
+func TestRefreshSafeOnNil(t *testing.T) {
+	var provider *Provider
 	assert.NotPanics(t, func() {
-		provider.RefreshStrategy()
+		provider.Refresh()
 	})
 }
 
-func TestRefreshStrategy(t *testing.T) {
-	componentVersion := version.Version{31, 157, 3}
-	enabledFlags := map[string]bool{}
+func TestStrategyUnknownFamily(t *testing.T) {
+	p, err := NewProvider(nil, map[string]string{}, map[string]string{}, nil, version.Version{})
+	assert.NoError(t, err)
+	_, err = p.Strategy("unknown-family")
+	assert.Error(t, err)
+}
 
-	for _, tc := range []struct {
-		desc string
-		experiments.Manager
-		want LookaheadPodStrategy
-	}{
-		{
-			desc: "experiment strategy is unspecified when AutopilotEk::LookaheadPodsV1 flag is unset",
-			Manager: experiments.NewMockManagerWithOptions(
-				componentVersion,
-				enabledFlags,
-				map[string]string{},
-			),
-			want: LookaheadPodStrategy{Status: Unspecified},
-		},
-		{
-			desc: "experiment strategy is unspecified when AutopilotEk::LookaheadPodsV1 flag is empty",
-			Manager: experiments.NewMockManagerWithOptions(
-				componentVersion,
-				enabledFlags,
-				map[string]string{experiments.EkLookaheadPodsV1Flag: ""},
-			),
-			want: LookaheadPodStrategy{Status: Unspecified},
-		},
-		{
-			desc: "experiment strategy is unspecified when AutopilotEk::LookaheadPodsV1 flag is invalid JSON",
-			Manager: experiments.NewMockManagerWithOptions(
-				componentVersion,
-				enabledFlags,
-				map[string]string{experiments.EkLookaheadPodsV1Flag: "{"},
-			),
-			want: LookaheadPodStrategy{Status: Unspecified},
-		},
-		{
-			desc: "experiment strategy is unspecified when MinCaVersion is bigger than component version",
-			Manager: experiments.NewMockManagerWithOptions(
-				componentVersion,
-				enabledFlags,
-				map[string]string{experiments.EkLookaheadPodsV1Flag: "{\"minCaVersion\": \"999.999.999\"}"},
-			),
-			want: LookaheadPodStrategy{Status: Unspecified},
-		},
-		{
-			desc: "experiment strategy is set when AutopilotEk::LookaheadPodsV1 flag is valid",
-			Manager: experiments.NewMockManagerWithOptions(
-				componentVersion,
-				enabledFlags,
-				map[string]string{experiments.EkLookaheadPodsV1Flag: `
-				{
-					"minCaVersion": "30.0.0",
-					"status": "STATUS_ENABLED",
-					"tieredStrategy": {
-						"tiers": [
-							{
-								"numLookaheadPods": 1,
-								"lookaheadPodMilliCpu": 8000,
-								"lookaheadPodMemKib": 134217728,
-								"minTargetNodesCpu": 200
-							}
-						]
-					}
-				}
-				`},
-			),
-			want: LookaheadPodStrategy{
-				MinCaVersion: "30.0.0",
-				Status:       Enabled,
-				TieredStrategy: &TieredStrategy{
-					Tiers: []Tier{
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   134217728,
-							MinTargetNodesCPU:    200,
-						},
-					},
-				},
-			},
-		},
-	} {
-		t.Run(tc.desc, func(t *testing.T) {
-			p := &providerImpl{Manager: tc.Manager, componentVersion: componentVersion}
-			p.RefreshStrategy()
-			assert.Equal(t, tc.want, p.experimentStrategy)
-		})
-	}
+type mockAutoprovisioningProvider struct {
+	resizingEnabled bool
+}
+
+func (m *mockAutoprovisioningProvider) ResizingEnabled(machineFamily string) bool {
+	return m.resizingEnabled
 }
 
 type mockMetrics struct {

@@ -17,7 +17,10 @@ package strategy
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	klog "k8s.io/klog/v2"
@@ -27,100 +30,103 @@ type metrics interface {
 	UpdateLookaheadLaunchStatus(launchPhase, launchedFrom, strategy string)
 }
 
-type launchSource string
-
-const (
-	experimentSource   launchSource = "EXPERIMENT"
-	clusterProtoSource launchSource = "CLUSTER_PROTO"
-	undefinedSource    launchSource = ""
-)
-
-var unspecifiedStrategy = LookaheadPodStrategy{Status: Unspecified} // default strategy configuration if smth goes wrong
-
-type Provider interface {
-	SetEkResizingEnabled(ekResizingEnabled bool)
-	RefreshStrategy()
-	Strategy() (LookaheadPodStrategy, error)
+type autoprovisioningProvider interface {
+	ResizingEnabled(machineFamily string) bool
 }
 
-// providerImpl parses and provides lookahead config.
-type providerImpl struct {
-	experiments.Manager
-	// flagStrategy is passed via Cluster Autoscaler flags
-	flagStrategy LookaheadPodStrategy
-	// experimentStrategy is passed via an experiment
-	experimentStrategy LookaheadPodStrategy
-	laMetrics          metrics
-	ekResizingEnabled  bool
-	componentVersion   version.Version
+// Provider manages and provides lookahead buffer strategies across supported machine families.
+type Provider struct {
+	sources         map[string]strategySource
+	laMetrics       metrics
+	resizingEnabled map[string]bool
 }
 
 // NewProvider creates a new lookahead provider instance.
-func NewProvider(em experiments.Manager, flagConfig LookaheadPodStrategy, laMetrics metrics, componentVersion version.Version) *providerImpl {
-	return &providerImpl{
-		Manager:          em,
-		flagStrategy:     flagConfig,
-		laMetrics:        laMetrics,
-		componentVersion: componentVersion,
+func NewProvider(
+	em experiments.Manager,
+	manifestFlagStrategies map[string]string,
+	experimentFlags map[string]string,
+	laMetrics metrics,
+	componentVersion version.Version,
+) (*Provider, error) {
+	// We need to trim single quotes from lookaheadPodStrategy since it's a single-line JSON string
+	// and we wrap it in single quotes for CA manifest to treat it as a string.
+	sources := make(map[string]strategySource, len(manifestFlagStrategies))
+	for family, configFlag := range manifestFlagStrategies {
+		config, err := ParsePodStrategy(strings.Trim(configFlag, "'"))
+		if err != nil {
+			return nil, fmt.Errorf("cannot parse %s lookahead pod strategy, error: %v", family, err)
+		}
+		if config.Status != Unspecified {
+			sources[family] = &flagStrategySource{flagStrategy: config}
+		} else {
+			sources[family] = newExperimentStrategySource(em, componentVersion, experimentFlags[family], family)
+		}
+	}
+
+	return &Provider{
+		sources:         sources,
+		laMetrics:       laMetrics,
+		resizingEnabled: make(map[string]bool, len(sources)),
+	}, nil
+}
+
+// SetResizingEnabled sets whether resizing is enabled for each machine family
+// using autoprovisioningProvider.
+func (p *Provider) SetResizingEnabled(autoprovisioningProvider autoprovisioningProvider) {
+	if p == nil || autoprovisioningProvider == nil {
+		return
+	}
+	for machineFamily := range p.sources {
+		p.resizingEnabled[machineFamily] = autoprovisioningProvider.ResizingEnabled(machineFamily)
 	}
 }
 
-func (p *providerImpl) SetEkResizingEnabled(ekResizingEnabled bool) {
-	p.ekResizingEnabled = ekResizingEnabled
-}
-
-// RefreshStrategy reads the value of config from experiment, parses it, and sets it.
-func (p *providerImpl) RefreshStrategy() {
+// Refresh refreshes the value of config from the experiment for each strategy source.
+func (p *Provider) Refresh() {
 	if p == nil {
-		klog.Warning("RefreshStrategy called on nil providerImpl. The value should not be nil.")
+		klog.Warning("refresh called on nil Provider. The value should not be nil.")
 		return
 	}
-	experimentConfigFlag := p.EvaluateStringFlagOrFailsafe(experiments.EkLookaheadPodsV1Flag, `{"minCaVersion": "999.999.999"}`)
-	experimentConfig, err := ParsePodStrategy(experimentConfigFlag)
-	if err != nil {
-		klog.Errorf("Cannot parse experiment %q flag: %v", experiments.EkLookaheadPodsV1Flag, err)
-		p.experimentStrategy = unspecifiedStrategy
-		return
+	for _, source := range p.sources {
+		if source != nil {
+			source.refresh()
+		}
 	}
-
-	experimentVersion, err := version.FromString(experimentConfig.MinCaVersion)
-	if err != nil {
-		klog.Errorf("Experiment %q provided invalid min version %q, using unspecified lookahead pod strategy", experiments.EkLookaheadPodsV1Flag, experimentConfig.MinCaVersion)
-		p.experimentStrategy = unspecifiedStrategy
-		return
-	}
-
-	// Fallback to unspecified lookahead pod strategy if component version is less than minCaVersion in experiment.
-	if p.componentVersion.LessThan(experimentVersion) {
-		p.experimentStrategy = unspecifiedStrategy
-		return
-	}
-
-	p.experimentStrategy = experimentConfig
 }
 
-// Strategy returns the authoritative LookaheadPodStrategy.
-func (p *providerImpl) Strategy() (LookaheadPodStrategy, error) {
+// Strategy returns LookaheadPodStrategy for the corresponding machineFamily.
+func (p *Provider) Strategy(machineFamily string) (LookaheadPodStrategy, error) {
 	if p == nil {
-		return unspecifiedStrategy, errors.New("Strategy called on nil providerImpl. The value should not be nil")
+		return unspecifiedStrategy, errors.New("strategy called on nil Provider. The value should not be nil")
 	}
-	if !p.ekResizingEnabled {
-		klog.Info("EK resizing is not enabled, skipping lookahead buffer")
+	source, ok := p.sources[machineFamily]
+	if !ok {
+		return unspecifiedStrategy, fmt.Errorf("no LookaheadPodStrategy for machineFamily %s", machineFamily)
+	}
+	if !p.resizingEnabled[machineFamily] {
+		klog.Infof("%s resizing is not enabled, skipping lookahead buffer", machineFamily)
 		return unspecifiedStrategy, nil
 	}
-	if p.flagStrategy.Status != Unspecified {
-		p.updateLaunchStatus(p.flagStrategy, clusterProtoSource)
-		return p.flagStrategy, nil
+	if source == nil {
+		return unspecifiedStrategy, fmt.Errorf("strategy called with nil source for machineFamily %s", machineFamily)
 	}
-	if p.experimentStrategy.Status != Unspecified {
-		p.updateLaunchStatus(p.experimentStrategy, experimentSource)
-		return p.experimentStrategy, nil
-	}
-	p.updateLaunchStatus(unspecifiedStrategy, undefinedSource)
-	return unspecifiedStrategy, nil
+	strategy, sourceKind := source.strategy()
+	p.updateLaunchStatus(machineFamily, strategy, sourceKind)
+	return strategy, nil
 }
 
-func (p *providerImpl) updateLaunchStatus(strategy LookaheadPodStrategy, launchedFrom launchSource) {
+func (p *Provider) updateLaunchStatus(machineFamily string, strategy LookaheadPodStrategy, launchedFrom launchSource) {
+	if p.laMetrics == nil {
+		return
+	}
+
+	// Currently lookahead_launch_status only tracks EK LA launch status.
+	// TODO(b/567108065): Introduce new metric with machine_family label for all resizable VMs
+	if machineFamily != machinetypes.EK.Name() {
+		return
+	}
+
 	launchPhase := string(strategy.Status)
 	launchStrategy := ""
 	if strategy.Status == Enabled {
@@ -130,7 +136,7 @@ func (p *providerImpl) updateLaunchStatus(strategy LookaheadPodStrategy, launche
 
 		b, err := json.Marshal(strategy)
 		if err != nil {
-			klog.Errorf(`Failed to marshal LookaheadPodStrategy, will skip updating launch status metric. Error: %v\nStrategy: %+v`, err, strategy)
+			klog.Errorf("Failed to marshal %s LookaheadPodStrategy, will skip updating launch status metric. Error: %v\nStrategy: %+v", machineFamily, err, strategy)
 			return
 		}
 		launchStrategy = string(b)

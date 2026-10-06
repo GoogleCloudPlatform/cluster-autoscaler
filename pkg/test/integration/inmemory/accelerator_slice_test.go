@@ -106,11 +106,15 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 			wantTargetSizeAfterCapacityRestored: tpuNodesPerSlice,
 		},
 		{
-			name:                                "ProvisionOnly_Stockout_NonAtomic",
-			acceleratorTopologyMode:             gceclient.AcceleratorTopologyModeProvisionOnly,
-			backendCapacity:                     8,
-			wantInitialTargetSize:               8,
-			wantTargetSizeAfterCapacityRestored: tpuNodesPerSlice,
+			name:                    "ProvisionOnly_Stockout_NonAtomic",
+			acceleratorTopologyMode: gceclient.AcceleratorTopologyModeProvisionOnly,
+			backendCapacity:         8,
+			wantInitialTargetSize:   8,
+			// Under relaxed node group creation penalty, the expander treats autoprovisioning
+			// a new 16-node slice for the remaining 8 pods equally with expanding the existing 8-node
+			// slice. Thus, a new 16-node slice is provisioned alongside the original 8-node slice,
+			// resulting in a total target size of 8 + 16 = 24.
+			wantTargetSizeAfterCapacityRestored: 8 + tpuNodesPerSlice,
 		},
 	}
 
@@ -138,7 +142,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 				// Step 1: initial scale-up.
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
-				assert.Equal(t, tc.wantInitialTargetSize, firstTargetSize(t, autoscaler),
+				assert.Equal(t, tc.wantInitialTargetSize, totalTargetSize(t, autoscaler),
 					"unexpected initial MIG target size")
 
 				// Step 2: if the stockout path partially provisioned the slice, restore full
@@ -147,7 +151,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 					infra.Fakes.GceService.ResetHardwareCapacity()
 					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Minute)
 
-					assert.Equal(t, tc.wantTargetSizeAfterCapacityRestored, firstTargetSize(t, autoscaler),
+					assert.Equal(t, tc.wantTargetSizeAfterCapacityRestored, totalTargetSize(t, autoscaler),
 						"unexpected MIG target size after capacity restoration")
 				}
 			})
@@ -192,7 +196,7 @@ func TestAcceleratorSlice_ScaleUp_WithReservation(t *testing.T) {
 
 		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
-		assert.Equal(t, tpuNodesPerSlice, firstTargetSize(t, autoscaler),
+		assert.Equal(t, tpuNodesPerSlice, totalTargetSize(t, autoscaler),
 			"PROVISION_ONLY with reservation should scale up to full slice")
 	})
 }
@@ -338,19 +342,17 @@ func addTPUPods(infra *integration.TestInfrastructure, count int) {
 	}
 }
 
-// firstTargetSize returns the TargetSize of the first autoscaled node group
-// with non-null desired capacity (i.e. the "active" slice the autoscaler is
-// currently growing). Returns 0 if no such node group exists.
-func firstTargetSize(t *testing.T, autoscaler *core.StaticAutoscaler) int {
+// totalTargetSize returns the sum of TargetSize across all autoscaled node groups
+// in the cluster. Returns 0 if no autoscaled node groups exist.
+func totalTargetSize(t *testing.T, autoscaler *core.StaticAutoscaler) int {
 	t.Helper()
+	totalSize := 0
 	for _, nodeGroup := range autoscaler.AutoscalingContext.CloudProvider.NodeGroups(context.Background()) {
 		targetSize, err := nodeGroup.TargetSize(context.Background())
 		if !assert.NoError(t, err) {
 			continue
 		}
-		if targetSize > 0 {
-			return targetSize
-		}
+		totalSize += targetSize
 	}
-	return 0
+	return totalSize
 }

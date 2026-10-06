@@ -62,8 +62,8 @@ const (
 	// InternalError - an unexpected error happened while trying to create the node group.
 	InternalError
 	// ReservationSubBlockAlreadyTargeted - the node group would have targeted a reservation
-	// sub-block that is already targeted by another node group. Only applies to atomically
-	// resized node groups, which consume a whole sub-block.
+	// sub-block that is already targeted by another node group. Only applies to dynamic slicing
+	// (PROVISION_ONLY) node groups, whose MIG must map 1:1 onto a sub-block.
 	ReservationSubBlockAlreadyTargeted
 )
 

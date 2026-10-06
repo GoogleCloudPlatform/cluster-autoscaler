@@ -532,7 +532,7 @@ type gkeManagerImpl struct {
 	autoscalingOptsProvider             AutoscalingOptionsProvider
 	autoprovisioningEligibility         AutoprovisioningEligibility
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider
-	lookaheadBufferStrategyProvider     lookaheadbuffer_strategy.Provider
+	lookaheadBufferStrategyProvider     *lookaheadbuffer_strategy.Provider
 	optsTracker                         *optstracking.OptionsTracker
 	// injectedMig is set for all existing node pools created by this instance of Cluster Autoscaler
 	// and represents an injected specification of this MIG (before part of the spec was filled
@@ -601,7 +601,7 @@ func CreateGkeManager(
 	autoscalingOptsProvider AutoscalingOptionsProvider,
 	autoprovisioningEligibility AutoprovisioningEligibility,
 	resizableVmAutoprovisioningProvider ekvm_provider_interfaces.ResizableVmAutoprovisioningProvider,
-	lookaheadBufferStrategyProvider lookaheadbuffer_strategy.Provider,
+	lookaheadBufferStrategyProvider *lookaheadbuffer_strategy.Provider,
 	draResourcePredictor *dynamicresources.ResourcePredictor,
 	reservationsPuller *gceclient.ReservationsPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
@@ -1977,9 +1977,9 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	m.resizableVmAutoprovisioningProvider.Refresh()
 
 	// TODO(b/377482817): Cleanup after LA experiment is over.
-	m.lookaheadBufferStrategyProvider.RefreshStrategy()
+	m.lookaheadBufferStrategyProvider.Refresh()
 
-	m.lookaheadBufferStrategyProvider.SetEkResizingEnabled(m.ResizingEnabled(machinetypes.EK.Name()))
+	m.lookaheadBufferStrategyProvider.SetResizingEnabled(m.resizableVmAutoprovisioningProvider)
 
 	// TODO(b/486148603): Cleanup experiment flag for custom thresholds when the experiment is over
 	m.resizableVmCustomThresholdsProvider.RefreshCustomThresholds()

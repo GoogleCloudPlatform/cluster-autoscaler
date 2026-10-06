@@ -61,11 +61,11 @@ func (p *shardAwareNodeGroupListProcessor) filterNodeGroupsByCccShardHomogeneity
 		return nodeGroups
 	}
 
-	nodeSelectorTargetCCCName := p.getPodCccName(unschedulablePods[0])
+	nodeSelectorTargetCCCName := p.getPodCccLabelValue(unschedulablePods[0])
 	isHomogeneous := true
 
 	for _, pod := range unschedulablePods[1:] {
-		if p.getPodCccName(pod) != nodeSelectorTargetCCCName {
+		if p.getPodCccLabelValue(pod) != nodeSelectorTargetCCCName {
 			isHomogeneous = false
 			break
 		}
@@ -119,12 +119,12 @@ func (p *shardAwareNodeGroupListProcessor) cccNodeGroupMatchesPod(ng cloudprovid
 	return false
 }
 
-// getPodCccName returns the explicit compute-class selector for a pod, or "" if none exists.
+// getPodCccLabelValue returns the explicit compute-class selector for a pod, or "" if none exists.
 // We inspect pod requirements directly instead of using the lister pipeline (p.lister.PodCrd)
 // to prevent pods without an explicit selector from resolving to "default" when Default Compute Class
 // is enabled. This preserves the expected behavior (b/542146049, b/528305042) where fallback workloads
 // with matching custom labels and tolerations are not over-pruned upfront and can schedule on custom node pools.
-func (p *shardAwareNodeGroupListProcessor) getPodCccName(pod *apiv1.Pod) string {
+func (p *shardAwareNodeGroupListProcessor) getPodCccLabelValue(pod *apiv1.Pod) string {
 	req := podrequirements.GetRequirements(pod)
 	name, found := req.LabelReq.GetSingleValue(gkelabels.ComputeClassLabel)
 	if !found {

@@ -46,7 +46,6 @@ import (
 func ExpanderStrategyFromString(
 	expanderFlag string,
 	cloudProvider provider.GkeExpanderCloudProvider,
-	nodeGroupPenaltyChecker gkepriceexpander.RelaxedNodeGroupPenaltyChecker,
 	autoscalingKubeClients *context.AutoscalingKubeClients,
 	kubeClient kube_client.Interface,
 	defragProcessor *defrag_processor.Processor,
@@ -66,7 +65,7 @@ func ExpanderStrategyFromString(
 	var gkePriceExpander filterStrategy
 	getGkePriceExpander := func() filterStrategy {
 		if gkePriceExpander == nil {
-			gkePriceExpander = createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, nodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
+			gkePriceExpander = createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
 		}
 		return gkePriceExpander
 	}
@@ -77,7 +76,7 @@ func ExpanderStrategyFromString(
 		return getGkePriceExpander()
 	})
 	expanderFactory.RegisterFilter(internalopts.ScalabilityTestExpanderName, func() expander.Filter {
-		return createScalabilityTestExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, nodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
+		return createScalabilityTestExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, pvmUnfitnessPenaltyEnabled, localSSDDiskSizeProvider, upcomingChecker)
 	})
 	expanderNames := strings.Split(expanderFlag, ",")
 	// Add Defrag Processor as filter if defrag is enabled
@@ -107,8 +106,8 @@ type filterStrategy interface {
 	expander.Strategy
 }
 
-func createGkePriceExpander(cloudProvider provider.GkeExpanderCloudProvider, autoscalingKubeClients *context.AutoscalingKubeClients, reservationsPuller *gceclient.ReservationsPuller, penaltyChecker gkepriceexpander.RelaxedNodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled bool, localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) filterStrategy {
-	gkePriceExpander, err := gkepriceexpander.NewStrategy(cloudProvider, autoscalingKubeClients.AllNodeLister(), autoscalingKubeClients.AllPodLister(), reservationsPuller, penaltyChecker, pvmUnfitnessPenaltyEnabled, localssdDiskSizeProvider, upcomingChecker)
+func createGkePriceExpander(cloudProvider provider.GkeExpanderCloudProvider, autoscalingKubeClients *context.AutoscalingKubeClients, reservationsPuller *gceclient.ReservationsPuller, pvmUnfitnessPenaltyEnabled bool, localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) filterStrategy {
+	gkePriceExpander, err := gkepriceexpander.NewStrategy(cloudProvider, autoscalingKubeClients.AllNodeLister(), autoscalingKubeClients.AllPodLister(), reservationsPuller, pvmUnfitnessPenaltyEnabled, localssdDiskSizeProvider, upcomingChecker)
 	if err != nil {
 		klog.Fatalf("Failed to create %s expander: %v", internalopts.PriceBasedImprovedExpanderName, err)
 	}
@@ -116,7 +115,7 @@ func createGkePriceExpander(cloudProvider provider.GkeExpanderCloudProvider, aut
 	return gkePriceExpander
 }
 
-func createScalabilityTestExpander(cloudProvider provider.GkeExpanderCloudProvider, autoscalingKubeClients *context.AutoscalingKubeClients, reservationsPuller *gceclient.ReservationsPuller, penaltyChecker gkepriceexpander.RelaxedNodeGroupPenaltyChecker, pvmUnfitnessPenaltyEnabled bool, localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) expander.Filter {
+func createScalabilityTestExpander(cloudProvider provider.GkeExpanderCloudProvider, autoscalingKubeClients *context.AutoscalingKubeClients, reservationsPuller *gceclient.ReservationsPuller, pvmUnfitnessPenaltyEnabled bool, localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider, upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker) expander.Filter {
 	klog.V(4).Infof("Using scalability test expander with GKE price expander as the original strategy.")
-	return scalabilitytestexpander.NewStrategy(createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, penaltyChecker, pvmUnfitnessPenaltyEnabled, localssdDiskSizeProvider, upcomingChecker))
+	return scalabilitytestexpander.NewStrategy(createGkePriceExpander(cloudProvider, autoscalingKubeClients, reservationsPuller, pvmUnfitnessPenaltyEnabled, localssdDiskSizeProvider, upcomingChecker))
 }

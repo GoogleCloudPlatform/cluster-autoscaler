@@ -25,6 +25,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 	"k8s.io/apimachinery/pkg/runtime"
+	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -44,7 +45,9 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/builder"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
@@ -52,7 +55,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	coreoptions "sigs.k8s.io/cluster-autoscaler/pkg/core/options"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
-	ca_utils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
 	"sigs.k8s.io/cluster-autoscaler/pkg/observers/loopstart"
@@ -86,7 +88,6 @@ import (
 	internalestimator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/estimator"
 	internalexpander "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/gkeprice"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	flexadvisorapi "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
@@ -594,14 +595,28 @@ func (b *Builder) Build(
 	clusterLocationsObserverImpl := &delegatingClusterLocationsObserver{}
 	var clusterLocationsObserver gke.ClusterLocationsObserver = clusterLocationsObserverImpl
 
-	// We need to trim single quotes from ekLookaheadPodStrategy since it's a single-line JSON string
-	// and we wrap it in single quotes for CA manifest to treat it as a string.
-	flagConfig, err := lookaheadbuffer_strategy.ParsePodStrategy(strings.Trim(autoscalingOptions.EkLookaheadPodStrategy, "'"))
+	manifestFlagStrategies := map[string]string{
+		machinetypes.EK.Name():  autoscalingOptions.EkLookaheadPodStrategy,
+		machinetypes.E4A.Name(): autoscalingOptions.E4aLookaheadPodStrategy,
+		machinetypes.E4.Name():  autoscalingOptions.E4LookaheadPodStrategy,
+	}
+	experimentFlags := map[string]string{
+		machinetypes.EK.Name():  experiments.EkLookaheadPodsV1Flag,
+		machinetypes.E4A.Name(): experiments.E4aLookaheadPodsV1Flag,
+		machinetypes.E4.Name():  experiments.E4LookaheadPodsV1Flag,
+	}
+
+	lookaheadBufferStrategyProvider, err := lookaheadbuffer_strategy.NewProvider(
+		experimentsManager,
+		manifestFlagStrategies,
+		experimentFlags,
+		internalmetrics.Metrics,
+		caVersion,
+	)
 	if err != nil {
-		klog.Errorf("Cannot parse lookahead pod strategy, error: %v", err)
+		klog.Errorf("Cannot create LookaheadBufferStrategyProvider, error: %v", err)
 		return nil, nil, err
 	}
-	lookaheadBufferStrategyProvider := lookaheadbuffer_strategy.NewProvider(experimentsManager, flagConfig, internalmetrics.Metrics, caVersion)
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
 
 	var provreqProcessor pods.PodListProcessor
@@ -729,6 +744,7 @@ func (b *Builder) Build(
 			s := runtime.NewScheme()
 			_ = scheme.AddToScheme(s)
 			_ = ccc_api.AddToScheme(s)
+			_ = cbv1beta1.AddToScheme(s)
 
 			var err error
 			ctrClient, err = client.New(b.kubeConfig, client.Options{
@@ -773,6 +789,13 @@ func (b *Builder) Build(
 		if err := minCapacityController.Start(bgContext); err != nil {
 			klog.Errorf("Failed to start MinCapacityController: %v", err)
 			return nil, nil, err
+		}
+	}
+
+	if b.manager != nil && computeclass.IsComputeClassCapacityBuffersEnabled(experimentsManager) {
+		if err := capacitybuffers.SetupWithManager(b.manager); err != nil {
+			klog.Errorf("Failed to setup CapacityBuffer reconciler: %v", err)
+			return nil, nil, fmt.Errorf("failed to setup CapacityBuffer reconciler: %w", err)
 		}
 	}
 
@@ -878,7 +901,7 @@ func (b *Builder) Build(
 			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager, cloudProvider, true /* exemptAtomicNodeGroups */),
 		}),
 		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
-			ca_utils.VirtualKubeletNodeFilter{},
+			utils.VirtualKubeletNodeFilter{},
 			gke_utils.TerminatingNodeFilter{},
 			surgeUpgradeResourceTracker,
 		}),
@@ -973,11 +996,10 @@ func (b *Builder) Build(
 	if err != nil {
 		return nil, nil, err
 	}
-	penaltyChecker := provider.NewRelaxedNodeGroupPenaltyChecker(experimentsManager, cloudProvider.IsAutopilotEnabled())
+
 	expanderStrategy, err := internalexpander.ExpanderStrategyFromString(
 		autoscalingOptions.ExpanderNames,
 		cloudProvider,
-		penaltyChecker,
 		autoscalingKubeClients,
 		b.kubeClient,
 		defragProcessor,

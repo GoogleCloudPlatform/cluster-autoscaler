@@ -15,59 +15,94 @@
 package processor
 
 import (
-	"strconv"
+	"slices"
 	"strings"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	"k8s.io/klog/v2"
 )
 
 type workloadSeparationLimiter struct {
-	experimentsManager experiments.Manager
-	defaultLimit       int
-	componentVersion   version.Version
+	resizableVmLimiters map[string]resizableVmLimitProvider
 }
 
-func NewWorkloadSeparationLimiter(experimentsManager experiments.Manager, defaultLimit int, componentVersion version.Version) *workloadSeparationLimiter {
-	if defaultLimit < 0 {
-		defaultLimit = 0
-	}
-
-	return &workloadSeparationLimiter{
-		experimentsManager: experimentsManager,
-		defaultLimit:       defaultLimit,
-		componentVersion:   componentVersion,
-	}
+type workloadIDRequestsPair struct {
+	workloadID string
+	resources  apiv1.ResourceList
 }
 
-// Limit returns the maximum number of non-default workload separations that can have lookahead buffer.
-func (w *workloadSeparationLimiter) Limit() int {
-	flag := w.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.EkLookaheadMaxWorkloadSeparationsFlag, "0,999.999.999")
-	if len(flag) == 0 {
-		return w.defaultLimit
+type resizableVmLimitProvider interface {
+	provide() int
+}
+
+func NewWorkloadSeparationLimiter(experimentsManager experiments.Manager, laWorkloadSeparationsConfigFlags map[string]int, experimentFlags map[string]string, componentVersion version.Version) *workloadSeparationLimiter {
+	resizableVmLimiters := map[string]resizableVmLimitProvider{}
+	for family, defaultLimit := range laWorkloadSeparationsConfigFlags {
+		resizableVmLimiters[family] = newProvider(experimentsManager, experimentFlags[family], defaultLimit, componentVersion)
 	}
-	config := strings.Split(flag, ",")
-	if len(config) != 2 {
-		klog.Warningf("Experiment %q provided unexpected flag: %q, expected format <limit>,<min_version>", experiments.EkLookaheadMaxWorkloadSeparationsFlag, flag)
-		return w.defaultLimit
+
+	return &workloadSeparationLimiter{resizableVmLimiters}
+}
+
+// Limit filters the workload separation requests per machine family to the top N by CPU,
+// always preserving the default workload ID ("").
+func (w *workloadSeparationLimiter) Limit(requestsByFamily map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList {
+	limitedRequests := map[string]map[string]apiv1.ResourceList{}
+	for machineFamily, requests := range requestsByFamily {
+		limitProvider, ok := w.resizableVmLimiters[machineFamily]
+		limit := 0
+		if ok {
+			limit = limitProvider.provide()
+		}
+		limitedRequests[machineFamily] = limitRequestsForFamily(requests, limit)
 	}
-	limit, minVersionValue := config[0], config[1]
-	minVersion, err := version.FromString(minVersionValue)
-	if err != nil {
-		klog.Errorf("Experiment %q provided invalid min version %q, using default workload separation limit", experiments.EkLookaheadMaxWorkloadSeparationsFlag, minVersionValue)
-		return w.defaultLimit
+	return limitedRequests
+}
+
+func limitRequestsForFamily(requests map[string]apiv1.ResourceList, limit int) map[string]apiv1.ResourceList {
+	defaultWID, defaultExists := requests[""]
+	delete(requests, "")
+
+	// TODO(b/421106616): Set of workload IDs with lookahead is recomputed every loop. A cluster
+	// with more workload IDs than `maxWorkloadSeparations` might have some groups moving between having lookahead and not having it.
+	// This could lead to extra node churn. This is an edge-case and probably not worth handling right now.
+	requests = selectLargestRequests(requests, limit)
+
+	if defaultExists {
+		// Add default workload ID back, if it existed in the first place.
+		requests[""] = defaultWID
 	}
-	if w.componentVersion.LessThan(minVersion) {
-		return w.defaultLimit
+	return requests
+}
+
+func selectLargestRequests(requests map[string]apiv1.ResourceList, limit int) map[string]apiv1.ResourceList {
+	if len(requests) <= limit {
+		result := make(map[string]apiv1.ResourceList, len(requests))
+		for k, v := range requests {
+			result[k] = v
+		}
+		return result
 	}
-	l, err := strconv.Atoi(limit)
-	if err != nil {
-		klog.Warningf("Experiment %q provided unexpected limit: %q, expected integer", experiments.EkLookaheadMaxWorkloadSeparationsFlag, limit)
-		return w.defaultLimit
+
+	pairs := make([]workloadIDRequestsPair, 0, len(requests))
+	for k, v := range requests {
+		pairs = append(pairs, workloadIDRequestsPair{k, v})
 	}
-	// Clipping at 0 in case the experiment set negative value.
-	l = max(0, l)
-	klog.V(4).Infof("Using limit %d from experiment %q, raw flag: %q", l, experiments.EkLookaheadMaxWorkloadSeparationsFlag, flag)
-	return l
+	slices.SortFunc(pairs, func(a, b workloadIDRequestsPair) int {
+		aCpu := a.resources.Cpu().MilliValue()
+		bCpu := b.resources.Cpu().MilliValue()
+		if aCpu != bCpu {
+			return int(aCpu - bCpu)
+		}
+		return strings.Compare(b.workloadID, a.workloadID)
+	})
+	slices.Reverse(pairs)
+	topRequests := pairs[:min(limit, len(pairs))]
+	limited := make(map[string]apiv1.ResourceList, len(topRequests))
+	for _, pair := range topRequests {
+		limited[pair.workloadID] = pair.resources
+	}
+
+	return limited
 }

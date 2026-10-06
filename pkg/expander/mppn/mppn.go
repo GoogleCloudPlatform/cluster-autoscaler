@@ -90,7 +90,7 @@ func (f *Filter) getOptionPenalty(option expander.Option) float64 {
 	penalty := 1.0
 	mig := option.NodeGroup.(*gke.GkeMig)
 	if !option.NodeGroup.Exist(context.TODO()) {
-		penalty = f.gcr.BaseGroupCreationPenalty()
+		penalty = f.gcr.GroupCreationPenalty()
 	}
 	return penalty * getMppnPenalty(option, mig)
 }

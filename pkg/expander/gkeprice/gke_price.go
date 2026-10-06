@@ -48,26 +48,18 @@ import (
 // The detailed description of what is going on in this expander can be found here:
 // https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/proposals/pricing.md
 // https://docs.google.com/document/d/1GjHJAMPG_CRHICWExzr5lxXWbUzi_1vOAqlhuDovEm8
-// **********
-
-type RelaxedNodeGroupPenaltyChecker interface {
-	// Enabled decides if relaxed group penalty should be used when scoring scale-up options.
-	Enabled() bool
-}
-
 type gkePriceBased struct {
-	pricingModel                   cloudprovider.PricingModel
-	clusterAnalyzer                ClusterAnalyzer
-	groupCountReducer              GroupCountReducer
-	machineTypeBalancer            MachineTypeBalancer
-	reservationsPuller             *gceclient.ReservationsPuller
-	localSSDDiskSizeProvider       localssdsize.LocalSSDSizeProvider
-	relaxedNodeGroupPenaltyChecker RelaxedNodeGroupPenaltyChecker
-	pvmUnfitnessPenaltyEnabled     bool
-	epsilon                        float64
-	autopilotEnabled               bool
-	upcomingChecker                asyncnodegroups.AsyncNodeGroupStateChecker
-	cloudProvider                  provider.GkeExpanderCloudProvider
+	pricingModel               cloudprovider.PricingModel
+	clusterAnalyzer            ClusterAnalyzer
+	groupCountReducer          GroupCountReducer
+	machineTypeBalancer        MachineTypeBalancer
+	reservationsPuller         *gceclient.ReservationsPuller
+	localSSDDiskSizeProvider   localssdsize.LocalSSDSizeProvider
+	pvmUnfitnessPenaltyEnabled bool
+	epsilon                    float64
+	autopilotEnabled           bool
+	upcomingChecker            asyncnodegroups.AsyncNodeGroupStateChecker
+	cloudProvider              provider.GkeExpanderCloudProvider
 }
 
 const (
@@ -121,6 +113,9 @@ const (
 	preemptionUnfitnessCPUThreshold    = 32
 	preemptionUnfitnessMemoryThreshold = 64 * units.GiB
 	largeScaleUpNodeCountThreshold     = 10
+	// Base penalty multiplier given to unfit node groups, it's supposed to be
+	// higher than the one for not yet created node groups (GroupCreationPenalty)
+	notExistCoefficient = 1.5
 )
 
 var (
@@ -135,7 +130,6 @@ func NewStrategy(
 	nodeLister kube_util.NodeLister,
 	podLister kube_util.PodLister,
 	reservationsPuller *gceclient.ReservationsPuller,
-	penaltyChecker RelaxedNodeGroupPenaltyChecker,
 	pvmUnfitnessPenaltyEnabled bool,
 	localssdDiskSizeProvider localssdsize.LocalSSDSizeProvider,
 	upcomingChecker asyncnodegroups.AsyncNodeGroupStateChecker,
@@ -156,18 +150,17 @@ func NewStrategy(
 	}
 
 	return &gkePriceBased{
-		cloudProvider:                  cloudProvider,
-		pricingModel:                   pricingModel,
-		clusterAnalyzer:                clusterAnalyzer,
-		groupCountReducer:              groupCountReducer,
-		machineTypeBalancer:            machineTypeBalancer,
-		pvmUnfitnessPenaltyEnabled:     pvmUnfitnessPenaltyEnabled,
-		epsilon:                        epsilon,
-		reservationsPuller:             reservationsPuller,
-		relaxedNodeGroupPenaltyChecker: penaltyChecker,
-		autopilotEnabled:               cloudProvider.IsAutopilotEnabled(),
-		localSSDDiskSizeProvider:       localssdDiskSizeProvider,
-		upcomingChecker:                upcomingChecker,
+		cloudProvider:              cloudProvider,
+		pricingModel:               pricingModel,
+		clusterAnalyzer:            clusterAnalyzer,
+		groupCountReducer:          groupCountReducer,
+		machineTypeBalancer:        machineTypeBalancer,
+		pvmUnfitnessPenaltyEnabled: pvmUnfitnessPenaltyEnabled,
+		epsilon:                    epsilon,
+		reservationsPuller:         reservationsPuller,
+		autopilotEnabled:           cloudProvider.IsAutopilotEnabled(),
+		localSSDDiskSizeProvider:   localssdDiskSizeProvider,
+		upcomingChecker:            upcomingChecker,
 	}, nil
 }
 
@@ -178,9 +171,6 @@ func (p *gkePriceBased) BestOption(ctx context.Context, expansionOptions []expan
 	bestOptionUnfitness := math.MaxFloat64
 	now := time.Now()
 	then := now.Add(time.Hour)
-
-	// Evaluated only once per call to guarantee the same behavior for all options.
-	relaxedNodeGroupPenaltyEnabled := p.relaxedNodeGroupPenaltyChecker.Enabled()
 
 	// shuffling introduces randomness between options with the same score
 	rand.Shuffle(len(expansionOptions), func(i, j int) {
@@ -278,15 +268,8 @@ nextoption:
 		}
 
 		optionScore := supressedUnfitness * priceSubScore
-
-		groupCountPenalty := 1.0
 		if !option.NodeGroup.Exist(context.TODO()) && !p.upcomingChecker.IsUpcoming(option.NodeGroup) {
-			if relaxedNodeGroupPenaltyEnabled {
-				groupCountPenalty = p.groupCountReducer.BaseGroupCreationPenalty()
-			} else {
-				groupCountPenalty = p.groupCountReducer.GroupCreationPenalty(nodePoolHasGpu)
-			}
-			optionScore *= groupCountPenalty
+			optionScore *= p.groupCountReducer.GroupCreationPenalty()
 		}
 
 		machineTypeBalancingFactor := 1.0
@@ -295,7 +278,7 @@ nextoption:
 			optionScore *= machineTypeBalancingFactor
 		}
 
-		debug := fmt.Sprintf("machine_type=%s node_count=%d all_nodes_price=%f total_reservations=%d pods_price=%f reclaimable_price=%f stabilized_ratio=%f preferred_cpu_count=%d unfitness=%f suppressed=%f group_count_penalty=%f machine_type_balancing_factor=%f node_annotations=%#v, final_score=%f",
+		debug := fmt.Sprintf("machine_type=%s node_count=%d all_nodes_price=%f total_reservations=%d pods_price=%f reclaimable_price=%f stabilized_ratio=%f preferred_cpu_count=%d unfitness=%f suppressed=%f machine_type_balancing_factor=%f node_annotations=%#v, final_score=%f",
 			machineType,
 			option.NodeCount,
 			totalNodePrice,
@@ -306,7 +289,6 @@ nextoption:
 			preferredCpuCount,
 			nodeUnfitness,
 			supressedUnfitness,
-			groupCountPenalty,
 			machineTypeBalancingFactor,
 			nodeInfo.Node().Annotations,
 			optionScore,
@@ -321,6 +303,7 @@ nextoption:
 			bestOptionUnfitness = nodeUnfitness
 		}
 	}
+
 	return bestOption
 }
 
