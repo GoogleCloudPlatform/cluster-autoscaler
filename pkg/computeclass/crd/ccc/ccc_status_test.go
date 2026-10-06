@@ -745,8 +745,8 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 				ActuationInProgress: ptr.To(2),
 				NotProcessed:        ptr.To(1),
 				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
-					{Reason: crd.ConsolidationReasonUsedByFormedSlice, Count: 16},
-					{Reason: crd.ConsolidationReasonBlockingPods, Count: 3},
+					{Reason: crd.ConsolidationReasonUsedByFormedSlice, NodeCount: 16},
+					{Reason: crd.ConsolidationReasonBlockingPods, NodeCount: 3},
 				},
 				MeasuredAt: &measuredAt,
 			},
@@ -767,7 +767,7 @@ func TestCccCRDStatus_UpdateRuleConsolidationStatus(t *testing.T) {
 				ActuationInProgress: ptr.To(0),
 				NotProcessed:        ptr.To(0),
 				BlockedNodes: []ccc_api.ConsolidationBlockedNodesInfo{
-					{Reason: crd.ConsolidationReasonConsolidationBlocked, Count: 7},
+					{Reason: crd.ConsolidationReasonConsolidationBlocked, NodeCount: 7},
 				},
 				MeasuredAt: &measuredAt,
 			},

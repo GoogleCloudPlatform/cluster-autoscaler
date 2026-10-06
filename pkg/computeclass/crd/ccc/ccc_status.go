@@ -294,11 +294,11 @@ func toCccBlockedNodes(blocked []crd.BlockedNodesByReason) []ccc_api.Consolidati
 			reason = crd.ConsolidationReasonConsolidationBlocked
 		}
 		if i, ok := indexByReason[reason]; ok {
-			blockedNodes[i].Count += b.Count
+			blockedNodes[i].NodeCount += b.Count
 			continue
 		}
 		indexByReason[reason] = len(blockedNodes)
-		blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason, Count: b.Count})
+		blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason, NodeCount: b.Count})
 	}
 	return blockedNodes
 }
