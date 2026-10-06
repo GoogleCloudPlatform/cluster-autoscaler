@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -37,7 +38,7 @@ func TestGetPodDestinationCandidates(t *testing.T) {
 	unknownNode := createNode("unknown-node", "") // No instance type label
 	missingFromSnapshotNode := createNode("missing-node", "ek-standard-2")
 
-	lookaheadPod := lookaheadbuffer.BuildTestLookaheadPod("some-workload", 100, 100)
+	lookaheadPod := lookaheadbuffer.BuildTestLookaheadPod("some-workload", 100, 100, machinetypes.EK.Name())
 	normalPod := test.BuildTestPod("normal-pod", 100, 100)
 
 	tests := []struct {
@@ -131,7 +132,7 @@ func TestGetScaleDownCandidates(t *testing.T) {
 		createNode("node3", "g2-standard-8"),
 	}
 	pods := []*apiv1.Pod{
-		lookaheadbuffer.BuildTestLookaheadPod("some-workload", 100, 100),
+		lookaheadbuffer.BuildTestLookaheadPod("some-workload", 100, 100, machinetypes.EK.Name()),
 		test.BuildTestPod("normal-pod", 100, 100),
 	}
 	snapshot := testsnapshot.NewTestSnapshotOrDie(t)

@@ -2251,7 +2251,7 @@ func systemPod(name string, cpu, mem int64) *v1.Pod {
 }
 
 func lookaheadPod(name string, cpu, mem int64) *v1.Pod {
-	return lookaheadbuffer.BuildTestLookaheadPod("", cpu, mem, lookaheadbuffer.WithName(name))
+	return lookaheadbuffer.BuildTestLookaheadPod("", cpu, mem, machinetypes.EK.Name(), lookaheadbuffer.WithName(name))
 }
 
 func resizingPod(name string, fromCpu, fromMem, toCpu, toMem int64) *v1.Pod {

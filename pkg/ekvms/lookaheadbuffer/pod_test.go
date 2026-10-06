@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -47,8 +48,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 			expectedPods: []apiv1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "lookahead-virtual-pod-default-0",
-						UID:       types.UID("lookahead-virtual-pod-default-0"),
+						Name:      "lookahead-virtual-pod-ek-default-0",
+						UID:       types.UID("lookahead-virtual-pod-ek-default-0"),
 						Namespace: "kube-system",
 						Labels: map[string]string{
 							lookaheadPodLabel: "true",
@@ -60,8 +61,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 							{
 								APIVersion: "v1",
 								Kind:       "LookaheadBuffer",
-								Name:       "lookahead-buffer-default",
-								UID:        types.UID("lookahead-vuid-default"),
+								Name:       "lookahead-buffer-ek-default",
+								UID:        types.UID("lookahead-vuid-ek-default"),
 								Controller: ptr.To(true),
 							},
 						},
@@ -85,8 +86,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "lookahead-virtual-pod-default-1",
-						UID:       types.UID("lookahead-virtual-pod-default-1"),
+						Name:      "lookahead-virtual-pod-ek-default-1",
+						UID:       types.UID("lookahead-virtual-pod-ek-default-1"),
 						Namespace: "kube-system",
 						Labels: map[string]string{
 							lookaheadPodLabel: "true",
@@ -98,8 +99,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 							{
 								APIVersion: "v1",
 								Kind:       "LookaheadBuffer",
-								Name:       "lookahead-buffer-default",
-								UID:        types.UID("lookahead-vuid-default"),
+								Name:       "lookahead-buffer-ek-default",
+								UID:        types.UID("lookahead-vuid-ek-default"),
 								Controller: ptr.To(true),
 							},
 						},
@@ -122,8 +123,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 				},
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "lookahead-virtual-pod-default-2",
-						UID:       types.UID("lookahead-virtual-pod-default-2"),
+						Name:      "lookahead-virtual-pod-ek-default-2",
+						UID:       types.UID("lookahead-virtual-pod-ek-default-2"),
 						Namespace: "kube-system",
 						Labels: map[string]string{
 							lookaheadPodLabel: "true",
@@ -135,8 +136,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 							{
 								APIVersion: "v1",
 								Kind:       "LookaheadBuffer",
-								Name:       "lookahead-buffer-default",
-								UID:        types.UID("lookahead-vuid-default"),
+								Name:       "lookahead-buffer-ek-default",
+								UID:        types.UID("lookahead-vuid-ek-default"),
 								Controller: ptr.To(true),
 							},
 						},
@@ -168,8 +169,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 			expectedPods: []apiv1.Pod{
 				{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      "lookahead-virtual-pod-77bb52f2-0",
-						UID:       types.UID("lookahead-virtual-pod-77bb52f2-0"),
+						Name:      "lookahead-virtual-pod-ek-77bb52f2-0",
+						UID:       types.UID("lookahead-virtual-pod-ek-77bb52f2-0"),
 						Namespace: "kube-system",
 						Labels: map[string]string{
 							lookaheadPodLabel: "true",
@@ -181,8 +182,8 @@ func TestGenerateLookaheadPods(t *testing.T) {
 							{
 								APIVersion: "v1",
 								Kind:       "LookaheadBuffer",
-								Name:       "lookahead-buffer-77bb52f2",
-								UID:        types.UID("lookahead-vuid-77bb52f2"),
+								Name:       "lookahead-buffer-ek-77bb52f2",
+								UID:        types.UID("lookahead-vuid-ek-77bb52f2"),
 								Controller: ptr.To(true),
 							},
 						},
@@ -225,7 +226,7 @@ func TestGenerateLookaheadPods(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pods := GenerateLookaheadPods(tc.number, tc.cpu, tc.memory, tc.workloadID)
+			pods := GenerateLookaheadPods(tc.number, tc.cpu, tc.memory, tc.workloadID, machinetypes.EK.Name())
 
 			actualPods := make([]apiv1.Pod, len(pods))
 			for i, pod := range pods {
@@ -319,9 +320,9 @@ func TestAllLookaheadPodsRequests(t *testing.T) {
 			name: "lookahead_pods_in_list",
 			pods: []*apiv1.Pod{
 				test.BuildTestPod("p1", 200, 2, func(p *apiv1.Pod) { p.Namespace = "kube-system" }),
-				BuildTestLookaheadPod("", 6000, 24, WithPosition(0)),
+				BuildTestLookaheadPod("", 6000, 24, machinetypes.EK.Name(), WithPosition(0)),
 				test.BuildTestPod("p2", 1000, 4),
-				BuildTestLookaheadPod("", 5400, 23, WithPosition(1)),
+				BuildTestLookaheadPod("", 5400, 23, machinetypes.EK.Name(), WithPosition(1)),
 			},
 			expectedResourceList: apiv1.ResourceList{
 				apiv1.ResourceCPU:    resource.MustParse("11400m"),
@@ -375,7 +376,7 @@ func TestHashWorkloadID(t *testing.T) {
 }
 
 func TestLookaheadPodIsFake(t *testing.T) {
-	pods := GenerateLookaheadPods(1, resource.MustParse("100m"), resource.MustParse("128Mi"), "")
+	pods := GenerateLookaheadPods(1, resource.MustParse("100m"), resource.MustParse("128Mi"), "", machinetypes.EK.Name())
 	for _, pod := range pods {
 		assert.True(t, fake.IsFake(pod))
 	}

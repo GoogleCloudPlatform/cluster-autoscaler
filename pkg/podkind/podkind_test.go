@@ -24,6 +24,7 @@ import (
 	provreqv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
@@ -59,7 +60,7 @@ func capacityRequestPod(t *testing.T) *apiv1.Pod {
 }
 
 func TestOf(t *testing.T) {
-	lookaheadPod := lookaheadbuffer.GenerateLookaheadPods(1, resource.MustParse("1"), resource.MustParse("1Gi"), "workload-1")[0]
+	lookaheadPod := lookaheadbuffer.GenerateLookaheadPods(1, resource.MustParse("1"), resource.MustParse("1Gi"), "workload-1", machinetypes.EK.Name())[0]
 
 	csnPod := podWithAnnotations("csn-pod", nil)
 	csn.MakePodCSN(csnPod, "buffer-1")

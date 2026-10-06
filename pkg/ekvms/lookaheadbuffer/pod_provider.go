@@ -66,7 +66,7 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash, m
 	}
 	cpu := *resource.NewMilliQuantity(int64(tier.LookaheadPodMilliCPU), resource.DecimalSI)
 	memory := *resource.NewQuantity(int64(tier.LookaheadPodMemKib*size.KiB), resource.BinarySI)
-	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash)
+	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash, machineFamily)
 }
 
 func getLookaheadPodNumber(targetNodesCPU int, tier strategy.Tier) int {

@@ -20,6 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
@@ -161,7 +162,7 @@ func TestNewCandidate(t *testing.T) {
 			},
 			podsPerNode: map[string][]*v1.Pod{
 				"ek-node-1": {
-					lookaheadbuffer.BuildTestLookaheadPod("", 1500, 5, lookaheadbuffer.WithNode("ek-node-1")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1500, 5, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-1")),
 					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 6000, 25),
 				},
 				"ek-node-2": {
@@ -317,7 +318,7 @@ func TestNewCandidate(t *testing.T) {
 				},
 				"ek-node-2": {
 					buildTestPod("ek-node-2-pod", "ek-node-2", 1000, 4),
-					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, lookaheadbuffer.WithNode("ek-node-2")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-2")),
 					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 6000, 25),
 				},
 			},
@@ -343,7 +344,7 @@ func TestNewCandidate(t *testing.T) {
 				},
 				"ek-node-2": {
 					buildTestPod("ek-node-2-pod", "ek-node-2", 1000, 4),
-					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, lookaheadbuffer.WithNode("ek-node-2")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-2")),
 					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 6000, 25),
 				},
 			},
@@ -493,7 +494,7 @@ func TestValidCandidateNodes(t *testing.T) {
 			},
 			podsPerNode: map[string][]*v1.Pod{
 				"ek-node-1": {
-					lookaheadbuffer.BuildTestLookaheadPod("", 2500, 5, lookaheadbuffer.WithNode("ek-node-1")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 2500, 5, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-1")),
 					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 4000, 25),
 				},
 				"ek-node-2": {
@@ -586,7 +587,7 @@ func TestValidCandidateNodes(t *testing.T) {
 				},
 				"ek-node-2": {
 					buildTestPod("ek-node-2-pod", "ek-node-2", 2000, 4),
-					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, lookaheadbuffer.WithNode("ek-node-2")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-2")),
 					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 4000, 25),
 				},
 			},
@@ -611,7 +612,7 @@ func TestValidCandidateNodes(t *testing.T) {
 				},
 				"ek-node-2": {
 					buildTestPod("ek-node-2-pod", "ek-node-2", 2000, 4),
-					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, lookaheadbuffer.WithNode("ek-node-2")),
+					lookaheadbuffer.BuildTestLookaheadPod("", 500, 1, machinetypes.EK.Name(), lookaheadbuffer.WithNode("ek-node-2")),
 					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 4000, 25),
 				},
 			},

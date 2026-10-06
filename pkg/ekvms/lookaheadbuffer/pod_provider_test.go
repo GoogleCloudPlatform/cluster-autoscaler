@@ -28,146 +28,149 @@ import (
 )
 
 func TestGetLookaheadPods(t *testing.T) {
-	for _, tc := range []struct {
-		desc            string
-		laStrategy      strategy.LookaheadPodStrategy
-		laStrategyError error
-		targetNodesCPUs int
-		want            []*apiv1.Pod
-	}{
-		{
-			desc:            "enabled status",
-			targetNodesCPUs: 100,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Enabled,
-				TieredStrategy: &strategy.TieredStrategy{
-					Tiers: []strategy.Tier{
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   32 * 1024 * 1024,
-							MinTargetNodesCPU:    0,
+	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
+		t.Run(family, func(t *testing.T) {
+			for _, tc := range []struct {
+				desc            string
+				laStrategy      strategy.LookaheadPodStrategy
+				laStrategyError error
+				targetNodesCPUs int
+				want            []*apiv1.Pod
+			}{
+				{
+					desc:            "enabled status",
+					targetNodesCPUs: 100,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Enabled,
+						TieredStrategy: &strategy.TieredStrategy{
+							Tiers: []strategy.Tier{
+								{
+									NumLookaheadPods:     1,
+									LookaheadPodMilliCPU: 8000,
+									LookaheadPodMemKib:   32 * 1024 * 1024,
+									MinTargetNodesCPU:    0,
+								},
+							},
 						},
 					},
+					want: GenerateLookaheadPods(1, *resource.NewMilliQuantity(8000, resource.DecimalSI), *resource.NewQuantity(32*size.GiB, resource.BinarySI), "", family),
 				},
-			},
-			want: GenerateLookaheadPods(1, *resource.NewMilliQuantity(8000, resource.DecimalSI), *resource.NewQuantity(32*size.GiB, resource.BinarySI), ""),
-		},
-		{
-			desc:            "disabled status",
-			targetNodesCPUs: 100,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Disabled,
-				TieredStrategy: &strategy.TieredStrategy{
-					Tiers: []strategy.Tier{
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   32 * 1024 * 1024,
-							MinTargetNodesCPU:    0,
+				{
+					desc:            "disabled status",
+					targetNodesCPUs: 100,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Disabled,
+						TieredStrategy: &strategy.TieredStrategy{
+							Tiers: []strategy.Tier{
+								{
+									NumLookaheadPods:     1,
+									LookaheadPodMilliCPU: 8000,
+									LookaheadPodMemKib:   32 * 1024 * 1024,
+									MinTargetNodesCPU:    0,
+								},
+							},
 						},
 					},
+					want: nil,
 				},
-			},
-			want: nil,
-		},
-		{
-			desc:            "unspecified status",
-			targetNodesCPUs: 100,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Unspecified,
-				TieredStrategy: &strategy.TieredStrategy{
-					Tiers: []strategy.Tier{
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   32 * 1024 * 1024,
-							MinTargetNodesCPU:    0,
+				{
+					desc:            "unspecified status",
+					targetNodesCPUs: 100,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Unspecified,
+						TieredStrategy: &strategy.TieredStrategy{
+							Tiers: []strategy.Tier{
+								{
+									NumLookaheadPods:     1,
+									LookaheadPodMilliCPU: 8000,
+									LookaheadPodMemKib:   32 * 1024 * 1024,
+									MinTargetNodesCPU:    0,
+								},
+							},
 						},
 					},
+					want: nil,
 				},
-			},
-			want: nil,
-		},
-		{
-			desc:            "stragey provider returns error",
-			targetNodesCPUs: 100,
-			laStrategyError: errors.New("Some error"),
-			want:            nil,
-		},
-		{
-			desc:            "no tiered strategy",
-			targetNodesCPUs: 100,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Enabled,
-			},
-			want: nil,
-		},
-		{
-			desc:            "tiered strategy has no tiers",
-			targetNodesCPUs: 100,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status:         strategy.Enabled,
-				TieredStrategy: &strategy.TieredStrategy{},
-			},
-			want: nil,
-		},
-		{
-			desc:            "1 la pod in first tier",
-			targetNodesCPUs: 50,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Enabled,
-				TieredStrategy: &strategy.TieredStrategy{
-					Tiers: []strategy.Tier{
-						{
-							NumLookaheadPods:     2,
-							LookaheadPodMilliCPU: 32000,
-							LookaheadPodMemKib:   128 * 1024 * 1024,
-							MinTargetNodesCPU:    100,
-						},
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   32 * 1024 * 1024,
-							MinTargetNodesCPU:    0,
+				{
+					desc:            "stragey provider returns error",
+					targetNodesCPUs: 100,
+					laStrategyError: errors.New("Some error"),
+					want:            nil,
+				},
+				{
+					desc:            "no tiered strategy",
+					targetNodesCPUs: 100,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Enabled,
+					},
+					want: nil,
+				},
+				{
+					desc:            "tiered strategy has no tiers",
+					targetNodesCPUs: 100,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status:         strategy.Enabled,
+						TieredStrategy: &strategy.TieredStrategy{},
+					},
+					want: nil,
+				},
+				{
+					desc:            "1 la pod in first tier",
+					targetNodesCPUs: 50,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Enabled,
+						TieredStrategy: &strategy.TieredStrategy{
+							Tiers: []strategy.Tier{
+								{
+									NumLookaheadPods:     2,
+									LookaheadPodMilliCPU: 32000,
+									LookaheadPodMemKib:   128 * 1024 * 1024,
+									MinTargetNodesCPU:    100,
+								},
+								{
+									NumLookaheadPods:     1,
+									LookaheadPodMilliCPU: 8000,
+									LookaheadPodMemKib:   32 * 1024 * 1024,
+									MinTargetNodesCPU:    0,
+								},
+							},
 						},
 					},
+					want: GenerateLookaheadPods(1, *resource.NewMilliQuantity(8000, resource.DecimalSI), *resource.NewQuantity(32*size.GiB, resource.BinarySI), "", family),
 				},
-			},
-			want: GenerateLookaheadPods(1, *resource.NewMilliQuantity(8000, resource.DecimalSI), *resource.NewQuantity(32*size.GiB, resource.BinarySI), ""),
-		},
-		{
-			desc:            "2 la pods in second tier",
-			targetNodesCPUs: 200,
-			laStrategy: strategy.LookaheadPodStrategy{
-				Status: strategy.Enabled,
-				TieredStrategy: &strategy.TieredStrategy{
-					Tiers: []strategy.Tier{
-						{
-							NumLookaheadPods:     2,
-							LookaheadPodMilliCPU: 32000,
-							LookaheadPodMemKib:   128 * 1024 * 1024,
-							MinTargetNodesCPU:    100,
-						},
-						{
-							NumLookaheadPods:     1,
-							LookaheadPodMilliCPU: 8000,
-							LookaheadPodMemKib:   32 * 1024 * 1024,
-							MinTargetNodesCPU:    0,
+				{
+					desc:            "2 la pods in second tier",
+					targetNodesCPUs: 200,
+					laStrategy: strategy.LookaheadPodStrategy{
+						Status: strategy.Enabled,
+						TieredStrategy: &strategy.TieredStrategy{
+							Tiers: []strategy.Tier{
+								{
+									NumLookaheadPods:     2,
+									LookaheadPodMilliCPU: 32000,
+									LookaheadPodMemKib:   128 * 1024 * 1024,
+									MinTargetNodesCPU:    100,
+								},
+								{
+									NumLookaheadPods:     1,
+									LookaheadPodMilliCPU: 8000,
+									LookaheadPodMemKib:   32 * 1024 * 1024,
+									MinTargetNodesCPU:    0,
+								},
+							},
 						},
 					},
+					want: GenerateLookaheadPods(2, *resource.NewMilliQuantity(32000, resource.DecimalSI), *resource.NewQuantity(128*size.GiB, resource.BinarySI), "", family),
 				},
-			},
-			want: GenerateLookaheadPods(2, *resource.NewMilliQuantity(32000, resource.DecimalSI), *resource.NewQuantity(128*size.GiB, resource.BinarySI), ""),
-		},
-	} {
-		t.Run(tc.desc, func(t *testing.T) {
-
-			mockStrategyProvider := &mockStrategyProvider{}
-			mockStrategyProvider.On("Strategy", machinetypes.EK.Name()).Return(tc.laStrategy, tc.laStrategyError)
-			p := NewPodProvider(mockStrategyProvider)
-			got := p.GetLookaheadPods(tc.targetNodesCPUs, "", machinetypes.EK.Name())
-			assert.Equal(t, tc.want, got)
+			} {
+				t.Run(tc.desc, func(t *testing.T) {
+					mockStrategyProvider := &mockStrategyProvider{}
+					mockStrategyProvider.On("Strategy", family).Return(tc.laStrategy, tc.laStrategyError)
+					p := NewPodProvider(mockStrategyProvider)
+					got := p.GetLookaheadPods(tc.targetNodesCPUs, "", family)
+					assert.Equal(t, tc.want, got)
+				})
+			}
 		})
 	}
 }

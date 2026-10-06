@@ -119,7 +119,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 			nodeInfos: []*framework.NodeInfo{
 				framework.NewTestNodeInfo(
 					ekvms_test.EkNode32("node-1", 1000, 1000),
-					lookaheadbuffer.BuildTestLookaheadPod("la-pod-1", 1000, 1*size.GiB),
+					lookaheadbuffer.BuildTestLookaheadPod("la-pod-1", 1000, 1*size.GiB, machinetypes.EK.Name()),
 					test.BuildTestPod("system-pod-1", 1000, 1*size.GiB, func(p *apiv1.Pod) { p.Namespace = metav1.NamespaceSystem }),
 				),
 			},
@@ -775,7 +775,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 			},
 			daemonsets: []*appsv1.DaemonSet{},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, machinetypes.EK.Name()),
 			},
 		},
 		{
@@ -788,7 +788,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				newDaemonSet("ds-1", 1, 100, 100, nil),
 			},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 900, 900),
+				lookaheadbuffer.BuildTestLookaheadPod("", 900, 900, machinetypes.EK.Name()),
 			},
 		},
 		{
@@ -812,7 +812,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				newDaemonSet("ds-1", 2, 100, 100, nil),
 			},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 800, 800),
+				lookaheadbuffer.BuildTestLookaheadPod("", 800, 800, machinetypes.EK.Name()),
 			},
 		},
 		{
@@ -826,7 +826,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				newDaemonSet("ds-2", 1, 200, 200, nil),
 			},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 700, 700),
+				lookaheadbuffer.BuildTestLookaheadPod("", 700, 700, machinetypes.EK.Name()),
 			},
 		},
 		{
@@ -849,7 +849,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				newDaemonSet("ds-1", 1, 100, 100, nil),
 			},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, machinetypes.EK.Name()),
 			},
 		},
 		{
@@ -862,7 +862,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 				withToleration(newDaemonSet("ds-1", 1, 100, 100, nil), apiv1.Toleration{Operator: apiv1.TolerationOpExists, Effect: apiv1.TaintEffectNoSchedule}),
 			},
 			want: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 900, 900),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 900, 900, machinetypes.EK.Name()),
 			},
 		},
 	}
@@ -949,8 +949,8 @@ func TestProcess(t *testing.T) {
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, machinetypes.EK.Name()),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, machinetypes.E4A.Name()),
 				test.BuildTestPod("pod-1", 100, 100),
 			},
 		},
@@ -987,9 +987,9 @@ func TestProcess(t *testing.T) {
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
-				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, machinetypes.EK.Name()),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, machinetypes.E4A.Name()),
+				lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, machinetypes.E4.Name()),
 				test.BuildTestPod("pod-1", 100, 100),
 			},
 		},
@@ -1007,7 +1007,7 @@ func TestProcess(t *testing.T) {
 			},
 			unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 			expectedPods: []*apiv1.Pod{
-				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+				lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, machinetypes.EK.Name()),
 				test.BuildTestPod("pod-1", 100, 100),
 			},
 		},
@@ -1057,8 +1057,8 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, family),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1076,7 +1076,7 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1117,9 +1117,9 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
-					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(0)),
-					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, lookaheadbuffer.WithPosition(1)),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(1)),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1168,8 +1168,8 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 600, 600),
-					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("", 600, 600, family),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, family),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1187,7 +1187,7 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1255,9 +1255,9 @@ func TestProcess(t *testing.T) {
 				},
 				unschedulablePods: []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
 				expectedPods: []*apiv1.Pod{
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(0)),
-					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, lookaheadbuffer.WithPosition(1)),
-					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family, lookaheadbuffer.WithPosition(1)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, family),
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1624,7 +1624,7 @@ type fakeLookaheadPodProvider struct{}
 // GetLookaheadPods returns lookahead pods number equal to floor(cpus/32).
 func (s *fakeLookaheadPodProvider) GetLookaheadPods(cpus int, workloadID, machineFamily string) []*apiv1.Pod {
 	laNum := cpus / 32
-	return lookaheadbuffer.GenerateLookaheadPods(laNum, *resource.NewMilliQuantity(1000, resource.DecimalSI), *resource.NewQuantity(1000, resource.BinarySI), workloadID)
+	return lookaheadbuffer.GenerateLookaheadPods(laNum, *resource.NewMilliQuantity(1000, resource.DecimalSI), *resource.NewQuantity(1000, resource.BinarySI), workloadID, machineFamily)
 }
 
 func node32(family, name string, milliCpu, bytes int64) *apiv1.Node {
