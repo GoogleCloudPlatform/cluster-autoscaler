@@ -79,6 +79,8 @@ type GceClient struct {
 	createInstanceForZoneError map[string]cloudprovider.InstanceErrorInfo // Key: zoneName
 	fetchMachineTypeHandler    map[string]func() error                    // Key: {zone}/{machineType}
 	capacityMap                map[CapacityKey]int64                      // Key: CapacityKey
+	fetchMigCalls              map[gceinternal.GceRef]int
+	fetchMigTemplateCalls      map[gceinternal.GceRef]int
 }
 
 // NewGceClient creates a new, empty fake GCE client.
@@ -100,6 +102,8 @@ func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 		createInstanceForZoneError: make(map[string]cloudprovider.InstanceErrorInfo),
 		fetchMachineTypeHandler:    make(map[string]func() error),
 		capacityMap:                make(map[CapacityKey]int64),
+		fetchMigCalls:              make(map[gceinternal.GceRef]int),
+		fetchMigTemplateCalls:      make(map[gceinternal.GceRef]int),
 		k8s:                        k8s,
 	}
 }
@@ -604,6 +608,10 @@ func (g *GceClient) FetchAllMigs(zone string) ([]*gcev1.InstanceGroupManager, er
 func (g *GceClient) FetchMig(ctx context.Context, ref gceinternal.GceRef) (*gcev1.InstanceGroupManager, error) {
 	g.Lock()
 	defer g.Unlock()
+	if g.fetchMigCalls == nil {
+		g.fetchMigCalls = make(map[gceinternal.GceRef]int)
+	}
+	g.fetchMigCalls[ref]++
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	if mig, found := g.migs[key]; found {
 		return cloneMig(mig), nil
@@ -678,6 +686,10 @@ func (g *GceClient) FetchMigTemplateName(ctx context.Context, migRef gceinternal
 func (g *GceClient) FetchMigTemplate(ctx context.Context, migRef gceinternal.GceRef, templateName string, regional bool) (*gcev1.InstanceTemplate, error) {
 	g.Lock()
 	defer g.Unlock()
+	if g.fetchMigTemplateCalls == nil {
+		g.fetchMigTemplateCalls = make(map[gceinternal.GceRef]int)
+	}
+	g.fetchMigTemplateCalls[migRef]++
 	if t, found := g.templates[templateName]; found {
 		return t, nil
 	}
@@ -686,6 +698,50 @@ func (g *GceClient) FetchMigTemplate(ctx context.Context, migRef gceinternal.Gce
 		return t, nil
 	}
 	return nil, fmt.Errorf("template %s not found in fake GCE", templateName)
+}
+
+// FetchMigCalls returns number of FetchMig calls for a given MIG ref.
+func (g *GceClient) FetchMigCalls(ref gceinternal.GceRef) int {
+	g.Lock()
+	defer g.Unlock()
+	return g.fetchMigCalls[ref]
+}
+
+// TotalFetchMigCalls returns total number of FetchMig calls.
+func (g *GceClient) TotalFetchMigCalls() int {
+	g.Lock()
+	defer g.Unlock()
+	total := 0
+	for _, count := range g.fetchMigCalls {
+		total += count
+	}
+	return total
+}
+
+// FetchMigTemplateCalls returns number of FetchMigTemplate calls for a given MIG ref.
+func (g *GceClient) FetchMigTemplateCalls(ref gceinternal.GceRef) int {
+	g.Lock()
+	defer g.Unlock()
+	return g.fetchMigTemplateCalls[ref]
+}
+
+// TotalFetchMigTemplateCalls returns total number of FetchMigTemplate calls.
+func (g *GceClient) TotalFetchMigTemplateCalls() int {
+	g.Lock()
+	defer g.Unlock()
+	total := 0
+	for _, count := range g.fetchMigTemplateCalls {
+		total += count
+	}
+	return total
+}
+
+// ResetCallCounts resets the tracked call counts.
+func (g *GceClient) ResetCallCounts() {
+	g.Lock()
+	defer g.Unlock()
+	g.fetchMigCalls = make(map[gceinternal.GceRef]int)
+	g.fetchMigTemplateCalls = make(map[gceinternal.GceRef]int)
 }
 
 func (g *GceClient) FetchMigsWithName(ctx context.Context, zone string, filter *regexp.Regexp) ([]string, error) {

@@ -1715,6 +1715,10 @@ func (fake *FakeGkeManager) GetMigForInstance(instance gce.GceRef) (gce.Mig, err
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) IsMigBlocked(migRef gce.GceRef) bool {
+	return false
+}
+
 func (fake *FakeGkeManager) GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error) {
 	return fake.instances, nil
 }
@@ -2485,6 +2489,17 @@ func (m *GkeManagerMock) GetMigForInstance(instance gce.GceRef) (migRet gce.Mig,
 	}
 
 	return
+}
+
+// IsMigBlocked is a mocked method.
+func (m *GkeManagerMock) IsMigBlocked(migRef gce.GceRef) bool {
+	for _, call := range m.ExpectedCalls {
+		if call.Method == "IsMigBlocked" {
+			args := m.Called(migRef)
+			return args.Bool(0)
+		}
+	}
+	return false
 }
 
 // GetMigNodes is a mocked method.

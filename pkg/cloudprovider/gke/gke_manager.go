@@ -149,6 +149,8 @@ type GkeManager interface {
 	DeleteInstances(instances []gce.GceRef) error
 	// GetMigForInstance returns MigConfig of the given Instance
 	GetMigForInstance(instance gce.GceRef) (gce.Mig, error)
+	// IsMigBlocked returns whether the given MIG is currently marked as blocked.
+	IsMigBlocked(migRef gce.GceRef) bool
 	// GetMigNodes returns mig nodes.
 	GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error)
 	// Refresh updates both GCE and GKE resources.
@@ -1774,6 +1776,11 @@ func (m *gkeManagerImpl) GetAllNodePoolNames() sets.Set[string] {
 // GetMigForInstance returns MIG to which the given instance belongs.
 func (m *gkeManagerImpl) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
 	return m.migInfoProvider.GetMigForInstance(context.TODO(), instance)
+}
+
+// IsMigBlocked returns whether the given MIG is currently marked as blocked.
+func (m *gkeManagerImpl) IsMigBlocked(migRef gce.GceRef) bool {
+	return m.cache.IsMigBlocked(migRef)
 }
 
 // GetMigNodes returns instances that belong to a MIG.
