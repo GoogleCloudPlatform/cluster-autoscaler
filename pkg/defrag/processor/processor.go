@@ -22,6 +22,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
@@ -59,6 +60,14 @@ type Config struct {
 	ScaleDownTimeout time.Duration
 	ScaleDownDelay   time.Duration
 	Autopilot        bool
+	// RecordBlockReasons makes every pass explain why each node outside its
+	// candidates cannot be migrated, and publishes the result through
+	// BlockReasons. A pass that stops early, because a tracked candidate still
+	// needs its scale-up or because the candidate limit is reached, has to run
+	// an extra candidate search for that, which costs about as much as the
+	// search a pass without tracked candidates performs anyway. Leave it off
+	// when nothing reads BlockReasons.
+	RecordBlockReasons bool
 }
 
 // candidateInfo keeps the metadata about candidates
@@ -126,6 +135,11 @@ type Processor struct {
 	ctx   *cacontext.AutoscalingContext
 	clock clock.PassiveClock
 
+	// blockReasons holds why each node could not be migrated during the defrag
+	// pass of the current loop. It is nil when no pass completed, and reading
+	// it clears it, so it can never outlive the loop that produced it.
+	blockReasons *observability.Registry
+
 	experimentsManager experiments.Manager
 }
 
@@ -171,6 +185,7 @@ func NewProcessor(opts Options) *Processor {
 func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	p.ctx = autoscalingCtx
 	p.pickedCandidateInfo = nil
+	p.blockReasons = nil
 
 	nodeFilter, err := p.nodeFilterFactory.NewDefragNodeFilter(p.ctx)
 	if err != nil {
@@ -178,6 +193,8 @@ func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.Autos
 	}
 
 	if p.fairnessEnforcer != nil && !p.fairnessEnforcer.Admit(unschedulablePods) {
+		// Defrag did not evaluate any node this loop, so there is nothing to
+		// say about which nodes are blocked.
 		return unschedulablePods, nil
 	}
 
@@ -190,6 +207,16 @@ func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.Autos
 	pods, err := p.processCandidates(nodeFilter)
 	if err != nil {
 		return nil, err
+	}
+
+	// Only a pass that ran to completion is a complete answer about what is
+	// blocked. A pass that gave up part way leaves the registry holding
+	// whatever the filters reached before the error, and publishing that would
+	// report every node they never got to as free to migrate. The same goes
+	// for a pass that was not asked to record: its filters only saw the nodes
+	// the search happened to reach.
+	if p.config.RecordBlockReasons {
+		p.blockReasons = nodeFilter.BlockReasons()
 	}
 
 	klog.V(4).Infof("Defrag candidate count: %v", len(p.candidateInfos))
@@ -219,6 +246,23 @@ func markActiveMigrationPods(pods []*apiv1.Pod) []*apiv1.Pod {
 		marked = append(marked, markedPod)
 	}
 	return marked
+}
+
+// BlockReasons returns why each node was held back during the defrag pass of
+// the current autoscaler loop, or nil if no pass completed or recording is
+// disabled by Config.RecordBlockReasons.
+//
+// A nil result means "unknown", not "nothing is blocked": callers must not
+// treat it as an empty set, or a loop in which defrag was skipped would look
+// like a loop in which every node was free to migrate.
+//
+// Reading consumes the result. Only a completed pass publishes one, so a loop
+// in which Process did not run has no answer to give, and handing back the
+// previous loop's would present stale reasons as current.
+func (p *Processor) BlockReasons() *observability.Registry {
+	reasons := p.blockReasons
+	p.blockReasons = nil
+	return reasons
 }
 
 // DefragPickedCandidate returns true if defrag picked a candidate during the last Process call.
@@ -253,6 +297,12 @@ func (p *Processor) cleanUpCandidates(filter *defragNodeFilter) error {
 
 		if info.candidate.IsAtomic && len(info.candidate.Nodes) < survivingCount {
 			klog.V(1).Infof("Atomic candidate %v lost nodes, invalidating candidate", info)
+			// The nodes that were filtered out already carry the reason that
+			// removed them. The ones left behind are blocked only because the
+			// group can no longer be migrated as a whole.
+			for _, nodeName := range info.candidate.Nodes {
+				filter.BlockReasons().Record(nodeName, observability.AtomicGroupBlocked)
+			}
 			info.candidate.Nodes = nil
 		}
 
@@ -262,7 +312,15 @@ func (p *Processor) cleanUpCandidates(filter *defragNodeFilter) error {
 			} else {
 				metrics.Metrics.IncrementDefragInvalidatedCandidatesTotal(string(reason), info.candidate.Plugin.String())
 				klog.V(4).Infof("Defrag candidate %v no longer valid: %v", info, reason)
-				p.backoff.backoff(p.ctx, info.candidate)
+				blockReason := blockReasonForRemovedCandidate(reason)
+				// Recorded here as well as on the backoff entry. The backoff
+				// covers later passes, but newCandidate may not be reached in
+				// this one, for example once the candidate limit is hit, and
+				// these nodes would then go unattributed for the loop.
+				for _, nodeName := range info.candidate.Nodes {
+					filter.BlockReasons().Record(nodeName, blockReason)
+				}
+				p.backoff.backoff(p.ctx, info.candidate, blockReason)
 			}
 			// The leftover nodes
 			metrics.Metrics.IncreaseDefragFailedScaleDownNodesTotal(info.candidate.Plugin.String(), len(info.candidate.Nodes))
@@ -319,9 +377,12 @@ func (p *Processor) shouldRemoveCandidate(info *candidateInfo) (bool, removeCand
 // Candidate which pods cannot schedule on other existing/upcoming nodes
 func (p *Processor) processCandidates(filter *defragNodeFilter) ([]*apiv1.Pod, error) {
 	allCandidatesNodes := make(map[string]bool)
-	for idx := 0; idx < p.config.CandidateLimit; idx++ {
+	searched := false
+	var pickedPods []*apiv1.Pod
+	for idx := 0; idx < p.config.CandidateLimit && pickedPods == nil; idx++ {
 		// Find a new candidate if needed
 		if idx >= len(p.candidateInfos) {
+			searched = true
 			newCandidateInfo, err := p.newCandidate(filter, allCandidatesNodes)
 			if err != nil {
 				klog.Error("Error while creating a new defrag candidate")
@@ -347,11 +408,38 @@ func (p *Processor) processCandidates(filter *defragNodeFilter) ([]*apiv1.Pod, e
 		if len(unschedulablePods) > 0 {
 			p.pickedCandidateInfo = p.candidateInfos[idx]
 			p.pickedCandidateInfo.scaleUpNoOptions = true
-			return unschedulablePods, nil
+			pickedPods = unschedulablePods
 		}
 	}
 
-	return nil, nil
+	// The filters that explain why a node is held back only run while
+	// searching for a new candidate. A pass that stops before it gets to
+	// search, because an existing candidate still needs its scale-up or
+	// because the candidate limit is reached, would otherwise publish a
+	// registry that says nothing about the nodes outside its candidates, and
+	// nothing recorded reads as free to migrate. The extra search is only
+	// worth its cost when something reads the result.
+	if !searched && p.config.RecordBlockReasons {
+		if err := p.recordBlockedNodes(filter); err != nil {
+			return nil, err
+		}
+	}
+	return pickedPods, nil
+}
+
+// recordBlockedNodes records why each node outside the tracked candidates
+// cannot be migrated, by running the candidate search for its side effects on
+// the filter alone. The candidate it may find is discarded: nothing is tainted,
+// reserved or tracked for it, so it can be found again by a later pass.
+func (p *Processor) recordBlockedNodes(filter *defragNodeFilter) error {
+	allCandidatesNodes := make(map[string]bool)
+	for _, info := range p.candidateInfos {
+		for _, nodeName := range info.candidate.Nodes {
+			allCandidatesNodes[nodeName] = true
+		}
+	}
+	_, err := p.searchCandidate(filter, allCandidatesNodes)
+	return err
 }
 
 // processCandidate processes a single defrag Candidate and returns its unschedulable pods if any exist
@@ -483,6 +571,38 @@ func (p *Processor) processCandidateAtomic(info *candidateInfo, allCandidatesNod
 
 // newCandidate returns a new defrag Candidate using the Plugins
 func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map[string]bool) (*candidateInfo, error) {
+	candidate, err := p.searchCandidate(filter, allCandidateNodes)
+	if err != nil || candidate == nil {
+		return nil, err
+	}
+
+	klog.V(4).Infof("Creating new defrag candidate for plugin: %s, nodes: %s", candidate.Plugin.String(), strings.Join(candidate.Nodes, ","))
+	pods, err := recreatablePods(p.ctx.ClusterSnapshot, candidate.Nodes)
+	if err != nil {
+		return nil, err
+	}
+
+	p.pdbTracker.RemovePods(pods)
+	ci := &candidateInfo{candidate: candidate, creationTime: p.clock.Now()}
+	if err := p.nodeReconciler.ReconcileCandidate(p.ctx, ci); err != nil {
+		return nil, err
+	}
+	return ci, nil
+}
+
+// searchCandidate asks the plugins for a new candidate among the nodes that
+// are not part of a tracked candidate, and returns it narrowed down to the
+// nodes that may be migrated now, or nil if there is none.
+//
+// Every node it turns down along the way is recorded in the filter with the
+// reason. The processor itself keeps nothing from the search, so its result
+// may be discarded; callers that run it for the recording alone should know
+// that the plugins do: each updates its unfit-node count and the metric
+// derived from it, and a plugin that gives nodes a grace period before it
+// offers them (the daemonset one) starts and advances those timers whenever
+// it is asked, so a node that turns unfit while a migration is in flight is
+// offered as soon as its grace period ends rather than after the migration.
+func (p *Processor) searchCandidate(filter *defragNodeFilter, allCandidateNodes map[string]bool) (*defrag.Candidate, error) {
 	nodeNames, err := filter.newValidCandidateNodes(p.ctx, p.pdbTracker, allCandidateNodes)
 	if err != nil {
 		return nil, err
@@ -490,7 +610,27 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 
 	for _, plugin := range p.plugins {
 		availableNodes, backedOffNodes := p.backoff.splitNodesBasedOnBackoff(plugin, nodeNames)
+		// A node backed off for this plugin may still be picked up by a later
+		// one. That is fine: a node that ends up in a candidate is reported as
+		// migrating, which takes precedence over any reason recorded here.
+		//
+		// The reason comes from the backoff entry rather than being assumed,
+		// so a candidate abandoned for lack of replacement capacity keeps
+		// reporting that for as long as it stays backed off.
+		//
+		// The backoff is per plugin, the recording is not: a node that no
+		// plugin picks this pass carries the cause of whichever plugin backed
+		// it off, even one unrelated to why it is reported on. That is an
+		// accepted imprecision. The cause is still a real, recent failure to
+		// migrate the node, and it is more useful than the catch-all it would
+		// otherwise be reported under.
+		for _, nodeName := range backedOffNodes {
+			filter.BlockReasons().Record(nodeName, p.backoff.cause(plugin, nodeName))
+		}
 		candidate := plugin.NewCandidate(p.ctx, availableNodes)
+		if reporter, ok := plugin.(defrag.AtomicGroupReporter); ok {
+			recordAtomicGroupBlocked(filter, reporter.LatestAtomicGroupBlockedNodes())
+		}
 		unfitNodesCount := plugin.LatestUnfitNodesCount()
 		metrics.Metrics.SetDefragUnfitNodes(plugin.String(), unfitNodesCount+len(backedOffNodes))
 		metrics.Metrics.ObserveDefragStaleness(plugin.String())
@@ -503,35 +643,27 @@ func (p *Processor) newCandidate(filter *defragNodeFilter, allCandidateNodes map
 			}
 			if candidate.IsAtomic && len(nodes) < originalNodeCount {
 				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated min quotas")
+				recordAtomicGroupBlocked(filter, nodes)
 				continue
 			}
 			candidate.Nodes = filter.filterNodesViolatingMinSize(p.ctx, nodes)
 			if candidate.IsAtomic && len(candidate.Nodes) < originalNodeCount {
 				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated min size")
+				recordAtomicGroupBlocked(filter, candidate.Nodes)
 				continue
 			}
 			candidate.Nodes = filter.filterNodesViolatingMaxDisruption(p.ctx, candidate.Nodes)
 			if candidate.IsAtomic && len(candidate.Nodes) < originalNodeCount {
 				klog.V(1).Infof("Defrag: skipping atomic candidate - some nodes violated max disruption")
+				recordAtomicGroupBlocked(filter, candidate.Nodes)
 				continue
 			}
 			if len(candidate.Nodes) == 0 {
 				continue
 			}
 
-			klog.V(4).Infof("Creating new defrag candidate for plugin: %s, nodes: %s", plugin.String(), strings.Join(candidate.Nodes, ","))
-			pods, err := recreatablePods(p.ctx.ClusterSnapshot, candidate.Nodes)
-			if err != nil {
-				return nil, err
-			}
-
-			p.pdbTracker.RemovePods(pods)
 			candidate.Plugin = plugin
-			ci := &candidateInfo{candidate: candidate, creationTime: p.clock.Now()}
-			if err := p.nodeReconciler.ReconcileCandidate(p.ctx, ci); err != nil {
-				return nil, err
-			}
-			return ci, nil
+			return candidate, nil
 		}
 	}
 	return nil, nil

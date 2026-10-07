@@ -88,6 +88,9 @@ const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinC
 const ComputeClassCapacityBuffersFlag = "ComputeClassCapacityBuffers::Enabled"
 const ComputeClassCapacityBuffersMinCAVersionFlag = "ComputeClassCapacityBuffers::MinCAVersion"
 
+const ComputeClassConfigDriftStatusEnabledFlag = "ComputeClassConfigDriftStatus::Enabled"
+const ComputeClassConfigDriftStatusMinCAVersionFlag = "ComputeClassConfigDriftStatus::MinCAVersion"
+
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
 const MultitenancyEnableLazyReservationGCEClientFlag = "Multitenancy::EnableLazyReservationGCEClient"

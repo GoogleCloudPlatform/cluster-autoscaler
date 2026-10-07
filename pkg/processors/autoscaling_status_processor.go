@@ -36,6 +36,7 @@ type GkeInternalAutoscalingStatusProcessor struct {
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor
 	edpMetrics                      *edps.Metrics
 	observabilityProcessor          *crd_status.CrdResourceReportingProcessor
+	configDriftProcessor            *crd_status.ConfigDriftReportingProcessor
 	autoscalingHistoryProcessor     *history.AutoscalingStatusHistoryProcessor
 }
 
@@ -81,6 +82,13 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, aut
 			err = processorErr
 		}
 	}
+	if p.configDriftProcessor != nil {
+		processorErr := p.configDriftProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
+		if processorErr != nil {
+			klog.Errorf("Config drift reporting processor failed: %v", processorErr)
+			err = processorErr
+		}
+	}
 	if p.autoscalingHistoryProcessor != nil {
 		historyErr := p.autoscalingHistoryProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if historyErr != nil {
@@ -105,6 +113,9 @@ func (p *GkeInternalAutoscalingStatusProcessor) CleanUp() {
 	if p.edpMetrics != nil {
 		p.edpMetrics.CleanUp()
 	}
+	if p.configDriftProcessor != nil {
+		p.configDriftProcessor.CleanUp()
+	}
 	if p.autoscalingHistoryProcessor != nil {
 		p.autoscalingHistoryProcessor.CleanUp()
 	}
@@ -117,6 +128,7 @@ func NewGkeInternalAutoscalingStatusProcessor(
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor,
 	edpMetrics *edps.Metrics,
 	observabilityProcessor *status.CrdResourceReportingProcessor,
+	configDriftProcessor *status.ConfigDriftReportingProcessor,
 	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor) *GkeInternalAutoscalingStatusProcessor {
 	return &GkeInternalAutoscalingStatusProcessor{
 		quotaProcessor:                  quotaProcessor,
@@ -124,6 +136,7 @@ func NewGkeInternalAutoscalingStatusProcessor(
 		edpUpgradeNodeTaintingProcessor: edpUpgradeNodeTaintingProcessor,
 		edpMetrics:                      edpMetrics,
 		observabilityProcessor:          observabilityProcessor,
+		configDriftProcessor:            configDriftProcessor,
 		autoscalingHistoryProcessor:     autoscalingHistoryProcessor,
 	}
 }

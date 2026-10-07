@@ -26,6 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -614,9 +615,36 @@ func TestMaxNodeDisruptionTracker_DoubleCountingPrevention(t *testing.T) {
 			}
 
 			if tc.nodesToFilter != nil {
-				filtered := tracker.FilterNodesViolatingMaxDisruption(ctx, tc.nodesToFilter)
+				reasons := observability.NewRegistry()
+				filtered := tracker.FilterNodesViolatingMaxDisruption(ctx, tc.nodesToFilter, reasons)
 				assert.Equal(t, tc.wantFilteredNodes, filtered)
+
+				// A node that survived the budget must not be reported as
+				// blocked by it, and anything the budget did hold back must be
+				// reported under that reason and no other.
+				for _, nodeName := range filtered {
+					_, recorded := reasons.Reason(nodeName)
+					assert.False(t, recorded, "node %s survived the disruption budget but was recorded as blocked", nodeName)
+				}
+				reasons.Each(func(nodeName string, reason observability.BlockReason) {
+					assert.Equal(t, observability.DisruptionBudgetReached, reason, "unexpected reason for node %s", nodeName)
+				})
 			}
 		})
 	}
+}
+
+// TestFilterNodesViolatingMaxDisruptionNilRegistry ensures callers that do not
+// collect reasons, such as existing non-observability call sites, are not
+// forced to allocate a registry.
+func TestFilterNodesViolatingMaxDisruptionNilRegistry(t *testing.T) {
+	tracker := &MaxNodeDisruptionTracker{
+		remainingDisruptionBudget: map[string]int{"test-crd1": 0},
+		reservedNodes:             map[string]bool{},
+	}
+	// A tracker without a lister short-circuits, which is the cheapest way to
+	// prove the nil registry is never dereferenced on the happy path.
+	assert.NotPanics(t, func() {
+		tracker.FilterNodesViolatingMaxDisruption(nil, []string{"node-1"}, nil)
+	})
 }

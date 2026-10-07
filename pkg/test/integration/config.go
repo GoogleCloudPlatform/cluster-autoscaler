@@ -543,6 +543,15 @@ func WithEnhancedCrdStatusReportingEnabled() Option[*config.AutoscalingOptions] 
 	}
 }
 
+// WithComputeClassConfigDriftReportingEnabled enables reporting config drift
+// migration progress in the ComputeClass status.
+func WithComputeClassConfigDriftReportingEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ComputeClassConfigDriftReporting = true
+		return o
+	}
+}
+
 // WithDaemonSetMutationEnabled enables or disables DaemonSet mutation.
 func WithDaemonSetMutationEnabled(enabled bool) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

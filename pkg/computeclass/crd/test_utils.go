@@ -538,8 +538,10 @@ func NewMockCRDStatus(existingRuleConditions map[string][]metav1.Condition) *Moc
 	m.On("UpdateRuleResourceInfo", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleScalingHistory", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleConfigHash", mock.Anything, mock.Anything).Return().Maybe()
+	m.On("UpdateConfigDriftInfo", mock.Anything).Return().Maybe()
 	m.On("ResetAllScalingHistories").Return().Maybe()
 	m.On("ResetAllResourceInfo").Return().Maybe()
+	m.On("ResetConfigDriftInfo").Return().Maybe()
 	m.On("GetConditions").Return(([]metav1.Condition)(nil)).Maybe()
 	m.On("GetRuleConditions", mock.Anything).Return(([]metav1.Condition)(nil)).Maybe()
 	m.On("GetRuleScalingHistory", mock.Anything).Return((*ScalingEventsHistory)(nil)).Maybe()
@@ -575,11 +577,19 @@ func (m *MockCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
 	m.Called(ruleIdx, hash)
 }
 
+func (m *MockCRDStatus) UpdateConfigDriftInfo(info ConfigDriftInfo) {
+	m.Called(info)
+}
+
 func (m *MockCRDStatus) ResetAllScalingHistories() {
 	m.Called()
 }
 
 func (m *MockCRDStatus) ResetAllResourceInfo() {
+	m.Called()
+}
+
+func (m *MockCRDStatus) ResetConfigDriftInfo() {
 	m.Called()
 }
 

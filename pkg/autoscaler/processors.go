@@ -631,6 +631,10 @@ func setUpProcessors(
 			ScaleUpTimeout:   options.DefragScaleUpTimeout,
 			ScaleDownTimeout: options.DefragScaleDownTimeout,
 			ScaleDownDelay:   options.DefragScaleDownDelay,
+			// The only reader of the block reasons is the config drift
+			// reporter below, so the flag that enables it also decides whether
+			// defrag pays for recording them.
+			RecordBlockReasons: options.ComputeClassConfigDriftReporting,
 		}
 		pluginsConfig := defrag_plugins_config.New(defrag_plugins_config.Options{
 			MaxCandidateNodeCount: options.DefragCandidateNodeLimit,
@@ -742,6 +746,7 @@ func setUpProcessors(
 
 	var crdStatusHistoryProcessor *history.AutoscalingStatusHistoryProcessor
 	var crdResourcesReportingProcessor *npc_status.CrdResourceReportingProcessor
+	var crdConfigDriftProcessor *npc_status.ConfigDriftReportingProcessor
 	if options.EnhancedCrdStatusReporting && updatesCh != nil {
 		sharedScaleUpData := history.NewScaleUpData()
 		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(ccLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
@@ -753,6 +758,13 @@ func setUpProcessors(
 
 		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(ccLister, provider, updatesCh, experimentsManager)
 		scaleDownProcessorChain.AddProcessor(crdScaleDownHistoryProcessor)
+
+		// Defrag is what actually migrates drifted nodes, and the reasons it
+		// records are the only explanation of why a node is not being migrated.
+		// With it disabled there is no migration to report the progress of.
+		if options.ComputeClassConfigDriftReporting && options.DefragEnabled {
+			crdConfigDriftProcessor = npc_status.NewConfigDriftReportingProcessor(ccLister, updatesCh, computeclass.NewMatcher(ccLister, provider), *defragProcessor, experimentsManager)
+		}
 	}
 
 	var mutationInjector *daemonsetmutation.Injector
@@ -764,7 +776,7 @@ func setUpProcessors(
 		mutationController.Start()
 	}
 
-	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
+	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdConfigDriftProcessor, crdStatusHistoryProcessor)
 
 	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, ccLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor

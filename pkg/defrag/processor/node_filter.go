@@ -25,6 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
+	scaledown_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -40,9 +42,20 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/options"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
+	ca_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
+
+// stagedScaleDownNodeProcessor is implemented by scale-down node processors
+// that can report which stage of the chain excluded each node.
+//
+// It is an optional capability: when the configured processor does not
+// implement it, defrag still works, but exclusions are reported under the
+// generic observability.MigrationBlocked reason.
+type stagedScaleDownNodeProcessor interface {
+	GetScaleDownCandidatesWithStages(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, *scaledown_processors.ScaleDownCandidateStages, ca_errors.AutoscalerError)
+}
 
 // defragNodeFilterFactory is a factory for defragNodeFilter.
 // It is created once and used for the entire lifetime of the defrag processor.
@@ -70,7 +83,7 @@ func newDefragNodeFilterFactory(scaleDownNodeProcessor nodes.ScaleDownNodeProces
 
 // NewDefragNodeFilter creates a new defragNodeFilter with a refreshed cache.
 func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.AutoscalingContext) (*defragNodeFilter, error) {
-	cache, err := f.buildScaleDownCandidatesCache(ctx)
+	cache, stages, err := f.buildScaleDownCandidatesCache(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -94,30 +107,42 @@ func (f *defragNodeFilterFactory) NewDefragNodeFilter(ctx *ca_context.Autoscalin
 		drainabilityRules:        f.drainabilityRules,
 		clock:                    f.clock,
 		scaleDownCandidatesCache: cache,
+		scaleDownCandidateStages: stages,
 		nodeGroupSize:            utils.GetNodeGroupSizeMap(context.TODO(), ctx.CloudProvider),
 		minQuotasTracker:         tracker,
 		disruptionTracker:        disruptionTracker,
+		reasons:                  observability.NewRegistry(),
 	}, nil
 }
 
-func (f *defragNodeFilterFactory) buildScaleDownCandidatesCache(ctx *ca_context.AutoscalingContext) (sets.Set[string], error) {
+// buildScaleDownCandidatesCache runs the scale-down candidate pipeline and
+// returns the surviving nodes, along with the per-stage attribution of the
+// excluded ones when the configured processor can provide it.
+func (f *defragNodeFilterFactory) buildScaleDownCandidatesCache(ctx *ca_context.AutoscalingContext) (sets.Set[string], *scaledown_processors.ScaleDownCandidateStages, error) {
 	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
-		return nil, fmt.Errorf("failed to list node infos: %w", err)
+		return nil, nil, fmt.Errorf("failed to list node infos: %w", err)
 	}
 	scaleDownCandidates := make([]*apiv1.Node, len(nodeInfos))
 	for i, nodeInfo := range nodeInfos {
 		scaleDownCandidates[i] = nodeInfo.Node()
 	}
-	scaleDownCandidates, err = f.scaleDownNodeProcessor.GetScaleDownCandidates(context.TODO(), ctx, scaleDownCandidates)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get scale down candidates: %w", err)
+
+	var stages *scaledown_processors.ScaleDownCandidateStages
+	if staged, ok := f.scaleDownNodeProcessor.(stagedScaleDownNodeProcessor); ok {
+		scaleDownCandidates, stages, err = staged.GetScaleDownCandidatesWithStages(context.TODO(), ctx, scaleDownCandidates)
+	} else {
+		scaleDownCandidates, err = f.scaleDownNodeProcessor.GetScaleDownCandidates(context.TODO(), ctx, scaleDownCandidates)
 	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get scale down candidates: %w", err)
+	}
+
 	cache := sets.New[string]()
 	for _, node := range scaleDownCandidates {
 		cache.Insert(node.Name)
 	}
-	return cache, nil
+	return cache, stages, nil
 }
 
 // defragNodeFilter holds a cache for a single Process() call.
@@ -132,8 +157,25 @@ type defragNodeFilter struct {
 	nodeGroupSize map[string]int
 
 	scaleDownCandidatesCache sets.Set[string]
+	// scaleDownCandidateStages explains which stage of the scale-down pipeline
+	// excluded each node missing from scaleDownCandidatesCache. It is nil when
+	// the configured processor cannot report it.
+	scaleDownCandidateStages *scaledown_processors.ScaleDownCandidateStages
 	minQuotasTracker         *resourcequotas.Tracker
 	disruptionTracker        *MaxNodeDisruptionTracker
+
+	// reasons collects why each rejected node could not be migrated during this
+	// pass. It is nil-safe, so filters constructed directly in tests need not
+	// set it.
+	reasons *observability.Registry
+}
+
+// BlockReasons returns the reasons recorded during this pass.
+func (f *defragNodeFilter) BlockReasons() *observability.Registry {
+	if f == nil {
+		return nil
+	}
+	return f.reasons
 }
 
 // newValidCandidateNodes returns nodes that could be considered for defrag candidates.
@@ -147,39 +189,51 @@ func (f *defragNodeFilter) newValidCandidateNodes(ctx *ca_context.AutoscalingCon
 
 	var nodeNames []string
 	for _, nodeInfo := range nodeInfos {
-		if allCandidateNodes[nodeInfo.Node().Name] || !f.isCandidateNodeValid(ctx, nodeInfo) {
+		nodeName := nodeInfo.Node().Name
+		if allCandidateNodes[nodeName] {
 			continue
 		}
-		if f.hasBlockingPods(nodeInfo, ctx, pdbTracker) {
-			klog.V(4).Infof("Defrag: node %s has blocking pods", nodeInfo.Node().Name)
+		if valid, reason := f.isCandidateNodeValid(ctx, nodeInfo); !valid {
+			f.reasons.Record(nodeName, reason)
 			continue
 		}
-		nodeNames = append(nodeNames, nodeInfo.Node().Name)
+		if blocked, reason := f.hasBlockingPods(nodeInfo, ctx, pdbTracker); blocked {
+			klog.V(4).Infof("Defrag: node %s has blocking pods", nodeName)
+			f.reasons.Record(nodeName, reason)
+			continue
+		}
+		nodeNames = append(nodeNames, nodeName)
 	}
 	return nodeNames, nil
 }
 
 // isNodeOngoingDeletion returns true if the node is in the process of deletion.
-func (f *defragNodeFilter) isNodeOngoingDeletion(ctx *ca_context.AutoscalingContext, node *apiv1.Node) bool {
+//
+// The returned reason is empty when the node is genuinely being removed by the
+// autoscaler, because such a node is making progress rather than being blocked.
+// It is only set for nodes that merely look undeletable, that is cordoned
+// nodes. Whether the cordon is somebody's doing or part of an operation on the
+// node pool is for the caller to work out from the scale-down pipeline.
+func (f *defragNodeFilter) isNodeOngoingDeletion(ctx *ca_context.AutoscalingContext, node *apiv1.Node) (bool, observability.BlockReason) {
 	if node.DeletionTimestamp != nil {
-		return true
+		return true, ""
 	}
 	if actuation.IsNodeBeingDeleted(node, f.clock.Now()) || taints.HasToBeDeletedTaint(node) {
-		return true
+		return true, ""
 	}
 	if node.Spec.Unschedulable {
-		return true
+		return true, observability.Cordoned
 	}
 	if ctx.ScaleDownActuator != nil && !reflect.ValueOf(ctx.ScaleDownActuator).IsNil() {
 		status := ctx.ScaleDownActuator.CheckStatus()
 		if status != nil && !reflect.ValueOf(status).IsNil() {
 			empty, drained := status.DeletionsInProgress()
 			if slices.Contains(empty, node.Name) || slices.Contains(drained, node.Name) {
-				return true
+				return true, ""
 			}
 		}
 	}
-	return false
+	return false, ""
 }
 
 // filterDeletedCandidateNodes removes candidate nodes that are no longer present in the cluster or are being deleted
@@ -193,7 +247,14 @@ func (f *defragNodeFilter) filterDeletedCandidateNodes(ctx *ca_context.Autoscali
 			}
 			continue
 		}
-		if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
+		if ongoing, reason := f.isNodeOngoingDeletion(ctx, nodeInfo.Node()); ongoing {
+			if reason != "" && !f.scaleDownCandidatesCache.Has(nodeName) {
+				// The node only looks undeletable. Whatever excluded it from
+				// scale-down may explain that better than its own state does,
+				// as with a node cordoned by an upgrade of its node pool.
+				reason = observability.MoreSignificant(reason, reasonForExcludedScaleDownCandidate(f.scaleDownCandidateStages, nodeName))
+			}
+			f.reasons.Record(nodeName, reason)
 			continue
 		}
 		nodeNames = append(nodeNames, nodeName)
@@ -212,11 +273,13 @@ func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *ca_context.Autoscali
 			}
 			continue
 		}
-		if !f.isCandidateNodeValid(ctx, nodeInfo) {
+		if valid, reason := f.isCandidateNodeValid(ctx, nodeInfo); !valid {
+			f.reasons.Record(nodeName, reason)
 			continue
 		}
-		if f.hasBlockingPods(nodeInfo, ctx, pdbTracker) {
+		if blocked, reason := f.hasBlockingPods(nodeInfo, ctx, pdbTracker); blocked {
 			klog.V(4).Infof("Defrag: node %s has blocking pods", nodeName)
+			f.reasons.Record(nodeName, reason)
 			continue
 		}
 		nodeNames = append(nodeNames, nodeName)
@@ -224,37 +287,66 @@ func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *ca_context.Autoscali
 	candidate.Nodes = candidate.Plugin.ValidCandidateNodes(ctx, nodeNames)
 }
 
-// isCandidateNodeValid checks if a node is valid candidate node for defrag
-func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingContext, nodeInfo *framework.NodeInfo) bool {
-	nodeName := nodeInfo.Node().Name
+// isCandidateNodeValid checks if a node is valid candidate node for defrag.
+//
+// When the node is not a valid candidate it also returns the reason, which is
+// empty if the node is already progressing through migration rather than being
+// blocked.
+//
+// A node is often invalid for more than one reason, so instead of stopping at
+// the first one found, every check runs and the most significant reason wins.
+// In particular what the scale-down pipeline knows about the node is folded in
+// even when the node's own state already rules it out: a node cordoned by an
+// upgrade of its node pool is reported under the upgrade, not as a cordon.
+func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingContext, nodeInfo *framework.NodeInfo) (bool, observability.BlockReason) {
+	node := nodeInfo.Node()
+	nodeName := node.Name
 
-	if eligibility.HasNoScaleDownAnnotation(nodeInfo.Node()) {
+	valid := true
+	var reason observability.BlockReason
+	invalidate := func(r observability.BlockReason) {
+		valid = false
+		reason = observability.MoreSignificant(reason, r)
+	}
+
+	if eligibility.HasNoScaleDownAnnotation(node) {
 		klog.V(4).Infof("Defrag: node %s has no-scale-down annotation", nodeName)
-		return false
+		invalidate(observability.NodeConsolidationDisabled)
 	}
-	if f.isNodeOngoingDeletion(ctx, nodeInfo.Node()) {
-		klog.V(4).Infof("Defrag: node %s is being deleted", nodeName)
-		return false
+	if ongoing, r := f.isNodeOngoingDeletion(ctx, node); ongoing {
+		if r == "" {
+			// The node is already on its way out, so whatever else is true of
+			// it, it is progressing rather than blocked.
+			klog.V(4).Infof("Defrag: node %s is being deleted", nodeName)
+			return false, ""
+		}
+		klog.V(4).Infof("Defrag: node %s is cordoned", nodeName)
+		invalidate(r)
 	}
-	if !kubernetes.IsNodeReadyAndSchedulable(nodeInfo.Node()) {
-		klog.V(4).Infof("Defrag: node %s is not ready and schedulable", nodeName)
-		return false
+	if readiness, err := kubernetes.GetNodeReadiness(node); err != nil || !readiness.Ready {
+		klog.V(4).Infof("Defrag: node %s is not ready", nodeName)
+		invalidate(observability.NodeNotReady)
 	}
-	if _, found := nodeInfo.Node().Annotations[annotations.NodeUpcomingAnnotation]; found {
+	if _, found := node.Annotations[annotations.NodeUpcomingAnnotation]; found {
 		klog.V(4).Infof("Defrag: node %s has upcoming annotation", nodeName)
-		return false
+		// An upcoming node is registered but not yet usable, so it is reported
+		// as not ready rather than as a distinct reason.
+		invalidate(observability.NodeNotReady)
 	}
-
 	if !f.scaleDownCandidatesCache.Has(nodeName) {
 		klog.V(4).Infof("Defrag: node %s is not a scale down candidate", nodeName)
-		return false
+		invalidate(reasonForExcludedScaleDownCandidate(f.scaleDownCandidateStages, nodeName))
 	}
 
-	klog.V(5).Infof("Defrag: node %s is a valid candidate", nodeName)
-	return true
+	if valid {
+		klog.V(5).Infof("Defrag: node %s is a valid candidate", nodeName)
+	}
+	return valid, reason
 }
 
-func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker) bool {
+// hasBlockingPods reports whether the node hosts pods that prevent it from
+// being drained, along with the reason to report it under.
+func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker) (bool, observability.BlockReason) {
 	// nodeInfo is tainted here to distinguish the interaction of defrag from scale down
 	// when considering for the BspDrainability rule which drains Blocking System Pods
 	taint := apiv1.Taint{
@@ -265,19 +357,23 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca
 	addTaint(nodeInfo, taint)
 	defer removeTaint(nodeInfo, taint)
 	podMoveInfo, err := simulator.GetPodsToMove(context.TODO(), nodeInfo, f.deleteOptions, f.drainabilityRules, ctx.ListerRegistry, pdbTracker, f.clock.Now())
-	if err != nil {
-		klog.V(4).Infof("Defrag: blocking pod error: %v", err)
-		return true
-	}
+	// A blocked drain reports the offending pod and, for some rules, an error
+	// describing the same thing. The pod carries the specific reason, so it is
+	// inspected first; an error on its own means the simulation failed and the
+	// node cannot be attributed to any particular blocker.
 	if podMoveInfo.BlockingPod != nil {
 		klog.V(4).Infof("Defrag: blocking pod: %s, reason: %v", podMoveInfo.BlockingPod.Pod.Name, podMoveInfo.BlockingPod.Reason)
-		return true
+		return true, reasonForBlockingPod(podMoveInfo.BlockingPod.Reason)
+	}
+	if err != nil {
+		klog.V(4).Infof("Defrag: blocking pod error: %v", err)
+		return true, observability.MigrationBlocked
 	}
 	if len(podMoveInfo.OnCompletionPods) > 0 {
 		klog.V(4).Infof("Defrag: node %s has pods with safe-to-evict=on-completion annotation, not considered for defrag: %v", nodeInfo.Node().Name, podNames(podMoveInfo.OnCompletionPods))
-		return true
+		return true, observability.BlockingPods
 	}
-	return false
+	return false, ""
 }
 
 // filterNodesViolatingMinQuotas filters scale-down candidates that would violate
@@ -308,10 +404,12 @@ func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *ca_context.Autosca
 		consumeResult, err := f.minQuotasTracker.ConsumeQuota(context.TODO(), ctx, nodeGroup, node, 1)
 		if err != nil {
 			klog.Errorf("Defrag: failed to consume quota for node %s: %v", node.Name, err)
+			f.reasons.Record(node.Name, observability.MigrationBlocked)
 			continue
 		}
 		if consumeResult.Exceeded() {
 			klog.V(1).Infof("Skipping %s - quota exceeded", node.Name)
+			f.reasons.Record(node.Name, observability.MinCapacityReached)
 			continue
 		}
 
@@ -356,6 +454,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.Autoscali
 		deletionsInProgress := ctx.ScaleDownActuator.CheckStatus().DeletionsCount(nodeGroupId)
 		if size-deletionsInProgress <= minSize {
 			klog.V(1).Infof("Skipping %s - node group min size reached (current: %d, deletionsInProgress: %d, min: %d), accounting for previous nodes", node.Name, size, deletionsInProgress, minSize)
+			f.reasons.Record(node.Name, observability.MinCapacityReached)
 			continue
 		}
 		result = append(result, node.Name)
@@ -368,7 +467,7 @@ func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.Autoscali
 // their ComputeClass's MaxNodeDisruption limit.
 func (f *defragNodeFilter) filterNodesViolatingMaxDisruption(ctx *ca_context.AutoscalingContext, nodes []string) []string {
 	if f.disruptionTracker != nil {
-		return f.disruptionTracker.FilterNodesViolatingMaxDisruption(ctx, nodes)
+		return f.disruptionTracker.FilterNodesViolatingMaxDisruption(ctx, nodes, f.reasons)
 	}
 	return nodes
 }

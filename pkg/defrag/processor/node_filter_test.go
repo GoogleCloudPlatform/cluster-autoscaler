@@ -36,10 +36,13 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
+	scaledown_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/customresources"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
@@ -345,6 +348,32 @@ func TestFilterDeletedCandidateNodes(t *testing.T) {
 	}
 }
 
+func TestFilterDeletedCandidateNodesReportsPipelineReasonForCordonedNode(t *testing.T) {
+	// A node pool operation cordons the nodes it works on, and the scale-down
+	// pipeline knows about the operation. A tracked candidate's node that gets
+	// cordoned that way is reported under the operation, not as a cordon.
+	chain := scaledown_processors.NewGkeInternalAutoscalingScaleDownNodeProcessor([]nodes.ScaleDownNodeProcessor{
+		&droppingProcessorWithReason{reason: observability.NodePoolOperationInProgress},
+	})
+	ctx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+		CloudProvider:   testprovider.NewTestCloudProviderBuilder().Build(),
+	}
+	assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(buildUnschedulableNode("n1", 1000, 1))))
+
+	deleteOpts := options.NodeDeleteOptions{}
+	factory := newDefragNodeFilterFactory(chain, deleteOpts, rules.Default(deleteOpts), newTestTrackerFactory(nil), nil)
+	nodeFilter, err := factory.NewDefragNodeFilter(ctx)
+	assert.NoError(t, err)
+
+	candidate := &defrag.Candidate{Nodes: []string{"n1"}}
+	nodeFilter.filterDeletedCandidateNodes(ctx, candidate)
+	assert.Empty(t, candidate.Nodes)
+	got, ok := nodeFilter.BlockReasons().Reason("n1")
+	assert.True(t, ok, "no reason recorded for n1")
+	assert.Equal(t, observability.NodePoolOperationInProgress, got)
+}
+
 func TestIsCandidateNodeValid(t *testing.T) {
 	allNodesProcessor := &mockScaleDownNodeProcessor{
 		candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node {
@@ -364,49 +393,112 @@ func TestIsCandidateNodeValid(t *testing.T) {
 	testLabelKey1 := "testKey1"
 	testLabels := map[string]string{testLabelKey1: "true"}
 
+	// nodePoolOperationChain excludes every node and, like the GKE processors
+	// that hold whole node pools back, says why.
+	nodePoolOperationChain := scaledown_processors.NewGkeInternalAutoscalingScaleDownNodeProcessor([]nodes.ScaleDownNodeProcessor{
+		&droppingProcessorWithReason{reason: observability.NodePoolOperationInProgress},
+	})
+
 	testCases := []struct {
 		name          string
-		processor     *mockScaleDownNodeProcessor
+		processor     nodes.ScaleDownNodeProcessor
 		node          *apiv1.Node
 		pods          []*apiv1.Pod
 		defragEnabled bool
 		want          bool
+		// wantReason is the reason the rejection should be reported under. It
+		// is empty both for valid nodes and for nodes that are already being
+		// deleted, since those are progressing rather than blocked.
+		wantReason observability.BlockReason
 	}{
 		{
-			name:      "node during deletion",
-			processor: allNodesProcessor,
-			node:      buildDuringDeletionNode("n", 1000, 1),
-			want:      false,
+			name:       "node during deletion",
+			processor:  allNodesProcessor,
+			node:       buildDuringDeletionNode("n", 1000, 1),
+			want:       false,
+			wantReason: "",
 		},
 		{
-			name:      "unready node",
-			processor: allNodesProcessor,
-			node:      test.BuildTestNode("n", 1000, 1),
-			want:      false,
+			name:       "unready node",
+			processor:  allNodesProcessor,
+			node:       test.BuildTestNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.NodeNotReady,
 		},
 		{
-			name:      "upcoming node",
-			processor: allNodesProcessor,
-			node:      buildUpcomingNode("n", 1000, 1),
-			want:      false,
+			name:       "upcoming node",
+			processor:  allNodesProcessor,
+			node:       buildUpcomingNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.NodeNotReady,
 		},
 		{
-			name:      "no scale down node",
-			processor: allNodesProcessor,
-			node:      buildNoScaleDownNode("n", 1000, 1),
-			want:      false,
+			name:       "no scale down node",
+			processor:  allNodesProcessor,
+			node:       buildNoScaleDownNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.NodeConsolidationDisabled,
+		},
+		{
+			name:       "cordoned node",
+			processor:  allNodesProcessor,
+			node:       buildUnschedulableNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.Cordoned,
 		},
 		{
 			name:      "node filtered by ScaleDownNodeProcessor",
 			processor: noNodesProcessor,
 			node:      buildReadyNode("n", 1000, 1),
 			want:      false,
+			// The mock processor cannot report per-stage attribution, so the
+			// exclusion falls back to the generic reason.
+			wantReason: observability.MigrationBlocked,
 		},
 		{
-			name:      "valid node",
+			// The cordon is the operation's doing, and the pipeline says so.
+			name:       "cordoned node excluded by a node pool operation",
+			processor:  nodePoolOperationChain,
+			node:       buildUnschedulableNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.NodePoolOperationInProgress,
+		},
+		{
+			// The pipeline cannot say why it excluded the node, so what the
+			// node's own state says stands.
+			name:       "cordoned node excluded without attribution",
+			processor:  noNodesProcessor,
+			node:       buildUnschedulableNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.Cordoned,
+		},
+		{
+			name:       "unready node excluded by a node pool operation",
+			processor:  nodePoolOperationChain,
+			node:       test.BuildTestNode("n", 1000, 1),
+			want:       false,
+			wantReason: observability.NodePoolOperationInProgress,
+		},
+		{
+			// Several of the node's own blockers apply at once; the most
+			// significant one is reported regardless of the order they are
+			// checked in.
+			name:      "cordoned node with no scale down annotation",
 			processor: allNodesProcessor,
-			node:      buildReadyNode("n", 1000, 1),
-			want:      true,
+			node: func() *apiv1.Node {
+				node := buildNoScaleDownNode("n", 1000, 1)
+				node.Spec.Unschedulable = true
+				return node
+			}(),
+			want:       false,
+			wantReason: observability.Cordoned,
+		},
+		{
+			name:       "valid node",
+			processor:  allNodesProcessor,
+			node:       buildReadyNode("n", 1000, 1),
+			want:       true,
+			wantReason: "",
 		},
 		{
 			name:      "kube-system pods with defrag enabled",
@@ -417,6 +509,7 @@ func TestIsCandidateNodeValid(t *testing.T) {
 			},
 			defragEnabled: true,
 			want:          true,
+			wantReason:    "",
 		},
 	}
 
@@ -438,7 +531,9 @@ func TestIsCandidateNodeValid(t *testing.T) {
 
 			nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(tc.node.Name)
 			assert.NoError(t, err)
-			assert.Equal(t, tc.want, nodeFilter.isCandidateNodeValid(ctx, nodeInfo))
+			got, gotReason := nodeFilter.isCandidateNodeValid(ctx, nodeInfo)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantReason, gotReason)
 		})
 	}
 }
@@ -458,6 +553,9 @@ func TestHasBlockingPods(t *testing.T) {
 		pods      []*apiv1.Pod
 		pdbs      []*v1.PodDisruptionBudget
 		want      bool
+		// wantReason distinguishes a transient PDB shortage, which clears on
+		// its own, from a pod that needs its owner to intervene.
+		wantReason observability.BlockReason
 	}{
 		{
 			name:      "replicated pod",
@@ -466,7 +564,8 @@ func TestHasBlockingPods(t *testing.T) {
 			pods: []*apiv1.Pod{
 				test.SetRSPodSpec(test.BuildScheduledTestPod("p", 100, 1, "n"), "rs"),
 			},
-			want: false,
+			want:       false,
+			wantReason: "",
 		},
 		{
 			name:      "blocking non-replicated pods",
@@ -475,7 +574,8 @@ func TestHasBlockingPods(t *testing.T) {
 			pods: []*apiv1.Pod{
 				test.BuildScheduledTestPod("p", 100, 1, "n"),
 			},
-			want: true,
+			want:       true,
+			wantReason: observability.BlockingPods,
 		},
 		{
 			name:      "pdb with remaining disruptions",
@@ -488,7 +588,8 @@ func TestHasBlockingPods(t *testing.T) {
 			pdbs: []*v1.PodDisruptionBudget{
 				buildPdb("label", 1),
 			},
-			want: false,
+			want:       false,
+			wantReason: "",
 		},
 		{
 			name:      "pdb without remaining disruptions",
@@ -501,7 +602,8 @@ func TestHasBlockingPods(t *testing.T) {
 			pdbs: []*v1.PodDisruptionBudget{
 				buildPdb("label", 0),
 			},
-			want: true,
+			want:       true,
+			wantReason: observability.PodDisruptionBudget,
 		},
 		{
 			name:      "pdb with various remaining disruptions",
@@ -515,7 +617,8 @@ func TestHasBlockingPods(t *testing.T) {
 				buildPdb("label", 1),
 				buildPdb("label", 0),
 			},
-			want: true,
+			want:       true,
+			wantReason: observability.PodDisruptionBudget,
 		},
 		{
 			name:      "on-completion pod",
@@ -524,7 +627,8 @@ func TestHasBlockingPods(t *testing.T) {
 			pods: []*apiv1.Pod{
 				buildOnCompletionPod("p", "n"),
 			},
-			want: true,
+			want:       true,
+			wantReason: observability.BlockingPods,
 		},
 	}
 
@@ -547,7 +651,9 @@ func TestHasBlockingPods(t *testing.T) {
 
 			nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(tc.node.Name)
 			assert.NoError(t, err)
-			assert.Equal(t, tc.want, nodeFilter.hasBlockingPods(nodeInfo, ctx, pdbTracker))
+			got, gotReason := nodeFilter.hasBlockingPods(nodeInfo, ctx, pdbTracker)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantReason, gotReason)
 		})
 	}
 }
@@ -986,6 +1092,26 @@ func (p *mockScaleDownNodeProcessor) GetScaleDownCandidates(ctx context.Context,
 }
 
 func (p *mockScaleDownNodeProcessor) CleanUp() {}
+
+// droppingProcessorWithReason excludes every node it is given and declares the
+// reason through scaledown_processors.ExclusionReasonProvider.
+type droppingProcessorWithReason struct {
+	reason observability.BlockReason
+}
+
+func (p *droppingProcessorWithReason) GetPodDestinationCandidates(_ *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+	return nodes, nil
+}
+
+func (p *droppingProcessorWithReason) GetScaleDownCandidates(context.Context, *ca_context.AutoscalingContext, []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
+	return nil, nil
+}
+
+func (p *droppingProcessorWithReason) CleanUp() {}
+
+func (p *droppingProcessorWithReason) ExclusionReason() observability.BlockReason {
+	return p.reason
+}
 
 type testNodeFilter struct {
 	actuator scaledown.Actuator

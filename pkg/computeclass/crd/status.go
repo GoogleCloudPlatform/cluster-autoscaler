@@ -33,6 +33,9 @@ type CRDStatus interface {
 	UpdateRuleScalingHistory(ruleIdx string, history ScalingEventsHistory)
 	// UpdateRuleConfigHash updates the configuration hash of a rule.
 	UpdateRuleConfigHash(ruleIdx string, hash string)
+	// UpdateConfigDriftInfo updates the reported progress of migrating nodes
+	// that no longer match the configuration of the CRD.
+	UpdateConfigDriftInfo(info ConfigDriftInfo)
 	// GetConditions returns the current conditions of the CRD.
 	GetConditions() []metav1.Condition
 	// GetRuleConditions returns the conditions of a rule.
@@ -43,8 +46,45 @@ type CRDStatus interface {
 	ResetAllScalingHistories()
 	// ResetAllResourceInfo resets resource info across all rules.
 	ResetAllResourceInfo()
+	// ResetConfigDriftInfo removes the reported config drift migration
+	// progress, so that nothing is reported for CRDs that are not migrating.
+	ResetConfigDriftInfo()
 	// GetCRDStatusPatch returns the object that can be used to patch the status of the CRD.
 	GetCRDStatusPatch() client.Object
+}
+
+// ConfigDriftInfo describes how far the migration of nodes that no longer match
+// the CRD configuration has got.
+//
+// The counts partition the nodes of the CRD: every node is counted exactly
+// once, so their sum is the number of nodes belonging to the CRD at MeasuredAt.
+type ConfigDriftInfo struct {
+	// CurrentNodes is the number of nodes matching the current configuration.
+	CurrentNodes int
+
+	// DriftedNodes is the number of nodes that need to be replaced and whose
+	// replacement has not started yet.
+	DriftedNodes int
+
+	// MigratingNodes is the number of nodes that are being replaced, including
+	// those waiting for their replacement capacity to be provisioned.
+	MigratingNodes int
+
+	// BlockedNodes groups the nodes that need to be replaced but cannot be, by
+	// the reason holding them back. Reasons blocking no node are not reported.
+	BlockedNodes []BlockedNodesInfo
+
+	// MeasuredAt represents the timestamp at which the data was gathered.
+	MeasuredAt metav1.Time
+}
+
+// BlockedNodesInfo is the number of nodes that a single reason holds back.
+type BlockedNodesInfo struct {
+	// Reason identifies what prevents the nodes from being replaced.
+	Reason string
+
+	// Count is the number of nodes blocked by Reason. It is never zero.
+	Count int
 }
 
 // ScalingEventsHistory represents the aggregated information about scaling events.

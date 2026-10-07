@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	kube "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	klog "k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -42,6 +43,15 @@ const (
 // NewSurgeUpgradeScaleDownNodeProcessor configures and returns a SurgeUpgradeScaleDownNodeProcessor.
 func NewSurgeUpgradeScaleDownNodeProcessor(fetcher kube.UpdateInfoFetcher) *SurgeUpgradeScaleDownNodeProcessor {
 	return &SurgeUpgradeScaleDownNodeProcessor{fetcher: fetcher}
+}
+
+// ExclusionReason implements scaledown.ExclusionReasonProvider.
+//
+// Nodes are removed here only while an UpdateInfo names them as the target or
+// the surge node of an upgrade or repair, both of which are node pool
+// operations that finish on their own.
+func (sup *SurgeUpgradeScaleDownNodeProcessor) ExclusionReason() observability.BlockReason {
+	return observability.NodePoolOperationInProgress
 }
 
 func (sup *SurgeUpgradeScaleDownNodeProcessor) filterSurgeNodes(nodes []*apiv1.Node, msg string) ([]*apiv1.Node, errors.AutoscalerError) {

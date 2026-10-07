@@ -18,6 +18,7 @@ import (
 	"context"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -25,6 +26,14 @@ import (
 
 // ScaleDownProcessor is used to process EDP nodes passed to scale-down logic.
 type ScaleDownProcessor struct {
+}
+
+// ExclusionReason implements scaledown.ExclusionReasonProvider.
+//
+// Nodes are removed here because an extended duration pod is scheduled on them,
+// which is a pod the autoscaler is not allowed to evict.
+func (d *ScaleDownProcessor) ExclusionReason() observability.BlockReason {
+	return observability.BlockingPods
 }
 
 // GetPodDestinationCandidates filters out all nodes containing labels.ExtendedDurationPodsLabel label

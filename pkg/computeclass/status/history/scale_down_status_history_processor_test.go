@@ -60,9 +60,11 @@ func (f *fakeCRDStatus) GetRuleScalingHistory(ruleIdx string) *crd.ScalingEvents
 	}
 	return nil
 }
-func (f *fakeCRDStatus) ResetAllScalingHistories()             {}
-func (f *fakeCRDStatus) ResetAllResourceInfo()                 {}
-func (f *fakeCRDStatus) GetCRDStatusPatch() ctrl_client.Object { return nil }
+func (f *fakeCRDStatus) ResetAllScalingHistories()                      {}
+func (f *fakeCRDStatus) ResetAllResourceInfo()                          {}
+func (f *fakeCRDStatus) UpdateConfigDriftInfo(info crd.ConfigDriftInfo) {}
+func (f *fakeCRDStatus) ResetConfigDriftInfo()                          {}
+func (f *fakeCRDStatus) GetCRDStatusPatch() ctrl_client.Object          { return nil }
 
 func TestScaleDownStatusHistoryProcessor(t *testing.T) {
 	testCrdLabel := "test-crd-label"

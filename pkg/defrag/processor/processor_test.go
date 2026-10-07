@@ -34,6 +34,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
 	. "k8s.io/utils/clock/testing"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
@@ -3033,6 +3034,80 @@ func (f fakePlugin) LatestUnfitNodesCount() int {
 	return 0
 }
 
+// incompleteAtomicGroupPlugin never produces a candidate. It holds back every
+// node it is given, as if their atomic group were missing members.
+type incompleteAtomicGroupPlugin struct {
+	fakePlugin
+	gotNodes []string
+}
+
+func (p *incompleteAtomicGroupPlugin) NewCandidate(_ *cacontext.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+	p.gotNodes = nodeNames
+	return nil
+}
+
+func (p *incompleteAtomicGroupPlugin) LatestAtomicGroupBlockedNodes() []string {
+	return p.gotNodes
+}
+
+func TestNewCandidateRecordsIncompleteAtomicGroups(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	provider.AddNodeGroup("ng1", 0, 1000, 3)
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	client := fake.NewClientset()
+	nodesWithPods := map[*apiv1.Node][]*apiv1.Pod{
+		buildReadyNode("blocked", 1000, 1): {test.BuildScheduledTestPod("bare", 100, 1, "blocked")},
+		buildReadyNode("peer-1", 1000, 1):  {},
+		buildReadyNode("peer-2", 1000, 1):  {},
+	}
+	for node, pods := range nodesWithPods {
+		provider.AddNode("ng1", node)
+		assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node, pods...)))
+		_, err := client.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+		assert.NoError(t, err)
+	}
+
+	plugin := &incompleteAtomicGroupPlugin{}
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Plugins:                 []defrag.Plugin{plugin},
+		Clock:                   &FakePassiveClock{},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+	})
+	scaleDownActuator := &mockScaleDownActuator{}
+	scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+	processor.ctx = &cacontext.AutoscalingContext{
+		ClusterSnapshot:        snapshot,
+		CloudProvider:          provider,
+		ScaleDownActuator:      scaleDownActuator,
+		RemainingPdbTracker:    pdb.NewBasicRemainingPdbTracker(),
+		AutoscalingKubeClients: cacontext.AutoscalingKubeClients{ClientSet: client},
+	}
+	nodeFilter, err := processor.nodeFilterFactory.NewDefragNodeFilter(processor.ctx)
+	assert.NoError(t, err)
+
+	candidateInfo, err := processor.newCandidate(nodeFilter, map[string]bool{})
+	assert.NoError(t, err)
+	assert.Nil(t, candidateInfo)
+
+	assert.ElementsMatch(t, []string{"peer-1", "peer-2"}, plugin.gotNodes, "the blocked node should be filtered out before the plugin sees it")
+	wantReasons := map[string]observability.BlockReason{
+		"blocked": observability.BlockingPods,
+		"peer-1":  observability.AtomicGroupBlocked,
+		"peer-2":  observability.AtomicGroupBlocked,
+	}
+	for nodeName, want := range wantReasons {
+		got, ok := nodeFilter.BlockReasons().Reason(nodeName)
+		assert.True(t, ok, "no reason recorded for %s", nodeName)
+		assert.Equal(t, want, got, "reason for %s", nodeName)
+	}
+}
+
 func TestCleanPickedCandidate(t *testing.T) {
 	testCases := []struct {
 		name  string
@@ -3325,4 +3400,221 @@ func TestProcessCandidatesMaxDisruptionBudgetReservedAcrossPlugins(t *testing.T)
 	if len(processor.candidateInfos) > 0 {
 		assert.Equal(t, []string{ng1_nodes[0].Name}, processor.candidateInfos[0].candidate.Nodes)
 	}
+}
+
+func TestProcessCandidatesRecordsBlockReasonsWithoutSearching(t *testing.T) {
+	testCases := []struct {
+		name string
+		// candidateLimit bounds how many candidates a pass processes.
+		candidateLimit int
+		// blockedNodeCPU sizes the only node the candidate's pod could move to.
+		blockedNodeCPU int64
+		// recordBlockReasons is the Config knob under test.
+		recordBlockReasons bool
+		wantPicked         bool
+		// wantRecorded is whether the blocked node is expected to have a
+		// reason recorded by the end of the pass.
+		wantRecorded bool
+	}{
+		{
+			// The pass processes the tracked candidate and stops, never
+			// reaching the point where it would look for another one.
+			name:               "candidate limit filled by existing candidates",
+			candidateLimit:     1,
+			blockedNodeCPU:     1000,
+			recordBlockReasons: true,
+			wantRecorded:       true,
+		},
+		{
+			// The tracked candidate's pod fits nowhere, so the pass picks it
+			// for scale-up and stops before looking for another candidate.
+			name:               "existing candidate still needs its scale-up",
+			candidateLimit:     3,
+			blockedNodeCPU:     300,
+			recordBlockReasons: true,
+			wantPicked:         true,
+			wantRecorded:       true,
+		},
+		{
+			// Nothing reads the reasons, so the pass must not pay for the
+			// extra search that would record them.
+			name:           "recording disabled skips the attribution-only search",
+			candidateLimit: 1,
+			blockedNodeCPU: 1000,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().Build()
+			provider.AddNodeGroup("ng1", 0, 10, 2)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			client := fake.NewClientset()
+			candidateNode := buildReadyNode("candidate", 1000, 1000)
+			candidatePod := test.SetRSPodSpec(test.BuildScheduledTestPod("p1", 400, 1, candidateNode.Name), "rs")
+			blockedNode := buildReadyNode("blocked", tc.blockedNodeCPU, 1000)
+			// A pod without a controller cannot be drained, so the node is
+			// blocked for as long as it runs.
+			barePod := test.BuildScheduledTestPod("bare", 100, 1, blockedNode.Name)
+			for node, pods := range map[*apiv1.Node][]*apiv1.Pod{candidateNode: {candidatePod}, blockedNode: {barePod}} {
+				provider.AddNode("ng1", node)
+				assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node, pods...)))
+				_, err := client.CoreV1().Nodes().Create(context.TODO(), node, metav1.CreateOptions{})
+				assert.NoError(t, err)
+			}
+
+			plugin := fakePlugin{isAtomic: true, mode: defrag.CreateBeforeDelete, targetNodes: []string{candidateNode.Name}}
+			deleteOpts := options.NodeDeleteOptions{}
+			processor := NewProcessor(Options{
+				ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+					candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+				},
+				DeleteOptions:     deleteOpts,
+				DrainabilityRules: rules.Default(deleteOpts),
+				Plugins:           []defrag.Plugin{plugin},
+				// Long enough for the candidate not to be scaled down by the
+				// pass under test.
+				Config:                  Config{CandidateLimit: tc.candidateLimit, ScaleDownDelay: time.Hour, RecordBlockReasons: tc.recordBlockReasons},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+			})
+			scaleDownActuator := &mockScaleDownActuator{}
+			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+			processor.ctx = &cacontext.AutoscalingContext{
+				ClusterSnapshot:        snapshot,
+				CloudProvider:          provider,
+				ScaleDownActuator:      scaleDownActuator,
+				RemainingPdbTracker:    pdb.NewBasicRemainingPdbTracker(),
+				AutoscalingKubeClients: cacontext.AutoscalingKubeClients{ClientSet: client},
+			}
+			processor.candidateInfos = []*candidateInfo{{
+				candidate:    &defrag.Candidate{IsAtomic: true, Mode: defrag.CreateBeforeDelete, Nodes: []string{candidateNode.Name}, Plugin: plugin},
+				creationTime: time.Now(),
+			}}
+			nodeFilter, err := processor.nodeFilterFactory.NewDefragNodeFilter(processor.ctx)
+			assert.NoError(t, err)
+
+			pods, err := processor.processCandidates(nodeFilter)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantPicked, len(pods) > 0, "unexpected pods returned for scale-up: %v", pods)
+			assert.Len(t, processor.candidateInfos, 1, "the attribution-only search must not create a candidate")
+
+			got, ok := nodeFilter.BlockReasons().Reason(blockedNode.Name)
+			assert.Equal(t, tc.wantRecorded, ok, "reason recorded for %s: %q", blockedNode.Name, got)
+			if tc.wantRecorded {
+				assert.Equal(t, observability.BlockingPods, got)
+			}
+			_, ok = nodeFilter.BlockReasons().Reason(candidateNode.Name)
+			assert.False(t, ok, "a candidate node should not be recorded as blocked")
+		})
+	}
+}
+
+func TestProcessPublishesBlockReasonsOnlyWhenRecording(t *testing.T) {
+	for _, recording := range []bool{true, false} {
+		t.Run(fmt.Sprintf("RecordBlockReasons=%v", recording), func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().Build()
+			provider.AddNodeGroup("ng1", 0, 10, 1)
+			node := buildReadyNode("n1", 1000, 10)
+			provider.AddNode("ng1", node)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+
+			deleteOpts := options.NodeDeleteOptions{}
+			processor := NewProcessor(Options{
+				ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+					candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+				},
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Config:                  Config{CandidateLimit: 3, RecordBlockReasons: recording},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+			})
+			scaleDownActuator := &mockScaleDownActuator{}
+			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+			ctx := &cacontext.AutoscalingContext{
+				ClusterSnapshot:     snapshot,
+				CloudProvider:       provider,
+				ScaleDownActuator:   scaleDownActuator,
+				RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+			}
+
+			_, err := processor.Process(context.TODO(), ctx, nil)
+			assert.NoError(t, err)
+			// A nil result reads as "unknown" to the consumer, which is the
+			// right answer when the pass was not asked to record: whatever
+			// its filters happened to see is not a complete account.
+			if recording {
+				assert.NotNil(t, processor.BlockReasons(), "a completed recording pass must publish block reasons")
+			} else {
+				assert.Nil(t, processor.BlockReasons(), "a pass that does not record must not publish block reasons")
+			}
+		})
+	}
+}
+
+func TestProcessDoesNotPublishBlockReasonsWhenThePassFails(t *testing.T) {
+	provider := testprovider.NewTestCloudProviderBuilder().Build()
+	provider.AddNodeGroup("ng1", 0, 10, 1)
+	node := test.BuildTestNode("n1", 1000, 10)
+	provider.AddNode("ng1", node)
+
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+
+	deleteOpts := options.NodeDeleteOptions{}
+	processor := NewProcessor(Options{
+		ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{
+			candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes },
+		},
+		DeleteOptions:           deleteOpts,
+		DrainabilityRules:       rules.Default(deleteOpts),
+		Config:                  Config{MaxDelay: time.Hour, CandidateLimit: 3},
+		MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+	})
+
+	ctx := &cacontext.AutoscalingContext{
+		ClusterSnapshot: snapshot,
+		CloudProvider:   provider,
+		// Makes cleanUpCandidates fail, which aborts the pass after the node
+		// filter, and therefore the registry, has already been created.
+		RemainingPdbTracker: unparseablePdbTracker{pdb.NewBasicRemainingPdbTracker()},
+	}
+
+	_, err := processor.Process(context.TODO(), ctx, nil)
+	assert.Error(t, err, "Process() should fail when the PDB tracker rejects the PDBs")
+
+	// The pass never reached most of its filters, so the registry describes
+	// only the handful of nodes it happened to get to. Publishing it would
+	// report every node it never looked at as free to migrate, wiping the
+	// blocked counters and resetting every debounce streak.
+	assert.Nil(t, processor.BlockReasons(), "an aborted pass must not publish block reasons")
+}
+
+func TestBlockReasonsIsConsumedByReading(t *testing.T) {
+	registry := observability.NewRegistry()
+	registry.Record("n1", observability.BlockingPods)
+	processor := &Processor{blockReasons: registry}
+
+	assert.Same(t, registry, processor.BlockReasons(), "first read should return the published registry")
+
+	// A loop in which Process did not run must not be served the previous
+	// loop's reasons as if they described the current one.
+	assert.Nil(t, processor.BlockReasons(), "second read should report that nothing was published")
+}
+
+// unparseablePdbTracker hands out a PDB whose selector cannot be parsed, so
+// that the processor's own tracker rejects it and the pass aborts.
+type unparseablePdbTracker struct{ pdb.RemainingPdbTracker }
+
+func (unparseablePdbTracker) GetPdbs() []*v1.PodDisruptionBudget {
+	return []*v1.PodDisruptionBudget{{
+		Spec: v1.PodDisruptionBudgetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{{
+					Key:      "app",
+					Operator: "ThisIsNotAValidOperator",
+				}},
+			},
+		},
+	}}
 }

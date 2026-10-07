@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 )
 
@@ -106,7 +107,7 @@ func TestBackoff(t *testing.T) {
 			backoff := newDefragBackoff()
 
 			for _, candidate := range tc.candidates {
-				backoff.backoff(&autoscaling_context.AutoscalingContext{}, candidate)
+				backoff.backoff(&autoscaling_context.AutoscalingContext{}, candidate, observability.RecentMigrationFailure)
 			}
 			for _, plugin := range allPlugins {
 				availableNodes, backedOffNodes := backoff.splitNodesBasedOnBackoff(plugin, tc.allNodes)
@@ -115,4 +116,36 @@ func TestBackoff(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBackoffCause covers the reason surviving alongside the backoff, which is
+// what stops a candidate abandoned for lack of capacity from being reported as
+// a generic recent failure on every pass after the first.
+func TestBackoffCause(t *testing.T) {
+	plugin := &mockPlugin{}
+	plugin.On("BackoffDuration", mock.Anything, mock.Anything).Return(time.Hour)
+	otherPlugin := &mockPlugin{}
+	otherPlugin.On("BackoffDuration", mock.Anything, mock.Anything).Return(time.Hour)
+
+	backoff := newDefragBackoff()
+	backoff.backoff(&autoscaling_context.AutoscalingContext{}, &defrag.Candidate{
+		Plugin: plugin,
+		Nodes:  []string{"n1"},
+	}, observability.ReplacementUnavailable)
+
+	t.Run("recorded cause is returned", func(t *testing.T) {
+		assert.Equal(t, observability.ReplacementUnavailable, backoff.cause(plugin, "n1"))
+	})
+	t.Run("unknown node falls back", func(t *testing.T) {
+		// Never an empty reason: an unattributed node would silently drop out
+		// of the reported totals.
+		assert.Equal(t, observability.RecentMigrationFailure, backoff.cause(plugin, "unknown"))
+	})
+	t.Run("cause is per plugin", func(t *testing.T) {
+		assert.Equal(t, observability.RecentMigrationFailure, backoff.cause(otherPlugin, "n1"))
+	})
+	t.Run("cause survives cleanup while the backoff is live", func(t *testing.T) {
+		backoff.cleanBackoffInfo()
+		assert.Equal(t, observability.ReplacementUnavailable, backoff.cause(plugin, "n1"))
+	})
 }

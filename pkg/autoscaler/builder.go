@@ -769,6 +769,12 @@ func (b *Builder) Build(
 
 	if autoscalingOptions.EnhancedCrdStatusReporting {
 		cc_history.SetupHistoryResetObserver(cccInformer, cccStatusUpdatesCh, experimentsManager)
+		// Same gate as the reporting processor in processors.go: without defrag
+		// nothing reports config drift, so there is nothing for the observer to
+		// clear.
+		if autoscalingOptions.ComputeClassConfigDriftReporting && autoscalingOptions.DefragEnabled {
+			status.SetupConfigDriftResetObserver(cccInformer, cccStatusUpdatesCh, experimentsManager)
+		}
 	}
 
 	var minCapacityObserver cc_processors.MinCapacityObserver

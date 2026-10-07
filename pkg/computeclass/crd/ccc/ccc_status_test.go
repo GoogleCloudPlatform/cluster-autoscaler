@@ -15,6 +15,12 @@
 package ccc
 
 import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -22,6 +28,7 @@ import (
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 )
 
 func TestCccCRDStatus(t *testing.T) {
@@ -224,6 +231,50 @@ func TestCccCRDStatus(t *testing.T) {
 						Conditions:   []metav1.Condition{},
 					},
 				},
+			},
+		},
+		{
+			name: "UpdateConfigDriftInfo",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateConfigDriftInfo(crd.ConfigDriftInfo{
+					CurrentNodes:   3,
+					DriftedNodes:   2,
+					MigratingNodes: 1,
+					BlockedNodes: []crd.BlockedNodesInfo{
+						{Reason: "Cordoned", Count: 4},
+						{Reason: "BlockingPods", Count: 5},
+					},
+					MeasuredAt: configDriftMeasuredAt,
+				})
+			},
+			expectedStatus: ccc_api.ComputeClassStatus{
+				Conditions:       []metav1.Condition{},
+				ResourceInfo:     []ccc_api.ResourceInfo{},
+				PriorityStatuses: []ccc_api.PriorityStatus{},
+				Migration: &ccc_api.MigrationStatus{
+					ConfigDrift: &ccc_api.ConfigDriftStatus{
+						CurrentNodes:   intPtr(3),
+						DriftedNodes:   intPtr(2),
+						MigratingNodes: intPtr(1),
+						BlockedNodes: []ccc_api.BlockedNodesInfo{
+							{Reason: "Cordoned", Count: 4},
+							{Reason: "BlockingPods", Count: 5},
+						},
+						MeasuredAt: &configDriftMeasuredAt,
+					},
+				},
+			},
+		},
+		{
+			name: "ResetConfigDriftInfo",
+			operations: func(s crd.CRDStatus) {
+				s.UpdateConfigDriftInfo(crd.ConfigDriftInfo{CurrentNodes: 3, MeasuredAt: configDriftMeasuredAt})
+				s.ResetConfigDriftInfo()
+			},
+			expectedStatus: ccc_api.ComputeClassStatus{
+				Conditions:       []metav1.Condition{},
+				ResourceInfo:     []ccc_api.ResourceInfo{},
+				PriorityStatuses: []ccc_api.PriorityStatus{},
 			},
 		},
 	}
@@ -549,5 +600,123 @@ func TestCccCRDStatus_GetRuleConditions(t *testing.T) {
 				t.Errorf("GetRuleConditions mismatch (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// configDriftMeasuredAt is a fixed timestamp, so that expectations can compare
+// the reported one by value.
+var configDriftMeasuredAt = metav1.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+
+// TestCccCRDStatus_UpdateConfigDriftInfoUnknownReason covers the failure mode
+// the closed enum creates: a reason the API does not know about makes the
+// apiserver reject the whole status patch, taking every other counter with it.
+func TestCccCRDStatus_UpdateConfigDriftInfoUnknownReason(t *testing.T) {
+	s := NewCccCRDStatus("test-ccc").(*cccCRDStatus)
+	s.UpdateConfigDriftInfo(crd.ConfigDriftInfo{
+		CurrentNodes: 1,
+		BlockedNodes: []crd.BlockedNodesInfo{
+			{Reason: "MigrationBlocked", Count: 2},
+			{Reason: "SomethingTheApiHasNeverHeardOf", Count: 3},
+			{Reason: "BlockingPods", Count: 0},
+		},
+		MeasuredAt: configDriftMeasuredAt,
+	})
+
+	want := &ccc_api.ConfigDriftStatus{
+		CurrentNodes:   intPtr(1),
+		DriftedNodes:   intPtr(0),
+		MigratingNodes: intPtr(0),
+		// The unknown reason is folded into the catch-all and merged with the
+		// entry already there, because the list is keyed by reason. The bucket
+		// with no nodes is dropped, since the API requires a count of at least
+		// one.
+		BlockedNodes: []ccc_api.BlockedNodesInfo{{Reason: "MigrationBlocked", Count: 5}},
+		MeasuredAt:   &configDriftMeasuredAt,
+	}
+	if diff := cmp.Diff(want, s.apiStatus.Migration.ConfigDrift); diff != "" {
+		t.Errorf("config drift status mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// apiBlockReasonEnum returns the values the ComputeClass API actually accepts
+// for BlockedNodesInfo.Reason, read from the kubebuilder enum marker in the
+// vendored API.
+//
+// The marker is the contract the apiserver enforces. Comparing against a second
+// hand-maintained list instead would make the check self-referential: both
+// copies can be wrong in the same way, which is exactly how a reason the API
+// rejects can reach a cluster and take a whole status patch down with it.
+func apiBlockReasonEnum(t *testing.T) map[string]bool {
+	t.Helper()
+	// The path is resolved from this file's location rather than from the
+	// working directory, which is not the package directory under every
+	// build. Builds that do not vendor the API (the OSS-style one drops the
+	// replace directive) have nothing to compare against and skip the check.
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("Could not determine the location of this test file")
+	}
+	typesPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "vendor", "github.com", "googlecloudplatform", "compute-class-api", "api", "cloud.google.com", "v1", "types.go")
+	src, err := os.ReadFile(typesPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		t.Skipf("The ComputeClass API is not vendored at %s; nothing to compare the reasons against", typesPath)
+	}
+	if err != nil {
+		t.Fatalf("Failed to read the vendored ComputeClass API at %s: %v", typesPath, err)
+	}
+	const marker = "+kubebuilder:validation:Enum="
+	body := string(src)
+	structAt := strings.Index(body, "type BlockedNodesInfo struct")
+	if structAt < 0 {
+		t.Fatalf("Could not find BlockedNodesInfo in %s", typesPath)
+	}
+	markerAt := strings.Index(body[structAt:], marker)
+	if markerAt < 0 {
+		t.Fatalf("Could not find %q on BlockedNodesInfo.Reason in %s", marker, typesPath)
+	}
+	start := structAt + markerAt + len(marker)
+	line := body[start:]
+	if end := strings.IndexByte(line, '\n'); end >= 0 {
+		line = line[:end]
+	}
+	enum := map[string]bool{}
+	for _, value := range strings.Split(strings.TrimSpace(line), ";") {
+		if value = strings.TrimSpace(value); value != "" {
+			enum[value] = true
+		}
+	}
+	if len(enum) == 0 {
+		t.Fatalf("Parsed an empty enum from %s", typesPath)
+	}
+	return enum
+}
+
+func TestBlockReasonsAreAcceptedByTheApi(t *testing.T) {
+	apiEnum := apiBlockReasonEnum(t)
+
+	// Every reason the autoscaler can report has to be one the apiserver will
+	// accept, or the status patch carrying it is rejected in full.
+	for _, reason := range observability.AllReasons() {
+		if !apiEnum[string(reason)] {
+			t.Errorf("reason %q can be reported but the ComputeClass API enum does not accept it; the apiserver would reject the whole status patch", reason)
+		}
+	}
+
+	// knownBlockReasons guards the conversion, so it has to mirror the enum
+	// exactly: a missing value would be rewritten to the fallback even though
+	// the API accepts it, and an extra one would be let through and rejected.
+	for reason := range apiEnum {
+		if !knownBlockReasons[reason] {
+			t.Errorf("the ComputeClass API accepts %q but knownBlockReasons does not list it", reason)
+		}
+	}
+	for reason := range knownBlockReasons {
+		if !apiEnum[reason] {
+			t.Errorf("knownBlockReasons lists %q but the ComputeClass API enum does not accept it", reason)
+		}
+	}
+
+	if !apiEnum[unknownBlockReasonFallback] {
+		t.Errorf("the fallback reason %q is not accepted by the ComputeClass API enum, so an unknown reason would still be rejected", unknownBlockReasonFallback)
 	}
 }
