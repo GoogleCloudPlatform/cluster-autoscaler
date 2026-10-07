@@ -555,8 +555,10 @@ func (b *Builder) setUpProcessors(
 		// So we had to use a callback function to register the NodesCountProvider to ResizableVmAutoprovisioningProvider.
 		resizableVmAutoprovisioningProvider.RegisterNodesCountProvider(resizableVmManager)
 
-		// laChurnTracker records per-node lookahead history, updated by the EK scale-up processor.
+		// laChurnTracker records per-node lookahead history (updated by the EK scale-up processor)
+		// and lookahead churn events (recorded by the churn scale-down status processor).
 		laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), clock.RealClock{})
+		scaleDownProcessorChain.AddProcessor(ekvms_churntracker.NewChurnScaleDownStatusProcessor(laChurnTracker))
 
 		// Scale Up and Scale Down processors will be added by default but will be executed only if resize is enabled
 		npcCrdBackoff := gke_backoff.GetNpcCrdBackoff(backoff)
