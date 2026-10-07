@@ -19,8 +19,8 @@ import (
 )
 
 // bucketedNodeOrderMapping is a clustersnapshot.NodeOrderMapping that makes the scheduler try nodes
-// in priority order: nodes of priority 0 first, then priority 1, and so on, and nodes without a
-// priority last.
+// in priority order: nodes of priority 0 first, then priority 1, and so on. Nodes without a
+// priority are not placed in any bucket, so At returns -1 once it reaches them.
 //
 // Inside a bucket, nodes are tried round robin: the scan of a bucket starts at the node that got the
 // last pod from that bucket, then wraps around to the nodes before it. So the next pod tries the
@@ -34,20 +34,20 @@ type bucketedNodeOrderMapping struct {
 	// nodePriorities maps node names to their priority, i.e. the index of the first priority filter
 	// that matched the original node. Nodes that aren't in the map have no priority.
 	nodePriorities map[string]int
-	// numPriorities is the number of priorities. There is one bucket per priority, plus an extra
-	// last bucket for nodes without a priority, so there are numPriorities+1 buckets.
+	// numPriorities is the number of priorities. There is one bucket per priority.
 	numPriorities int
 	// startFromLastMatch controls whether At starts the scan of a bucket at m.start (the last
 	// matched node in that bucket) or always from the beginning of the bucket.
 	startFromLastMatch bool
 	// buckets[b] holds the indices into the collection passed to Reset of the nodes with priority b,
-	// in snapshot order. The last bucket holds the nodes without a priority.
+	// in snapshot order.
 	buckets [][]int
 	// start[b] is the position in buckets[b] where the scan of bucket b starts.
 	start []int
 	// steps[i] is the bucket tried at step i, and the step offset within that bucket.
 	steps []bucketPos
-	// pos[i] is the bucket of the node at index i of the collection, and its position in that bucket.
+	// pos[i] is the bucket of the node at index i of the collection, and its position in that bucket,
+	// or bucket -1 if the node has no priority.
 	pos []bucketPos
 	// names holds the node name at each index of the collection that buckets were built for.
 	names []string
@@ -95,15 +95,15 @@ func (m *bucketedNodeOrderMapping) Reset(collection []*framework.NodeInfo) {
 	}
 
 	m.names = make([]string, len(collection))
-	m.buckets = make([][]int, m.numPriorities+1)
-	m.start = make([]int, m.numPriorities+1)
+	m.buckets = make([][]int, m.numPriorities)
+	m.start = make([]int, m.numPriorities)
 	m.pos = make([]bucketPos, len(collection))
 	for i, ni := range collection {
 		m.names[i] = ni.Node().Name
 		b, ok := m.nodePriorities[m.names[i]]
 		if !ok || b < 0 || b >= m.numPriorities {
-			// Nodes without a priority go last.
-			b = m.numPriorities
+			m.pos[i] = bucketPos{bucket: -1}
+			continue
 		}
 		m.pos[i] = bucketPos{bucket: b, pos: len(m.buckets[b])}
 		m.buckets[b] = append(m.buckets[b], i)
@@ -116,7 +116,8 @@ func (m *bucketedNodeOrderMapping) Reset(collection []*framework.NodeInfo) {
 	}
 }
 
-// At returns the index in collection of the i-th node to try, or -1 if i is out of range.
+// At returns the index in collection of the i-th node to try, or -1 once all nodes with a priority
+// have been visited (or if i is negative).
 func (m *bucketedNodeOrderMapping) At(i int) int {
 	if i < 0 || i >= len(m.steps) {
 		return -1
@@ -140,6 +141,9 @@ func (m *bucketedNodeOrderMapping) MarkMatch(idx int) {
 		return
 	}
 	p := m.pos[idx]
+	if p.bucket < 0 {
+		return
+	}
 	m.start[p.bucket] = p.pos
 }
 
