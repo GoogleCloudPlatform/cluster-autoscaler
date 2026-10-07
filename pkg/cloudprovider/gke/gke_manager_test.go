@@ -5574,6 +5574,52 @@ func TestInstanceByRefBlockedMig(t *testing.T) {
 	}
 }
 
+func TestDropInstanceTemplatesForUnregisteredMigs(t *testing.T) {
+	blockedMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "blocked-mig"}
+	unblockedMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "unblocked-mig"}
+	unregisteredMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "unregistered-mig"}
+
+	tests := map[string]struct {
+		migRef           gce.GceRef
+		wantTemplateKept bool
+	}{
+		"BlockedMigTemplateKept": {
+			migRef:           blockedMigRef,
+			wantTemplateKept: true,
+		},
+		"UnblockedMigTemplateKept": {
+			migRef:           unblockedMigRef,
+			wantTemplateKept: true,
+		},
+		"UnregisteredMigTemplateDropped": {
+			migRef:           unregisteredMigRef,
+			wantTemplateKept: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gceCache := gce.NewGceCache()
+			cache := NewGkeCache(gceCache, nodetemplate.NewCache())
+			cache.RegisterMig(&GkeMig{gceRef: blockedMigRef})
+			cache.RegisterMig(&GkeMig{gceRef: unblockedMigRef})
+			cache.MarkIrretrievableMig(blockedMigRef, 1, IrretrievableMigReasonUnreachable)
+			for _, ref := range []gce.GceRef{blockedMigRef, unblockedMigRef, unregisteredMigRef} {
+				gceCache.SetMigInstanceTemplate(ref, &gce_api_compute.InstanceTemplate{Name: ref.Name})
+			}
+			m := &gkeManagerImpl{
+				cache:     cache,
+				migLister: NewGkeMigLister(cache, irretrievableMigRefreshTime, irretrievableMigRefreshTime, 1),
+			}
+
+			m.dropInstanceTemplatesForUnregisteredMigs()
+
+			_, found := gceCache.GetMigInstanceTemplate(context.TODO(), tc.migRef)
+			assert.Equal(t, tc.wantTemplateKept, found)
+		})
+	}
+}
+
 func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 	testCases := []struct {
 		name                                    string

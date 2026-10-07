@@ -2005,8 +2005,7 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 		}
 
 		// Once GCE MIGs list got updated drop instance templates for no longer tracked instance groups
-		migs := m.migLister.GetMigs()
-		m.cache.DropInstanceTemplatesForMissingMigs(context.TODO(), migs)
+		m.dropInstanceTemplatesForUnregisteredMigs()
 	}
 	// ProvisioningRequest Manager depends on MIG status it should be refreshed after the main loop
 	if m.provisioningRequestManager != nil {
@@ -2016,6 +2015,13 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 		}
 	}
 	return m.initializeOnce()
+}
+
+// dropInstanceTemplatesForUnregisteredMigs drops cached instance templates of
+// MIGs that are no longer registered, note that templates of temporarily
+// blocked MIGs are kept so that we don't refetch them after getting unblocked
+func (m *gkeManagerImpl) dropInstanceTemplatesForUnregisteredMigs() {
+	m.cache.DropInstanceTemplatesForMissingMigs(context.TODO(), m.cache.GetMigs())
 }
 
 func (m *gkeManagerImpl) queuedProvisioningMigGceRefs() (map[gce.GceRef]common.GkeMigWrapper, map[gce.GceRef]common.GkeMigWrapper) {
