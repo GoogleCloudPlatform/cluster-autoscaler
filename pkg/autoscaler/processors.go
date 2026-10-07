@@ -557,7 +557,7 @@ func (b *Builder) setUpProcessors(
 
 		// laChurnTracker records per-node lookahead history (updated by the EK scale-up processor)
 		// and lookahead churn events (recorded by the churn scale-down status processor).
-		laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), clock.RealClock{})
+		laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), internalmetrics.Metrics, clock.RealClock{})
 		scaleDownProcessorChain.AddProcessor(ekvms_churntracker.NewChurnScaleDownStatusProcessor(laChurnTracker))
 
 		// Scale Up and Scale Down processors will be added by default but will be executed only if resize is enabled

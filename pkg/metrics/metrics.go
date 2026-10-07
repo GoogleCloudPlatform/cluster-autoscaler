@@ -995,6 +995,15 @@ var (
 		[]string{"nodeCpu", "nodeMemoryGiB", "sqrtUserPodsCount"},
 	)
 
+	lookaheadChurnEventsTotal = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "lookahead_churn_events_total",
+			Help:      "Number of lookahead churn events per machine family.",
+		},
+		[]string{"machine_family"},
+	)
+
 	// TODO(b/494558643): Move it to OSS.
 	capacityBuffersPodsMetric = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
@@ -1342,6 +1351,7 @@ var allMetrics = []k8smetrics.Registerable{
 	resizableVmTotalNodesLookaheadSpaceCPU,
 	resizableVmTotalNodesLookaheadSpaceMemory,
 	nodesWithLookaheadPodsShape,
+	lookaheadChurnEventsTotal,
 	capacityBuffersPodsMetric,
 	capacityBuffersNumberMetric,
 	csnEnabled,
@@ -2043,6 +2053,11 @@ func (m *prometheusMetrics) UpdateLookaheadPodsCount(laPodsCount map[size.Alloca
 		memoryKiB := allocatable.KBytes
 		lookaheadPodsCount.WithLabelValues(strconv.Itoa(int(milliCpu)), strconv.Itoa(int(memoryKiB))).Set(float64(count))
 	}
+}
+
+// RegisterLookaheadChurnEvent increments the lookahead churn events counter of the machine family.
+func (*prometheusMetrics) RegisterLookaheadChurnEvent(machineFamily string) {
+	lookaheadChurnEventsTotal.WithLabelValues(machineFamily).Inc()
 }
 
 func (pm *prometheusMetrics) UpdateResizableVmTotalNodesLookaheadSpace(machineFamily string, val size.Allocatable) {

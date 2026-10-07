@@ -134,7 +134,7 @@ func TestChurnScaleDownStatusProcessor(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, fakeclock.NewFakePassiveClock(now))
+			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
 			tracker.nodes = tc.nodesBefore
 			p := NewChurnScaleDownStatusProcessor(tracker)
 
