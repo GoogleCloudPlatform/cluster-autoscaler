@@ -645,6 +645,11 @@ func ekNodeInfo(name string, pods ...*apiv1.Pod) *framework.NodeInfo {
 	return framework.NewTestNodeInfo(withUID(ekvms_test.EkNode32(name, 1000, 1000)), pods...)
 }
 
+// e4aNodeInfo returns a NodeInfo of an E4A node with UID set to its name and the given pods.
+func e4aNodeInfo(name string, pods ...*apiv1.Pod) *framework.NodeInfo {
+	return framework.NewTestNodeInfo(withUID(ekvms_test.E4aNode32(name, 1000, 1000)), pods...)
+}
+
 // createdAt sets the node creation timestamp.
 func createdAt(node *apiv1.Node, creationTime time.Time) *apiv1.Node {
 	node.CreationTimestamp = metav1.NewTime(creationTime)
