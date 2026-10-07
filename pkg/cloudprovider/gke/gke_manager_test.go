@@ -5517,6 +5517,63 @@ func TestInstanceByRef(t *testing.T) {
 	}
 }
 
+func TestInstanceByRefBlockedMig(t *testing.T) {
+	migRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: gkeMigA}
+	instanceRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "gce-mig-a-inst1"}
+	instance := gce.GceInstance{Instance: cloudprovider.Instance{Id: instanceRef.ToProviderId()}}
+
+	tests := map[string]struct {
+		migBlocked     bool
+		wantFetchCalls int
+		wantInstance   *gce.GceInstance
+	}{
+		"BlockedMigSkipsGceCall": {
+			migBlocked:     true,
+			wantFetchCalls: 0,
+			wantInstance:   nil,
+		},
+		"UnblockedMigFetchesInstances": {
+			migBlocked:     false,
+			wantFetchCalls: 1,
+			wantInstance:   &gce.GceInstance{Instance: cloudprovider.Instance{Id: instanceRef.ToProviderId()}},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gceCache := gce.NewGceCache()
+			cache := NewGkeCache(gceCache, nodetemplate.NewCache())
+			cache.RegisterMig(&GkeMig{gceRef: migRef})
+			// Populate the instance -> MIG mapping, then drop the MIG instances as
+			// refresh() does every loop, so that listing instances requires a GCE call.
+			assert.NoError(t, gceCache.SetMigInstances(migRef, []gce.GceInstance{instance}, time.Now()))
+			gceCache.InvalidateMigInstances(context.TODO(), migRef)
+			if tc.migBlocked {
+				cache.MarkIrretrievableMig(migRef, 1, IrretrievableMigReasonServerError)
+			}
+
+			migLister := NewGkeMigLister(cache, irretrievableMigRefreshTime, irretrievableMigRefreshTime, 2)
+			gceClient := &mockAutoscalingGceClient{}
+			if tc.wantFetchCalls > 0 {
+				gceClient.On("FetchMigInstances", migRef).Return([]gce.GceInstance{instance}, nil).Times(tc.wantFetchCalls)
+			}
+			// set migInstancesMinRefreshWaitTime to 0 to force fetching instances that are not in the cache
+			migInfoProvider := gce.NewCachingMigInfoProvider(gceCache, migLister, gceClient, projectId, 1, 0*time.Second, false, false)
+			m := &gkeManagerImpl{
+				cache:           cache,
+				migLister:       migLister,
+				migInfoProvider: migInfoProvider,
+			}
+
+			got := m.InstanceByRef(instanceRef)
+
+			assert.Equal(t, tc.wantInstance, got)
+			gceClient.AssertExpectations(t)
+			gceClient.AssertNumberOfCalls(t, "FetchMigInstances", tc.wantFetchCalls)
+		})
+	}
+}
+
 func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 	testCases := []struct {
 		name                                    string

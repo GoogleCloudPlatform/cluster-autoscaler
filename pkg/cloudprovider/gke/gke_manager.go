@@ -2905,6 +2905,11 @@ func (m *gkeManagerImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
 		return nil
 	}
 
+	if m.IsMigBlocked(mig.GceRef()) {
+		klog.V(4).Infof("[InstanceByRef] Mig %v for %v is blocked, skipping instance lookup", mig.GceRef(), ref)
+		return nil
+	}
+
 	instances, err := m.migInfoProvider.GetMigInstances(context.TODO(), mig.GceRef())
 	if err != nil {
 		klog.Errorf("[InstanceByRef] GetMigInstances failed for %v with err: %v", mig.GceRef(), err)
