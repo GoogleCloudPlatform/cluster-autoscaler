@@ -5603,7 +5603,7 @@ func TestDropInstanceTemplatesForUnregisteredMigs(t *testing.T) {
 			cache := NewGkeCache(gceCache, nodetemplate.NewCache())
 			cache.RegisterMig(&GkeMig{gceRef: blockedMigRef})
 			cache.RegisterMig(&GkeMig{gceRef: unblockedMigRef})
-			cache.MarkIrretrievableMig(blockedMigRef, 1, IrretrievableMigReasonUnreachable)
+			cache.MarkIrretrievableMig(blockedMigRef, 1, IrretrievableMigReasonServerError)
 			for _, ref := range []gce.GceRef{blockedMigRef, unblockedMigRef, unregisteredMigRef} {
 				gceCache.SetMigInstanceTemplate(ref, &gce_api_compute.InstanceTemplate{Name: ref.Name})
 			}

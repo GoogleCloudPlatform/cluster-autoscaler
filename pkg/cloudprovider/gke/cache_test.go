@@ -15,10 +15,15 @@
 package gke
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -430,6 +435,14 @@ func TestMachineTypeErrorCachePolicy(t *testing.T) {
 	}
 }
 
+// testTimeoutError is a net.Error reporting a timeout, as returned by the HTTP
+// transport when a request to GCE times out.
+type testTimeoutError struct{}
+
+func (testTimeoutError) Error() string   { return "i/o timeout" }
+func (testTimeoutError) Timeout() bool   { return true }
+func (testTimeoutError) Temporary() bool { return true }
+
 func TestGkeMigListerHandleMigIssue(t *testing.T) {
 	gceRef := gce.GceRef{
 		Project: "project1",
@@ -437,14 +450,17 @@ func TestGkeMigListerHandleMigIssue(t *testing.T) {
 		Name:    "mig1",
 	}
 
-	tests := []struct {
-		name        string
+	tests := map[string]struct {
 		err         error
 		wantBlocked bool
 		wantReason  IrretrievableMigBlockReason
 	}{
-		{
-			name: "GKE Auth 404 error (wrapped googleapi.Error 404)",
+		"GoogleAPINotFound": {
+			err:         &googleapi.Error{Code: http.StatusNotFound, Message: "Not Found"},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonNotFound,
+		},
+		"GkeAuthNotFoundWrappedInURLError": {
 			err: &url.Error{
 				Op:  "Post",
 				URL: "https://compute.googleapis.com/...",
@@ -456,8 +472,25 @@ func TestGkeMigListerHandleMigIssue(t *testing.T) {
 			wantBlocked: true,
 			wantReason:  IrretrievableMigReasonNotFound,
 		},
-		{
-			name: "GKE Auth 500 error (wrapped googleapi.Error 500)",
+		"WrappedNodeGroupDoesNotExistError": {
+			err: fmt.Errorf("helper failed: %w", ca_errors.NewAutoscalerError(
+				ca_errors.NodeGroupDoesNotExistError,
+				"Node group does not exist",
+			)),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonNotFound,
+		},
+		"GoogleAPIServiceUnavailable": {
+			err:         &googleapi.Error{Code: http.StatusServiceUnavailable, Message: "Service Unavailable"},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"GoogleAPIServiceUnavailableWrappedWithFmt": {
+			err:         fmt.Errorf("x: %w", &googleapi.Error{Code: http.StatusServiceUnavailable, Message: "Service Unavailable"}),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"GkeAuthServerErrorWrappedInURLError": {
 			err: &url.Error{
 				Op:  "Post",
 				URL: "https://compute.googleapis.com/...",
@@ -469,24 +502,115 @@ func TestGkeMigListerHandleMigIssue(t *testing.T) {
 			wantBlocked: true,
 			wantReason:  IrretrievableMigReasonServerError,
 		},
-		{
-			name: "Wrapped AutoscalerError (NodeGroupDoesNotExistError)",
-			err: fmt.Errorf("helper failed: %w", ca_errors.NewAutoscalerError(
-				ca_errors.NodeGroupDoesNotExistError,
-				"Node group does not exist",
-			)),
-			wantBlocked: true,
-			wantReason:  IrretrievableMigReasonNotFound,
+		"GoogleAPITooManyRequestsDoesNotBlock": {
+			err: &googleapi.Error{
+				Code:    http.StatusTooManyRequests,
+				Message: "Rate Limit Exceeded",
+				Errors:  []googleapi.ErrorItem{{Reason: "rateLimitExceeded"}},
+			},
+			wantBlocked: false,
 		},
-		{
-			name:        "Generic error (should not block)",
+		"GoogleAPIBadRequestDoesNotBlock": {
+			err:         &googleapi.Error{Code: http.StatusBadRequest, Message: "Bad Request"},
+			wantBlocked: false,
+		},
+		"ContextDeadlineExceeded": {
+			err:         context.DeadlineExceeded,
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"WrappedContextDeadlineExceeded": {
+			err:         fmt.Errorf("failed to list managed instances: %w", context.DeadlineExceeded),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"TimeoutWrappedInURLError": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: testTimeoutError{},
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"DNSError": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: &net.DNSError{Err: "no such host", Name: "compute.googleapis.com"},
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"ConnectionRefusedWrappedInURLError": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: &net.OpError{Op: "dial", Net: "tcp", Err: &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED}},
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"HTTP2GoAwayWrappedInURLError": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: errors.New("http2: server sent GOAWAY and closed the connection; LastStreamID=1, ErrCode=NO_ERROR, debug=\"\""),
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"BareOpErrorFromBodyRead": {
+			err:         fmt.Errorf("decode: %w", &net.OpError{Op: "read", Net: "tcp", Err: &os.SyscallError{Syscall: "read", Err: syscall.ECONNRESET}}),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"BareTimeoutFromBodyRead": {
+			err:         fmt.Errorf("decode: %w", testTimeoutError{}),
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"UnexpectedEOFWrappedInURLError": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: io.ErrUnexpectedEOF,
+			},
+			wantBlocked: true,
+			wantReason:  IrretrievableMigReasonServerError,
+		},
+		"UnexpectedEOFNotInURLErrorDoesNotBlock": {
+			err:         fmt.Errorf("decode: %w", io.ErrUnexpectedEOF),
+			wantBlocked: false,
+		},
+		"URLParseErrorDoesNotBlock": {
+			err: &url.Error{
+				Op:  "parse",
+				URL: "://compute.googleapis.com",
+				Err: errors.New("missing protocol scheme"),
+			},
+			wantBlocked: false,
+		},
+		"ContextCanceledDoesNotBlock": {
+			err:         context.Canceled,
+			wantBlocked: false,
+		},
+		"ContextCanceledWrappedInURLErrorDoesNotBlock": {
+			err: &url.Error{
+				Op:  "Get",
+				URL: "https://compute.googleapis.com/...",
+				Err: context.Canceled,
+			},
+			wantBlocked: false,
+		},
+		"GenericErrorDoesNotBlock": {
 			err:         errors.New("some generic error"),
 			wantBlocked: false,
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
 			cache := NewGkeCache(&MockGceCache{}, nodetemplate.NewCache())
 			// maxIrretrievableErrsBeforeBlocked = 2
 			migLister := NewGkeMigLister(cache, 15*time.Minute, 24*time.Hour, 2)
@@ -506,6 +630,50 @@ func TestGkeMigListerHandleMigIssue(t *testing.T) {
 			} else {
 				assert.False(t, cache.IsMigBlocked(gceRef))
 			}
+		})
+	}
+}
+
+func TestGetBlockedGkeMigsByReason(t *testing.T) {
+	notFoundRef := gce.GceRef{Project: "project1", Zone: "zone", Name: "not-found"}
+	serverErrorRef := gce.GceRef{Project: "project1", Zone: "zone", Name: "server-error"}
+	unreachableRef := gce.GceRef{Project: "project1", Zone: "zone", Name: "unreachable"}
+
+	tests := map[string]struct {
+		reason   IrretrievableMigBlockReason
+		wantRefs []gce.GceRef
+	}{
+		"NotFound": {
+			reason:   IrretrievableMigReasonNotFound,
+			wantRefs: []gce.GceRef{notFoundRef},
+		},
+		"ServerErrorIncludesUnreachable": {
+			reason:   IrretrievableMigReasonServerError,
+			wantRefs: []gce.GceRef{serverErrorRef, unreachableRef},
+		},
+		"CloudProviderErrorIsEmpty": {
+			reason:   IrretrievableMigReasonCloudProviderError,
+			wantRefs: nil,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			cache := NewGkeCache(&MockGceCache{}, nodetemplate.NewCache())
+			for _, ref := range []gce.GceRef{notFoundRef, serverErrorRef, unreachableRef} {
+				cache.RegisterMig(&GkeMig{gceRef: ref})
+			}
+			migLister := NewGkeMigLister(cache, 15*time.Minute, 24*time.Hour, 1)
+			migLister.HandleMigIssue(notFoundRef, &googleapi.Error{Code: http.StatusNotFound})
+			migLister.HandleMigIssue(serverErrorRef, &googleapi.Error{Code: http.StatusServiceUnavailable})
+			migLister.HandleMigIssue(unreachableRef, context.DeadlineExceeded)
+
+			var gotRefs []gce.GceRef
+			for _, mig := range migLister.GetBlockedGkeMigs(tc.reason) {
+				gotRefs = append(gotRefs, mig.GceRef())
+			}
+			assert.ElementsMatch(t, tc.wantRefs, gotRefs)
+			assert.Empty(t, migLister.GetMigs())
 		})
 	}
 }
