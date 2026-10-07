@@ -230,6 +230,9 @@ const FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag = "FlexAdvisorScaleUpLimi
 const FlexAdvisorEnableReservationSpecificMigsProcessingFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessing"
 const FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessingMinCAVersion"
 
+const FlexAdvisorNapZoneSetExpansionEnabledFlag = "FlexAdvisorNapZoneSetExpansionEnabled::Enabled"
+const FlexAdvisorNapZoneSetExpansionMinCAVersionFlag = "FlexAdvisorNapZoneSetExpansionEnabled::MinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"

@@ -26,12 +26,14 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	"k8s.io/utils/ptr"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -303,5 +305,67 @@ func TestReservationEnforcesTwoStepAllocation(t *testing.T) {
 		assert.Len(t, nodesAfter2ndRun, 2)
 		assert.Contains(t, pod1After2ndRun.Spec.NodeName, "pool-1")
 		assert.Contains(t, pod2After2ndRun.Spec.NodeName, "pool-1")
+	})
+}
+
+// TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone verifies that an uncreated
+// NAP candidate with an unused ANY reservation in a non-representative planned zone is not eliminated
+// by instanceAvailabilityThreshold when FA reports 0 on-demand capacity across all zones.
+func TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("test-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineType: ptr.To("n2-standard-4"),
+			},
+		).
+		Build()
+
+	res := reservations.BuildMultipleMachineReservation("n2-standard-4", ZoneB, 0, 1)
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithReservationsForDefaultProject([]*compute.Reservation{res}).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithBalanceSimilarNodeGroups(),
+		).
+		WithExperiments(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		// FA reports 0 capacity across all zones for n2-standard-4.
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithCapacity(0).WithScore(0.5),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		pod := tu.BuildTestPod("standard-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
+		infra.Fakes.K8s.AddPod(pod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		assert.Equal(t, 1, len(infra.Fakes.K8s.Nodes().Items), "Expected 1 node to be created using reservation")
+		node := infra.Fakes.K8s.Nodes().Items[0]
+		assert.Equal(t, "n2-standard-4", node.Labels[apiv1.LabelInstanceTypeStable], "Expected node to be n2-standard-4")
+		assert.Equal(t, ZoneB, node.Labels[apiv1.LabelTopologyZone], "Expected node to be created in ZoneB where reservation exists")
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "standard-pod", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
 	})
 }

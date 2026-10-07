@@ -866,6 +866,7 @@ func (b *Builder) Build(
 			cloudProvider,
 			experimentsManager,
 			scaleUpLimiterTracker,
+			autoscalingOptions.BalanceSimilarNodeGroups,
 		))
 	}
 

@@ -16,6 +16,7 @@ package flexadvisor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -26,11 +27,13 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -351,5 +354,247 @@ func TestFlexAdvisorCapacityShortageRecovery(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotEmpty(t, updatedPod2.Spec.NodeName, "Expected pod-2 to be scheduled")
 		assert.Contains(t, updatedPod2.Spec.NodeName, "pool-p1", "Expected pod-2 to be scheduled on pool-p1, but got %s", updatedPod2.Spec.NodeName)
+	})
+}
+
+// TestUncreatedNAPPriorityWithPartialZoneStockoutDoesNotInvertPriority verifies that when an uncreated
+// NAP priority has partial zone stockouts (e.g. ZoneA=0, ZoneB=0, ZoneC=5), the autoscaler evaluates
+// available capacity across all planned zones and scales up Priority 1 in ZoneC rather than falsely
+// eliminating it and inverting priority to a lower priority (e2-standard-4).
+func TestUncreatedNAPPriorityWithPartialZoneStockoutDoesNotInvertPriority(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("test-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineType: ptr.To("n2-standard-4"),
+			},
+			v1.Priority{
+				MachineType: ptr.To("e2-standard-4"),
+			},
+		).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithBalanceSimilarNodeGroups(),
+		).
+		WithExperiments(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithCapacity(5).WithScore(0.5),
+			fake.NewGuidance("e2-standard-4").WithZone(ZoneA).WithCapacity(10).WithScore(0.5),
+			fake.NewGuidance("e2-standard-4").WithZone(ZoneB).WithCapacity(10).WithScore(0.5),
+			fake.NewGuidance("e2-standard-4").WithZone(ZoneC).WithCapacity(10).WithScore(0.5),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		pod := tu.BuildTestPod("standard-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
+		infra.Fakes.K8s.AddPod(pod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		assert.Equal(t, 1, len(infra.Fakes.K8s.Nodes().Items), "Expected 1 node to be created")
+		node := infra.Fakes.K8s.Nodes().Items[0]
+		assert.Equal(t, "n2-standard-4", node.Labels[apiv1.LabelInstanceTypeStable], "Expected node to be n2-standard-4 from Priority 1")
+		assert.Equal(t, ZoneC, node.Labels[apiv1.LabelTopologyZone], "Expected node to be in ZoneC where capacity is available")
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "standard-pod", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
+	})
+}
+
+// TestMultiNodeScaleUpSumsFACapacityAcrossPlannedZonesForUncreatedNAPNodePool verifies that binpacking
+// estimation sums Flex Advisor capacity across all planned zones for an uncreated regional NAP candidate.
+// When the experiment is enabled, 3 pods requiring 1 node each can all schedule onto n2-standard-4
+// (capacity=1 in each of ZoneA, ZoneB, ZoneC). When disabled, the candidate is capped at 1 node (single zone),
+// leaving the remaining pods pending after a single scale-up cycle.
+func TestMultiNodeScaleUpSumsFACapacityAcrossPlannedZonesForUncreatedNAPNodePool(t *testing.T) {
+	for name, tc := range map[string]struct {
+		experimentEnabled     bool
+		expectedN2Nodes       int
+		expectedE2Nodes       int
+		expectedScheduledPods int
+	}{
+		"experiment_enabled": {
+			experimentEnabled:     true,
+			expectedN2Nodes:       3,
+			expectedE2Nodes:       0,
+			expectedScheduledPods: 3,
+		},
+		"experiment_disabled": {
+			experimentEnabled:     false,
+			expectedN2Nodes:       1,
+			expectedE2Nodes:       0,
+			expectedScheduledPods: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cccObj := ccc.NewComputeClassBuilder("test-ccc").
+				WithNodePoolAutoCreation(true).
+				WithPriorities(
+					v1.Priority{
+						MachineType: ptr.To("n2-standard-4"),
+					},
+					v1.Priority{
+						MachineType: ptr.To("e2-standard-4"),
+					},
+				).
+				Build()
+
+			testConfig := integration.NewTestConfig().
+				WithCccCrds(cccObj).
+				WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+				).
+				WithOverrides(
+					integration.WithMaxMemoryTotal(140*1024*1024*1024),
+					integration.WithAutoProvisioningEnabled(),
+					integration.WithFlexAdvisorEnabled(),
+					integration.WithBalanceSimilarNodeGroups(),
+				)
+
+			if tc.experimentEnabled {
+				testConfig = testConfig.WithExperiments(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag)
+			} else {
+				testConfig = testConfig.WithExperimentOverrides(map[string]bool{
+					experiments.FlexAdvisorNapZoneSetExpansionEnabledFlag: false,
+				}, nil)
+			}
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+
+				infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+					fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithCapacity(1).WithScore(0.5),
+					fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithCapacity(1).WithScore(0.5),
+					fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithCapacity(1).WithScore(0.5),
+					fake.NewGuidance("e2-standard-4").WithZone(ZoneA).WithCapacity(10).WithScore(0.5),
+					fake.NewGuidance("e2-standard-4").WithZone(ZoneB).WithCapacity(10).WithScore(0.5),
+					fake.NewGuidance("e2-standard-4").WithZone(ZoneC).WithCapacity(10).WithScore(0.5),
+				)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+				defer integration_synctest.TearDown(cancel)
+
+				for i := 1; i <= 3; i++ {
+					pod := tu.BuildTestPod(fmt.Sprintf("pod-%d", i), 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
+					infra.Fakes.K8s.AddPod(pod)
+				}
+
+				// Single scale-up cycle:
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				infra.Fakes.RunScheduler(ctx, t)
+
+				n2Count := 0
+				e2Count := 0
+				for _, node := range infra.Fakes.K8s.Nodes().Items {
+					switch node.Labels[apiv1.LabelInstanceTypeStable] {
+					case "n2-standard-4":
+						n2Count++
+					case "e2-standard-4":
+						e2Count++
+					}
+				}
+				assert.Equal(t, tc.expectedN2Nodes, n2Count, "Mismatch in n2-standard-4 node count")
+				assert.Equal(t, tc.expectedE2Nodes, e2Count, "Mismatch in e2-standard-4 node count")
+
+				scheduledPods := 0
+				for i := 1; i <= 3; i++ {
+					p, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, fmt.Sprintf("pod-%d", i), metav1.GetOptions{})
+					assert.NoError(t, err)
+					if p.Spec.NodeName != "" {
+						scheduledPods++
+					}
+				}
+				assert.Equal(t, tc.expectedScheduledPods, scheduledPods, "Mismatch in scheduled pods count in single cycle")
+			})
+		})
+	}
+}
+
+// TestUncreatedNAPWithCccZonalPreferencesSubsetOfAutoprovisioningLocations verifies that an uncreated NAP
+// candidate restricted by CCC Location.Zones to a subset of the autoprovisioning locations is evaluated only
+// across the specified zones (injection always picks the representative zone from the specified zones), is
+// created with a non-empty node pool name spanning only those zones, and is scaled up in one of them.
+func TestUncreatedNAPWithCccZonalPreferencesSubsetOfAutoprovisioningLocations(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("test-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineType: ptr.To("n2-standard-4"),
+				Location:    &v1.Location{Zones: []string{ZoneB, ZoneC}},
+			},
+		).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithBalanceSimilarNodeGroups(),
+		).
+		WithExperiments(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithCapacity(5).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithCapacity(5).WithScore(0.5),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		infra.Fakes.K8s.AddPod(tu.BuildTestPod("zonal-pref-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc")))
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		napNodePools := infra.Fakes.GkeService.GetAutoprovisionedNodePools()
+		if assert.Len(t, napNodePools, 1, "Expected one NAP node pool to be created") {
+			assert.NotEmpty(t, napNodePools[0].Name, "Expected NAP node pool to have a non-empty name")
+			assert.Subset(t, []string{ZoneB, ZoneC}, napNodePools[0].Locations, "Expected NAP node pool to span only the CCC specified zones")
+		}
+
+		if assert.Len(t, infra.Fakes.K8s.Nodes().Items, 1, "Expected 1 node to be created") {
+			node := infra.Fakes.K8s.Nodes().Items[0]
+			assert.Contains(t, []string{ZoneB, ZoneC}, node.Labels[apiv1.LabelTopologyZone], "Expected node in one of the CCC specified zones")
+		}
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "zonal-pref-pod", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
 	})
 }

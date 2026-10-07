@@ -1150,7 +1150,7 @@ func TestFleetEfficiency_ZonalPod_FallbackReusesExistingNodePoolOverUncreatedNap
 // In Pass 1, a pod triggers async creation of a regional node pool.
 // In Pass 2, while the pool is still in the upcoming state (Exist() == false, IsUpcoming() == true),
 // a second pod arrives.
-// Because targetZonesForOption checks option.NodeGroup.Exist(ctx) || gkeNg.IsUpcoming(), the upcoming
+// Because flexadvisor.NewNodeGroupSet excludes upcoming node groups from uncreated candidate expansion, the upcoming
 // pool is recognized as an existing regional pool and correctly reused, preventing NAP
 // from creating redundant duplicate node pools.
 func TestFleetEfficiency_AsyncUpcomingNodePoolReusedOnSubsequentCycle(t *testing.T) {

@@ -16,6 +16,7 @@ package fleetefficiency
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
@@ -43,6 +45,7 @@ import (
 	listerutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	crdRules "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -163,6 +166,31 @@ type fleetEfficiencyTestCase struct {
 	autoprovisioningLocations []string
 	trimmedLocations          []string
 	backoff                   base_backoff.Backoff
+	// plannedLocationsErr, if set, is returned by the cloud provider's PlannedNodePoolLocations.
+	plannedLocationsErr error
+	// expectedPlannedLocationsCalls, if set, is the expected number of PlannedNodePoolLocations calls.
+	expectedPlannedLocationsCalls *int
+}
+
+// countingPlannedLocationsCloudProvider wraps a test cloud provider and counts PlannedNodePoolLocations calls.
+type countingPlannedLocationsCloudProvider struct {
+	*gke.TestAutoprovisioningCloudProvider
+	calls int
+}
+
+func (p *countingPlannedLocationsCloudProvider) PlannedNodePoolLocations(mig *gke.GkeMig) ([]string, error) {
+	p.calls++
+	return p.TestAutoprovisioningCloudProvider.PlannedNodePoolLocations(mig)
+}
+
+// failingPlannedLocationsCloudProvider wraps a test cloud provider and fails PlannedNodePoolLocations.
+type failingPlannedLocationsCloudProvider struct {
+	*gke.TestAutoprovisioningCloudProvider
+	err error
+}
+
+func (p *failingPlannedLocationsCloudProvider) PlannedNodePoolLocations(_ *gke.GkeMig) ([]string, error) {
+	return nil, p.err
 }
 
 // fakeBackoff reports uncreated node groups as backed off by machine type and zone (mirroring zone-scoped
@@ -216,7 +244,16 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 		if tc.trimmedLocations != nil {
 			cpBuilder = cpBuilder.WithTrimmedLocations(tc.trimmedLocations)
 		}
-		cloudProvider := cpBuilder.Build()
+		baseCloudProvider := cpBuilder.Build()
+		var cloudProvider provider.GkeExpanderCloudProvider = baseCloudProvider
+		if tc.plannedLocationsErr != nil {
+			cloudProvider = &failingPlannedLocationsCloudProvider{TestAutoprovisioningCloudProvider: baseCloudProvider, err: tc.plannedLocationsErr}
+		}
+		var countingProvider *countingPlannedLocationsCloudProvider
+		if tc.expectedPlannedLocationsCalls != nil {
+			countingProvider = &countingPlannedLocationsCloudProvider{TestAutoprovisioningCloudProvider: baseCloudProvider}
+			cloudProvider = countingProvider
+		}
 		localSSDDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
 
 		var puller *gceclient.ReservationsPuller
@@ -252,6 +289,9 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 
 		if tc.expectedErrorLog != "" {
 			assert.Contains(t, logBuf.String(), tc.expectedErrorLog)
+		}
+		if tc.expectedPlannedLocationsCalls != nil {
+			assert.Equal(t, *tc.expectedPlannedLocationsCalls, countingProvider.calls, "unexpected number of PlannedNodePoolLocations calls")
 		}
 	})
 }
@@ -370,6 +410,12 @@ func TestFleetEfficiencyFilter_SelectingStrategy(t *testing.T) {
 func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 	f := newTestFixture()
 
+	ngNap := gke.NewTestGkeMigBuilder().SetNodePoolName("nap-pool").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
+	optNap := expander.Option{
+		NodeGroup: ngNap,
+		Pods:      []*v1.Pod{f.pod},
+	}
+
 	tests := []fleetEfficiencyTestCase{
 		{
 			name:    "Option has matching unused reservation - doesnt use FA, returns original options",
@@ -391,6 +437,49 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			flexAdvisorSetup:    defaultFlexAdvisorSetup,
 			expectedBestOptions: []expander.Option{f.optFleet2},
 		},
+		{
+			name:                      "Uncreated NAP candidate with matching reservation in non-representative planned zone - falls back to lowest cost",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			options:                   []expander.Option{optNap, f.optFleet1},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
+			reservations: []*gce_api.Reservation{
+				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n2-standard-4", "us-central1-b"),
+			},
+			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{optNap, f.optFleet1},
+		},
+		{
+			name:                      "Uncreated NAP candidate - planned locations error ignores other zones' reservations and falls back to lowest cost when scoring",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			options:                   []expander.Option{optNap, f.optFleet1},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
+			plannedLocationsErr:       errors.New("cannot determine locations"),
+			reservations: []*gce_api.Reservation{
+				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n2-standard-4", "us-central1-b"),
+			},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Maybe().Return(
+					instanceavailability.NewSnapshot(m, "test-ccc", "n2-standard-4", "guidance", "", nil, map[string]float64{"us-central1-a": 0.2}),
+				)
+			},
+			expectedBestOptions: []expander.Option{optNap, f.optFleet1},
+			expectedErrorLog:    "Couldn't determine planned node pool locations",
+		},
+		{
+			name:                      "Uncreated NAP candidate with non-matching reservation - computes planned locations once for reservation check and scoring",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			options:                   []expander.Option{optNap, f.optFleet1},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
+			reservations: []*gce_api.Reservation{
+				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "e2-standard-8", "us-central1-b"),
+			},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n2-standard-4", map[string]float64{"us-central1-a": 0.8, "us-central1-b": 0.8})
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.2})
+			},
+			expectedBestOptions:           []expander.Option{optNap},
+			expectedPlannedLocationsCalls: ptr.To(1),
+		},
 	}
 
 	for _, tc := range tests {
@@ -401,7 +490,7 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 	f := newTestFixture()
 
-	ngNap := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2"}).Build()
+	ngNap := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2"}).Build()
 	optNap := expander.Option{
 		NodeGroup: ngNap,
 		Pods:      []*v1.Pod{f.pod},
@@ -413,7 +502,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 		Pods:      []*v1.Pod{f.pod},
 	}
 
-	ngNapWithLocations := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-loc").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{
+	ngNapWithLocations := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-loc").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{
 		MachineType: "n2-standard-2",
 		Locations:   []string{"us-central1-a", "us-central1-b"},
 	}).Build()
@@ -422,7 +511,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 		Pods:      []*v1.Pod{f.pod},
 	}
 
-	ngNapCompact := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-compact").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{
+	ngNapCompact := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-compact").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{
 		MachineType:    "n2-standard-2",
 		PlacementGroup: placement.Spec{Policy: "COMPACT"},
 	}).Build()
@@ -431,7 +520,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 		Pods:      []*v1.Pod{f.pod},
 	}
 
-	ngNapSpecificRes := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-res").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{
+	ngNapSpecificRes := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-res").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{
 		MachineType: "n2-standard-2",
 		ReservationAffinity: &gke_api_beta.ReservationAffinity{
 			ConsumeReservationType: gkeclient.ReservationAffinitySpecific,
@@ -451,7 +540,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 		Pods:              []*v1.Pod{f.pod},
 	}
 
-	ngNapRegional := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-reg").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
+	ngNapRegional := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-reg").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
 	optNapRegional := expander.Option{
 		NodeGroup: ngNapRegional,
 		Pods:      []*v1.Pod{f.pod},
@@ -638,6 +727,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 						SetNodePoolName("pool-nap-loc-3").
 						SetGceRefZone("us-central1-a").
 						SetExist(false).
+						SetAutoprovisioned(true).
 						SetSpec(&gkeclient.NodePoolSpec{
 							MachineType: "n2-standard-2",
 							Locations:   []string{"us-central1-a", "us-central1-b", "us-central1-c"},
@@ -1023,12 +1113,12 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			name: "Fallback - TieBreak (all uncreated candidates backed off in all target zones)",
 			options: []expander.Option{
 				{
-					NodeGroup: gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-1").SetGceRefZone("us-central1-a").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-1"}).Build(),
+					NodeGroup: gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-1").SetGceRefZone("us-central1-a").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-1"}).Build(),
 					NodeCount: 1,
 					Pods:      []*v1.Pod{f.pod},
 				},
 				{
-					NodeGroup: gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-2").SetGceRefZone("us-central1-b").SetExist(false).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2"}).Build(),
+					NodeGroup: gke.NewTestGkeMigBuilder().SetNodePoolName("pool-nap-2").SetGceRefZone("us-central1-b").SetExist(false).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2"}).Build(),
 					NodeCount: 1,
 					Pods:      []*v1.Pod{f.pod},
 				},
@@ -1293,14 +1383,4 @@ func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
 	for _, tc := range tests {
 		runFleetEfficiencyTest(t, tc)
 	}
-}
-
-func TestTargetZonesForOption_NilNodeGroup(t *testing.T) {
-	filter := &fleetEfficiencyFilter{}
-	opt := expander.Option{
-		NodeGroup: nil,
-	}
-	_, err := filter.targetZonesForOption(context.Background(), opt, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "nil node group")
 }

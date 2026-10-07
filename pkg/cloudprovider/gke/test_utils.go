@@ -3141,7 +3141,12 @@ func (m *GkeManagerMock) TrimLocationsForMachineConfig(locations []string, machi
 }
 
 func (m *GkeManagerMock) PlannedNodePoolLocations(mig *GkeMig) ([]string, error) {
-	panic("not implemented")
+	args := m.Called(mig)
+	var locations []string
+	if args.Get(0) != nil {
+		locations = args.Get(0).([]string)
+	}
+	return locations, args.Error(1)
 }
 
 func (m *GkeManagerMock) MachineConfigProvider() *machinetypes.MachineConfigProvider {

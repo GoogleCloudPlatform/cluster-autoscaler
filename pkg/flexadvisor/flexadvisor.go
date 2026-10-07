@@ -543,3 +543,12 @@ func isFlexAdvisorReservationSpecificMigsProcessingEnabled(manager experiments.M
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorEnableReservationSpecificMigsProcessingFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag, true)
 }
+
+// IsFlexAdvisorNapZoneSetExpansionEnabled returns whether evaluating uncreated node pool MIGs across their planned zone set is enabled.
+func IsFlexAdvisorNapZoneSetExpansionEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorNapZoneSetExpansionEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag, false)
+}
