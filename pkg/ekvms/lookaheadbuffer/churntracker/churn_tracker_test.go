@@ -290,7 +290,7 @@ func TestProcessNodeInfos(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, fakeclock.NewFakePassiveClock(now))
+			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
 			tracker.nodes = tc.nodesBefore
 
 			tracker.ProcessNodeInfos(tc.nodeInfos)
@@ -384,7 +384,7 @@ func TestCleanExpiredEvents(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, fakeclock.NewFakePassiveClock(now))
+			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
 			tracker.events = tc.events
 
 			tracker.cleanExpiredEvents()
@@ -475,6 +475,8 @@ func TestRecordScaledDownNodes(t *testing.T) {
 		eventsBefore    churnEvents
 		scaledDownNodes []*apiv1.Node
 		wantEvents      churnEvents
+		// wantMetric is the number of churn events registered in the metric per machine family.
+		wantMetric map[string]int
 	}{
 		{
 			desc:            "no node history, scaled down nodes are not recorded",
@@ -507,6 +509,7 @@ func TestRecordScaledDownNodes(t *testing.T) {
 			wantEvents: churnEvents{
 				ekDefaultWorkload: {now},
 			},
+			wantMetric: map[string]int{ekFamily: 1},
 		},
 		{
 			desc: "scaled down node that had a running customer pod is not recorded",
@@ -518,6 +521,7 @@ func TestRecordScaledDownNodes(t *testing.T) {
 			wantEvents: churnEvents{
 				ekDefaultWorkload: {now},
 			},
+			wantMetric: map[string]int{ekFamily: 1},
 		},
 		{
 			desc: "scaled down node created after churnLifetimeThreshold is not recorded",
@@ -540,6 +544,7 @@ func TestRecordScaledDownNodes(t *testing.T) {
 				ekDefaultWorkload: {tMinus1m},
 				ekTestWorkload:    {now},
 			},
+			wantMetric: map[string]int{ekFamily: 1},
 		},
 		{
 			desc: "event is appended to existing events of the same workload ID",
@@ -556,6 +561,7 @@ func TestRecordScaledDownNodes(t *testing.T) {
 				ekDefaultWorkload: {tMinus1m},
 				ekTestWorkload:    {tMinus1m, now},
 			},
+			wantMetric: map[string]int{ekFamily: 1},
 		},
 		{
 			desc: "events of multiple nodes are recorded per workload ID",
@@ -569,6 +575,7 @@ func TestRecordScaledDownNodes(t *testing.T) {
 				ekDefaultWorkload: {now},
 				ekTestWorkload:    {now, now},
 			},
+			wantMetric: map[string]int{ekFamily: 3},
 		},
 		{
 			desc: "events of the same workload ID are recorded per machine family",
@@ -584,10 +591,12 @@ func TestRecordScaledDownNodes(t *testing.T) {
 				ekTestWorkload:  {tMinus1m, now},
 				e4aTestWorkload: {now},
 			},
+			wantMetric: map[string]int{ekFamily: 1, e4aFamily: 1},
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, fakeclock.NewFakePassiveClock(now))
+			metrics := &fakeChurnMetrics{}
+			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, metrics, fakeclock.NewFakePassiveClock(now))
 			tracker.nodes = tc.nodesBefore
 			if tc.eventsBefore != nil {
 				tracker.events = tc.eventsBefore
@@ -597,6 +606,9 @@ func TestRecordScaledDownNodes(t *testing.T) {
 
 			if diff := cmp.Diff(tc.wantEvents, tracker.events, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("RecordScaledDownNodes() events mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantMetric, metrics.counts, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("RecordScaledDownNodes() churn events metric mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -612,7 +624,8 @@ func TestChurnTrackerDisabled(t *testing.T) {
 		{desc: "nil provider", configProvider: nil},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tracker := NewChurnTracker(tc.configProvider, testMcp, nil)
+			metrics := &fakeChurnMetrics{}
+			tracker := NewChurnTracker(tc.configProvider, testMcp, metrics, nil)
 
 			tracker.ProcessNodeInfos([]*framework.NodeInfo{nodeInfo})
 			if len(tracker.nodes) != 0 {
@@ -624,8 +637,39 @@ func TestChurnTrackerDisabled(t *testing.T) {
 			if len(tracker.events) != 0 {
 				t.Errorf("RecordScaledDownNodes() recorded events %v, want none", tracker.events)
 			}
+			if len(metrics.counts) != 0 {
+				t.Errorf("churn events metric reported %v, want nothing", metrics.counts)
+			}
 		})
 	}
+}
+
+func TestRecordScaledDownNodesNilMetrics(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	node := ekNodeInfo("node").Node()
+	tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
+	tracker.nodes = map[types.UID]*nodeHistory{
+		node.UID: {creationTime: now, machineFamily: ekFamily, everHostedLookahead: true, lookaheadWorkloadID: ""},
+	}
+
+	// Must not panic.
+	tracker.RecordScaledDownNodes([]*apiv1.Node{node})
+
+	if got := len(tracker.events[workloadKey{machineFamily: ekFamily, workloadID: ""}]); got != 1 {
+		t.Errorf("RecordScaledDownNodes() recorded %d events, want 1", got)
+	}
+}
+
+// fakeChurnMetrics counts the lookahead churn events registered per machine family.
+type fakeChurnMetrics struct {
+	counts map[string]int
+}
+
+func (f *fakeChurnMetrics) RegisterLookaheadChurnEvent(machineFamily string) {
+	if f.counts == nil {
+		f.counts = make(map[string]int)
+	}
+	f.counts[machineFamily]++
 }
 
 // bindTo marks the pod as bound to the node by kube-scheduler.

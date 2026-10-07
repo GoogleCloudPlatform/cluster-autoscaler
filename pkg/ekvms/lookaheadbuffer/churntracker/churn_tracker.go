@@ -53,27 +53,34 @@ type workloadKey struct {
 // churnEvents are the timestamps of churn events, tracked per workload separation of a machine family.
 type churnEvents map[workloadKey][]time.Time
 
+// churnMetrics is the subset of metrics emitted by the ChurnTracker.
+type churnMetrics interface {
+	RegisterLookaheadChurnEvent(machineFamily string)
+}
+
 // ChurnTracker tracks node history and lookahead churn events per workload separation.
 // It is not thread-safe: it is expected to be called from the main autoscaler loop (RunOnce) only.
 type ChurnTracker struct {
 	// configProvider provides the churn tracker configuration. The tracker is a no-op if it is nil or the experiment is disabled.
 	configProvider ConfigProvider
 	// mcp is used to filter out the nodes of non-resizable machine families, which are not tracked.
-	mcp   *machinetypes.MachineConfigProvider
-	clock clock.PassiveClock
+	mcp     *machinetypes.MachineConfigProvider
+	metrics churnMetrics
+	clock   clock.PassiveClock
 
 	nodes  map[types.UID]*nodeHistory
 	events churnEvents // churn events happened within the churnWindow
 }
 
 // NewChurnTracker returns a new initialized ChurnTracker.
-func NewChurnTracker(configProvider ConfigProvider, mcp *machinetypes.MachineConfigProvider, c clock.PassiveClock) *ChurnTracker {
+func NewChurnTracker(configProvider ConfigProvider, mcp *machinetypes.MachineConfigProvider, metrics churnMetrics, c clock.PassiveClock) *ChurnTracker {
 	if c == nil {
 		c = clock.RealClock{}
 	}
 	return &ChurnTracker{
 		configProvider: configProvider,
 		mcp:            mcp,
+		metrics:        metrics,
 		clock:          c,
 		nodes:          make(map[types.UID]*nodeHistory),
 		events:         make(churnEvents),
@@ -143,6 +150,9 @@ func (t *ChurnTracker) RecordScaledDownNodes(nodes []*apiv1.Node) {
 		}
 		key := workloadKey{machineFamily: history.machineFamily, workloadID: history.lookaheadWorkloadID}
 		t.events[key] = append(t.events[key], now)
+		if t.metrics != nil {
+			t.metrics.RegisterLookaheadChurnEvent(history.machineFamily)
+		}
 		klog.V(4).Infof("[Churn Tracker] Recorded lookahead churn event for workload ID %q: node %q of machine family %q without running customer pods was scaled down after %v", history.lookaheadWorkloadID, node.Name, history.machineFamily, now.Sub(history.creationTime))
 	}
 }
