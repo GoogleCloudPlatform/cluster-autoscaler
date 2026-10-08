@@ -136,6 +136,11 @@ func (m *kwokNodeMapper) mapInstanceToNode(ctx context.Context, inst *gce_api.In
 	// TODO: b/532099850 - When cloud-controller-manager handles setting ProviderID, replace setting ProviderID here with setting the node.cloudprovider.kubernetes.io/uninitialized taint.
 	node.Spec.ProviderID = fmt.Sprintf("gce://%s/%s/%s", m.projectID, zone, inst.Name)
 
+	// The API server requires taints to be unique by key and effect, but the predicted template
+	// node may carry the same taint twice (e.g. google.com/tpu from both NODE_TAINTS and the TPU
+	// machine type).
+	node.Spec.Taints = dedupeTaints(node.Spec.Taints)
+
 	if labelsFromKubeEnv, err := gce.GetLabelsFromKubeEnv(ke); err == nil && len(labelsFromKubeEnv) > 0 {
 		var labelPairs []string
 		for k, v := range labelsFromKubeEnv {
@@ -190,4 +195,24 @@ func (m *kwokNodeMapper) mapInstanceToNode(ctx context.Context, inst *gce_api.In
 	}
 
 	return node, nil
+}
+
+// dedupeTaints returns taints with duplicates (same key and effect) removed, keeping the first
+// occurrence.
+func dedupeTaints(taints []apiv1.Taint) []apiv1.Taint {
+	type taintID struct {
+		key    string
+		effect apiv1.TaintEffect
+	}
+	seen := make(map[taintID]bool, len(taints))
+	result := make([]apiv1.Taint, 0, len(taints))
+	for _, t := range taints {
+		id := taintID{key: t.Key, effect: t.Effect}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		result = append(result, t)
+	}
+	return result
 }
