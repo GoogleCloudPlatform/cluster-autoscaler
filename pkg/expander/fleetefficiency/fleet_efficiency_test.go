@@ -1039,17 +1039,63 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 	optFleet2 := f.optFleet2
 	optFleet2.NodeCount = 1
 
+	optFleet1MultiNode := f.optFleet1
+	optFleet1MultiNode.NodeCount = 3
+
+	enabledPayPerPodExps := map[string]bool{
+		experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+		experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+	}
+	enabledTracker := optstracking.NewOptionsTracker(
+		options.AutoscalingOptions{},
+		experiments.NewMockManagerWithOptions(version.Version{}, enabledPayPerPodExps, nil),
+	)
+
+	ngE2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-e2").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build()
+	optPodFamilyCcc := expander.Option{
+		NodeGroup: ngE2,
+		NodeCount: 1,
+		Pods:      []*v1.Pod{f.pod},
+	}
+	optAutopilotDefault := expander.Option{
+		NodeGroup: ngE2,
+		NodeCount: 1,
+		Pods: []*v1.Pod{
+			{ObjectMeta: metav1.ObjectMeta{Name: "default-ap-pod"}},
+		},
+	}
+	optBalancedPcc := expander.Option{
+		NodeGroup: gke.NewTestGkeMigBuilder().SetNodePoolName("pool-bal").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build(),
+		NodeCount: 1,
+		Pods: []*v1.Pod{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "balanced-ap-pod"},
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						gkelabels.ComputeClassLabel: "Balanced",
+					},
+				},
+			},
+		},
+	}
+
 	tests := []struct {
 		name                      string
 		crd                       crd.CRD
+		noCrdInLister             bool
 		options                   []expander.Option
 		setupMock                 func(*instanceavailability.MockProvider)
 		reservations              []*gce_api.Reservation
 		autoprovisioningLocations []string
 		backoff                   base_backoff.Backoff
+		autopilotEnabled          bool
+		boolExperimentValues      map[string]bool
+		clusterDefaultStrategy    options.ClusterDefaultAllocationStrategy
 		expectedRequestedStrategy cccv1.AllocationStrategy
 		expectedReason            metrics.AllocationStrategyFallbackReason
 		expectedMachineType       string
+		expectedSource            metrics.AllocationStrategySource
+		expectedNodeCount         float64
 	}{
 		{
 			name:                      "Fallback - FlexAdvisorNotSupported (TPU)",
@@ -1218,6 +1264,145 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			expectedReason:            metrics.AllocationStrategyFallbackNone,
 			expectedMachineType:       "n1-standard-1",
 		},
+		{
+			name:    "Multi-node scale up records node count in nodes metric and 1 in scaleups metric",
+			options: []expander.Option{optFleet1MultiNode, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+			expectedNodeCount:         3,
+		},
+		{
+			name:                   "Source - Default (Cluster default fleet-efficiency)",
+			crd:                    f.crdNoRules,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+		},
+		{
+			name:                      "Source - Default (Cluster default lowest-cost)",
+			crd:                       f.crdNoRules,
+			clusterDefaultStrategy:    options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                   []expander.Option{optFleet1},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+		},
+		{
+			name: "Source - ComputeClass (CCC with podFamily default)",
+			crd: ccc.NewCccCrd(
+				&cccv1.ComputeClass{
+					ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+					Spec: cccv1.ComputeClassSpec{
+						Priorities: []cccv1.Priority{
+							{PodFamily: new(crdRules.GeneralPurposePodFamily)},
+						},
+					},
+				},
+				"test-project",
+				true,
+				crd.TestDefaultDataProvider(),
+				enabledTracker,
+			),
+			boolExperimentValues: enabledPayPerPodExps,
+			options:              []expander.Option{optPodFamilyCcc},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, "test-ccc", "e2-standard-4", map[string]float64{"us-central1-a": 0.9})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name:                 "Source - PredefinedComputeClass (Balanced on Autopilot)",
+			noCrdInLister:        true,
+			autopilotEnabled:     true,
+			boolExperimentValues: enabledPayPerPodExps,
+			options:              []expander.Option{optBalancedPcc},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, "Balanced", "n2-standard-4", map[string]float64{"us-central1-a": 0.9})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourcePredefinedComputeClass,
+		},
+		{
+			name:                 "Source - AutopilotWorkload (Unlabelled pod on Autopilot)",
+			noCrdInLister:        true,
+			autopilotEnabled:     true,
+			boolExperimentValues: enabledPayPerPodExps,
+			options:              []expander.Option{optAutopilotDefault},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, crdRules.GeneralPurposePodFamily, "e2-standard-4", map[string]float64{"us-central1-a": 0.9})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceAutopilotWorkload,
+		},
+		{
+			name: "Source - ComputeClass (Mixed omitted and explicit lowest-cost rules override cluster default fleet-efficiency)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+					),
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyLowestCost)),
+						crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy:    options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                   []expander.Option{optFleet1, optFleet2},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name: "Source - ComputeClass (Mixed omitted and explicit fleet-efficiency rules override cluster default lowest-cost)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+					),
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+						crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
 	}
 
 	for _, tc := range tests {
@@ -1229,12 +1414,17 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 				tc.setupMock(flexAdvisor)
 			}
 
-			crdToUse := f.crdRuleFleet
-			if tc.crd != nil {
-				crdToUse = tc.crd
+			var lister *listerutils.MockCrdLister
+			if tc.noCrdInLister {
+				lister = listerutils.NewMockCrdListerWithLabel(nil, gkelabels.ComputeClassLabel)
+			} else {
+				crdToUse := f.crdRuleFleet
+				if tc.crd != nil {
+					crdToUse = tc.crd
+				}
+				lister = listerutils.NewMockCrdListerWithLabel([]crd.CRD{crdToUse}, gkelabels.ComputeClassLabel)
+				lister.SetDefaultCrdName(crdToUse.Name())
 			}
-			lister := listerutils.NewMockCrdListerWithLabel([]crd.CRD{crdToUse}, gkelabels.ComputeClassLabel)
-			lister.SetDefaultCrdName(crdToUse.Name())
 
 			var puller *gceclient.ReservationsPuller
 			if len(tc.reservations) > 0 {
@@ -1245,22 +1435,48 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			}
 
 			cpBuilder := gke.NewTestAutoprovisioningCloudProviderBuilder().
-				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil))
+				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				WithAutopilotEnabled(tc.autopilotEnabled)
 			if len(tc.autoprovisioningLocations) > 0 {
 				cpBuilder = cpBuilder.WithAutoprovisioningLocations(tc.autoprovisioningLocations...)
 			}
 			cloudProvider := cpBuilder.Build()
 			localSSDDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
 
-			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, options.ClusterDefaultAllocationStrategyLowestCost, true, experiments.NewMockManager(), tc.backoff, nil)
+			var em experiments.Manager
+			if tc.boolExperimentValues != nil {
+				em = experiments.NewMockManagerWithOptions(version.Version{}, tc.boolExperimentValues, nil)
+			} else {
+				em = experiments.NewMockManager()
+			}
+			clusterDefaultStrategy := tc.clusterDefaultStrategy
+			if clusterDefaultStrategy == "" {
+				clusterDefaultStrategy = options.ClusterDefaultAllocationStrategyLowestCost
+			}
+			optionsTracker := optstracking.NewOptionsTracker(options.AutoscalingOptions{}, em)
+
+			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, clusterDefaultStrategy, true, em, tc.backoff, optionsTracker)
 
 			// We don't care about the returned options here, just that the fallback logic was triggered and recorded metrics.
 			_ = filter.BestOptions(context.TODO(), tc.options, map[string]*framework.NodeInfo{})
 
+			expectedNodeCount := tc.expectedNodeCount
+			if expectedNodeCount == 0 {
+				expectedNodeCount = 1
+			}
+			expectedSource := tc.expectedSource
+			if expectedSource == "" {
+				expectedSource = metrics.AllocationStrategySourceCustomComputeClass
+			}
+
 			// Verify metrics
 			count, err := metrics.GetNodesWithAllocationStrategyCountForTest(string(tc.expectedRequestedStrategy), tc.expectedReason, tc.expectedMachineType)
 			assert.NoError(t, err)
-			assert.Equal(t, float64(1), count)
+			assert.Equal(t, expectedNodeCount, count)
+
+			scaleupCount, err := metrics.GetScaleupsWithAllocationStrategyCountForTest(string(tc.expectedRequestedStrategy), tc.expectedReason, expectedSource)
+			assert.NoError(t, err)
+			assert.Equal(t, float64(1), scaleupCount)
 
 			flexAdvisor.AssertExpectations(t)
 		})
@@ -1678,11 +1894,13 @@ func TestGetPodCrd_NilCloudProviderAndNilPod(t *testing.T) {
 		experimentsManager: em,
 		cloudProvider:      nil,
 	}
-	gotCrd, err := filter.getPodCrd(&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test-pod"}})
+	gotCrd, gotSource, err := filter.getPodCrd(&v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test-pod"}})
 	assert.NoError(t, err)
 	assert.Nil(t, gotCrd)
+	assert.Equal(t, metrics.AllocationStrategySourceUnknown, gotSource)
 
-	gotCrd, err = filter.getPodCrd(nil)
+	gotCrd, gotSource, err = filter.getPodCrd(nil)
 	assert.NoError(t, err)
 	assert.Nil(t, gotCrd)
+	assert.Equal(t, metrics.AllocationStrategySourceUnknown, gotSource)
 }

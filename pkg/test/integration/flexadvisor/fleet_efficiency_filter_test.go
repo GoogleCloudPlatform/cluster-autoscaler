@@ -964,6 +964,9 @@ func TestFleetEfficiency_FallbackUnsupported(t *testing.T) {
 				count, err := metrics.GetNodesWithAllocationStrategyCountForTest("fleet-efficiency", "unsupported", "e2-standard-4")
 				assert.NoError(t, err)
 				assert.Equal(t, float64(1), count, "Expected unsupported fallback metric count to be 1")
+				scaleupCount, err := metrics.GetScaleupsWithAllocationStrategyCountForTest("fleet-efficiency", "unsupported", metrics.AllocationStrategySourceCustomComputeClass)
+				assert.NoError(t, err)
+				assert.Equal(t, float64(1), scaleupCount, "Expected unsupported fallback scaleups metric count to be 1")
 			})
 		})
 	}

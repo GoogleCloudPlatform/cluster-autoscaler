@@ -108,7 +108,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	// Verify the allocation strategy.
 	samplePod := expansionOptions[0].Pods[0]
-	crd, err := f.getPodCrd(samplePod)
+	crd, source, err := f.getPodCrd(samplePod)
 	if err != nil {
 		klog.Errorf("FleetEfficiencyFilter: failed to get the CRD for pod: %v", err)
 		// We don't know the allocation strategy, do not record any metrics at this point.
@@ -119,9 +119,10 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 		klog.V(4).Infof("FleetEfficiencyFilter: pod %s/%s does not use a ComputeClass, skipping", samplePod.Namespace, samplePod.Name)
 		return expansionOptions
 	}
-	if !f.isFleetEfficiencyStrategySelected(crd, expansionOptions) {
+	isFleetEfficiency, effectiveSource := f.isFleetEfficiencyStrategySelected(crd, source, expansionOptions)
+	if !isFleetEfficiency {
 		klog.V(4).Infof("FleetEfficiencyFilter: allocation strategy is not fleet-efficiency (CCC %s, cluster default %q), skipping", crd.Name(), f.getClusterDefaultAllocationStrategy())
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone, effectiveSource)
 	}
 
 	// The node group sets of every option are resolved once and shared by the reservation check and scoring.
@@ -132,12 +133,12 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	if nodeGroupId, found := f.usableReservationNodeGroup(nodeGroupSets); found {
 		klog.V(4).Infof("FleetEfficiencyFilter: node group %s has matching unused reservations (CCC %s), falling back to lowest-cost", nodeGroupId, crd.Name())
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent, effectiveSource)
 	}
 
 	if reason, explanation, shouldFallback := shouldFallbackToLowestCost(expansionOptions); shouldFallback {
 		klog.V(4).Infof("FleetEfficiencyFilter: %s (CCC %s), falling back to lowest-cost with reason %q", explanation, crd.Name(), reason)
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason, effectiveSource)
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: evaluating %d expansion options (CCC %s)", len(expansionOptions), crd.Name())
@@ -154,7 +155,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 			}
 			reason := determineFallbackReason(err)
 			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s (CCC %s), falling back to lowest-cost with reason %q: %v", nodeGroupId, crd.Name(), reason, err)
-			return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
+			return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason, effectiveSource)
 		}
 
 		klog.V(5).Infof("FleetEfficiencyFilter: fleet efficiency score for option %s (CCC %s) is %f", option.NodeGroup.Id(), crd.Name(), score)
@@ -183,12 +184,12 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	if len(bestOptions) == 1 {
 		klog.V(4).Infof("FleetEfficiencyFilter: selected best option %s (CCC %s)", bestOptions[0].NodeGroup.Id(), crd.Name())
-		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, &bestOptions[0])
+		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, effectiveSource, &bestOptions[0])
 		return bestOptions
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options (CCC %s), fallback to lowest-cost", len(bestOptions), crd.Name())
-	return f.fallbackAndRecordMetric(ctx, bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
+	return f.fallbackAndRecordMetric(ctx, bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak, effectiveSource)
 }
 
 // shouldFallbackToLowestCost returns whether fleet efficiency cannot be used for the given options because
@@ -242,7 +243,7 @@ func determineFallbackReason(err error) metrics.AllocationStrategyFallbackReason
 	return metrics.AllocationStrategyFallbackError
 }
 
-func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, option *expander.Option) {
+func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, allocationStrategySource metrics.AllocationStrategySource, option *expander.Option) {
 	if option == nil {
 		klog.Fatal("FleetEfficiencyFilter: recordMetric called with nil option")
 		return
@@ -252,15 +253,16 @@ func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationS
 		machineType = gkeNodeGroup.MachineType()
 	}
 	metrics.RegisterNodesWithAllocationStrategy(string(requestedStrategy), fallbackReason, machineType, option.NodeCount)
+	metrics.RegisterScaleupsWithAllocationStrategy(string(requestedStrategy), fallbackReason, allocationStrategySource)
 }
 
-func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason) []expander.Option {
+func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, allocationStrategySource metrics.AllocationStrategySource) []expander.Option {
 	if f.fallback == nil {
 		return expansionOptions
 	}
 	selected := f.fallback.BestOption(ctx, expansionOptions, nodeInfo)
 	if selected != nil {
-		f.recordMetric(requestedStrategy, fallbackReason, selected)
+		f.recordMetric(requestedStrategy, fallbackReason, allocationStrategySource, selected)
 		return []expander.Option{*selected}
 	}
 	// This should never happen, since fallback should be gke_price which always returns one option.
@@ -309,35 +311,37 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 	return totalScore / float64(len(targetZones)), nil
 }
 
-func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, error) {
+func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.AllocationStrategySource, error) {
 	if pod == nil {
-		return nil, nil
+		return nil, metrics.AllocationStrategySourceUnknown, nil
 	}
 	crd, name, err := f.cccLister.PodCrd(pod)
 	if err != nil {
-		return nil, err
+		return nil, metrics.AllocationStrategySourceUnknown, err
 	}
 	if crd != nil {
-		return crd, nil
+		return crd, metrics.AllocationStrategySourceCustomComputeClass, nil
 	}
 	if f.cloudProvider != nil && f.cloudProvider.IsAutopilotEnabled() && experiments.IsPayPerPodFleetEfficiencyEnabled(f.experimentsManager) {
 		projectId, _, _ := f.cloudProvider.GetClusterInfo()
 		if machinetypes.IsPredefinedComputeClass(name) {
 			if !flexadvisor.IsFlexAdvisorPCCSupportEnabled(f.experimentsManager) {
-				return nil, nil
+				return nil, metrics.AllocationStrategySourceUnknown, nil
 			}
 			if billing.GetBillingModel(pod, nil, name, true) == billing.PodBasedBilling {
-				if pcc, err := machinetypes.ToPredefinedComputeClass(name); err == nil {
-					return ccc.NewPccCrd(pcc, projectId, true, f.cloudProvider, f.optionsTracker), nil
+				pcc, err := machinetypes.ToPredefinedComputeClass(name)
+				if err != nil {
+					return nil, metrics.AllocationStrategySourceUnknown, err
 				}
+				return ccc.NewPccCrd(pcc, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourcePredefinedComputeClass, nil
 			}
-			return nil, nil
+			return nil, metrics.AllocationStrategySourceUnknown, nil
 		}
 		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod); ok {
-			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), nil
+			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourceAutopilotWorkload, nil
 		}
 	}
-	return nil, nil
+	return nil, metrics.AllocationStrategySourceUnknown, nil
 }
 
 func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {
@@ -352,7 +356,7 @@ func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {
 }
 
 // isFleetEfficiencyStrategySelected determines whether the fleet-efficiency allocation strategy
-// should be used for the given candidate expansion options.
+// should be used for the given candidate expansion options, along with the resolved strategy source.
 //
 // CCC rules sharing the same priorityScore can define conflicting allocation strategies
 // (or omit them). To resolve conflicts deterministically across all candidate expansion
@@ -366,7 +370,7 @@ func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {
 //     lowest-cost and another omits the strategy (inheriting the cluster default).
 //  2. Explicit fleet-efficiency strategy: overrides cluster defaults.
 //  3. Omitted (nil) strategy: inherits the cluster default allocation strategy.
-func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, opts []expander.Option) bool {
+func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, crdSource metrics.AllocationStrategySource, opts []expander.Option) (bool, metrics.AllocationStrategySource) {
 	hasFleetEfficiency := false
 	for _, opt := range opts {
 		if sr, ok := getMatchedRule(ccc, opt).(rules.AllocationStrategyRule); ok {
@@ -375,7 +379,7 @@ func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, o
 				// Explicit non-fleet-efficiency strategy (e.g., lowest-cost) overrides everything in this priorityScore group.
 				// Note that conflicting strategies in the same priority score are possible only for a non-default cluster
 				// allocation strategy (other than lowest-cost), where one rule specifies lowest-cost and another omits it.
-				return false
+				return false, crdSource
 			}
 			if strategy != nil && *strategy == cccv1.AllocationStrategyFleetEfficiency {
 				hasFleetEfficiency = true
@@ -384,9 +388,9 @@ func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, o
 	}
 	if hasFleetEfficiency {
 		// Explicit fleet-efficiency overrides cluster default.
-		return true
+		return true, crdSource
 	}
-	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
+	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency, metrics.AllocationStrategySourceCluster
 }
 
 // getClusterDefaultAllocationStrategy returns the cluster default allocation strategy, taken from the CLI flag

@@ -155,6 +155,22 @@ const (
 	AllocationStrategyFallbackUnsupported AllocationStrategyFallbackReason = "unsupported"
 )
 
+// AllocationStrategySource describes the source from which the allocation strategy was resolved.
+type AllocationStrategySource string
+
+const (
+	// AllocationStrategySourceUnknown represents an unknown or unset allocation strategy source.
+	AllocationStrategySourceUnknown AllocationStrategySource = ""
+	// AllocationStrategySourceCluster represents a strategy that was not set explicitly on the matched CCC rule and was resolved from the cluster-level default (or the built-in lowest-cost default when the cluster-default override is disabled).
+	AllocationStrategySourceCluster AllocationStrategySource = "default"
+	// AllocationStrategySourceCustomComputeClass represents strategy derived from an explicit or defaulted Custom Compute Class (CCC).
+	AllocationStrategySourceCustomComputeClass AllocationStrategySource = "compute-class"
+	// AllocationStrategySourcePredefinedComputeClass represents strategy derived from a Predefined Compute Class (Balanced, Scale-Out).
+	AllocationStrategySourcePredefinedComputeClass AllocationStrategySource = "predefined-compute-class"
+	// AllocationStrategySourceAutopilotWorkload represents strategy derived from an unlabelled pay-per-pod Autopilot workload.
+	AllocationStrategySourceAutopilotWorkload AllocationStrategySource = "autopilot-workload"
+)
+
 // ReactionType defines the type of reaction CA has for a pod.
 type ReactionType uint8
 
@@ -1126,6 +1142,15 @@ var (
 		[]string{"requested_allocation_strategy", "fallback_reason", "machine_type"},
 	)
 
+	scaleupsWithAllocationStrategy = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "scaleups_with_allocation_strategy",
+			Help:      "How many scale up attempts were evaluated with an allocation strategy",
+		},
+		[]string{"requested_allocation_strategy", "fallback_reason", "allocation_strategy_source"},
+	)
+
 	machineConfigSourceInfo = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1233,6 +1258,7 @@ var (
 var allMetrics = []k8smetrics.Registerable{
 	profile,
 	nodesWithAllocationStrategy,
+	scaleupsWithAllocationStrategy,
 	clusterType,
 	podShardCount,
 	unschedulablePodDuration,
@@ -2110,6 +2136,11 @@ func (*prometheusMetrics) RegisterFlexAdvisorBypassAttempt() {
 // RegisterNodesWithAllocationStrategy records the nodes_with_allocation_strategy metric.
 func RegisterNodesWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string, count int) {
 	nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType).Add(float64(count))
+}
+
+// RegisterScaleupsWithAllocationStrategy records the scaleups_with_allocation_strategy metric.
+func RegisterScaleupsWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, source AllocationStrategySource) {
+	scaleupsWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), string(source)).Inc()
 }
 
 // RegisterCCStatusUpdate records a ComputeClass CRD status update attempt.

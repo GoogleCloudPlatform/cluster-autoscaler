@@ -47,6 +47,12 @@ func GetNodesWithAllocationStrategyCountForTest(requestedStrategy string, fallba
 	return testutil.GetCounterMetricValue(counter)
 }
 
+// GetScaleupsWithAllocationStrategyCountForTest returns the current count for given labels (only for tests).
+func GetScaleupsWithAllocationStrategyCountForTest(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, source AllocationStrategySource) (float64, error) {
+	counter := scaleupsWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), string(source))
+	return testutil.GetCounterMetricValue(counter)
+}
+
 // GetCCStatusUpdatesCountForTest returns the current count for a given status (only for tests).
 func GetCCStatusUpdatesCountForTest(status string) (float64, error) {
 	counter := ccStatusUpdatesTotal.WithLabelValues(status)
