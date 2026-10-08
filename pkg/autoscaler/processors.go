@@ -673,8 +673,12 @@ func setUpProcessors(
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
+	var cbAutoscalingStatusProcessor *cbprocessors.CapacityBufferAutoscalingStatusProcessor
 	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
+		if options.CapacityBufferReadyReplicasEnabled {
+			cbAutoscalingStatusProcessor = cbprocessors.NewCapacityBufferAutoscalingStatusProcessor(manager.GetClient(), capacitybufferPodsRegistry)
+		}
 	}
 
 	var podInjectionProcessor *podinjection.PodInjectionPodListProcessor
@@ -781,7 +785,7 @@ func setUpProcessors(
 		mutationController.Start()
 	}
 
-	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdConfigDriftProcessor, crdStatusHistoryProcessor)
+	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdConfigDriftProcessor, crdStatusHistoryProcessor, cbAutoscalingStatusProcessor)
 
 	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, ccLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor

@@ -27,6 +27,7 @@ import (
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 )
 
 // GkeInternalAutoscalingStatusProcessor is an AutoscalingStatusProcessor used in gke internal CA.
@@ -38,10 +39,12 @@ type GkeInternalAutoscalingStatusProcessor struct {
 	observabilityProcessor          *crd_status.CrdResourceReportingProcessor
 	configDriftProcessor            *crd_status.ConfigDriftReportingProcessor
 	autoscalingHistoryProcessor     *history.AutoscalingStatusHistoryProcessor
+	capacityBuffersProcessor        *cbprocessors.CapacityBufferAutoscalingStatusProcessor
 }
 
 // Process calls various GKE AutoscalingStatusProcessors
 func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+	logger := klog.FromContext(ctx)
 	var err error
 	if p.quotaProcessor != nil {
 		err = p.quotaProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
@@ -96,6 +99,13 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, aut
 			err = historyErr
 		}
 	}
+	if p.capacityBuffersProcessor != nil {
+		cbErr := p.capacityBuffersProcessor.Process(ctx, autoscalingCtx, csr, now)
+		if cbErr != nil {
+			logger.Error(cbErr, "CapacityBuffer autoscaling status processor failed")
+			err = cbErr
+		}
+	}
 	return err
 }
 
@@ -119,6 +129,9 @@ func (p *GkeInternalAutoscalingStatusProcessor) CleanUp() {
 	if p.autoscalingHistoryProcessor != nil {
 		p.autoscalingHistoryProcessor.CleanUp()
 	}
+	if p.capacityBuffersProcessor != nil {
+		p.capacityBuffersProcessor.CleanUp()
+	}
 }
 
 // NewGkeInternalAutoscalingStatusProcessor creates GkeInternalAutoscalingStatusProcessor
@@ -129,7 +142,8 @@ func NewGkeInternalAutoscalingStatusProcessor(
 	edpMetrics *edps.Metrics,
 	observabilityProcessor *status.CrdResourceReportingProcessor,
 	configDriftProcessor *status.ConfigDriftReportingProcessor,
-	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor) *GkeInternalAutoscalingStatusProcessor {
+	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor,
+	capacityBuffersProcessor *cbprocessors.CapacityBufferAutoscalingStatusProcessor) *GkeInternalAutoscalingStatusProcessor {
 	return &GkeInternalAutoscalingStatusProcessor{
 		quotaProcessor:                  quotaProcessor,
 		vizProcessor:                    vizProcessor,
@@ -138,5 +152,6 @@ func NewGkeInternalAutoscalingStatusProcessor(
 		observabilityProcessor:          observabilityProcessor,
 		configDriftProcessor:            configDriftProcessor,
 		autoscalingHistoryProcessor:     autoscalingHistoryProcessor,
+		capacityBuffersProcessor:        capacityBuffersProcessor,
 	}
 }

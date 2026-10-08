@@ -98,7 +98,7 @@ func InitializeAndRunBufferController(
 		reconciledBuffersCache,
 	)
 
-	if err := mgr.Add(controller); err != nil {
+	if err := controller.SetupWithManager(ctx, mgr); err != nil {
 		return err
 	}
 	cbmetrics.RegisterReconciliationTimestampCollector(capacitybufferClient, strategies, reconciledBuffersCache, realClock)
