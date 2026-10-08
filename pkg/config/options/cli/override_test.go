@@ -15,7 +15,7 @@
 package cli
 
 import (
-	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -28,12 +28,13 @@ func TestProcessFlagOverrides(t *testing.T) {
 		wantActive       int
 		wantUnrecognized int
 		wantRedundant    int
+		wantErr          bool
 	}{
 		{
 			name:    "no overrides",
-			args:    []string{"app", "--foo=bar", "--baz", "qux"},
+			args:    []string{"app", "--foo=bar", "--baz=qux"},
 			defined: map[string]string{"foo": "", "baz": ""},
-			want:    []string{"app", "--foo=bar", "--baz", "qux"},
+			want:    []string{"app", "--foo=bar", "--baz=qux"},
 		},
 		{
 			name:       "override defined flag with value",
@@ -43,10 +44,11 @@ func TestProcessFlagOverrides(t *testing.T) {
 			wantActive: 1,
 		},
 		{
-			name:    "override without value is ignored",
-			args:    []string{"app", "--foo", "old", "--override_foo"},
-			defined: map[string]string{"foo": ""},
-			want:    []string{"app", "--foo", "old"},
+			name:       "override defined flag with negative number",
+			args:       []string{"app", "--retry-count=-3", "--override_retry-count=-5"},
+			defined:    map[string]string{"retry-count": "0"},
+			want:       []string{"app", "--retry-count=-5"},
+			wantActive: 1,
 		},
 		{
 			name:       "override defined flag with empty string",
@@ -60,6 +62,13 @@ func TestProcessFlagOverrides(t *testing.T) {
 			args:             []string{"app", "--foo=old", "--override_undef=new"},
 			defined:          map[string]string{"foo": ""},
 			want:             []string{"app", "--foo=old"},
+			wantUnrecognized: 1,
+		},
+		{
+			name:             "unrecognized override does not drop undefined cli flag",
+			args:             []string{"app", "--foo=old", "--undef=old", "--override_undef=new"},
+			defined:          map[string]string{"foo": ""},
+			want:             []string{"app", "--foo=old", "--undef=old"},
 			wantUnrecognized: 1,
 		},
 		{
@@ -105,25 +114,121 @@ func TestProcessFlagOverrides(t *testing.T) {
 			wantActive: 1,
 		},
 		{
-			name:       "space separated override",
-			args:       []string{"app", "--foo", "old", "--override_foo", "new"},
-			defined:    map[string]string{"foo": "def"},
-			want:       []string{"app", "--foo=new"},
+			name:          "redundant override with empty default value",
+			args:          []string{"app", "--override_foo="},
+			defined:       map[string]string{"foo": ""},
+			want:          []string{"app"},
+			wantRedundant: 1,
+		},
+		{
+			name:          "redundant override with negative default value",
+			args:          []string{"app", "--override_cutoff=-10"},
+			defined:       map[string]string{"cutoff": "-10"},
+			want:          []string{"app"},
+			wantRedundant: 1,
+		},
+		{
+			name:       "override flag with quoted value",
+			args:       []string{"app", "--foo='old'", "--override_foo=\"new\""},
+			defined:    map[string]string{"foo": ""},
+			want:       []string{"app", "--foo=\"new\""},
 			wantActive: 1,
 		},
 		{
-			name:          "redundant space separated override",
-			args:          []string{"app", "--foo", "val", "--override_foo", "val"},
-			defined:       map[string]string{"foo": "def"},
-			want:          []string{"app", "--foo", "val"},
+			name:       "override flag with value containing equals",
+			args:       []string{"app", "--foo=k1=v1", "--override_foo=k2=v2"},
+			defined:    map[string]string{"foo": ""},
+			want:       []string{"app", "--foo=k2=v2"},
+			wantActive: 1,
+		},
+		{
+			name:       "override single dash flag",
+			args:       []string{"app", "-v=2", "--override_v=4"},
+			defined:    map[string]string{"v": "0"},
+			want:       []string{"app", "--v=4"},
+			wantActive: 1,
+		},
+		{
+			name:          "redundant single dash flag",
+			args:          []string{"app", "-v=4", "-override_v=4"},
+			defined:       map[string]string{"v": "0"},
+			want:          []string{"app", "-v=4"},
 			wantRedundant: 1,
+		},
+		{
+			name:    "bare boolean flag without overrides",
+			args:    []string{"app", "--bool-flag", "-h"},
+			defined: map[string]string{"bool-flag": "false"},
+			want:    []string{"app", "--bool-flag", "-h"},
+		},
+		{
+			name:       "override bare boolean flag",
+			args:       []string{"app", "--bool-flag", "--override_bool-flag=false"},
+			defined:    map[string]string{"bool-flag": "false"},
+			want:       []string{"app", "--bool-flag=false"},
+			wantActive: 1,
+		},
+		{
+			name:          "redundant override on bare boolean flag",
+			args:          []string{"app", "--bool-flag", "--override_bool-flag=true"},
+			defined:       map[string]string{"bool-flag": "false"},
+			want:          []string{"app", "--bool-flag"},
+			wantRedundant: 1,
+		},
+		{
+			name:    "error on override without value",
+			args:    []string{"app", "--foo=old", "--override_foo"},
+			defined: map[string]string{"foo": ""},
+			wantErr: true,
+		},
+		{
+			name:    "error on empty override flag name",
+			args:    []string{"app", "--override_=val"},
+			defined: map[string]string{"foo": ""},
+			wantErr: true,
+		},
+		{
+			name:    "error on empty arg",
+			args:    []string{"app", ""},
+			defined: map[string]string{"foo": ""},
+			wantErr: true,
+		},
+		{
+			name:    "error on space separated base flag",
+			args:    []string{"app", "--foo", "old", "--override_foo=new"},
+			defined: map[string]string{"foo": "def"},
+			wantErr: true,
+		},
+		{
+			name:    "error on space separated negative number",
+			args:    []string{"app", "--retry-count", "-3"},
+			defined: map[string]string{"retry-count": "0"},
+			wantErr: true,
+		},
+		{
+			name:    "error on space separated override",
+			args:    []string{"app", "--foo=old", "--override_foo", "new"},
+			defined: map[string]string{"foo": "def"},
+			wantErr: true,
+		},
+		{
+			name:    "error on triple dash flag",
+			args:    []string{"app", "---foo=bar"},
+			defined: map[string]string{"foo": ""},
+			wantErr: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			actual := resolveFlags(tc.args, tc.defined)
-			if !reflect.DeepEqual(actual.args, tc.want) {
+			actual, err := mergeFlagOverrides(tc.args, tc.defined)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("mergeFlagOverrides() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			if !slices.Equal(actual.args, tc.want) {
 				t.Errorf("Want %v, got %v", tc.want, actual.args)
 			}
 			if actual.activeCount != tc.wantActive {

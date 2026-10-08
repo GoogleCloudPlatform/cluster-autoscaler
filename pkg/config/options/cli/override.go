@@ -16,8 +16,11 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"unicode"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 
@@ -36,6 +39,7 @@ type flagOverrideResult struct {
 
 // ProcessFlagOverrides identifies any flags prefixed with --override_,
 // removes their standard counterparts from os.Args according to the rules, and appends the new flags.
+// All non-boolean CLI flags in os.Args[1:] must use the --flag=value (or -flag=value) format.
 func ProcessFlagOverrides() {
 	definedFlags := make(map[string]string)
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
@@ -44,99 +48,74 @@ func ProcessFlagOverrides() {
 	flag.CommandLine.VisitAll(func(f *flag.Flag) {
 		definedFlags[f.Name] = f.DefValue
 	})
-	result := resolveFlags(os.Args, definedFlags)
+	result, err := mergeFlagOverrides(os.Args, definedFlags)
+	if err != nil {
+		klog.Fatalf("[flag_override] Failed to process flag overrides: %v", err)
+	}
 	os.Args = result.args
 	metrics.UpdateComponentFlagOverrides(result.activeCount, result.unrecognizedCount, result.redundantCount)
 }
 
-func resolveFlags(args []string, definedFlags map[string]string) flagOverrideResult {
+// mergeFlagOverrides merges CLI flags with --override_<flag>=<value> arguments.
+// It removes base CLI flags that have a non-redundant override, replaces active
+// --override_<flag>=<value> arguments with --<flag>=<value>, drops redundant or
+// unrecognized overrides, and returns the resulting argument list along with
+// counts of active, unrecognized, and redundant overrides for metrics.
+func mergeFlagOverrides(args []string, definedFlags map[string]string) (flagOverrideResult, error) {
+	if len(args) == 0 {
+		return flagOverrideResult{}, nil
+	}
+	if err := validateFlagsFormat(args); err != nil {
+		return flagOverrideResult{}, err
+	}
+
 	overrideVals, cliVals := collectFlagValues(args)
+	if len(overrideVals) == 0 {
+		return flagOverrideResult{args: args}, nil
+	}
 	redundantFlags := findRedundantFlags(overrideVals, cliVals, definedFlags)
 
-	var newArgs []string
-	skipNext := false
+	newArgs := []string{args[0]}
 	var activeCount, unrecognizedCount, redundantCount int
 
-	for i := 0; i < len(args); i++ {
-		if skipNext {
-			skipNext = false
-			continue
-		}
-
-		arg := args[i]
-
-		if !strings.HasPrefix(arg, "-") {
-			newArgs = append(newArgs, arg)
-			continue
-		}
-
-		flagName := strings.TrimLeft(arg, "-")
-
-		var value string
-		hasValue := false
-		if idx := strings.Index(flagName, "="); idx != -1 {
-			value = flagName[idx+1:]
-			flagName = flagName[:idx]
-			hasValue = true
-		}
-
-		valueFromNext := false
-		if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			value = args[i+1]
-			hasValue = true
-			valueFromNext = true
-		}
+	for _, arg := range args[1:] {
+		flagName, value, _ := parseFlag(arg)
 
 		// Handle override_
-		if strings.HasPrefix(flagName, overridePrefix) {
-			if !hasValue {
-				klog.Warningf("[flag_override] Skipping flag override without value: --%s", flagName)
-				continue
-			}
-			if valueFromNext {
-				skipNext = true
-			}
-
-			baseFlagName := strings.TrimPrefix(flagName, overridePrefix)
+		if baseFlagName, ok := strings.CutPrefix(flagName, overridePrefix); ok {
 			_, isDefined := definedFlags[baseFlagName]
-			if isDefined {
-				if redundantFlags[baseFlagName] {
-					redundantCount++
-					if len(cliVals[baseFlagName]) > 0 {
-						klog.Infof("[flag_override] Skipping redundant flag override (matches CLI): --%s=%q", baseFlagName, value)
-					} else {
-						klog.Infof("[flag_override] Skipping redundant flag override (matches default): --%s=%q", baseFlagName, value)
-					}
-				} else {
-					activeCount++
-					klog.Infof("[flag_override] Setting flag: --%s=%q", baseFlagName, value)
-					newArg := "--" + baseFlagName + "=" + value
-					newArgs = append(newArgs, newArg)
-				}
-			} else {
+			if !isDefined {
 				unrecognizedCount++
 				klog.Warningf("[flag_override] Skipping unrecognized flag override: --%s=%q", baseFlagName, value)
+				continue
 			}
+			if redundantFlags[baseFlagName] {
+				redundantCount++
+				if len(cliVals[baseFlagName]) > 0 {
+					klog.Infof("[flag_override] Skipping redundant flag override (matches CLI): --%s=%q", baseFlagName, value)
+				} else {
+					klog.Infof("[flag_override] Skipping redundant flag override (matches default): --%s=%q", baseFlagName, value)
+				}
+				continue
+			}
+			activeCount++
+			klog.Infof("[flag_override] Setting flag override: --%s=%q", baseFlagName, value)
+			newArg := "--" + baseFlagName + "=" + value
+			newArgs = append(newArgs, newArg)
 			continue
 		}
 
-		if _, ok := overrideVals[flagName]; ok && !redundantFlags[flagName] {
-			klog.Infof("[flag_override] Dropping flag: --%s=%q", flagName, value)
-			if valueFromNext {
-				skipNext = true
-			}
+		_, isDefined := definedFlags[flagName]
+		if _, hasOverride := overrideVals[flagName]; hasOverride && isDefined && !redundantFlags[flagName] {
+			klog.Infof("[flag_override] Dropping overridden CLI flag: --%s=%q", flagName, value)
 			continue
 		}
 
 		newArgs = append(newArgs, arg)
-		if valueFromNext {
-			newArgs = append(newArgs, args[i+1])
-			skipNext = true
-		}
 	}
 
 	if activeCount > 0 || redundantCount > 0 || unrecognizedCount > 0 {
-		klog.Infof("[flag_override] Applied flag overrides: %d (redundant: %d, unrecognized: %d)", activeCount, redundantCount, unrecognizedCount)
+		klog.Infof("[flag_override] Processed flag overrides (active: %d, redundant: %d, unrecognized: %d)", activeCount, redundantCount, unrecognizedCount)
 	}
 
 	return flagOverrideResult{
@@ -144,59 +123,65 @@ func resolveFlags(args []string, definedFlags map[string]string) flagOverrideRes
 		activeCount:       activeCount,
 		unrecognizedCount: unrecognizedCount,
 		redundantCount:    redundantCount,
+	}, nil
+}
+
+// validateFlagsFormat enforces that all non-boolean CLI flags and --override_*
+// arguments use the --flag=value format (as generated in GKE manifests).
+// Requiring '=' avoids ambiguous lookahead parsing for space-separated arguments
+// (such as negative numbers like "--retry-count -3" or bare boolean flags).
+// Validating all arguments upfront—even when no overrides are present—ensures
+// that any space-separated flag accidentally added to a manifest fails fast in
+// tests rather than silently breaking when an override is later applied.
+func validateFlagsFormat(args []string) error {
+	for _, arg := range args[1:] {
+		if _, _, ok := parseFlag(arg); !ok {
+			return fmt.Errorf("invalid CLI argument format (expected --flag=value or --bool-flag): %q", arg)
+		}
 	}
+	return nil
+}
+
+func parseFlag(arg string) (string, string, bool) {
+	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "---") {
+		return "", "", false
+	}
+	trimmed := strings.TrimLeft(arg, "-")
+	if len(trimmed) == 0 || !unicode.IsLetter(rune(trimmed[0])) {
+		return "", "", false
+	}
+	idx := strings.Index(trimmed, "=")
+	if idx == -1 {
+		if strings.HasPrefix(trimmed, overridePrefix) {
+			return "", "", false
+		}
+		return trimmed, "true", true
+	}
+	if trimmed[:idx] == overridePrefix {
+		return "", "", false
+	}
+	return trimmed[:idx], trimmed[idx+1:], true
 }
 
 func collectFlagValues(args []string) (map[string][]string, map[string][]string) {
 	overrideVals := make(map[string][]string)
 	cliVals := make(map[string][]string)
-	skipNext := false
-	for i := 0; i < len(args); i++ {
-		if skipNext {
-			skipNext = false
+	for _, arg := range args[1:] {
+		flagName, value, _ := parseFlag(arg)
+		if baseName, ok := strings.CutPrefix(flagName, overridePrefix); ok {
+			overrideVals[baseName] = append(overrideVals[baseName], value)
 			continue
 		}
-
-		arg := args[i]
-		if !strings.HasPrefix(arg, "-") {
-			continue
-		}
-
-		flagName := strings.TrimLeft(arg, "-")
-		var value string
-		hasValue := false
-		if idx := strings.Index(flagName, "="); idx != -1 {
-			value = flagName[idx+1:]
-			flagName = flagName[:idx]
-			hasValue = true
-		}
-
-		valueFromNext := false
-		if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-			value = args[i+1]
-			hasValue = true
-			valueFromNext = true
-		}
-
-		if strings.HasPrefix(flagName, overridePrefix) {
-			if hasValue {
-				baseName := strings.TrimPrefix(flagName, overridePrefix)
-				overrideVals[baseName] = append(overrideVals[baseName], value)
-				if valueFromNext {
-					skipNext = true
-				}
-			}
-			continue
-		}
-
 		cliVals[flagName] = append(cliVals[flagName], value)
-		if valueFromNext {
-			skipNext = true
-		}
 	}
 	return overrideVals, cliVals
 }
 
+// findRedundantFlags identifies overrides whose values are identical to the
+// effective values that would be used without the override (either the explicit
+// CLI values if the flag was passed on the command line, or the flag's default
+// value otherwise). This allows skipping no-op overrides and reporting them
+// separately in metrics.
 func findRedundantFlags(overrideVals, cliVals map[string][]string, definedFlags map[string]string) map[string]bool {
 	redundantFlags := make(map[string]bool)
 	for baseName, oVals := range overrideVals {
@@ -210,17 +195,8 @@ func findRedundantFlags(overrideVals, cliVals map[string][]string, definedFlags 
 			rVals = []string{defVal}
 		}
 
-		if len(oVals) == len(rVals) {
-			same := true
-			for i := range oVals {
-				if oVals[i] != rVals[i] {
-					same = false
-					break
-				}
-			}
-			if same {
-				redundantFlags[baseName] = true
-			}
+		if slices.Equal(oVals, rVals) {
+			redundantFlags[baseName] = true
 		}
 	}
 	return redundantFlags
