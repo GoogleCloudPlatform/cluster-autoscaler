@@ -67,12 +67,13 @@ type flexAdvisor struct {
 	metrics                 flexAdvisorMetrics
 	optionsTracker          *optstracking.OptionsTracker
 	statusUpdatesCh         chan<- status.UpdateMessage
+	bypassTracker           RecommendationsBypassTracker
 }
 
-type option func(*flexAdvisor)
+type flexAdvisorConstructorOption func(*flexAdvisor)
 
 // NewFlexAdvisor creates a new flexAdvisor object.
-func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccLister lister.Lister, instanceConfigCloudProvider instanceConfigCloudProvider, optionsTracker *optstracking.OptionsTracker, statusUpdatesCh chan<- status.UpdateMessage, opts ...option) (*flexAdvisor, error) {
+func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccLister lister.Lister, instanceConfigCloudProvider instanceConfigCloudProvider, optionsTracker *optstracking.OptionsTracker, statusUpdatesCh chan<- status.UpdateMessage, bypassTracker RecommendationsBypassTracker, opts ...flexAdvisorConstructorOption) (*flexAdvisor, error) {
 	if adviceProvider == nil {
 		return nil, fmt.Errorf("flex advisor expects a non nil flexadvisor.AdviceProvider")
 	}
@@ -96,6 +97,7 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 		metrics:                 metrics.Metrics,
 		optionsTracker:          optionsTracker,
 		statusUpdatesCh:         statusUpdatesCh,
+		bypassTracker:           bypassTracker,
 	}
 	for _, opt := range opts {
 		opt(f)
@@ -108,6 +110,10 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 // GetInstanceAvailability tries to get InstanceAvailability from cache. Unlike AwaitInstanceAvailability if cache is not available, it does not wait for background job to fetch it.
 // WARNING: THIS METHOD DOES NOT UPDATE KEEP-ALIVE. This method is meant to be as non-blocking as possible, acquiring only RLocks in happy path. See b/514258103 for more
 func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *instanceavailability.Snapshot {
+	if f.bypassTracker != nil && f.bypassTracker.IsRecommendationsEnforcementPaused(flexibilityScopeKey) {
+		klog.Infof("FlexAdvisor: recommendations enforcement is paused for flexibilityScopeKey=%v, skipping returning availability data for instanceConfigKey=%v", flexibilityScopeKey, instanceConfigKey)
+		return nil
+	}
 	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
 	if !scopeFound || scope == nil {
 		if isAtCapacity {
@@ -139,7 +145,14 @@ func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error
 	return err
 }
 
+// AwaitInstanceAvailability blocking await for scope's recommendations data.
+// Warning: updates ttl of scope on each await (vs GetInstanceAvailability which doesn't, read docstrings at GetInstanceAvailability)
 func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
+	// Warning: if bypass is active, scope's ttl won't get updated
+	if f.bypassTracker != nil && f.bypassTracker.IsRecommendationsEnforcementPaused(flexibilityScopeKey) {
+		klog.Infof("FlexAdvisor: recommendations enforcement is paused for flexibilityScopeKey=%v, skipping returning availability data for instanceConfigKey=%v", flexibilityScopeKey, instanceConfigKey)
+		return nil, fmt.Errorf("recommendations enforcement is paused for flexibilityScopeKey=%v", flexibilityScopeKey)
+	}
 	waitStart := time.Now()
 	var err error
 	defer func() {
@@ -552,4 +565,15 @@ func IsFlexAdvisorNapZoneSetExpansionEnabled(manager experiments.Manager) bool {
 	}
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorNapZoneSetExpansionEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag, false)
+}
+
+// isFlexAdvisorRecommendationsBypassEnabled returns whether recommendations bypass is enabled.
+func isFlexAdvisorRecommendationsBypassEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return IsFlexAdvisorProcessingEnabled(manager) &&
+		IsFlexAdvisorScaleUpLimiterTrackerEnabled(true, manager) &&
+		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorRecommendationsBypassEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorRecommendationsBypassMinCAVersionFlag, true)
 }

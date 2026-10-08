@@ -65,19 +65,16 @@ func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, pu
 	}
 }
 
-// NodeLimit return max node limit based on Flex Advisor guidance and matching unused reservations.
-// In case of matching reservations, the max value from reservations and Flex Advisor guidance is used.
-// Effect of negative capacity from Flex Advisor is ignored if there are matching unused reservations.
-// max node limit is the sum of max node limits for nodegroup and all similar node groups.
-// In case of error, 0 is returned. Thresholds with 0 limits will be ignored in favor of thresholds with positive or negative limits.
-// -1 is returned when max node limit is zero, to disallow new nodes.
+// NodeLimit return maxNodeLimit as a sum of FlexAdvisor recommendations + matching reservations across all similar node groups (so for a pool it should match all MIGs for each of its zones).
+// For example for pool-1 with zone-a, zone-b and zone-c MIGs, we may receive zone-a as main nodeGroup. We will find zone-b and zone-c through SimilarNodeGroups() and sum all their matching FA recommendations to return total NodeLimit just for zone-a - ie 3000 (1000+1000+1000)
+// Similar node groups are matched in such way (and their limits summed) to duct-tape drift between how bin packing and balancers operate - limiters make single zone represent capacity for all similar node groups to allow given MIG through, knowing that
+// balancers expand selected best option in same way
 func (t *instanceAvailabilityThreshold) NodeLimit(ctx context.Context, nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) estimator.NodeLimitResult {
 	if !IsFlexAdvisorProcessingEnabled(t.experimentsManager) {
 		klog.Info("FlexAdvisor: bin packer processing is disabled by FlexAdvisorProcessing experiment, skipping applying FlexAdvisor limits in bin packer")
 		return estimator.NodeLimitResult{Limit: 0}
 	}
 	maxNodeLimit := 0
-	totalReservationCount := 0
 
 	guidanceIdsUsed := make(map[string]bool)
 	instanceReferencesProcessed := make(map[string]bool)
@@ -99,7 +96,6 @@ func (t *instanceAvailabilityThreshold) NodeLimit(ctx context.Context, nodeGroup
 			return estimator.NodeLimitResult{Limit: 0}
 		}
 		reservationCount := t.allUnusedReservations(ng)
-		totalReservationCount += reservationCount
 		maxInstancesFromFA, ok := snapshot.MaxAvailableInstances(instanceRef.Zone)
 		if !ok {
 			// if we didn't receive available instances from GCE FlexAdvisor for at least one zone, we don't apply node limit to the node group at all
@@ -107,24 +103,18 @@ func (t *instanceAvailabilityThreshold) NodeLimit(ctx context.Context, nodeGroup
 			return estimator.NodeLimitResult{Limit: 0}
 		}
 
-		if reservationCount > 0 {
-			maxNodeLimit = maxNodeLimit + maxInstancesFromFA + reservationCount
-		} else {
-			maxNodeLimit = maxNodeLimit + maxInstancesFromFA
-		}
+		// Negative capacity from FlexAdvisor or negative unused reservation count in one zone must not deduct capacity from another zone.
+		// Capping each zone's contribution at 0 also ensures maxNodeLimit is monotonically non-decreasing across the loop.
+		maxNodeLimit += max(0, maxInstancesFromFA) + max(0, reservationCount)
+
 		guidanceIdsUsed[snapshot.GuidanceId()] = true
 		instanceReferencesProcessed[instanceRef.String()] = true
-	}
-
-	// if there is any reservation, we favour them against negative capacities from other node groups.
-	if totalReservationCount > 0 {
-		maxNodeLimit = max(maxNodeLimit, totalReservationCount)
 	}
 	if maxNodeLimit <= 0 {
 		klog.Infof("FlexAdvisor: removing %s from bin packing due to no capacity, instanceReferencesProcessed=%v, guidancesUsed=%v", nodeGroup.Id(), slices.Collect(maps.Keys(instanceReferencesProcessed)), slices.Collect(maps.Keys(guidanceIdsUsed)))
 		if t.limiterTracker != nil {
 			for scope := range flexibilityScopes {
-				t.limiterTracker.MarkScaleUpOptionRemoved(nodeGroup.Id(), scope)
+				t.limiterTracker.MarkScaleUpOptionRemovedByFlexAdvisor(nodeGroup.Id(), scope)
 			}
 		}
 		return estimator.NodeLimitResult{Limit: -1}

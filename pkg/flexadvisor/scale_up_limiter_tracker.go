@@ -25,10 +25,13 @@ import (
 
 // ScaleUpLimiterTracker tracks whether Flex Advisor constrained scale-up options during estimation.
 type ScaleUpLimiterTracker interface {
-	// MarkScaleUpOptionRemoved records that a scale-up option was removed due to capacity constraints for the given node group and flexibility scope.
-	MarkScaleUpOptionRemoved(nodeGroupId string, flexibilityScope string)
+	// MarkScaleUpOptionRemovedByFlexAdvisor records that a scale-up option was removed due to capacity constraints for the given node group and flexibility scope.
+	MarkScaleUpOptionRemovedByFlexAdvisor(nodeGroupId string, flexibilityScope string)
 	// GetFlexibilityScopesForNodeGroupIfRemoved returns a sorted list of flexibility scopes for which the specified node group had scale-up options removed during the current iteration.
 	GetFlexibilityScopesForNodeGroupIfRemoved(nodeGroupId string) []string
+	// GetFlexibilityScopesConstrainedByFlexAdvisor returns all flexibility scopes that had options removed in this scale up
+	// TODO(b/570943323): CA will process one CCC at most during a scale up. We don't need to operate on arrays and "scopes" (as in, plural) processed during a loop
+	GetFlexibilityScopesConstrainedByFlexAdvisor() []string
 	// WasNodeGroupRemovedByFlexAdvisor returns true if the specified node group had scale-up options removed during the current iteration.
 	WasNodeGroupRemovedByFlexAdvisor(nodeGroupId string) bool
 	// Reset clears the tracked scale-up option removal state for the next evaluation iteration.
@@ -68,11 +71,12 @@ func NewScaleUpLimiterTracker(gceFlexAdvisorEnabled bool, experimentsManager exp
 	}
 }
 
-// MarkScaleUpOptionRemoved records that a scale-up option was removed due to capacity constraints for the given node group and flexibility scope.
-func (t *scaleUpLimiterTracker) MarkScaleUpOptionRemoved(nodeGroupId string, flexibilityScope string) {
+// MarkScaleUpOptionRemovedByFlexAdvisor records that a scale-up option was removed due to capacity constraints for the given node group and flexibility scope.
+func (t *scaleUpLimiterTracker) MarkScaleUpOptionRemovedByFlexAdvisor(nodeGroupId string, flexibilityScope string) {
 	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
 		return
 	}
+
 	if nodeGroupId == "" {
 		return
 	}
@@ -85,6 +89,23 @@ func (t *scaleUpLimiterTracker) MarkScaleUpOptionRemoved(nodeGroupId string, fle
 	if flexibilityScope != "" {
 		t.removedNodeGroupsToScopes[nodeGroupId][flexibilityScope] = true
 	}
+}
+
+// GetFlexibilityScopesConstrainedByFlexAdvisor returns a sorted list of all flexibility scopes that had options removed in this scale up.
+func (t *scaleUpLimiterTracker) GetFlexibilityScopesConstrainedByFlexAdvisor() []string {
+	if !IsFlexAdvisorScaleUpLimiterTrackerEnabled(t.gceFlexAdvisorEnabled, t.experimentsManager) {
+		return nil
+	}
+
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	scopeSet := make(map[string]bool)
+	for _, ngScopes := range t.removedNodeGroupsToScopes {
+		maps.Copy(scopeSet, ngScopes)
+	}
+	scopes := slices.Collect(maps.Keys(scopeSet))
+	sort.Strings(scopes)
+	return scopes
 }
 
 // GetFlexibilityScopesForNodeGroupIfRemoved returns a sorted list of flexibility scopes for which the specified node group had scale-up options removed during the current iteration.

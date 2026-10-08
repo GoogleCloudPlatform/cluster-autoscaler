@@ -1022,7 +1022,7 @@ func TestGetNewReasons_FlexAdvisorReasons(t *testing.T) {
 			if !tc.nilTracker {
 				tracker = flexadvisor.NewScaleUpLimiterTracker(tc.trackerEnabled, nil)
 				for _, opt := range tc.removedOptions {
-					tracker.MarkScaleUpOptionRemoved(opt[0], opt[1])
+					tracker.MarkScaleUpOptionRemovedByFlexAdvisor(opt[0], opt[1])
 				}
 			}
 			nsu := NewNoScaleUp(time.Minute, false, tracker)

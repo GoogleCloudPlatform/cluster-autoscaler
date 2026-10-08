@@ -523,7 +523,8 @@ func TestBalancerChainScaleUpTimeoutFallback_GceClient(t *testing.T) {
 				}, labels.ComputeClassLabel)
 				mockAdviceProvider := &mockAdviceProvider{}
 
-				fa, err := flexadvisor.NewFlexAdvisor(ctx, mockAdviceProvider, mockLister, gkeProvider, optstracking.EmptyFakeOptionsTracker(), nil)
+				tracker := flexadvisor.NewRecommendationsBypassTracker(experiments.NewMockManager())
+				fa, err := flexadvisor.NewFlexAdvisor(ctx, mockAdviceProvider, mockLister, gkeProvider, optstracking.EmptyFakeOptionsTracker(), nil, tracker)
 				assert.NoError(t, err)
 
 				mockBalancer := new(testutil.MockBalancer)

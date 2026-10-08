@@ -208,6 +208,15 @@ const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersi
 const FlexAdvisorLateRegistrationEnabledFlag = "FlexAdvisorLateRegistration::Enabled"
 const FlexAdvisorLateRegistrationMinCAVersionFlag = "FlexAdvisorLateRegistration::MinCAVersion"
 
+const FlexAdvisorRecommendationsBypassEnabledFlag = "FlexAdvisor::RecommendationsBypassEnabled"
+const FlexAdvisorRecommendationsBypassMinCAVersionFlag = "FlexAdvisor::RecommendationsBypassMinCAVersion"
+
+// FlexAdvisorRecommendationsBypassMeasurementWindowFlag length in minutes of measurement window within which we should count blocked scale ups that contribute for bypass threshold
+const FlexAdvisorRecommendationsBypassMeasurementWindowFlag = "FlexAdvisor::RecommendationsBypassMeasurementWindow"
+
+// FlexAdvisorRecommendationsBypassCountThresholdFlag how many blocked scale ups must happen within window for recommendations enforcement to be paused
+const FlexAdvisorRecommendationsBypassCountThresholdFlag = "FlexAdvisor::RecommendationsBypassCountThreshold"
+
 const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
 const FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag = "FlexAdvisor::AwaitInstanceAvailabilityTimeoutSeconds"

@@ -82,9 +82,7 @@ func (ns *throttledNoScaleUp) GetNewReasons(scaleUpStatus *vistypes.ScaleUpStatu
 
 // getFlexAdvisorConstrainedScopes returns a sorted, deduplicated list of flexibility scopes
 // associated with node groups (both existing MIGs and theoretical NAP MIGs) that were rejected
-// due to FlexAdvisor capacity limits.
-// Including both existing and theoretical NAP MIGs ensures that constrained flexibility scopes
-// can be resolved and reported when either type of MIG is blocked by FlexAdvisor.
+// due to FlexAdvisor capacity limits
 func (ns *throttledNoScaleUp) getFlexAdvisorConstrainedScopes(scaleUpStatus *vistypes.ScaleUpStatus) []string {
 	if ns.flexAdvisorScaleUpLimiterTracker == nil {
 		return nil
@@ -96,6 +94,7 @@ func (ns *throttledNoScaleUp) getFlexAdvisorConstrainedScopes(scaleUpStatus *vis
 		// SkippedNodeGroups were filtered out prior to bin-packing and never evaluated by FlexAdvisor.
 		for migId, reasons := range info.RejectedNodeGroups {
 			if isRemovedByFlexAdvisor(migId, reasons, ns.flexAdvisorScaleUpLimiterTracker) {
+				// tracking of removed node groups by FlexAdvisor is reset at flexadvisor's wrapper_orchestrator
 				for _, scope := range ns.flexAdvisorScaleUpLimiterTracker.GetFlexibilityScopesForNodeGroupIfRemoved(migId) {
 					scopeSet[scope] = true
 				}

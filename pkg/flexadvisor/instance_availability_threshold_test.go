@@ -157,9 +157,21 @@ func TestNodeLimit(t *testing.T) {
 			want: 600,
 		},
 		{
-			name: "no more capacity",
+			name: "negative capacity in some zones does not deduct positive capacity in another zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 300}).Build().NewSnapshot()).Times(3)
+			},
+			nodeGroup: mig1,
+			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
+				newTestMig("us-central1-b", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+				newTestMig("us-central1-c", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+			}, 0),
+			want: 300,
+		},
+		{
+			name: "no more capacity across all zones",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot()).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -412,6 +424,10 @@ func TestNodeLimit(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			manager := tc.experimentsManager
+			if manager == nil {
+				manager = experiments.NewMockManager()
+			}
 			mockProvider := new(instanceavailability.MockProvider)
 			if tc.initialSetup != nil {
 				tc.initialSetup(mockProvider)
@@ -423,11 +439,6 @@ func TestNodeLimit(t *testing.T) {
 				Build()
 			if tc.plannedLocationsErr != nil {
 				cloudProvider = &failingPlannedLocationsCloudProvider{InstanceAvailabilityCloudProvider: cloudProvider, err: tc.plannedLocationsErr}
-			}
-
-			manager := tc.experimentsManager
-			if manager == nil {
-				manager = experiments.NewMockManager()
 			}
 			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager, nil, !tc.balanceSimilarNodeGroupsDisabled)
 			got := threshold.NodeLimit(context.TODO(), tc.nodeGroup, tc.estimationContext)

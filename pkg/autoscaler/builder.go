@@ -848,9 +848,11 @@ func (b *Builder) Build(
 	// Initializing GCE Flex Advisor
 	var flexAdvisor instanceavailability.Provider
 	var scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker
+	var bypassTracker flexadvisor.RecommendationsBypassTracker
 	if autoscalingOptions.GCEFlexAdvisorEnabled {
 		scaleUpLimiterTracker = flexadvisor.NewScaleUpLimiterTracker(autoscalingOptions.GCEFlexAdvisorEnabled, experimentsManager)
-		flexAdvisor, err = flexadvisor.NewFlexAdvisor(bgContext, cloudProvider, b.npcCrdLister, cloudProvider, b.optsTracker, cccStatusUpdatesCh)
+		bypassTracker = flexadvisor.NewRecommendationsBypassTracker(experimentsManager)
+		flexAdvisor, err = flexadvisor.NewFlexAdvisor(bgContext, cloudProvider, b.npcCrdLister, cloudProvider, b.optsTracker, cccStatusUpdatesCh, bypassTracker)
 		if err != nil {
 			klog.Errorf("cannot create Flex Advisor. Error: %v", err)
 			return nil, nil, err
@@ -1028,7 +1030,13 @@ func (b *Builder) Build(
 	}
 
 	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
-	scaleUpOrchestrator := provreqorchestrator.NewWrapperOrchestrator(prOrchestrator)
+	scaleUpOrchestrator := flexadvisor.NewWrapperOrchestrator(
+		provreqorchestrator.NewWrapperOrchestrator(prOrchestrator),
+		b.npcCrdLister,
+		bypassTracker,
+		scaleUpLimiterTracker,
+		experimentsManager,
+	)
 
 	opts := coreoptions.AutoscalerOptions{
 		AutoscalingOptions:         autoscalingOptions.AutoscalingOptions,

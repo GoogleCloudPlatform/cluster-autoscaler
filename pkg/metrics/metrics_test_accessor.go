@@ -30,6 +30,11 @@ func GetFlexAdvisorResponseErrorsCountForTest(reason FAResponseErrorReason) (flo
 	return testutil.GetCounterMetricValue(gauge)
 }
 
+// GetFlexAdvisorRecommendationsBypassCountForTest returns the current count of Flex Advisor recommendations bypass attempts (only for tests).
+func GetFlexAdvisorRecommendationsBypassCountForTest() (float64, error) {
+	return testutil.GetCounterMetricValue(flexAdvisorRecommendationsBypassCount)
+}
+
 // GetMachineConfigSourceInfoValueForTest returns the current value for a given family and source (only for tests).
 func GetMachineConfigSourceInfoValueForTest(machineFamily, configSource string) (float64, error) {
 	gauge := machineConfigSourceInfo.WithLabelValues(machineFamily, configSource)

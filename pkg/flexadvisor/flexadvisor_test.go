@@ -49,13 +49,13 @@ var (
 )
 
 // withInstanceConfigGenerator is an Option to set a custom instance config generator, typically for testing.
-func withInstanceConfigGenerator(instanceConfigGenerator *instanceConfigGenerator) option {
+func withInstanceConfigGenerator(instanceConfigGenerator *instanceConfigGenerator) flexAdvisorConstructorOption {
 	return func(f *flexAdvisor) {
 		f.instanceConfigGenerator = instanceConfigGenerator
 	}
 }
 
-func withMetrics(metrics flexAdvisorMetrics) option {
+func withMetrics(metrics flexAdvisorMetrics) flexAdvisorConstructorOption {
 	return func(f *flexAdvisor) {
 		f.metrics = metrics
 	}
@@ -280,6 +280,44 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 			instanceKeyToCheck: "InstanceConfig-key-1",
 			want:               wantedAvailability.NewSnapshot(),
 		},
+		{
+			name: "Recommendations enforcement paused for scope - returns nil",
+			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
+				wantedAvailability.SetProvider(nil)
+				mockApiResponse := map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": wantedAvailability,
+				}
+				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
+				f.RegisterFlexibilityScope("scope-1")
+				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				assert.NotNil(t, snapShot)
+				assert.Nil(t, err)
+
+				f.bypassTracker.PauseRecommendationsEnforcement("scope-1")
+			},
+			scopeKeyToCheck:    "scope-1",
+			instanceKeyToCheck: "InstanceConfig-key-1",
+			want:               nil,
+		},
+		{
+			name: "Recommendations enforcement paused for different scope - returns snapshot",
+			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
+				wantedAvailability.SetProvider(nil)
+				mockApiResponse := map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": wantedAvailability,
+				}
+				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
+				f.RegisterFlexibilityScope("scope-1")
+				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				assert.NotNil(t, snapShot)
+				assert.Nil(t, err)
+
+				f.bypassTracker.PauseRecommendationsEnforcement("scope-2")
+			},
+			scopeKeyToCheck:    "scope-1",
+			instanceKeyToCheck: "InstanceConfig-key-1",
+			want:               wantedAvailability.NewSnapshot(),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -289,8 +327,10 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, []*gke.GkeMig{}, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				experimentsManager := experiments.NewMockManager()
+				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+				bypassTracker := NewRecommendationsBypassTracker(experimentsManager)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, bypassTracker)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
@@ -372,7 +412,7 @@ func TestFlexAdvisor_RegisterFlexibilityScope(t *testing.T) {
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 				fa.RegisterFlexibilityScope(tc.scopeKey)
@@ -449,7 +489,7 @@ func TestFlexAdvisor_RegisterFlexibilityScopeLimits(t *testing.T) {
 					optionsManager = experiments.NewMockManager()
 				}
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, optionsManager)
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
 				mockProvider.On("FetchCapacityGuidance").Return(nil, nil)
@@ -672,6 +712,31 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 			want:    instanceConfig1.NewSnapshot(),
 			wantErr: nil,
 		},
+		{
+			name:        "Recommendations enforcement paused for scope - returns error immediately without fetching",
+			scopeKey:    "scope-1",
+			instanceKey: "InstanceConfig-key-1",
+			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
+				f.bypassTracker.PauseRecommendationsEnforcement("scope-1")
+			},
+			want:    nil,
+			wantErr: fmt.Errorf("recommendations enforcement is paused for flexibilityScopeKey=scope-1"),
+		},
+		{
+			name:        "Recommendations enforcement paused for different scope - returns snapshot",
+			scopeKey:    "scope-1",
+			instanceKey: "InstanceConfig-key-1",
+			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
+				instanceConfig1.SetProvider(nil)
+				mockApiResponse := map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": instanceConfig1,
+				}
+				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
+				f.bypassTracker.PauseRecommendationsEnforcement("scope-2")
+			},
+			want:    instanceConfig1.NewSnapshot(),
+			wantErr: nil,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -683,7 +748,8 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				mockManager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.enabledFeatures)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, mockManager)
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				bypassTracker := NewRecommendationsBypassTracker(mockManager)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, bypassTracker)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
@@ -752,7 +818,7 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
 				if tc.addDataRaceJob {
@@ -878,7 +944,7 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, provider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, provider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 
 				assert.NoError(t, err)
 				tc.initialSetup(fa, provider)
@@ -995,7 +1061,7 @@ func TestFlexAdvisor_IncrementFlexAdvisorCacheQueryCount(t *testing.T) {
 				crd.NewTestCrd(crd.WithScaleUpAnyway(), crd.WithName("ccc-scale-up-anyway")),
 			})
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-			fa, err := NewFlexAdvisor(ctx, mockProvider, crdLister, newMockInstanceConfigCloudProvider(nil, nil, machinetypes.E2, true, nil), optionsTracker, nil)
+			fa, err := NewFlexAdvisor(ctx, mockProvider, crdLister, newMockInstanceConfigCloudProvider(nil, nil, machinetypes.E2, true, nil), optionsTracker, nil, nil)
 			assert.NoError(t, err)
 
 			addScopeDataRaceBackgroundJob(fa, "scope-1")
@@ -1506,7 +1572,7 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				manager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
 				var scope *flexibilityScope
@@ -1651,7 +1717,7 @@ func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
 				boolFlags[experiments.PayPerPodFleetEfficiencyMinCAVersionFlag] = true
 			}
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil))
-			fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{updatedGeneralPurposeCrd}), instanceConfigCloudProvider, optionsTracker, nil)
+			fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{updatedGeneralPurposeCrd}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 			assert.NoError(t, err)
 
 			scope := newFlexibilityScope(nil, rules.GeneralPurposePodFamily, func() {})
@@ -1880,6 +1946,93 @@ func TestFlexAdvisorScopeTtl(t *testing.T) {
 				optionsTracker: optionsTracker,
 			}
 			got := fa.getScopeTtl()
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestIsFlexAdvisorRecommendationsBypassEnabled(t *testing.T) {
+	testCases := []struct {
+		name        string
+		boolFlags   map[string]bool
+		stringFlags map[string]string
+		nilManager  bool
+		want        bool
+	}{
+		{
+			name:       "nil manager - defaults to true",
+			nilManager: true,
+			want:       true,
+		},
+		{
+			name: "nothing set - returns true",
+			want: true,
+		},
+		{
+			name: "FlexAdvisor::EnableProcessing off - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::ProcessingMinCAVersion doesn't match - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorProcessingMinCAVersionFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::ScaleUpLimiterTracker off - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorScaleUpLimiterTrackerEnabledFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::ScaleUpLimiterTrackerMinCAVersion doesn't match - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::RecommendationsBypassEnabled off - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorRecommendationsBypassEnabledFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "FlexAdvisor::RecommendationsBypassMinCAVersion doesn't match - returns false",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorRecommendationsBypassMinCAVersionFlag: false,
+			},
+			want: false,
+		},
+		{
+			name: "all flags enabled - returns true",
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag:                 true,
+				experiments.FlexAdvisorProcessingMinCAVersionFlag:            true,
+				experiments.FlexAdvisorScaleUpLimiterTrackerEnabledFlag:      true,
+				experiments.FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag: true,
+				experiments.FlexAdvisorRecommendationsBypassEnabledFlag:      true,
+				experiments.FlexAdvisorRecommendationsBypassMinCAVersionFlag: true,
+			},
+			want: true,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var manager experiments.Manager
+			if tc.nilManager && (tc.boolFlags != nil || tc.stringFlags != nil) {
+				t.Fatalf("Invalid usage: nilManager cannot be set along with experiments")
+			}
+			if !tc.nilManager {
+				manager = experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, tc.stringFlags)
+			}
+			got := isFlexAdvisorRecommendationsBypassEnabled(manager)
 			assert.Equal(t, tc.want, got)
 		})
 	}

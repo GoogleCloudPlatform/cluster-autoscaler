@@ -47,7 +47,12 @@ func withPodListProcessorMetrics(m podListProcessorMetrics) podListProcessorOpti
 }
 
 // NewPodListProcessor returns an instance of PodListProcessor for Flex Advisor
-func NewPodListProcessor(provider instanceavailability.Provider, cccLister lister.Lister, experimentsManager experiments.Manager, opts ...podListProcessorOption) *PodListProcessor {
+func NewPodListProcessor(
+	provider instanceavailability.Provider,
+	cccLister lister.Lister,
+	experimentsManager experiments.Manager,
+	opts ...podListProcessorOption,
+) *PodListProcessor {
 	p := &PodListProcessor{
 		provider:           provider,
 		cccLister:          cccLister,

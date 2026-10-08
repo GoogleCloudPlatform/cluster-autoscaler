@@ -1216,6 +1216,14 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	flexAdvisorRecommendationsBypassCount = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "flexadvisor_recommendations_bypass_count",
+			Help:      "Number of times FlexAdvisor recommendations bypass was attempted.",
+		},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1329,6 +1337,7 @@ var allMetrics = []k8smetrics.Registerable{
 	dsMutationResolutionsTotal,
 	dsMutationResolutionDuration,
 	componentFlagOverrides,
+	flexAdvisorRecommendationsBypassCount,
 }
 
 // UpdateComponentFlagOverrides sets the component overrides flag overrides metric.
@@ -2091,6 +2100,11 @@ func (*prometheusMetrics) RegisterFlexAdvisorGenerationError(reason FAGeneration
 // RegisterFlexAdvisorResponseError records a Flex Advisor response error.
 func (*prometheusMetrics) RegisterFlexAdvisorResponseError(reason FAResponseErrorReason) {
 	flexAdvisorResponseErrors.WithLabelValues(string(reason)).Inc()
+}
+
+// RegisterFlexAdvisorBypassAttempt increments the count of Flex Advisor recommendations bypass attempts.
+func (*prometheusMetrics) RegisterFlexAdvisorBypassAttempt() {
+	flexAdvisorRecommendationsBypassCount.Inc()
 }
 
 // RegisterNodesWithAllocationStrategy records the nodes_with_allocation_strategy metric.
