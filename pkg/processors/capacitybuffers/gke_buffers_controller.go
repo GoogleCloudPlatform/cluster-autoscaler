@@ -20,7 +20,6 @@ import (
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	kube_client "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/accelerators"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers/billing"
@@ -39,7 +38,8 @@ import (
 
 // NewCapacityBufferClientIfCRDPresent creates a CapacityBufferClient if the CapacityBuffer CRD is present in the cluster.
 // If the CRD is not present, it logs a warning and returns an error without initializing the client informers.
-func NewCapacityBufferClientIfCRDPresent(kubeClient kube_client.Interface, kubeConfig *rest.Config) (*cbclient.CapacityBufferClient, error) {
+// The client is built from the controller-runtime manager (REST config and RESTMapper).
+func NewCapacityBufferClientIfCRDPresent(kubeClient kube_client.Interface, mgr ctrl.Manager) (*cbclient.CapacityBufferClient, error) {
 	crdPresent, err := IsCapacityBufferCRDPresent(kubeClient)
 	if err != nil {
 		klog.Warningf("Failed to check if CapacityBuffer CRD is present: %v. Capacity Buffers will be disabled.", err)
@@ -49,7 +49,7 @@ func NewCapacityBufferClientIfCRDPresent(kubeClient kube_client.Interface, kubeC
 		klog.Warning("CapacityBuffer CRD is not present in the cluster. Capacity Buffers will be disabled.")
 		return nil, fmt.Errorf("CapacityBuffer CRD is missing")
 	}
-	return cbclient.NewCapacityBufferClientFromConfig(kubeConfig)
+	return cbclient.NewCapacityBufferClientFromManager(mgr)
 }
 
 // IsCapacityBufferCRDPresent checks if the CapacityBuffer CRD is registered in the Kubernetes cluster.

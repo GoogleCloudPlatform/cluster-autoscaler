@@ -403,7 +403,7 @@ func setUpProcessors(
 	cbReady := false
 	if cbEnabled {
 		var err error
-		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, kubeConfig)
+		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, manager)
 		cbReady = err == nil && capacitybufferClient != nil
 	}
 
