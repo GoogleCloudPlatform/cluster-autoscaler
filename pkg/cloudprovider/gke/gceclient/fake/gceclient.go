@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"slices"
@@ -79,8 +80,15 @@ type GceClient struct {
 	createInstanceForZoneError map[string]cloudprovider.InstanceErrorInfo // Key: zoneName
 	fetchMachineTypeHandler    map[string]func() error                    // Key: {zone}/{machineType}
 	capacityMap                map[CapacityKey]int64                      // Key: CapacityKey
-	fetchMigCalls              map[gceinternal.GceRef]int
-	fetchMigTemplateCalls      map[gceinternal.GceRef]int
+	// zoneErrors simulates a failing zonal endpoint:
+	// every zone/MIG-scoped call for the zone, read or write, returns the configured error.
+	zoneErrors map[string]error // Key: zoneName
+
+	// --- Call tracking
+	fetchMigCalls         map[gceinternal.GceRef]int
+	fetchMigTemplateCalls map[gceinternal.GceRef]int
+	fetchAllMigsCalls     map[string]int
+	zoneCalls             map[string]int
 }
 
 // NewGceClient creates a new, empty fake GCE client.
@@ -102,8 +110,11 @@ func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 		createInstanceForZoneError: make(map[string]cloudprovider.InstanceErrorInfo),
 		fetchMachineTypeHandler:    make(map[string]func() error),
 		capacityMap:                make(map[CapacityKey]int64),
+		zoneErrors:                 make(map[string]error),
 		fetchMigCalls:              make(map[gceinternal.GceRef]int),
 		fetchMigTemplateCalls:      make(map[gceinternal.GceRef]int),
+		fetchAllMigsCalls:          make(map[string]int),
+		zoneCalls:                  make(map[string]int),
 		k8s:                        k8s,
 	}
 }
@@ -436,6 +447,9 @@ func (g *GceClient) DeleteInstanceTemplate(name string) error {
 func (g *GceClient) InsertInstanceGroupManager(project, zone string, mig *gcev1.InstanceGroupManager) error {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return err
+	}
 
 	if mig.Zone == "" {
 		mig.Zone = zone
@@ -471,6 +485,9 @@ func (g *GceClient) InsertInstanceGroupManager(project, zone string, mig *gcev1.
 func (g *GceClient) DeleteInstanceGroupManager(zone, name string) error {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return err
+	}
 
 	key := fmt.Sprintf("%s/%s", zone, name)
 	if _, exists := g.migs[key]; !exists {
@@ -554,6 +571,9 @@ func (g *GceClient) findMachineType(name, zone string) *gcev1.MachineType {
 func (g *GceClient) FetchMachineType(ctx context.Context, zone, machineType string) (*gcev1.MachineType, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 
 	key := machineTypeKey(zone, machineType)
 	if handler, found := g.fetchMachineTypeHandler[key]; found && handler != nil {
@@ -578,6 +598,9 @@ func (g *GceClient) FetchMachineType(ctx context.Context, zone, machineType stri
 func (g *GceClient) FetchMachineTypes(zone string) ([]*gcev1.MachineType, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	var results []*gcev1.MachineType
 	for _, mt := range g.machineTypes {
 		if mt.Zone == zone {
@@ -593,9 +616,23 @@ func (g *GceClient) FetchMachineTypes(zone string) ([]*gcev1.MachineType, error)
 	return results, nil
 }
 
+// zoneCall records a zone/MIG-scoped call against zone and returns the simulated
+// error if the zone is failing. Must be called with g locked.
+func (g *GceClient) zoneCall(zone string) error {
+	g.zoneCalls[zone]++
+	if err, failing := g.zoneErrors[zone]; failing {
+		return err
+	}
+	return nil
+}
+
 func (g *GceClient) FetchAllMigs(zone string) ([]*gcev1.InstanceGroupManager, error) {
 	g.Lock()
 	defer g.Unlock()
+	g.fetchAllMigsCalls[zone]++
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	var results []*gcev1.InstanceGroupManager
 	for key, mig := range g.migs {
 		if strings.HasPrefix(key, zone+"/") {
@@ -612,6 +649,9 @@ func (g *GceClient) FetchMig(ctx context.Context, ref gceinternal.GceRef) (*gcev
 		g.fetchMigCalls = make(map[gceinternal.GceRef]int)
 	}
 	g.fetchMigCalls[ref]++
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return nil, err
+	}
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	if mig, found := g.migs[key]; found {
 		return cloneMig(mig), nil
@@ -622,6 +662,9 @@ func (g *GceClient) FetchMig(ctx context.Context, ref gceinternal.GceRef) (*gcev
 func (g *GceClient) FetchAllInstances(ctx context.Context, project, zone string, filter string) ([]gceinternal.GceInstance, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	var results []gceinternal.GceInstance
 	for _, instances := range g.instances {
 		for _, inst := range instances {
@@ -636,6 +679,9 @@ func (g *GceClient) FetchAllInstances(ctx context.Context, project, zone string,
 func (g *GceClient) FetchMigTargetSize(ctx context.Context, ref gceinternal.GceRef) (int64, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return 0, err
+	}
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	if mig, found := g.migs[key]; found {
 		return mig.TargetSize, nil
@@ -644,12 +690,20 @@ func (g *GceClient) FetchMigTargetSize(ctx context.Context, ref gceinternal.GceR
 }
 
 func (g *GceClient) FetchMigBasename(ctx context.Context, ref gceinternal.GceRef) (string, error) {
+	g.Lock()
+	defer g.Unlock()
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return "", err
+	}
 	return ref.Name, nil
 }
 
 func (g *GceClient) FetchMigInstances(ctx context.Context, ref gceinternal.GceRef) ([]gceinternal.GceInstance, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return nil, err
+	}
 	var results []gceinternal.GceInstance
 	for _, instances := range g.instances {
 		for _, inst := range instances {
@@ -664,6 +718,9 @@ func (g *GceClient) FetchMigInstances(ctx context.Context, ref gceinternal.GceRe
 func (g *GceClient) FetchMigTemplateName(ctx context.Context, migRef gceinternal.GceRef) (gceinternal.InstanceTemplateName, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(migRef.Zone); err != nil {
+		return gceinternal.InstanceTemplateName{}, err
+	}
 	key := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
 	mig, found := g.migs[key]
 	if !found {
@@ -690,6 +747,9 @@ func (g *GceClient) FetchMigTemplate(ctx context.Context, migRef gceinternal.Gce
 		g.fetchMigTemplateCalls = make(map[gceinternal.GceRef]int)
 	}
 	g.fetchMigTemplateCalls[migRef]++
+	if err := g.zoneCall(migRef.Zone); err != nil {
+		return nil, err
+	}
 	if t, found := g.templates[templateName]; found {
 		return t, nil
 	}
@@ -736,17 +796,37 @@ func (g *GceClient) TotalFetchMigTemplateCalls() int {
 	return total
 }
 
+// FetchAllMigsCalls returns number of FetchAllMigs calls for a given zone.
+func (g *GceClient) FetchAllMigsCalls(zone string) int {
+	g.Lock()
+	defer g.Unlock()
+	return g.fetchAllMigsCalls[zone]
+}
+
+// TotalCallsForZone returns the number of zone/MIG-scoped calls, reads and writes,
+// issued against the given zone.
+func (g *GceClient) TotalCallsForZone(zone string) int {
+	g.Lock()
+	defer g.Unlock()
+	return g.zoneCalls[zone]
+}
+
 // ResetCallCounts resets the tracked call counts.
 func (g *GceClient) ResetCallCounts() {
 	g.Lock()
 	defer g.Unlock()
 	g.fetchMigCalls = make(map[gceinternal.GceRef]int)
 	g.fetchMigTemplateCalls = make(map[gceinternal.GceRef]int)
+	g.fetchAllMigsCalls = make(map[string]int)
+	g.zoneCalls = make(map[string]int)
 }
 
 func (g *GceClient) FetchMigsWithName(ctx context.Context, zone string, filter *regexp.Regexp) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	var links []string
 	for _, mig := range g.migs {
 		if mig.Zone == zone {
@@ -811,6 +891,9 @@ func (g *GceClient) FetchAvailableCpuPlatforms() (map[string][]string, error) {
 func (g *GceClient) FetchAvailableDiskTypes(zone string) ([]string, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	return g.zoneToDiskTypes[zone], nil
 }
 
@@ -851,6 +934,9 @@ func (g *GceClient) FetchReservation(projectID string, name string) (*gcev1.Rese
 func (g *GceClient) FetchListManagedInstancesResults(ctx context.Context, migRef gceinternal.GceRef) (string, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(migRef.Zone); err != nil {
+		return "", err
+	}
 	key := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
 	if mig, found := g.migs[key]; found {
 		return mig.ListManagedInstancesResults, nil
@@ -861,6 +947,9 @@ func (g *GceClient) FetchListManagedInstancesResults(ctx context.Context, migRef
 func (g *GceClient) ResizeMig(ctx context.Context, ref gceinternal.GceRef, size int64) error {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return err
+	}
 
 	key := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	mig, found := g.migs[key]
@@ -884,6 +973,9 @@ func (g *GceClient) ResizeMig(ctx context.Context, ref gceinternal.GceRef, size 
 func (g *GceClient) DeleteInstances(ctx context.Context, migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(migRef.Zone); err != nil {
+		return err
+	}
 
 	migKey := fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)
 	klog.Infof("GceClient.DeleteInstances called for MIG %s, instances: %v", migKey, instances)
@@ -943,6 +1035,9 @@ func (g *GceClient) CreateInstances(ctx context.Context, ref gceinternal.GceRef,
 }
 
 func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName string, count int64, names []string) ([]string, error) {
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return nil, err
+	}
 	migKey := fmt.Sprintf("%s/%s", ref.Zone, ref.Name)
 	mig, found := g.migs[migKey]
 
@@ -1001,6 +1096,9 @@ func (g *GceClient) machineTypeForTemplateLocked(mig *gcev1.InstanceGroupManager
 func (g *GceClient) ResizeAtomically(ref gceinternal.GceRef, templateName string, names []string) error {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(ref.Zone); err != nil {
+		return err
+	}
 
 	return g.resizeAtomicallyLocked(ref, templateName, names)
 }
@@ -1176,12 +1274,17 @@ func randString(n int) string {
 }
 
 func (g *GceClient) WaitForOperation(ctx context.Context, operationName, operationType, project, zone string) error {
-	return nil
+	g.Lock()
+	defer g.Unlock()
+	return g.zoneCall(zone)
 }
 
 func (g *GceClient) FetchAcceleratorTypes(zone string) (*gcev1.AcceleratorTypeList, error) {
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(zone); err != nil {
+		return nil, err
+	}
 	return g.accelerators, nil
 }
 
@@ -1212,7 +1315,9 @@ func (g *GceClient) FetchNetwork(projectId, name string) (*gcev1.Network, error)
 }
 
 func (g *GceClient) ResumeInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef) error {
-	return nil
+	g.Lock()
+	defer g.Unlock()
+	return g.zoneCall(migRef.Zone)
 }
 
 func (g *GceClient) PollUntilActionStops(_ context.Context, action gceclient.InstanceAction, migRef gceinternal.GceRef, instances []gceinternal.GceRef) gceclient.ActionPollSeq {
@@ -1220,7 +1325,9 @@ func (g *GceClient) PollUntilActionStops(_ context.Context, action gceclient.Ins
 }
 
 func (g *GceClient) SuspendInstances(migRef gceinternal.GceRef, instances []gceinternal.GceRef, forceSuspend bool) error {
-	return nil
+	g.Lock()
+	defer g.Unlock()
+	return g.zoneCall(migRef.Zone)
 }
 
 // FetchManagedInstances returns the ManagedInstance view of the instances the
@@ -1235,6 +1342,9 @@ func (g *GceClient) FetchManagedInstances(migRef gceinternal.GceRef, filter stri
 
 	g.Lock()
 	defer g.Unlock()
+	if err := g.zoneCall(migRef.Zone); err != nil {
+		return nil, err
+	}
 	instances := g.instances[fmt.Sprintf("%s/%s", migRef.Zone, migRef.Name)]
 	res := make([]*gceclient.ManagedInstance, 0, len(instances))
 	for name, inst := range instances {
@@ -1249,6 +1359,43 @@ func (g *GceClient) FetchManagedInstances(migRef gceinternal.GceRef, filter stri
 }
 
 // --- Behavior modifier functions ---
+
+// timeoutError is a net.Error reporting a timeout, as produced by the HTTP
+// transport when a request to GCE times out.
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+// UnreachableError returns the canonical transport-level failure for a zonal GCE
+// endpoint: the *url.Error http.Client.Do produces when the request times out
+// before a response is received.
+func UnreachableError(zone string) error {
+	return &url.Error{
+		Op:  "Get",
+		URL: fmt.Sprintf("https://compute.googleapis.com/compute/v1/projects/test-project/zones/%s/instanceGroupManagers", zone),
+		Err: timeoutError{},
+	}
+}
+
+// SetZoneError makes every zone/MIG-scoped call for the zone, read or write, fail
+// with err until ClearZoneError is called. A nil err defaults to UnreachableError(zone).
+func (g *GceClient) SetZoneError(zone string, err error) {
+	g.Lock()
+	defer g.Unlock()
+	if err == nil {
+		err = UnreachableError(zone)
+	}
+	g.zoneErrors[zone] = err
+}
+
+// ClearZoneError restores normal behavior for the zone.
+func (g *GceClient) ClearZoneError(zone string) {
+	g.Lock()
+	defer g.Unlock()
+	delete(g.zoneErrors, zone)
+}
 
 func (g *GceClient) SetCreateInstanceForMigError(migName string, errInfo cloudprovider.InstanceErrorInfo) {
 	g.Lock()

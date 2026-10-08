@@ -30,12 +30,12 @@ import (
 )
 
 const (
-	// maxIrretrievableErrsBeforeBlocked is number of NodeGroup can be irretrievable before its blocked
-	maxIrretrievableErrsBeforeBlocked = 3
-	// markedIrretrievableRefreshIntervalTime is the time before marked irretrievable list is refreshed
-	markedIrretrievableRefreshIntervalTime = 24 * time.Hour
-	// blockListRefreshIntervalTime is the time before the blocked list is refreshed
-	blockListRefreshIntervalTime = 15 * time.Minute
+	// MaxIrretrievableErrsBeforeBlocked is number of NodeGroup can be irretrievable before its blocked
+	MaxIrretrievableErrsBeforeBlocked = 3
+	// MarkedIrretrievableRefreshIntervalTime is the time before marked irretrievable list is refreshed
+	MarkedIrretrievableRefreshIntervalTime = 24 * time.Hour
+	// BlockListRefreshIntervalTime is the time before the blocked list is refreshed
+	BlockListRefreshIntervalTime = 15 * time.Minute
 )
 
 // IrretrievableMigBlockReason informs why the MIG has been blocked.

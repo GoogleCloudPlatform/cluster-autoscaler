@@ -609,7 +609,7 @@ func CreateGkeManager(
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
 ) (GkeManager, error) {
 	// Create cache and mig lister
-	migLister := NewGkeMigLister(cache, blockListRefreshIntervalTime, markedIrretrievableRefreshIntervalTime, maxIrretrievableErrsBeforeBlocked)
+	migLister := NewGkeMigLister(cache, BlockListRefreshIntervalTime, MarkedIrretrievableRefreshIntervalTime, MaxIrretrievableErrsBeforeBlocked)
 
 	domainUrl := strings.TrimSuffix(gceConnectionConfig.Endpoint, "/")
 	gceService := client.GCE
