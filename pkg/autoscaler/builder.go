@@ -83,6 +83,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
+	ekvms_churntracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/churntracker"
 	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	ekvms_providers "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers"
@@ -626,6 +627,7 @@ func (b *Builder) Build(
 		return nil, nil, err
 	}
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
+	churnTrackerConfigProvider := ekvms_churntracker.NewConfigProvider(experimentsManager, caVersion)
 
 	var provreqProcessor pods.PodListProcessor
 	prProcessor := provreq.NewProvReqProcessor(b.prClient, autoscalingOptions.CheckCapacityProcessorInstance)
@@ -698,6 +700,7 @@ func (b *Builder) Build(
 		DraResourcePredictor:                customResourcesProcessor.GetDraResourcePredictor(),
 		ReservationsPuller:                  reservationsPuller,
 		ResizableVmCustomThresholdsProvider: resizableVmCustomThresholdsProvider,
+		ChurnTrackerConfigProvider:          churnTrackerConfigProvider,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("error building GKE: %v", err)

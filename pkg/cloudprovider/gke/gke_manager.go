@@ -62,6 +62,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/validators"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
+	ekvms_churntracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/churntracker"
 	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvm_provider_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers/interfaces"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -546,6 +547,7 @@ type gkeManagerImpl struct {
 	machineConfigProvider  *machinetypes.MachineConfigProvider
 
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
+	churnTrackerConfigProvider          ekvms_churntracker.ConfigProvider
 	recommendations                     sync.Map
 }
 
@@ -605,6 +607,7 @@ func CreateGkeManager(
 	draResourcePredictor *dynamicresources.ResourcePredictor,
 	reservationsPuller *gceclient.ReservationsPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
+	churnTrackerConfigProvider ekvms_churntracker.ConfigProvider,
 ) (GkeManager, error) {
 	// Create cache and mig lister
 	migLister := NewGkeMigLister(cache, BlockListRefreshIntervalTime, MarkedIrretrievableRefreshIntervalTime, MaxIrretrievableErrsBeforeBlocked)
@@ -665,6 +668,7 @@ func CreateGkeManager(
 		machineConfigProvider:               client.MachineConfigProvider,
 		napDefaultMachineTypeFamily:         napDefaultMachineTypeFamily,
 		resizableVmCustomThresholdsProvider: resizableVmCustomThresholdsProvider,
+		churnTrackerConfigProvider:          churnTrackerConfigProvider,
 		gkeMetrics:                          internalmetrics.Metrics,
 	}
 
@@ -1986,6 +1990,11 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 
 	// TODO(b/486148603): Cleanup experiment flag for custom thresholds when the experiment is over
 	m.resizableVmCustomThresholdsProvider.RefreshCustomThresholds()
+
+	// TODO(b/573600967): Cleanup experiment flag for the lookahead churn circuit breaker when the experiment is over.
+	if m.churnTrackerConfigProvider != nil {
+		m.churnTrackerConfigProvider.Refresh()
+	}
 
 	m.refreshCSNMetrics()
 

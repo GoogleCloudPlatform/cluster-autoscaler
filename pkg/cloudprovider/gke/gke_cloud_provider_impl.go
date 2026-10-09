@@ -50,6 +50,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
+	ekvms_churntracker "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/churntracker"
 	lookaheadbuffer_strategy "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	ekvm_provider_interfaces "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/providers/interfaces"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -2376,6 +2377,7 @@ type Config struct {
 	DraResourcePredictor                *dynamicresources.ResourcePredictor
 	ReservationsPuller                  *gceclient.ReservationsPuller
 	ResizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
+	ChurnTrackerConfigProvider          ekvms_churntracker.ConfigProvider
 }
 
 // InternalClient contains all the internal client dependencies required by the GkeManager.
@@ -2464,6 +2466,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		config.DraResourcePredictor,
 		config.ReservationsPuller,
 		config.ResizableVmCustomThresholdsProvider,
+		config.ChurnTrackerConfigProvider,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GKE Manager: %v", err)

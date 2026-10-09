@@ -69,6 +69,7 @@ const EkFineGrainedResizeIncrementStepFlag = "AutopilotEk::FineGrainedResizeIncr
 const EkFineGrainedResizeMinCAVersionFlag = "AutopilotEk::FineGrainedResizeMinCAVersion"
 const EKOnManagedNodesMinCAVersionFlag = "EKOnManagedNodes::MinCaVersion"
 const ResizableClusterBackoffCustomThresholdsPerErrorTypeFlag = "EkClusterBackoff::CustomThresholdsPerErrorType"
+const ResizableVmChurnCircuitBreakerFlag = "AutopilotResizableVM::LookaheadChurnCircuitBreaker"
 
 const PodTopologySpreadCCCMinCAVersionFlag = "PodTopologySpreadCCC::MinCAVersion"
 const PodTopologySpreadNodeBasedMinCAVersionFlag = "PodTopologySpreadNodeBased::MinCAVersion"
