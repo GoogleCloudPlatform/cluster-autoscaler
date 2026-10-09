@@ -252,3 +252,41 @@ func TestCloneV1DoesNotShareUsage(t *testing.T) {
 		t.Errorf("modifying the clone changed the original in-use accelerators to %d, want 4", got)
 	}
 }
+
+func TestCloneNil(t *testing.T) {
+	var r *Reservation
+	if got := r.Clone(); got != nil {
+		t.Errorf("(*Reservation)(nil).Clone() = %v, want nil", got)
+	}
+}
+
+func TestCloneDoesNotShareAvailableResources(t *testing.T) {
+	specific := &Reservation{
+		Name:                "specific",
+		SpecificReservation: &SpecificReservation{AvailableCount: 4},
+	}
+	aggregate := &Reservation{
+		Name: "aggregate",
+		AggregateReservation: &AggregateReservation{
+			AvailableResources: []AcceleratorResource{{AcceleratorType: ct5lp, AcceleratorCount: 12}},
+		},
+	}
+
+	gotSpecific := specific.Clone()
+	gotAggregate := aggregate.Clone()
+	if diff := cmp.Diff(specific, gotSpecific); diff != "" {
+		t.Errorf("specific.Clone() mismatch (-want +got):\n%s", diff)
+	}
+	if diff := cmp.Diff(aggregate, gotAggregate); diff != "" {
+		t.Errorf("aggregate.Clone() mismatch (-want +got):\n%s", diff)
+	}
+
+	gotSpecific.SpecificReservation.AvailableCount = 0
+	gotAggregate.AggregateReservation.AvailableResources[0].AcceleratorCount = 0
+	if specific.SpecificReservation.AvailableCount != 4 {
+		t.Errorf("modifying the clone changed the original AvailableCount to %d, want 4", specific.SpecificReservation.AvailableCount)
+	}
+	if got := aggregate.AggregateReservation.AvailableResources[0].AcceleratorCount; got != 12 {
+		t.Errorf("modifying the clone changed the original available accelerators to %d, want 12", got)
+	}
+}

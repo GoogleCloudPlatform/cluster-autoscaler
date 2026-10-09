@@ -23,6 +23,8 @@
 package reservation
 
 import (
+	"slices"
+
 	gceapi "google.golang.org/api/compute/v1"
 )
 
@@ -141,6 +143,26 @@ func FromV1List(rs []*gceapi.Reservation) []*Reservation {
 		result = append(result, FromV1(r))
 	}
 	return result
+}
+
+// Clone returns a copy of r whose available resources (SpecificReservation.AvailableCount,
+// AggregateReservation.AvailableResources) can be changed without affecting r. Other
+// nested fields are shared with r.
+func (r *Reservation) Clone() *Reservation {
+	if r == nil {
+		return nil
+	}
+	c := *r
+	if r.SpecificReservation != nil {
+		specific := *r.SpecificReservation
+		c.SpecificReservation = &specific
+	}
+	if r.AggregateReservation != nil {
+		aggregate := *r.AggregateReservation
+		aggregate.AvailableResources = slices.Clone(r.AggregateReservation.AvailableResources)
+		c.AggregateReservation = &aggregate
+	}
+	return &c
 }
 
 // CloneV1 returns a copy of r whose usage counters (SpecificReservation.InUseCount,
