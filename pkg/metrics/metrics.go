@@ -1366,11 +1366,18 @@ var allMetrics = []k8smetrics.Registerable{
 	flexAdvisorRecommendationsBypassCount,
 }
 
+// FlagOverrideStats holds the counts of processed flag overrides for metrics reporting.
+type FlagOverrideStats struct {
+	ActiveCount       int
+	UnrecognizedCount int
+	RedundantCount    int
+}
+
 // UpdateComponentFlagOverrides sets the component overrides flag overrides metric.
-func UpdateComponentFlagOverrides(active, unrecognized, redundant int) {
-	componentFlagOverrides.WithLabelValues("active").Set(float64(active))
-	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(unrecognized))
-	componentFlagOverrides.WithLabelValues("redundant").Set(float64(redundant))
+func UpdateComponentFlagOverrides(stats FlagOverrideStats) {
+	componentFlagOverrides.WithLabelValues("active").Set(float64(stats.ActiveCount))
+	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(stats.UnrecognizedCount))
+	componentFlagOverrides.WithLabelValues("redundant").Set(float64(stats.RedundantCount))
 }
 
 // RegisterAll registers all metrics.

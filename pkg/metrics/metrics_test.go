@@ -554,3 +554,26 @@ func TestDemandFungibilityMetrics(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, float64(1), val)
 }
+
+func TestUpdateComponentFlagOverrides(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	ResetAllForTest()
+
+	UpdateComponentFlagOverrides(FlagOverrideStats{
+		ActiveCount:       3,
+		UnrecognizedCount: 1,
+		RedundantCount:    2,
+	})
+
+	activeVal, err := testutil.GetGaugeMetricValue(componentFlagOverrides.WithLabelValues("active"))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(3), activeVal)
+
+	unrecognizedVal, err := testutil.GetGaugeMetricValue(componentFlagOverrides.WithLabelValues("unrecognized"))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), unrecognizedVal)
+
+	redundantVal, err := testutil.GetGaugeMetricValue(componentFlagOverrides.WithLabelValues("redundant"))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(2), redundantVal)
+}

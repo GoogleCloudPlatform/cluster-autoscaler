@@ -37,6 +37,17 @@ type flagOverrideResult struct {
 	redundantCount    int
 }
 
+var flagOverrideStats *metrics.FlagOverrideStats
+
+// GetFlagOverrideStats returns the stats collected during ProcessFlagOverrides,
+// or an error if ProcessFlagOverrides has not been executed yet.
+func GetFlagOverrideStats() (metrics.FlagOverrideStats, error) {
+	if flagOverrideStats == nil {
+		return metrics.FlagOverrideStats{}, fmt.Errorf("ProcessFlagOverrides was not called")
+	}
+	return *flagOverrideStats, nil
+}
+
 // ProcessFlagOverrides identifies any flags prefixed with --override_,
 // removes their standard counterparts from os.Args according to the rules, and appends the new flags.
 // All non-boolean CLI flags in os.Args[1:] must use the --flag=value (or -flag=value) format.
@@ -53,7 +64,11 @@ func ProcessFlagOverrides() {
 		klog.Fatalf("[flag_override] Failed to process flag overrides: %v", err)
 	}
 	os.Args = result.args
-	metrics.UpdateComponentFlagOverrides(result.activeCount, result.unrecognizedCount, result.redundantCount)
+	flagOverrideStats = &metrics.FlagOverrideStats{
+		ActiveCount:       result.activeCount,
+		UnrecognizedCount: result.unrecognizedCount,
+		RedundantCount:    result.redundantCount,
+	}
 }
 
 // mergeFlagOverrides merges CLI flags with --override_<flag>=<value> arguments.

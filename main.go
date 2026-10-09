@@ -92,6 +92,11 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
+	if flagOverrideStats, err := cli.GetFlagOverrideStats(); err != nil {
+		klog.Errorf("[flag_override] Failed to get flag override stats: %v", err)
+	} else {
+		internalmetrics.UpdateComponentFlagOverrides(flagOverrideStats)
+	}
 
 	opts := optsTracker.Options()
 	restConfig := kube_util.GetKubeConfig(opts.KubeClientOpts)

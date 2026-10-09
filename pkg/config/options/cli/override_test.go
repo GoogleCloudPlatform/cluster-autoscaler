@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"os"
 	"slices"
 	"testing"
 )
@@ -241,5 +242,29 @@ func TestProcessFlagOverrides(t *testing.T) {
 				t.Errorf("Want redundant count %d, got %d", tc.wantRedundant, actual.redundantCount)
 			}
 		})
+	}
+}
+
+func TestGetFlagOverrideStats(t *testing.T) {
+	flagOverrideStats = nil
+	if _, err := GetFlagOverrideStats(); err == nil {
+		t.Fatalf("Expected error when ProcessFlagOverrides was not called, got nil")
+	}
+
+	origArgs := os.Args
+	defer func() {
+		os.Args = origArgs
+		flagOverrideStats = nil
+	}()
+
+	os.Args = []string{"app", "--override_unknown=val"}
+	ProcessFlagOverrides()
+
+	stats, err := GetFlagOverrideStats()
+	if err != nil {
+		t.Fatalf("Unexpected error after ProcessFlagOverrides: %v", err)
+	}
+	if stats.UnrecognizedCount != 1 {
+		t.Errorf("Want unrecognized count 1, got %d", stats.UnrecognizedCount)
 	}
 }
