@@ -20,7 +20,6 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
@@ -30,7 +29,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 // PreventScheduleOnLookaheadExperimentFlags maps machine family names to their corresponding experiment flag
@@ -111,10 +109,6 @@ func isAnyResizingEnabled(manager operationtracker.Manager, families []machinety
 	return false
 }
 
-func isSystemPod(pod *apiv1.Pod) bool {
-	return pod.Namespace == metav1.NamespaceSystem
-}
-
 // allLookaheadPodsRequests return the sum of requests of all lookahead pods in a given node.
 func allLookaheadPodsRequests(nodeInfo *framework.NodeInfo) size.Allocatable {
 	return matchingPodRequests(nodeInfo, func(pod *apiv1.Pod) bool {
@@ -150,11 +144,6 @@ func HasLookaheadPods(nodeInfo *framework.NodeInfo) bool {
 		}
 	}
 	return false
-}
-
-// IsUserWorkloadPod returns true if the pod is non-static non-daemonSet non-kubesystem pod.
-func IsUserWorkloadPod(pod *apiv1.Pod) bool {
-	return !isSystemPod(pod) && !podutils.IsDaemonSetPod(pod) && !podutils.IsMirrorPod(pod) && !podutils.IsStaticPod(pod)
 }
 
 // PreventScheduleOnLookaheadNode returns true if scheduling on the lookahead node should be prevented based on its machine family.

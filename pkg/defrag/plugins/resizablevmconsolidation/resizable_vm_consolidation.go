@@ -25,6 +25,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	ekvms_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -246,7 +247,7 @@ func (p *plugin) selectWorkloadPods(nodeInfo *framework.NodeInfo) []*v1.Pod {
 	pods := []*v1.Pod{}
 	for _, podInfo := range nodeInfo.Pods() {
 		pod := podInfo.Pod
-		if !processor.IsUserWorkloadPod(pod) {
+		if !ekvms_utils.IsUserWorkloadPod(pod) {
 			continue
 		}
 		pods = append(pods, pod)

@@ -133,9 +133,8 @@ func (p *ScaleUpNodeProcessor) process(ctx *ca_context.AutoscalingContext, unsch
 	}
 	var podsForcingScaleUp []*v1.Pod
 	if p.isForceScaleUpFeatureEnabled() {
-		// Filter out all pods that faces a lot of failed upsizes. Remove them from the list now and inject back right before return.
+		// Filter out all pods that face a lot of failed upsizes. Remove them from the list now and inject back right before return.
 		unschedulablePods, podsForcingScaleUp = filterPodsForcingScaleUp(unschedulablePods, p.attemptsToScheduleOnUpsize, p.customThresholdsProvider.GetUpsizeTriesThreshold())
-
 	}
 
 	if emitMetrics {
