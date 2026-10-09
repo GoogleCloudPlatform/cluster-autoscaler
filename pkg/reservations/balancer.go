@@ -237,7 +237,7 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 			continue
 		}
 		size, err := ng.TargetSize(context.TODO())
-		if err != nil && size <= 0 {
+		if err != nil || size <= 0 {
 			continue
 		}
 		for _, rsv := range reservations {
@@ -264,11 +264,9 @@ func subtractReservations(reservations []*reservation.Reservation, consumedReser
 			subtracted = append(subtracted, rsv)
 			continue
 		}
-		specRsvCopy := *rsv.SpecificReservation
-		specRsvCopy.AvailableCount -= int64(consumed)
-		rsvCopy := *rsv
-		rsvCopy.SpecificReservation = &specRsvCopy
-		subtracted = append(subtracted, &rsvCopy)
+		rsvCopy := rsv.Clone()
+		rsvCopy.SpecificReservation.AvailableCount -= int64(consumed)
+		subtracted = append(subtracted, rsvCopy)
 	}
 	return subtracted
 }
@@ -281,14 +279,17 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 		pulledReservationMap[pulledRsv.ID] = pulledRsv
 	}
 
+	// claimed counts the slots of each reservation used by earlier node groups in this call.
+	claimed := map[uint64]int{}
 	for _, scaleUpInfo := range scaleUpInfos {
-		reservedNodes := MatchingUnusedReservations(p.provider, scaleUpInfo.Group, reservations, p.localSSDDiskSizeProvider, false)
-		newNodes := scaleUpInfo.NewSize - scaleUpInfo.CurrentSize
-		newReservedNodes := min(newNodes, reservedNodes)
+		newReservedNodes := scaleUpInfo.NewSize - scaleUpInfo.CurrentSize
 
 		for _, rsv := range reservations {
+			if newReservedNodes <= 0 {
+				break
+			}
 			if ok, _, _ := reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider, false); ok {
-				unusedNodes := int(rsv.SpecificReservation.AvailableCount)
+				unusedNodes := int(rsv.SpecificReservation.AvailableCount) - claimed[rsv.ID]
 
 				if unusedNodes > 0 {
 					pulledRsv, found := pulledReservationMap[rsv.ID]
@@ -297,7 +298,7 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 						continue
 					}
 					usedNodes := min(unusedNodes, newReservedNodes)
-					pulledRsv.SpecificReservation.AvailableCount -= int64(usedNodes)
+					claimed[rsv.ID] += usedNodes
 					newReservedNodes -= usedNodes
 					usedReservations[gceclient.ReservationMetricLabels(pulledRsv)] += usedNodes
 				}
@@ -309,7 +310,23 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 		metrics.Metrics.IncreaseReservationsUsed(labels.ToMap(), count)
 	}
 
-	return pulledReservations
+	if len(claimed) == 0 {
+		return pulledReservations
+	}
+
+	updatedReservations := make([]*reservation.Reservation, 0, len(pulledReservations))
+	for _, pulledRsv := range pulledReservations {
+		used := claimed[pulledRsv.ID]
+		if used == 0 || pulledRsv.SpecificReservation == nil {
+			updatedReservations = append(updatedReservations, pulledRsv)
+			continue
+		}
+		rsvCopy := pulledRsv.Clone()
+		rsvCopy.SpecificReservation.AvailableCount = max(0, rsvCopy.SpecificReservation.AvailableCount-int64(used))
+		updatedReservations = append(updatedReservations, rsvCopy)
+	}
+
+	return updatedReservations
 }
 
 // filterEmptyScaleUpInfos removes empty scale-up infos

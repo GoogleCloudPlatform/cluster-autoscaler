@@ -42,6 +42,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 	mig1000_1 := newTestNodeGroup("machine-type-2", "zone-a", 0, 1000)
 	mig1000_2 := newTestNodeGroup("machine-type-2", "zone-b", 0, 1000)
 	mig1000_3 := newTestNodeGroup("machine-type-2", "zone-c", 0, 1000)
+	mig1SameZone := newNamedTestNodeGroup("mig-same-zone", "machine-type-2", "zone-a", 3, 10)
 
 	testCases := []struct {
 		name                  string
@@ -171,6 +172,42 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 			wantReservations: []*reservation.Reservation{
 				BuildAvailableReservation("machine-type-2", "zone-a", 0),
+			},
+		},
+		{
+			// Both groups see the 2 reservation slots left after the upcoming node group, so the
+			// balancer gives each of them 2 nodes, but only 2 of these 4 nodes use the reservation.
+			name:   "groups sharing a reservation don't use the same slots twice",
+			groups: []cloudprovider.NodeGroup{mig1, mig1SameZone},
+			upcomingNodeGroups: []cloudprovider.NodeGroup{
+				newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 1),
+			},
+			newNodes: 4,
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 3),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(mig1, 5, 7, 10),
+				newTestScaleUpInfo(mig1SameZone, 3, 5, 10),
+			},
+			// The upcoming node group isn't subtracted from the puller, so 3 - 2 = 1 slot is left.
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 1),
+			},
+		},
+		{
+			name:     "groups sharing a reservation use all its slots",
+			groups:   []cloudprovider.NodeGroup{mig1, mig1SameZone},
+			newNodes: 4,
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 4),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(mig1, 5, 6, 10),
+				newTestScaleUpInfo(mig1SameZone, 3, 6, 10),
+			},
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 0),
 			},
 		},
 	}
@@ -328,9 +365,14 @@ func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.Con
 func (p *noopTestBalancingProcessor) CleanUp() {}
 
 func newTestNodeGroup(machineType, zone string, currentSize, maxSize int) cloudprovider.NodeGroup {
-	gkeManagerMock := &gke.GkeManagerMock{}
-	gkeManagerMock.On("GetMigSize", mock.AnythingOfType("*gke.GkeMig")).Return(int64(currentSize), nil)
-	return gke.NewTestGkeMigBuilder().SetGkeManager(gkeManagerMock).SetSpec(&gkeclient.NodePoolSpec{MachineType: machineType}).SetGceRefZone(zone).SetMaxSize(maxSize).SetExist(true).Build()
+	return newNamedTestNodeGroup("", machineType, zone, currentSize, maxSize)
+}
+
+// newNamedTestNodeGroup is newTestNodeGroup with the given MIG name, for node groups in the same
+// zone that must have different IDs.
+func newNamedTestNodeGroup(name, machineType, zone string, currentSize, maxSize int) cloudprovider.NodeGroup {
+	gkeManager := gke.NewFakeGkeManagerBuilder().WithMigSize(int64(currentSize)).Build()
+	return gke.NewTestGkeMigBuilder().SetGkeManager(gkeManager).SetSpec(&gkeclient.NodePoolSpec{MachineType: machineType}).SetGceRefZone(zone).SetGceRefName(name).SetMaxSize(maxSize).SetExist(true).Build()
 }
 
 func newTestScaleUpInfo(group cloudprovider.NodeGroup, currentSize, newSize, maxSize int) nodegroupset.ScaleUpInfo {
@@ -348,6 +390,7 @@ func TestUpdateReservations(t *testing.T) {
 
 	spec := &gkeclient.NodePoolSpec{MachineType: matching}
 	migA := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-A").Build()
+	migA2 := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-A").SetGceRefName("mig-a-2").Build()
 	migB := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-B").Build()
 	migC := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-C").Build()
 
@@ -355,6 +398,7 @@ func TestUpdateReservations(t *testing.T) {
 		name                       string
 		scaleUpInfos               []nodegroupset.ScaleUpInfo
 		reservations               []*reservation.Reservation
+		consumedReservations       map[uint64]int
 		wantReservationsPostUpdate []*reservation.Reservation
 	}{
 		{
@@ -453,6 +497,28 @@ func TestUpdateReservations(t *testing.T) {
 				BuildAvailableReservationWithID(7, matching, "zone-C", 1),
 			},
 		},
+		{
+			name: "Shared reservation adjusted for upcoming nodes is not double-used",
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{Group: migA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+				{Group: migA2, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+			},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 3),
+			},
+			consumedReservations: map[uint64]int{1: 1},
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 1),
+			},
+		},
+	}
+
+	cloneReservations := func(src []*reservation.Reservation) []*reservation.Reservation {
+		cloned := make([]*reservation.Reservation, len(src))
+		for i, r := range src {
+			cloned[i] = r.Clone()
+		}
+		return cloned
 	}
 
 	for _, tc := range testCases {
@@ -461,22 +527,32 @@ func TestUpdateReservations(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			processor := NewReservationBalancingProcessor(nil, nil, localssdsize.NewSimpleLocalSSDProvider(), provider)
-			rsvs := tc.reservations
-			reservations := processor.updateReservations(tc.scaleUpInfos, rsvs, rsvs)
+			pulledRsvs := tc.reservations
+			rsvs := pulledRsvs
+			if len(tc.consumedReservations) > 0 {
+				rsvs = subtractReservations(pulledRsvs, tc.consumedReservations)
+			}
+			wantPulledInput := cloneReservations(pulledRsvs)
+			wantRsvsInput := cloneReservations(rsvs)
+
+			reservations := processor.updateReservations(tc.scaleUpInfos, rsvs, pulledRsvs)
 
 			if diff := cmp.Diff(tc.wantReservationsPostUpdate, reservations); diff != "" {
 				t.Errorf("updateReservations() diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(wantPulledInput, pulledRsvs); diff != "" {
+				t.Errorf("updateReservations() modified pulledReservations in place, diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(wantRsvsInput, rsvs); diff != "" {
+				t.Errorf("updateReservations() modified reservations in place, diff (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
 func newUpcomingTestNodeGroup(nodePoolName, machineType, zone string, maxSize, targetSize int) cloudprovider.NodeGroup {
-	gkeManager := gke.GkeManagerMock{MockIsUpcoming: true}
-	mig := gke.NewTestGkeMigBuilder().SetGkeManager(&gkeManager).SetNodePoolName(nodePoolName).SetSpec(&gkeclient.NodePoolSpec{MachineType: machineType}).SetGceRefZone(zone).SetGceRefName(nodePoolName).SetMaxSize(maxSize).Build()
-	gkeManager.On("IsUpcoming", mig).Return(true)
-	gkeManager.On("GetMigSize", mig).Return(int64(targetSize), nil)
-	return mig
+	gkeManager := gke.NewFakeGkeManagerBuilder().WithIsUpcoming(true).WithMigSize(int64(targetSize)).Build()
+	return gke.NewTestGkeMigBuilder().SetGkeManager(gkeManager).SetNodePoolName(nodePoolName).SetSpec(&gkeclient.NodePoolSpec{MachineType: machineType}).SetGceRefZone(zone).SetGceRefName(nodePoolName).SetMaxSize(maxSize).Build()
 }
 
 func TestConsumeUpcomingScaleUps(t *testing.T) {
@@ -596,6 +672,14 @@ func TestReservationsForUpcomingNodes(t *testing.T) {
 			want: map[uint64]int{},
 		},
 		{
+			name:       "upcoming node group with zero target size",
+			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 0)},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+			},
+			want: map[uint64]int{},
+		},
+		{
 			name:       "upcoming nodes with matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2), newTestNodeGroup(machineType1, "zone-A", 0, 10)},
 			reservations: []*reservation.Reservation{
@@ -685,9 +769,7 @@ func TestAdjustReservations(t *testing.T) {
 			rsvs := tc.reservations
 			wantInput := make([]*reservation.Reservation, len(rsvs))
 			for i, r := range rsvs {
-				c, specific := *r, *r.SpecificReservation
-				c.SpecificReservation = &specific
-				wantInput[i] = &c
+				wantInput[i] = r.Clone()
 			}
 
 			subtractedReservation := subtractReservations(rsvs, tc.consumedReservations)
