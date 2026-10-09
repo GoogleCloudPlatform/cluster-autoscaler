@@ -17,9 +17,14 @@ package utils
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
 func TestIsSystemPod(t *testing.T) {
@@ -167,4 +172,113 @@ func TestIsUserWorkloadPod(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHasRunningCustomerPods(t *testing.T) {
+	const nodeName = "node-1"
+	boundTo := func(pod *v1.Pod, nodeName string) *v1.Pod {
+		pod.Spec.NodeName = nodeName
+		return pod
+	}
+	userPod := func(name string) *v1.Pod {
+		return test.BuildTestPod(name, 100, 100)
+	}
+	systemPod := func(name string) *v1.Pod {
+		return test.BuildTestPod(name, 100, 100, func(p *v1.Pod) { p.Namespace = metav1.NamespaceSystem })
+	}
+	lookaheadPod := func(name string) *v1.Pod {
+		return lookaheadbuffer.BuildTestLookaheadPod("", 100, 100, machinetypes.EK.Name(), lookaheadbuffer.WithName(name))
+	}
+	testCases := []struct {
+		name     string
+		pods     []*v1.Pod
+		expected bool
+	}{
+		{
+			name:     "no pods",
+			pods:     []*v1.Pod{},
+			expected: false,
+		},
+		{
+			name: "lookahead pod only",
+			pods: []*v1.Pod{
+				lookaheadPod("la-pod-1"),
+			},
+			expected: false,
+		},
+		{
+			name: "lookahead pod bound to the node",
+			pods: []*v1.Pod{
+				boundTo(lookaheadPod("la-pod-1"), nodeName),
+			},
+			expected: false,
+		},
+		{
+			name: "kube-system pod bound to the node",
+			pods: []*v1.Pod{
+				boundTo(systemPod("sys-pod-1"), nodeName),
+			},
+			expected: false,
+		},
+		{
+			name: "user pod bound to the node",
+			pods: []*v1.Pod{
+				boundTo(userPod("pod-1"), nodeName),
+			},
+			expected: true,
+		},
+		{
+			name: "user pod placed only by simulation",
+			pods: []*v1.Pod{
+				userPod("pod-1"),
+			},
+			expected: false,
+		},
+		{
+			name: "user pod bound to a different node",
+			pods: []*v1.Pod{
+				boundTo(userPod("pod-1"), "other-node"),
+			},
+			expected: false,
+		},
+		{
+			name: "lookahead pod and simulated user pod",
+			pods: []*v1.Pod{
+				lookaheadPod("la-pod-1"),
+				userPod("pod-1"),
+			},
+			expected: false,
+		},
+		{
+			name: "lookahead pod and bound user pod",
+			pods: []*v1.Pod{
+				lookaheadPod("la-pod-1"),
+				boundTo(userPod("pod-1"), nodeName),
+			},
+			expected: true,
+		},
+		{
+			name: "simulated and bound user pods",
+			pods: []*v1.Pod{
+				userPod("pod-1"),
+				boundTo(userPod("pod-2"), nodeName),
+			},
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			node := test.BuildTestNode(nodeName, 1000, 1000)
+			nodeInfo := framework.NewTestNodeInfo(node, tc.pods...)
+
+			actual := HasRunningCustomerPods(nodeInfo)
+			assert.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
+func TestHasRunningCustomerPodsWithoutNode(t *testing.T) {
+	assert.False(t, HasRunningCustomerPods(nil), "nil node info")
+	assert.False(t, HasRunningCustomerPods(framework.NewNodeInfo(nil, nil)), "node info without node")
 }
