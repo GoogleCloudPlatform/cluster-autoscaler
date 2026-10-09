@@ -612,6 +612,9 @@ func (p *ScaleUpNodeProcessor) calculateNodeRuleIndex(node *v1.Node, cccCrd crd.
 	if err != nil {
 		return 0, err
 	}
+	if mig == nil {
+		return 0, fmt.Errorf("node group not found for node %q", node.Name)
+	}
 
 	found, ruleIdx, _ := p.matcher.FirstMatchedRule(mig, cccCrd)
 	if !found {

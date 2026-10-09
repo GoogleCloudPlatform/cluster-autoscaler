@@ -86,6 +86,7 @@ func (p *shardAwareNodeGroupListProcessor) filterNodeGroupsByCccShardHomogeneity
 		if err != nil {
 			klog.Warningf("Cannot resolve CRD for node group %s due to error, not pruning: %v", ng.Id(), err)
 			filteredNodeGroups = append(filteredNodeGroups, ng)
+			continue
 		}
 		// node selector defined
 		if nodeSelectorTargetCCCName != "" {

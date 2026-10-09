@@ -912,6 +912,39 @@ func TestShardAwareNodeGroupListProcessor(t *testing.T) {
 					Build(),
 			},
 		},
+		{
+			name: "Do not duplicate node group when NodeGroupCrd returns error",
+			nodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("missing-ccc-pool").
+					SetGceRefName("missing-ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "non-existent-ccc"},
+						MachineType: defaultMachineType,
+					}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+			crds: []crd.CRD{},
+			unschedulablePods: []*apiv1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "pod-standard",
+					},
+				},
+			},
+			wantNodegroups: []cloudprovider.NodeGroup{
+				gke.NewTestGkeMigBuilder().
+					SetNodePoolName("missing-ccc-pool").
+					SetGceRefName("missing-ccc-pool").
+					SetSpec(&gkeclient.NodePoolSpec{
+						Labels:      map[string]string{testCrdLabel: "non-existent-ccc"},
+						MachineType: defaultMachineType,
+					}).
+					SetGkeManager(gkeManager).
+					Build(),
+			},
+		},
 	}
 
 	for _, tc := range testCases {

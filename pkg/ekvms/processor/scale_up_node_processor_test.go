@@ -2500,6 +2500,11 @@ func TestOrganizeByCCCByRule(t *testing.T) {
 			ekNodesWithMigs: []nodeWithMig{
 				{
 					node: ekvms_test.NewNodeBuilder("ccc1Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").Build(),
+					mig:  nil,
+				},
+				{
+					node: ekvms_test.NewNodeBuilder("ccc2Node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc2").Build(),
+					mig:  nil,
 				},
 			},
 			expectedResizableNodesSnapshots: make(resizableNodesSnapshotsByCCC),
