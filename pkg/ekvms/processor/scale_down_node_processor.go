@@ -162,7 +162,7 @@ func (p *ScaleDownNodeProcessor) emitLookaheadMetrics(ctx *ca_context.Autoscalin
 
 		userWorkloadPodsNum := 0
 		for _, podInfo := range nodeInfo.Pods() {
-			if IsUserWorkloadPod(podInfo.Pod) {
+			if utils.IsUserWorkloadPod(podInfo.Pod) {
 				userWorkloadPodsNum++
 			}
 		}

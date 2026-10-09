@@ -16,11 +16,23 @@ package utils
 
 import (
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	ca_podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
 // PodRequestsAsSize returns the requests of a pod as size.Allocatable.
 func PodRequestsAsSize(pod *v1.Pod) size.Allocatable {
 	return size.ResourcesToSize(podutils.PodRequests(pod))
+}
+
+// IsSystemPod returns true if the pod is in the kube-system namespace.
+func IsSystemPod(pod *v1.Pod) bool {
+	return pod.Namespace == metav1.NamespaceSystem
+}
+
+// IsUserWorkloadPod returns true if the pod is non-static non-daemonSet non-kubesystem pod.
+func IsUserWorkloadPod(pod *v1.Pod) bool {
+	return !IsSystemPod(pod) && !ca_podutils.IsDaemonSetPod(pod) && !ca_podutils.IsMirrorPod(pod) && !ca_podutils.IsStaticPod(pod)
 }
