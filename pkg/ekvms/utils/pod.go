@@ -19,6 +19,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	ca_podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
@@ -35,4 +37,23 @@ func IsSystemPod(pod *v1.Pod) bool {
 // IsUserWorkloadPod returns true if the pod is non-static non-daemonSet non-kubesystem pod.
 func IsUserWorkloadPod(pod *v1.Pod) bool {
 	return !IsSystemPod(pod) && !ca_podutils.IsDaemonSetPod(pod) && !ca_podutils.IsMirrorPod(pod) && !ca_podutils.IsStaticPod(pod)
+}
+
+// HasRunningCustomerPods returns true if the node has any running user workload pods.
+// Note: we also need to check if pod.Spec.NodeName == nodeInfo.Node().Name to verify if a pod is actually running on a node
+// and it is not just a simulation result.
+func HasRunningCustomerPods(nodeInfo *framework.NodeInfo) bool {
+	if nodeInfo == nil {
+		return false
+	}
+	if nodeInfo.Node() == nil {
+		klog.Warningf("Nil Node object for node info %q", nodeInfo)
+		return false
+	}
+	for _, podInfo := range nodeInfo.Pods() {
+		if IsUserWorkloadPod(podInfo.Pod) && podInfo.Pod.Spec.NodeName == nodeInfo.Node().Name {
+			return true
+		}
+	}
+	return false
 }
