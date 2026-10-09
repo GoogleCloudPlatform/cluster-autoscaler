@@ -91,11 +91,9 @@ func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, pr
 // NewPccCrd builds a CustomComputeClass CRD from a PredefinedComputeClass object.
 func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
 	var strategy *v1.AllocationStrategy
-	var priorityScore *int
 	if optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
 		if autopilotEnabled && !pcc.IsSliceOfHardware() && !pcc.IsAcceleratorClass() {
 			strategy = ptr.To(v1.AllocationStrategyFleetEfficiency)
-			priorityScore = ptr.To(100)
 		}
 	}
 	var priorities []v1.Priority
@@ -103,7 +101,7 @@ func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopi
 		familyRef := family.Name()
 		priority := v1.Priority{
 			MachineFamily:      &familyRef,
-			PriorityScore:      priorityScore,
+			PriorityScore:      ptr.To(100),
 			AllocationStrategy: strategy,
 		}
 		priorities = append(priorities, priority)

@@ -3416,6 +3416,7 @@ func TestNewPccCrd(t *testing.T) {
 		c := NewPccCrd(performancePcc, "test-project", true, crd.TestDefaultDataProvider(), enabledTracker)
 		assert.Equal(t, "Performance", c.Name())
 		assert.True(t, c.(*cccCrd).autopilotEnabled)
+		assert.Len(t, c.GroupedRules(), 1)
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
@@ -3426,7 +3427,7 @@ func TestNewPccCrd(t *testing.T) {
 	t.Run("Pay-per-pod PCC with experiment disabled does not set fleet-efficiency", func(t *testing.T) {
 		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), disabledTracker)
 		assert.Equal(t, "Balanced", c.Name())
-		assert.Len(t, c.GroupedRules(), 2)
+		assert.Len(t, c.GroupedRules(), 1)
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
@@ -3437,7 +3438,7 @@ func TestNewPccCrd(t *testing.T) {
 	t.Run("Nil optionsTracker does not panic and does not set fleet-efficiency", func(t *testing.T) {
 		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), nil)
 		assert.Equal(t, "Balanced", c.Name())
-		assert.Len(t, c.GroupedRules(), 2)
+		assert.Len(t, c.GroupedRules(), 1)
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)

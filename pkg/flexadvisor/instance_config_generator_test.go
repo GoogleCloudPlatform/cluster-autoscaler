@@ -2248,11 +2248,11 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			wantFleetEfficiency:   true,
 		},
 		{
-			name:                  "Balanced PCC on Autopilot with PayPerPodFleetEfficiency disabled keeps rules in separate groups",
+			name:                  "Balanced PCC on Autopilot with PayPerPodFleetEfficiency disabled groups rules at same priorityScore without fleet-efficiency",
 			flexibilityScopeKey:   "Balanced",
 			autopilotEnabled:      true,
 			payPerPodEnabled:      false,
-			wantGroupedRulesCount: 2,
+			wantGroupedRulesCount: 1,
 			wantFleetEfficiency:   false,
 		},
 	}
