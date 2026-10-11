@@ -369,6 +369,24 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			},
 			wantRestart: true,
 		},
+		{
+			testName: "AuthoritativeMachinesCacheEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AuthoritativeMachinesCacheEnabled = true
+			},
+			wantRestart: false,
+		},
+		{
+			testName: "AuthoritativeMachinesCacheEnabled_is_tracked_when_experiment_disables_it",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AuthoritativeMachinesCacheEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.AuthoritativeMachinesCacheEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AuthoritativeMachinesCacheEnabled = false
+			},
+			wantRestart: true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			wantOpts := EmptyTestOptionsTracker().Options()

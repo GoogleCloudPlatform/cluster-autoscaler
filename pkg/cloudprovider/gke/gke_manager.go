@@ -88,7 +88,7 @@ const (
 	// ClusterRefreshInterval specifies how often the GKE Cluster state is refreshed.
 	ClusterRefreshInterval                = 1 * time.Minute
 	maxConcurrentRefreshShortLivedUpgrade = 15
-	machinesRefreshInterval               = 1 * time.Hour
+	legacyMachinesRefreshInterval         = 1 * time.Hour
 	migCreationWaitTimeout                = 120 * time.Second
 	migCreationCheckInterval              = 1 * time.Second
 	injectedMigCacheTTL                   = 1 * time.Hour
@@ -467,6 +467,7 @@ type gkeManagerImpl struct {
 	gkeConfigurationCache    gkeConfigurationCache
 	lastRefresh              time.Time
 	machinesCacheLastRefresh time.Time
+	machinesCacheRefresher   *machinesCacheRefresher
 	validators.MachineConfigValidator
 	surgeUpgradeResourceTracker     *SurgeUpgradeResourceTracker
 	confidentialNodesEnabled        bool
@@ -580,6 +581,7 @@ type GkeManagerOptions struct {
 	enableUserAnyZoneSelection        bool
 	MachineSerenityLabelsEnabled      bool
 	DefaultReservedResourcesV2Enabled bool
+	AuthoritativeMachinesCacheEnabled bool
 	generalPurposeMachineFamilies     []string
 }
 
@@ -671,6 +673,7 @@ func CreateGkeManager(
 		churnTrackerConfigProvider:          churnTrackerConfigProvider,
 		gkeMetrics:                          internalmetrics.Metrics,
 	}
+	manager.machinesCacheRefresher = newMachinesCacheRefresher(manager)
 
 	if err := manager.forceRefreshResources(); err != nil {
 		return nil, err
@@ -1416,8 +1419,17 @@ func (m *gkeManagerImpl) GetOsDistributionForNap(mig *GkeMig) gce.OperatingSyste
 	}
 }
 
-func (m *gkeManagerImpl) refreshMachinesCache() error {
-	if m.machinesCacheLastRefresh.Add(machinesRefreshInterval).After(time.Now()) {
+func (m *gkeManagerImpl) refreshMachinesCacheIfStale() error {
+	if !m.managerOptions.AuthoritativeMachinesCacheEnabled {
+		return m.legacyRefreshMachinesCacheIfStale()
+	}
+	return m.machinesCacheRefresher.refreshIfStale()
+}
+
+// legacyRefreshMachinesCacheIfStale refreshes machines cache using legacy polling method if lastRefresh + refreshInterval >= time.Now()
+// Warning: ...IfStale in the name regards only timeout interval and not whether set of zones that should be queried changed - this is actually a known issue where this method is not reacting to new zones appropriately
+func (m *gkeManagerImpl) legacyRefreshMachinesCacheIfStale() error {
+	if m.machinesCacheLastRefresh.Add(legacyMachinesRefreshInterval).After(time.Now()) {
 		return nil
 	}
 	// Machine types cache is only updated directly after refreshing cluster resources, so value from cache should be good enough.
@@ -2053,7 +2065,7 @@ func (m *gkeManagerImpl) forceRefreshResources() error {
 		klog.Errorf("Failed to refresh GKE cluster resources: %v", err)
 		return err
 	}
-	if err := m.refreshMachinesCache(); err != nil {
+	if err := m.refreshMachinesCacheIfStale(); err != nil {
 		klog.Errorf("Failed to fetch machine types: %v", err)
 		return err
 	}
@@ -2646,7 +2658,9 @@ func subtract(a, b resource.Quantity) resource.Quantity {
 	return *pValue
 }
 
-func (m *gkeManagerImpl) GetMachineType(machineName string, zone string) (gce.MachineType, error) {
+// legacyGetMachineType runs legacy/deprecated routing for GetMachineType. Should be removed if new version is running in prod for meaningful time
+// and AuthoritativeMachinesCache::Enabled is removed
+func (m *gkeManagerImpl) legacyGetMachineType(machineName string, zone string) (gce.MachineType, error) {
 	if gce.IsCustomMachine(machineName) {
 		return gce.NewCustomMachineType(machineName)
 	}
@@ -2679,6 +2693,32 @@ func (m *gkeManagerImpl) GetMachineType(machineName string, zone string) (gce.Ma
 
 	m.cache.AddMachine(machine, zone)
 	return machine, nil
+}
+
+func (m *gkeManagerImpl) GetMachineType(machineName string, zone string) (gce.MachineType, error) {
+	if !m.managerOptions.AuthoritativeMachinesCacheEnabled {
+		return m.legacyGetMachineType(machineName, zone)
+	}
+
+	if gce.IsCustomMachine(machineName) {
+		return gce.NewCustomMachineType(machineName)
+	}
+
+	if fetchedZones := m.machinesCacheRefresher.fetchedZones.Load(); fetchedZones != nil && !fetchedZones.Has(zone) {
+		// Use rate.Limiter.Allow() instead of logging.NewLogRateLimiter so that sets.List(*fetchedZones)
+		// is not evaluated (avoiding slice allocation and sorting) when the log is rate-limited.
+		if m.machinesCacheRefresher.missingZoneLogLimiter.Allow() {
+			klog.Warningf("GetMachineType: requested zone=%v not present in fetchedZones=%v", zone, sets.List(*fetchedZones))
+		}
+		return gce.MachineType{}, fmt.Errorf("machine %s not available in %s", machineName, zone)
+	}
+
+	// Cache hit: return the machine type immediately.
+	if machine, found := m.cache.GetMachine(machineName, zone); found {
+		return machine, nil
+	}
+
+	return gce.MachineType{}, fmt.Errorf("machine %s not available in %s", machineName, zone)
 }
 
 func (m *gkeManagerImpl) IsDataplaneV2Enabled() bool {
@@ -3144,6 +3184,9 @@ func (m *gkeManagerImpl) MachineConfigProvider() *machinetypes.MachineConfigProv
 
 // ExperimentsManager returns the experiments.Manager.
 func (m *gkeManagerImpl) ExperimentsManager() experiments.Manager {
+	if m.optsTracker == nil {
+		return nil
+	}
 	return m.optsTracker.ExperimentsManager()
 }
 

@@ -35,6 +35,7 @@ import (
 	kubeletapis "k8s.io/kubelet/pkg/apis"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
 
 // params: machineType, serialized guestAccelerators, serialized labels, additional properties field if needed
@@ -172,13 +173,8 @@ func (c *testMigConfig) machineFamily(t *testing.T) machinetypes.MachineFamily {
 	return machineFamily
 }
 
-func (c *testMigConfig) machineTypeApiResponse(t *testing.T) string {
-	template := `{
-		"name": "%s",
-		"guestCpus": %d,
-		"memoryMb": %d
-	}`
-
+// machineTypeCpuAndMemoryMb returns the CPU and memory (as reported in the memoryMb field by GCE) of the machine type.
+func (c *testMigConfig) machineTypeCpuAndMemoryMb(t *testing.T) (int64, int64) {
 	machineType, err := machinetypes.NewMachineConfigProvider(nil).ToMachineType(c.machineType)
 	assert.NoError(t, err)
 
@@ -191,8 +187,7 @@ func (c *testMigConfig) machineTypeApiResponse(t *testing.T) string {
 	if c.machineTypeMemOverride != 0 {
 		mem = c.machineTypeMemOverride
 	}
-
-	return fmt.Sprintf(template, c.machineType, cpu, mem)
+	return cpu, mem
 }
 
 // createMig creates a GkeMig object for the purpose of testing GkeManager.GetMigTemplateNodeInfo() logic:
@@ -201,10 +196,12 @@ func (c *testMigConfig) machineTypeApiResponse(t *testing.T) string {
 //     MIGs should only have a field set if NAP sets it in reality, and so on.
 //   - If the templating logic for the created MIG needs to make GCE calls, they are recorded in the provided gceServerMock.
 func (c *testMigConfig) createMig(t *testing.T, gkeManager *gkeManagerImpl, gceServerMock *test_utils.HttpServerMock) *GkeMig {
-	// GetMigTemplateNodeInfo() retrieves info about the MIG's machine type from GCE, unless the machine type is custom (in which case it relies on parsing the type name instead).
+	// GetMigTemplateNodeInfo() retrieves info about the MIG's machine type from the machine types cache (populated by refreshMachinesCache()
+	// for all zones in the cluster region), unless the machine type is custom (in which case it relies on parsing the type name instead).
+	// Both NAP-created and real MIGs hit the cache, so no GCE call is made for the machine type.
 	if !gce.IsCustomMachine(c.machineType) {
-		machineTypeUrl := fmt.Sprintf("/projects/project1/zones/us-central1-b/machineTypes/%s", c.machineType)
-		gceServerMock.On("handle", machineTypeUrl).Return(c.machineTypeApiResponse(t))
+		cpu, memMb := c.machineTypeCpuAndMemoryMb(t)
+		gkeManager.cache.AddMachine(gce.MachineType{Name: c.machineType, CPU: cpu, Memory: memMb * units.MiB}, zoneB)
 	}
 
 	// GKE-specific labels are stored in different places depending on whether the MIG is real or NAP-created - set them later in the NAP/non-NAP specific paths.
@@ -550,8 +547,7 @@ func TestGetMigTemplateNodeInfo(t *testing.T) {
 			gkeManager := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
 			gkeManager.dataplaneV2Enabled.Store(!tc.dataPlaneV2Disabled)
 			gkeManager.defaultMaxPodsPerNode.Store(tc.clusterMPPN)
-			// newTestGkeManager seeds the machine-types cache with 2 arbitrary machine types, which makes reasoning about GCE calls very difficult (there's no
-			// GCE call for the 2 types in cache, but there is one for all other types). Clear the cache so that we can always expect a GCE call.
+			// newTestGkeManager seeds the machine-types cache with 2 arbitrary machine types. Clear the cache, createMig() seeds it with the tested machine type.
 			gkeManager.cache.SetMachines(nil)
 
 			// Create a test MIG based on the test-case config. This also registers all GCE calls needed by GetMigTemplateNodeInfo() for a given MIG in the

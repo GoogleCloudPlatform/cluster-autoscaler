@@ -163,6 +163,7 @@ type InternalOptions struct {
 	ExperimentsConfigMap                         string
 	FilterMigsByClusterNameEnabled               bool
 	ResizableVmEdpEnabled                        bool
+	AuthoritativeMachinesCacheEnabled            bool
 	FlagOverrideResult                           FlagOverrideResult
 }
 

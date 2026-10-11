@@ -28,6 +28,8 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gke "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -110,15 +112,26 @@ func TestUnregisteredMachineType(t *testing.T) {
 }
 
 // TestUnregisteredMachineTypeErrorCaching verifies that GCE API errors encountered when fetching
-// machine types during NAP scale-up are cached to prevent GCE API spam across multiple pod groups.
+// machine types during NAP scale-up are cached to prevent GCE API spam across multiple pod groups
+// when AuthoritativeMachinesCache is disabled.
 // It also verifies that the autoscaler successfully recovers and scales up once the cache TTL expires.
 func TestUnregisteredMachineTypeErrorCaching(t *testing.T) {
 	testConfig := integration.NewTestConfig().
-		WithOverrides(integration.WithAutoProvisioningEnabled()).
+		WithOverrides(
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithInitialNodeGroupBackoffDuration(time.Hour),
+			func(o *options.AutoscalingOptions) *options.AutoscalingOptions {
+				o.EnableUserAnyZoneSelection = true
+				return o
+			},
+		).
 		WithClusterOverrides(
 			integration.WithClusterAutoProvisioningEnabled(),
 			integration.WithAutoprovisioningLocations("us-central1-a"),
-		)
+		).
+		WithExperimentOverrides(map[string]bool{
+			experiments.AuthoritativeMachinesCacheEnabledFlag: false,
+		}, nil)
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -128,25 +141,26 @@ func TestUnregisteredMachineTypeErrorCaching(t *testing.T) {
 		assert.NoError(t, err)
 		defer integration_synctest.TearDown(cancel)
 
-		// Register a GCE handler that fails with 404 on the very first call, and returns success
-		// on all subsequent calls. This simulates a transient GCE outage that recovers mid-loop.
+		// Register a GCE handler for us-central1-b (which is not in AutoprovisioningLocations,
+		// so legacyRefreshMachinesCache did not pre-populate it at startup) that fails with 404
+		// on the very first call, and returns success on all subsequent calls.
 		//
-		// If the autoscaler's error caching is working, it will cache the first failure and block
-		// subsequent scale-up attempts within the same loop without querying GCE again (which would
-		// otherwise succeed since GCE recovered immediately).
+		// If the autoscaler's error caching in legacyGetMachineType is working, it will cache the
+		// first FetchMachineType failure for gke.MachineTypeErrorCacheValidity and block subsequent
+		// scale-up attempts without querying GCE again (which would otherwise succeed immediately).
 		failedOnce := false
-		infra.Fakes.GceService.SetFetchMachineTypeHandler("us-central1-a", "n1-standard-96", func() error {
+		infra.Fakes.GceService.SetFetchMachineTypeHandler("us-central1-b", "n1-standard-96", func() error {
 			if !failedOnce {
 				failedOnce = true
 				return &googleapi.Error{
 					Code:    http.StatusNotFound,
-					Message: "machine type n1-standard-96 in zone us-central1-a not found (temporary testing error)",
+					Message: "machine type n1-standard-96 in zone us-central1-b not found (temporary testing error)",
 				}
 			}
 			return nil
 		})
 
-		// Create 5 unschedulable pods strictly requesting n1-standard-96.
+		// Create 5 unschedulable pods strictly requesting n1-standard-96 in us-central1-b.
 		// We use slightly different CPU requests to ensure they are not equivalent,
 		// forcing the autoscaler to process them as 5 separate groups in the same loop.
 		for i := 0; i < 5; i++ {
@@ -155,23 +169,27 @@ func TestUnregisteredMachineTypeErrorCaching(t *testing.T) {
 			pod := tu.BuildTestPod(podName, cpuRequest, 2000, tu.MarkUnschedulable())
 			pod.Spec.NodeSelector = map[string]string{
 				apiv1.LabelInstanceTypeStable: "n1-standard-96",
+				apiv1.LabelTopologyZone:       "us-central1-b",
 			}
 			infra.Fakes.K8s.AddPod(pod)
 		}
 
-		// Loop 1: The first pod group triggers a GCE query, which fails and gets cached.
-		// If caching is working, the other 4 groups will hit the cache and fail immediately
-		// without calling GCE (which would otherwise succeed).
-		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "Machine type n1-standard-96 is not supported in zone")
+		// Loop 1: legacyGetMachineType misses GkeCache for us-central1-b and queries GCE,
+		// which fails with 404 and caches the error for gke.MachineTypeErrorCacheValidity.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
-		// Assert that no scale-up happened, confirming the cached error blocked all pod groups.
+		// Loop 2 (before cache TTL expires): legacyGetMachineType hits the negative error cache
+		// and fails immediately without calling GCE (which would otherwise succeed).
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		// Assert that no scale-up happened, confirming the cached error blocked scale-up.
 		nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 		assert.NoError(t, err)
-		assert.Empty(t, nodes.Items, "Expected no nodes to be added because the error should be cached for all pods in the loop")
+		assert.Empty(t, nodes.Items, "Expected no nodes to be added because the error should be cached")
 
-		// Loop 2: Sleep past the cache TTL. Since the cache has expired and GCE has recovered,
-		// the autoscaler should now successfully query GCE, validate the machine config,
-		// and scale up the cluster to accommodate all 5 pods.
+		// Loop 3: Sleep past the error cache TTL (5m, which is well below the 1h NAP backoff).
+		// Since the error cache has expired and GCE has recovered, legacyGetMachineType should now
+		// successfully query GCE and scale up the cluster to accommodate all 5 pods.
 		time.Sleep(gke.MachineTypeErrorCacheValidity + time.Minute)
 		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
 
@@ -190,5 +208,93 @@ func TestUnregisteredMachineTypeErrorCaching(t *testing.T) {
 		nodes, err = infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 		assert.NoError(t, err)
 		assert.Len(t, nodes.Items, 5, "Expected 5 nodes to be added after cache expiration")
+	})
+}
+
+// TestUnregisteredMachineTypeErrorBackoffWithAuthoritativeMachinesCache verifies that with
+// AuthoritativeMachinesCache enabled, refreshMachinesCacheIfStale pre-populates all zones in the region
+// (including zones outside AutoprovisioningLocations) so GetMachineType hits the authoritative cache,
+// while a transient GCE API error during CreateNodePool machine config validation blocks scale-up and
+// backs off the NAP node group until the backoff expires.
+func TestUnregisteredMachineTypeErrorBackoffWithAuthoritativeMachinesCache(t *testing.T) {
+	const napBackoff = 5 * time.Minute
+	testConfig := integration.NewTestConfig().
+		WithOverrides(
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithInitialNodeGroupBackoffDuration(napBackoff),
+			func(o *options.AutoscalingOptions) *options.AutoscalingOptions {
+				o.EnableUserAnyZoneSelection = true
+				return o
+			},
+		).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations("us-central1-a"),
+		).
+		WithExperimentOverrides(map[string]bool{
+			experiments.AuthoritativeMachinesCacheEnabledFlag: true,
+		}, nil)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		failedOnce := false
+		infra.Fakes.GceService.SetFetchMachineTypeHandler("us-central1-b", "n1-standard-96", func() error {
+			if !failedOnce {
+				failedOnce = true
+				return &googleapi.Error{
+					Code:    http.StatusNotFound,
+					Message: "machine type n1-standard-96 in zone us-central1-b not found (temporary testing error)",
+				}
+			}
+			return nil
+		})
+
+		for i := 0; i < 5; i++ {
+			podName := fmt.Sprintf("pod-%d", i)
+			cpuRequest := int64(70000 + i) // 70000, 70001, etc. -> forces 1 pod per node on 96-core machine
+			pod := tu.BuildTestPod(podName, cpuRequest, 2000, tu.MarkUnschedulable())
+			pod.Spec.NodeSelector = map[string]string{
+				apiv1.LabelInstanceTypeStable: "n1-standard-96",
+				apiv1.LabelTopologyZone:       "us-central1-b",
+			}
+			infra.Fakes.K8s.AddPod(pod)
+		}
+
+		// Loop 1: GetMachineType hits the authoritative cache (populated at startup across all zones
+		// in the region), and the first pod group triggers machine config validation during CreateNodePool,
+		// which fails and caches the validation error.
+		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "Machine type n1-standard-96 is not supported in zone")
+
+		// Loop 2 (before validation error cache expires): CreateNodePool hits the cached validation error
+		// without querying GCE again.
+		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "Machine type n1-standard-96 is not supported in zone")
+
+		nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		assert.NoError(t, err)
+		assert.Empty(t, nodes.Items, "Expected no nodes to be added because the NAP node group should be backed off")
+
+		// Loop 3: Sleep past the NAP backoff. Since the backoff has expired and GCE has recovered,
+		// the autoscaler should now successfully validate the machine config and scale up the cluster.
+		time.Sleep(napBackoff + time.Minute)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		infra.Fakes.RunScheduler(ctx, t)
+
+		for i := 0; i < 5; i++ {
+			podName := fmt.Sprintf("pod-%d", i)
+			updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod %s to be scheduled after backoff expiration", podName)
+		}
+
+		nodes, err = infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		assert.NoError(t, err)
+		assert.Len(t, nodes.Items, 5, "Expected 5 nodes to be added after backoff expiration")
 	})
 }
