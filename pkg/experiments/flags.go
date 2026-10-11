@@ -338,3 +338,7 @@ const FilterMigsByClusterNameMinCAVersionFlag = "FilterMigsByClusterName::MinCAV
 
 const HighThroughputScaledownEnabledFlag = "HighThroughputScaledown::Enabled"
 const HighThroughputScaledownMinCAVersionFlag = "HighThroughputScaledown::MinCAVersion"
+
+const AuthoritativeMachinesCacheEnabledFlag = "AuthoritativeMachinesCache::Enabled"
+const AuthoritativeMachinesCacheMinCAVersionFlag = "AuthoritativeMachinesCache::MinCAVersion"
+const AuthoritativeMachinesCacheRefreshIntervalMinutesFlag = "AuthoritativeMachinesCache::RefreshIntervalMinutes"

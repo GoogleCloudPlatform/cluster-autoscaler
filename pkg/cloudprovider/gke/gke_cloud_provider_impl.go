@@ -2441,6 +2441,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		enableUserAnyZoneSelection:        opts.EnableUserAnyZoneSelection,
 		MachineSerenityLabelsEnabled:      opts.MachineSerenityLabelsEnabled,
 		DefaultReservedResourcesV2Enabled: opts.DefaultReservedResourcesV2Enabled,
+		AuthoritativeMachinesCacheEnabled: opts.AuthoritativeMachinesCacheEnabled,
 	}
 
 	manager, err := CreateGkeManager(

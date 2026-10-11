@@ -90,6 +90,7 @@ var allTrackedFields = []trackedField{
 	kubeClientOptsField,
 	maxScaleDownParallelismField,
 	maxConcurrentNodesTaintingField,
+	authoritativeMachinesCacheEnabledField,
 }
 
 // OptionsTracker computes AutoscalingOptions based on <CLI flags, experiments, Cluster proto> and tracks changes to them during Cluster Autoscaler runtime.

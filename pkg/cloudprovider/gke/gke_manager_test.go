@@ -808,10 +808,11 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		gkeConfigurationCache:       gkeConfigurationCache{autoprovisioningLocations: []string{zoneA, zoneB}},
 		MachineConfigValidator:      &testMachineConfigValidator{},
 		managerOptions: GkeManagerOptions{
-			Regional:                      regional,
-			AutopilotEnabled:              autopilotEnabled,
-			AutopilotHigherMaxPodsPerNode: autopilotHigherMaxPodsPerNode,
-			enableUserAnyZoneSelection:    true,
+			Regional:                          regional,
+			AutopilotEnabled:                  autopilotEnabled,
+			AutopilotHigherMaxPodsPerNode:     autopilotHigherMaxPodsPerNode,
+			enableUserAnyZoneSelection:        true,
+			AuthoritativeMachinesCacheEnabled: true,
 		},
 
 		draResourcePredictor:     dynamicresources.NewResourcePredictor(),
@@ -825,6 +826,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 	} else {
 		manager.location = zoneB
 	}
+	manager.machinesCacheRefresher = newMachinesCacheRefresher(manager)
 
 	machineConfigProvider := machinetypes.NewMachineConfigProvider(nil)
 	manager.draResourcePredictor.SetCloudProvider(&fakeProvider{machineConfigProvider})
@@ -3283,55 +3285,84 @@ const listMachineTypesResponse = `{
  "selfLink": "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-c/machineTypes"
 }`
 
-func TestRefreshMachinesCache(t *testing.T) {
-	server := NewHttpServerMock()
-	defer server.Close()
-
-	g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)
-	addDefaultListMigsMocks(server, g.cache)
-	mig := &GkeMig{
-		gceRef: gce.GceRef{
-			Project: projectId,
-			Zone:    zoneB,
-			Name:    "default-pool",
+func TestLegacyRefreshMachinesCache(t *testing.T) {
+	testCases := []struct {
+		name           string
+		lastRefreshAgo time.Duration
+		wantFetch      bool
+		fetchFails     bool
+		wantErr        bool
+		wantRefreshed  bool
+	}{
+		{
+			name:          "authoritative cache disabled, never refreshed - refreshes autoprovisioning locations synchronously",
+			wantFetch:     true,
+			wantRefreshed: true,
+		},
+		{
+			name:           "authoritative cache disabled, refreshed recently - skips refresh",
+			lastRefreshAgo: 30 * time.Minute,
+		},
+		{
+			name:           "authoritative cache disabled, stale - refreshes synchronously",
+			lastRefreshAgo: legacyMachinesRefreshInterval + time.Minute,
+			wantFetch:      true,
+			wantRefreshed:  true,
+		},
+		{
+			name:       "authoritative cache disabled, fetch fails - returns error",
+			wantFetch:  true,
+			fetchFails: true,
+			wantErr:    true,
 		},
 	}
-	g.cache.RegisterMig(mig)
-	g.gkeConfigurationCache.setAutoprovisioningLocations([]string{})
 
-	server.On("handle", "/projects/project1/zones/us-central1-b/machineTypes").Return(listMachineTypesResponse).Once()
-	err := g.refreshMachinesCache()
-	assert.NoError(t, err)
-	machine, _ := g.cache.GetMachine("f1-micro", zoneB)
-	assert.NotNil(t, machine)
-	machine, _ = g.cache.GetMachine("g1-small", zoneB)
-	assert.NotNil(t, machine)
-	mock.AssertExpectationsForObjects(t, server)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewHttpServerMock(MockFieldStatusCode, MockFieldResponse)
+			defer server.Close()
 
-	// Skipped refresh.
-	err = g.refreshMachinesCache()
-	assert.NoError(t, err)
-	mock.AssertExpectationsForObjects(t, server)
+			g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)
+			g.managerOptions.AuthoritativeMachinesCacheEnabled = false
+			// Set region zones to include zoneC, which is not in autoprovisioningLocations (zoneA, zoneB).
+			// Legacy refresh should only fetch autoprovisioningLocations (zoneA, zoneB), not zoneC.
+			g.cache.SetZonesInRegion(region, []string{zoneA, zoneB, zoneC})
+			var initialLastRefresh time.Time
+			if tc.lastRefreshAgo > 0 {
+				initialLastRefresh = time.Now().Add(-tc.lastRefreshAgo)
+			}
+			g.machinesCacheLastRefresh = initialLastRefresh
 
-	// Refresh again.
-	server.On("handle", "/projects/project1/zones/us-central1-b/machineTypes").Return(listMachineTypesResponse).Once()
-	g.machinesCacheLastRefresh = time.Now().Add(-2 * time.Hour)
-	err = g.refreshMachinesCache()
-	assert.NoError(t, err)
-	mock.AssertExpectationsForObjects(t, server)
+			if tc.wantFetch {
+				if tc.fetchFails {
+					server.On("handle", "/projects/project1/zones/us-central1-a/machineTypes").Return(http.StatusInternalServerError, "Internal Server Error").Maybe()
+					server.On("handle", "/projects/project1/zones/us-central1-b/machineTypes").Return(http.StatusInternalServerError, "Internal Server Error").Maybe()
+				} else {
+					server.On("handle", "/projects/project1/zones/us-central1-a/machineTypes").Return(http.StatusOK, listMachineTypesResponse).Once()
+					server.On("handle", "/projects/project1/zones/us-central1-b/machineTypes").Return(http.StatusOK, listMachineTypesResponse).Once()
+				}
+			}
 
-	// Get machines for autoprovisioning locations with existing nodes.
-	g.gkeConfigurationCache.setAutoprovisioningLocations([]string{zoneC})
-	server.On("handle", "/projects/project1/zones/us-central1-b/machineTypes").Return(listMachineTypesResponse).Once()
-	server.On("handle", "/projects/project1/zones/us-central1-c/machineTypes").Return(listMachineTypesResponse).Once()
-	g.machinesCacheLastRefresh = time.Now().Add(-2 * time.Hour)
-	err = g.refreshMachinesCache()
-	assert.NoError(t, err)
-	machine, _ = g.cache.GetMachine("f1-micro", zoneB)
-	assert.NotNil(t, machine)
-	machine, _ = g.cache.GetMachine("f1-micro", zoneC)
-	assert.NotNil(t, machine)
-	mock.AssertExpectationsForObjects(t, server)
+			err := g.refreshMachinesCacheIfStale()
+
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			_, oldMachineFound := g.cache.GetMachine(machineTypeA, zoneB)
+			_, newMachineFound := g.cache.GetMachine("f1-micro", zoneB)
+			assert.Equal(t, !tc.wantRefreshed, oldMachineFound)
+			assert.Equal(t, tc.wantRefreshed, newMachineFound)
+			assert.Nil(t, g.machinesCacheRefresher.fetchedZones.Load())
+			if tc.wantRefreshed {
+				assert.WithinDuration(t, time.Now(), g.machinesCacheLastRefresh, 10*time.Second)
+			} else {
+				assert.Equal(t, initialLastRefresh, g.machinesCacheLastRefresh)
+			}
+			mock.AssertExpectationsForObjects(t, server)
+		})
+	}
 }
 
 const getMachineTypeResponse = `{
@@ -3350,97 +3381,190 @@ const getMachineTypeResponse = `{
 }`
 
 func TestGetMachineType(t *testing.T) {
-	server := NewHttpServerMock()
-	defer server.Close()
-	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
-	addDefaultListMigsMocks(server, g.cache)
+	testCases := []struct {
+		name                       string
+		authoritativeCacheDisabled bool
+		fetchedZones               []string // nil means that the machines cache was never refreshed.
+		machineType                string
+		zone                       string
+		wantGcePath                string
+		gceStatusCode              int
+		gceResponse                string
+		wantErr                    bool
+		wantErrContains            string
+		wantCPU                    int64
+		wantMemory                 int64
+		wantZonesAfter             []string
+	}{
+		{
+			name:           "custom machine type - parsed from name",
+			fetchedZones:   []string{zoneB},
+			machineType:    "custom-8-2",
+			zone:           zoneB,
+			wantCPU:        8,
+			wantMemory:     2 * units.MiB,
+			wantZonesAfter: []string{zoneB},
+		},
+		{
+			name:           "standard machine type in cache - returned from cache",
+			fetchedZones:   []string{zoneB},
+			machineType:    machineTypeA,
+			zone:           zoneB,
+			wantCPU:        1,
+			wantMemory:     1 * units.MiB,
+			wantZonesAfter: []string{zoneB},
+		},
+		{
+			name:           "standard machine type not in cache, zone fetched - returns error without calling GCE",
+			fetchedZones:   []string{zoneB},
+			machineType:    "n1-standard-2",
+			zone:           zoneB,
+			wantErr:        true,
+			wantZonesAfter: []string{zoneB},
+		},
+		{
+			name:        "standard machine type not in cache, never refreshed - returns error without calling GCE",
+			machineType: "n1-standard-2",
+			zone:        zoneB,
+			wantErr:     true,
+		},
+		{
+			name:           "zone not in fetched zones - returns error without calling GCE",
+			fetchedZones:   []string{zoneB},
+			machineType:    machineTypeA,
+			zone:           zoneA,
+			wantErr:        true,
+			wantZonesAfter: []string{zoneB},
+		},
+		{
+			name:                       "authoritative cache disabled, custom machine type - parsed from name",
+			authoritativeCacheDisabled: true,
+			fetchedZones:               []string{zoneB},
+			machineType:                "custom-8-2",
+			zone:                       zoneB,
+			wantCPU:                    8,
+			wantMemory:                 2 * units.MiB,
+			wantZonesAfter:             []string{zoneB},
+		},
+		{
+			name:                       "authoritative cache disabled, standard machine type in cache - returned from cache",
+			authoritativeCacheDisabled: true,
+			fetchedZones:               []string{zoneB},
+			machineType:                machineTypeA,
+			zone:                       zoneB,
+			wantCPU:                    1,
+			wantMemory:                 1 * units.MiB,
+			wantZonesAfter:             []string{zoneB},
+		},
+		{
+			name:                       "authoritative cache disabled, standard machine type not in cache - fetched from GCE and cached",
+			authoritativeCacheDisabled: true,
+			fetchedZones:               []string{zoneB},
+			machineType:                "n1-standard-2",
+			zone:                       zoneB,
+			wantGcePath:                "/projects/project1/zones/us-central1-b/machineTypes/n1-standard-2",
+			gceStatusCode:              http.StatusOK,
+			gceResponse:                getMachineTypeResponse,
+			wantCPU:                    2,
+			wantMemory:                 3840 * units.MiB,
+			wantZonesAfter:             []string{zoneB},
+		},
+		{
+			name:                       "authoritative cache disabled, standard machine type not found in GCE - returns error",
+			authoritativeCacheDisabled: true,
+			fetchedZones:               []string{zoneB},
+			machineType:                machineTypeA,
+			zone:                       "us-central1-g",
+			wantGcePath:                "/projects/project1/zones/us-central1-g/machineTypes/n1-standard-1",
+			gceStatusCode:              http.StatusNotFound,
+			gceResponse:                "Not Found",
+			wantErr:                    true,
+			wantZonesAfter:             []string{zoneB},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewHttpServerMock(MockFieldStatusCode, MockFieldResponse)
+			defer server.Close()
+			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			if tc.authoritativeCacheDisabled {
+				g.managerOptions.AuthoritativeMachinesCacheEnabled = false
+			}
+			if tc.fetchedZones != nil {
+				fetchedZones := sets.New(tc.fetchedZones...)
+				g.machinesCacheRefresher.fetchedZones.Store(&fetchedZones)
+			}
+			if tc.wantGcePath != "" {
+				server.On("handle", tc.wantGcePath).Return(tc.gceStatusCode, tc.gceResponse).Once()
+			}
 
-	// Custom machine type.
-	machine, err := g.GetMachineType("custom-8-2", zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(8), machine.CPU)
-	assert.Equal(t, int64(2*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
+			machine, err := g.GetMachineType(tc.machineType, tc.zone)
 
-	// Standard machine type found in cache.
-	machine, err = g.GetMachineType(machineTypeA, zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(1), machine.CPU)
-	assert.Equal(t, int64(1*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
-
-	// Standard machine type not found in cache.
-	server.On("handle", "/projects/project1/zones/"+zoneB+"/machineTypes/n1-standard-2").Return(getMachineTypeResponse).Once()
-	machine, err = g.GetMachineType("n1-standard-2", zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(2), machine.CPU)
-	assert.Equal(t, int64(3840*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
-
-	// Standard machine type cached.
-	machine, err = g.GetMachineType("n1-standard-2", zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(2), machine.CPU)
-	assert.Equal(t, int64(3840*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
-
-	machine, err = g.GetMachineType("n1-standard-2", zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(2), machine.CPU)
-	assert.Equal(t, int64(3840*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
-
-	machine, err = g.GetMachineType("custom-8-2", zoneB)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(8), machine.CPU)
-	assert.Equal(t, int64(2*units.MiB), machine.Memory)
-	mock.AssertExpectationsForObjects(t, server)
-
-	// Standard machine type not found in the zone.
-	server.On("handle", "/projects/project1/zones/us-central1-g/machineTypes/n1-standard-1").Return("").Once()
-	_, err = g.GetMachineType(machineTypeA, "us-central1-g")
-	assert.Error(t, err)
-	mock.AssertExpectationsForObjects(t, server)
+			if tc.wantErr {
+				assert.Error(t, err)
+				if tc.wantErrContains != "" {
+					assert.ErrorContains(t, err, tc.wantErrContains)
+				}
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, tc.wantCPU, machine.CPU)
+				assert.Equal(t, tc.wantMemory, machine.Memory)
+			}
+			if tc.wantZonesAfter != nil {
+				gotZones := g.machinesCacheRefresher.fetchedZones.Load()
+				if assert.NotNil(t, gotZones) {
+					assert.Equal(t, sets.New(tc.wantZonesAfter...), *gotZones)
+				}
+			} else {
+				assert.Nil(t, g.machinesCacheRefresher.fetchedZones.Load())
+			}
+			mock.AssertExpectationsForObjects(t, server)
+			if tc.wantGcePath == "" {
+				server.AssertNotCalled(t, "handle", mock.Anything)
+			}
+		})
+	}
 }
 
 func TestGetMachineTypeErrorCache(t *testing.T) {
-	tests := []struct {
+	testCases := []struct {
 		name        string
 		statusCode  int
 		response    string
 		shouldCache bool
 	}{
 		{
-			name:        "404 Not Found is cached",
+			name:        "404 Not Found - cached",
 			statusCode:  http.StatusNotFound,
 			response:    "Not Found",
 			shouldCache: true,
 		},
 		{
-			name:        "400 Bad Request is cached",
+			name:        "400 Bad Request - cached",
 			statusCode:  http.StatusBadRequest,
 			response:    "Bad Request",
 			shouldCache: true,
 		},
 		{
-			name:        "429 Too Many Requests is cached",
+			name:        "429 Too Many Requests - cached",
 			statusCode:  http.StatusTooManyRequests,
 			response:    "Too Many Requests",
 			shouldCache: true,
 		},
 		{
-			name:        "503 Service Unavailable is not cached",
+			name:        "503 Service Unavailable - not cached",
 			statusCode:  http.StatusServiceUnavailable,
 			response:    "Service Unavailable",
 			shouldCache: false,
 		},
 	}
 
-	for _, tc := range tests {
+	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			server := NewHttpServerMock(MockFieldStatusCode, MockFieldResponse)
 			defer server.Close()
 			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+			g.managerOptions.AuthoritativeMachinesCacheEnabled = false
 			addDefaultListMigsMocks(server, g.cache)
 
 			machineName := fmt.Sprintf("n1-%d", tc.statusCode)
@@ -3453,14 +3577,12 @@ func TestGetMachineTypeErrorCache(t *testing.T) {
 			mock.AssertExpectationsForObjects(t, server)
 
 			if tc.shouldCache {
-				// Second call: Should hit the negative cache and return the EXACT SAME error immediately.
-				// Since the mock was configured to run "Once()" and we haven't added more expectations,
-				// any call to the GCE API will cause the mock server to fail the test.
+				// Second call: Should hit the negative cache and return the exact same error immediately.
 				_, err2 := g.GetMachineType(machineName, "us-central1-g")
 				assert.Error(t, err2)
 				assert.Equal(t, err1, err2)
 			} else {
-				// Second call: Should NOT hit the cache, so it must call GCE API again. We set up another expectation.
+				// Second call: Should not hit the cache, so it must call GCE API again.
 				server.On("handle", path).Return(tc.statusCode, tc.response).Once()
 				_, err2 := g.GetMachineType(machineName, "us-central1-g")
 				assert.Error(t, err2)
