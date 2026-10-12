@@ -2804,3 +2804,159 @@ func TestReapFinishedInstances_ContextCancelled(t *testing.T) {
 	assert.False(t, stopped)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+func TestFetchAllMigs(t *testing.T) {
+	tests := []struct {
+		name        string
+		clusterName string
+		filterMigs  bool
+		response    *gce_api.InstanceGroupManagerList
+		wantMigs    []string
+		wantFilter  string
+		wantErr     bool
+	}{
+		{
+			name:        "success with filtering",
+			clusterName: "my-cluster",
+			filterMigs:  true,
+			response: &gce_api.InstanceGroupManagerList{
+				Items: []*gce_api.InstanceGroupManager{
+					{
+						Name: "gke-my-cluster-pool-1-abcde",
+					},
+					{
+						Name: "gke-my-cluster-pool-2-abcde",
+					},
+				},
+			},
+			wantMigs: []string{
+				"gke-my-cluster-pool-1-abcde",
+				"gke-my-cluster-pool-2-abcde",
+			},
+			wantFilter: `name eq "(gke|gk3)-my-cluster.*"`,
+			wantErr:    false,
+		},
+		{
+			name:        "success with filtering (long cluster name)",
+			clusterName: "long-cluster-name-test",
+			filterMigs:  true,
+			response: &gce_api.InstanceGroupManagerList{
+				Items: []*gce_api.InstanceGroupManager{
+					{
+						Name: "gke-long-cluster-name-pool-abcde",
+					},
+				},
+			},
+			wantMigs: []string{
+				"gke-long-cluster-name-pool-abcde",
+			},
+			wantFilter: `name eq "(gke|gk3)-long-cluster-nam.*"`,
+			wantErr:    false,
+		},
+		{
+			name:        "success with filter ends with dash",
+			clusterName: "long-cluster-ab-cdefg",
+			filterMigs:  true,
+			response: &gce_api.InstanceGroupManagerList{
+				Items: []*gce_api.InstanceGroupManager{
+					{
+						Name: "gke-long-cluster-ab-pool-abcde",
+					},
+				},
+			},
+			wantMigs: []string{
+				"gke-long-cluster-ab-pool-abcde",
+			},
+			wantFilter: `name eq "(gke|gk3)-long-cluster-ab.*"`,
+			wantErr:    false,
+		},
+		{
+			name:        "no matching MIGs",
+			clusterName: "my-cluster",
+			filterMigs:  true,
+			response: &gce_api.InstanceGroupManagerList{
+				Items: []*gce_api.InstanceGroupManager{},
+			},
+			wantMigs:   []string{},
+			wantFilter: `name eq "(gke|gk3)-my-cluster.*"`,
+			wantErr:    false,
+		},
+		{
+			name:        "no filtering",
+			clusterName: "my-cluster",
+			filterMigs:  false,
+			response: &gce_api.InstanceGroupManagerList{
+				Items: []*gce_api.InstanceGroupManager{
+					{
+						Name: "gke-my-cluster-pool-1-abcde",
+					},
+					{
+						Name: "gke-other-cluster-pool-1-abcde",
+					},
+				},
+			},
+			wantMigs: []string{
+				"gke-my-cluster-pool-1-abcde",
+				"gke-other-cluster-pool-1-abcde",
+			},
+			wantFilter: ``,
+			wantErr:    false,
+		},
+		{
+			name:        "api error",
+			clusterName: "my-cluster",
+			filterMigs:  true,
+			wantFilter:  `name eq "(gke|gk3)-my-cluster.*"`,
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var capturedFilter string
+			server := httptest.NewServer(http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+				if req.URL.Path == "/projects/test-project/zones/us-central1-a/instanceGroupManagers" {
+					capturedFilter = req.URL.Query().Get("filter")
+					if tt.wantErr {
+						res.WriteHeader(http.StatusNotFound)
+						res.Write([]byte("Error"))
+						return
+					}
+					b, err := json.Marshal(tt.response)
+					assert.NoError(t, err)
+					res.WriteHeader(http.StatusOK)
+					res.Write(b)
+					return
+				}
+				res.WriteHeader(http.StatusNotFound)
+			}))
+			defer server.Close()
+
+			gceInternalService := newTestAutoscalingInternalGceClient(t, "test-project", server.URL, false, false)
+			gceInternalService.clusterName = tt.clusterName
+			gceInternalService.filterMigsByClusterNameEnabled = tt.filterMigs
+
+			got, err := gceInternalService.FetchAllMigs("us-central1-a")
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("autoscalingInternalGceClient.FetchAllMigs() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.Equal(t, tt.wantFilter, capturedFilter)
+
+			gotNames := make([]string, 0)
+			for _, mig := range got {
+				gotNames = append(gotNames, mig.Name)
+			}
+
+			if diff := cmp.Diff(tt.wantMigs, gotNames); diff != "" {
+				t.Errorf("autoscalingInternalGceClient.FetchAllMigs() diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}

@@ -301,3 +301,6 @@ const SpecificTypeReservationWithoutMatchEnabledFlag = "SpecificTypeReservationW
 
 const ReservationsAnyLocationPolicyOverrideMinCAVersionFlag = "ReservationsAnyLocationPolicyOverride::MinCAVersion"
 const ReservationsAnyLocationPolicyOverrideEnabledFlag = "ReservationsAnyLocationPolicyOverride::Enabled"
+
+const FilterMigsByClusterNameEnabledFlag = "FilterMigsByClusterName::Enabled"
+const FilterMigsByClusterNameMinCAVersionFlag = "FilterMigsByClusterName::MinCAVersion"

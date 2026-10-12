@@ -38,6 +38,8 @@ const (
 	GracefulDegradationFeatureName = "graceful_degradation_enabled"
 	// BalloonPodIpprResizeFeatureName is the name of the BalloonPodIpprResize feature.
 	BalloonPodIpprResizeFeatureName = "balloon_pod_ippr_resize"
+	// FilterMigsByClusterNameFeatureName is the name of the mig filter by cluster name feature.
+	FilterMigsByClusterNameFeatureName = "filter_migs_by_cluster_name"
 )
 
 var featureEnabled = k8smetrics.NewGaugeVec(

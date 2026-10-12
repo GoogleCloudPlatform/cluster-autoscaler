@@ -1239,6 +1239,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
 	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
 	logAndRecordFeatureMetric(internalmetrics.BalloonPodIpprResizeFeatureName, "BalloonPodIpprResize", options.BalloonPodIpprResizeEnabled)
+	logAndRecordFeatureMetric(internalmetrics.FilterMigsByClusterNameFeatureName, "Filter migs by cluster name", options.FilterMigsByClusterNameEnabled)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

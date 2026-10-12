@@ -147,6 +147,7 @@ type InternalOptions struct {
 	CapacityBuffersMetricsEndpointEnabled        bool
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
 	ExperimentsConfigMap                         string
+	FilterMigsByClusterNameEnabled               bool
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.

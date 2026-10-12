@@ -150,6 +150,7 @@ var (
 	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
+	filterMigsByClusterNameEnabled       = flag.Bool("enable-filter-migs-by-cluster-name", true, "Whether GKE MIGs are filtered by cluster name on the GCE server-side is enabled.")
 
 	// See go/gke-ca-perf-node-pod-watch-selector, read Risks sections before using
 	nodeWatchLabelSelector = flag.String("node-watch-label-selector", "", "Label selector to filter nodes in informer watch, defaults to all nodes.")
@@ -423,5 +424,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		DaemonSetMutationEnabled:                     *daemonSetMutationEnabled,
 		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
 		ExperimentsConfigMap:                         *experimentsConfigMap,
+		FilterMigsByClusterNameEnabled:               *filterMigsByClusterNameEnabled,
 	}
 }

@@ -265,17 +265,18 @@ func MustCreateGceClient(
 		klog.Warningf("Failed to get region from location %q: %v", opts.Location, err)
 	}
 	gceConfig := gceclient.GceConfig{
-		ProjectId:              projectID,
-		ProjectNumber:          int64(opts.ProjectNumber),
-		MultitenancyEnabled:    opts.MultitenancyEnabled,
-		HttpClient:             httpClient,
-		Cache:                  cache,
-		ClusterName:            opts.ClusterName,
-		UserAgent:              opts.UserAgent,
-		ExperimentsManager:     experimentsManager,
-		Endpoint:               opts.GceEndpoint,
-		ProviderConfigObserver: observer,
-		Region:                 region,
+		ProjectId:                      projectID,
+		ProjectNumber:                  int64(opts.ProjectNumber),
+		MultitenancyEnabled:            opts.MultitenancyEnabled,
+		HttpClient:                     httpClient,
+		Cache:                          cache,
+		ClusterName:                    opts.ClusterName,
+		UserAgent:                      opts.UserAgent,
+		ExperimentsManager:             experimentsManager,
+		Endpoint:                       opts.GceEndpoint,
+		ProviderConfigObserver:         observer,
+		Region:                         region,
+		FilterMigsByClusterNameEnabled: opts.FilterMigsByClusterNameEnabled,
 	}
 	client, err := gceclient.CreateClient(gceConfig)
 	if err != nil {

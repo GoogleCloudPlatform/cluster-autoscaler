@@ -75,10 +75,10 @@ var _ MultitenancyGCEClient = &multitenancyGCEClient{}
 // NOTE: The MT client uses the cluster project tokenSource for all GCE API calls
 // which means the cluster GKE P4SA needs to have permissions on all tenant projects.
 // This will change when MT specific Auth server changes have been made.
-func NewMultitenancyGCEClient(client *http.Client, migInfoProvider MigInfoProvider, clusterProjectID string, clusterProjectNumber int64, clusterName string, userAgent string, waitTimeout, pollInterval time.Duration, experimentsManager experiments.Manager) (*multitenancyGCEClient, error) {
+func NewMultitenancyGCEClient(client *http.Client, migInfoProvider MigInfoProvider, clusterProjectID string, clusterProjectNumber int64, clusterName string, userAgent string, waitTimeout, pollInterval time.Duration, experimentsManager experiments.Manager, filterMigsByClusterNameEnabled bool) (*multitenancyGCEClient, error) {
 	// Create cluster project client as the default client otherwise during cluster startup
 	// nodes won't be created since ProviderConfig for cluster project does not exist.
-	clusterProjectClient, err := NewAutoscalingInternalGceClient(client, migInfoProvider, clusterProjectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager)
+	clusterProjectClient, err := NewAutoscalingInternalGceClient(client, migInfoProvider, clusterProjectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager, WithFilterMigsByClusterName(filterMigsByClusterNameEnabled))
 	if err != nil {
 		return nil, fmt.Errorf("unable to create cluster project client: %v", err)
 	}
@@ -94,14 +94,14 @@ func NewMultitenancyGCEClient(client *http.Client, migInfoProvider MigInfoProvid
 		mutex:                   sync.Mutex{},
 		createClientFunc: func(tenantProjectID string, pc *multitenancy.ProviderConfig) (AutoscalingInternalGceClient, error) {
 			if experimentsManager != nil && experimentsManager.DirectLaunchBoolFlag(experiments.MultitenancyEnablePerTenantP4SAFlag) {
-				return NewPerTenantAutoscalingInternalGceClient(client, migInfoProvider, tenantProjectID, clusterProjectNumber, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager, pc)
+				return NewPerTenantAutoscalingInternalGceClient(client, migInfoProvider, tenantProjectID, clusterProjectNumber, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager, pc, filterMigsByClusterNameEnabled)
 			}
-			return NewAutoscalingInternalGceClient(client, migInfoProvider, tenantProjectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager)
+			return NewAutoscalingInternalGceClient(client, migInfoProvider, tenantProjectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager, WithFilterMigsByClusterName(filterMigsByClusterNameEnabled))
 		},
 	}, nil
 }
 
-func NewPerTenantAutoscalingInternalGceClient(client *http.Client, migInfoProvider MigInfoProvider, projectID string, clusterProjectNumber int64, clusterName string, userAgent string, waitTimeout, pollInterval time.Duration, experimentsManager experiments.Manager, providerConfig *multitenancy.ProviderConfig) (AutoscalingInternalGceClient, error) {
+func NewPerTenantAutoscalingInternalGceClient(client *http.Client, migInfoProvider MigInfoProvider, projectID string, clusterProjectNumber int64, clusterName string, userAgent string, waitTimeout, pollInterval time.Duration, experimentsManager experiments.Manager, providerConfig *multitenancy.ProviderConfig, filterMigsByClusterNameEnabled bool) (AutoscalingInternalGceClient, error) {
 	timeout := client.Timeout
 	if providerConfig != nil {
 		klog.Infof("NewPerTenantAutoscalingInternalGceClient called for providerConfig: %s", providerConfig.Name)
@@ -117,7 +117,7 @@ func NewPerTenantAutoscalingInternalGceClient(client *http.Client, migInfoProvid
 		klog.Warningf("NewPerTenantAutoscalingInternalGceClient: providerConfig is nil")
 	}
 
-	return NewAutoscalingInternalGceClient(client, migInfoProvider, projectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager)
+	return NewAutoscalingInternalGceClient(client, migInfoProvider, projectID, clusterName, userAgent, waitTimeout, pollInterval, experimentsManager, WithFilterMigsByClusterName(filterMigsByClusterNameEnabled))
 }
 
 // AddProviderConfig should be called when a new ProviderConfig is created.
