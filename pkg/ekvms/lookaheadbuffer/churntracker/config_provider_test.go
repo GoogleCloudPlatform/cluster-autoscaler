@@ -111,7 +111,7 @@ func TestConfigProvider(t *testing.T) {
 			if tc.flagValue != "" {
 				stringFlags[experiments.ResizableVmChurnCircuitBreakerFlag] = tc.flagValue
 			}
-			p := NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags), "", caVersion)
+			p := NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags), "", caVersion, nil)
 
 			if got := p.IsEnabled(); got != tc.wantEnabled {
 				t.Errorf("IsEnabled() = %v, want %v", got, tc.wantEnabled)
@@ -139,7 +139,7 @@ func TestConfigProvider(t *testing.T) {
 }
 
 func TestConfigProviderNilExperimentsManager(t *testing.T) {
-	p := NewConfigProvider(nil, "", version.Version{})
+	p := NewConfigProvider(nil, "", version.Version{}, nil)
 	if p.IsEnabled() {
 		t.Errorf("IsEnabled() = true, want false")
 	}
@@ -234,7 +234,7 @@ func TestProviderProtoConfig(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			p := NewConfigProvider(newMockManagerWithChurnFlag(tc.experimentFlag), tc.manifestConfig, caVersion)
+			p := NewConfigProvider(newMockManagerWithChurnFlag(tc.experimentFlag), tc.manifestConfig, caVersion, nil)
 
 			if got := p.(*configProviderImpl).fromProto; got != tc.wantFromProto {
 				t.Errorf("fromProto = %v, want %v", got, tc.wantFromProto)
@@ -258,6 +258,120 @@ func TestProviderProtoConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProviderLaunchStatusMetric(t *testing.T) {
+	caVersion, err := version.FromString("37.231.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		invalidFlag            = "this-is-invalid-json-string"
+		disabledFlag           = `{"minCaVersion": "999.0.0", "churnThreshold": 3}`
+		enabledFlag            = `{"minCaVersion": "37.225.0", "churnThreshold": 3}`
+		manifestConfig         = `{"minCaVersion": "37.225.0", "churnThreshold": 7}`
+		disabledManifestConfig = `{"minCaVersion": "999.0.0", "churnThreshold": 7}`
+	)
+
+	// The launch status is emitted on construction (oldFlagValue) and on Refresh() (newFlagValue). The manifest config
+	// is emitted instead of the experiment flag value if it is set and valid. enabled reports whether the config in use is
+	// enabled: if the flag value cannot be parsed, the previous config is kept.
+	for _, tc := range []struct {
+		desc              string
+		manifestConfig    string
+		oldFlagValue      string
+		newFlagValue      string
+		wantEmittedValues []launchStatus
+	}{
+		{
+			desc:              "flag not set (failsafe)",
+			wantEmittedValues: []launchStatus{{false, experimentSource, failsafeFlagValue}, {false, experimentSource, failsafeFlagValue}},
+		},
+		{
+			desc:              "invalid flag is still emitted",
+			oldFlagValue:      invalidFlag,
+			newFlagValue:      invalidFlag,
+			wantEmittedValues: []launchStatus{{false, experimentSource, invalidFlag}, {false, experimentSource, invalidFlag}},
+		},
+		{
+			desc:              "experiment disabled for ca version, then invalid flag",
+			oldFlagValue:      disabledFlag,
+			newFlagValue:      invalidFlag,
+			wantEmittedValues: []launchStatus{{false, experimentSource, disabledFlag}, {false, experimentSource, invalidFlag}},
+		},
+		{
+			desc:              "experiment enabled, then invalid flag",
+			oldFlagValue:      enabledFlag,
+			newFlagValue:      invalidFlag,
+			wantEmittedValues: []launchStatus{{true, experimentSource, enabledFlag}, {true, experimentSource, invalidFlag}},
+		},
+		{
+			desc:              "invalid flag, then experiment enabled",
+			oldFlagValue:      invalidFlag,
+			newFlagValue:      enabledFlag,
+			wantEmittedValues: []launchStatus{{false, experimentSource, invalidFlag}, {true, experimentSource, enabledFlag}},
+		},
+		{
+			desc:              "experiment enabled for ca version, then disabled",
+			oldFlagValue:      enabledFlag,
+			newFlagValue:      disabledFlag,
+			wantEmittedValues: []launchStatus{{true, experimentSource, enabledFlag}, {false, experimentSource, disabledFlag}},
+		},
+		{
+			desc:              "experiment disabled for ca version, then enabled",
+			oldFlagValue:      disabledFlag,
+			newFlagValue:      enabledFlag,
+			wantEmittedValues: []launchStatus{{false, experimentSource, disabledFlag}, {true, experimentSource, enabledFlag}},
+		},
+		{
+			desc:              "manifest config is emitted without the single quotes instead of the experiment flag value",
+			manifestConfig:    "'" + manifestConfig + "'",
+			oldFlagValue:      enabledFlag,
+			newFlagValue:      disabledFlag,
+			wantEmittedValues: []launchStatus{{true, clusterProtoSource, manifestConfig}, {true, clusterProtoSource, manifestConfig}},
+		},
+		{
+			desc:              "disabled manifest config is emitted as disabled instead of the experiment flag value",
+			manifestConfig:    "'" + disabledManifestConfig + "'",
+			oldFlagValue:      enabledFlag,
+			newFlagValue:      enabledFlag,
+			wantEmittedValues: []launchStatus{{false, clusterProtoSource, disabledManifestConfig}, {false, clusterProtoSource, disabledManifestConfig}},
+		},
+		{
+			desc:              "invalid manifest config is not emitted, the experiment flag value is emitted instead",
+			manifestConfig:    "'" + invalidFlag + "'",
+			oldFlagValue:      enabledFlag,
+			newFlagValue:      disabledFlag,
+			wantEmittedValues: []launchStatus{{true, experimentSource, enabledFlag}, {false, experimentSource, disabledFlag}},
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			metrics := &fakeProviderMetrics{}
+			p := NewConfigProvider(newMockManagerWithChurnFlag(tc.oldFlagValue), tc.manifestConfig, caVersion, metrics)
+
+			p.(*configProviderImpl).experimentsManager = newMockManagerWithChurnFlag(tc.newFlagValue)
+			p.Refresh()
+
+			if diff := cmp.Diff(tc.wantEmittedValues, metrics.statuses, cmp.AllowUnexported(launchStatus{})); diff != "" {
+				t.Errorf("UpdateLookaheadChurnBreakerLaunchStatus() calls mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// launchStatus is a recorded UpdateLookaheadChurnBreakerLaunchStatus call.
+type launchStatus struct {
+	enabled      bool
+	launchedFrom launchSource
+	config       string
+}
+
+type fakeProviderMetrics struct {
+	statuses []launchStatus
+}
+
+func (f *fakeProviderMetrics) UpdateLookaheadChurnBreakerLaunchStatus(enabled bool, launchedFrom, config string) {
+	f.statuses = append(f.statuses, launchStatus{enabled: enabled, launchedFrom: launchSource(launchedFrom), config: config})
 }
 
 // newMockManagerWithChurnFlag returns a mock experiments manager with the churn circuit breaker flag set to flagValue.

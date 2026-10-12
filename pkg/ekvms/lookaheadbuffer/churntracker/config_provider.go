@@ -25,6 +25,22 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// failsafeFlagValue is used when the experiment flag is not set.
+const failsafeFlagValue = `{"minCaVersion": "999.999.999"}`
+
+// launchSource is the source of the churn circuit breaker configuration reported by the launch status metric.
+type launchSource string
+
+const (
+	experimentSource   launchSource = "EXPERIMENT"
+	clusterProtoSource launchSource = "CLUSTER_PROTO"
+)
+
+// providerMetrics is the subset of metrics emitted by the Provider.
+type providerMetrics interface {
+	UpdateLookaheadChurnBreakerLaunchStatus(enabled bool, launchedFrom, config string)
+}
+
 // ConfigProvider provides the churn tracker configuration from the --lookahead-churn-circuit-breaker-config proto flag
 // or, if it is not set, from the AutopilotResizableVM::LookaheadChurnCircuitBreaker experiment flag.
 type ConfigProvider interface {
@@ -45,6 +61,9 @@ type configProviderImpl struct {
 	experimentsManager experiments.Manager
 	// fromProto indicates that the configuration comes from the proto flag, so the experiment is not evaluated.
 	fromProto bool
+	metrics   providerMetrics
+	// protoConfig is the proto flag value without the wrapping single quotes.
+	protoConfig string
 
 	mu     sync.RWMutex
 	config *Config
@@ -52,18 +71,20 @@ type configProviderImpl struct {
 
 // NewConfigProvider creates a new ConfigProvider instance. If protoConfig (the --lookahead-churn-circuit-breaker-config flag
 // value) is set and valid, it is used as a static configuration. Otherwise, the configuration is taken from the experiment.
-func NewConfigProvider(em experiments.Manager, protoConfig string, caVersion version.Version) ConfigProvider {
+func NewConfigProvider(em experiments.Manager, protoConfig string, caVersion version.Version, metrics providerMetrics) ConfigProvider {
+	// Similarly to the lookahead/strategy/strategy_provider: this flag is a single-line JSON string
+	// and we wrap it in single quotes for CA proto to treat it as a string.
+	protoConfig = strings.TrimSpace(strings.Trim(protoConfig, "'"))
 	provider := &configProviderImpl{
 		experimentsManager: em,
 		caVersion:          caVersion,
+		metrics:            metrics,
+		protoConfig:        protoConfig,
 		config:             defaultConfig(),
 	}
-	// Similarly to the lookahead/strategy/strategy_provider: this flag is a single-line JSON string
-	// and we wrap it in single quotes for CA proto to treat it as a string.
-	if config, ok := newProtoConfig(strings.TrimSpace(strings.Trim(protoConfig, "'")), caVersion); ok {
+	if config, ok := newProtoConfig(protoConfig, caVersion); ok {
 		provider.config = config
 		provider.fromProto = true
-		return provider
 	}
 	provider.Refresh()
 	return provider
@@ -84,22 +105,38 @@ func newProtoConfig(protoConfig string, caVersion version.Version) (*Config, boo
 }
 
 // Refresh refreshes the churn tracker configuration from the experiments manager if proto config is not provided.
+// It also reports the configuration and its source in the launch status metric.
 func (p *configProviderImpl) Refresh() {
-	if p.fromProto || p.experimentsManager == nil {
+	if p.fromProto {
+		p.updateLaunchStatus(clusterProtoSource, p.protoConfig)
 		return
 	}
-	flagValue := p.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ResizableVmChurnCircuitBreakerFlag, `{"minCaVersion": "999.999.999"}`)
+	if p.experimentsManager == nil {
+		return
+	}
+	flagValue := p.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ResizableVmChurnCircuitBreakerFlag, failsafeFlagValue)
+	// If we got here, it means that we are not using the proto value and fallback to the experiment instead.
 	flag, err := parseChurnCircuitBreakerFlag(flagValue)
 	if err != nil {
 		klog.Errorf("Cannot parse experiment %q flag: %v", experiments.ResizableVmChurnCircuitBreakerFlag, err)
+		// The previous configuration is kept, so it is reported as enabled or disabled along with the raw flag value.
+		p.updateLaunchStatus(experimentSource, flagValue)
 		return
 	}
-
 	newConfig := NewConfig(flag, p.caVersion)
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.config = newConfig
+	p.mu.Unlock()
+	// The launch status is reported after the config is updated, so that it reports whether the new config is enabled.
+	p.updateLaunchStatus(experimentSource, flagValue)
+}
+
+// updateLaunchStatus reports the raw configuration and its source in the launch status metric.
+func (p *configProviderImpl) updateLaunchStatus(launchedFrom launchSource, config string) {
+	if p.metrics != nil {
+		p.metrics.UpdateLookaheadChurnBreakerLaunchStatus(p.IsEnabled(), string(launchedFrom), config)
+	}
 }
 
 // IsEnabled returns true if the churn circuit breaker experiment is enabled.
