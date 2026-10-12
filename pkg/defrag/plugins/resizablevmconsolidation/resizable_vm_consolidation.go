@@ -16,7 +16,6 @@ package resizablevmconsolidation
 
 import (
 	"context"
-	"reflect"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -68,7 +67,7 @@ func (p *plugin) String() string {
 
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
 	// Checks if resizing is enabled
-	if p.resizableVmManager == nil || reflect.ValueOf(p.resizableVmManager).IsNil() {
+	if p.resizableVmManager == nil {
 		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
 		return nil
 	}
@@ -138,7 +137,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
-	if p.resizableVmManager == nil || reflect.ValueOf(p.resizableVmManager).IsNil() {
+	if p.resizableVmManager == nil {
 		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
 		return nil
 	}

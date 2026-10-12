@@ -532,7 +532,7 @@ func setUpProcessors(
 	scaleDownComparers = append(scaleDownComparers, npcCrdComparer)
 
 	var ekvmsProcessor *ekvms_processor.ScaleUpNodeProcessor
-	var resizableVmManager *ekvms_operationtracker.ManagerImpl
+	var resizableVmManager ekvms_operationtracker.Manager
 	var resizableMachineTypesProvider internalcfg.Provider[sets.Set[string]]
 
 	if options.EkvmsFixerEnabled {
