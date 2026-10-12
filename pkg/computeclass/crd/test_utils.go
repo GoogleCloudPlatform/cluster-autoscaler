@@ -199,6 +199,10 @@ func (t *testCrd) ResourceManagerTags() []Tag {
 	return t.resourceManagerTags
 }
 
+func (t *testCrd) AllocationStrategyDefaults() *cccv1.AllocationStrategyDefaults {
+	return t.allocationStrategyDefaults
+}
+
 func (t *testCrd) TpuDriverMode() TpuDriverMode {
 	return t.tpuDriverMode
 }
@@ -448,6 +452,7 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.UserDefinedLabels(), c2.UserDefinedLabels())
 	assert.Equal(t, c1.UserDefinedTaints(), c2.UserDefinedTaints())
 	assert.Equal(t, c1.ResourceManagerTags(), c2.ResourceManagerTags())
+	assert.Equal(t, c1.AllocationStrategyDefaults(), c2.AllocationStrategyDefaults())
 	assert.Equal(t, c1.TargetNodeCount(), c2.TargetNodeCount())
 	assert.Equal(t, c1.ArchitectureTaintBehavior(), c2.ArchitectureTaintBehavior())
 	assert.Equal(t, c1.MaxNodeDisruption(), c2.MaxNodeDisruption())

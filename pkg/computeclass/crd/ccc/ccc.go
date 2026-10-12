@@ -469,7 +469,7 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		}
 	}
 
-	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil {
+	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil && priority.Nodepools == nil {
 		if priority.FlexStart != nil && priority.FlexStart.Enabled {
 			priority.AllocationStrategy = allocationStrategyDefaults.FlexStart
 		} else if priority.Spot != nil && *priority.Spot {
@@ -479,7 +479,7 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		}
 	}
 
-	if priority.AllocationStrategy == nil && priority.PodFamily != nil && rules.IsPodFamily(*priority.PodFamily) && optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
+	if priority.AllocationStrategy == nil && priority.PodFamily != nil && priority.Nodepools == nil && rules.IsPodFamily(*priority.PodFamily) && optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
 		priority.AllocationStrategy = new(v1.AllocationStrategyFleetEfficiency)
 	}
 }
@@ -836,6 +836,14 @@ func (ccc *cccCrd) TpuDriverMode() crd.TpuDriverMode {
 		klog.Warningf("Unknown TPU driver mode for CCC (%s): %v, defaulting to device plugin", ccc.Name(), ccc.Spec.NodePoolConfig.Tpu.DriverMode)
 		return crd.TpuDriverModeDevicePlugin
 	}
+}
+
+// AllocationStrategyDefaults returns the global AllocationStrategyDefaults for the CCC.
+func (ccc *cccCrd) AllocationStrategyDefaults() *v1.AllocationStrategyDefaults {
+	if ccc == nil || ccc.ComputeClass == nil {
+		return nil
+	}
+	return ccc.Spec.AllocationStrategyDefaults.DeepCopy()
 }
 
 func (ccc *cccCrd) getGPURequest(machineType *string, gpu *v1.GPU) (gpuRequest *machinetypes.GpuRequest) {

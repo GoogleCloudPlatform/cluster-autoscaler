@@ -49,6 +49,8 @@ func TestFleetEfficiency(t *testing.T) {
 	testCases := map[string]struct {
 		priorityStrategy       *v1.AllocationStrategy
 		strategyDefaults       *v1.AllocationStrategyDefaults
+		customPriorities       []v1.Priority
+		whenUnsatisfiable      string
 		nodePools              []*gke_api_beta.NodePool
 		fakeGuidances          []fake.CapacityGuidance
 		reservations           []*compute.Reservation
@@ -299,30 +301,80 @@ func TestFleetEfficiency(t *testing.T) {
 			priorityStrategy: &fleetEfficiency,
 			expectedNodePool: "pool-high-preference",
 		},
+		"podFamily rule with omitted sibling rule in same priorityScore - fall back to lowest cost": {
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			customPriorities: []v1.Priority{
+				{
+					PodFamily:     ptr.To("general-purpose"),
+					PriorityScore: ptr.To(100),
+				},
+				{
+					Nodepools:     []string{"pool-low-preference"},
+					PriorityScore: ptr.To(100),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag: true,
+			},
+			stringExperimentFlags: map[string]string{
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: "0.0.0",
+			},
+			expectedNodePool: "pool-low-preference",
+		},
+		"whenUnsatisfiable ScaleUpAnyway with allocationStrategyDefaults fleet efficiency - use fleet efficiency": {
+			whenUnsatisfiable: "ScaleUpAnyway",
+			strategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: &fleetEfficiency,
+			},
+			customPriorities: []v1.Priority{
+				{
+					MachineFamily: ptr.To("e2"),
+					NodeLabels:    map[string]string{"unmatched-label": "true"},
+					PriorityScore: ptr.To(100),
+				},
+			},
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			fakeGuidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedNodePool: "pool-high-preference",
+		},
 	}
 
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
-			var cccPriorityFlexStart *v1.FlexStart
-			if tc.provisioningMode == instanceavailability.FlexStart {
-				cccPriorityFlexStart = &v1.FlexStart{Enabled: true}
-			}
 			nodepoolNames := make([]string, 0, len(tc.nodePools))
 			for _, np := range tc.nodePools {
 				nodepoolNames = append(nodepoolNames, np.Name)
 			}
-			cccCrd := ccc.NewComputeClassBuilder("test-ccc").
-				WithAllocationStrategyDefaults(tc.strategyDefaults).
-				WithPriorities(
-					v1.Priority{
+			priorities := tc.customPriorities
+			if len(priorities) == 0 {
+				priorities = []v1.Priority{
+					{
 						Nodepools:          nodepoolNames,
 						PriorityScore:      ptr.To(100),
 						AllocationStrategy: tc.priorityStrategy,
-						FlexStart:          cccPriorityFlexStart,
-						Spot:               ptr.To(tc.provisioningMode == instanceavailability.Spot),
 					},
-				).
-				Build()
+				}
+			}
+			cccBuilder := ccc.NewComputeClassBuilder("test-ccc").
+				WithAllocationStrategyDefaults(tc.strategyDefaults).
+				WithPriorities(priorities...)
+			if tc.whenUnsatisfiable != "" {
+				cccBuilder = cccBuilder.WithWhenUnsatisfiable(tc.whenUnsatisfiable)
+			}
+			cccCrd := cccBuilder.Build()
 
 			overrides := []integration.Option[*internalopts.AutoscalingOptions]{
 				integration.WithMaxMemoryTotal(140 * 1024 * 1024 * 1024),
@@ -341,7 +393,11 @@ func TestFleetEfficiency(t *testing.T) {
 				WithCccCrds(cccCrd).
 				WithExperimentOverrides(tc.experimentFlags, tc.stringExperimentFlags).
 				WithReservationsForDefaultProject(tc.reservations).
-				WithOverrides(overrides...)
+				WithOverrides(overrides...).
+				WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations(ZoneB),
+				)
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())

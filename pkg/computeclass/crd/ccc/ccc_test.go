@@ -2145,6 +2145,36 @@ func TestNewCccCrd(t *testing.T) {
 				crd.WithResourceManagerTags([]crd.Tag(nil)),
 			),
 		},
+		{
+			name: "ccc allocationStrategyDefaults set with ScaleUpAnyway",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					WhenUnsatisfiable: scaleUpAnyway,
+					AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+						OnDemand:  new(v1.AllocationStrategyFleetEfficiency),
+						Spot:      new(v1.AllocationStrategyLowestCost),
+						FlexStart: new(v1.AllocationStrategyFleetEfficiency),
+					},
+					Priorities: []v1.Priority{
+						{Nodepools: []string{"np1"}},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithScaleUpAnyway(),
+				crd.WithAllocationStrategyDefaults(&v1.AllocationStrategyDefaults{
+					OnDemand:  new(v1.AllocationStrategyFleetEfficiency),
+					Spot:      new(v1.AllocationStrategyLowestCost),
+					FlexStart: new(v1.AllocationStrategyFleetEfficiency),
+				}),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithNodePoolsRule([]string{"np1"}),
+					),
+				}),
+			),
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2540,6 +2570,13 @@ func TestPriorities(t *testing.T) {
 							MachineFamily:      proto.String("n2"),
 							AllocationStrategy: &costStrategy, // Explicitly set, overrides default
 						},
+						{
+							Nodepools: []string{"np1"}, // Nodepools rule omits strategy -> remains nil for per-NodeGroup resolution
+						},
+						{
+							Nodepools:          []string{"np2"},
+							AllocationStrategy: &costStrategy, // Explicitly set on Nodepools rule -> preserved
+						},
 					},
 					AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
 						OnDemand:  &fleetStrategy,
@@ -2565,6 +2602,13 @@ func TestPriorities(t *testing.T) {
 					MachineFamily:      proto.String("n2"),
 					AllocationStrategy: &costStrategy,
 				},
+				{
+					Nodepools: []string{"np1"},
+				},
+				{
+					Nodepools:          []string{"np2"},
+					AllocationStrategy: &costStrategy,
+				},
 			},
 		},
 	}
@@ -2574,6 +2618,11 @@ func TestPriorities(t *testing.T) {
 				ComputeClass: test.ccc,
 			}
 			assert.Equal(t, crd.priorities(), test.exopectedPriorities)
+			if test.ccc != nil {
+				assert.Equal(t, test.ccc.Spec.AllocationStrategyDefaults, crd.AllocationStrategyDefaults())
+			} else {
+				assert.Nil(t, crd.AllocationStrategyDefaults())
+			}
 		})
 	}
 }
@@ -3529,6 +3578,15 @@ func TestPodFamilyAllocationStrategyDefaulting(t *testing.T) {
 			tracker:        enabledTracker,
 			wantStrategies: []*v1.AllocationStrategy{nil},
 		},
+		{
+			name: "nodepools rule with podFamily set does not default to fleet-efficiency when experiment enabled",
+			priority: v1.Priority{
+				PodFamily: new(rules.GeneralPurposePodFamily),
+				Nodepools: []string{"np1"},
+			},
+			tracker:        enabledTracker,
+			wantStrategies: []*v1.AllocationStrategy{nil},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -3558,4 +3616,22 @@ func TestPodFamilyAllocationStrategyDefaulting(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAllocationStrategyDefaultsDefensiveCopy(t *testing.T) {
+	cc := &v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+		Spec: v1.ComputeClassSpec{
+			AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: new(v1.AllocationStrategyFleetEfficiency),
+			},
+		},
+	}
+	c := NewCccCrd(cc, "test-project", false, crd.TestDefaultDataProvider(), nil)
+	got := c.AllocationStrategyDefaults()
+	assert.NotNil(t, got)
+	assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *got.OnDemand)
+
+	*got.OnDemand = v1.AllocationStrategyLowestCost
+	assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *c.AllocationStrategyDefaults().OnDemand)
 }

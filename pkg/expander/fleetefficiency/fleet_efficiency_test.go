@@ -1378,7 +1378,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 		},
 		{
-			name: "Source - ComputeClass (Mixed omitted and explicit fleet-efficiency rules override cluster default lowest-cost)",
+			name: "Source - ComputeClass (Mixed omitted and explicit fleet-efficiency rules with cluster default fleet-efficiency)",
 			crd: crdutils.NewTestCrd(
 				crdutils.WithName("test-ccc"),
 				crdutils.WithLabel(gkelabels.ComputeClassLabel),
@@ -1392,6 +1392,77 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 					),
 				}),
 			),
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name: "Source - Cluster (Mixed omitted and explicit fleet-efficiency rules fall back to cluster default lowest-cost)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+					),
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+						crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy:    options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                   []expander.Option{optFleet1, optFleet2},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+		},
+		{
+			name: "Source - ComputeClass (Mixed omitted and explicit lowest-cost rules report compute-class source regardless of option order)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+					),
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyLowestCost)),
+						crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy:    options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                   []expander.Option{optFleet1, optFleet2},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name: "Source - ComputeClass (Unmatched ScaleUpAnyway options use AllocationStrategyDefaults)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithScaleUpAnyway(),
+				crdutils.WithAllocationStrategyDefaults(&cccv1.AllocationStrategyDefaults{
+					OnDemand: new(cccv1.AllocationStrategyFleetEfficiency),
+				}),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+						crdRules.WithNodePoolsRule([]string{"non-matching-pool"}),
+					),
+				}),
+			),
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
 			options:                []expander.Option{optFleet1, optFleet2},
 			setupMock: func(m *instanceavailability.MockProvider) {
@@ -1402,6 +1473,52 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			expectedReason:            metrics.AllocationStrategyFallbackNone,
 			expectedMachineType:       "n1-standard-1",
 			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name: "Source - ComputeClass (Unmatched ScaleUpAnyway options use AllocationStrategyDefaults lowest-cost)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithScaleUpAnyway(),
+				crdutils.WithAllocationStrategyDefaults(&cccv1.AllocationStrategyDefaults{
+					OnDemand: new(cccv1.AllocationStrategyLowestCost),
+				}),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+						crdRules.WithNodePoolsRule([]string{"non-matching-pool"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy:    options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                   []expander.Option{optFleet1, optFleet2},
+			expectedRequestedStrategy: cccv1.AllocationStrategyLowestCost,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+		},
+		{
+			name: "Source - Cluster (Unmatched ScaleUpAnyway options without AllocationStrategyDefaults inherit cluster default)",
+			crd: crdutils.NewTestCrd(
+				crdutils.WithName("test-ccc"),
+				crdutils.WithLabel(gkelabels.ComputeClassLabel),
+				crdutils.WithScaleUpAnyway(),
+				crdutils.WithRules([]crdRules.Rule{
+					crdRules.NewRule(
+						crdRules.WithNodePoolsRule([]string{"non-matching-pool"}),
+					),
+				}),
+			),
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			options:                []expander.Option{optFleet1, optFleet2},
+			setupMock: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshot(m, "n2-standard-2", map[string]float64{"us-central1-a": 0.1})
+			},
+			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
+			expectedReason:            metrics.AllocationStrategyFallbackNone,
+			expectedMachineType:       "n1-standard-1",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
 		},
 	}
 
@@ -1504,6 +1621,28 @@ func TestFleetEfficiencyFilter_Errors(t *testing.T) {
 func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
 	f := newTestFixture()
 
+	enabledPayPerPodExps := map[string]bool{
+		experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+		experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+	}
+	enabledTracker := optstracking.NewOptionsTracker(
+		options.AutoscalingOptions{},
+		experiments.NewMockManagerWithOptions(version.Version{}, enabledPayPerPodExps, nil),
+	)
+
+	ngSpot1 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-spot1").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-1", Spot: true}).Build()
+	ngSpot2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-spot2").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2", Spot: true}).Build()
+	optSpot1 := expander.Option{NodeGroup: ngSpot1, Pods: []*v1.Pod{f.pod}}
+	optSpot2 := expander.Option{NodeGroup: ngSpot2, Pods: []*v1.Pod{f.pod}}
+
+	ngFlexStart1 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-fs1").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-1", FlexStart: true}).Build()
+	ngFlexStart2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-fs2").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-2", FlexStart: true}).Build()
+	optFlexStart1 := expander.Option{NodeGroup: ngFlexStart1, Pods: []*v1.Pod{f.pod}}
+	optFlexStart2 := expander.Option{NodeGroup: ngFlexStart2, Pods: []*v1.Pod{f.pod}}
+
+	ngE2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-e2").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build()
+	optE2 := expander.Option{NodeGroup: ngE2, Pods: []*v1.Pod{f.pod}}
+
 	// Defining rules with the same priority score that mix "fleet-efficiency" and "lowest-cost"
 	// is impossible in production due to CCC validation.
 	// On unit test level this however makes sense for completeness, so it is covered with tests.
@@ -1557,7 +1696,7 @@ func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
 			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
 		},
 		{
-			name: "explicit fleet-efficiency on last rule overrides cluster default lowest-cost",
+			name: "omitted rule with cluster default lowest-cost overrides fleet-efficiency on sibling rule",
 			crds: []crd.CRD{
 				crdutils.NewTestCrd(
 					crdutils.WithName("test-ccc"),
@@ -1575,8 +1714,299 @@ func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
 			},
 			options:                []expander.Option{f.optFleet1, f.optFleet2},
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name: "podFamily rule defaulting to fleet-efficiency with omitted sibling rule in same priorityScore falls back to lowest-cost",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							Autopilot: &cccv1.Autopilot{Enabled: true},
+							Priorities: []cccv1.Priority{
+								{
+									PodFamily:     new(crdRules.GeneralPurposePodFamily),
+									PriorityScore: new(100),
+								},
+								{
+									MachineFamily: new("n2"),
+									PriorityScore: new(100),
+								},
+							},
+						},
+					},
+					"test-project",
+					true,
+					crdutils.TestDefaultDataProvider(),
+					enabledTracker,
+				),
+			},
+			options:                []expander.Option{optE2, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			boolExperimentValues:   enabledPayPerPodExps,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{optE2, f.optFleet2},
+		},
+		{
+			name: "omitted rule with cluster default fleet-efficiency and explicit fleet-efficiency on sibling rule uses fleet-efficiency",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"pool-fe1"}),
+						),
+						crdRules.NewRule(
+							crdRules.WithAllocationStrategyRule(new(cccv1.AllocationStrategyFleetEfficiency)),
+							crdRules.WithNodePoolsRule([]string{"pool-fe2"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
 			flexAdvisorSetup:       defaultFlexAdvisorSetup,
 			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+		{
+			name: "unmatched ScaleUpAnyway options use AllocationStrategyDefaults fleet-efficiency",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							WhenUnsatisfiable: "ScaleUpAnyway",
+							AllocationStrategyDefaults: &cccv1.AllocationStrategyDefaults{
+								OnDemand: new(cccv1.AllocationStrategyFleetEfficiency),
+							},
+							Priorities: []cccv1.Priority{
+								{
+									AllocationStrategy: new(cccv1.AllocationStrategyFleetEfficiency),
+									Nodepools:          []string{"non-matching-pool"},
+								},
+							},
+						},
+					},
+					"test-project",
+					false,
+					crdutils.TestDefaultDataProvider(),
+					nil,
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+		{
+			name: "unmatched ScaleUpAnyway options use AllocationStrategyDefaults lowest-cost overriding cluster default fleet-efficiency",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithScaleUpAnyway(),
+					crdutils.WithAllocationStrategyDefaults(&cccv1.AllocationStrategyDefaults{
+						OnDemand: new(cccv1.AllocationStrategyLowestCost),
+					}),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"non-matching-pool"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet1, f.optFleet2},
+		},
+		{
+			name: "unmatched ScaleUpAnyway options without AllocationStrategyDefaults inherit cluster default",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithScaleUpAnyway(),
+					crdutils.WithRules([]crdRules.Rule{
+						crdRules.NewRule(
+							crdRules.WithNodePoolsRule([]string{"non-matching-pool"}),
+						),
+					}),
+				),
+			},
+			options:                []expander.Option{f.optFleet1, f.optFleet2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyFleetEfficiency,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{f.optFleet2},
+		},
+		{
+			name: "unmatched ScaleUpAnyway Spot options use AllocationStrategyDefaults Spot",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithScaleUpAnyway(),
+					crdutils.WithAllocationStrategyDefaults(&cccv1.AllocationStrategyDefaults{
+						OnDemand:  new(cccv1.AllocationStrategyLowestCost),
+						Spot:      new(cccv1.AllocationStrategyFleetEfficiency),
+						FlexStart: new(cccv1.AllocationStrategyLowestCost),
+					}),
+				),
+			},
+			options:                []expander.Option{optSpot1, optSpot2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{optSpot2},
+		},
+		{
+			name: "unmatched ScaleUpAnyway FlexStart options use AllocationStrategyDefaults FlexStart",
+			crds: []crd.CRD{
+				crdutils.NewTestCrd(
+					crdutils.WithName("test-ccc"),
+					crdutils.WithLabel(gkelabels.ComputeClassLabel),
+					crdutils.WithScaleUpAnyway(),
+					crdutils.WithAllocationStrategyDefaults(&cccv1.AllocationStrategyDefaults{
+						OnDemand:  new(cccv1.AllocationStrategyLowestCost),
+						Spot:      new(cccv1.AllocationStrategyLowestCost),
+						FlexStart: new(cccv1.AllocationStrategyFleetEfficiency),
+					}),
+				),
+			},
+			options:                []expander.Option{optFlexStart1, optFlexStart2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			boolExperimentValues: map[string]bool{
+				experiments.FlexAdvisorDWSEnabledFlag:      true,
+				experiments.FlexAdvisorDWSMinCAVersionFlag: true,
+			},
+			flexAdvisorSetup:    defaultFlexAdvisorSetup,
+			expectedBestOptions: []expander.Option{optFlexStart2},
+		},
+		{
+			name: "matched nodepools rule with Spot node group uses AllocationStrategyDefaults Spot",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							AllocationStrategyDefaults: &cccv1.AllocationStrategyDefaults{
+								OnDemand: new(cccv1.AllocationStrategyLowestCost),
+								Spot:     new(cccv1.AllocationStrategyFleetEfficiency),
+							},
+							Priorities: []cccv1.Priority{
+								{
+									Nodepools:     []string{"pool-spot1", "pool-spot2"},
+									PriorityScore: new(100),
+								},
+							},
+						},
+					},
+					"test-project",
+					false,
+					crdutils.TestDefaultDataProvider(),
+					nil,
+				),
+			},
+			options:                []expander.Option{optSpot1, optSpot2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       defaultFlexAdvisorSetup,
+			expectedBestOptions:    []expander.Option{optSpot2},
+		},
+		{
+			name: "matched nodepools rule with mixed OnDemand and Spot node groups and partial AllocationStrategyDefaults resolves conflict to lowest-cost",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							AllocationStrategyDefaults: &cccv1.AllocationStrategyDefaults{
+								OnDemand: new(cccv1.AllocationStrategyFleetEfficiency),
+							},
+							Priorities: []cccv1.Priority{
+								{
+									Nodepools:     []string{"pool-e2", "pool-spot1"},
+									PriorityScore: new(100),
+								},
+							},
+						},
+					},
+					"test-project",
+					false,
+					crdutils.TestDefaultDataProvider(),
+					nil,
+				),
+			},
+			options:                []expander.Option{optE2, optSpot1},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{optE2, optSpot1},
+		},
+		{
+			name: "podFamily rule listed before overlapping nodepools rule in same priorityScore resolves conflict to lowest-cost",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							Autopilot: &cccv1.Autopilot{Enabled: true},
+							Priorities: []cccv1.Priority{
+								{
+									PodFamily:     new(crdRules.GeneralPurposePodFamily),
+									PriorityScore: new(100),
+								},
+								{
+									Nodepools:     []string{"pool-e2"},
+									PriorityScore: new(100),
+								},
+							},
+						},
+					},
+					"test-project",
+					true,
+					crdutils.TestDefaultDataProvider(),
+					enabledTracker,
+				),
+			},
+			options:                []expander.Option{optE2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			boolExperimentValues:   enabledPayPerPodExps,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{optE2},
+		},
+		{
+			name: "matched non-nodepools rule omitting spot does not fall through to AllocationStrategyDefaults Spot",
+			crds: []crd.CRD{
+				ccc.NewCccCrd(
+					&cccv1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "test-ccc"},
+						Spec: cccv1.ComputeClassSpec{
+							AllocationStrategyDefaults: &cccv1.AllocationStrategyDefaults{
+								Spot: new(cccv1.AllocationStrategyFleetEfficiency),
+							},
+							Priorities: []cccv1.Priority{
+								{
+									MachineFamily: new("n1"),
+									PriorityScore: new(100),
+								},
+								{
+									MachineFamily: new("n2"),
+									PriorityScore: new(100),
+								},
+							},
+						},
+					},
+					"test-project",
+					false,
+					crdutils.TestDefaultDataProvider(),
+					nil,
+				),
+			},
+			options:                []expander.Option{optSpot1, optSpot2},
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{optSpot1, optSpot2},
 		},
 		{
 			name: "inherits cluster default fleet-efficiency",
@@ -1854,7 +2284,6 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 							Priorities: []cccv1.Priority{
 								{
 									PodFamily:     new(crdRules.GeneralPurposePodFamily),
-									Nodepools:     []string{"pool-1"},
 									PriorityScore: new(100),
 								},
 								{

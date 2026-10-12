@@ -344,53 +344,141 @@ func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.Allo
 	return nil, metrics.AllocationStrategySourceUnknown, nil
 }
 
-func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {
+// getMatchedRules returns all rules in the highest-priority matching ruleGroup that match opt.NodeGroup,
+// or nil if no rule in any ruleGroup matches.
+func getMatchedRules(ccc crd.CRD, opt expander.Option) []rules.Rule {
 	for _, ruleGroup := range ccc.GroupedRules() {
+		var matched []rules.Rule
 		for _, rule := range ruleGroup {
 			if rule.Matches(opt.NodeGroup) {
-				return rule
+				matched = append(matched, rule)
 			}
+		}
+		if len(matched) > 0 {
+			return matched
 		}
 	}
 	return nil
 }
 
+// getRuleStrategy returns the allocation strategy configured on the CRD for a single matched rule
+// (or nil rule when evaluating an unmatched ScaleUpAnyway option), or nil if the CRD does not
+// specify one (in which case the caller inherits the cluster default strategy).
+//
+//   - Matched non-nodepools rule (rule != nil && len(rule.NodePoolNames()) == 0):
+//     ccc.AllocationStrategyDefaults() and the podFamily fleet-efficiency default have already been
+//     applied during rule construction in applyDefaultsToPriority according to the rule's
+//     provisioning model, so sr.AllocationStrategy() is returned directly without falling through
+//     to ccc.AllocationStrategyDefaults().
+//   - Matched nodepools rule with nil strategy or unmatched ScaleUpAnyway option (rule == nil):
+//     Because Kubernetes CEL validation forbids setting spot or flexStart on a nodepools priority
+//     rule, applyDefaultsToPriority leaves AllocationStrategy nil on nodepools rules that omit it;
+//     similarly, unmatched whenUnsatisfiable: ScaleUpAnyway options have no matched rule. In both
+//     cases, getRuleStrategy falls through to ccc.AllocationStrategyDefaults() and derives the
+//     provisioning model (FlexStart, Spot, or OnDemand) from the candidate node group spec.
+func getRuleStrategy(ccc crd.CRD, rule rules.Rule, opt expander.Option) *cccv1.AllocationStrategy {
+	if ccc == nil {
+		return nil
+	}
+	if rule != nil {
+		if sr, ok := rule.(rules.AllocationStrategyRule); ok && sr.AllocationStrategy() != nil {
+			return sr.AllocationStrategy()
+		}
+		if len(rule.NodePoolNames()) == 0 {
+			return nil
+		}
+	}
+	defaults := ccc.AllocationStrategyDefaults()
+	if defaults == nil {
+		return nil
+	}
+	if gkeNg, ok := opt.NodeGroup.(gke.NodeGroup); ok && gkeNg.Spec() != nil {
+		spec := gkeNg.Spec()
+		if spec.FlexStart {
+			return defaults.FlexStart
+		}
+		if spec.Spot {
+			return defaults.Spot
+		}
+	}
+	return defaults.OnDemand
+}
+
+// getOptionStrategies returns the resolved allocation strategies for all rules in the highest
+// matching priorityScore group for opt.NodeGroup, or a single strategy resolved via
+// getRuleStrategy(ccc, nil, opt) if no rule matches (whenUnsatisfiable: ScaleUpAnyway).
+func getOptionStrategies(ccc crd.CRD, opt expander.Option) []*cccv1.AllocationStrategy {
+	if ccc == nil {
+		return []*cccv1.AllocationStrategy{nil}
+	}
+	matchedRules := getMatchedRules(ccc, opt)
+	if len(matchedRules) == 0 {
+		return []*cccv1.AllocationStrategy{getRuleStrategy(ccc, nil, opt)}
+	}
+	strategies := make([]*cccv1.AllocationStrategy, 0, len(matchedRules))
+	for _, rule := range matchedRules {
+		strategies = append(strategies, getRuleStrategy(ccc, rule, opt))
+	}
+	return strategies
+}
+
 // isFleetEfficiencyStrategySelected determines whether the fleet-efficiency allocation strategy
 // should be used for the given candidate expansion options, along with the resolved strategy source.
 //
-// CCC rules sharing the same priorityScore can define conflicting allocation strategies
-// (or omit them). To resolve conflicts deterministically across all candidate expansion
-// options in the priorityScore group, we enforce the following precedence:
-//  1. Explicit non-fleet-efficiency strategy (e.g., lowest-cost): overrides explicit
-//     fleet-efficiency and cluster defaults. CCC validation assumes lowest-cost when
-//     conflicting strategies are present in the same priority score, so any explicit
-//     non-fleet-efficiency strategy takes highest precedence. Note that having conflicting
-//     strategies in the same priority score is possible only for a non-default cluster
-//     allocation strategy (other than lowest-cost), where one rule explicitly specifies
-//     lowest-cost and another omits the strategy (inheriting the cluster default).
-//  2. Explicit fleet-efficiency strategy: overrides cluster defaults.
-//  3. Omitted (nil) strategy: inherits the cluster default allocation strategy.
+// CCC admission webhook validation rejects priorities sharing the same priorityScore with
+// conflicting strategies by assuming omitted strategies default to lowest-cost. However,
+// runtime conflicts in the same priorityScore can still arise in three valid configurations:
+//  1. Cluster default is fleet-efficiency, and one rule explicitly specifies lowest-cost while
+//     a sibling rule omits allocationStrategy (inheriting the cluster default).
+//  2. Cluster default is lowest-cost (or the DefaultAllocationStrategy experiment is disabled),
+//     and a podFamily rule omits allocationStrategy (defaulting to fleet-efficiency in
+//     applyDefaultsToPriority when PayPerPodFleetEfficiency is enabled) while a sibling rule
+//     also omits allocationStrategy (retaining a nil strategy that inherits lowest-cost).
+//  3. A nodepools rule (or sibling nodepools rules) omits allocationStrategy and matches node
+//     pools with different provisioning models (e.g. On-Demand and Spot) when
+//     allocationStrategyDefaults specifies fleet-efficiency for one model and omits (or sets
+//     lowest-cost for) the other.
+//
+// Similarly, when ScaleUpAnyway options do not match any priority rule, their strategy is
+// resolved from the CCC's allocationStrategyDefaults (if present) or remains nil.
+//
+// To resolve conflicts deterministically across all candidate expansion options and all matching
+// rules in the priorityScore group, we enforce lowest-cost precedence:
+//  1. Explicit non-fleet-efficiency strategy (e.g., lowest-cost) on the CRD: overrides
+//     fleet-efficiency and cluster defaults (source = crdSource).
+//  2. Omitted (nil) strategy on the CRD when the cluster default is not fleet-efficiency
+//     (i.e. lowest-cost): overrides fleet-efficiency (source = cluster).
+//  3. Explicit or defaulted fleet-efficiency strategy on the CRD (with all other options
+//     also resolving to fleet-efficiency): selects fleet-efficiency (source = crdSource).
+//  4. All options have omitted (nil) strategies on the CRD: inherits the cluster default
+//     allocation strategy (source = cluster).
 func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, crdSource metrics.AllocationStrategySource, opts []expander.Option) (bool, metrics.AllocationStrategySource) {
-	hasFleetEfficiency := false
+	clusterDefaultIsFleetEfficiency := f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
+	hasCrdFleetEfficiency := false
+	hasClusterLowestCost := false
 	for _, opt := range opts {
-		if sr, ok := getMatchedRule(ccc, opt).(rules.AllocationStrategyRule); ok {
-			strategy := sr.AllocationStrategy()
-			if strategy != nil && *strategy != cccv1.AllocationStrategyFleetEfficiency {
+		for _, strategy := range getOptionStrategies(ccc, opt) {
+			if strategy == nil {
+				if !clusterDefaultIsFleetEfficiency {
+					hasClusterLowestCost = true
+				}
+				continue
+			}
+			if *strategy != cccv1.AllocationStrategyFleetEfficiency {
 				// Explicit non-fleet-efficiency strategy (e.g., lowest-cost) overrides everything in this priorityScore group.
-				// Note that conflicting strategies in the same priority score are possible only for a non-default cluster
-				// allocation strategy (other than lowest-cost), where one rule specifies lowest-cost and another omits it.
 				return false, crdSource
 			}
-			if strategy != nil && *strategy == cccv1.AllocationStrategyFleetEfficiency {
-				hasFleetEfficiency = true
-			}
+			hasCrdFleetEfficiency = true
 		}
 	}
-	if hasFleetEfficiency {
-		// Explicit fleet-efficiency overrides cluster default.
+	if hasClusterLowestCost {
+		// An omitted strategy inherits the cluster default (lowest-cost), which takes precedence over fleet-efficiency.
+		return false, metrics.AllocationStrategySourceCluster
+	}
+	if hasCrdFleetEfficiency {
 		return true, crdSource
 	}
-	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency, metrics.AllocationStrategySourceCluster
+	return clusterDefaultIsFleetEfficiency, metrics.AllocationStrategySourceCluster
 }
 
 // getClusterDefaultAllocationStrategy returns the cluster default allocation strategy, taken from the CLI flag
