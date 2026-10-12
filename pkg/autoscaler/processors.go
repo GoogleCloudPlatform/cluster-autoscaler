@@ -674,11 +674,15 @@ func setUpProcessors(
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
-	var cbAutoscalingStatusProcessor *cbprocessors.CapacityBufferAutoscalingStatusProcessor
+	var cbAutoscalingStatusProcessor *capacitybuffers.CapacityBufferAutoscalingStatusProcessor
 	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		if options.CapacityBufferReadyReplicasEnabled {
-			cbAutoscalingStatusProcessor = cbprocessors.NewCapacityBufferAutoscalingStatusProcessor(manager.GetClient(), capacitybufferPodsRegistry)
+			readyReplicasController := capacitybuffers.NewReadyReplicasController(manager.GetClient())
+			if err := readyReplicasController.SetupWithManager(manager); err != nil {
+				return nil, fmt.Errorf("failed to setup CapacityBuffer ReadyReplicas controller: %w", err)
+			}
+			cbAutoscalingStatusProcessor = capacitybuffers.NewCapacityBufferAutoscalingStatusProcessor(readyReplicasController, capacitybufferPodsRegistry)
 		}
 	}
 

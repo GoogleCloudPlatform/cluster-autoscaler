@@ -22,12 +22,12 @@ import (
 	crd_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/nodequota"
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
-	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 )
 
 // GkeInternalAutoscalingStatusProcessor is an AutoscalingStatusProcessor used in gke internal CA.
@@ -39,7 +39,7 @@ type GkeInternalAutoscalingStatusProcessor struct {
 	observabilityProcessor          *crd_status.CrdResourceReportingProcessor
 	configDriftProcessor            *crd_status.ConfigDriftReportingProcessor
 	autoscalingHistoryProcessor     *history.AutoscalingStatusHistoryProcessor
-	capacityBuffersProcessor        *cbprocessors.CapacityBufferAutoscalingStatusProcessor
+	capacityBuffersProcessor        *capacitybuffers.CapacityBufferAutoscalingStatusProcessor
 }
 
 // Process calls various GKE AutoscalingStatusProcessors
@@ -143,7 +143,7 @@ func NewGkeInternalAutoscalingStatusProcessor(
 	observabilityProcessor *status.CrdResourceReportingProcessor,
 	configDriftProcessor *status.ConfigDriftReportingProcessor,
 	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor,
-	capacityBuffersProcessor *cbprocessors.CapacityBufferAutoscalingStatusProcessor) *GkeInternalAutoscalingStatusProcessor {
+	capacityBuffersProcessor *capacitybuffers.CapacityBufferAutoscalingStatusProcessor) *GkeInternalAutoscalingStatusProcessor {
 	return &GkeInternalAutoscalingStatusProcessor{
 		quotaProcessor:                  quotaProcessor,
 		vizProcessor:                    vizProcessor,
