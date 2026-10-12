@@ -158,7 +158,7 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: true}},
 			experimentValues:            map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
 			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
-			wantRestart:                 true,
+			wantRestart:                 false,
 		},
 		{
 			testName:                    "CapacityBuffersMetricsEndpointEnabled_defaults_to_enabled_when_no_experiment_is_defined",
