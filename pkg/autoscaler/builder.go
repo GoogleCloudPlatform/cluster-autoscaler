@@ -624,7 +624,16 @@ func (b *Builder) Build(
 	loopStartObservers = append(loopStartObservers, b.prCache, prProcessor)
 	provreqProcessor = prProcessor
 
-	resizableVmAutoprovisioningProvider, err := ekvms_providers.NewResizableVmAutoprovisioningProvider(b.kubeClient, b.machineConfigProvider, experimentsManager, autoscalingOptions.AutopilotEnabled, autoscalingOptions.EkOnManagedNodesEnabled, autoscalingOptions.E4aOnManagedNodesEnabled, autoscalingOptions.EkAutoprovisioning, autoscalingOptions.E4aAutoprovisioning, internalmetrics.Metrics)
+	resizableVmAutoprovisioningFlags := ekvms_providers.ResizableVmAutoprovisioningFlags{
+		AutopilotEnabled:         autoscalingOptions.AutopilotEnabled,
+		EkAutoprovisioning:       autoscalingOptions.EkAutoprovisioning,
+		E4aAutoprovisioning:      autoscalingOptions.E4aAutoprovisioning,
+		E4Autoprovisioning:       autoscalingOptions.E4Autoprovisioning,
+		EkOnManagedNodesEnabled:  autoscalingOptions.EkOnManagedNodesEnabled,
+		E4aOnManagedNodesEnabled: autoscalingOptions.E4aOnManagedNodesEnabled,
+		E4OnManagedNodesEnabled:  autoscalingOptions.E4OnManagedNodesEnabled,
+	}
+	resizableVmAutoprovisioningProvider, err := ekvms_providers.NewResizableVmAutoprovisioningProvider(b.kubeClient, b.machineConfigProvider, experimentsManager, resizableVmAutoprovisioningFlags, internalmetrics.Metrics)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
 	}

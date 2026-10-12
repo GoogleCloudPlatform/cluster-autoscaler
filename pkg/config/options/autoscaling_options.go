@@ -47,6 +47,7 @@ type InternalOptions struct {
 	GeneralPurposeMachineFamilies                []string
 	EkMachineTypes                               string
 	E4aMachineTypes                              string
+	E4MachineTypes                               string
 	EkDownsizeConfig                             string
 	E4aDownsizeConfig                            string
 	E4DownsizeConfig                             string
@@ -89,8 +90,10 @@ type InternalOptions struct {
 	EkvmsConcurrentResizeWorkers                 int
 	EkAutoprovisioning                           string
 	E4aAutoprovisioning                          string
+	E4Autoprovisioning                           string
 	EkOnManagedNodesEnabled                      bool
 	E4aOnManagedNodesEnabled                     bool
+	E4OnManagedNodesEnabled                      bool
 	EkLookaheadMaxWorkloadSeparations            int
 	E4aLookaheadMaxWorkloadSeparations           int
 	E4LookaheadMaxWorkloadSeparations            int

@@ -41,8 +41,22 @@ type ResizableVmAutoprovisioningProvider struct {
 	balloonPodChecker         *balloonPodChecker
 }
 
+// ResizableVmAutoprovisioningFlags groups the CLI flags configuring autoprovisioning of resizable VMs per machine family.
+type ResizableVmAutoprovisioningFlags struct {
+	AutopilotEnabled bool
+	// Specifies if the machine family is enabled and if so, which resizing mode is used.
+	// If unspecified, the mode is determined by experiments.
+	EkAutoprovisioning  string
+	E4aAutoprovisioning string
+	E4Autoprovisioning  string
+	// Specifies if the machine family is enabled on managed nodes.
+	EkOnManagedNodesEnabled  bool
+	E4aOnManagedNodesEnabled bool
+	E4OnManagedNodesEnabled  bool
+}
+
 // NewResizableVmAutoprovisioningProvider creates a new ResizableVmAutoprovisioning provider instance.
-func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *machinetypes.MachineConfigProvider, em experiments.Manager, autopilotEnabled, ekOnManagedNodesEnabledCAFlag, e4aOnManagedNodesEnabledCAFlag bool, ekAutoprovisioning, e4aAutoprovisioning string, metrics resizableVmMetrics) (*ResizableVmAutoprovisioningProvider, error) {
+func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *machinetypes.MachineConfigProvider, em experiments.Manager, flags ResizableVmAutoprovisioningFlags, metrics resizableVmMetrics) (*ResizableVmAutoprovisioningProvider, error) {
 	bpChecker := balloonPodChecker{
 		clientSet:                    clientSet,
 		isBalloonPodCreatable:        true,
@@ -51,14 +65,17 @@ func NewResizableVmAutoprovisioningProvider(clientSet clientset.Interface, mcp *
 		runInterval:                  15 * time.Second,
 	}
 
-	ekAutoprovisioningProvider, err := newEkAutoprovisioningProvider(ekAutoprovisioning, em, &bpChecker, autopilotEnabled, ekOnManagedNodesEnabledCAFlag, metrics)
+	ekAutoprovisioningProvider, err := newEkAutoprovisioningProvider(flags.EkAutoprovisioning, em, &bpChecker, flags.AutopilotEnabled, flags.EkOnManagedNodesEnabled, metrics)
 	if err != nil {
 		return nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
 	}
 
-	e4AutoprovisioningProvider := newE4AutoprovisioningProvider(em, &bpChecker, autopilotEnabled, false, metrics)
+	e4AutoprovisioningProvider, err := newE4AutoprovisioningProvider(flags.E4Autoprovisioning, em, &bpChecker, flags.AutopilotEnabled, flags.E4OnManagedNodesEnabled, metrics)
+	if err != nil {
+		return nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
+	}
 
-	e4aAutoprovisioningProvider, err := newE4aAutoprovisioningProvider(e4aAutoprovisioning, em, &bpChecker, autopilotEnabled, e4aOnManagedNodesEnabledCAFlag, metrics)
+	e4aAutoprovisioningProvider, err := newE4aAutoprovisioningProvider(flags.E4aAutoprovisioning, em, &bpChecker, flags.AutopilotEnabled, flags.E4aOnManagedNodesEnabled, metrics)
 	if err != nil {
 		return nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
 	}

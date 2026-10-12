@@ -567,6 +567,7 @@ func setUpProcessors(
 		machineTypeFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkMachineTypes,
 			machinetypes.E4A.Name(): options.E4aMachineTypes,
+			machinetypes.E4.Name():  options.E4MachineTypes,
 		}
 		experimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkMachineTypesFlag,

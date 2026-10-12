@@ -18,20 +18,60 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	resizable_vm_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
+
+func TestParseE4AutoprovisioningMode(t *testing.T) {
+	tests := []struct {
+		input        string
+		expectedMode resizable_vm_types.E4AutoprovisioningMode
+		wantErr      bool
+	}{
+		{"", resizable_vm_types.E4AutoprovisioningUnspecified, false},
+		{string(resizable_vm_types.E4AutoprovisioningUnspecified), resizable_vm_types.E4AutoprovisioningUnspecified, false},
+		{string(resizable_vm_types.E4AutoprovisioningDisabled), resizable_vm_types.E4AutoprovisioningDisabled, false},
+		{string(resizable_vm_types.E4AutoprovisioningEnabledNoResize), resizable_vm_types.E4AutoprovisioningEnabledNoResize, false},
+		{string(resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize), resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize, false},
+		{"INVALID_VALUE", "", true},
+	}
+
+	for _, tc := range tests {
+		gotMode, err := parseE4AutoprovisioningMode(tc.input)
+		assert.Equal(t, tc.wantErr, err != nil)
+		assert.Equal(t, tc.expectedMode, gotMode)
+	}
+}
 
 func TestRefreshE4LaunchStatus(t *testing.T) {
 	tests := []struct {
 		name                  string
+		mode                  resizable_vm_types.E4AutoprovisioningMode
 		isBalloonPodCreatable bool
 		experimentFlags       map[string]bool
 		expectedPhase         launchPhase
 		expectedSource        launchSource
 	}{
 		{
-			name:                  "balloon pod error - coarse resize disabled",
+			name:                  "balloon pod error - flag coarse resize disabled",
+			mode:                  resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize,
+			isBalloonPodCreatable: false,
+			experimentFlags:       map[string]bool{},
+			expectedPhase:         launchDisabledBalloonPodError,
+			expectedSource:        launchUndefined,
+		},
+		{
+			name:                  "balloon pod error - flag no resize still enabled",
+			mode:                  resizable_vm_types.E4AutoprovisioningEnabledNoResize,
+			isBalloonPodCreatable: false,
+			experimentFlags:       map[string]bool{},
+			expectedPhase:         launchEnabledNoResize,
+			expectedSource:        launchClusterProto,
+		},
+		{
+			name:                  "balloon pod error - experiment coarse resize disabled",
 			isBalloonPodCreatable: false,
 			experimentFlags: map[string]bool{
 				experiments.AutopilotE4WithResizeMinVersionFlag: true,
@@ -49,6 +89,52 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 			},
 			expectedPhase:  launchEnabledNoResize,
 			expectedSource: launchExperiment,
+		},
+		{
+			name:                  "flag disabled overrides experiment enabled",
+			mode:                  resizable_vm_types.E4AutoprovisioningDisabled,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+			},
+			expectedPhase:  launchDisabled,
+			expectedSource: launchUndefined,
+		},
+		{
+			name:                  "flag coarse resize overrides experiment disabled",
+			mode:                  resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: false,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+			},
+			expectedPhase:  launchCoarseGrainedResize,
+			expectedSource: launchClusterProto,
+		},
+		{
+			name:                  "flag no resize overrides experiment coarse resize",
+			mode:                  resizable_vm_types.E4AutoprovisioningEnabledNoResize,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: true,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+			},
+			expectedPhase:  launchEnabledNoResize,
+			expectedSource: launchClusterProto,
+		},
+		{
+			name:                  "flag coarse resize overrides experiment no resize",
+			mode:                  resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize,
+			isBalloonPodCreatable: true,
+			experimentFlags: map[string]bool{
+				experiments.AutopilotE4WithResizeMinVersionFlag: false,
+				experiments.AutopilotE4WithResizeEnabledFlag:    true,
+				experiments.AutopilotE4MinVersionFlag:           true,
+				experiments.AutopilotE4NoResizeEnabledFlag:      true,
+			},
+			expectedPhase:  launchCoarseGrainedResize,
+			expectedSource: launchClusterProto,
 		},
 		{
 			name:                  "experiment enables coarse resize",
@@ -168,7 +254,11 @@ func TestRefreshE4LaunchStatus(t *testing.T) {
 				map[string]string{},
 			)
 
+			mode, err := parseE4AutoprovisioningMode(string(tc.mode))
+			assert.NoError(t, err)
+
 			p := &e4AutoprovisioningProvider{
+				mode:               mode,
 				experimentsManager: experimentsManager,
 				status: LaunchStatus{
 					phase:  launchNotEnabled,
@@ -191,6 +281,7 @@ func TestRefreshE4ManagedNodesStatus(t *testing.T) {
 	tests := []struct {
 		name                        string
 		enabledOnManagedNodesCAFlag bool
+		nilExperimentsManager       bool
 		experimentFlags             map[string]bool
 		want                        bool
 	}{
@@ -202,6 +293,12 @@ func TestRefreshE4ManagedNodesStatus(t *testing.T) {
 		{
 			name:                        "disabled when CA flag is false and no experiment",
 			enabledOnManagedNodesCAFlag: false,
+			want:                        false,
+		},
+		{
+			name:                        "disabled when CA flag is false and experimentsManager is nil",
+			enabledOnManagedNodesCAFlag: false,
+			nilExperimentsManager:       true,
 			want:                        false,
 		},
 		{
@@ -242,11 +339,14 @@ func TestRefreshE4ManagedNodesStatus(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			experimentsManager := experiments.NewMockManagerWithOptions(
-				version.Version{},
-				tc.experimentFlags,
-				map[string]string{},
-			)
+			var experimentsManager experiments.Manager
+			if !tc.nilExperimentsManager {
+				experimentsManager = experiments.NewMockManagerWithOptions(
+					version.Version{},
+					tc.experimentFlags,
+					map[string]string{},
+				)
+			}
 
 			p := &e4AutoprovisioningProvider{
 				enabledOnManagedNodesCAFlag: tc.enabledOnManagedNodesCAFlag,
@@ -256,6 +356,146 @@ func TestRefreshE4ManagedNodesStatus(t *testing.T) {
 
 			p.refreshManagedNodesStatus()
 			assert.Equal(t, tc.want, p.enabledOnManagedNodes)
+		})
+	}
+}
+
+func TestIsE4EnabledInAutopilot(t *testing.T) {
+	tests := []struct {
+		name             string
+		launchPhase      launchPhase
+		autopilotEnabled bool
+		want             bool
+	}{
+		{
+			name:             "disabled when autopilot is disabled",
+			launchPhase:      launchCoarseGrainedResize,
+			autopilotEnabled: false,
+			want:             false,
+		},
+		{
+			name:             "disabled when launch phase is disabled",
+			launchPhase:      launchDisabled,
+			autopilotEnabled: true,
+			want:             false,
+		},
+		{
+			name:             "disabled when launch phase is not enabled",
+			launchPhase:      launchNotEnabled,
+			autopilotEnabled: true,
+			want:             false,
+		},
+		{
+			name:             "disabled on balloon pod error",
+			launchPhase:      launchDisabledBalloonPodError,
+			autopilotEnabled: true,
+			want:             false,
+		},
+		{
+			name:             "enabled when phase is coarse grained resize",
+			launchPhase:      launchCoarseGrainedResize,
+			autopilotEnabled: true,
+			want:             true,
+		},
+		{
+			name:             "enabled when phase is init downsizing",
+			launchPhase:      launchEnabledNoResize,
+			autopilotEnabled: true,
+			want:             true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &e4AutoprovisioningProvider{
+				status: LaunchStatus{
+					phase: tc.launchPhase,
+				},
+				autopilotEnabled: tc.autopilotEnabled,
+			}
+
+			assert.Equal(t, tc.want, p.isEnabledInAutopilot())
+		})
+	}
+}
+
+func TestE4ManagedNodesEnabled(t *testing.T) {
+	tests := []struct {
+		name                  string
+		launchPhase           launchPhase
+		enabledOnManagedNodes bool
+		want                  bool
+	}{
+		{
+			name:                  "disabled when managed nodes flag is false",
+			launchPhase:           launchCoarseGrainedResize,
+			enabledOnManagedNodes: false,
+			want:                  false,
+		},
+		{
+			name:                  "disabled when launch phase is disabled",
+			launchPhase:           launchDisabled,
+			enabledOnManagedNodes: true,
+			want:                  false,
+		},
+		{
+			name:                  "enabled when managed nodes flag is true and phase is coarse grained resize",
+			launchPhase:           launchCoarseGrainedResize,
+			enabledOnManagedNodes: true,
+			want:                  true,
+		},
+		{
+			name:                  "enabled when managed nodes flag is true and phase is init downsizing",
+			launchPhase:           launchEnabledNoResize,
+			enabledOnManagedNodes: true,
+			want:                  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &e4AutoprovisioningProvider{
+				status: LaunchStatus{
+					phase: tc.launchPhase,
+				},
+				enabledOnManagedNodes: tc.enabledOnManagedNodes,
+			}
+
+			assert.Equal(t, tc.want, p.managedNodesEnabled())
+		})
+	}
+}
+
+func TestE4NodesCount(t *testing.T) {
+	for _, tc := range []struct {
+		description        string
+		nodesCountProvider nodesCountProvider
+		expectedNodesCount int
+	}{
+		{
+			description:        "E4 nodesCountProvider is nil, should return 0",
+			nodesCountProvider: nil,
+			expectedNodesCount: 0,
+		},
+		{
+			description:        "E4 nodesCountProvider is nil 2nd case, should return 0",
+			nodesCountProvider: (*mockNodesCountProvider)(nil),
+			expectedNodesCount: 0,
+		},
+		{
+			description: "E4 nodesCountProvider returns 5, should return 5",
+			nodesCountProvider: func() nodesCountProvider {
+				m := &mockNodesCountProvider{}
+				m.On("NodesCount", machinetypes.E4.Name()).Return(5)
+				return m
+			}(),
+			expectedNodesCount: 5,
+		},
+	} {
+		t.Run(tc.description, func(t *testing.T) {
+			p := &e4AutoprovisioningProvider{}
+			p.registerNodesCountProvider(tc.nodesCountProvider)
+			assert.Equal(t, tc.expectedNodesCount, p.nodesCount())
 		})
 	}
 }
