@@ -1004,6 +1004,15 @@ var (
 		[]string{"machine_family"},
 	)
 
+	lookaheadChurnBreakerLaunchStatus = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "lookahead_churn_breaker_launch_status",
+			Help:      "Information about the lookahead churn circuit breaker launch status: 1 if it is enabled, 0 otherwise. The labels include config source and its raw content.",
+		},
+		[]string{"launched_from", "config"},
+	)
+
 	// TODO(b/494558643): Move it to OSS.
 	capacityBuffersPodsMetric = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
@@ -1352,6 +1361,7 @@ var allMetrics = []k8smetrics.Registerable{
 	resizableVmTotalNodesLookaheadSpaceMemory,
 	nodesWithLookaheadPodsShape,
 	lookaheadChurnEventsTotal,
+	lookaheadChurnBreakerLaunchStatus,
 	capacityBuffersPodsMetric,
 	capacityBuffersNumberMetric,
 	csnEnabled,
@@ -2058,6 +2068,18 @@ func (m *prometheusMetrics) UpdateLookaheadPodsCount(laPodsCount map[size.Alloca
 // RegisterLookaheadChurnEvent increments the lookahead churn events counter of the machine family.
 func (*prometheusMetrics) RegisterLookaheadChurnEvent(machineFamily string) {
 	lookaheadChurnEventsTotal.WithLabelValues(machineFamily).Inc()
+}
+
+// UpdateLookaheadChurnBreakerLaunchStatus sets the lookahead churn circuit breaker launch status with the given
+// raw configuration and its source.
+func (*prometheusMetrics) UpdateLookaheadChurnBreakerLaunchStatus(enabled bool, launchedFrom, config string) {
+	// The launch status changes over time, so only the latest one is exported.
+	lookaheadChurnBreakerLaunchStatus.Reset()
+	if enabled {
+		lookaheadChurnBreakerLaunchStatus.WithLabelValues(launchedFrom, config).Set(1)
+	} else {
+		lookaheadChurnBreakerLaunchStatus.WithLabelValues(launchedFrom, config).Set(0)
+	}
 }
 
 func (pm *prometheusMetrics) UpdateResizableVmTotalNodesLookaheadSpace(machineFamily string, val size.Allocatable) {

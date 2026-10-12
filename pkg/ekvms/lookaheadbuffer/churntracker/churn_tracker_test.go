@@ -703,12 +703,12 @@ func createdAt(node *apiv1.Node, creationTime time.Time) *apiv1.Node {
 // enabledChurnTrackerProvider returns a churn tracker configProvider with the experiment enabled and default values.
 func enabledChurnTrackerProvider() ConfigProvider {
 	flags := map[string]string{experiments.ResizableVmChurnCircuitBreakerFlag: `{"minCaVersion": "0.0.0"}`}
-	return NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, flags), "", version.Version{})
+	return NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, flags), "", version.Version{}, nil)
 }
 
 // disabledChurnTrackerProvider returns a churn tracker configProvider with the experiment disabled.
 func disabledChurnTrackerProvider() ConfigProvider {
-	return NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, nil), "", version.Version{})
+	return NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, nil), "", version.Version{}, nil)
 }
 
 func userPod(name string, cpu, mem int64) *apiv1.Pod {
