@@ -536,9 +536,21 @@ func extractSsdConfig(ssdConfig *v1.LocalSSDConfig) *ephemeralLocalSsdConfig {
 		}
 	}
 
+	// The CRD DefaultCount mirrors GCE's *default* local SSD count
+	// (global_configuration.proto LocalSsdConfig.disk_count), while CA's
+	// automaticDiskCount means a *fixed* count (e.g. -lssd machine types).
+	// Only map it when the count is fixed, i.e. AvailableCounts ==
+	// [DefaultCount], which matches withAutomaticEphemeralLocalSsdCount.
+	// A true default (default N with multiple allowed counts) is
+	// intentionally not mapped yet.
+	var automatic *int64
+	if ssdConfig.DefaultCount > 0 && len(ssdConfig.AvailableCounts) == 1 && ssdConfig.AvailableCounts[0] == ssdConfig.DefaultCount {
+		automatic = ptr.To(ssdConfig.DefaultCount)
+	}
+
 	return &ephemeralLocalSsdConfig{
 		allowedDiskCounts:  ac,
-		automaticDiskCount: ptr.To(ssdConfig.DefaultCount),
+		automaticDiskCount: automatic,
 		diskSize:           uint64(ssdConfig.DiskSize),
 	}
 }
