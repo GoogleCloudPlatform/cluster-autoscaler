@@ -21,11 +21,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	gce_api "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -672,7 +672,7 @@ func TestBestOption_VariousGPUs(t *testing.T) {
 func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 	tests := []struct {
 		name         string
-		reservations []*gce_api.Reservation
+		reservations []*reservation.Reservation
 		machineType  string
 		zone         string
 		nodeCount    int
@@ -693,8 +693,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "not matching machine type",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("other-machine", "zone-A", 0, 5),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("other-machine", "zone-A", 5),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -706,8 +706,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "not matching zone",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("some-machine", "zone-B", 0, 5),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-B", 5),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -719,8 +719,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "half of the nodes are reserved",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("some-machine", "zone-A", 0, 5),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-A", 5),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -732,8 +732,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "all of the nodes are reserved",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("some-machine", "zone-A", 0, 10),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-A", 10),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -745,8 +745,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "even more nodes are reserved",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("some-machine", "zone-A", 0, 20),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-A", 20),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -758,9 +758,9 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		},
 		{
 			name: "all of the nodes are reserved by multiple reservations",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(0, 0, 5, "some-machine", "zone-A"),
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "some-machine", "zone-A"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(0, "some-machine", "zone-A", 5),
+				reservations.BuildAvailableReservationWithID(1, "some-machine", "zone-A", 5),
 			},
 			machineType: "some-machine",
 			zone:        "zone-A",
@@ -844,7 +844,7 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		reservations []*gce_api.Reservation
+		reservations []*reservation.Reservation
 
 		cheaperNodeInfo        *framework.NodeInfo
 		cheaperNodeGroupExists bool
@@ -863,8 +863,8 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 		},
 		{
 			name: "16 core reservation, non-existing 16 < existing 2",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("standard-16", zone, 0, 1),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("standard-16", zone, 1),
 			},
 			cheaperNodeInfo:        nodeInfo16,
 			cheaperNodeGroupExists: false,
@@ -873,8 +873,8 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 		},
 		{
 			name: "32 core reservation, existing 32 < existing 2",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("standard-32", zone, 0, 1),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("standard-32", zone, 1),
 			},
 			cheaperNodeInfo:        nodeInfo32,
 			cheaperNodeGroupExists: true,
@@ -883,8 +883,8 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 		},
 		{
 			name: "32 core reservation, non-existing 32 < existing 2",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("standard-32", zone, 0, 1),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("standard-32", zone, 1),
 			},
 			cheaperNodeInfo:        nodeInfo32,
 			cheaperNodeGroupExists: false,
@@ -893,8 +893,8 @@ func TestBestOption_ReservationDiscount(t *testing.T) {
 		},
 		{
 			name: "64 core reservation, non-reserved 2 < reserved 64 due to unfitness",
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservation("standard-64", zone, 0, 1),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("standard-64", zone, 1),
 			},
 			cheaperNodeInfo:        nodeInfo2,
 			cheaperNodeGroupExists: true,

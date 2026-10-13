@@ -1819,10 +1819,6 @@ func (fake *FakeGkeManager) SendCapacityDecision(ctx context.Context, decision a
 	panic("not implemented")
 }
 
-func (fake *FakeGkeManager) GetReservationsInProject(projectID string) ([]*gce_api.Reservation, error) {
-	panic("not implemented")
-}
-
 func (fake *FakeGkeManager) GetFutureReservationsInProject(projectID string) ([]*gceclient.GceFutureReservation, error) {
 	panic("not implemented")
 }

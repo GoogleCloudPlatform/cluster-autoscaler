@@ -24,7 +24,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	gce_api "google.golang.org/api/compute/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
@@ -162,7 +161,7 @@ type fleetEfficiencyTestCase struct {
 	flexAdvisorSetup          func(*instanceavailability.MockProvider)
 	expectedBestOptions       []expander.Option
 	expectedErrorLog          string
-	reservations              []*gce_api.Reservation
+	reservations              []*reservation.Reservation
 	clusterDefaultStrategy    options.ClusterDefaultAllocationStrategy
 	stringExperimentValues    map[string]string
 	boolExperimentValues      map[string]bool
@@ -266,7 +265,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
 			puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-			puller.SetReservations(reservation.FromV1List(tc.reservations))
+			puller.SetReservations(tc.reservations)
 		}
 
 		var em experiments.Manager
@@ -427,8 +426,8 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			name:    "Option has matching unused reservation - doesnt use FA, returns original options",
 			crds:    []crd.CRD{f.crdRuleFleet},
 			options: []expander.Option{f.optFleet1, f.optFleet2},
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n1-standard-1", "us-central1-a"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "n1-standard-1", "us-central1-a", 5),
 			},
 			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
 			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
@@ -437,8 +436,8 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			name:    "Reservations exist but do not match options - calls FA, scores the options",
 			crds:    []crd.CRD{f.crdRuleFleet},
 			options: []expander.Option{f.optFleet1, f.optFleet2},
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "some-other-machine", "us-central1-a"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "some-other-machine", "us-central1-a", 5),
 			},
 			flexAdvisorSetup:    defaultFlexAdvisorSetup,
 			expectedBestOptions: []expander.Option{f.optFleet2},
@@ -448,8 +447,8 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			crds:                      []crd.CRD{f.crdRuleFleet},
 			options:                   []expander.Option{optNap, f.optFleet1},
 			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n2-standard-4", "us-central1-b"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "n2-standard-4", "us-central1-b", 5),
 			},
 			flexAdvisorSetup:    flexAdvisorNotCalledSetup,
 			expectedBestOptions: []expander.Option{optNap, f.optFleet1},
@@ -460,8 +459,8 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			options:                   []expander.Option{optNap, f.optFleet1},
 			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
 			plannedLocationsErr:       errors.New("cannot determine locations"),
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n2-standard-4", "us-central1-b"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "n2-standard-4", "us-central1-b", 5),
 			},
 			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
 				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Maybe().Return(
@@ -476,8 +475,8 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 			crds:                      []crd.CRD{f.crdRuleFleet},
 			options:                   []expander.Option{optNap, f.optFleet1},
 			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b"},
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "e2-standard-8", "us-central1-b"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "e2-standard-8", "us-central1-b", 5),
 			},
 			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
 				setupMockSnapshot(m, "n2-standard-4", map[string]float64{"us-central1-a": 0.8, "us-central1-b": 0.8})
@@ -1153,7 +1152,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 		noCrdInLister             bool
 		options                   []expander.Option
 		setupMock                 func(*instanceavailability.MockProvider)
-		reservations              []*gce_api.Reservation
+		reservations              []*reservation.Reservation
 		autoprovisioningLocations []string
 		backoff                   base_backoff.Backoff
 		autopilotEnabled          bool
@@ -1303,8 +1302,8 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 		{
 			name:    "Usable Reservations",
 			options: []expander.Option{optFleet1},
-			reservations: []*gce_api.Reservation{
-				reservations.BuildMultipleMachineReservationWithId(1, 0, 5, "n1-standard-1", "us-central1-a"),
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservationWithID(1, "n1-standard-1", "us-central1-a", 5),
 			},
 			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
 			expectedReason:            metrics.AllocationStrategyFallbackReservationPresent,
@@ -1616,7 +1615,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 				mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 					WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
 				puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-				puller.SetReservations(reservation.FromV1List(tc.reservations))
+				puller.SetReservations(tc.reservations)
 			}
 
 			cpBuilder := gke.NewTestAutoprovisioningCloudProviderBuilder().

@@ -3197,12 +3197,12 @@ func TestIsReservationCompatible(t *testing.T) {
 					Values:                 []string{tt.affinityName},
 				}
 			}
-			rsv := &gcev1.Reservation{
+			rsv := &reservation.Reservation{
 				Name:                        tt.reservationName,
 				SpecificReservationRequired: tt.specificReservationReq,
 			}
 
-			got, reason := mig.IsReservationCompatible(reservation.FromV1(rsv))
+			got, reason := mig.IsReservationCompatible(rsv)
 			assert.Equal(t, tt.want, got)
 			if tt.want {
 				assert.Empty(t, reason)

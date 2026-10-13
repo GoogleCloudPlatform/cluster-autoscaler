@@ -348,17 +348,32 @@ func (p *ReservationsPuller) GetReservationsInProject(project string) []*reserva
 	return result
 }
 
+// SetReservations overrides pulled reservations, e.g. to account for capacity used by a scale-up
+// before GCE reports it. Each reservation is stored back in the puller that returned it, so that
+// the puller's next successful pull replaces it.
 func (p *ReservationsPuller) SetReservations(reservations []*reservation.Reservation) {
-	// Organize by project
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	consumableOnly := make(map[uint64]int, len(p.consumableReservations))
+	for i, r := range p.consumableReservations {
+		consumableOnly[r.ID] = i
+	}
+	for _, pp := range p.projectPullers {
+		for _, r := range pp.GetReservations() {
+			delete(consumableOnly, r.ID)
+		}
+	}
+
 	reservationsByProject := make(map[string][]*reservation.Reservation)
 	for _, r := range reservations {
+		if i, found := consumableOnly[r.ID]; found {
+			p.consumableReservations[i] = r
+			continue
+		}
 		proj := GetReservationProject(r)
 		reservationsByProject[proj] = append(reservationsByProject[proj], r)
 	}
-
-	// Update pullers
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
 	for k, pp := range p.projectPullers {
 		pp.SetReservations(reservationsByProject[k])
 	}

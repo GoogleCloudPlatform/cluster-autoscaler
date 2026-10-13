@@ -19,11 +19,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	gceapiv1 "google.golang.org/api/compute/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	gcereservation "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
@@ -52,7 +52,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 	testCases := []struct {
 		name              string
 		crd               crd.CRD
-		reservations      []*gceapiv1.Reservation
+		reservations      []*gcereservation.Reservation
 		reservationBlocks map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 
 		wantCondition bool
@@ -74,7 +74,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations:  []*gceapiv1.Reservation{},
+			reservations:  []*gcereservation.Reservation{},
 			wantCondition: true,
 			wantReason:    ReservationNotFoundReason,
 			wantMessage:   fmt.Sprintf(ReservationNotFoundMessage, "reservation1"),
@@ -94,7 +94,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -127,7 +127,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -160,7 +160,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -193,7 +193,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -227,7 +227,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -261,7 +261,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -295,7 +295,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -329,7 +329,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -359,7 +359,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -389,7 +389,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -419,7 +419,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -449,7 +449,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -487,7 +487,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -517,7 +517,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations:  []*gceapiv1.Reservation{},
+			reservations:  []*gcereservation.Reservation{},
 			wantCondition: false,
 		},
 		{
@@ -535,7 +535,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -565,7 +565,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -596,7 +596,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -627,7 +627,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -655,7 +655,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -685,7 +685,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -712,7 +712,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -739,7 +739,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -766,7 +766,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -796,7 +796,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -830,7 +830,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -860,7 +860,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -892,7 +892,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -937,7 +937,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(
 					0,
 					"READY",
@@ -976,16 +976,14 @@ func TestValidateReservationsConfig(t *testing.T) {
 				),
 				{
 					Name:                        "aggregate",
-					Id:                          3,
+					ID:                          3,
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
-					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-						ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+					AggregateReservation: &gcereservation.AggregateReservation{
+						AvailableResources: []gcereservation.AcceleratorResource{
 							{
-								Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-									AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-									AcceleratorCount: 8,
-								},
+								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+								AcceleratorCount: 8,
 							},
 						},
 						WorkloadType: tpu.WorkloadTypeServing,
@@ -1006,19 +1004,17 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				{
 					Name:                        "aggregate",
 					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
-					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-						ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+					AggregateReservation: &gcereservation.AggregateReservation{
+						AvailableResources: []gcereservation.AcceleratorResource{
 							{
-								Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-									AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-									AcceleratorCount: 8,
-								},
+								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+								AcceleratorCount: 8,
 							},
 						},
 						WorkloadType: tpu.WorkloadTypeServing,
@@ -1040,19 +1036,17 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				{
 					Name:                        "aggregate",
 					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
-					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-						ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+					AggregateReservation: &gcereservation.AggregateReservation{
+						AvailableResources: []gcereservation.AcceleratorResource{
 							{
-								Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-									AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct5p",
-									AcceleratorCount: 4,
-								},
+								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct5p",
+								AcceleratorCount: 4,
 							},
 						},
 					},
@@ -1075,19 +1069,17 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				{
 					Name:                        "aggregate",
 					Zone:                        "zone-a",
 					SelfLink:                    fmt.Sprintf("projects/%s/reservations/%s", localReservationProject, "aggregate"),
 					SpecificReservationRequired: true,
-					AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-						ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+					AggregateReservation: &gcereservation.AggregateReservation{
+						AvailableResources: []gcereservation.AcceleratorResource{
 							{
-								Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-									AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-									AcceleratorCount: 8,
-								},
+								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+								AcceleratorCount: 8,
 							},
 						},
 					},
@@ -1110,7 +1102,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				// Specific reservation claiming to be aggregate
 				reservations.BuildReservationWithId(
 					0,
@@ -1141,7 +1133,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 			},
@@ -1158,7 +1150,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 			},
 			wantCondition: true,
@@ -1176,7 +1168,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
 				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 			},
@@ -1195,7 +1187,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
 				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 			},
@@ -1212,7 +1204,7 @@ func TestValidateReservationsConfig(t *testing.T) {
 					),
 				}),
 			),
-			reservations: []*gceapiv1.Reservation{
+			reservations: []*gcereservation.Reservation{
 				reservations.BuildReservationWithId(1, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone1", existingMachineType, "", nil, nil, localReservationProject, "reservation1"),
 				reservations.BuildReservationWithId(2, "READY", true, "https://www.googleapis.com/compute/v1/projects/"+localReservationProject+"/zones/zone2", "n2-standard-2", "", nil, nil, localReservationProject, "reservation1"),
 			},

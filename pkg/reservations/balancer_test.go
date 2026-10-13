@@ -21,7 +21,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -49,10 +48,10 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 		groups                []cloudprovider.NodeGroup
 		withFallbackBalancers func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor
 		upcomingNodeGroups    []cloudprovider.NodeGroup
-		reservations          []*gce_api.Reservation
+		reservations          []*reservation.Reservation
 		newNodes              int
 		wantScaleUpInfo       []nodegroupset.ScaleUpInfo
-		wantReservations      []*gce_api.Reservation
+		wantReservations      []*reservation.Reservation
 	}{
 		{
 			name: "single group, no reservations",
@@ -68,31 +67,31 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				mig1,
 			},
 			newNodes: 10,
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 18, 20),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 2),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1, 5, 7, 10),
 			},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 20, 20),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 0),
 			},
 		},
 		{
 			name:     "many groups, some reservations",
 			groups:   []cloudprovider.NodeGroup{mig1, mig2, mig3},
 			newNodes: 10,
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 10, 20, "machine-type-2", "zone-a"),
-				BuildMultipleMachineReservationWithId(2, 0, 10, "machine-type-2", "zone-b"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 10),
+				BuildAvailableReservationWithID(2, "machine-type-2", "zone-b", 10),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1, 5, 9, 10),
 				newTestScaleUpInfo(mig2, 3, 9, 10),
 			},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 14, 20, "machine-type-2", "zone-a"),
-				BuildMultipleMachineReservationWithId(2, 6, 10, "machine-type-2", "zone-b"),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 6),
+				BuildAvailableReservationWithID(2, "machine-type-2", "zone-b", 4),
 			},
 		},
 		{
@@ -102,14 +101,14 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				newUpcomingTestNodeGroup("", "machine-type-2", "zone-a", 10, 6),
 			},
 			newNodes: 10,
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 10, 20, "machine-type-2", "zone-a"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 10),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1, 5, 9, 10),
 			},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 14, 20, "machine-type-2", "zone-a"),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 6),
 			},
 		},
 		{
@@ -118,12 +117,12 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			upcomingNodeGroups: []cloudprovider.NodeGroup{
 				newUpcomingTestNodeGroup("", "machine-type-2", "zone-a", 10, 10),
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 10, 20, "machine-type-2", "zone-a"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 10),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 10, 20, "machine-type-2", "zone-a"),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 10),
 			},
 		},
 		{
@@ -136,14 +135,14 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				registerMock(&mockBalancer.Mock)
 				return mockBalancer
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 0, 100),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 100),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1000_1, 0, 100, 1000),
 			},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 100, 100),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 0),
 			},
 		},
 		{
@@ -162,16 +161,16 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				registerMock(&mockBalancer.Mock)
 				return mockBalancer
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 0, 500),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 500),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1000_1, 0, 500, 1000),
 				newTestScaleUpInfo(mig1000_2, 0, 250, 1000),
 				newTestScaleUpInfo(mig1000_3, 0, 250, 1000),
 			},
-			wantReservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation("machine-type-2", "zone-a", 500, 500),
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservation("machine-type-2", "zone-a", 0),
 			},
 		},
 	}
@@ -187,7 +186,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"zone-a, zone-b"}, nil })
 			puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-			puller.SetReservations(reservation.FromV1List(tc.reservations))
+			puller.SetReservations(tc.reservations)
 
 			provider := &gke.GkeCloudProviderMock{}
 			provider.On("NodeGroups").Return(append(tc.groups, tc.upcomingNodeGroups...)).Once()
@@ -208,7 +207,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
-			assert.ElementsMatch(t, availabilities(reservation.FromV1List(tc.wantReservations)), availabilities(puller.GetReservations()))
+			assert.ElementsMatch(t, tc.wantReservations, puller.GetReservations())
 
 			for _, m := range mocks {
 				m.AssertExpectations(t)
@@ -355,17 +354,17 @@ func TestUpdateReservations(t *testing.T) {
 	testCases := []struct {
 		name                       string
 		scaleUpInfos               []nodegroupset.ScaleUpInfo
-		reservations               []*gce_api.Reservation
-		wantReservationsPostUpdate []*gce_api.Reservation
+		reservations               []*reservation.Reservation
+		wantReservationsPostUpdate []*reservation.Reservation
 	}{
 		{
 			name:         "No scale up info",
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation(matching, "zone-A", 0, 5),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation(matching, "zone-A", 5),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservation(matching, "zone-A", 0, 5),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservation(matching, "zone-A", 5),
 			},
 		},
 		{
@@ -373,13 +372,13 @@ func TestUpdateReservations(t *testing.T) {
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				{Group: migA, CurrentSize: 0, NewSize: 3, MaxSize: 10},
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 0, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, matching, "zone-A"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 5),
+				BuildAvailableReservationWithID(2, matching, "zone-A", 5),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 3, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, matching, "zone-A"),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 2),
+				BuildAvailableReservationWithID(2, matching, "zone-A", 5),
 			},
 		},
 		{
@@ -387,13 +386,13 @@ func TestUpdateReservations(t *testing.T) {
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				{Group: migA, CurrentSize: 0, NewSize: 8, MaxSize: 10},
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 0, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, matching, "zone-A"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 5),
+				BuildAvailableReservationWithID(2, matching, "zone-A", 5),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 3, 5, matching, "zone-A"),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 0),
+				BuildAvailableReservationWithID(2, matching, "zone-A", 2),
 			},
 		},
 		{
@@ -401,13 +400,13 @@ func TestUpdateReservations(t *testing.T) {
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				{Group: migA, CurrentSize: 0, NewSize: 3, MaxSize: 10},
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservation(different, "zone-A", 0, 5),
-				BuildMultipleMachineReservation(matching, "zone-B", 0, 5),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation(different, "zone-A", 5),
+				BuildAvailableReservation(matching, "zone-B", 5),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservation(different, "zone-A", 0, 5),
-				BuildMultipleMachineReservation(matching, "zone-B", 0, 5),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservation(different, "zone-A", 5),
+				BuildAvailableReservation(matching, "zone-B", 5),
 			},
 		},
 		{
@@ -417,15 +416,15 @@ func TestUpdateReservations(t *testing.T) {
 				{Group: migB, CurrentSize: 0, NewSize: 4, MaxSize: 10},
 				{Group: migC, CurrentSize: 0, NewSize: 5, MaxSize: 10},
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 0, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, matching, "zone-B"),
-				BuildMultipleMachineReservationWithId(3, 0, 5, matching, "zone-C"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 5),
+				BuildAvailableReservationWithID(2, matching, "zone-B", 5),
+				BuildAvailableReservationWithID(3, matching, "zone-C", 5),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 3, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 4, 5, matching, "zone-B"),
-				BuildMultipleMachineReservationWithId(3, 5, 5, matching, "zone-C"),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 2),
+				BuildAvailableReservationWithID(2, matching, "zone-B", 1),
+				BuildAvailableReservationWithID(3, matching, "zone-C", 0),
 			},
 		},
 		{
@@ -435,23 +434,23 @@ func TestUpdateReservations(t *testing.T) {
 				{Group: migB, CurrentSize: 0, NewSize: 8, MaxSize: 10},
 				{Group: migC, CurrentSize: 0, NewSize: 9, MaxSize: 10},
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 0, 5, different, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, different, "zone-B"),
-				BuildMultipleMachineReservationWithId(3, 0, 5, different, "zone-C"),
-				BuildMultipleMachineReservationWithId(4, 0, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(5, 0, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(6, 0, 5, matching, "zone-B"),
-				BuildMultipleMachineReservationWithId(7, 0, 10, matching, "zone-C"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, different, "zone-A", 5),
+				BuildAvailableReservationWithID(2, different, "zone-B", 5),
+				BuildAvailableReservationWithID(3, different, "zone-C", 5),
+				BuildAvailableReservationWithID(4, matching, "zone-A", 5),
+				BuildAvailableReservationWithID(5, matching, "zone-A", 5),
+				BuildAvailableReservationWithID(6, matching, "zone-B", 5),
+				BuildAvailableReservationWithID(7, matching, "zone-C", 10),
 			},
-			wantReservationsPostUpdate: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 0, 5, different, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, different, "zone-B"),
-				BuildMultipleMachineReservationWithId(3, 0, 5, different, "zone-C"),
-				BuildMultipleMachineReservationWithId(4, 5, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(5, 2, 5, matching, "zone-A"),
-				BuildMultipleMachineReservationWithId(6, 5, 5, matching, "zone-B"),
-				BuildMultipleMachineReservationWithId(7, 9, 10, matching, "zone-C"),
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, different, "zone-A", 5),
+				BuildAvailableReservationWithID(2, different, "zone-B", 5),
+				BuildAvailableReservationWithID(3, different, "zone-C", 5),
+				BuildAvailableReservationWithID(4, matching, "zone-A", 0),
+				BuildAvailableReservationWithID(5, matching, "zone-A", 3),
+				BuildAvailableReservationWithID(6, matching, "zone-B", 0),
+				BuildAvailableReservationWithID(7, matching, "zone-C", 1),
 			},
 		},
 	}
@@ -462,11 +461,11 @@ func TestUpdateReservations(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			processor := NewReservationBalancingProcessor(nil, nil, localssdsize.NewSimpleLocalSSDProvider(), provider)
-			rsvs := reservation.FromV1List(tc.reservations)
+			rsvs := tc.reservations
 			reservations := processor.updateReservations(tc.scaleUpInfos, rsvs, rsvs)
 
-			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.wantReservationsPostUpdate)), availableCounts(reservations)); diff != "" {
-				t.Errorf("updateReservations() available counts diff (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tc.wantReservationsPostUpdate, reservations); diff != "" {
+				t.Errorf("updateReservations() diff (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -485,79 +484,79 @@ func TestConsumeUpcomingScaleUps(t *testing.T) {
 	testCases := []struct {
 		name         string
 		nodeGroups   []cloudprovider.NodeGroup
-		reservations []*gce_api.Reservation
-		want         []*gce_api.Reservation
+		reservations []*reservation.Reservation
+		want         []*reservation.Reservation
 	}{
 		{
 			name:       "no upcoming nodes - no adjustment to the reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newTestNodeGroup(machineType1, "zone-A", 0, 10)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 		{
 			name:       "adjust reservation only for upcoming nodes with matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2), newTestNodeGroup(machineType1, "zone-A", 0, 10)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 1, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 3, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 2),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 		{
 			name:       "multiple upcoming nodes with matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2), newUpcomingTestNodeGroup("np2", machineType1, "zone-A", 5, 1)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 1, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 4, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 1),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 		{
 			name:       "upcoming node without matching reservations does not adjust reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-C", 5, 2)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 		{
 			name:       "upcoming nodes with matching reservations and all matching reservations are already fully utilized",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 		{
 			name:       "upcoming nodes with matching reservations, but not enough reservations to accommodate all upcoming nodes",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 4, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 1),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 		},
 	}
@@ -571,9 +570,9 @@ func TestConsumeUpcomingScaleUps(t *testing.T) {
 			ctx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
-			reservations := processor.consumeUpcomingScaleUps(ctx, reservation.FromV1List(tc.reservations))
-			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.want)), availableCounts(reservations)); diff != "" {
-				t.Errorf("consumeUpcomingScaleUps() available counts diff (-want +got):\n%s", diff)
+			reservations := processor.consumeUpcomingScaleUps(ctx, tc.reservations)
+			if diff := cmp.Diff(tc.want, reservations); diff != "" {
+				t.Errorf("consumeUpcomingScaleUps() diff (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -584,24 +583,24 @@ func TestReservationsForUpcomingNodes(t *testing.T) {
 	testCases := []struct {
 		name         string
 		nodeGroups   []cloudprovider.NodeGroup
-		reservations []*gce_api.Reservation
+		reservations []*reservation.Reservation
 		want         map[uint64]int
 	}{
 		{
 			name:       "no upcoming nodes",
 			nodeGroups: []cloudprovider.NodeGroup{newTestNodeGroup(machineType1, "zone-A", 0, 10)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 			want: map[uint64]int{},
 		},
 		{
 			name:       "upcoming nodes with matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2), newTestNodeGroup(machineType1, "zone-A", 0, 10)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 1, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 			want: map[uint64]int{
 				1: 2,
@@ -610,18 +609,18 @@ func TestReservationsForUpcomingNodes(t *testing.T) {
 		{
 			name:       "upcoming nodes no matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-C", 5, 2)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-B"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-B", 5),
 			},
 			want: map[uint64]int{},
 		},
 		{
 			name:       "upcoming nodes with multiple matching reservations",
 			nodeGroups: []cloudprovider.NodeGroup{newUpcomingTestNodeGroup("np1", machineType1, "zone-A", 5, 2)},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 1, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-A"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+				BuildAvailableReservationWithID(2, machineType1, "zone-A", 5),
 			},
 			want: map[uint64]int{
 				1: 2,
@@ -638,7 +637,7 @@ func TestReservationsForUpcomingNodes(t *testing.T) {
 			ctx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
-			consumedReservations := processor.reservationsForUpcomingNodes(ctx, reservation.FromV1List(tc.reservations))
+			consumedReservations := processor.reservationsForUpcomingNodes(ctx, tc.reservations)
 			if diff := cmp.Diff(consumedReservations, tc.want); diff != "" {
 				t.Errorf("reservationsForUpcomingNodes(context, reservations) diff (-want +got): %v %v %v", diff, consumedReservations, tc.want)
 			}
@@ -651,19 +650,19 @@ func TestAdjustReservations(t *testing.T) {
 	testCases := []struct {
 		name                 string
 		consumedReservations map[uint64]int
-		reservations         []*gce_api.Reservation
-		want                 []*gce_api.Reservation
+		reservations         []*reservation.Reservation
+		want                 []*reservation.Reservation
 	}{
 		{
 			name:                 "no consumed reservations",
 			consumedReservations: map[uint64]int{},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-A"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-A", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 5, 1, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-A"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 0),
+				BuildAvailableReservationWithID(2, machineType1, "zone-A", 5),
 			},
 		},
 		{
@@ -671,57 +670,34 @@ func TestAdjustReservations(t *testing.T) {
 			consumedReservations: map[uint64]int{
 				1: 2,
 			},
-			reservations: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 1, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-A"),
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 4),
+				BuildAvailableReservationWithID(2, machineType1, "zone-A", 5),
 			},
-			want: []*gce_api.Reservation{
-				BuildMultipleMachineReservationWithId(1, 3, 5, machineType1, "zone-A"),
-				BuildMultipleMachineReservationWithId(2, 0, 5, machineType1, "zone-A"),
+			want: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, machineType1, "zone-A", 2),
+				BuildAvailableReservationWithID(2, machineType1, "zone-A", 5),
 			},
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			rsvs := reservation.FromV1List(tc.reservations)
-			wantInput := availableCounts(rsvs)
+			rsvs := tc.reservations
+			wantInput := make([]*reservation.Reservation, len(rsvs))
+			for i, r := range rsvs {
+				c, specific := *r, *r.SpecificReservation
+				c.SpecificReservation = &specific
+				wantInput[i] = &c
+			}
 
 			subtractedReservation := subtractReservations(rsvs, tc.consumedReservations)
 
-			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.want)), availableCounts(subtractedReservation)); diff != "" {
-				t.Errorf("subtractReservations() available counts diff (-want +got):\n%s", diff)
+			if diff := cmp.Diff(tc.want, subtractedReservation); diff != "" {
+				t.Errorf("subtractReservations() diff (-want +got):\n%s", diff)
 			}
-			if diff := cmp.Diff(wantInput, availableCounts(rsvs)); diff != "" {
+			if diff := cmp.Diff(wantInput, rsvs); diff != "" {
 				t.Errorf("subtractReservations() modified input reservations, diff (-want +got):\n%s", diff)
 			}
 		})
 	}
-}
-
-// availableCounts maps reservation IDs to their available counts.
-func availableCounts(rsvs []*reservation.Reservation) map[uint64]int64 {
-	result := make(map[uint64]int64, len(rsvs))
-	for _, rsv := range rsvs {
-		result[rsv.ID] = rsv.SpecificReservation.AvailableCount
-	}
-	return result
-}
-
-type availability struct {
-	zone           string
-	machineType    string
-	availableCount int64
-}
-
-// availabilities summarizes available counts of specific reservations.
-func availabilities(rsvs []*reservation.Reservation) []availability {
-	var result []availability
-	for _, rsv := range rsvs {
-		result = append(result, availability{
-			zone:           rsv.Zone,
-			machineType:    rsv.SpecificReservation.InstanceProperties.MachineType,
-			availableCount: rsv.SpecificReservation.AvailableCount,
-		})
-	}
-	return result
 }

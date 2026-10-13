@@ -17,21 +17,20 @@ package gceclient
 import (
 	"testing"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 func TestIsReservationUsable(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
-		rsv            *gce_api.Reservation
+		rsv            *reservation.Reservation
 		allowAggregate bool
 		wantUsable     bool
 		wantReason     ReservationComment
 	}{
 		{
 			name: "Status not READY",
-			rsv: &gce_api.Reservation{
+			rsv: &reservation.Reservation{
 				Status: "CREATING",
 			},
 			wantUsable: false,
@@ -39,15 +38,15 @@ func TestIsReservationUsable(t *testing.T) {
 		},
 		{
 			name:       "Both specific and aggregate are nil",
-			rsv:        &gce_api.Reservation{Status: "READY"},
+			rsv:        &reservation.Reservation{Status: "READY"},
 			wantUsable: false,
 			wantReason: ReservationNeitherAggregateNorSpecific,
 		},
 		{
 			name: "Specific reservation is nil, aggregate not allowed",
-			rsv: &gce_api.Reservation{
+			rsv: &reservation.Reservation{
 				Status:               "READY",
-				AggregateReservation: &gce_api.AllocationAggregateReservation{},
+				AggregateReservation: &reservation.AggregateReservation{},
 			},
 			allowAggregate: false,
 			wantUsable:     false,
@@ -55,9 +54,9 @@ func TestIsReservationUsable(t *testing.T) {
 		},
 		{
 			name: "Specific reservation is nil, aggregate allowed",
-			rsv: &gce_api.Reservation{
+			rsv: &reservation.Reservation{
 				Status:               "READY",
-				AggregateReservation: &gce_api.AllocationAggregateReservation{},
+				AggregateReservation: &reservation.AggregateReservation{},
 			},
 			allowAggregate: true,
 			wantUsable:     true,
@@ -65,19 +64,19 @@ func TestIsReservationUsable(t *testing.T) {
 		},
 		{
 			name: "Specific reservation with nil instance properties",
-			rsv: &gce_api.Reservation{
+			rsv: &reservation.Reservation{
 				Status:              "READY",
-				SpecificReservation: &gce_api.AllocationSpecificSKUReservation{},
+				SpecificReservation: &reservation.SpecificReservation{},
 			},
 			wantUsable: false,
 			wantReason: SpecificReservationNoInstanceProperties,
 		},
 		{
 			name: "Specific reservation with non-nil instance properties",
-			rsv: &gce_api.Reservation{
+			rsv: &reservation.Reservation{
 				Status: "READY",
-				SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-					InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{},
+				SpecificReservation: &reservation.SpecificReservation{
+					InstanceProperties: &reservation.InstanceProperties{},
 				},
 			},
 			wantUsable: true,
@@ -85,7 +84,7 @@ func TestIsReservationUsable(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			isUsable, reason := IsReservationUsable(reservation.FromV1(tc.rsv), tc.allowAggregate)
+			isUsable, reason := IsReservationUsable(tc.rsv, tc.allowAggregate)
 			if isUsable != tc.wantUsable {
 				t.Errorf("IsReservationUsable() = %v, want %v", isUsable, tc.wantUsable)
 			}

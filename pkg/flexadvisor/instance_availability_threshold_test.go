@@ -22,13 +22,12 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gceprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -76,33 +75,20 @@ func TestNodeLimit(t *testing.T) {
 	napMigSpecifiedLocations.Spec().Locations = []string{"us-central1-b", "us-central1-c"}
 
 	mig1 := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
-	rsv1 := reservations.NewAny("", "us-central1-a", reservations.WithId(1), reservations.WithCounts(0, 100), reservations.WithMachine("n2-standard-4"))
-	rsv2 := reservations.NewAny("", "us-central1-b", reservations.WithId(2), reservations.WithCounts(100, 300), reservations.WithMachine("n2-standard-4"))
+	rsv1 := reservations.NewAny("", "us-central1-a", reservations.WithId(1), reservations.WithAvailableCount(100), reservations.WithMachine("n2-standard-4"))
+	rsv2 := reservations.NewAny("", "us-central1-b", reservations.WithId(2), reservations.WithAvailableCount(200), reservations.WithMachine("n2-standard-4"))
 	rsv3 := reservations.New("a4x-rsv", "us-central1-c",
 		reservations.WithId(3),
 		reservations.WithMachine("a4x-highgpu-4g"),
-		reservations.WithCounts(0, 18),
-		reservations.WithGuestAccelerators([]*compute.AcceleratorConfig{
+		reservations.WithAvailableCount(18),
+		reservations.WithGuestAccelerators([]reservation.AcceleratorResource{
 			{
 				AcceleratorType:  "nvidia-gb200",
 				AcceleratorCount: 4,
 			},
 		}),
 	)
-
-	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-		WithFetchZones(func(region string) ([]string, error) {
-			return []string{"us-central1-a", "us-central1-b", "us-central1-c"}, nil
-		}).
-		WithFetchReservationsInProject(func(project string) ([]*compute.Reservation, error) {
-			return []*compute.Reservation{rsv1, rsv2, rsv3}, nil
-		})
-	puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "project-1", false, "us-central1")
-	assert.NoError(t, err)
-
-	stop := make(chan struct{})
-	puller.Run(context.Background())
-	defer close(stop)
+	puller := reservations.NewTestingReservationsPuller(reservations.DefaultProject, nil, []*reservation.Reservation{rsv1, rsv2, rsv3})
 
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{

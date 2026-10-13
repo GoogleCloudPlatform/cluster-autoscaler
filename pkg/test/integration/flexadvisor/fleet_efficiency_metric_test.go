@@ -314,7 +314,7 @@ func TestFleetEfficiency_AllocationStrategyMetrics(t *testing.T) {
 				fake.NewGuidance("e2-standard-8").WithScore(0.9),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation("e2-standard-4", ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine("e2-standard-4"), reservations.WithAvailableCount(1)),
 			},
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "reservation_present",

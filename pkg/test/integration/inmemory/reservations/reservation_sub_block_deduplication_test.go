@@ -149,11 +149,11 @@ func TestReservationSubBlockDeduplication(t *testing.T) {
 				).
 				WithNodePools(existingPool).
 				WithCccCrds(cc).
-				AddReservation(project, reservations.New(
+				AddReservation(project, reservations.NewV1(
 					resName, zone,
 					reservations.WithMachine(fmt.Sprintf("%s-standard-4t", tpuType)),
 					reservations.WithProject(project),
-					reservations.WithCounts(0, 16),
+					reservations.WithAvailableCount(16),
 				))
 
 			synctest.Test(t, func(t *testing.T) {

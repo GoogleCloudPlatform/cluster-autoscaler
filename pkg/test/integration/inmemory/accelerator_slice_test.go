@@ -169,11 +169,11 @@ func TestAcceleratorSlice_ScaleUp_WithReservation(t *testing.T) {
 	testConfig := acceleratorSliceTestConfig(gceclient.AcceleratorTopologyModeProvisionOnly).
 		AddReservation(
 			integration.DefaultProject(),
-			reservations.New(
+			reservations.NewV1(
 				"tpu7x-reservation", reservationZone,
 				reservations.WithMachine(tpuMachineType),
 				reservations.WithProject(integration.DefaultProject()),
-				reservations.WithCounts(0, tpuNodesPerSlice),
+				reservations.WithAvailableCount(tpuNodesPerSlice),
 			),
 		)
 

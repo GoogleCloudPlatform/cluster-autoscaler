@@ -271,7 +271,7 @@ func TestFleetEfficiency(t *testing.T) {
 				Spot:      &fleetEfficiency,
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation("e2-standard-4", ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine("e2-standard-4"), reservations.WithAvailableCount(1)),
 			},
 			expectedNodePool: "pool-low-preference",
 		},

@@ -29,22 +29,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 )
 
-func BuildReservationAccelerators(acceleratorType string, count machinetypes.PhysicalGpuCount) []*gce_api.AcceleratorConfig {
-	return []*gce_api.AcceleratorConfig{
-		{
-			AcceleratorType:  acceleratorType,
-			AcceleratorCount: int64(count),
-		},
-	}
+func BuildReservationAccelerators(acceleratorType string, count machinetypes.PhysicalGpuCount) []reservation.AcceleratorResource {
+	return []reservation.AcceleratorResource{{AcceleratorType: acceleratorType, AcceleratorCount: int64(count)}}
 }
 
-func BuildReservationLocalSSDs(localSSDType string, size int) []*gce_api.AllocationSpecificSKUAllocationAllocatedInstancePropertiesReservedDisk {
-	return []*gce_api.AllocationSpecificSKUAllocationAllocatedInstancePropertiesReservedDisk{
-		{
-			Interface:  localSSDType,
-			DiskSizeGb: int64(size),
-		},
-	}
+func BuildReservationLocalSSDs(localSSDType string, size int) []reservation.LocalSSD {
+	return []reservation.LocalSSD{{Interface: localSSDType, DiskSizeGB: int64(size)}}
 }
 
 func BuildNodePoolSpecAccelerators(acceleratorType string, count machinetypes.PhysicalGpuCount) []*gke_api.AcceleratorConfig {
@@ -69,57 +59,55 @@ func BuildNodePoolSpecLocalSSDs(localSSDType string, count int) *gkeclient.Local
 	}
 }
 
-func BuildSingleMachineReservation(machineType string, zone string) *gce_api.Reservation {
-	return BuildMultipleMachineReservation(machineType, zone, 0, 1)
+// BuildSingleMachineReservation returns a specific reservation with one available VM.
+func BuildSingleMachineReservation(machineType string, zone string) *reservation.Reservation {
+	return BuildAvailableReservation(machineType, zone, 1)
 }
 
-func BuildReservationWithSpecificReservationRequired(name string, machineType string, zone string) *gce_api.Reservation {
-	return &gce_api.Reservation{
+func BuildReservationWithSpecificReservationRequired(name string, machineType string, zone string) *reservation.Reservation {
+	return &reservation.Reservation{
 		Name:                        name,
 		Status:                      "READY",
 		SpecificReservationRequired: true,
 		Zone:                        zone,
-		SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-			InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
-				MachineType: machineType,
-			},
+		SpecificReservation: &reservation.SpecificReservation{
+			InstanceProperties: &reservation.InstanceProperties{MachineType: machineType},
 		},
 		SelfLink: fmt.Sprintf("%s/%s", zone, name),
 	}
 }
 
-func BuildMultipleMachineReservation(machineType, zone string, inUseCount, count int) *gce_api.Reservation {
-	return &gce_api.Reservation{
-		Status:                      "READY",
-		SpecificReservationRequired: false,
-		Zone:                        zone,
-		SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-			InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
-				MachineType: machineType,
-			},
-			InUseCount: int64(inUseCount),
-			Count:      int64(count),
+// BuildAvailableReservation returns a specific reservation, not requiring targeting by name, with
+// availableCount VMs available.
+func BuildAvailableReservation(machineType, zone string, availableCount int) *reservation.Reservation {
+	return &reservation.Reservation{
+		Status: "READY",
+		Zone:   zone,
+		SpecificReservation: &reservation.SpecificReservation{
+			InstanceProperties: &reservation.InstanceProperties{MachineType: machineType},
+			AvailableCount:     int64(availableCount),
 		},
 	}
 }
 
-func BuildMultipleMachineReservationWithId(id, inUseCount, count int, machineType, zone string) *gce_api.Reservation {
-	rsv := BuildMultipleMachineReservation(machineType, zone, inUseCount, count)
-	rsv.Id = uint64(id)
+// BuildAvailableReservationWithID is BuildAvailableReservation with the given ID.
+func BuildAvailableReservationWithID(id uint64, machineType, zone string, availableCount int) *reservation.Reservation {
+	rsv := BuildAvailableReservation(machineType, zone, availableCount)
+	rsv.ID = id
 	return rsv
 }
 
 func BuildReservationWithId(id uint64, rsvStatus string, specificReservationRequired bool, zone string,
-	machineType string, minCpuPlatform string, accelerators []*gce_api.AcceleratorConfig,
-	localSSDs []*gce_api.AllocationSpecificSKUAllocationAllocatedInstancePropertiesReservedDisk, project string, name string) *gce_api.Reservation {
+	machineType string, minCpuPlatform string, accelerators []reservation.AcceleratorResource,
+	localSSDs []reservation.LocalSSD, project string, name string) *reservation.Reservation {
 	rsv := BuildReservation(rsvStatus, specificReservationRequired, zone, machineType, minCpuPlatform, accelerators, localSSDs)
 	rsv.SelfLink = fmt.Sprintf("projects/%s/reservations/%s", project, name)
 	rsv.Name = name
-	rsv.Id = id
+	rsv.ID = id
 	return rsv
 }
 
-func BuildReservationWithLink(zone string, machineType string, project string, name string) *gce_api.Reservation {
+func BuildReservationWithLink(zone string, machineType string, project string, name string) *reservation.Reservation {
 	rsv := BuildReservationWithSpecificReservationRequired(name, machineType, zone)
 	rsv.SelfLink = fmt.Sprintf("projects/%s/reservations/%s", project, name)
 	rsv.Name = name
@@ -127,30 +115,29 @@ func BuildReservationWithLink(zone string, machineType string, project string, n
 }
 
 func BuildReservation(rsvStatus string, specificReservationRequired bool, zone string,
-	machineType string, minCpuPlatform string, accelerators []*gce_api.AcceleratorConfig,
-	localSSDs []*gce_api.AllocationSpecificSKUAllocationAllocatedInstancePropertiesReservedDisk) *gce_api.Reservation {
-
-	return &gce_api.Reservation{
+	machineType string, minCpuPlatform string, accelerators []reservation.AcceleratorResource,
+	localSSDs []reservation.LocalSSD) *reservation.Reservation {
+	return &reservation.Reservation{
 		Status:                      rsvStatus,
 		Zone:                        "/" + zone,
 		SpecificReservationRequired: specificReservationRequired,
-		SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-			InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
+		SpecificReservation: &reservation.SpecificReservation{
+			InstanceProperties: &reservation.InstanceProperties{
 				MachineType:       machineType,
-				MinCpuPlatform:    minCpuPlatform,
+				MinCPUPlatform:    minCpuPlatform,
 				GuestAccelerators: accelerators,
-				LocalSsds:         localSSDs,
+				LocalSSDs:         localSSDs,
 			},
 		},
 	}
 }
 
-func BuildAggregateReservation(zone string) *gce_api.Reservation {
-	return &gce_api.Reservation{
+func BuildAggregateReservation(zone string) *reservation.Reservation {
+	return &reservation.Reservation{
 		Status: "READY",
 		Zone:   zone,
-		AggregateReservation: &gce_api.AllocationAggregateReservation{
-			VmFamily:     "VM_FAMILY_CLOUD_TPU_POD_SLICE_CT4P",
+		AggregateReservation: &reservation.AggregateReservation{
+			VMFamily:     "VM_FAMILY_CLOUD_TPU_POD_SLICE_CT4P",
 			WorkloadType: "BATCH",
 		},
 	}
@@ -228,7 +215,7 @@ func (f *FakeBlocksPullerProvider) GetReservationSubBlocksInReservationBlock(res
 	return nil, nil
 }
 
-func NewTestingReservationsPuller(localProject string, sharedPrjs []string, rsv []*gce_api.Reservation) *gceclient.ReservationsPuller {
+func NewTestingReservationsPuller(localProject string, sharedPrjs []string, rsv []*reservation.Reservation) *gceclient.ReservationsPuller {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-c"}, nil })
 	puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
@@ -237,7 +224,7 @@ func NewTestingReservationsPuller(localProject string, sharedPrjs []string, rsv 
 			puller.AddProject(project)
 		}
 	}
-	puller.SetReservations(reservation.FromV1List(rsv))
+	puller.SetReservations(rsv)
 	return puller
 }
 
@@ -298,10 +285,10 @@ func nextId() uint64 {
 	return id
 }
 
-type ReservationOption func(*gce_api.Reservation)
+type ReservationOption func(*reservation.Reservation)
 
 func WithMachine(machineType string) ReservationOption {
-	return func(r *gce_api.Reservation) {
+	return func(r *reservation.Reservation) {
 		if r.SpecificReservation != nil && r.SpecificReservation.InstanceProperties != nil {
 			r.SpecificReservation.InstanceProperties.MachineType = machineType
 		}
@@ -309,40 +296,39 @@ func WithMachine(machineType string) ReservationOption {
 }
 
 func WithId(id uint64) ReservationOption {
-	return func(r *gce_api.Reservation) {
-		r.Id = id
+	return func(r *reservation.Reservation) {
+		r.ID = id
 	}
 }
 
 func WithSpecificReservationRequired(required bool) ReservationOption {
-	return func(r *gce_api.Reservation) {
+	return func(r *reservation.Reservation) {
 		r.SpecificReservationRequired = required
 	}
 }
 
-func WithGuestAccelerators(accelerators []*gce_api.AcceleratorConfig) ReservationOption {
-	return func(r *gce_api.Reservation) {
+func WithGuestAccelerators(accelerators []reservation.AcceleratorResource) ReservationOption {
+	return func(r *reservation.Reservation) {
 		if r.SpecificReservation != nil && r.SpecificReservation.InstanceProperties != nil {
 			r.SpecificReservation.InstanceProperties.GuestAccelerators = accelerators
 		}
 	}
 }
 
+// WithAggregate turns the reservation into an aggregate ct6e reservation with 8 available chips.
 func WithAggregate(zone, workloadType string) ReservationOption {
-	return func(r *gce_api.Reservation) {
+	return func(r *reservation.Reservation) {
 		if workloadType == "" {
 			workloadType = tpu.WorkloadTypeUnspecified
 		}
 		r.SpecificReservation = nil
-		r.AggregateReservation = &gce_api.AllocationAggregateReservation{
-			VmFamily:     "VM_FAMILY_CLOUD_TPU_LITE_POD_SLICE_CT6E",
+		r.AggregateReservation = &reservation.AggregateReservation{
+			VMFamily:     "VM_FAMILY_CLOUD_TPU_LITE_POD_SLICE_CT6E",
 			WorkloadType: workloadType,
-			ReservedResources: []*gce_api.AllocationAggregateReservationReservedResourceInfo{
+			AvailableResources: []reservation.AcceleratorResource{
 				{
-					Accelerator: &gce_api.AllocationAggregateReservationReservedResourceInfoAccelerator{
-						AcceleratorType:  fmt.Sprintf("projects/whatever/zones/%s/acceleratorTypes/ct6e", zone),
-						AcceleratorCount: 8,
-					},
+					AcceleratorType:  fmt.Sprintf("projects/whatever/zones/%s/acceleratorTypes/ct6e", zone),
+					AcceleratorCount: 8,
 				},
 			},
 		}
@@ -350,7 +336,7 @@ func WithAggregate(zone, workloadType string) ReservationOption {
 }
 
 func WithProject(project string) ReservationOption {
-	return func(r *gce_api.Reservation) {
+	return func(r *reservation.Reservation) {
 		parts := strings.Split(r.SelfLink, "/")
 		name := parts[len(parts)-1]
 
@@ -362,26 +348,26 @@ func WithProject(project string) ReservationOption {
 	}
 }
 
-func WithCounts(inUseCount, count int64) ReservationOption {
-	return func(r *gce_api.Reservation) {
-		r.SpecificReservation.InUseCount = inUseCount
-		r.SpecificReservation.Count = count
+// WithAvailableCount sets the number of VMs that can still be created using a specific reservation.
+func WithAvailableCount(availableCount int64) ReservationOption {
+	return func(r *reservation.Reservation) {
+		r.SpecificReservation.AvailableCount = availableCount
 	}
 }
 
-func New(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+func New(name, zone string, opts ...ReservationOption) *reservation.Reservation {
 	zoneURL := fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s", DefaultProject, zone)
-	r := &gce_api.Reservation{
+	r := &reservation.Reservation{
 		Name:                        name,
 		Status:                      "READY",
 		SpecificReservationRequired: true,
 		Zone:                        zoneURL,
-		SpecificReservation: &gce_api.AllocationSpecificSKUReservation{
-			InstanceProperties: &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
+		SpecificReservation: &reservation.SpecificReservation{
+			InstanceProperties: &reservation.InstanceProperties{
 				MachineType: DefaultMachineType,
 			},
 		},
-		Id:       nextId(),
+		ID:       nextId(),
 		SelfLink: fmt.Sprintf("projects/%s/reservations/%s", DefaultProject, name),
 	}
 	for _, opt := range opts {
@@ -390,7 +376,7 @@ func New(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
 	return r
 }
 
-func NewAny(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+func NewAny(name, zone string, opts ...ReservationOption) *reservation.Reservation {
 	opts = append([]ReservationOption{WithSpecificReservationRequired(false)}, opts...)
 	return New(name, zone, opts...)
 }
@@ -423,4 +409,82 @@ func ReservationAffinitySpec(consumeType string, values ...string) *gkeclient.No
 			Values:                 values,
 		},
 	}
+}
+
+// NewV1 is New returning a GCE API reservation, e.g. for tests that set up the fake GCE client.
+// Available resources are returned as reserved resources with nothing in use.
+func NewV1(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+	return toV1(New(name, zone, opts...))
+}
+
+// NewAnyV1 is NewAny returning a GCE API reservation, see NewV1.
+func NewAnyV1(name, zone string, opts ...ReservationOption) *gce_api.Reservation {
+	return toV1(NewAny(name, zone, opts...))
+}
+
+// toV1 converts a domain reservation to the v1 Reservations API representation for test fixtures.
+//
+// Available resources are returned as reserved resources with nothing in use, so
+// reservation.FromV1(toV1(r)) equals r. Returns nil for nil input.
+func toV1(r *reservation.Reservation) *gce_api.Reservation {
+	if r == nil {
+		return nil
+	}
+	res := &gce_api.Reservation{
+		Id:                          r.ID,
+		Name:                        r.Name,
+		SelfLink:                    r.SelfLink,
+		Zone:                        r.Zone,
+		Status:                      r.Status,
+		DeploymentType:              r.DeploymentType,
+		SpecificReservationRequired: r.SpecificReservationRequired,
+		ResourcePolicies:            r.ResourcePolicies,
+	}
+	if r.ResourceStatus != nil {
+		res.ResourceStatus = &gce_api.AllocationResourceStatus{ReservationBlockCount: r.ResourceStatus.ReservationBlockCount}
+	}
+	if r.SpecificReservation != nil {
+		res.SpecificReservation = &gce_api.AllocationSpecificSKUReservation{
+			InstanceProperties: instancePropertiesToV1(r.SpecificReservation.InstanceProperties),
+			Count:              r.SpecificReservation.AvailableCount,
+		}
+	}
+	if r.AggregateReservation != nil {
+		res.AggregateReservation = &gce_api.AllocationAggregateReservation{
+			VmFamily:     r.AggregateReservation.VMFamily,
+			WorkloadType: r.AggregateReservation.WorkloadType,
+		}
+		for _, a := range r.AggregateReservation.AvailableResources {
+			res.AggregateReservation.ReservedResources = append(res.AggregateReservation.ReservedResources, &gce_api.AllocationAggregateReservationReservedResourceInfo{
+				Accelerator: &gce_api.AllocationAggregateReservationReservedResourceInfoAccelerator{
+					AcceleratorType:  a.AcceleratorType,
+					AcceleratorCount: a.AcceleratorCount,
+				},
+			})
+		}
+	}
+	return res
+}
+
+func instancePropertiesToV1(p *reservation.InstanceProperties) *gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties {
+	if p == nil {
+		return nil
+	}
+	res := &gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties{
+		MachineType:    p.MachineType,
+		MinCpuPlatform: p.MinCPUPlatform,
+	}
+	for _, a := range p.GuestAccelerators {
+		res.GuestAccelerators = append(res.GuestAccelerators, &gce_api.AcceleratorConfig{
+			AcceleratorType:  a.AcceleratorType,
+			AcceleratorCount: a.AcceleratorCount,
+		})
+	}
+	for _, d := range p.LocalSSDs {
+		res.LocalSsds = append(res.LocalSsds, &gce_api.AllocationSpecificSKUAllocationAllocatedInstancePropertiesReservedDisk{
+			DiskSizeGb: d.DiskSizeGB,
+			Interface:  d.Interface,
+		})
+	}
+	return res
 }

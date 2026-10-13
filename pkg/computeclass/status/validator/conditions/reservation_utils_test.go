@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	gceapiv1 "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -37,9 +36,9 @@ func TestReservationsCacheAddProject(t *testing.T) {
 	clusterProject := "cluster-project"
 	sharedProject1 := "shared-project1"
 	sharedProject2 := "shared-project2"
-	rsv1 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-1", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-1", clusterProject)})
-	rsv2 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-2", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-2", sharedProject1)})
-	rsv3 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-3", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-3", sharedProject2)})
+	rsv1 := &gcereservation.Reservation{Name: "reservation-1", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-1", clusterProject)}
+	rsv2 := &gcereservation.Reservation{Name: "reservation-2", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-2", sharedProject1)}
+	rsv3 := &gcereservation.Reservation{Name: "reservation-3", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-3", sharedProject2)}
 
 	tests := map[string]struct {
 		reservations  []*gcereservation.Reservation
@@ -133,14 +132,14 @@ func TestReservationsCacheAddProject(t *testing.T) {
 }
 
 func TestReservationsCacheGetReservation(t *testing.T) {
-	rsv := gcereservation.FromV1(&gceapiv1.Reservation{
+	rsv := &gcereservation.Reservation{
 		Name: "reservation-1",
 		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-1",
-	})
-	rsv2 := gcereservation.FromV1(&gceapiv1.Reservation{
+	}
+	rsv2 := &gcereservation.Reservation{
 		Name: "reservation-1",
 		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-2",
-	})
+	}
 
 	tests := map[string]struct {
 		cache            map[string]map[string]map[string]*gcereservation.Reservation
@@ -226,7 +225,7 @@ func TestMatchSpecificReservation(t *testing.T) {
 	nonDefaultMachineFamily := "n2"
 
 	tests := map[string]struct {
-		reservation *gceapiv1.Reservation
+		reservation *gcereservation.Reservation
 		rule        rules.Rule
 
 		wantError error
@@ -557,7 +556,7 @@ func TestMatchSpecificReservation(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotError := matchSpecificReservationOrError(provider, gcereservation.FromV1(test.reservation), test.rule, ssdProvider)
+			gotError := matchSpecificReservationOrError(provider, test.reservation, test.rule, ssdProvider)
 			assert.Equal(t, test.wantError, gotError)
 		})
 	}
@@ -565,22 +564,20 @@ func TestMatchSpecificReservation(t *testing.T) {
 
 func TestMatchAggregateReservation(t *testing.T) {
 	tests := map[string]struct {
-		reservation *gceapiv1.Reservation
+		reservation *gcereservation.Reservation
 		rule        rules.Rule
 
 		wantError error
 	}{
 		"MatchTypeAndCount": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 4,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 4,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeUnspecified,
@@ -592,41 +589,15 @@ func TestMatchAggregateReservation(t *testing.T) {
 
 			wantError: nil,
 		},
-		"NonAcceleratorResourcesSkipped": {
-			reservation: &gceapiv1.Reservation{
-				Status:                      "READY",
-				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
-						// Non-accelerator (vCPU or memory) entry.
-						{},
-						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 8,
-							},
-						},
-					},
-					WorkloadType: tpu.WorkloadTypeUnspecified,
-				},
-			},
-			rule: rules.NewRule(
-				rules.WithTpuRule(labels.TpuV4PodsliceValue, 4, "2x2x2"),
-			),
-
-			wantError: nil,
-		},
 		"TypeMismatch": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 4,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 4,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeUnspecified,
@@ -639,16 +610,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("requested TPU accelerator {tpu-v5-lite-podslice, 2x2, 4}, but it's missing from reservation"),
 		},
 		"CountMismatch": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 4,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 4,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeUnspecified,
@@ -661,15 +630,13 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("requested TPU accelerator {tpu-v4-podslice, 2x2x2, 8}, but it's missing from reservation"),
 		},
 		"AnyReservation_NoMatch": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status: "READY",
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 4,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 4,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeUnspecified,
@@ -682,10 +649,10 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("any affinity reservation cannot be consumed"),
 		},
 		"NotAggregateReservation": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				SpecificReservation:         &gceapiv1.AllocationSpecificSKUReservation{},
+				SpecificReservation:         &gcereservation.SpecificReservation{},
 			},
 			rule: rules.NewRule(
 				rules.WithTpuRule(labels.TpuV4PodsliceValue, 4, "2x2"),
@@ -694,16 +661,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("unable to match non-aggregate reservation"),
 		},
 		"MultihostRequiredSinglehostAvailable": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 8,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 8,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeServing,
@@ -716,16 +681,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("requested multihost TPU, reservation has singlehost"),
 		},
 		"SingleHostRequiredMultihostAvailable": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 8,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 8,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeBatch,
@@ -738,16 +701,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: errors.New("requested singlehost TPU, reservation has multihost"),
 		},
 		"WorkloadTypeMatchingMultihost": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 8,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 8,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeBatch,
@@ -760,16 +721,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 			wantError: nil,
 		},
 		"WorkloadTypeMatchingSinglehost": {
-			reservation: &gceapiv1.Reservation{
+			reservation: &gcereservation.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
-				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
-					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
+				AggregateReservation: &gcereservation.AggregateReservation{
+					AvailableResources: []gcereservation.AcceleratorResource{
 						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
-								AcceleratorCount: 8,
-							},
+							AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
+							AcceleratorCount: 8,
 						},
 					},
 					WorkloadType: tpu.WorkloadTypeServing,
@@ -791,7 +750,7 @@ func TestMatchAggregateReservation(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotError := matchAggregateReservationOrError(provider, gcereservation.FromV1(test.reservation), test.rule)
+			gotError := matchAggregateReservationOrError(provider, test.reservation, test.rule)
 			assert.Equal(t, test.wantError, gotError)
 		})
 	}

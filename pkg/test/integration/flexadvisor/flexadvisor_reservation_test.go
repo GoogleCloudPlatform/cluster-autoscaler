@@ -53,7 +53,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(StockOutMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -64,7 +64,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(UnknownAvailabilityMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(UnknownAvailabilityMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -74,7 +74,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(AvailableMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(AvailableMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -85,7 +85,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneA, 0, 1),
+				reservations.NewAnyV1("", ZoneA, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-2",
 		},
@@ -96,7 +96,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, "us-east1-a", 0, 1),
+				reservations.NewAnyV1("", "us-east1-a", reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-2",
 		},
@@ -160,7 +160,7 @@ func TestReservationAndFAReturnNoCapacityMultiplePods(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(OneInstanceAvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(OneInstanceAvailableMachineType, ZoneB, 10, 10),
+				fullyUsedReservation(OneInstanceAvailableMachineType, ZoneB, 10),
 			},
 			pods: []*apiv1.Pod{ // one node fits only one pod
 				tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc")),
@@ -178,7 +178,7 @@ func TestReservationAndFAReturnNoCapacityMultiplePods(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(StockOutMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			pods: []*apiv1.Pod{ // one node fits only one pod
 				tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc")),
@@ -251,7 +251,7 @@ func TestReservationEnforcesTwoStepAllocation(t *testing.T) {
 		integration.EmptyNodePool("pool-2").WithMachineType(StockOutMachineType).WithCCCLabel(crd.Name).Build(),
 	}
 	rsrvs := []*compute.Reservation{
-		reservations.BuildMultipleMachineReservation(OneInstanceAvailableMachineType, "us-central1-b", 0, 1),
+		reservations.NewAnyV1("", "us-central1-b", reservations.WithMachine(OneInstanceAvailableMachineType), reservations.WithAvailableCount(1)),
 	}
 	// one node fits only one pod
 	pod1 := tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
@@ -321,7 +321,7 @@ func TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone(t *te
 		).
 		Build()
 
-	res := reservations.BuildMultipleMachineReservation("n2-standard-4", ZoneB, 0, 1)
+	res := reservations.NewAnyV1("", ZoneB, reservations.WithMachine("n2-standard-4"), reservations.WithAvailableCount(1))
 
 	testConfig := integration.NewTestConfig().
 		WithCccCrds(cccObj).
@@ -368,4 +368,12 @@ func TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone(t *te
 		assert.NoError(t, err)
 		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
 	})
+}
+
+// fullyUsedReservation returns a reservation of count VMs, all of which are in use.
+func fullyUsedReservation(machineType, zone string, count int64) *compute.Reservation {
+	rsv := reservations.NewAnyV1("", zone, reservations.WithMachine(machineType))
+	rsv.SpecificReservation.Count = count
+	rsv.SpecificReservation.InUseCount = count
+	return rsv
 }

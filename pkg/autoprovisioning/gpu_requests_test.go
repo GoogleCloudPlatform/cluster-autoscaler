@@ -22,7 +22,6 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -992,7 +991,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 		expectedRequests   []machinetypes.GpuRequest
 		extendedDuration   bool
 		reservationEnabled bool
-		reservations       []*gce_api.Reservation
+		reservations       []*reservation.Reservation
 	}{
 		{
 			name:               "1 a100 GPU request",
@@ -1290,7 +1289,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 			cpuCount:           *resource.NewQuantity(1, resource.DecimalSI),
 			memCount:           *resource.NewQuantity(1*units.GiB, resource.DecimalSI),
 			reservationEnabled: true,
-			reservations:       []*gce_api.Reservation{res1},
+			reservations:       []*reservation.Reservation{res1},
 			expectedRequests: []machinetypes.GpuRequest{
 				{Config: gpuSpecK80, Count: 1, PhysicalGPUCount: 1},
 			},
@@ -1368,7 +1367,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 			}
 			scaleBlockingProcessor := scaleblocking.NewProcessor(mockProvider, []scaleblocking.BlockedMigsSource{})
 			em := experiments.NewMockManager()
-			mockReservationPuller.SetReservations(reservation.FromV1List(tc.reservations))
+			mockReservationPuller.SetReservations(tc.reservations)
 			opts := AutoprovisioningNodeGroupManagerOptions{
 				CloudProvider:          provider,
 				Backoff:                nodeGroupBackoff,

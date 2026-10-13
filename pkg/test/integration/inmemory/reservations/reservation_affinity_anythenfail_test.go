@@ -248,7 +248,7 @@ func createCCCCRD() *v1.ComputeClass {
 }
 
 func createReservation(machineType, name, zone string) *gceapi.Reservation {
-	return reservations.New(name, zone, reservations.WithMachine(machineType), reservations.WithProject("test-project"), reservations.WithCounts(0, 2), reservations.WithSpecificReservationRequired(false))
+	return reservations.NewV1(name, zone, reservations.WithMachine(machineType), reservations.WithProject("test-project"), reservations.WithAvailableCount(2), reservations.WithSpecificReservationRequired(false))
 }
 
 func assertScheduledPods(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure, podCount int) {

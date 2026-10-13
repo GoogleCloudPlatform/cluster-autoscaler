@@ -6183,15 +6183,15 @@ func TestGetDeploymentType(t *testing.T) {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{zoneB}, nil })
 
-	reservations := []*gce_api.Reservation{
+	reservations := []*reservation.Reservation{
 		{
-			Id:             1234,
+			ID:             1234,
 			Name:           "dense-res",
 			DeploymentType: "DENSE",
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/dense-res",
 		},
 		{
-			Id:             12345,
+			ID:             12345,
 			Name:           "unspecified-res",
 			DeploymentType: "UNSPECIFIED",
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/unspecified-res",
@@ -6199,7 +6199,7 @@ func TestGetDeploymentType(t *testing.T) {
 	}
 	reservationsPuller, err := gceclient.NewReservationsPuller(mGceClient, nil, experiments.NewMockManager(), projectId, true, zoneB)
 	assert.NoError(t, err)
-	reservationsPuller.SetReservations(reservation.FromV1List(reservations))
+	reservationsPuller.SetReservations(reservations)
 
 	g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)
 

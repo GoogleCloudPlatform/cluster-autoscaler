@@ -17,7 +17,9 @@ package gceclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -709,6 +711,99 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 		assert.ElementsMatch(t, reservation.FromV1List(wantLocal), puller.GetReservationsInProject(localProject))
 		assert.ElementsMatch(t, reservation.FromV1List(wantShared), puller.GetReservationsInProject(sharedProject))
 	})
+}
+
+func TestReservationsPuller_SetReservations(t *testing.T) {
+	const (
+		localProject    = "local-proj"
+		sharedProject   = "shared-proj"
+		unpulledProject = "unpulled-proj"
+		zone            = "us-central1-a"
+	)
+	// newReservation returns a reservation of a single VM, with availableCount of 0 or 1.
+	newReservation := func(id uint64, project string, availableCount int64) *gce_api.Reservation {
+		rsv := buildSingleMachineReservation("fake-machine-type", zone)
+		rsv.Id = id
+		rsv.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/reservations/rsv-%d", project, zone, id)
+		rsv.SpecificReservation.InUseCount = rsv.SpecificReservation.Count - availableCount
+		return rsv
+	}
+	freeShared := reservation.FromV1(newReservation(1, sharedProject, 1))
+	usedShared := reservation.FromV1(newReservation(1, sharedProject, 0))
+	freeLocal := newReservation(2, localProject, 1)
+	usedLocal := reservation.FromV1(newReservation(2, localProject, 0))
+	freeUnpulled := reservation.FromV1(newReservation(3, unpulledProject, 1))
+	usedUnpulled := reservation.FromV1(newReservation(3, unpulledProject, 0))
+	availableCounts := func(rsvs []*reservation.Reservation) []int64 {
+		var result []int64
+		for _, rsv := range rsvs {
+			result = append(result, rsv.SpecificReservation.AvailableCount)
+		}
+		return result
+	}
+
+	testCases := []struct {
+		name                   string
+		localReservations      []*gce_api.Reservation
+		sharedProjectErr       error
+		consumableReservations []*reservation.Reservation
+		// usedReservation is passed to SetReservations, like the balancer does after a scale-up.
+		usedReservation *reservation.Reservation
+	}{
+		{
+			name:                   "reservation_returned_only_by_consumable_puller_and_project_cannot_be_pulled",
+			sharedProjectErr:       errors.New("googleapi: Error 403: Required 'compute.reservations.list' permission"),
+			consumableReservations: []*reservation.Reservation{freeShared},
+			usedReservation:        usedShared,
+		},
+		{
+			name:                   "reservation_returned_by_project_and_consumable_pullers",
+			localReservations:      []*gce_api.Reservation{freeLocal},
+			consumableReservations: []*reservation.Reservation{reservation.FromV1(freeLocal)},
+			usedReservation:        usedLocal,
+		},
+		{
+			name:                   "reservation_returned_only_by_consumable_puller_and_project_without_puller",
+			consumableReservations: []*reservation.Reservation{freeUnpulled},
+			usedReservation:        usedUnpulled,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mGceClient := BuildAutoscalingInternalGceClientMock().
+				WithFetchZones(func(region string) ([]string, error) { return []string{zone}, nil }).
+				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
+					if project == sharedProject {
+						return nil, tc.sharedProjectErr
+					}
+					return tc.localReservations, nil
+				})
+			gm := experiments.NewMockManager(experiments.ConsumableReservationExperimentName)
+			puller, err := NewReservationsPuller(mGceClient, nil, gm, localProject, true, zone)
+			if err != nil {
+				t.Fatalf("NewReservationsPuller() failed: %v", err)
+			}
+			puller.updateExperiments()
+			puller.AddProject(sharedProject)
+			pull := func() {
+				for _, pp := range puller.projectPullers {
+					pp.Loop()
+				}
+				puller.consumableReservations = slices.Clone(tc.consumableReservations)
+			}
+
+			pull()
+			puller.SetReservations([]*reservation.Reservation{tc.usedReservation})
+			if diff := cmp.Diff([]int64{0}, availableCounts(puller.GetReservations())); diff != "" {
+				t.Errorf("GetReservations() after SetReservations() available counts diff (-want +got):\n%s", diff)
+			}
+
+			pull()
+			if diff := cmp.Diff([]int64{1}, availableCounts(puller.GetReservations())); diff != "" {
+				t.Errorf("GetReservations() after the next pull available counts diff (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestPullerPullLocalReservations(t *testing.T) {

@@ -17,7 +17,6 @@ package gceclient
 import (
 	"testing"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
@@ -129,33 +128,33 @@ func TestReservationRef_Serialize(t *testing.T) {
 func TestReservationRef_ShortenSelfLink(t *testing.T) {
 	tests := []struct {
 		name        string
-		reservation *gce_api.Reservation
+		reservation *reservation.Reservation
 		expected    string
 	}{
 		{
 			name:        "production_SelfLink",
-			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
+			reservation: &reservation.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
 			expected:    "/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1",
 		},
 		{
 			name:        "alpha_v1_SelfLink",
-			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/alpha_v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
+			reservation: &reservation.Reservation{Name: "my-res-name", SelfLink: "https://www.googleapis.com/compute/alpha_v1/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1"},
 			expected:    "/projects/my-test-projects/zones/us-central1/reservations/my-res-name-1",
 		},
 		{
 			name:        "unexpected_SelfLink",
-			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: "this-is-not-a-standard-self-link"},
+			reservation: &reservation.Reservation{Name: "my-res-name", SelfLink: "this-is-not-a-standard-self-link"},
 			expected:    "this-is-not-a-standard-self-link",
 		},
 		{
 			name:        "empty_SelfLink",
-			reservation: &gce_api.Reservation{Name: "my-res-name", SelfLink: ""},
+			reservation: &reservation.Reservation{Name: "my-res-name", SelfLink: ""},
 			expected:    "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GetShortSelfLink(reservation.FromV1(tt.reservation))
+			got := GetShortSelfLink(tt.reservation)
 			if got != tt.expected {
 				t.Errorf("ShortenSelfLink(%v) got %q, want %q", tt.reservation, got, tt.expected)
 			}

@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	gce_api "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
@@ -51,9 +50,8 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 	}
 
 	type reservationsConfig struct {
-		nodeGroupUsedCapacity  int
-		nodeGroupTotalCapacity int
-		zone                   string
+		availableCount int
+		zone           string
 	}
 
 	// We assume that no 2 MIGs are in the same zone, i.e. no reservation matches 2 MIGs
@@ -77,7 +75,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Returns 0 for no capacity in the node group",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 1, nodeGroupTotalCapacity: 2, zone: firstZone}, // 1
+				{availableCount: 1, zone: firstZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 0, nodesCount: 0, zone: firstZone},
 			wantThreshold:       0,
@@ -85,9 +83,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Returns reservations for this node group having no context",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 1, nodeGroupTotalCapacity: 2, zone: firstZone}, // 1
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: secondZone},
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 5, zone: thirdZone},
+				{availableCount: 1, zone: firstZone},
+				{availableCount: 3, zone: secondZone},
+				{availableCount: 5, zone: thirdZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone},
 			emptyContext:        true,
@@ -96,9 +94,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Threshold based on this node group reservations hits max node limit",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 1, nodeGroupTotalCapacity: 2, zone: firstZone}, // 1
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: secondZone},
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 2, zone: thirdZone},
+				{availableCount: 1, zone: firstZone},
+				{availableCount: 3, zone: secondZone},
+				{availableCount: 2, zone: thirdZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone},
 			emptyContext:        true,
@@ -107,9 +105,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Computes threshold based on sng reservations",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 1, nodeGroupTotalCapacity: 2, zone: firstZone},  // 1
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: secondZone}, // 3
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 5, zone: thirdZone},
+				{availableCount: 1, zone: firstZone},
+				{availableCount: 3, zone: secondZone},
+				{availableCount: 5, zone: thirdZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 0, nodesCount: 0, zone: firstZone},
 			similarNodeGroupsConfig: []nodeGroupConfig{
@@ -121,9 +119,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Threshold based on sng reservations hits max node limit",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 10, zone: firstZone},  // 1
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 30, zone: secondZone}, // 3
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 5, zone: thirdZone},
+				{availableCount: 10, zone: firstZone},
+				{availableCount: 30, zone: secondZone},
+				{availableCount: 5, zone: thirdZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 0, nodesCount: 0, zone: firstZone},
 			similarNodeGroupsConfig: []nodeGroupConfig{
@@ -135,9 +133,9 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Computes threshold based on combined reservations",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 10, nodeGroupTotalCapacity: 20, zone: firstZone},
-				{nodeGroupUsedCapacity: 10, nodeGroupTotalCapacity: 50, zone: secondZone},
-				{nodeGroupUsedCapacity: 10, nodeGroupTotalCapacity: 70, zone: thirdZone},
+				{availableCount: 10, zone: firstZone},
+				{availableCount: 40, zone: secondZone},
+				{availableCount: 60, zone: thirdZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone},
 			similarNodeGroupsConfig: []nodeGroupConfig{
@@ -155,7 +153,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Returns_reservations_for_any-then-fail_affinity_when_available",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: firstZone},
+				{availableCount: 3, zone: firstZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.AnyThenFail},
 			wantThreshold:       3,
@@ -163,7 +161,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 		{
 			name: "Returns_0_for_none_affinity_even_when_reservations_are_available",
 			reservationsConfig: []reservationsConfig{
-				{nodeGroupUsedCapacity: 0, nodeGroupTotalCapacity: 3, zone: firstZone},
+				{availableCount: 3, zone: firstZone},
 			},
 			thisNodeGroupConfig: nodeGroupConfig{maxNodes: 5, nodesCount: 0, zone: firstZone, affinity: reservations.NoneAffinity},
 			wantThreshold:       0,
@@ -191,11 +189,11 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 			puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, firstZone)
 			assert.NoError(t1, err)
 
-			res := make([]*gce_api.Reservation, 0)
+			res := make([]*reservation.Reservation, 0)
 			for i, resConfig := range tt.reservationsConfig {
-				res = append(res, reservations.BuildMultipleMachineReservationWithId(i, resConfig.nodeGroupUsedCapacity, resConfig.nodeGroupTotalCapacity, defaultMachineType, resConfig.zone))
+				res = append(res, reservations.BuildAvailableReservationWithID(uint64(i), defaultMachineType, resConfig.zone, resConfig.availableCount))
 			}
-			puller.SetReservations(reservation.FromV1List(res))
+			puller.SetReservations(res)
 
 			similarNodeGroups := make([]cloudprovider.NodeGroup, 0)
 			for _, ng := range tt.similarNodeGroupsConfig {

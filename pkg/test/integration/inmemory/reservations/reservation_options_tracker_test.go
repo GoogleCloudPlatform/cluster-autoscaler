@@ -227,7 +227,7 @@ func TestReservationGeneratorOptionsTracker(t *testing.T) {
 			}
 
 			if tc.hasMatchingReservationInGCE {
-				testConfig.AddReservation(integration.DefaultProject(), reservations.New(testReservationName, reservationZone, reservations.WithMachine("n1-standard-4"), reservations.WithProject("test-project"), reservations.WithCounts(0, 2)))
+				testConfig.AddReservation(integration.DefaultProject(), reservations.NewV1(testReservationName, reservationZone, reservations.WithMachine("n1-standard-4"), reservations.WithProject("test-project"), reservations.WithAvailableCount(2)))
 			}
 
 			synctest.Test(t, func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestReservationGeneratorOptionsTracker(t *testing.T) {
 					// zone, so the reservation must have that shape in every zone for GCE to accept the
 					// new instances.
 					for _, zone := range integration.DefaultZones {
-						infra.Fakes.GceService.WithUnlistedReservations(integration.DefaultProject(), reservations.New(testReservationName, zone, reservations.WithMachine("n1-highcpu-4"), reservations.WithProject("test-project"), reservations.WithCounts(0, 2)))
+						infra.Fakes.GceService.WithUnlistedReservations(integration.DefaultProject(), reservations.NewV1(testReservationName, zone, reservations.WithMachine("n1-highcpu-4"), reservations.WithProject("test-project"), reservations.WithAvailableCount(2)))
 					}
 				}
 

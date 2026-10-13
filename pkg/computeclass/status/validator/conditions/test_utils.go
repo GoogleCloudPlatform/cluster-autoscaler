@@ -15,7 +15,6 @@
 package conditions
 
 import (
-	gceapiv1 "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -26,14 +25,14 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 )
 
-func newMockReservationsPuller(localProject string, projects []string, rsvs []*gceapiv1.Reservation) *gceclient.ReservationsPuller {
+func newMockReservationsPuller(localProject string, projects []string, rsvs []*gcereservation.Reservation) *gceclient.ReservationsPuller {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-c"}, nil })
 	puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1")
 	for _, project := range projects {
 		puller.AddProject(project)
 	}
-	puller.SetReservations(gcereservation.FromV1List(rsvs))
+	puller.SetReservations(rsvs)
 
 	return puller
 }
