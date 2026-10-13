@@ -21,10 +21,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
+	scaleup_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
+	utils_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/processors"
+	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
 func TestInitCapacityBufferMetricsProcessor(t *testing.T) {
@@ -160,4 +166,27 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 			assert.Equal(t, tc.expectedOrder, gotOrder)
 		})
 	}
+}
+
+// TestScaleUpStatusProcessorOrderingForMinCapacity guards the ordering invariant for
+// ComputeClass minimum capacity scale-up status processing:
+//  1. ScaleUpStatusHistoryProcessor runs before MinCapacityFilteringScaleUpStatusProcessor,
+//     so it observes PodsTriggeredScaleUp with podkind.MinCapacity and emits
+//     ConditionReasonMinimumCapacity on the ComputeClass status.
+//  2. MinCapacityFilteringScaleUpStatusProcessor runs before EventingScaleUpStatusProcessor,
+//     InternalEventingScaleUpStatusProcessor, and ScaleUpStatusVisibilityProcessor, so K8s
+//     events and visibility logs are not emitted for synthetic MinCapacity pods.
+func TestScaleUpStatusProcessorOrderingForMinCapacity(t *testing.T) {
+	historyOrder := utils_processors.ProcessorOrder[reflect.TypeOf(history.ScaleUpStatusHistoryProcessor{})]
+	minCapOrder := utils_processors.ProcessorOrder[reflect.TypeOf(npc_processors.MinCapacityFilteringScaleUpStatusProcessor{})]
+	eventingOrder := utils_processors.ProcessorOrder[reflect.TypeOf(status.EventingScaleUpStatusProcessor{})]
+	internalEventingOrder := utils_processors.ProcessorOrder[reflect.TypeOf(scaleup_processors.InternalEventingScaleUpStatusProcessor{})]
+	vizOrder := utils_processors.ProcessorOrder[reflect.TypeOf(viz_processors.ScaleUpStatusVisibilityProcessor{})]
+
+	assert.Greater(t, historyOrder, 0, "ScaleUpStatusHistoryProcessor must have a defined order")
+	assert.Greater(t, minCapOrder, 0, "MinCapacityFilteringScaleUpStatusProcessor must have a defined order")
+	assert.Less(t, historyOrder, minCapOrder, "ScaleUpStatusHistoryProcessor must run before MinCapacityFilteringScaleUpStatusProcessor")
+	assert.Less(t, minCapOrder, eventingOrder, "MinCapacityFilteringScaleUpStatusProcessor must run before EventingScaleUpStatusProcessor")
+	assert.Less(t, minCapOrder, internalEventingOrder, "MinCapacityFilteringScaleUpStatusProcessor must run before InternalEventingScaleUpStatusProcessor")
+	assert.Less(t, minCapOrder, vizOrder, "MinCapacityFilteringScaleUpStatusProcessor must run before ScaleUpStatusVisibilityProcessor")
 }

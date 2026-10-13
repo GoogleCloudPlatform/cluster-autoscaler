@@ -791,6 +791,14 @@ func (b *Builder) setUpProcessors(
 		}
 	}
 
+	if options.EnableComputeClassMinCapacity {
+		// The chain sorts by ProcessorOrder: this runs after ScaleUpStatusHistoryProcessor
+		// and before eventing/visibility processors.
+		if err := scaleUpProcessorChain.AddProcessor(npc_processors.NewMinCapacityFilteringScaleUpStatusProcessor()); err != nil {
+			return nil, err
+		}
+	}
+
 	var mutationInjector *daemonsetmutation.Injector
 	if options.DaemonSetMutationEnabled {
 		dryRunResolver := daemonsetmutation.NewDryRunResolver(kubeClient)

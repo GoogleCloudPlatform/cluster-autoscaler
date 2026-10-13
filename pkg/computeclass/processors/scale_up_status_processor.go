@@ -17,6 +17,7 @@ package processors
 import (
 	"context"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
@@ -73,4 +74,41 @@ func (p *CrdScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx 
 
 // CleanUp cleans up the processor's internal structures.
 func (p *CrdScaleUpStatusProcessor) CleanUp() {
+}
+
+// MinCapacityFilteringScaleUpStatusProcessor is a ScaleUpStatusProcessor used for filtering out
+// ComputeClass minimum capacity fake pods from scale-up status so that K8s events and visibility
+// logs are not emitted for synthetic pods.
+type MinCapacityFilteringScaleUpStatusProcessor struct{}
+
+// NewMinCapacityFilteringScaleUpStatusProcessor returns a new MinCapacityFilteringScaleUpStatusProcessor.
+func NewMinCapacityFilteringScaleUpStatusProcessor() *MinCapacityFilteringScaleUpStatusProcessor {
+	return &MinCapacityFilteringScaleUpStatusProcessor{}
+}
+
+// Process updates scaleUpStatus to remove all min capacity fake pods from
+// PodsRemainUnschedulable, PodsAwaitEvaluation, and PodsTriggeredScaleUp.
+func (p *MinCapacityFilteringScaleUpStatusProcessor) Process(ctx context.Context, _ *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
+	if scaleUpStatus == nil {
+		return
+	}
+	scaleUpStatus.PodsRemainUnschedulable = filterMinCapacityFakePods(scaleUpStatus.PodsRemainUnschedulable, func(noScaleUpInfo status.NoScaleUpInfo) *apiv1.Pod { return noScaleUpInfo.Pod })
+	scaleUpStatus.PodsAwaitEvaluation = filterMinCapacityFakePods(scaleUpStatus.PodsAwaitEvaluation, func(pod *apiv1.Pod) *apiv1.Pod { return pod })
+	scaleUpStatus.PodsTriggeredScaleUp = filterMinCapacityFakePods(scaleUpStatus.PodsTriggeredScaleUp, func(pod *apiv1.Pod) *apiv1.Pod { return pod })
+}
+
+// CleanUp cleans up the processor's internal structures.
+func (p *MinCapacityFilteringScaleUpStatusProcessor) CleanUp() {}
+
+func filterMinCapacityFakePods[T any](items []T, getPod func(T) *apiv1.Pod) []T {
+	if len(items) == 0 {
+		return items
+	}
+	filtered := make([]T, 0, len(items))
+	for _, item := range items {
+		if !IsMinCapacityFakePod(getPod(item)) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
 }
