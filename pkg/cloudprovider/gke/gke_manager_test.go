@@ -2461,6 +2461,20 @@ func TestDeleteInstances(t *testing.T) {
 			wantErr: "cannot delete instances which don't belong to the same MIG.",
 		},
 		{
+			desc: "instance not in any known MIG",
+			nodepools: []*nodepoolSetup{
+				testZonalNodePool(),
+			},
+			instances: []gce.GceRef{
+				{
+					Project: projectId,
+					Zone:    zoneB,
+					Name:    "unknown-instance",
+				},
+			},
+			wantErr: "instance project1/us-central1-b/unknown-instance does not belong to any known MIG",
+		},
+		{
 			desc: "atomically resized MIG",
 			nodepools: []*nodepoolSetup{
 				testZonalNodePool().withAtomicResize(),
@@ -3159,8 +3173,9 @@ func TestGetMigForInstance(t *testing.T) {
 		Name:    "gke-cluster-1-default-pool-f7607aac-f1hm",
 	}
 
-	mig, err := g.GetMigForInstance(gceRef)
+	mig, found, err := g.GetMigForInstance(gceRef)
 	assert.NoError(t, err)
+	assert.True(t, found)
 	assert.NotNil(t, mig)
 	assert.Equal(t, "gke-cluster-1-default-pool", mig.GceRef().Name)
 	mock.AssertExpectationsForObjects(t, server)

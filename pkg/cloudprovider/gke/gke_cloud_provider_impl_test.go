@@ -1949,8 +1949,11 @@ type migForNodeGkeManagerMock struct {
 	mig gce.Mig
 }
 
-func (m *migForNodeGkeManagerMock) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
-	return m.mig, nil
+func (m *migForNodeGkeManagerMock) GetMigForInstance(instance gce.GceRef) (gce.Mig, bool, error) {
+	if m.mig == nil {
+		return nil, false, nil
+	}
+	return m.mig, true, nil
 }
 
 func (m *migForNodeGkeManagerMock) IsMigBlocked(migRef gce.GceRef) bool {

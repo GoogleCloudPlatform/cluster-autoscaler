@@ -17,7 +17,6 @@ package gke
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -882,28 +881,28 @@ func (m *asyncGkeManager) getScheduledMigLocked(migId string) *GkeMig {
 }
 
 // GetMigForInstance returns mig the instance is part of.
-func (m *asyncGkeManager) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
+func (m *asyncGkeManager) GetMigForInstance(instance gce.GceRef) (gce.Mig, bool, error) {
 	if mig := m.getUpcomingMigForInstanceLocked(instance); mig != nil {
-		return mig, nil
+		return mig, true, nil
 	}
 	// gkeManager will return also uninitialized and terminating migs
-	mig, err := m.GkeManager.GetMigForInstance(instance)
-	if err != nil || mig == nil || reflect.ValueOf(mig).IsNil() {
-		return mig, err
+	mig, found, err := m.GkeManager.GetMigForInstance(instance)
+	if err != nil || !found {
+		return nil, false, err
 	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
-	unitialized := m.uninitializedGkeMigs[mig.Id()]
-	if unitialized != nil {
-		return unitialized, nil
+	uninitialized := m.uninitializedGkeMigs[mig.Id()]
+	if uninitialized != nil {
+		return uninitialized, true, nil
 	}
-	if mig, found := m.scheduledMigs[mig.Id()]; found {
-		if _, found := m.terminatingNodePools[mig.NodePoolName()]; found {
+	if scheduled, ok := m.scheduledMigs[mig.Id()]; ok {
+		if _, terminating := m.terminatingNodePools[scheduled.NodePoolName()]; terminating {
 			// terminating node pools should not be accessible
-			return nil, nil
+			return nil, false, nil
 		}
 	}
-	return mig, nil
+	return mig, true, nil
 }
 
 func (m *asyncGkeManager) getUpcomingMigForInstanceLocked(instance gce.GceRef) gce.Mig {

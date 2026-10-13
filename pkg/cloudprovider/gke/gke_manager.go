@@ -154,8 +154,10 @@ type GkeManager interface {
 	IsMigStable(mig gce.Mig) (bool, error)
 	// DeleteInstances deletes the given instances. All instances must be controlled by the same MIG.
 	DeleteInstances(instances []gce.GceRef) error
-	// GetMigForInstance returns MigConfig of the given Instance
-	GetMigForInstance(instance gce.GceRef) (gce.Mig, error)
+	// GetMigForInstance returns the MIG the given instance belongs to. found is
+	// false, with a nil MIG and a nil error, when the instance does not belong
+	// to any known MIG.
+	GetMigForInstance(instance gce.GceRef) (mig gce.Mig, found bool, err error)
 	// IsMigBlocked returns whether the given MIG is currently marked as blocked.
 	IsMigBlocked(migRef gce.GceRef) bool
 	// GetMigNodes returns mig nodes.
@@ -1863,16 +1865,19 @@ func (m *gkeManagerImpl) DeleteInstances(instances []gce.GceRef) error {
 	if len(instances) == 0 {
 		return nil
 	}
-	commonMig, err := m.GetMigForInstance(instances[0])
+	commonMig, found, err := m.GetMigForInstance(instances[0])
 	if err != nil {
 		return err
 	}
+	if !found {
+		return fmt.Errorf("instance %v does not belong to any known MIG", instances[0])
+	}
 	for _, instance := range instances {
-		mig, err := m.GetMigForInstance(instance)
+		mig, found, err := m.GetMigForInstance(instance)
 		if err != nil {
 			return err
 		}
-		if mig != commonMig {
+		if !found || mig != commonMig {
 			return fmt.Errorf("cannot delete instances which don't belong to the same MIG.")
 		}
 	}
@@ -1904,8 +1909,17 @@ func (m *gkeManagerImpl) GetAllNodePoolNames() sets.Set[string] {
 }
 
 // GetMigForInstance returns MIG to which the given instance belongs.
-func (m *gkeManagerImpl) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
-	return m.migInfoProvider.GetMigForInstance(context.TODO(), instance)
+func (m *gkeManagerImpl) GetMigForInstance(instance gce.GceRef) (gce.Mig, bool, error) {
+	// The OSS MigInfoProvider reports "not found" as (nil, nil); translate it
+	// into an explicit found flag at this boundary.
+	mig, err := m.migInfoProvider.GetMigForInstance(context.TODO(), instance)
+	if err != nil {
+		return nil, false, err
+	}
+	if mig == nil {
+		return nil, false, nil
+	}
+	return mig, true, nil
 }
 
 // IsMigBlocked returns whether the given MIG is currently marked as blocked.
@@ -3054,12 +3068,12 @@ func capacityCheckWaitTimeSecondsLabelValue(labels map[string]string, minDefault
 
 // InstanceByRef returns GceInstance from cache. It returns nil when the corresponding instance is not cached.
 func (m *gkeManagerImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
-	mig, err := m.GetMigForInstance(ref)
+	mig, found, err := m.GetMigForInstance(ref)
 	if err != nil {
 		klog.Errorf("[InstanceByRef] GetMigForInstance failed for %v with err: %v", ref, err)
 		return nil
 	}
-	if mig == nil {
+	if !found {
 		klog.V(4).Infof("[InstanceByRef] Mig for %v not found", ref)
 		return nil
 	}
