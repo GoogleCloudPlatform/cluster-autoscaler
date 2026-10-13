@@ -1701,7 +1701,7 @@ func (fake *FakeGkeManager) DeleteInstances(instances []gce.GceRef) error {
 	panic("not implemented")
 }
 
-func (fake *FakeGkeManager) GetMigForInstance(instance gce.GceRef) (gce.Mig, error) {
+func (fake *FakeGkeManager) GetMigForInstance(instance gce.GceRef) (gce.Mig, bool, error) {
 	panic("not implemented")
 }
 
@@ -2469,21 +2469,23 @@ func (m *GkeManagerMock) DeleteInstances(instances []gce.GceRef) error {
 	return args.Error(0)
 }
 
-// GetMigForInstance is a mocked method.
-func (m *GkeManagerMock) GetMigForInstance(instance gce.GceRef) (migRet gce.Mig, errRet error) {
+// GetMigForInstance is a mocked method. Expectations are set as
+// On("GetMigForInstance", ref).Return(mig, err); a nil mig (untyped, or a nil
+// *GkeMig) means "not found".
+func (m *GkeManagerMock) GetMigForInstance(instance gce.GceRef) (migRet gce.Mig, found bool, errRet error) {
 	args := m.Called(instance)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
 
 	// based on https://github.com/stretchr/testify/issues/350#issuecomment-1173347793
 	switch v := args.Get(0).(type) {
 	case nil:
-		migRet = nil
 	case *GkeMig:
-		migRet = v
+		if v != nil {
+			migRet, found = v, true
+		}
 	case func(gce.GceRef) *GkeMig:
-		migRet = v(instance)
+		if res := v(instance); res != nil {
+			migRet, found = res, true
+		}
 	default:
 		panic(fmt.Sprintf("unexpected type %T", v))
 	}

@@ -409,8 +409,8 @@ func (p *gkeCloudProviderImpl) NodeGroupForNode(ctx context.Context, node *apiv1
 	if err != nil {
 		return nil, err
 	}
-	mig, err := p.gkeManager.GetMigForInstance(ref)
-	if err != nil || mig == nil {
+	mig, found, err := p.gkeManager.GetMigForInstance(ref)
+	if err != nil || !found {
 		return nil, err
 	}
 	if gkeMig, ok := mig.(*GkeMig); ok && gkeMig != nil {
@@ -1706,11 +1706,11 @@ func (mig *GkeMig) Belongs(node *apiv1.Node) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	targetMig, err := mig.gkeManager.GetMigForInstance(ref)
+	targetMig, found, err := mig.gkeManager.GetMigForInstance(ref)
 	if err != nil {
 		return false, err
 	}
-	if targetMig == nil {
+	if !found {
 		return false, fmt.Errorf("%s doesn't belong to a known mig", node.Name)
 	}
 	if targetMig.Id() != mig.Id() {
