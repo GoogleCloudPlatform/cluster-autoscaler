@@ -2239,6 +2239,105 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "CCC self service additional networks specified",
+			spec: &NodePoolSpec{
+				SelfServiceMetadata: selfservice.Metadata{
+					"internal.additional-networks": `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						AdditionalNodeNetworkConfigs: []*gke_api_beta.AdditionalNodeNetworkConfig{
+							{
+								Network:    "net-1",
+								Subnetwork: "subnet-1",
+							},
+							{
+								Network:    "net-2",
+								Subnetwork: "subnet-2",
+							},
+						},
+						AdditionalPodNetworkConfigs: []*gke_api_beta.AdditionalPodNetworkConfig{
+							{
+								Subnetwork:        "subnet-1",
+								SecondaryPodRange: "pod-range-1",
+								MaxPodsPerNode: &gke_api_beta.MaxPodsConstraint{
+									MaxPodsPerNode: 4,
+								},
+							},
+						},
+						ForceSendFields: []string{"AdditionalNodeNetworkConfigs", "AdditionalPodNetworkConfigs"},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service additional networks overwrites existing spec.NetworkConfigs in-place without duplication",
+			spec: &NodePoolSpec{
+				NetworkConfigs: []AdditionalNetworkConfig{
+					TestAdditionalNetworkConfig("net-1", "subnet-1", "random-pod-range", 4),
+				},
+				SelfServiceMetadata: selfservice.Metadata{
+					"internal.additional-networks": `[{"network":"net-1","subnetwork":"subnet-1","podRange":"ccc-pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{},
+					Name:   nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{
+						AdditionalNodeNetworkConfigs: []*gke_api_beta.AdditionalNodeNetworkConfig{
+							{
+								Network:    "net-1",
+								Subnetwork: "subnet-1",
+							},
+							{
+								Network:    "net-2",
+								Subnetwork: "subnet-2",
+							},
+						},
+						AdditionalPodNetworkConfigs: []*gke_api_beta.AdditionalPodNetworkConfig{
+							{
+								Subnetwork:        "subnet-1",
+								SecondaryPodRange: "ccc-pod-range-1",
+								MaxPodsPerNode: &gke_api_beta.MaxPodsConstraint{
+									MaxPodsPerNode: 4,
+								},
+							},
+						},
+						ForceSendFields: []string{"AdditionalNodeNetworkConfigs", "AdditionalPodNetworkConfigs"},
+					},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "CCC self service ContainerdConfig specified",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{
@@ -5516,6 +5615,50 @@ func TestSelfServiceFromNodepool(t *testing.T) {
 			wantSelfServiceMetadata: map[string]string{
 				"internal.subnet-priority-0":       "custom-subnet",
 				"internal.pod-range-0":             "custom-pod-range",
+				"internal.private-node-from-ccc":   "false",
+				"internal.private-node-from-label": "false",
+				labels.GvnicLabelKey:               "false",
+			},
+		},
+		{
+			name: "Nodepool with AdditionalNetworks set",
+			apiClusterResponse: `{
+				"name": "cluster-1",
+				"nodePools": [
+				  {
+					"name": "pool-1",
+					"config": {
+					  "machineType": "e2-medium"
+					},
+					"networkConfig": {
+					  "additionalNodeNetworkConfigs": [
+						{
+						  "network": "projects/my-project/global/networks/net-1",
+						  "subnetwork": "projects/my-project/regions/us-central1/subnetworks/subnet-1"
+						},
+						{
+						  "network": "projects/my-project/global/networks/net-2",
+						  "subnetwork": "projects/my-project/regions/us-central1/subnetworks/subnet-2"
+						}
+					  ],
+					  "additionalPodNetworkConfigs": [
+						{
+						  "subnetwork": "projects/my-project/regions/us-central1/subnetworks/subnet-1",
+						  "secondaryPodRange": "pod-range-1"
+						}
+					  ]
+					},
+					"autoscaling": {
+					  "enabled": false,
+					  "minNodeCount": 1,
+					  "maxNodeCount": 8,
+					  "autoprovisioned": false
+					}
+				  }
+				]
+			  }`,
+			wantSelfServiceMetadata: map[string]string{
+				"internal.additional-networks":     `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
 				"internal.private-node-from-ccc":   "false",
 				"internal.private-node-from-label": "false",
 				labels.GvnicLabelKey:               "false",

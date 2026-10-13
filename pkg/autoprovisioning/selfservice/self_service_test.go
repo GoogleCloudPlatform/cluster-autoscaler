@@ -25,6 +25,7 @@ import (
 	gkesandbox "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	netutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking/util"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/utils/ptr"
 )
@@ -553,6 +554,34 @@ func TestNodepoolMetadata(t *testing.T) {
 				podRangeKey:          "test-pod-range",
 				privateNodeFromLabel: "false",
 				privateNodeFromCcc:   "false",
+			},
+		},
+		{
+			name: "AdditionalNetworks feature is processed correctly from nodepool",
+			nodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					AdditionalNodeNetworkConfigs: []*container.AdditionalNodeNetworkConfig{
+						{
+							Network:    "projects/test-project/global/networks/net-1",
+							Subnetwork: "projects/test-project/regions/us-central1/subnetworks/subnet-1",
+						},
+						{
+							Network:    "projects/test-project/global/networks/net-2",
+							Subnetwork: "projects/test-project/regions/us-central1/subnetworks/subnet-2",
+						},
+					},
+					AdditionalPodNetworkConfigs: []*container.AdditionalPodNetworkConfig{
+						{
+							Subnetwork:        "projects/test-project/regions/us-central1/subnetworks/subnet-1",
+							SecondaryPodRange: "pod-range-1",
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				additionalNetworksKey: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
+				privateNodeFromLabel:  "false",
+				privateNodeFromCcc:    "false",
 			},
 		},
 		{
@@ -1148,6 +1177,35 @@ func TestComputeClassSpecMetadata(t *testing.T) {
 			wantMetadata: Metadata{
 				subnetPriorityKey: "test-subnet",
 				podRangeKey:       "test-pod-range",
+			},
+		},
+		{
+			name: "AdditionalNetworks feature is processed correctly from spec",
+			spec: v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{
+					AdditionalNetworks: []v1.AdditionalNetwork{
+						{
+							Name: "net-1",
+							SubnetPriorities: []v1.SubnetPriority{
+								{
+									Name:     "subnet-1",
+									PodRange: "pod-range-1",
+								},
+							},
+						},
+						{
+							Name: "net-2",
+							SubnetPriorities: []v1.SubnetPriority{
+								{
+									Name: "subnet-2",
+								},
+							},
+						},
+					},
+				},
+			},
+			wantMetadata: Metadata{
+				additionalNetworksKey: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
 			},
 		},
 		{
@@ -1963,6 +2021,36 @@ func TestUpdateNodepool(t *testing.T) {
 			},
 		},
 		{
+			name: "AdditionalNetworks feature sets additionalNodeNetworkConfigs and additionalPodNetworkConfigs on nodepool",
+			metadata: Metadata{
+				additionalNetworksKey: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-2","subnetwork":"subnet-2"}]`,
+			},
+			wantNodepool: &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{
+					AdditionalNodeNetworkConfigs: []*container.AdditionalNodeNetworkConfig{
+						{
+							Network:    "net-1",
+							Subnetwork: "subnet-1",
+						},
+						{
+							Network:    "net-2",
+							Subnetwork: "subnet-2",
+						},
+					},
+					AdditionalPodNetworkConfigs: []*container.AdditionalPodNetworkConfig{
+						{
+							Subnetwork:        "subnet-1",
+							SecondaryPodRange: "pod-range-1",
+							MaxPodsPerNode: &container.MaxPodsConstraint{
+								MaxPodsPerNode: netutil.DefaultAdditionalMultiNetworkConfigMaxPodsPerNode,
+							},
+						},
+					},
+					ForceSendFields: []string{"AdditionalNodeNetworkConfigs", "AdditionalPodNetworkConfigs"},
+				},
+			},
+		},
+		{
 			name: "NetworkTags feature sets tags on nodepool",
 			metadata: Metadata{
 				"network-tags.cloud.google.com/secure-firewall": "true",
@@ -2210,5 +2298,57 @@ func TestArrayFeaturesMatchingUnordered(t *testing.T) {
 		targetNp := &container.NodePool{}
 		UpdateNodepool(targetNp, specMetadata)
 		assert.Equal(t, []string{"https://www.googleapis.com/auth/compute", "https://www.googleapis.com/auth/devstorage.read_only"}, targetNp.Config.OauthScopes)
+	})
+
+	t.Run("AdditionalNetworks round-trip from spec to nodepool and back", func(t *testing.T) {
+		spec := v1.ComputeClassSpec{
+			NetworkConfig: &v1.NetworkConfig{
+				AdditionalNetworks: []v1.AdditionalNetwork{
+					{
+						Name: "net-1",
+						SubnetPriorities: []v1.SubnetPriority{
+							{
+								Name:     "subnet-1",
+								PodRange: "pod-range-1",
+							},
+						},
+					},
+					{
+						Name: "net-2",
+						SubnetPriorities: []v1.SubnetPriority{
+							{
+								Name: "subnet-2",
+							},
+						},
+					},
+				},
+			},
+		}
+		specMetadata := ComputeClassSpecMetadata(spec)
+
+		targetNp := &container.NodePool{}
+		UpdateNodepool(targetNp, specMetadata)
+		assert.Equal(t, []*container.AdditionalNodeNetworkConfig{
+			{
+				Network:    "net-1",
+				Subnetwork: "subnet-1",
+			},
+			{
+				Network:    "net-2",
+				Subnetwork: "subnet-2",
+			},
+		}, targetNp.NetworkConfig.AdditionalNodeNetworkConfigs)
+		assert.Equal(t, []*container.AdditionalPodNetworkConfig{
+			{
+				Subnetwork:        "subnet-1",
+				SecondaryPodRange: "pod-range-1",
+				MaxPodsPerNode: &container.MaxPodsConstraint{
+					MaxPodsPerNode: netutil.DefaultAdditionalMultiNetworkConfigMaxPodsPerNode,
+				},
+			},
+		}, targetNp.NetworkConfig.AdditionalPodNetworkConfigs)
+
+		npMetadata := NodepoolMetadata(targetNp)
+		assert.Equal(t, specMetadata[additionalNetworksKey], npMetadata[additionalNetworksKey])
 	})
 }
