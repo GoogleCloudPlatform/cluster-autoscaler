@@ -122,7 +122,7 @@ func (s *Processor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscaling
 		}
 	}
 	// TODO(b/504971103): move notifying logic directly to location_policy_any_balancer.go, so directly to RLA service.
-	if s.isFlexAdvisorEnabled && locationPolicy == gke.LocationPolicyAny {
+	if s.isFlexAdvisorEnabled && flexadvisor.IsFlexAdvisorProcessingEnabled(s.experimentsManager) && locationPolicy == gke.LocationPolicyAny {
 		balancingInfos, _, faErr := flexadvisor.BalancingInfoFromFlexAdvisor(s.iaProvider, s.cccLister, scaleUpInfos, s.experimentsManager, newNodes)
 		if faErr == nil {
 			flexadvisor.MarkUsed(balancingInfos)

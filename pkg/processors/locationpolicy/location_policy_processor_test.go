@@ -21,14 +21,22 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/api/googleapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	rrclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
@@ -46,9 +54,22 @@ func TestLocationPolicyProcessor(t *testing.T) {
 	balancerResponse := []nodegroupset.ScaleUpInfo{
 		{Group: gke.NewTestGkeMigBuilder().Build(), CurrentSize: 0, NewSize: 10, MaxSize: 10},
 	}
+	faMig := gke.NewTestGkeMigBuilder().
+		SetGceRefZone("us-test1-a").
+		SetSpec(&gkeclient.NodePoolSpec{
+			MachineType: "e2-standard-4",
+			Labels:      map[string]string{labels.ComputeClassLabel: "ccc-1"},
+		}).
+		Build()
+	faBalancerResponse := []nodegroupset.ScaleUpInfo{
+		{Group: faMig, CurrentSize: 0, NewSize: 10, MaxSize: 10},
+	}
 
 	balancerCallOk := balancerCall{
 		response: balancerResponse,
+	}
+	faBalancerCallOk := balancerCall{
+		response: faBalancerResponse,
 	}
 	balancerCallError := balancerCall{
 		err: fmt.Errorf("balancer error"),
@@ -68,6 +89,9 @@ func TestLocationPolicyProcessor(t *testing.T) {
 		locationPolicy                 gke.LocationPolicyEnum
 		newNodes                       int
 		enabledExperimentFlags         []string
+		disabledExperimentFlags        []string
+		isFlexAdvisorEnabled           bool
+		setupFlexAdvisor               func(iaProvider *instanceavailability.MockProvider)
 		npSpec                         *gkeclient.NodePoolSpec
 		wantScaleUpInfo                []nodegroupset.ScaleUpInfo
 		provisioningRequestScaleUpMode bool
@@ -242,6 +266,64 @@ func TestLocationPolicyProcessor(t *testing.T) {
 			newNodes:        10,
 			wantScaleUpInfo: balancerResponse,
 		},
+		{
+			name: "migs with location policy ANY, FlexAdvisor enabled and processing enabled - notifies FlexAdvisor",
+			balancers: map[gke.LocationPolicyEnum]*balancerMock{
+				gke.LocationPolicyAny:      {},
+				gke.LocationPolicyBalanced: {},
+			},
+			balancerCalls: map[gke.LocationPolicyEnum]balancerCall{
+				gke.LocationPolicyAny: faBalancerCallOk,
+			},
+			locationPolicy:         gke.LocationPolicyAny,
+			newNodes:               10,
+			isFlexAdvisorEnabled:   true,
+			enabledExperimentFlags: []string{experiments.FlexAdvisorProcessingEnabledFlag, experiments.FlexAdvisorProcessingMinCAVersionFlag},
+			setupFlexAdvisor: func(iaProvider *instanceavailability.MockProvider) {
+				snapshot := instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", "", map[string]int{"us-test1-a": 10}, map[string]float64{"us-test1-a": 1.0})
+				iaProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil).Once()
+				iaProvider.On("MarkUsed", "ccc-1", "", "guidance-1", mock.Anything, map[string]int{"us-test1-a": 10}).Return(nil).Once()
+			},
+			wantScaleUpInfo: faBalancerResponse,
+		},
+		{
+			name: "migs with location policy ANY, FlexAdvisor enabled and FlexAdvisorProcessing::Enabled disabled - does not notify FlexAdvisor",
+			balancers: map[gke.LocationPolicyEnum]*balancerMock{
+				gke.LocationPolicyAny:      {},
+				gke.LocationPolicyBalanced: {},
+			},
+			balancerCalls: map[gke.LocationPolicyEnum]balancerCall{
+				gke.LocationPolicyAny: faBalancerCallOk,
+			},
+			locationPolicy:          gke.LocationPolicyAny,
+			newNodes:                10,
+			isFlexAdvisorEnabled:    true,
+			disabledExperimentFlags: []string{experiments.FlexAdvisorProcessingEnabledFlag},
+			setupFlexAdvisor: func(iaProvider *instanceavailability.MockProvider) {
+				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability should not be called")
+				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed should not be called")
+			},
+			wantScaleUpInfo: faBalancerResponse,
+		},
+		{
+			name: "migs with location policy ANY, FlexAdvisor enabled and FlexAdvisorProcessing::MinCAVersion disabled - does not notify FlexAdvisor",
+			balancers: map[gke.LocationPolicyEnum]*balancerMock{
+				gke.LocationPolicyAny:      {},
+				gke.LocationPolicyBalanced: {},
+			},
+			balancerCalls: map[gke.LocationPolicyEnum]balancerCall{
+				gke.LocationPolicyAny: faBalancerCallOk,
+			},
+			locationPolicy:          gke.LocationPolicyAny,
+			newNodes:                10,
+			isFlexAdvisorEnabled:    true,
+			disabledExperimentFlags: []string{experiments.FlexAdvisorProcessingMinCAVersionFlag},
+			setupFlexAdvisor: func(iaProvider *instanceavailability.MockProvider) {
+				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability should not be called")
+				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed should not be called")
+			},
+			wantScaleUpInfo: faBalancerResponse,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -276,11 +358,38 @@ func TestLocationPolicyProcessor(t *testing.T) {
 				balancers[policy] = balancer
 			}
 
-			processor := NewProcessor(mockProcessor, provider, balancers, experiments.NewMockManager(tc.enabledExperimentFlags...), false, nil, nil)
+			boolFlags := make(map[string]bool)
+			for _, f := range tc.enabledExperimentFlags {
+				boolFlags[f] = true
+			}
+			for _, f := range tc.disabledExperimentFlags {
+				boolFlags[f] = false
+			}
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil)
+
+			var iaProvider *instanceavailability.MockProvider
+			var cccLister lister.Lister
+			if tc.isFlexAdvisorEnabled {
+				iaProvider = new(instanceavailability.MockProvider)
+				iaProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+				if tc.setupFlexAdvisor != nil {
+					tc.setupFlexAdvisor(iaProvider)
+				}
+				cccLister = lister.NewMockCrdListerWithLabel([]crd.CRD{
+					ccc.NewCccCrd(&v1.ComputeClass{
+						ObjectMeta: metav1.ObjectMeta{Name: "ccc-1"},
+					}, "", false, nil, nil),
+				}, labels.ComputeClassLabel)
+			}
+
+			processor := NewProcessor(mockProcessor, provider, balancers, experimentsManager, tc.isFlexAdvisorEnabled, iaProvider, cccLister)
 			scaleUpInfo, err := processor.BalanceScaleUpBetweenGroups(context.TODO(), &ca_context.AutoscalingContext{ProvisioningRequestScaleUpMode: tc.provisioningRequestScaleUpMode}, nodeGroups, tc.newNodes)
 
 			for _, balancer := range tc.balancers {
 				balancer.AssertExpectations(t)
+			}
+			if iaProvider != nil {
+				iaProvider.AssertExpectations(t)
 			}
 
 			if (err != nil) != tc.wantErr {
