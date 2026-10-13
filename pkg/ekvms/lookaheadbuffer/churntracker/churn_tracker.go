@@ -29,6 +29,10 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
+const (
+	logPrefix = "[LA ChurnTracker]"
+)
+
 // nodeHistory is the per-resizable node record, keyed by node UID.
 type nodeHistory struct {
 	// creationTime is the creation timestamp of the node, used to measure the node lifetime.
@@ -153,7 +157,7 @@ func (t *ChurnTracker) RecordScaledDownNodes(nodes []*apiv1.Node) {
 		if t.metrics != nil {
 			t.metrics.RegisterLookaheadChurnEvent(history.machineFamily)
 		}
-		klog.V(4).Infof("[Churn Tracker] Recorded lookahead churn event for workload ID %q: node %q of machine family %q without running customer pods was scaled down after %v", history.lookaheadWorkloadID, node.Name, history.machineFamily, now.Sub(history.creationTime))
+		klog.V(4).Infof("%s: Recorded lookahead churn event for workload ID %q: node %q of machine family %q without running customer pods was scaled down after %v", logPrefix, history.lookaheadWorkloadID, node.Name, history.machineFamily, now.Sub(history.creationTime))
 	}
 }
 
@@ -212,4 +216,15 @@ func indexOfFirstEventAfterTs(eventTimestamps []time.Time, ts time.Time) int {
 		}
 	}
 	return len(eventTimestamps)
+}
+
+// countEventsAfterTs returns the number of the event timestamps that happened at or after ts.
+func countEventsAfterTs(eventTimestamps []time.Time, ts time.Time) int {
+	return len(eventTimestamps) - indexOfFirstEventAfterTs(eventTimestamps, ts)
+}
+
+// countEventsBetween returns the number of the sorted timestamps within [from, to).
+// Note: timestamps should be sorted in ascending order and to >= from.
+func countEventsBetween(eventTimestamps []time.Time, from, to time.Time) int {
+	return indexOfFirstEventAfterTs(eventTimestamps, to) - indexOfFirstEventAfterTs(eventTimestamps, from)
 }
