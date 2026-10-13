@@ -16,10 +16,12 @@ package scaledown
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -34,6 +36,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
@@ -61,6 +64,12 @@ func buildUpcomingCCNode(name, cc string) *apiv1.Node {
 		node.Annotations = map[string]string{}
 	}
 	node.Annotations[annotations.NodeUpcomingAnnotation] = "true"
+	return node
+}
+
+func buildDefragCandidateNode(name string) *apiv1.Node {
+	node := buildCCNode(name, testCC)
+	node.Spec.Taints = append(node.Spec.Taints, apiv1.Taint{Key: defrag.HardTaint, Effect: apiv1.TaintEffectNoSchedule})
 	return node
 }
 
@@ -99,14 +108,6 @@ func candidatesFromGroups(groups []testNodeGroup) []simulator.NodeToBeRemoved {
 		}
 	}
 	return candidates
-}
-
-func nodeNames(candidates []simulator.NodeToBeRemoved) []string {
-	names := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		names = append(names, c.Node.Name)
-	}
-	return names
 }
 
 func unremovableNames(unremovable []simulator.UnremovableNode) []string {
@@ -174,6 +175,45 @@ func TestAtomicMinCapacityProcessor_FilterUnremovableNodes(t *testing.T) {
 			experimentsMgr: experiments.NewMockManager(),
 			wantRemovable:  []string{"ng1-a", "ng1-b", "ng2-a", "ng2-b"},
 		},
+		{
+			name: "defrag candidate group is released instead of a group the floor needs",
+			groups: append(twoAtomicGroups(),
+				testNodeGroup{id: "ng3", atomic: true, nodes: []*apiv1.Node{buildDefragCandidateNode("ng3-a"), buildDefragCandidateNode("ng3-b")}}),
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(4)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng3-a", "ng3-b"},
+			wantUnremovable: []string{"ng1-a", "ng1-b", "ng2-a", "ng2-b"},
+		},
+		{
+			name: "defrag candidate group is kept while the floor needs it",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC)}},
+				{id: "ng2", atomic: true, nodes: []*apiv1.Node{buildDefragCandidateNode("ng2-a"), buildDefragCandidateNode("ng2-b")}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(4)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantUnremovable: []string{"ng1-a", "ng1-b", "ng2-a", "ng2-b"},
+		},
+		{
+			name: "non-atomic defrag candidate is released once the floor is met without it",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: false, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC), buildDefragCandidateNode("ng1-c")}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng1-a", "ng1-b", "ng1-c"},
+			wantUnremovable: nil,
+		},
+		{
+			name: "non-atomic defrag candidate is kept while the floor needs it",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: false, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC), buildDefragCandidateNode("ng1-c")}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(3)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng1-a", "ng1-b"},
+			wantUnremovable: []string{"ng1-c"},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -188,6 +228,29 @@ func TestAtomicMinCapacityProcessor_FilterUnremovableNodes(t *testing.T) {
 			assert.ElementsMatch(t, tc.wantUnremovable, unremovableNames(unremovable))
 		})
 	}
+}
+
+func TestAtomicMinCapacityProcessor_TrimScaleDownCandidates(t *testing.T) {
+	const otherCC = "other-ccc"
+	blockedNode := buildCCNode("ng2-a", otherCC)
+	blockedNode.Spec.Taints = append(blockedNode.Spec.Taints, apiv1.Taint{Key: defrag.HardTaint, Effect: apiv1.TaintEffectNoSchedule})
+	groups := []testNodeGroup{
+		// testCC keeps its min capacity of 2 without the defrag candidate ng1-c.
+		{id: "ng1", nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC), buildDefragCandidateNode("ng1-c")}},
+		// otherCC has no other node to keep its min capacity of 1.
+		{id: "ng2", nodes: []*apiv1.Node{blockedNode}},
+		{id: "ng3", nodes: []*apiv1.Node{buildCCNode("ng3-a", "")}},
+	}
+	ctx := setupAtomicMinCapacityCtx(t, groups)
+	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{
+		crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2))),
+		crd.NewTestCrd(crd.WithName(otherCC), crd.WithTargetNodeCount(ptrInt(1))),
+	})
+	processor := NewAtomicMinCapacityProcessor(ccLister, experiments.NewMockManager())
+
+	got := processor.TrimScaleDownCandidates(context.Background(), ctx, []*apiv1.Node{groups[0].nodes[2], blockedNode, groups[2].nodes[0]})
+
+	assert.Equal(t, []*apiv1.Node{groups[0].nodes[2], groups[2].nodes[0]}, got)
 }
 
 // TestAtomicMinCapacityProcessor_AccountsForNodesInDeletion verifies that nodes
@@ -220,6 +283,52 @@ func TestAtomicMinCapacityProcessor_AccountsForNodesInDeletion(t *testing.T) {
 	// ng2 would drop to 0, so ng2 must be kept.
 	assert.Empty(t, nodeNames(removable))
 	assert.ElementsMatch(t, []string{"ng2-a", "ng2-b"}, unremovableNames(unremovable))
+}
+
+// TestAtomicMinCapacityProcessor_DefragCandidatesDoNotCountTowardCurrent pins
+// that a node carrying the defrag HardTaint is not counted as current capacity
+// even when it is not being deleted yet (see beingDeleted), so it can hold
+// back an unrelated atomic group of the same ComputeClass.
+func TestAtomicMinCapacityProcessor_DefragCandidatesDoNotCountTowardCurrent(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		defragCandidate bool
+		wantRemovable   []string
+		wantUnremovable []string
+	}{
+		{
+			// current = 4 >= target 2 after removing ng1: ng1 can go.
+			name:          "no defrag candidate",
+			wantRemovable: []string{"ng1-a", "ng1-b"},
+		},
+		{
+			// current = 4 - 1 defrag candidate = 3; removing ng1 would leave 1 < 2.
+			name:            "defrag candidate in the same ComputeClass",
+			defragCandidate: true,
+			wantUnremovable: []string{"ng1-a", "ng1-b"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ng2a := buildCCNode("ng2-a", testCC)
+			if tc.defragCandidate {
+				ng2a = buildDefragCandidateNode("ng2-a")
+			}
+			groups := []testNodeGroup{
+				{id: "ng1", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC)}},
+				{id: "ng2", atomic: false, nodes: []*apiv1.Node{ng2a, buildCCNode("ng2-b", testCC)}},
+			}
+			ctx := setupAtomicMinCapacityCtx(t, groups)
+			ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
+			processor := NewAtomicMinCapacityProcessor(ccLister, experiments.NewMockManager())
+
+			// Only the atomic group ng1 is offered; ng2-a is a defrag candidate but not being deleted.
+			ng1Candidates := []simulator.NodeToBeRemoved{{Node: groups[0].nodes[0]}, {Node: groups[0].nodes[1]}}
+			removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), ng1Candidates)
+
+			assert.ElementsMatch(t, tc.wantRemovable, nodeNames(removable))
+			assert.ElementsMatch(t, tc.wantUnremovable, unremovableNames(unremovable))
+		})
+	}
 }
 
 // TestAtomicMinCapacityProcessor_UpcomingNodesShouldNotCountTowardCurrent is a
@@ -285,4 +394,68 @@ func (f *fakeActuationStatus) DeletionsCount(nodeGroupId string) int {
 
 func (f *fakeActuationStatus) RecentEvictions() (pods []*apiv1.Pod) {
 	return f.evictedPods
+}
+
+type erroringCrdLister struct {
+	*cc_lister.MockCrdLister
+}
+
+func (e *erroringCrdLister) ListCrds() ([]crd.CRD, error) {
+	return nil, errors.New("simulated CRD lister error")
+}
+
+func TestAtomicMinCapacityProcessor_FailsClosedOnListerError(t *testing.T) {
+	groups := []testNodeGroup{
+		{id: "ng-atomic-cc", atomic: true, nodes: []*apiv1.Node{buildCCNode("atomic-cc-1", testCC), buildCCNode("atomic-cc-2", testCC)}},
+		{id: "ng-regular-cc", atomic: false, nodes: []*apiv1.Node{buildCCNode("regular-cc-1", testCC)}},
+		{id: "ng-non-cc", atomic: true, nodes: []*apiv1.Node{buildCCNode("non-cc-1", "")}},
+	}
+	ctx := setupAtomicMinCapacityCtx(t, groups)
+	processor := NewAtomicMinCapacityProcessor(&erroringCrdLister{cc_lister.NewMockCrdLister(nil)}, experiments.NewMockManager())
+
+	removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
+
+	assert.ElementsMatch(t, []string{"regular-cc-1", "non-cc-1"}, nodeNames(removable))
+	assert.ElementsMatch(t, []string{"atomic-cc-1", "atomic-cc-2"}, unremovableNames(unremovable))
+	for _, u := range unremovable {
+		assert.Equal(t, simulator.UnexpectedError, u.Reason)
+	}
+}
+
+// erroringOptionsProvider returns node groups whose GetOptions fails.
+type erroringOptionsProvider struct {
+	cloudprovider.CloudProvider
+}
+
+func (p erroringOptionsProvider) NodeGroupForNode(ctx context.Context, node *apiv1.Node) (cloudprovider.NodeGroup, error) {
+	nodeGroup, err := p.CloudProvider.NodeGroupForNode(ctx, node)
+	if err != nil || nodeGroup == nil {
+		return nodeGroup, err
+	}
+	return erroringOptionsNodeGroup{nodeGroup}, nil
+}
+
+type erroringOptionsNodeGroup struct {
+	cloudprovider.NodeGroup
+}
+
+func (erroringOptionsNodeGroup) GetOptions(context.Context, config.NodeGroupAutoscalingOptions) (*config.NodeGroupAutoscalingOptions, error) {
+	return nil, errors.New("simulated GetOptions error")
+}
+
+func TestAtomicMinCapacityProcessor_ChecksNodesBeingDeletedOnGetOptionsError(t *testing.T) {
+	groups := []testNodeGroup{
+		{id: "ng1", nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildDefragCandidateNode("ng1-c")}},
+	}
+	ctx := setupAtomicMinCapacityCtx(t, groups)
+	ctx.CloudProvider = erroringOptionsProvider{ctx.CloudProvider}
+	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
+	processor := NewAtomicMinCapacityProcessor(ccLister, experiments.NewMockManager())
+
+	removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
+
+	// ng1-a is left to the per-node quota; ng1-c, already being deleted, is
+	// still checked: the ComputeClass needs it for its min capacity.
+	assert.ElementsMatch(t, []string{"ng1-a"}, nodeNames(removable))
+	assert.ElementsMatch(t, []string{"ng1-c"}, unremovableNames(unremovable))
 }

@@ -303,8 +303,7 @@ func initCapacityBufferMetricsProcessor(experimentsManager experiments.Manager, 
 func buildScaleDownSetProcessors(
 	provider GkeCloudProvider,
 	options *internalopts.AutoscalingOptions,
-	npcCrdLister npc_lister.Lister,
-	experimentsManager experiments.Manager,
+	minCapacityProcessor *scaledown.AtomicMinCapacityProcessor,
 ) []nodes.ScaleDownSetProcessor {
 	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
 		internal_processors.NewMinSizeProcessor(provider),
@@ -321,8 +320,8 @@ func buildScaleDownSetProcessors(
 	if options.EnableComputeClassMinCapacity {
 		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
 		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
-		// groups, which are exempt from the per-node TargetNodeCountQuota.
-		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(npcCrdLister, experimentsManager))
+		// groups and nodes being deleted, which are exempt from the per-node TargetNodeCountQuota.
+		scaleDownSetProcessors = append(scaleDownSetProcessors, minCapacityProcessor)
 	}
 	return scaleDownSetProcessors
 }
@@ -625,6 +624,9 @@ func setUpProcessors(
 		}
 	}
 
+	// Shared by the scale-down set processors and defrag.
+	atomicMinCapacityProcessor := scaledown.NewAtomicMinCapacityProcessor(ccLister, experimentsManager)
+
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
 			CandidateLimit:   options.DefragCandidateLimit,
@@ -635,7 +637,8 @@ func setUpProcessors(
 			// The only reader of the block reasons is the config drift
 			// reporter below, so the flag that enables it also decides whether
 			// defrag pays for recording them.
-			RecordBlockReasons: options.ComputeClassConfigDriftReporting,
+			RecordBlockReasons:    options.ComputeClassConfigDriftReporting,
+			EnableScaleDownFilter: options.EnableComputeClassMinCapacity,
 		}
 		pluginsConfig := defrag_plugins_config.New(defrag_plugins_config.Options{
 			MaxCandidateNodeCount: options.DefragCandidateNodeLimit,
@@ -661,6 +664,7 @@ func setUpProcessors(
 			FairnessEnforcer:         sharedFairnessManager.CreateEnforcer(defrag_processor.DefragProcessorName),
 			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
 			CcLister:                 ccLister,
+			ScaleDownNodesFilter:     atomicMinCapacityProcessor,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -850,7 +854,7 @@ func setUpProcessors(
 	autoscalingProcessors.BinpackingLimiter = metricsbinpacking.NewBinpackingMetricsProcessor(autoscalingProcessors.BinpackingLimiter)
 	autoscalingProcessors.NodeGroupManager = apNodeGroupManager
 	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(
-		buildScaleDownSetProcessors(provider, options, ccLister, experimentsManager))
+		buildScaleDownSetProcessors(provider, options, atomicMinCapacityProcessor))
 
 	var nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	nodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: internal_processors.IsGkeNodeInfoSimilar}

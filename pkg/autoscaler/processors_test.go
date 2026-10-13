@@ -23,6 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 )
 
@@ -150,7 +151,7 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{})
 
-			built := buildScaleDownSetProcessors(nil, tc.options, nil, experimentsManager)
+			built := buildScaleDownSetProcessors(nil, tc.options, scaledown.NewAtomicMinCapacityProcessor(nil, experimentsManager))
 
 			gotOrder := make([]string, 0, len(built))
 			for _, p := range built {

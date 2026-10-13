@@ -68,6 +68,9 @@ type Config struct {
 	// search a pass without tracked candidates performs anyway. Leave it off
 	// when nothing reads BlockReasons.
 	RecordBlockReasons bool
+	// EnableScaleDownFilter makes create-before-delete scale-downs go through
+	// Options.ScaleDownNodesFilter.
+	EnableScaleDownFilter bool
 }
 
 // candidateInfo keeps the metadata about candidates
@@ -125,6 +128,10 @@ type Processor struct {
 	// The global RemainingPdbTracker is updated only when nodes are scaled down,
 	// to ensure that scale-down won't accidentally exceed PDBs in this CA loop.
 	pdbTracker pdb.RemainingPdbTracker
+	// scaleDownNodesFilter filters out the nodes that must not be scaled down
+	// yet from create-before-delete candidates. Currently only ComputeClass
+	// min capacity is enforced through it.
+	scaleDownNodesFilter ScaleDownFilter
 
 	config  Config
 	plugins []defrag.Plugin
@@ -143,6 +150,12 @@ type Processor struct {
 	experimentsManager experiments.Manager
 }
 
+// ScaleDownFilter trims the nodes defrag is about to scale down to the ones
+// that can be deleted now.
+type ScaleDownFilter interface {
+	TrimScaleDownCandidates(ctx context.Context, autoscalingCtx *cacontext.AutoscalingContext, nodes []*apiv1.Node) []*apiv1.Node
+}
+
 type Options struct {
 	ScaleDownNodeProcessor   nodes.ScaleDownNodeProcessor
 	ScaleDownStatusProcessor status.ScaleDownStatusProcessor
@@ -155,6 +168,8 @@ type Options struct {
 	FairnessEnforcer         fairness.FairnessEnforcer
 	MinQuotasTrackerFactory  *resourcequotas.TrackerFactory
 	CcLister                 lister.Lister
+	// ScaleDownNodesFilter is used when Config.EnableScaleDownFilter is set.
+	ScaleDownNodesFilter ScaleDownFilter
 }
 
 // NewProcessor returns the default implementation of defrag processor
@@ -168,16 +183,17 @@ func NewProcessor(opts Options) *Processor {
 			ScaleDownStatusProcessor: opts.ScaleDownStatusProcessor,
 			Clock:                    c,
 		}),
-		backoff:            newDefragBackoff(),
-		nodeFilterFactory:  newDefragNodeFilterFactory(opts.ScaleDownNodeProcessor, opts.DeleteOptions, opts.DrainabilityRules, opts.MinQuotasTrackerFactory, opts.CcLister),
-		simulator:          newSimulator(simulatorOptions{DeleteOptions: opts.DeleteOptions, DrainabilityRules: opts.DrainabilityRules}),
-		fairnessEnforcer:   opts.FairnessEnforcer,
-		nodeReconciler:     newNodeReconciler(nodeReconcilerOptions{}),
-		pdbTracker:         pdb.NewBasicRemainingPdbTracker(),
-		config:             opts.Config,
-		plugins:            opts.Plugins,
-		clock:              c,
-		experimentsManager: opts.ExperimentsManager,
+		backoff:              newDefragBackoff(),
+		nodeFilterFactory:    newDefragNodeFilterFactory(opts.ScaleDownNodeProcessor, opts.DeleteOptions, opts.DrainabilityRules, opts.MinQuotasTrackerFactory, opts.CcLister),
+		simulator:            newSimulator(simulatorOptions{DeleteOptions: opts.DeleteOptions, DrainabilityRules: opts.DrainabilityRules}),
+		fairnessEnforcer:     opts.FairnessEnforcer,
+		nodeReconciler:       newNodeReconciler(nodeReconcilerOptions{}),
+		pdbTracker:           pdb.NewBasicRemainingPdbTracker(),
+		scaleDownNodesFilter: opts.ScaleDownNodesFilter,
+		config:               opts.Config,
+		plugins:              opts.Plugins,
+		clock:                c,
+		experimentsManager:   opts.ExperimentsManager,
 	}
 }
 
@@ -454,17 +470,16 @@ func (p *Processor) processCandidate(info *candidateInfo, allCandidatesNodes map
 // processCandidatePartial scales down nodes that can be already removed,
 // then simulates scheduling on the remaining nodes and returns unschedulable pods.
 func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNodes map[string]bool) ([]*apiv1.Pod, error) {
-	candidateNodeInfos := make(map[string]*framework.NodeInfo)
-	for _, nodeName := range info.candidate.Nodes {
-		nodeInfo, err := p.ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			return nil, err
-		}
-		candidateNodeInfos[nodeName] = nodeInfo
+	candidateNodeInfos, err := p.toNodeInfosMap(info)
+	if err != nil {
+		return nil, err
 	}
 	// simulateNodeRemovals intentionally removes removableNodes from the snapshot.
 	// We need the results of the simulation to persist, so the main scale down does not
-	// consider replacement nodes as removable.
+	// consider replacement nodes as removable. This also holds for removable nodes
+	// that the scale-down nodes filter below keeps out of this scale-down: they
+	// stay removed from the snapshot, with their pods on the replacement, so the
+	// replacement stays non-removable while they wait.
 	removableNodes, unremovableNodes, err := p.simulator.simulateNodeRemovals(p.ctx, info.candidate.Nodes, allCandidatesNodes)
 	if err != nil {
 		return nil, err
@@ -492,6 +507,16 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 		return nil, err
 	}
 	info.waitingForScaleUp = len(candidatePods.schedulableOnUpcoming) > 0
+	if info.candidate.Mode == defrag.CreateBeforeDelete {
+		// The replacement may not have registered yet, and the min quotas
+		// tracker lets a ComputeClass go below its min capacity, as
+		// delete-before-create needs.
+		trimmed := p.trimScaleDown(nodesToScaleDown, candidateNodeInfos)
+		if len(trimmed) < len(nodesToScaleDown) {
+			klog.V(2).Infof("Defrag candidate %v: not scaling down %d of %d nodes yet, ComputeClass would drop below its min capacity", info.candidate, len(nodesToScaleDown)-len(trimmed), len(nodesToScaleDown))
+		}
+		nodesToScaleDown = trimmed
+	}
 	if len(nodesToScaleDown) > 0 {
 		// Actuation needs to access nodeInfos of removed nodes to update PDB tracker,
 		// send metrics and report scale down status. Therefore, we need to add
@@ -558,6 +583,20 @@ func (p *Processor) processCandidateAtomic(info *candidateInfo, allCandidatesNod
 
 	// Start scale-down if all are schedulable on ready nodes OR candidate mode is "delete before create"
 	if info.candidate.Mode == defrag.DeleteBeforeCreate || (info.defragPossible && p.clock.Since(info.defragPossibleTime) >= p.config.ScaleDownDelay) {
+		if info.candidate.Mode == defrag.CreateBeforeDelete {
+			// Same as in processCandidatePartial, but an atomic candidate is
+			// scaled down as a whole, so it waits until all of its nodes can go.
+			candidateNodeInfos, err := p.toNodeInfosMap(info)
+			if err != nil {
+				return nil, err
+			}
+			if trimmed := p.trimScaleDown(info.candidate.Nodes, candidateNodeInfos); len(trimmed) < len(info.candidate.Nodes) {
+				klog.V(2).Infof("Defrag candidate %v: not scaling down yet, ComputeClass would drop below its min capacity", info)
+				// No pods are unschedulable here: create-before-delete only gets
+				// here once all of them fit on ready nodes, so no scale-up is needed.
+				return candidatePods.unschedulable, nil
+			}
+		}
 		klog.V(4).Infof("Scaling down defrag candidate %v", info)
 		scaledDownNodes, err := p.actuator.startScaleDown(p.ctx, info.candidate, info.creationTime)
 		if err != nil {
@@ -567,6 +606,36 @@ func (p *Processor) processCandidateAtomic(info *candidateInfo, allCandidatesNod
 	}
 
 	return candidatePods.unschedulable, nil
+}
+
+// toNodeInfosMap returns the candidate's node infos from the cluster snapshot, by node name.
+func (p *Processor) toNodeInfosMap(info *candidateInfo) (map[string]*framework.NodeInfo, error) {
+	nodeInfos := make(map[string]*framework.NodeInfo, len(info.candidate.Nodes))
+	for _, nodeName := range info.candidate.Nodes {
+		nodeInfo, err := p.ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+		if err != nil {
+			return nil, err
+		}
+		nodeInfos[nodeName] = nodeInfo
+	}
+	return nodeInfos, nil
+}
+
+// trimScaleDown returns the names of the given nodes, in the given order, that
+// the scale-down nodes filter allows to delete now.
+func (p *Processor) trimScaleDown(nodeNames []string, nodeInfos map[string]*framework.NodeInfo) []string {
+	if !p.config.EnableScaleDownFilter || p.scaleDownNodesFilter == nil || len(nodeNames) == 0 {
+		return nodeNames
+	}
+	nodes := make([]*apiv1.Node, 0, len(nodeNames))
+	for _, nodeName := range nodeNames {
+		nodes = append(nodes, nodeInfos[nodeName].Node())
+	}
+	var trimmedNodeNames []string
+	for _, node := range p.scaleDownNodesFilter.TrimScaleDownCandidates(context.TODO(), p.ctx, nodes) {
+		trimmedNodeNames = append(trimmedNodeNames, node.Name)
+	}
+	return trimmedNodeNames
 }
 
 // newCandidate returns a new defrag Candidate using the Plugins

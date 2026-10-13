@@ -30,14 +30,19 @@ import (
 	v1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	crdtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
 	. "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
+	caconfig "sigs.k8s.io/cluster-autoscaler/pkg/config"
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
@@ -2038,6 +2043,18 @@ func TestProcessCandidates(t *testing.T) {
 	}
 }
 
+const testCC = "my-ccc"
+
+// withComputeClass returns node with the ComputeClass label set to cc and, for
+// a defrag candidate, the defrag taint.
+func withComputeClass(node *apiv1.Node, cc string, defragCandidate bool) *apiv1.Node {
+	node.Labels[gke_labels.ComputeClassLabel] = cc
+	if defragCandidate {
+		node.Spec.Taints = append(node.Spec.Taints, apiv1.Taint{Key: defrag.HardTaint, Effect: apiv1.TaintEffectNoSchedule})
+	}
+	return node
+}
+
 func TestProcessCandidate(t *testing.T) {
 	timeNow := time.Now()
 
@@ -2062,6 +2079,9 @@ func TestProcessCandidate(t *testing.T) {
 		wantCandidateInfo *candidateInfo
 		wantNodesWithPods map[*apiv1.Node][]*apiv1.Pod
 		wantErr           bool
+		// minCapacityCrds, if set, enforces the ComputeClass min capacity with
+		// the real AtomicMinCapacityProcessor and these ComputeClasses.
+		minCapacityCrds []crdtest.CRD
 	}{
 		{
 			name: "candidate with non-reschedulable pods",
@@ -2174,6 +2194,86 @@ func TestProcessCandidate(t *testing.T) {
 			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
 				buildReadyNode("n1", 1500, 10): {pod1, pod2, pod3},
 				buildReadyNode("n2", 1500, 10): {pod1, pod2, pod3},
+			},
+		},
+		{
+			name: "create-before-delete candidate blocked by ComputeClass min capacity",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true):  {pod1, pod2, pod3},
+				withComputeClass(buildReadyNode("n2", 1500, 10), testCC, false): nil,
+			},
+			allCandidateNodes: []string{"n1"},
+			candidateInfo: &candidateInfo{
+				candidate:          &defrag.Candidate{IsAtomic: true, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}},
+				creationTime:       timeNow,
+				defragPossible:     true,
+				defragPossibleTime: timeNow.Add(-1 * time.Minute),
+			},
+			minCapacityCrds:   []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(2)))},
+			wantCandidatePods: []*apiv1.Pod{},
+			wantCandidateInfo: &candidateInfo{
+				candidate:          &defrag.Candidate{IsAtomic: true, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}},
+				creationTime:       timeNow,
+				defragPossible:     true,
+				defragPossibleTime: timeNow.Add(-1 * time.Minute),
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true):  {pod1, pod2, pod3},
+				withComputeClass(buildReadyNode("n2", 1500, 10), testCC, false): {pod1, pod2, pod3},
+			},
+		},
+		{
+			name: "create-before-delete candidate scaled down when ComputeClass keeps its min capacity",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true):  {pod1, pod2, pod3},
+				withComputeClass(buildReadyNode("n2", 1500, 10), testCC, false): nil,
+				withComputeClass(buildReadyNode("n3", 1500, 10), testCC, false): nil,
+			},
+			allCandidateNodes: []string{"n1"},
+			candidateInfo: &candidateInfo{
+				candidate:          &defrag.Candidate{IsAtomic: true, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}},
+				creationTime:       timeNow,
+				defragPossible:     true,
+				defragPossibleTime: timeNow.Add(-1 * time.Minute),
+			},
+			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(2)))},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true),
+			},
+			wantCandidatePods: []*apiv1.Pod{},
+			wantCandidateInfo: &candidateInfo{
+				candidate:          &defrag.Candidate{IsAtomic: true, Mode: defrag.CreateBeforeDelete, Nodes: []string{"n1"}},
+				creationTime:       timeNow,
+				defragPossible:     true,
+				defragPossibleTime: timeNow.Add(-1 * time.Minute),
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true): {pod1, pod2, pod3},
+			},
+		},
+		{
+			name: "delete-before-create candidate not blocked by ComputeClass min capacity",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true): {pod1, pod2, pod3},
+			},
+			allCandidateNodes: []string{"n1"},
+			candidateInfo: &candidateInfo{
+				candidate:    &defrag.Candidate{IsAtomic: true, Mode: defrag.DeleteBeforeCreate, Nodes: []string{"n1"}},
+				creationTime: timeNow,
+			},
+			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(1)))},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true),
+			},
+			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
+			wantCandidateInfo: &candidateInfo{
+				candidate:    &defrag.Candidate{IsAtomic: true, Mode: defrag.DeleteBeforeCreate, Nodes: []string{"n1"}},
+				creationTime: timeNow,
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true): {pod1, pod2, pod3},
 			},
 		},
 		{
@@ -2354,6 +2454,47 @@ func TestProcessCandidate(t *testing.T) {
 				buildReadyNode("n3", 1000, 10): {pod1, pod2},
 			},
 			wantCandidatePods: []*apiv1.Pod{pod3},
+		},
+		{
+			// n1's ComputeClass has no min capacity, n2's needs both n2 and n3.
+			name: "partial defrag, create-before-delete scale-down trimmed to the nodes ComputeClass min capacity can spare",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n1", 1000, 10), "other-ccc", true): {},
+				withComputeClass(buildReadyNode("n2", 1000, 10), testCC, true):      {},
+				withComputeClass(buildReadyNode("n3", 1000, 10), testCC, false):     {},
+			},
+			allCandidateNodes: []string{"n1", "n2"},
+			candidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.CreateBeforeDelete,
+				},
+				creationTime: timeNow,
+				defragPossibleMap: map[string]time.Time{
+					"n1": timeNow.Add(-1 * time.Minute),
+					"n2": timeNow.Add(-1 * time.Minute),
+				},
+			},
+			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(2)))},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				withComputeClass(buildReadyNode("n1", 1000, 10), "other-ccc", true),
+			},
+			wantCandidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.CreateBeforeDelete,
+				},
+				creationTime: timeNow,
+				defragPossibleMap: map[string]time.Time{
+					"n1": timeNow.Add(-1 * time.Minute),
+					"n2": timeNow.Add(-1 * time.Minute),
+				},
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withComputeClass(buildReadyNode("n3", 1000, 10), testCC, false): {},
+			},
+			wantCandidatePods: []*apiv1.Pod{},
 		},
 		{
 			name: "partial defrag, pods fit on upcoming node, but destination nodes must be ready",
@@ -2559,18 +2700,33 @@ func TestProcessCandidate(t *testing.T) {
 			deleteOpts := options.NodeDeleteOptions{}
 			fakeClock := &FakePassiveClock{}
 			fakeClock.SetTime(timeNow)
-			processor := NewProcessor(Options{
+			opts := Options{
 				DeleteOptions:           deleteOpts,
 				DrainabilityRules:       rules.Default(deleteOpts),
 				Config:                  Config{ScaleDownDelay: time.Minute},
 				Clock:                   fakeClock,
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
-			})
+			}
+			var cloudProvider *testprovider.TestCloudProvider
+			if len(tc.minCapacityCrds) > 0 {
+				opts.Config.EnableScaleDownFilter = true
+				opts.ScaleDownNodesFilter = scaledown.NewAtomicMinCapacityProcessor(listertest.NewMockCrdLister(tc.minCapacityCrds), experiments.NewMockManager())
+				// One node group per node, atomic for an atomic candidate.
+				cloudProvider = testprovider.NewTestCloudProviderBuilder().Build()
+				for node := range tc.nodesWithPods {
+					cloudProvider.AddNodeGroupWithCustomOptions(node.Name, 0, 10, 1, &caconfig.NodeGroupAutoscalingOptions{ZeroOrMaxNodeScaling: tc.candidateInfo.candidate.IsAtomic})
+					cloudProvider.AddNode(node.Name, node)
+				}
+			}
+			processor := NewProcessor(opts)
 			processor.candidateInfos = []*candidateInfo{tc.candidateInfo}
 			processor.ctx = &cacontext.AutoscalingContext{
 				ClusterSnapshot:     snapshot,
 				ScaleDownActuator:   scaleDownActuator,
 				RemainingPdbTracker: pdb.NewBasicRemainingPdbTracker(),
+			}
+			if cloudProvider != nil {
+				processor.ctx.CloudProvider = cloudProvider
 			}
 			if tc.isScaledDown {
 				for _, nodeName := range tc.candidateInfo.candidate.Nodes {

@@ -618,6 +618,14 @@ func WithScaleDownUnneededTime(d time.Duration) Option[*config.AutoscalingOption
 	}
 }
 
+// WithMaxNodeProvisionTime overrides the MaxNodeProvisionTime in NodeGroupDefaults.
+func WithMaxNodeProvisionTime(d time.Duration) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.NodeGroupDefaults.MaxNodeProvisionTime = d
+		return o
+	}
+}
+
 // WithScaleDownUtilizationThreshold overrides the ScaleDownUtilizationThreshold in NodeGroupDefaults.
 func WithScaleDownUtilizationThreshold(t float64) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -1217,6 +1225,14 @@ func WithDefragScaleDownDelay(d time.Duration) Option[*config.AutoscalingOptions
 func WithDefragCandidateLimit(limit int) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.DefragCandidateLimit = limit
+		return o
+	}
+}
+
+// WithDefragCandidateNodeLimit sets the DefragCandidateNodeLimit option.
+func WithDefragCandidateNodeLimit(limit int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.DefragCandidateNodeLimit = limit
 		return o
 	}
 }
