@@ -23,6 +23,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/util/sets"
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
+	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
@@ -45,6 +47,8 @@ func TestProvisioningRequestScaleUpStatusProcessor(t *testing.T) {
 	allowedPredecessors.Insert(reflect.TypeOf(new(csn_processors.CSNScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(capacitybufferpodlister.FakePodsScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(podinjection.FakePodsScaleUpStatusProcessor)).Elem())
+	allowedPredecessors.Insert(reflect.TypeOf(new(npc_history.ScaleUpStatusHistoryProcessor)).Elem())
+	allowedPredecessors.Insert(reflect.TypeOf(new(npc_processors.MinCapacityFilteringScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(status.EventingScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(processors.InternalEventingScaleUpStatusProcessor)).Elem())
 	allowedPredecessors.Insert(reflect.TypeOf(new(cr_processors.CapacityRequestScaleUpProcessor)).Elem())

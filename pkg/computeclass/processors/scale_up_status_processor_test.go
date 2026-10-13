@@ -18,6 +18,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -345,4 +348,55 @@ func TestCrdScaleUpStatusProcessor(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestMinCapacityFilteringScaleUpStatusProcessor(t *testing.T) {
+	realPod1 := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "real-pod-1", Namespace: metav1.NamespaceDefault}}
+	realPod2 := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "real-pod-2", Namespace: metav1.NamespaceDefault}}
+	fakePod1 := buildFakePod("my-ccc", nil, 0)
+	priorityIdx := 0
+	fakePod2 := buildFakePod("my-ccc", &priorityIdx, 1)
+
+	processor := NewMinCapacityFilteringScaleUpStatusProcessor()
+	defer processor.CleanUp()
+
+	t.Run("nil status is handled safely", func(t *testing.T) {
+		assert.NotPanics(t, func() {
+			processor.Process(context.Background(), nil, nil)
+		})
+	})
+
+	t.Run("filters fake pods and preserves real pods across all status slices", func(t *testing.T) {
+		scaleUpStatus := &status.ScaleUpStatus{
+			Result:               status.ScaleUpSuccessful,
+			PodsTriggeredScaleUp: []*apiv1.Pod{fakePod1, realPod1, fakePod2},
+			PodsRemainUnschedulable: []status.NoScaleUpInfo{
+				{Pod: fakePod1},
+				{Pod: realPod2},
+				{Pod: fakePod2},
+			},
+			PodsAwaitEvaluation: []*apiv1.Pod{realPod1, fakePod1, realPod2},
+		}
+
+		processor.Process(context.Background(), nil, scaleUpStatus)
+
+		assert.Equal(t, []*apiv1.Pod{realPod1}, scaleUpStatus.PodsTriggeredScaleUp)
+		assert.Equal(t, []status.NoScaleUpInfo{{Pod: realPod2}}, scaleUpStatus.PodsRemainUnschedulable)
+		assert.Equal(t, []*apiv1.Pod{realPod1, realPod2}, scaleUpStatus.PodsAwaitEvaluation)
+	})
+
+	t.Run("empties slices when only fake pods are present", func(t *testing.T) {
+		scaleUpStatus := &status.ScaleUpStatus{
+			Result:                  status.ScaleUpNoOptionsAvailable,
+			PodsTriggeredScaleUp:    []*apiv1.Pod{fakePod1, fakePod2},
+			PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: fakePod1}, {Pod: fakePod2}},
+			PodsAwaitEvaluation:     []*apiv1.Pod{fakePod1},
+		}
+
+		processor.Process(context.Background(), nil, scaleUpStatus)
+
+		assert.Empty(t, scaleUpStatus.PodsTriggeredScaleUp)
+		assert.Empty(t, scaleUpStatus.PodsRemainUnschedulable)
+		assert.Empty(t, scaleUpStatus.PodsAwaitEvaluation)
+	})
 }
