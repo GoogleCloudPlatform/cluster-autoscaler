@@ -46,6 +46,18 @@ var (
 		},
 		[]string{"op_type"},
 	)
+	opQueueWaitDurations = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: namespace,
+			Name:      "csn_operation_queue_wait_durations",
+			Help:      "Time in seconds an operation batch waits in the queue, from batch creation until a worker dequeues it.",
+			Buckets: []float64{
+				0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512,
+				1024, 2048, 4096,
+			},
+		},
+		[]string{"op_type"},
+	)
 )
 
 const (
@@ -68,4 +80,5 @@ func init() {
 	legacyregistry.MustRegister(opQueueLength)
 	legacyregistry.MustRegister(opQueueAddsTotal)
 	legacyregistry.MustRegister(opQueueNodesTotal)
+	legacyregistry.MustRegister(opQueueWaitDurations)
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
@@ -36,18 +37,27 @@ type StateManager interface {
 
 // WorkQueue is a thread-safe, batched work queue.
 type WorkQueue struct {
-	lock             sync.Mutex
-	opKeyToNodeNames map[opKey]set.Set[string]
-	workNotifier     chan opKey
-	stateManager     StateManager
+	lock         sync.Mutex
+	opKeyToBatch map[opKey]batch
+	workNotifier chan opKey
+	stateManager StateManager
+}
+
+// batch holds the nodes waiting in the queue for the same operation on the
+// same MIG.
+type batch struct {
+	nodeNames set.Set[string]
+	// createdAt is when the batch was added to the queue. Merging more nodes
+	// into the batch doesn't change it.
+	createdAt time.Time
 }
 
 // NewWorkQueue returns a new instance of WorkQueue.
 func NewWorkQueue(maxSize int, stateManager StateManager) *WorkQueue {
 	return &WorkQueue{
-		opKeyToNodeNames: make(map[opKey]set.Set[string]),
-		workNotifier:     make(chan opKey, maxSize),
-		stateManager:     stateManager,
+		opKeyToBatch: make(map[opKey]batch),
+		workNotifier: make(chan opKey, maxSize),
+		stateManager: stateManager,
 	}
 }
 
@@ -88,12 +98,12 @@ func (q *WorkQueue) addBatch(key opKey, nodeNames set.Set[string]) error {
 	defer q.lock.Unlock()
 
 	opType := key.OpType.String()
-	entry, exists := q.opKeyToNodeNames[key]
+	entry, exists := q.opKeyToBatch[key]
 	if exists {
 		// Existing batch. We don't need to notify (already notified when created).
 		for name := range nodeNames {
-			if !entry.Has(name) {
-				entry.Insert(name)
+			if !entry.nodeNames.Has(name) {
+				entry.nodeNames.Insert(name)
 				opQueueNodesTotal.WithLabelValues(opType).Inc()
 			}
 		}
@@ -101,7 +111,7 @@ func (q *WorkQueue) addBatch(key opKey, nodeNames set.Set[string]) error {
 		return nil
 	}
 	// New batch.
-	q.opKeyToNodeNames[key] = nodeNames
+	q.opKeyToBatch[key] = batch{nodeNames: nodeNames, createdAt: time.Now()}
 	select {
 	// Success
 	case q.workNotifier <- key:
@@ -110,7 +120,7 @@ func (q *WorkQueue) addBatch(key opKey, nodeNames set.Set[string]) error {
 		opQueueAddsTotal.WithLabelValues(queueAddSuccess, newBatch, opType).Inc()
 	default:
 		// roll back addition of new nodes
-		delete(q.opKeyToNodeNames, key)
+		delete(q.opKeyToBatch, key)
 		opQueueAddsTotal.WithLabelValues(queueAddFailure, newBatch, opType).Inc()
 		return ErrQueueFull
 	}
@@ -131,19 +141,21 @@ func (q *WorkQueue) Dequeue(ctx context.Context) (ops.Operation, bool) {
 	q.lock.Lock()
 	defer q.lock.Unlock()
 
-	entry := q.opKeyToNodeNames[key]
+	entry := q.opKeyToBatch[key]
 
 	// Take ownership
-	delete(q.opKeyToNodeNames, key)
+	delete(q.opKeyToBatch, key)
 
 	opType := key.OpType.String()
 	opQueueLength.WithLabelValues(opType).Dec()
-	opQueueNodesTotal.WithLabelValues(opType).Add(float64(-len(entry)))
+	opQueueNodesTotal.WithLabelValues(opType).Add(float64(-len(entry.nodeNames)))
+	waitTime := time.Since(entry.createdAt)
+	opQueueWaitDurations.WithLabelValues(opType).Observe(waitTime.Seconds())
 
 	return ops.Operation{
 		MIG:       key.MIG,
 		Type:      key.OpType,
-		NodeNames: entry,
+		NodeNames: entry.nodeNames,
 	}, true
 }
 
