@@ -15,7 +15,7 @@
 package gceclient
 
 import (
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 // ReservationComment describes why a reservation cannot be used.
@@ -34,7 +34,7 @@ const (
 
 // IsReservationUsable checks whether the reservation can be used. If not, it
 // also returns a comment describing the reason.
-func IsReservationUsable(rsv *gce_api.Reservation, allowAggregate bool) (bool, ReservationComment) {
+func IsReservationUsable(rsv *reservation.Reservation, allowAggregate bool) (bool, ReservationComment) {
 	if rsv.Status != "READY" {
 		return false, ReservationNotReady
 	}

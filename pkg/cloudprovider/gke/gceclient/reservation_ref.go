@@ -19,7 +19,7 @@ import (
 	"path"
 	"strings"
 
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 // ReservationRef keeps all the information needed to identify a reservation,
@@ -112,17 +112,17 @@ func CanonicalizeReservationPath(reservationPath, clusterProject string) string 
 }
 
 // GetReservationRefFromReservation creates and returns a ReservationRef by value.
-// It extracts the necessary information from a gce_api.Reservation object.
-func GetReservationRefFromReservation(reservation gce_api.Reservation) ReservationRef {
+// It extracts the necessary information from a reservation.Reservation object.
+func GetReservationRefFromReservation(rsv reservation.Reservation) ReservationRef {
 	return ReservationRef{
-		Project: GetReservationProject(&reservation),
-		Zone:    GetReservationZone(&reservation),
-		Name:    reservation.Name,
+		Project: GetReservationProject(&rsv),
+		Zone:    GetReservationZone(&rsv),
+		Name:    rsv.Name,
 	}
 }
 
 // GetReservationProject extracts project from Reservation URL
-func GetReservationProject(rsv *gce_api.Reservation) string {
+func GetReservationProject(rsv *reservation.Reservation) string {
 	// Expected form https://www.googleapis.com/compute/v1/projects/[Project]/zones/[Zone]/reservations/[Reservation]
 	parts := strings.Split(rsv.SelfLink, "/")
 	for i, part := range parts {
@@ -135,7 +135,7 @@ func GetReservationProject(rsv *gce_api.Reservation) string {
 }
 
 // GetReservationZone extracts zone from Reservation URL
-func GetReservationZone(rsv *gce_api.Reservation) string {
+func GetReservationZone(rsv *reservation.Reservation) string {
 	// Expected form https://www.googleapis.com/compute/v1/projects/[Project]/zones/[Zone]
 	temp := strings.Split(rsv.Zone, "/")
 	rsvZone := temp[len(temp)-1]
@@ -143,7 +143,7 @@ func GetReservationZone(rsv *gce_api.Reservation) string {
 }
 
 // GetShortSelfLink cuts https://www.googleapis.com/compute/[compute API version]/projects/ prefix from the self link
-func GetShortSelfLink(rsv *gce_api.Reservation) string {
+func GetShortSelfLink(rsv *reservation.Reservation) string {
 	// Expected form https://www.googleapis.com/compute/[compute API version]/projects/[Project]/zones/[Zone]/reservations/[Reservation]
 	splitSelfLink := strings.Split(rsv.SelfLink, "/projects/")
 	// fallback to original SelfLink if couldn't split the link

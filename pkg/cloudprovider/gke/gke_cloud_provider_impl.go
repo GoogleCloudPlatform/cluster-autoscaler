@@ -35,6 +35,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -2306,7 +2307,7 @@ func (mig *GkeMig) ShallowCopyInZone(z string) *GkeMig {
 }
 
 // IsReservationCompatible checks if given reservation is compatible with the created MIG.
-func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) (bool, string) {
+func (mig *GkeMig) IsReservationCompatible(rsv *reservation.Reservation) (bool, string) {
 	migReservationAffinity := mig.Spec().ReservationAffinity
 	migReservationAffinityType := gkeclient.ReservationAffinityAny
 	migReservationAffinityName := ""

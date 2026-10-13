@@ -22,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 func TestBlocksPullerPullReservationBlocks(t *testing.T) {
@@ -39,10 +40,10 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 	rsv4.Id = 4
 	rsv4.ResourceStatus = &gce_api.AllocationResourceStatus{ReservationBlockCount: 0}
 
-	rsv1Ref := gceclient.GetReservationRefFromReservation(*rsv1)
-	rsv2Ref := gceclient.GetReservationRefFromReservation(*rsv2)
-	rsv3Ref := gceclient.GetReservationRefFromReservation(*rsv3)
-	rsv4Ref := gceclient.GetReservationRefFromReservation(*rsv4)
+	rsv1Ref := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv1))
+	rsv2Ref := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv2))
+	rsv3Ref := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv3))
+	rsv4Ref := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv4))
 
 	// Define reservation blocks
 	rsvb1 := BuildSingleReservationBlock("rb1", 1, 0, "zone-A")
@@ -170,8 +171,8 @@ func TestBlocksPullerRemoveStaleReservations(t *testing.T) {
 	rsv2 := BuildReservationWithLink("zone-B", "fake-machine-type", projectID, "rsv2")
 	rsv2.Id = 2
 
-	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
-	rsv2Key := gceclient.GetReservationRefFromReservation(*rsv2)
+	rsv1Key := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv1))
+	rsv2Key := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv2))
 
 	rsvb1 := BuildSingleReservationBlock("rb1", 1, 0, "zone-A")
 	rsvb2 := BuildSingleReservationBlock("rb2", 1, 0, "zone-B")

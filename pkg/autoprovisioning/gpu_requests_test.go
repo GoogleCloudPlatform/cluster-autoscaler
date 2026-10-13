@@ -23,6 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -1367,7 +1368,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 			}
 			scaleBlockingProcessor := scaleblocking.NewProcessor(mockProvider, []scaleblocking.BlockedMigsSource{})
 			em := experiments.NewMockManager()
-			mockReservationPuller.SetReservations(tc.reservations)
+			mockReservationPuller.SetReservations(reservation.FromV1List(tc.reservations))
 			opts := AutoprovisioningNodeGroupManagerOptions{
 				CloudProvider:          provider,
 				Backoff:                nodeGroupBackoff,

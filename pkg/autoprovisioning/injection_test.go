@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/utils/ptr"
@@ -8949,8 +8950,8 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 	rsv2 := reservations.New("cloudtpu-b", "us-central2-b", reservations.WithProject(projectId), reservations.WithAggregate("us-central2-b", ""))
 	rsv3 := reservations.New("cloudtpu-c", "us-central2-b", reservations.WithProject(sharedProject), reservations.WithAggregate("us-central2-b", ""))
 
-	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
-	rsv2Key := gceclient.GetReservationRefFromReservation(*rsv2)
+	rsv1Key := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv1))
+	rsv2Key := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv2))
 
 	rbs := map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
 		rsv1Key: {reservations.BuildSingleReservationBlock("block-a", 1, 0, "us-central2-a")},
@@ -11989,7 +11990,7 @@ func TestBootDiskStoragePools_SpecifiedZonesFiltering(t *testing.T) {
 func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 	projectID := "project"
 	rsv1 := reservations.BuildReservationWithLink("zone-A", "fake-machine-type", projectID, "rsv1")
-	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
+	rsv1Key := gceclient.GetReservationRefFromReservation(*reservation.FromV1(rsv1))
 	testCases := []struct {
 		name              string
 		reservations      []*gce_api.Reservation

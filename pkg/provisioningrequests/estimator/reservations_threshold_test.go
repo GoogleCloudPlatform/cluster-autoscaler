@@ -25,6 +25,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -194,7 +195,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 			for i, resConfig := range tt.reservationsConfig {
 				res = append(res, reservations.BuildMultipleMachineReservationWithId(i, resConfig.nodeGroupUsedCapacity, resConfig.nodeGroupTotalCapacity, defaultMachineType, resConfig.zone))
 			}
-			puller.SetReservations(res)
+			puller.SetReservations(reservation.FromV1List(res))
 
 			similarNodeGroups := make([]cloudprovider.NodeGroup, 0)
 			for _, ng := range tt.similarNodeGroupsConfig {

@@ -16,6 +16,7 @@ package gkeprice
 
 import (
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
@@ -124,7 +125,7 @@ func WithReservations(gceReservations []*gce_api.Reservation) func(*gkePriceBase
 		mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 			WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
 		puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-		puller.SetReservations(gceReservations)
+		puller.SetReservations(reservation.FromV1List(gceReservations))
 		g.reservationsPuller = puller
 	}
 }

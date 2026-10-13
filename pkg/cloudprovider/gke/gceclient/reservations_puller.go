@@ -23,10 +23,10 @@ import (
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 
-	gce_api "google.golang.org/api/compute/v1"
 	gkeutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 	"k8s.io/klog/v2"
 )
@@ -64,7 +64,7 @@ type ProjectPuller struct {
 	// DO NOT refer .reservations directly
 	// use getter and setter to leverage locks
 	mutex        sync.Mutex
-	reservations []*gce_api.Reservation
+	reservations []*reservation.Reservation
 
 	// loopLock guards loop state from data races
 	loopLock            sync.Mutex
@@ -82,14 +82,14 @@ func NewProjectPuller(gceClient AutoscalingInternalGceClient, projectID string, 
 	}
 }
 
-func (p *ProjectPuller) GetReservations() []*gce_api.Reservation {
+func (p *ProjectPuller) GetReservations() []*reservation.Reservation {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
 	return p.reservations
 }
 
-func (p *ProjectPuller) SetReservations(reservations []*gce_api.Reservation) {
+func (p *ProjectPuller) SetReservations(reservations []*reservation.Reservation) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -134,12 +134,13 @@ func (p *ProjectPuller) Loop() {
 	startTime := time.Now()
 	p.lastLoopError = nil
 
-	reservations, err := p.gceClient.FetchReservationsInProject(p.projectID)
+	gceReservations, err := p.gceClient.FetchReservationsInProject(p.projectID)
 	if err != nil {
 		klog.Warningf("Couldn't get reservations from project %s: %v", p.projectID, err)
 		p.lastLoopError = err
 		return
 	}
+	reservations := reservation.FromV1List(gceReservations)
 	filteredReservations, err := filterReservations(reservations, p.zones)
 	if err != nil {
 		klog.Errorf("Error when filtering reservations %v", err)
@@ -154,23 +155,23 @@ func (p *ProjectPuller) Loop() {
 	klog.V(4).Infof("reservations.Puller loop: projectID='%s' allReservations=%d, filteredReservations=%d, duration=%v", p.projectID, len(reservations), len(filteredReservations), time.Since(startTime))
 }
 
-func filterReservations(reservations []*gce_api.Reservation, zones []string) ([]*gce_api.Reservation, error) {
-	result := make([]*gce_api.Reservation, 0, len(reservations))
-	for _, reservation := range reservations {
+func filterReservations(reservations []*reservation.Reservation, zones []string) ([]*reservation.Reservation, error) {
+	result := make([]*reservation.Reservation, 0, len(reservations))
+	for _, rsv := range reservations {
 		// Filter out unusable reservations
-		if ok, _ := IsReservationUsable(reservation, true); !ok {
+		if ok, _ := IsReservationUsable(rsv, true); !ok {
 			continue
 		}
 		// Filter out reservations from other zones
 		zonePresent := false
 		for _, zone := range zones {
-			zonePresent = zonePresent || (GetReservationZone(reservation) == zone)
+			zonePresent = zonePresent || (GetReservationZone(rsv) == zone)
 		}
 		if !zonePresent {
 			continue
 		}
 
-		result = append(result, reservation)
+		result = append(result, rsv)
 	}
 	return result, nil
 }
@@ -206,7 +207,7 @@ type ReservationsPuller struct {
 	projectPullers     map[string]*ProjectPuller
 	experimentsManager experiments.Manager
 
-	consumableReservations                 []*gce_api.Reservation
+	consumableReservations                 []*reservation.Reservation
 	useConsumablePuller                    atomic.Bool
 	consumableReservationExperimentEnabled atomic.Bool
 	consumableLoopLock                     sync.Mutex
@@ -275,31 +276,31 @@ func (p *ReservationsPuller) updateExperiments() {
 // If the consumable reservations puller is activated, the result list is first populated by
 // the ProjectPullers, then supplemented by the ListConsumableReservations API. This is
 // required because ListConsumableReservations does not return shared Aggregate reservations.
-func (p *ReservationsPuller) GetReservations() []*gce_api.Reservation {
+func (p *ReservationsPuller) GetReservations() []*reservation.Reservation {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
 	// For now, when a reservation is returned by both the legacy puller and the new API, we
 	// prefer the result from the legacy puller because is not set by the new API for
 	// aggregate reservations.
-	reservations := map[uint64]*gce_api.Reservation{}
+	reservations := map[uint64]*reservation.Reservation{}
 	for _, puller := range p.projectPullers {
 		rs := puller.GetReservations()
 		for _, r := range rs {
-			reservations[r.Id] = r
+			reservations[r.ID] = r
 
 		}
 	}
 
 	if p.consumablePullerFeatureEnabled() {
 		for _, r := range p.consumableReservations {
-			if _, ok := reservations[r.Id]; !ok {
-				reservations[r.Id] = r
+			if _, ok := reservations[r.ID]; !ok {
+				reservations[r.ID] = r
 			}
 		}
 	}
 
-	result := make([]*gce_api.Reservation, 0, len(reservations))
+	result := make([]*reservation.Reservation, 0, len(reservations))
 	for _, r := range reservations {
 		result = append(result, r)
 	}
@@ -307,7 +308,7 @@ func (p *ReservationsPuller) GetReservations() []*gce_api.Reservation {
 }
 
 // GetLocalReservations gets pulled reservations in a local project.
-func (p *ReservationsPuller) GetLocalReservations() []*gce_api.Reservation {
+func (p *ReservationsPuller) GetLocalReservations() []*reservation.Reservation {
 	return p.GetReservationsInProject(p.localProjectId)
 }
 
@@ -317,15 +318,15 @@ func (p *ReservationsPuller) GetLocalReservations() []*gce_api.Reservation {
 // If the consumable reservations puller is activated, the result list is first populated by
 // the ProjectPullers, then supplemented by the ListConsumableReservations API. This is
 // required because ListConsumableReservations does not return shared Aggregate reservations.
-func (p *ReservationsPuller) GetReservationsInProject(project string) []*gce_api.Reservation {
+func (p *ReservationsPuller) GetReservationsInProject(project string) []*reservation.Reservation {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	reservations := map[uint64]*gce_api.Reservation{}
+	reservations := map[uint64]*reservation.Reservation{}
 	pp := p.projectPullers[project]
 	if pp != nil {
 		for _, r := range pp.GetReservations() {
-			reservations[r.Id] = r
+			reservations[r.ID] = r
 
 		}
 	}
@@ -333,23 +334,23 @@ func (p *ReservationsPuller) GetReservationsInProject(project string) []*gce_api
 	if p.consumablePullerFeatureEnabled() {
 		for _, r := range p.consumableReservations {
 			if GetReservationProject(r) == project {
-				if _, ok := reservations[r.Id]; !ok {
-					reservations[r.Id] = r
+				if _, ok := reservations[r.ID]; !ok {
+					reservations[r.ID] = r
 				}
 			}
 		}
 	}
 
-	result := make([]*gce_api.Reservation, 0, len(reservations))
+	result := make([]*reservation.Reservation, 0, len(reservations))
 	for _, r := range reservations {
 		result = append(result, r)
 	}
 	return result
 }
 
-func (p *ReservationsPuller) SetReservations(reservations []*gce_api.Reservation) {
+func (p *ReservationsPuller) SetReservations(reservations []*reservation.Reservation) {
 	// Organize by project
-	reservationsByProject := make(map[string][]*gce_api.Reservation)
+	reservationsByProject := make(map[string][]*reservation.Reservation)
 	for _, r := range reservations {
 		proj := GetReservationProject(r)
 		reservationsByProject[proj] = append(reservationsByProject[proj], r)
@@ -470,7 +471,7 @@ func (p *ReservationsPuller) consumablePullerLoop(ctx context.Context) {
 	startTime := time.Now()
 
 	apiCallAlwaysFailed := true
-	var reservations []*gce_api.Reservation
+	var reservations []*reservation.Reservation
 	for _, zone := range p.zones {
 		rs, err := p.consumableReservationsClient.FetchConsumableReservations(ctx, p.localProjectId, zone)
 		if err != nil {
@@ -593,12 +594,11 @@ func (p *ReservationsPuller) updateMetricsInterval() time.Duration {
 
 func (p *ReservationsPuller) updateMetrics() {
 	availableReservations := map[MetricLabels]int64{}
-	for _, reservation := range p.GetReservations() {
-		if reservation.SpecificReservation == nil {
+	for _, rsv := range p.GetReservations() {
+		if rsv.SpecificReservation == nil {
 			continue
 		}
-		available := reservation.SpecificReservation.Count - reservation.SpecificReservation.InUseCount
-		availableReservations[ReservationMetricLabels(reservation)] += available
+		availableReservations[ReservationMetricLabels(rsv)] += rsv.SpecificReservation.AvailableCount
 	}
 	for labels, count := range availableReservations {
 		metrics.Metrics.SetReservationsAvailable(labels.ToMap(), int(count))

@@ -245,7 +245,7 @@ func TestFlexStartTPU_Queued_NAP(t *testing.T) {
 				infra := integration.SetupInfrastructure(ctx, t)
 
 				for _, zone := range integration.DefaultZones {
-					infra.Fakes.GceService.SetBackendMachineCount(zone, tc.machineType, 0)
+					infra.Fakes.GceService.SetOnDemandCapacity(zone, tc.machineType, 0)
 				}
 
 				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)

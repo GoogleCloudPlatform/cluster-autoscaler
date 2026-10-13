@@ -24,6 +24,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	gcereservation "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
@@ -36,26 +37,26 @@ func TestReservationsCacheAddProject(t *testing.T) {
 	clusterProject := "cluster-project"
 	sharedProject1 := "shared-project1"
 	sharedProject2 := "shared-project2"
-	rsv1 := &gceapiv1.Reservation{Name: "reservation-1", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-1", clusterProject)}
-	rsv2 := &gceapiv1.Reservation{Name: "reservation-2", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-2", sharedProject1)}
-	rsv3 := &gceapiv1.Reservation{Name: "reservation-3", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-3", sharedProject2)}
+	rsv1 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-1", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-1", clusterProject)})
+	rsv2 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-2", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-2", sharedProject1)})
+	rsv3 := gcereservation.FromV1(&gceapiv1.Reservation{Name: "reservation-3", SelfLink: fmt.Sprintf("projects/%s/reservations/reservation-3", sharedProject2)})
 
 	tests := map[string]struct {
-		reservations  []*gceapiv1.Reservation
+		reservations  []*gcereservation.Reservation
 		projectsToAdd []string
-		wantCache     map[string]map[string]map[string]*gceapiv1.Reservation
+		wantCache     map[string]map[string]map[string]*gcereservation.Reservation
 	}{
 		"NoReservations": {
-			reservations:  []*gceapiv1.Reservation{},
+			reservations:  []*gcereservation.Reservation{},
 			projectsToAdd: []string{"project-1"},
-			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gcereservation.Reservation{
 				"project-1": {},
 			},
 		},
 		"LocalReservations": {
-			reservations:  []*gceapiv1.Reservation{rsv1},
+			reservations:  []*gcereservation.Reservation{rsv1},
 			projectsToAdd: []string{localProject},
-			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gcereservation.Reservation{
 				localProject: {
 					rsv1.Name: {
 						"": rsv1,
@@ -64,9 +65,9 @@ func TestReservationsCacheAddProject(t *testing.T) {
 			},
 		},
 		"ReservationsPerProject": {
-			reservations:  []*gceapiv1.Reservation{rsv2, rsv3},
+			reservations:  []*gcereservation.Reservation{rsv2, rsv3},
 			projectsToAdd: []string{sharedProject1, sharedProject2},
-			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gcereservation.Reservation{
 				sharedProject1: {
 					rsv2.Name: {
 						"": rsv2,
@@ -80,9 +81,9 @@ func TestReservationsCacheAddProject(t *testing.T) {
 			},
 		},
 		"CombinedReservations": {
-			reservations:  []*gceapiv1.Reservation{rsv1, rsv2, rsv3},
+			reservations:  []*gcereservation.Reservation{rsv1, rsv2, rsv3},
 			projectsToAdd: []string{localProject, sharedProject1, sharedProject2},
-			wantCache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			wantCache: map[string]map[string]map[string]*gcereservation.Reservation{
 				localProject: {
 					rsv1.Name: {
 						"": rsv1,
@@ -101,9 +102,9 @@ func TestReservationsCacheAddProject(t *testing.T) {
 			},
 		},
 		"WithNotAddedProjects": {
-			reservations:  []*gceapiv1.Reservation{rsv1, rsv2, rsv3},
+			reservations:  []*gcereservation.Reservation{rsv1, rsv2, rsv3},
 			projectsToAdd: []string{},
-			wantCache:     map[string]map[string]map[string]*gceapiv1.Reservation{},
+			wantCache:     map[string]map[string]map[string]*gcereservation.Reservation{},
 		},
 	}
 
@@ -132,23 +133,23 @@ func TestReservationsCacheAddProject(t *testing.T) {
 }
 
 func TestReservationsCacheGetReservation(t *testing.T) {
-	rsv := &gceapiv1.Reservation{
+	rsv := gcereservation.FromV1(&gceapiv1.Reservation{
 		Name: "reservation-1",
 		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-1",
-	}
-	rsv2 := &gceapiv1.Reservation{
+	})
+	rsv2 := gcereservation.FromV1(&gceapiv1.Reservation{
 		Name: "reservation-1",
 		Zone: "https://www.googleapis.com/compute/v1/projects/project-1/zones/zone-2",
-	}
+	})
 
 	tests := map[string]struct {
-		cache            map[string]map[string]map[string]*gceapiv1.Reservation
+		cache            map[string]map[string]map[string]*gcereservation.Reservation
 		name             string
 		project          string
-		wantReservations []*gceapiv1.Reservation
+		wantReservations []*gcereservation.Reservation
 	}{
 		"ReservationInCache": {
-			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gcereservation.Reservation{
 				"project-1": {
 					"reservation-1": {
 						"zone-1": rsv,
@@ -157,10 +158,10 @@ func TestReservationsCacheGetReservation(t *testing.T) {
 			},
 			name:             "reservation-1",
 			project:          "project-1",
-			wantReservations: []*gceapiv1.Reservation{rsv},
+			wantReservations: []*gcereservation.Reservation{rsv},
 		},
 		"MultipleZonesInCache": {
-			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gcereservation.Reservation{
 				"project-1": {
 					"reservation-1": {
 						"zone-1": rsv,
@@ -170,10 +171,10 @@ func TestReservationsCacheGetReservation(t *testing.T) {
 			},
 			name:             "reservation-1",
 			project:          "project-1",
-			wantReservations: []*gceapiv1.Reservation{rsv, rsv2},
+			wantReservations: []*gcereservation.Reservation{rsv, rsv2},
 		},
 		"ReservationNotInCache": {
-			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gcereservation.Reservation{
 				"project-1": {
 					"reservation-1": {
 						"zone-1": rsv,
@@ -185,7 +186,7 @@ func TestReservationsCacheGetReservation(t *testing.T) {
 			wantReservations: nil,
 		},
 		"ProjectNotInCache": {
-			cache: map[string]map[string]map[string]*gceapiv1.Reservation{
+			cache: map[string]map[string]map[string]*gcereservation.Reservation{
 				"project-1": {
 					"reservation-1": {
 						"zone-1": rsv,
@@ -556,7 +557,7 @@ func TestMatchSpecificReservation(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotError := matchSpecificReservationOrError(provider, test.reservation, test.rule, ssdProvider)
+			gotError := matchSpecificReservationOrError(provider, gcereservation.FromV1(test.reservation), test.rule, ssdProvider)
 			assert.Equal(t, test.wantError, gotError)
 		})
 	}
@@ -591,18 +592,14 @@ func TestMatchAggregateReservation(t *testing.T) {
 
 			wantError: nil,
 		},
-		"MultipleResourcesAvailable": {
+		"NonAcceleratorResourcesSkipped": {
 			reservation: &gceapiv1.Reservation{
 				Status:                      "READY",
 				SpecificReservationRequired: true,
 				AggregateReservation: &gceapiv1.AllocationAggregateReservation{
 					ReservedResources: []*gceapiv1.AllocationAggregateReservationReservedResourceInfo{
-						{
-							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
-								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct5p",
-								AcceleratorCount: 4,
-							},
-						},
+						// Non-accelerator (vCPU or memory) entry.
+						{},
 						{
 							Accelerator: &gceapiv1.AllocationAggregateReservationReservedResourceInfoAccelerator{
 								AcceleratorType:  "projects/whatever/zones/us-central2-b/acceleratorTypes/ct4p",
@@ -794,7 +791,7 @@ func TestMatchAggregateReservation(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotError := matchAggregateReservationOrError(provider, test.reservation, test.rule)
+			gotError := matchAggregateReservationOrError(provider, gcereservation.FromV1(test.reservation), test.rule)
 			assert.Equal(t, test.wantError, gotError)
 		})
 	}

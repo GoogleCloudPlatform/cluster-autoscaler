@@ -22,6 +22,7 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -237,7 +238,7 @@ func TestMatchReservationShapeMigNotExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, reservation.FromV1(tc.reservation), localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -376,7 +377,7 @@ func TestMatchReservationShapeMigExist(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).SetExist(true).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, reservation.FromV1(tc.reservation), localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -467,7 +468,7 @@ func TestMatchReservationShapeWithReservationAffinity(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			mig := gke.NewTestGkeMigBuilder().SetSpec(&tc.nodePoolSpec).SetGceRefZone(defaultZone).Build()
-			actual, _, _ := reservationMatch(provider, mig, tc.reservation, localssdsize.NewSimpleLocalSSDProvider())
+			actual, _, _ := reservationMatch(provider, mig, reservation.FromV1(tc.reservation), localssdsize.NewSimpleLocalSSDProvider())
 			if actual != tc.expected {
 				t.Errorf("Test: \"%v\" failed, expected matching: %v got: %v", tc.name, tc.expected, actual)
 			}
@@ -529,7 +530,7 @@ func TestMatchingUnusedReservations(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotMatchingCount := MatchingUnusedReservations(provider, tc.nodeGroup, tc.reservations, localssdsize.NewSimpleLocalSSDProvider())
+			gotMatchingCount := MatchingUnusedReservations(provider, tc.nodeGroup, reservation.FromV1List(tc.reservations), localssdsize.NewSimpleLocalSSDProvider())
 
 			if tc.wantMatchingCount != gotMatchingCount {
 				t.Errorf("Test: \"%v\" failed, matching reservations count, want: %v got: %v", tc.name, tc.wantMatchingCount, gotMatchingCount)
@@ -799,7 +800,7 @@ func TestMatchSpecificReservationShape(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			nodeShape := NodeShape{MachineType: tc.machineType, Zone: tc.zone, MinCpuPlatform: tc.minCpuPlatform, LocalSSDSizes: tc.localSSDs, Accelerators: tc.accelerators}
-			gotReservationNoMatchReasons := MatchSpecificReservationShapeWithReasons(provider, tc.reservation, nodeShape, tc.acceleratorStrictRequests)
+			gotReservationNoMatchReasons := MatchSpecificReservationShapeWithReasons(provider, reservation.FromV1(tc.reservation), nodeShape, tc.acceleratorStrictRequests)
 			assert.Equal(t, tc.wantReservationMatch, len(gotReservationNoMatchReasons) == 0)
 			assert.Equal(t, tc.wantReservationNoMatchReasons, gotReservationNoMatchReasons)
 		})
@@ -995,7 +996,7 @@ func TestMatchAggregateReservation(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			gotMatchReasons := MatchAggregateReservationShapeWithReasons(provider, test.reservation, test.tpuType, test.tpuTopology, test.tpuCount)
+			gotMatchReasons := MatchAggregateReservationShapeWithReasons(provider, reservation.FromV1(test.reservation), test.tpuType, test.tpuTopology, test.tpuCount)
 			assert.Equal(t, test.wantMatch, len(gotMatchReasons) == 0)
 			assert.Equal(t, test.wantNoMatchReasons, gotMatchReasons)
 		})

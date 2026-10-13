@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	kube_record "k8s.io/client-go/tools/record"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/utils"
@@ -1165,7 +1166,7 @@ func TestInjectedLocations(t *testing.T) {
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
 			fakeRP, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "proj", false, "us-central1")
 			assert.NoError(t, err)
-			fakeRP.SetReservations(tc.reservations)
+			fakeRP.SetReservations(reservation.FromV1List(tc.reservations))
 			em := experiments.NewMockManager()
 
 			opts := AutoprovisioningNodeGroupManagerOptions{

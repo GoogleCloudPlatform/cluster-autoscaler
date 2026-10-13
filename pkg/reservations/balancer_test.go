@@ -25,6 +25,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/testutil"
@@ -186,7 +187,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"zone-a, zone-b"}, nil })
 			puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-			puller.SetReservations(tc.reservations)
+			puller.SetReservations(reservation.FromV1List(tc.reservations))
 
 			provider := &gke.GkeCloudProviderMock{}
 			provider.On("NodeGroups").Return(append(tc.groups, tc.upcomingNodeGroups...)).Once()
@@ -207,7 +208,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
-			assert.ElementsMatch(t, tc.wantReservations, puller.GetReservations())
+			assert.ElementsMatch(t, availabilities(reservation.FromV1List(tc.wantReservations)), availabilities(puller.GetReservations()))
 
 			for _, m := range mocks {
 				m.AssertExpectations(t)
@@ -461,10 +462,11 @@ func TestUpdateReservations(t *testing.T) {
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
 			processor := NewReservationBalancingProcessor(nil, nil, localssdsize.NewSimpleLocalSSDProvider(), provider)
-			reservations := processor.updateReservations(tc.scaleUpInfos, tc.reservations, tc.reservations)
+			rsvs := reservation.FromV1List(tc.reservations)
+			reservations := processor.updateReservations(tc.scaleUpInfos, rsvs, rsvs)
 
-			if diff := cmp.Diff(reservations, tc.wantReservationsPostUpdate); diff != "" {
-				t.Errorf("updateReservationsCache(nodegroup, usedReservations) diff (-want +got): %v %v %v", diff, reservations, tc.wantReservationsPostUpdate)
+			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.wantReservationsPostUpdate)), availableCounts(reservations)); diff != "" {
+				t.Errorf("updateReservations() available counts diff (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -569,9 +571,9 @@ func TestConsumeUpcomingScaleUps(t *testing.T) {
 			ctx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
-			reservations := processor.consumeUpcomingScaleUps(ctx, tc.reservations)
-			if diff := cmp.Diff(reservations, tc.want); diff != "" {
-				t.Errorf("consumeUpcomingScaleUps(context, reservations) diff (-want +got): %v %v %v", diff, reservations, tc.want)
+			reservations := processor.consumeUpcomingScaleUps(ctx, reservation.FromV1List(tc.reservations))
+			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.want)), availableCounts(reservations)); diff != "" {
+				t.Errorf("consumeUpcomingScaleUps() available counts diff (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -636,7 +638,7 @@ func TestReservationsForUpcomingNodes(t *testing.T) {
 			ctx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
 			}
-			consumedReservations := processor.reservationsForUpcomingNodes(ctx, tc.reservations)
+			consumedReservations := processor.reservationsForUpcomingNodes(ctx, reservation.FromV1List(tc.reservations))
 			if diff := cmp.Diff(consumedReservations, tc.want); diff != "" {
 				t.Errorf("reservationsForUpcomingNodes(context, reservations) diff (-want +got): %v %v %v", diff, consumedReservations, tc.want)
 			}
@@ -681,10 +683,45 @@ func TestAdjustReservations(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			subtractedReservation := subtractReservations(tc.reservations, tc.consumedReservations)
-			if diff := cmp.Diff(subtractedReservation, tc.want); diff != "" {
-				t.Errorf("subtractReservations(consumedReservations, reservations) diff (-want +got): %v %v %v", diff, subtractedReservation, tc.want)
+			rsvs := reservation.FromV1List(tc.reservations)
+			wantInput := availableCounts(rsvs)
+
+			subtractedReservation := subtractReservations(rsvs, tc.consumedReservations)
+
+			if diff := cmp.Diff(availableCounts(reservation.FromV1List(tc.want)), availableCounts(subtractedReservation)); diff != "" {
+				t.Errorf("subtractReservations() available counts diff (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(wantInput, availableCounts(rsvs)); diff != "" {
+				t.Errorf("subtractReservations() modified input reservations, diff (-want +got):\n%s", diff)
 			}
 		})
 	}
+}
+
+// availableCounts maps reservation IDs to their available counts.
+func availableCounts(rsvs []*reservation.Reservation) map[uint64]int64 {
+	result := make(map[uint64]int64, len(rsvs))
+	for _, rsv := range rsvs {
+		result[rsv.ID] = rsv.SpecificReservation.AvailableCount
+	}
+	return result
+}
+
+type availability struct {
+	zone           string
+	machineType    string
+	availableCount int64
+}
+
+// availabilities summarizes available counts of specific reservations.
+func availabilities(rsvs []*reservation.Reservation) []availability {
+	var result []availability
+	for _, rsv := range rsvs {
+		result = append(result, availability{
+			zone:           rsv.Zone,
+			machineType:    rsv.SpecificReservation.InstanceProperties.MachineType,
+			availableCount: rsv.SpecificReservation.AvailableCount,
+		})
+	}
+	return result
 }

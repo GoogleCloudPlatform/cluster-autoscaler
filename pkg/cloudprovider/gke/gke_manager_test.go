@@ -32,6 +32,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	gce_api_compute "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -6198,7 +6199,7 @@ func TestGetDeploymentType(t *testing.T) {
 	}
 	reservationsPuller, err := gceclient.NewReservationsPuller(mGceClient, nil, experiments.NewMockManager(), projectId, true, zoneB)
 	assert.NoError(t, err)
-	reservationsPuller.SetReservations(reservations)
+	reservationsPuller.SetReservations(reservation.FromV1List(reservations))
 
 	g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)
 

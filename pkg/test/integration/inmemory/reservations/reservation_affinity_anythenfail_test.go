@@ -59,7 +59,7 @@ const reservationZone = "us-central1-b"
 // 1. Both pods are successfully scheduled on the new nodes in "us-central1-b".
 // 2. The created NodePool has the correct "ANY_RESERVATION_THEN_FAIL" reservation affinity set.
 // 3. That the scale up happens for a MIG that is in the same zone as the reservation.
-// 4. The reservation "InUseCount" is correctly updated to 2 by the GKE ReservationBalancingProcessor.
+// 4. The new instances consume the reservation, so its "InUseCount" in GCE is 2.
 func TestCCCReservationAnyThenFailSuccess(t *testing.T) {
 	testConfig := integration.NewTestConfig().
 		WithOverrides(integration.WithAutoProvisioningEnabled(), integration.WithBalanceSimilarNodeGroups()).

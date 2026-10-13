@@ -134,7 +134,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 
 				// Constrain backend capacity per zone.
 				for _, zone := range []string{"us-central1-a", "us-central1-b", "us-central1-c"} {
-					infra.Fakes.GceService.SetBackendMachineCount(zone, tpuMachineType, tc.backendCapacity)
+					infra.Fakes.GceService.SetOnDemandCapacity(zone, tpuMachineType, tc.backendCapacity)
 				}
 
 				addTPUPods(infra, tpuNodesPerSlice)
@@ -148,7 +148,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 				// Step 2: if the stockout path partially provisioned the slice, restore full
 				// capacity and verify the autoscaler completes the slice.
 				if tc.wantTargetSizeAfterCapacityRestored != tc.wantInitialTargetSize {
-					infra.Fakes.GceService.ResetHardwareCapacity()
+					infra.Fakes.GceService.ResetOnDemandCapacity()
 					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Minute)
 
 					assert.Equal(t, tc.wantTargetSizeAfterCapacityRestored, totalTargetSize(t, autoscaler),
@@ -189,7 +189,7 @@ func TestAcceleratorSlice_ScaleUp_WithReservation(t *testing.T) {
 
 		// Backend capacity matches reservation count — full capacity.
 		for _, zone := range []string{"us-central1-a", "us-central1-b", "us-central1-c"} {
-			infra.Fakes.GceService.SetBackendMachineCount(zone, tpuMachineType, tpuNodesPerSlice)
+			infra.Fakes.GceService.SetOnDemandCapacity(zone, tpuMachineType, tpuNodesPerSlice)
 		}
 
 		addTPUPods(infra, tpuNodesPerSlice)

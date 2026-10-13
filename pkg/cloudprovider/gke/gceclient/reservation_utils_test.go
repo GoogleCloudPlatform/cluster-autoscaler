@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 func TestIsReservationUsable(t *testing.T) {
@@ -84,7 +85,7 @@ func TestIsReservationUsable(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			isUsable, reason := IsReservationUsable(tc.rsv, tc.allowAggregate)
+			isUsable, reason := IsReservationUsable(reservation.FromV1(tc.rsv), tc.allowAggregate)
 			if isUsable != tc.wantUsable {
 				t.Errorf("IsReservationUsable() = %v, want %v", isUsable, tc.wantUsable)
 			}

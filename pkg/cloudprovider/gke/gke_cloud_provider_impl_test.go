@@ -31,6 +31,7 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"google.golang.org/api/option"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -3201,7 +3202,7 @@ func TestIsReservationCompatible(t *testing.T) {
 				SpecificReservationRequired: tt.specificReservationReq,
 			}
 
-			got, reason := mig.IsReservationCompatible(rsv)
+			got, reason := mig.IsReservationCompatible(reservation.FromV1(rsv))
 			assert.Equal(t, tt.want, got)
 			if tt.want {
 				assert.Empty(t, reason)

@@ -27,6 +27,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
@@ -265,7 +266,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
 			puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-			puller.SetReservations(tc.reservations)
+			puller.SetReservations(reservation.FromV1List(tc.reservations))
 		}
 
 		var em experiments.Manager
@@ -1548,7 +1549,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 				mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 					WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
 				puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-				puller.SetReservations(tc.reservations)
+				puller.SetReservations(reservation.FromV1List(tc.reservations))
 			}
 
 			cpBuilder := gke.NewTestAutoprovisioningCloudProviderBuilder().

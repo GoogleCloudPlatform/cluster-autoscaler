@@ -17,7 +17,7 @@ package consumablereservations
 import (
 	"context"
 
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 // ErrorType represents the type of ConsumableReservationError.
@@ -64,12 +64,12 @@ func NewError(e error, t ErrorType) Error {
 // Client is used to fetch the consumable reservations
 type Client interface {
 	// FetchConsumableReservations fetches the consumable reservations in the provided project and zone.
-	FetchConsumableReservations(ctx context.Context, projectID, zone string) ([]*gce_api.Reservation, Error)
+	FetchConsumableReservations(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, Error)
 }
 
 type noOpClient struct{}
 
-func (*noOpClient) FetchConsumableReservations(_ context.Context, _, _ string) ([]*gce_api.Reservation, Error) {
+func (*noOpClient) FetchConsumableReservations(_ context.Context, _, _ string) ([]*reservation.Reservation, Error) {
 	return nil, nil
 }
 

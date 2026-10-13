@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/klog/v2"
 )
 
@@ -106,26 +106,26 @@ func (p *BlocksPuller) Loop() {
 	p.setReservationBlocksInReservation(rbsMap)
 }
 
-func (p *BlocksPuller) blocksPullerLoop(reservations []*compute.Reservation) map[gceclient.ReservationRef][]*gceclient.GceReservationBlock {
+func (p *BlocksPuller) blocksPullerLoop(reservations []*reservation.Reservation) map[gceclient.ReservationRef][]*gceclient.GceReservationBlock {
 	rbsMap := make(map[gceclient.ReservationRef][]*gceclient.GceReservationBlock)
 
 	startTime := time.Now()
 	blocksCount := 0
 	klog.V(4).Info("Starting blocksPuller loop")
-	for _, reservation := range reservations {
+	for _, rsv := range reservations {
 		// filter reservations and only list blocks for reservations that do have blocks
-		if reservation.ResourceStatus != nil && reservation.ResourceStatus.ReservationBlockCount == 0 {
+		if rsv.ResourceStatus != nil && rsv.ResourceStatus.ReservationBlockCount == 0 {
 			continue
 		}
-		key := gceclient.GetReservationRefFromReservation(*reservation)
+		key := gceclient.GetReservationRefFromReservation(*rsv)
 		rbs, err := p.provider.GetReservationBlocksInReservation(key)
 		if err != nil {
 			klog.Errorf("Error when getting reservation blocks: %v", err)
 			continue
 		}
 		if len(rbs) == 0 {
-			if reservation.ResourceStatus != nil {
-				klog.Warningf("Reservation has non zero block count but no reservation blocks were fetched: reservation=%s, blockCount=%d", reservation.Name, reservation.ResourceStatus.ReservationBlockCount)
+			if rsv.ResourceStatus != nil {
+				klog.Warningf("Reservation has non zero block count but no reservation blocks were fetched: reservation=%s, blockCount=%d", rsv.Name, rsv.ResourceStatus.ReservationBlockCount)
 			}
 			continue
 		}

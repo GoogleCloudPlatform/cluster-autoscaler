@@ -47,6 +47,9 @@ func TestReservationGeneratorOptionsTracker(t *testing.T) {
 		boolExperiments             map[string]bool
 		stringExperiments           map[string]string
 		hasMatchingReservationInGCE bool
+		// hasUnlistedReservationInGCE adds the reservation to GCE without the
+		// autoscaler being able to list it.
+		hasUnlistedReservationInGCE bool
 		wantScaleUp                 bool
 		wantLocationPolicyAny       bool
 	}{
@@ -119,6 +122,7 @@ func TestReservationGeneratorOptionsTracker(t *testing.T) {
 				experiments.ReservationsAnyLocationPolicyOverrideMinCAVersionFlag: "0.0.0",
 			},
 			hasMatchingReservationInGCE: false,
+			hasUnlistedReservationInGCE: true,
 			wantScaleUp:                 true,
 			wantLocationPolicyAny:       true,
 		},
@@ -229,6 +233,14 @@ func TestReservationGeneratorOptionsTracker(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
 				infra := integration.SetupInfrastructure(ctx, t)
+				if tc.hasUnlistedReservationInGCE {
+					// Without matching, the autoscaler picks the cheapest machine that fits the pod in any
+					// zone, so the reservation must have that shape in every zone for GCE to accept the
+					// new instances.
+					for _, zone := range integration.DefaultZones {
+						infra.Fakes.GceService.WithUnlistedReservations(integration.DefaultProject(), reservations.New(testReservationName, zone, reservations.WithMachine("n1-highcpu-4"), reservations.WithProject("test-project"), reservations.WithCounts(0, 2)))
+					}
+				}
 
 				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 				assert.NoError(t, err)

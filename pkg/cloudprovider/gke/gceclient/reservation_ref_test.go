@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 func TestReservationRef_Serialize(t *testing.T) {
@@ -154,7 +155,7 @@ func TestReservationRef_ShortenSelfLink(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := GetShortSelfLink(tt.reservation)
+			got := GetShortSelfLink(reservation.FromV1(tt.reservation))
 			if got != tt.expected {
 				t.Errorf("ShortenSelfLink(%v) got %q, want %q", tt.reservation, got, tt.expected)
 			}

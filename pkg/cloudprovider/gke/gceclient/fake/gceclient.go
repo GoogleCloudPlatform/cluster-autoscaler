@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -44,7 +45,7 @@ var (
 	letterRunes = []rune("abcdefghijklmnopqrstuvwxyz0123456789")
 )
 
-// CapacityKey uniquely identifies hardware capacity based on zone and machine type.
+// CapacityKey identifies on-demand capacity by zone and machine type.
 type CapacityKey struct {
 	Zone        string
 	MachineType string
@@ -68,6 +69,8 @@ type GceClient struct {
 	instances               map[string]map[string]gceinternal.GceInstance // Key: {zone}/{migName}, Val: {instanceName} -> Instance
 	zoneToDiskTypes         map[string][]string
 	projectToReservations   map[string][]*gcev1.Reservation
+	unlistedReservations    map[string][]*gcev1.Reservation
+	instanceCapacity        map[string]capacityAssignment // Key: {zone}/{migName}/{instanceName}
 	accelerators            *gcev1.AcceleratorTypeList
 	regionToZones           map[string][]string
 	regionToAiZones         map[string][]string
@@ -79,7 +82,7 @@ type GceClient struct {
 	createInstanceForMIGError  map[string]cloudprovider.InstanceErrorInfo // Key: migName
 	createInstanceForZoneError map[string]cloudprovider.InstanceErrorInfo // Key: zoneName
 	fetchMachineTypeHandler    map[string]func() error                    // Key: {zone}/{machineType}
-	capacityMap                map[CapacityKey]int64                      // Key: CapacityKey
+	onDemandCapacity           map[CapacityKey]int64                      // Unlimited for missing keys.
 	// zoneErrors simulates a failing zonal endpoint:
 	// every zone/MIG-scoped call for the zone, read or write, returns the configured error.
 	zoneErrors map[string]error // Key: zoneName
@@ -102,6 +105,8 @@ func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 		instances:                  make(map[string]map[string]gceinternal.GceInstance),
 		zoneToDiskTypes:            make(map[string][]string),
 		projectToReservations:      make(map[string][]*gcev1.Reservation),
+		unlistedReservations:       make(map[string][]*gcev1.Reservation),
+		instanceCapacity:           make(map[string]capacityAssignment),
 		regionToZones:              make(map[string][]string),
 		regionToAiZones:            make(map[string][]string),
 		availableCpuPlatforms:      make(map[string][]string),
@@ -109,7 +114,7 @@ func NewGceClient(t testing.TB, k8s *fakek8s.Kubernetes) *GceClient {
 		createInstanceForMIGError:  make(map[string]cloudprovider.InstanceErrorInfo),
 		createInstanceForZoneError: make(map[string]cloudprovider.InstanceErrorInfo),
 		fetchMachineTypeHandler:    make(map[string]func() error),
-		capacityMap:                make(map[CapacityKey]int64),
+		onDemandCapacity:           make(map[CapacityKey]int64),
 		zoneErrors:                 make(map[string]error),
 		fetchMigCalls:              make(map[gceinternal.GceRef]int),
 		fetchMigTemplateCalls:      make(map[gceinternal.GceRef]int),
@@ -178,10 +183,24 @@ func (g *GceClient) withMachineTypes(names ...string) *GceClient {
 }
 
 // WithReservations adds a list of reservations to the fake's internal state.
+// The fake stores copies, so later usage updates are not visible through the passed objects.
 func (g *GceClient) WithReservations(reservations map[string][]*gcev1.Reservation) *GceClient {
 	g.Lock()
 	defer g.Unlock()
-	g.projectToReservations = reservations
+	g.projectToReservations = make(map[string][]*gcev1.Reservation, len(reservations))
+	for project, rsvs := range reservations {
+		g.projectToReservations[project] = cloneReservations(rsvs)
+	}
+	return g
+}
+
+// WithUnlistedReservations adds reservations in the given project that new
+// instances can consume, but that aren't returned when listing or fetching
+// reservations, e.g. to simulate reservations the autoscaler can't see.
+func (g *GceClient) WithUnlistedReservations(project string, reservations ...*gcev1.Reservation) *GceClient {
+	g.Lock()
+	defer g.Unlock()
+	g.unlistedReservations[project] = append(g.unlistedReservations[project], cloneReservations(reservations)...)
 	return g
 }
 
@@ -543,11 +562,12 @@ func (g *GceClient) addInstances(mig *gcev1.InstanceGroupManager, template *gcev
 
 func (g *GceClient) removeInstances(numToRemove int64, currentInstances map[string]gceinternal.GceInstance) {
 	removedCount := 0
-	for instanceName := range currentInstances {
+	for instanceName, instance := range currentInstances {
 		if removedCount >= int(numToRemove) {
 			break
 		}
 		delete(currentInstances, instanceName)
+		g.releaseCapacityLocked(instance.Igm.Zone, instance.Igm.Name, instanceName)
 		g.k8s.DeleteNode(instanceName)
 		removedCount++
 	}
@@ -902,7 +922,7 @@ func (g *GceClient) FetchReservations() ([]*gcev1.Reservation, error) {
 	defer g.Unlock()
 	var reservations []*gcev1.Reservation
 	for _, rsv := range g.projectToReservations {
-		reservations = append(reservations, rsv...)
+		reservations = append(reservations, cloneReservations(rsv)...)
 	}
 	return reservations, nil
 }
@@ -910,22 +930,15 @@ func (g *GceClient) FetchReservations() ([]*gcev1.Reservation, error) {
 func (g *GceClient) FetchReservationsInProject(projectID string) ([]*gcev1.Reservation, error) {
 	g.Lock()
 	defer g.Unlock()
-	source, ok := g.projectToReservations[projectID]
-	if !ok {
-		return []*gcev1.Reservation{}, nil
-	}
-	results := make([]*gcev1.Reservation, len(source))
-	copy(results, g.projectToReservations[projectID])
-	return results, nil
+	return cloneReservations(g.projectToReservations[projectID]), nil
 }
 
 func (g *GceClient) FetchReservation(projectID string, name string) (*gcev1.Reservation, error) {
 	g.Lock()
 	defer g.Unlock()
-	for _, reservation := range g.projectToReservations[projectID] {
-		if reservation.Name == name {
-			copy := *reservation
-			return &copy, nil
+	for _, rsv := range g.projectToReservations[projectID] {
+		if rsv.Name == name {
+			return reservation.CloneV1(rsv), nil
 		}
 	}
 	return nil, fmt.Errorf("reservation %s not found in fake GCE", name)
@@ -992,6 +1005,7 @@ func (g *GceClient) DeleteInstances(ctx context.Context, migRef gceinternal.GceR
 	for _, instRef := range instances {
 		if _, exists := currentInstances[instRef.Name]; exists {
 			delete(currentInstances, instRef.Name)
+			g.releaseCapacityLocked(migRef.Zone, migRef.Name, instRef.Name)
 			deletedCount++
 		}
 	}
@@ -1045,15 +1059,20 @@ func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName s
 		return nil, fmt.Errorf("instance group manager %s not found", migKey)
 	}
 
-	machineType, err := g.machineTypeForTemplateLocked(mig, templateName)
+	template, err := g.templateForMigLocked(mig, templateName)
 	if err != nil {
 		return nil, err
 	}
 	actualCount := count
-	if cap, ok := g.capacityMap[CapacityKey{Zone: ref.Zone, MachineType: machineType}]; ok && cap < count {
-		actualCount = cap
+	if isCapacityTracked(template) {
+		if available, limited := g.availableCapacityLocked(ref.Project, ref.Zone, template); limited && available < count {
+			actualCount = available
+		}
 	}
 	if actualCount == 0 && count > 0 {
+		if affinity := template.Properties.ReservationAffinity; !allowsOnDemand(affinity) {
+			return nil, reservationCapacityExceededError(affinity)
+		}
 		return nil, &googleapi.Error{
 			Code:    400,
 			Message: "ZONE_RESOURCE_POOL_EXHAUSTED",
@@ -1078,18 +1097,18 @@ func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName s
 	return newNames, nil
 }
 
-// machineTypeForTemplateLocked resolves the machine type of the template attached
-// to the given MIG. Callers must hold g's lock.
-func (g *GceClient) machineTypeForTemplateLocked(mig *gcev1.InstanceGroupManager, templateName string) (string, error) {
+// templateForMigLocked resolves the template attached to the given MIG.
+// Callers must hold g's lock.
+func (g *GceClient) templateForMigLocked(mig *gcev1.InstanceGroupManager, templateName string) (*gcev1.InstanceTemplate, error) {
 	resolved, err := g.resolveTemplateName(mig, templateName)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	template, found := g.templates[resolved]
 	if !found {
-		return "", fmt.Errorf("instance template %s not found", templateName)
+		return nil, fmt.Errorf("instance template %s not found", templateName)
 	}
-	return template.Properties.MachineType, nil
+	return template, nil
 }
 
 // ResizeAtomically creates specific instances in the fake client immediately, simulating atomic resize.
@@ -1176,8 +1195,9 @@ func (g *GceClient) resolveTemplateName(mig *gcev1.InstanceGroupManager, templat
 }
 
 func (g *GceClient) createInstancesInternal(ref gceinternal.GceRef, mig *gcev1.InstanceGroupManager, mt *gcev1.MachineType, template *gcev1.InstanceTemplate, names []string, templateName string) error {
-	if template != nil && template.Properties != nil && template.Properties.MachineType != "" {
-		if err := g.consumeHardwareCapacityLocked(ref.Zone, template.Properties.MachineType, int64(len(names))); err != nil {
+	// Instances that fail to start (see instanceStatus) don't consume capacity.
+	if isCapacityTracked(template) && g.instanceStatus(ref).ErrorInfo == nil {
+		if err := g.allocateCapacityAtomicallyLocked(ref.Project, ref.Zone, ref.Name, names, template); err != nil {
 			return err
 		}
 	}
@@ -1440,11 +1460,14 @@ func machineTypeKey(zone, machineType string) string {
 	return fmt.Sprintf("%s/%s", zone, machineType)
 }
 
-// SetBackendMachineCount allows simulating capacity (in machine count) constraints for a given zone and machineType.
-func (g *GceClient) SetBackendMachineCount(zone string, machineType string, capacity int64) {
+// SetOnDemandCapacity limits how many more instances of machineType can be
+// created in zone without consuming a reservation. Instances backed by a
+// reservation don't count against the limit, and deleting an on-demand instance
+// returns its capacity. Without a limit, on-demand capacity is unlimited.
+func (g *GceClient) SetOnDemandCapacity(zone string, machineType string, capacity int64) {
 	g.Lock()
 	defer g.Unlock()
-	g.capacityMap[CapacityKey{Zone: zone, MachineType: machineType}] = capacity
+	g.onDemandCapacity[CapacityKey{Zone: zone, MachineType: machineType}] = capacity
 }
 
 // --- Manual Deep Cloning Functions ---
@@ -1472,29 +1495,24 @@ func cloneMig(mig *gcev1.InstanceGroupManager) *gcev1.InstanceGroupManager {
 	return &clone
 }
 
-// ResetHardwareCapacity clears all simulated stockouts.
-func (g *GceClient) ResetHardwareCapacity() {
+// ResetOnDemandCapacity removes all on-demand capacity limits, which clears all
+// simulated stockouts.
+func (g *GceClient) ResetOnDemandCapacity() {
 	g.Lock()
 	defer g.Unlock()
-	g.capacityMap = make(map[CapacityKey]int64)
+	g.onDemandCapacity = make(map[CapacityKey]int64)
 }
 
-// ConsumeHardwareCapacityAtomic attempts to consume capacity for the given zone and machineType.
-// If capacity is not configured, it assumes unlimited capacity.
-func (g *GceClient) ConsumeHardwareCapacityAtomic(zone string, machineType string, count int64) error {
-	g.Lock()
-	defer g.Unlock()
-	return g.consumeHardwareCapacityLocked(zone, machineType, count)
-}
-
-func (g *GceClient) consumeHardwareCapacityLocked(zone string, machineType string, count int64) error {
-	key := CapacityKey{Zone: zone, MachineType: machineType}
-	cap, ok := g.capacityMap[key]
-	if !ok {
-		return nil // Unlimited capacity if not explicitly mocked
+// consumeOnDemandCapacityLocked consumes on-demand capacity for count instances,
+// or returns a stockout error without consuming anything if there isn't enough.
+// Callers must hold g's lock.
+func (g *GceClient) consumeOnDemandCapacityLocked(key CapacityKey, count int64) error {
+	available, limited := g.onDemandCapacity[key]
+	if !limited {
+		return nil
 	}
 
-	if cap < count {
+	if available < count {
 		return &googleapi.Error{
 			Code:    400,
 			Message: "ZONE_RESOURCE_POOL_EXHAUSTED",
@@ -1503,8 +1521,16 @@ func (g *GceClient) consumeHardwareCapacityLocked(zone string, machineType strin
 			},
 		}
 	}
-	g.capacityMap[key] = cap - count
+	g.onDemandCapacity[key] = available - count
 	return nil
+}
+
+// releaseOnDemandCapacityLocked returns on-demand capacity of count instances.
+// Callers must hold g's lock.
+func (g *GceClient) releaseOnDemandCapacityLocked(key CapacityKey, count int64) {
+	if available, limited := g.onDemandCapacity[key]; limited {
+		g.onDemandCapacity[key] = available + count
+	}
 }
 
 // SetRecommendationApplier sets the recommendation applier for the fake GCE client.

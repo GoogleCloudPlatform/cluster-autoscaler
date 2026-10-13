@@ -20,6 +20,7 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 
 	gce_api "google.golang.org/api/compute/v1"
@@ -236,7 +237,7 @@ func NewTestingReservationsPuller(localProject string, sharedPrjs []string, rsv 
 			puller.AddProject(project)
 		}
 	}
-	puller.SetReservations(rsv)
+	puller.SetReservations(reservation.FromV1List(rsv))
 	return puller
 }
 
