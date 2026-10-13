@@ -16,6 +16,7 @@ package flexadvisor
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -26,6 +27,7 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
@@ -1452,4 +1454,134 @@ func TestFleetEfficiency_NapStockoutExcludesZoneFromLargerSameFamilyNapCandidate
 		}
 		assert.Equal(t, []string{"e2-standard-8"}, machineTypesOfNewPools, "Expected e2-standard-8 to beat n2-standard-8, which is backed off in ZoneA")
 	})
+}
+
+// TestFleetEfficiency_SalvoReusesUpcomingNodePoolWhenZonesAreBackedOff is a regression test for b/571982043.
+//
+// An earlier n2-standard-8 node pool failed to scale up in ZoneB and ZoneC, so uncreated (and upcoming)
+// n2-standard-8 node groups are backed off in these zones. A scale-up salvo with async node pool creation
+// (high-throughput NAP) then handles pods that need n2-standard-8:
+//   - Pass 0: the uncreated n2-standard-8 candidate is scored on ZoneA only (0.9). FlexAdvisor caps it at the
+//     ZoneA capacity, so NAP creates an upcoming node pool that handles only part of the pods.
+//   - Pass 1: the upcoming node pool (Exist() == false, IsUpcoming() == true) competes with a freshly injected
+//     candidate of the same shape. Both must be scored on the same non-backed-off zones (ZoneA, 0.9), so that
+//     they tie and the lowest-cost tie-break reuses the upcoming node pool. Without applying backoff to the
+//     upcoming node pool, it would be scored across all zones ((0.9+0.3+0.3)/3 = 0.5), lose to the candidate,
+//     and every salvo pass would create another node pool.
+func TestFleetEfficiency_SalvoReusesUpcomingNodePoolWhenZonesAreBackedOff(t *testing.T) {
+	fleetEfficiency := v1.AllocationStrategyFleetEfficiency
+
+	cccCrd := ccc.NewComputeClassBuilder("test-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineType:        ptr.To("n2-standard-8"),
+				PriorityScore:      ptr.To(100),
+				AllocationStrategy: &fleetEfficiency,
+				// Explicit zones disable NAP's reduced zone set optimisation, so that the salvo pods get a candidate
+				// in every non-backed-off zone rather than in a single random (possibly backed-off) zone.
+				Location: &v1.Location{Zones: []string{ZoneA, ZoneB, ZoneC}},
+			},
+		).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccCrd).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(1024*1024*1024*1024),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithHighThroughputNAPEnabled(10, 100),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithBalanceSimilarNodeGroups(),
+			func(o *internalopts.AutoscalingOptions) *internalopts.AutoscalingOptions {
+				o.SalvoScaleUp = true
+				o.SalvoScaleUpBudget = time.Minute
+				return o
+			},
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			// ZoneA can only fit half of the salvo pods, so the salvo needs more than one pass.
+			fake.NewGuidance("n2-standard-8").WithZone(ZoneA).WithScore(0.9).WithCapacity(2),
+			fake.NewGuidance("n2-standard-8").WithZone(ZoneB).WithScore(0.3).WithCapacity(100),
+			fake.NewGuidance("n2-standard-8").WithZone(ZoneC).WithScore(0.3).WithCapacity(100),
+		)
+		infra.Fakes.GceService.SetCreateInstanceForZoneError(ZoneB, stockOutError())
+		infra.Fakes.GceService.SetCreateInstanceForZoneError(ZoneC, stockOutError())
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+
+		// --- Setup: back off n2-standard-8 in ZoneB and ZoneC ---
+		// Zonal pods make NAP create an n2-standard-8 node pool and scale it up in ZoneB and ZoneC, where scale-ups
+		// fail. The failed scale-ups back off the uncreated n2-standard-8 node groups in these zones, and the empty
+		// failed node pool is deleted.
+		zonalPods := []*apiv1.Pod{
+			tu.BuildTestPod("zonal-pod-b", 6000, 24000, pod.WithCCC("test-ccc"), pod.WithNodeSelectorEntry(apiv1.LabelTopologyZone, ZoneB), tu.MarkUnschedulable()),
+			tu.BuildTestPod("zonal-pod-c", 6000, 24000, pod.WithCCC("test-ccc"), pod.WithNodeSelectorEntry(apiv1.LabelTopologyZone, ZoneC), tu.MarkUnschedulable()),
+		}
+		for _, p := range zonalPods {
+			infra.Fakes.K8s.AddPod(p)
+		}
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		for _, p := range zonalPods {
+			infra.Fakes.K8s.DeletePod(p.Namespace, p.Name)
+		}
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		assert.Empty(t, n2Standard8NodePools(t, infra), "Expected no n2-standard-8 node pool before the salvo")
+
+		// --- Salvo ---
+		for i := 0; i < 4; i++ {
+			infra.Fakes.K8s.AddPod(tu.BuildTestPod(fmt.Sprintf("salvo-pod-%d", i), 6000, 24000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable()))
+		}
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		// Let the node pool get created and the async initializer execute the scale-ups from both salvo passes.
+		time.Sleep(5 * time.Second)
+		synctest.Wait()
+
+		pools := n2Standard8NodePools(t, infra)
+		if assert.Len(t, pools, 1, "Expected the salvo to create a single n2-standard-8 node pool and reuse it while it is upcoming") {
+			assert.Equal(t, int64(4), nodePoolTargetSize(t, ctx, infra, pools[0]), "Expected both salvo passes to scale up the single node pool for all 4 pods")
+		}
+	})
+}
+
+func n2Standard8NodePools(t *testing.T, infra *integration.TestInfrastructure) []*gke_api_beta.NodePool {
+	t.Helper()
+	cluster, err := infra.Fakes.GkeService.GetCluster("projects/test-project/locations/us-central1/clusters/test-cluster")
+	assert.NoError(t, err)
+	var pools []*gke_api_beta.NodePool
+	for _, np := range cluster.NodePools {
+		if np.Config.MachineType == "n2-standard-8" {
+			pools = append(pools, np)
+		}
+	}
+	return pools
+}
+
+func nodePoolTargetSize(t *testing.T, ctx context.Context, infra *integration.TestInfrastructure, np *gke_api_beta.NodePool) int64 {
+	t.Helper()
+	var total int64
+	for _, url := range np.InstanceGroupUrls {
+		ref, err := gce.ParseIgmUrlRef(url)
+		if !assert.NoError(t, err) {
+			continue
+		}
+		size, err := infra.Fakes.GceService.FetchMigTargetSize(ctx, ref)
+		assert.NoError(t, err)
+		total += size
+	}
+	return total
 }

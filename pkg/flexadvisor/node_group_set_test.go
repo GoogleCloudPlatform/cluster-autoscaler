@@ -24,7 +24,10 @@ import (
 	"github.com/stretchr/testify/mock"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	testprovider "sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -114,7 +117,7 @@ func TestNodeGroupSet_UncreatedCandidate(t *testing.T) {
 			assert.Equal(t, tc.wantZones, gotZones)
 			assert.Len(t, mig.NodePool().Migs(), 1, "planned migs must not be registered in the node pool")
 
-			targetZones, err := ngs.TargetZones(nil, nil)
+			targetZones, err := ngs.TargetZonesForScoring(nil, nil)
 			if tc.wantTargetZonesErr {
 				assert.Error(t, err)
 				assert.Nil(t, targetZones)
@@ -178,7 +181,7 @@ func TestNodeGroupSet_TargetZonesExcludeBackedOffZones(t *testing.T) {
 
 			backoff := newZoneBackoff(tc.backedOffZones...)
 			ngs := NewNodeGroupSet(ctx, mig, nil, gkeManagerMock)
-			gotZones, err := ngs.TargetZones(backoff, nodeInfos)
+			gotZones, err := ngs.TargetZonesForScoring(backoff, nodeInfos)
 
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantZones, gotZones)
@@ -202,7 +205,7 @@ func TestNodeGroupSet_TargetZonesWithoutNodeInfo(t *testing.T) {
 	gkeManagerMock.On("PlannedNodePoolLocations", mig).Return([]string{"zone-a", "zone-b"}, nil).Once()
 
 	backoff := newZoneBackoff("zone-b")
-	gotZones, err := NewNodeGroupSet(context.TODO(), mig, nil, gkeManagerMock).TargetZones(backoff, nil)
+	gotZones, err := NewNodeGroupSet(context.TODO(), mig, nil, gkeManagerMock).TargetZonesForScoring(backoff, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"zone-a"}, gotZones)
@@ -225,17 +228,217 @@ func TestNodeGroupSet_ExistingNodePool(t *testing.T) {
 	assert.Same(t, sentinel, backing[1], "caller's similarNodeGroups backing array must not be modified")
 
 	// Backoff is not consulted for existing node pools (ComputeSimilarNodeGroups already excludes backed-off MIGs).
-	targetZones, err := ngs.TargetZones(newZoneBackoff("zone-a", "zone-b"), nil)
+	targetZones, err := ngs.TargetZonesForScoring(newZoneBackoff("zone-a", "zone-b"), nil)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"zone-a", "zone-b"}, targetZones)
 }
 
+func TestNodeGroupSet_UpcomingNodePool(t *testing.T) {
+	newUpcomingMig := func(zone, name string) *gke.GkeMig {
+		return gke.NewTestGkeMigBuilder().
+			SetUpcoming().
+			SetGceRef(gce.GceRef{Project: "p", Zone: zone, Name: name}).
+			SetAutoprovisioned(true).
+			SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-8"}).
+			Build()
+	}
+	newNodeInfoInZone := func(zone string) *framework.NodeInfo {
+		node := tu.BuildTestNode("template-"+zone, 1000, 1000)
+		node.Labels = map[string]string{apiv1.LabelTopologyZone: zone}
+		return framework.NewTestNodeInfo(node)
+	}
+
+	testCases := []struct {
+		name      string
+		backoff   base_backoff.Backoff
+		wantZones []string
+	}{
+		{
+			name:      "nil backoff - all zones",
+			backoff:   nil,
+			wantZones: []string{"zone-a", "zone-b", "zone-c"},
+		},
+		{
+			name:      "no zone backed off - all zones",
+			backoff:   newZoneBackoff(),
+			wantZones: []string{"zone-a", "zone-b", "zone-c"},
+		},
+		{
+			name:      "similar node groups' zones backed off - only representative zone",
+			backoff:   newZoneBackoff("zone-b", "zone-c"),
+			wantZones: []string{"zone-a"},
+		},
+		{
+			name:      "representative zone backed off - only similar node groups' zones",
+			backoff:   newZoneBackoff("zone-a"),
+			wantZones: []string{"zone-b", "zone-c"},
+		},
+		{
+			name:      "all zones backed off - no zones",
+			backoff:   newZoneBackoff("zone-a", "zone-b", "zone-c"),
+			wantZones: nil,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			upcomingA := newUpcomingMig("zone-a", "async-0")
+			upcomingB := newUpcomingMig("zone-b", "async-1")
+			upcomingC := newUpcomingMig("zone-c", "async-2")
+			gkeManagerMock := &gke.GkeManagerMock{}
+
+			// upcomingA and upcomingB have their own entries in nodeInfos (as registered by CreateNodeGroupAsync);
+			// upcomingC is omitted to also exercise the fallback to nodeInfoInZone(representativeNodeInfo, zone).
+			nodeInfoA := newNodeInfoInZone("zone-a")
+			nodeInfoB := newNodeInfoInZone("zone-b")
+			nodeInfos := map[string]*framework.NodeInfo{
+				upcomingA.Id(): nodeInfoA,
+				upcomingB.Id(): nodeInfoB,
+			}
+
+			ngs := NewNodeGroupSet(context.TODO(), upcomingA, []cloudprovider.NodeGroup{upcomingB, upcomingC}, gkeManagerMock)
+			gotZones, err := ngs.TargetZonesForScoring(tc.backoff, nodeInfos)
+
+			gkeManagerMock.AssertNotCalled(t, "PlannedNodePoolLocations", mock.Anything)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantZones, gotZones)
+			// NodeGroups is not backoff-aware and must still return all MIGs of the upcoming node pool.
+			assert.Equal(t, []cloudprovider.NodeGroup{upcomingA, upcomingB, upcomingC}, ngs.NodeGroups())
+
+			// Backoff must be queried with each upcoming MIG's own nodeInfo when present, or the representative's
+			// nodeInfo relabeled to the MIG's zone as a fallback.
+			if zb, ok := tc.backoff.(*zoneBackoff); ok {
+				assert.Same(t, nodeInfoA, zb.seenNodeInfos[upcomingA.Id()])
+				assert.Same(t, nodeInfoB, zb.seenNodeInfos[upcomingB.Id()])
+				if assert.Contains(t, zb.seenNodeInfos, upcomingC.Id()) {
+					assert.Equal(t, "zone-c", zb.seenNodeInfos[upcomingC.Id()].Node().Labels[apiv1.LabelTopologyZone])
+				}
+			}
+		})
+	}
+}
+
+func TestNodeGroupSet_UpcomingAndUncreatedShareSingleMigBackoff(t *testing.T) {
+	specForNodePool := func(npName string) *gkeclient.NodePoolSpec {
+		return &gkeclient.NodePoolSpec{
+			MachineType: "n2-standard-8",
+			Labels: map[string]string{
+				labels.GkeNodePoolLabel: npName,
+				"workload":              "batch",
+			},
+		}
+	}
+	gkeManagerMock := &gke.GkeManagerMock{}
+
+	candidate := gke.NewTestGkeMigBuilder().
+		SetGkeManager(gkeManagerMock).
+		SetGceRef(gce.GceRef{Project: "p", Zone: "zone-a", Name: "nap-temporary-mig"}).
+		SetExist(false).
+		SetAutoprovisioned(true).
+		SetNodePoolName("nap-temporary-pool").
+		SetSpec(specForNodePool("nap-temporary-pool")).
+		Build()
+	gkeManagerMock.On("PlannedNodePoolLocations", candidate).Return([]string{"zone-a", "zone-b", "zone-c"}, nil).Once()
+
+	newUpcomingMig := func(zone, name string) *gke.GkeMig {
+		return gke.NewTestGkeMigBuilder().
+			SetUpcoming().
+			SetGceRef(gce.GceRef{Project: "p", Zone: zone, Name: name}).
+			SetAutoprovisioned(true).
+			SetNodePoolName("upcoming-pool").
+			SetSpec(specForNodePool("upcoming-pool")).
+			Build()
+	}
+	upcomingA := newUpcomingMig("zone-a", "upcoming-async-0")
+	upcomingB := newUpcomingMig("zone-b", "upcoming-async-1")
+	upcomingC := newUpcomingMig("zone-c", "upcoming-async-2")
+
+	failedExistingB := gke.NewTestGkeMigBuilder().
+		SetGkeManager(gkeManagerMock).
+		SetGceRef(gce.GceRef{Project: "p", Zone: "zone-b", Name: "existing-mig-b"}).
+		SetExist(true).
+		SetAutoprovisioned(true).
+		SetNodePoolName("existing-pool").
+		SetSpec(specForNodePool("existing-pool")).
+		Build()
+	gkeManagerMock.SetInjectedMig(failedExistingB, candidate)
+
+	now := time.Now()
+	singleMigBackoff := backoff.NewSingleMigBackoff()
+	// zone-b is backed off when an existing MIG fails and backs off its injected candidate copy;
+	// zone-c is backed off directly on the upcoming MIG.
+	singleMigBackoff.Backoff(failedExistingB, nil, cloudprovider.InstanceErrorInfo{
+		ErrorClass: cloudprovider.OutOfResourcesErrorClass,
+		ErrorCode:  "ZONE_RESOURCE_POOL_EXHAUSTED",
+	}, now)
+	singleMigBackoff.Backoff(upcomingC, nil, cloudprovider.InstanceErrorInfo{
+		ErrorClass: cloudprovider.OtherErrorClass,
+		ErrorCode:  "TIMEOUT",
+	}, now)
+
+	upcomingNgs := NewNodeGroupSet(context.TODO(), upcomingA, []cloudprovider.NodeGroup{upcomingB, upcomingC}, gkeManagerMock)
+	upcomingZones, err := upcomingNgs.TargetZonesForScoring(singleMigBackoff, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"zone-a"}, upcomingZones)
+
+	candidateNgs := NewNodeGroupSet(context.TODO(), candidate, nil, gkeManagerMock)
+	candidateZones, err := candidateNgs.TargetZonesForScoring(singleMigBackoff, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"zone-a"}, candidateZones)
+}
+
+func TestNodeGroupSet_TargetZonesAppliesBackoffToNonExistingRepresentative(t *testing.T) {
+	upcoming := func(zone string) cloudprovider.NodeGroup {
+		return gke.NewTestGkeMigBuilder().SetUpcoming().SetGceRef(gce.GceRef{Project: "p", Zone: zone, Name: "upcoming-" + zone}).SetAutoprovisioned(true).Build()
+	}
+	uncreated := func(zone string) cloudprovider.NodeGroup {
+		return gke.NewTestGkeMigBuilder().SetGceRef(gce.GceRef{Project: "p", Zone: zone, Name: "uncreated-" + zone}).SetExist(false).SetAutoprovisioned(true).Build()
+	}
+
+	testCases := []struct {
+		name           string
+		representative cloudprovider.NodeGroup
+		similar        []cloudprovider.NodeGroup
+		backedOffZones []string
+		wantZones      []string
+	}{
+		{
+			name:           "upcoming node pool without similar node groups, not backed off - its zone",
+			representative: upcoming("zone-a"),
+			wantZones:      []string{"zone-a"},
+		},
+		{
+			name:           "upcoming node pool without similar node groups, backed off - no zones",
+			representative: upcoming("zone-a"),
+			backedOffZones: []string{"zone-a"},
+			wantZones:      nil,
+		},
+		{
+			name:           "uncreated candidate with backed-off similar node group - similar node group's zone excluded",
+			representative: uncreated("zone-a"),
+			similar:        []cloudprovider.NodeGroup{uncreated("zone-b")},
+			backedOffZones: []string{"zone-b"},
+			wantZones:      []string{"zone-a"},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gkeManagerMock := &gke.GkeManagerMock{}
+			ngs := NewNodeGroupSet(context.TODO(), tc.representative, tc.similar, gkeManagerMock)
+			gotZones, err := ngs.TargetZonesForScoring(newZoneBackoff(tc.backedOffZones...), nil)
+
+			gkeManagerMock.AssertNotCalled(t, "PlannedNodePoolLocations", mock.Anything)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantZones, gotZones)
+		})
+	}
+}
+
 func TestNodeGroupSet_TargetZonesErrors(t *testing.T) {
-	_, err := NewNodeGroupSet(context.Background(), nil, nil, nil).TargetZones(nil, nil)
+	_, err := NewNodeGroupSet(context.Background(), nil, nil, nil).TargetZonesForScoring(nil, nil)
 	assert.ErrorContains(t, err, "nil node group")
 
 	notGke := testprovider.NewTestNodeGroup("not-gke", 0, 0, 0, false, true, "", nil, nil)
-	_, err = NewNodeGroupSet(context.Background(), notGke, nil, nil).TargetZones(nil, nil)
+	_, err = NewNodeGroupSet(context.Background(), notGke, nil, nil).TargetZonesForScoring(nil, nil)
 	assert.ErrorContains(t, err, "not a GKE node group")
 }
 

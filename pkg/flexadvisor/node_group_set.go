@@ -107,12 +107,16 @@ func (ngs NodeGroupSet) NodeGroups() []cloudprovider.NodeGroup {
 	return uniqueNodeGroups(ngs.representative, ngs.similarNodeGroups)
 }
 
-// TargetZones returns the zones in which the node group can be scaled up:
-//   - For an existing or upcoming node group, the zones of the representative and similar node groups
-//     (ComputeSimilarNodeGroups already excludes backed-off MIGs).
-//   - For an uncreated NAP candidate, the planned node pool locations excluding any zones in which the
-//     candidate is backed off. Returns an error if planned locations could not be determined.
-func (ngs NodeGroupSet) TargetZones(backoff base_backoff.Backoff, nodeInfos map[string]*framework.NodeInfo) ([]string, error) {
+// TargetZonesForScoring returns the non-backed-off zones in which the node group set can be scored:
+//   - For an existing or upcoming node group, the zones of the representative and similar node groups.
+//   - For a !mig.exists NAP candidate, the planned node pool locations (or an error if they could not be determined).
+//
+// For !mig.exists node groups, backoff calculations are applied here; for existing node groups, backoffs are applied at ComputeSimilarNodeGroups.
+//
+// Note: Because backed-off zones are excluded for scoring, the returned list may be a subset of the zones where the node pool exists, will be created, or will have scale-up balanced across.
+//
+// An empty slice means all target zones are backed off
+func (ngs NodeGroupSet) TargetZonesForScoring(backoff base_backoff.Backoff, nodeInfos map[string]*framework.NodeInfo) ([]string, error) {
 	if ngs.representative == nil {
 		return nil, errors.New("nil node group")
 	}
@@ -124,43 +128,73 @@ func (ngs NodeGroupSet) TargetZones(backoff base_backoff.Backoff, nodeInfos map[
 		return nil, ngs.plannedLocationsErr
 	}
 
-	// Existing or upcoming node group:
-	// The scalable zones are the zones of the healthy MIGs (representative + similarNodeGroups,
-	// as ComputeSimilarNodeGroups excludes backed-off MIGs).
+	var targetZones []string
+	var targetNodeGroups []gke.NodeGroup
 	if len(ngs.plannedZonalMigs) == 0 {
-		rawZones := make([]string, 0, 1+len(ngs.similarNodeGroups))
-		rawZones = append(rawZones, gkeNg.GceRef().Zone)
+		// Existing or upcoming node group: the representative and its similarNodeGroups.
+		targetNodeGroups = make([]gke.NodeGroup, 0, 1+len(ngs.similarNodeGroups))
+		targetNodeGroups = append(targetNodeGroups, gkeNg)
 		for _, ng := range ngs.similarNodeGroups {
-			if similarGkeNg, ok := ng.(gke.NodeGroup); ok {
-				rawZones = append(rawZones, similarGkeNg.GceRef().Zone)
+			similarGkeNg, ok := ng.(gke.NodeGroup)
+			if !ok {
+				klog.Warningf("NodeGroupSet: Could not cast similar node group of type %T to gke.NodeGroup", ng)
+				continue
 			}
+			targetNodeGroups = append(targetNodeGroups, similarGkeNg)
 		}
-		return sanitizeZones(rawZones), nil
+	} else {
+		// Uncreated NAP candidate node group:
+		// Use the locations that GKE will create the node pool in, computed by the same code that builds
+		// the node pool spec on creation. Zones that are merely not covered by existing node pools are
+		// intentionally kept.
+		targetNodeGroups = make([]gke.NodeGroup, 0, len(ngs.plannedZonalMigs))
+		for _, m := range ngs.plannedZonalMigs {
+			targetNodeGroups = append(targetNodeGroups, m)
+		}
 	}
+	if !gkeNg.Exist(context.TODO()) {
+		// !exists && !upcoming && len(similarNodeGroups)==0 pools have their zones set expanded by us, we need to replicate logic from NAP and remove backed off migs so these pools are homogenous with existing pools.
+		// !exists && !upcoming && len(similarNodeGroups)>0 pools don't have their zones set expanded, so we don't need to apply backoffs again - to simplify logic we calculate it again (all zones should actually pass)
+		// !exists && upcoming && len(similarNodeGroups)==0 pools don't have zones set expanded, but due to CA bug they don't have backoffs applied, we apply it here to make these pools homogenous with existing ones
+		// !exists && upcoming && len(similarNodeGroups)>0 - same as above, need to apply backoffs
+		targetZones = ngs.limitByBackoffs(backoff, nodeInfos, targetNodeGroups)
+	} else {
+		targetZones = make([]string, 0, len(targetNodeGroups))
+		for _, ng := range targetNodeGroups {
+			targetZones = append(targetZones, ng.GceRef().Zone)
+		}
+	}
+	return sanitizeZones(targetZones), nil
+}
 
-	// Uncreated NAP candidate node group:
-	// Use the locations that GKE will create the node pool in, computed by the same code that builds
-	// the node pool spec on creation. Exclude zones in which the candidate is backed off, so that
-	// backed-off (e.g. stocked-out) zones do not create phantom scores for the uncreated candidate.
-	// Zones that are merely not covered by existing node pools are intentionally kept.
-	// An empty result means that the candidate is not scalable in any of its target zones.
+// limitByBackoffs returns the zones of targetNodeGroups, excluding the zones of non-existing node groups
+// that are backed off.
+//
+// Existing node groups are not checked, as ComputeSimilarNodeGroups and filterValidScaleUpNodeGroups
+// already exclude backed-off ones. Uncreated NAP candidates and upcoming node groups have Exist()==false,
+// so they are skipped by those checks. Their backed-off (e.g. stocked-out) zones are excluded here, so that
+// they do not create phantom scores. Upcoming node groups and uncreated candidates of the same shape share
+// the same spec-and-zone based singleMigBackoff key, so they are scored on the same set of zones.
+func (ngs NodeGroupSet) limitByBackoffs(backoff base_backoff.Backoff, nodeInfos map[string]*framework.NodeInfo, targetNodeGroups []gke.NodeGroup) []string {
+	var availableZones, backedOffZones []string
 	now := time.Now()
 	candidateNodeInfo := nodeInfos[ngs.representative.Id()]
-	plannedZones := make([]string, 0, len(ngs.plannedZonalMigs))
-	var availableZones, backedOffZones []string
-	for _, m := range ngs.plannedZonalMigs {
-		zone := m.GceRef().Zone
-		plannedZones = append(plannedZones, zone)
-		if backoff != nil && backoff.BackoffStatus(m, nodeInfoInZone(candidateNodeInfo, zone), now).IsBackedOff {
+	for _, gkeNg := range targetNodeGroups {
+		zone := gkeNg.GceRef().Zone
+		nodeInfo := nodeInfos[gkeNg.Id()]
+		if nodeInfo == nil {
+			nodeInfo = nodeInfoInZone(candidateNodeInfo, zone)
+		}
+		if backoff != nil && backoff.BackoffStatus(gkeNg, nodeInfo, now).IsBackedOff {
 			backedOffZones = append(backedOffZones, zone)
 		} else {
 			availableZones = append(availableZones, zone)
 		}
 	}
 	if len(backedOffZones) > 0 {
-		klog.V(5).Infof("Excluding backed-off zones %v from target zones %v of uncreated node group %s", backedOffZones, plannedZones, gkeNg.Id())
+		klog.V(5).Infof("Excluding backed-off zones %v of node group %s, remaining target zones: %v", backedOffZones, ngs.representative.Id(), availableZones)
 	}
-	return availableZones, nil
+	return availableZones
 }
 
 // zonalMigsForLocations returns one MIG per planned location of an uncreated candidate, in location order:

@@ -197,8 +197,8 @@ func (p *failingPlannedLocationsCloudProvider) PlannedNodePoolLocations(_ *gke.G
 	return nil, p.err
 }
 
-// fakeBackoff reports uncreated node groups as backed off by machine type and zone (mirroring zone-scoped
-// NAP / resource-based backoff).
+// fakeBackoff reports !mig.exists node groups as backed off by machine type and
+// zone (mirroring zone-scoped NAP / resource-based backoff).
 type fakeBackoff struct {
 	backedOffUncreated map[string]bool
 }
@@ -552,6 +552,16 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 		Pods:      []*v1.Pod{f.pod},
 	}
 
+	// Upcoming (being created asynchronously) regional node pool with the same hardware as ngNapRegional.
+	newUpcomingMig := func(zone string) *gke.GkeMig {
+		return gke.NewTestGkeMigBuilder().SetUpcoming().SetNodePoolName("pool-upcoming-reg").SetGceRefZone(zone).SetAutoprovisioned(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
+	}
+	optUpcomingRegional := expander.Option{
+		NodeGroup:         newUpcomingMig("us-central1-a"),
+		SimilarNodeGroups: []cloudprovider.NodeGroup{newUpcomingMig("us-central1-b"), newUpcomingMig("us-central1-c")},
+		Pods:              []*v1.Pod{f.pod},
+	}
+
 	// Zonal-by-design node pools with the same hardware as ngNapRegional.
 	ngZonalA := gke.NewTestGkeMigBuilder().SetId("pool-a").SetNodePoolName("pool-a").SetGceRefZone("us-central1-a").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
 	ngZonalB := gke.NewTestGkeMigBuilder().SetId("pool-b").SetNodePoolName("pool-b").SetGceRefZone("us-central1-b").SetExist(true).SetSpec(&gkeclient.NodePoolSpec{MachineType: "n2-standard-4"}).Build()
@@ -774,6 +784,63 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 				})
 			},
 			// Candidate is scored across [us-central1-b, us-central1-c] (0.3) < 0.35.
+			expectedBestOptions: []expander.Option{optExisting},
+		},
+		{
+			// Regression test for b/571982043.
+			name:                      "Upcoming node pool and uncreated candidate of the same shape backed off in the same zones tie",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b", "us-central1-c"},
+			backoff:                   newFakeBackoff().withBackedOffUncreated("n2-standard-4", "us-central1-b").withBackedOffUncreated("n2-standard-4", "us-central1-c"),
+			options:                   []expander.Option{optUpcomingRegional, optNapRegional},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				scores := map[string]float64{
+					"us-central1-a": 0.9,
+					"us-central1-b": 0.3,
+					"us-central1-c": 0.3,
+				}
+				setupMockSnapshot(m, "n2-standard-4", scores)
+				setupMockSnapshot(m, "n2-standard-4", scores)
+			},
+			// Both are scored on [us-central1-a] only (0.9) and tie, leaving the choice to the lowest-cost
+			// fallback (which prefers upcoming node pools over creating new ones). Without applying backoff to
+			// the upcoming node pool, it would be scored across all 3 zones (0.5) and lose to the candidate.
+			expectedBestOptions: []expander.Option{optUpcomingRegional, optNapRegional},
+		},
+		{
+			name:                      "Upcoming node pool and uncreated candidate of the same shape without backoff tie",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b", "us-central1-c"},
+			backoff:                   newFakeBackoff(),
+			options:                   []expander.Option{optUpcomingRegional, optNapRegional},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				scores := map[string]float64{
+					"us-central1-a": 0.9,
+					"us-central1-b": 0.3,
+					"us-central1-c": 0.3,
+				}
+				setupMockSnapshot(m, "n2-standard-4", scores)
+				setupMockSnapshot(m, "n2-standard-4", scores)
+			},
+			// Both are scored across all 3 zones: (0.9 + 0.3 + 0.3)/3 = 0.5.
+			expectedBestOptions: []expander.Option{optUpcomingRegional, optNapRegional},
+		},
+		{
+			name:                      "Upcoming node pool backed off in all zones scores 0 and loses to healthy option",
+			crds:                      []crd.CRD{f.crdRuleFleet},
+			autoprovisioningLocations: []string{"us-central1-a", "us-central1-b", "us-central1-c"},
+			backoff:                   newFakeBackoff().withBackedOffUncreated("n2-standard-4", "us-central1-a").withBackedOffUncreated("n2-standard-4", "us-central1-b").withBackedOffUncreated("n2-standard-4", "us-central1-c"),
+			options:                   []expander.Option{optUpcomingRegional, optExisting},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshot(m, "n2-standard-4", map[string]float64{
+					"us-central1-a": 0.9,
+					"us-central1-b": 0.9,
+					"us-central1-c": 0.9,
+				})
+				setupMockSnapshot(m, "n1-standard-1", map[string]float64{
+					"us-central1-a": 0.1,
+				})
+			},
 			expectedBestOptions: []expander.Option{optExisting},
 		},
 		{

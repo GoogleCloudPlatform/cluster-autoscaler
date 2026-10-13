@@ -61,7 +61,7 @@ type fleetEfficiencyFilter struct {
 	gceFlexAdvisorEnabled            bool
 	experimentsManager               experiments.Manager
 	// backoff is the scale-up backoff shared between NAP and the core scale-up logic. It is used to
-	// exclude zones in which uncreated NAP candidates cannot currently be scaled up. May be nil.
+	// exclude zones in which !mig.exists node groups cannot currently be scaled up. May be nil.
 	backoff        base_backoff.Backoff
 	optionsTracker *optstracking.OptionsTracker
 }
@@ -282,15 +282,15 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 	}
 
-	targetZones, err := nodeGroupSet.TargetZones(f.backoff, nodeInfos)
+	targetZones, err := nodeGroupSet.TargetZonesForScoring(f.backoff, nodeInfos)
 	if err != nil {
 		return 0, err
 	}
 	if len(targetZones) == 0 {
-		// Only uncreated candidates can end up without target zones, when all of them are backed off.
-		// Score the candidate with 0 so that it loses to any healthy option (> 0). If all candidates
-		// are backed off (all score 0), they tie at 0 and tie-breaking falls back to lowest-cost.
-		klog.V(5).Infof("FleetEfficiencyFilter: all target zones are backed off for uncreated node group %s, scoring 0", nodeGroup.Id())
+		// Only !mig.exists node groups can end up without target zones, when all
+		// of them are backed off. Score the option with 0 so that it loses to any healthy option (> 0). If
+		// all options are backed off (all score 0), they tie at 0 and tie-breaking falls back to lowest-cost.
+		klog.V(5).Infof("FleetEfficiencyFilter: all target zones are backed off for non-existing node group %s, scoring 0", nodeGroup.Id())
 		return 0.0, nil
 	}
 
