@@ -109,6 +109,7 @@ type InternalOptions struct {
 	EkLookaheadPodStrategy                       string
 	E4aLookaheadPodStrategy                      string
 	E4LookaheadPodStrategy                       string
+	LookaheadChurnCircuitBreakerConfig           string
 	MachineConfigEnabled                         bool
 	CvmMachineConfigEnabled                      bool
 	MachineConfigRefreshInterval                 time.Duration

@@ -124,6 +124,7 @@ var (
 	ekLookaheadPodStrategy                       = flag.String("ek-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing EK lookahead pod strategy.")
 	e4aLookaheadPodStrategy                      = flag.String("e4a-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing E4A lookahead pod strategy.")
 	e4LookaheadPodStrategy                       = flag.String("e4-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing E4 lookahead pod strategy.")
+	lookaheadChurnCircuitBreakerConfig           = flag.String("lookahead-churn-circuit-breaker-config", "", "Single-quote wrapped JSON string representing the lookahead churn circuit breaker configuration. If unspecified, can be overridden by experiment.")
 	ekOnManagedNodesEnabled                      = flag.Bool("enable-ek-on-managed-nodes", false, "Specifies if EKs are enabled on managed nodes.")
 	e4aOnManagedNodesEnabled                     = flag.Bool("enable-e4a-on-managed-nodes", false, "Specifies if E4As are enabled on managed nodes.")
 	e4OnManagedNodesEnabled                      = flag.Bool("enable-e4-on-managed-nodes", false, "Specifies if E4s are enabled on managed nodes.")
@@ -368,6 +369,7 @@ func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) i
 		EkLookaheadPodStrategy:                       *ekLookaheadPodStrategy,
 		E4aLookaheadPodStrategy:                      *e4aLookaheadPodStrategy,
 		E4LookaheadPodStrategy:                       *e4LookaheadPodStrategy,
+		LookaheadChurnCircuitBreakerConfig:           *lookaheadChurnCircuitBreakerConfig,
 		MachineConfigEnabled:                         *machineConfigEnabled,
 		CvmMachineConfigEnabled:                      *cvmMachineConfigEnabled,
 		MachineConfigRefreshInterval:                 *machineConfigRefreshInterval,

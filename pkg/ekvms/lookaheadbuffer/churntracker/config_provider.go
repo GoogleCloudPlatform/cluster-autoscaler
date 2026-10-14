@@ -16,6 +16,7 @@ package churntracker
 
 import (
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,11 +25,12 @@ import (
 	"k8s.io/klog/v2"
 )
 
-// ConfigProvider provides the churn tracker configuration from the AutopilotResizableVM::LookaheadChurnCircuitBreaker experiment flag.
+// ConfigProvider provides the churn tracker configuration from the --lookahead-churn-circuit-breaker-config proto flag
+// or, if it is not set, from the AutopilotResizableVM::LookaheadChurnCircuitBreaker experiment flag.
 type ConfigProvider interface {
-	// Refresh re-evaluates the experiment flag.
+	// Refresh re-evaluates the experiment flag. It is a no-op if the configuration comes from the proto flag.
 	Refresh()
-	// IsEnabled returns true if the churn circuit breaker experiment is enabled.
+	// IsEnabled returns true if the churn circuit breaker is enabled.
 	IsEnabled() bool
 	ChurnLifetimeThreshold() time.Duration
 	ChurnWindow() time.Duration
@@ -41,25 +43,49 @@ type ConfigProvider interface {
 type configProviderImpl struct {
 	caVersion          version.Version
 	experimentsManager experiments.Manager
+	// fromProto indicates that the configuration comes from the proto flag, so the experiment is not evaluated.
+	fromProto bool
 
 	mu     sync.RWMutex
 	config *Config
 }
 
-// NewConfigProvider creates a new ConfigProvider instance.
-func NewConfigProvider(em experiments.Manager, caVersion version.Version) ConfigProvider {
+// NewConfigProvider creates a new ConfigProvider instance. If protoConfig (the --lookahead-churn-circuit-breaker-config flag
+// value) is set and valid, it is used as a static configuration. Otherwise, the configuration is taken from the experiment.
+func NewConfigProvider(em experiments.Manager, protoConfig string, caVersion version.Version) ConfigProvider {
 	provider := &configProviderImpl{
 		experimentsManager: em,
 		caVersion:          caVersion,
 		config:             defaultConfig(),
 	}
+	// Similarly to the lookahead/strategy/strategy_provider: this flag is a single-line JSON string
+	// and we wrap it in single quotes for CA proto to treat it as a string.
+	if config, ok := newProtoConfig(strings.TrimSpace(strings.Trim(protoConfig, "'")), caVersion); ok {
+		provider.config = config
+		provider.fromProto = true
+		return provider
+	}
 	provider.Refresh()
 	return provider
 }
 
-// Refresh refreshes the churn tracker configuration from the experiments manager.
+// newProtoConfig returns the Config from the trimmed proto flag value and true if it is set and valid.
+// Like the experiment, the proto configuration is enabled only if its minCaVersion is valid and not higher than the CA version.
+func newProtoConfig(protoConfig string, caVersion version.Version) (*Config, bool) {
+	if protoConfig == "" || protoConfig == "{}" {
+		return nil, false
+	}
+	flag, err := parseChurnCircuitBreakerFlag(protoConfig)
+	if err != nil {
+		klog.Warningf("Cannot parse --lookahead-churn-circuit-breaker-config flag, falling back to experiment %q: %v", experiments.ResizableVmChurnCircuitBreakerFlag, err)
+		return nil, false
+	}
+	return NewConfig(flag, caVersion), true
+}
+
+// Refresh refreshes the churn tracker configuration from the experiments manager if proto config is not provided.
 func (p *configProviderImpl) Refresh() {
-	if p.experimentsManager == nil {
+	if p.fromProto || p.experimentsManager == nil {
 		return
 	}
 	flagValue := p.experimentsManager.EvaluateStringFlagOrFailsafe(experiments.ResizableVmChurnCircuitBreakerFlag, `{"minCaVersion": "999.999.999"}`)
