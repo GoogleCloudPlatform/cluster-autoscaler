@@ -23,7 +23,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
@@ -87,16 +86,17 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 		case NodeUnfit:
 			unfitNodes = append(unfitNodes, nodeName)
 		case NodeNeedsGrace:
+			machineFamily := nodeInfo.Node().Labels[gkelabels.MachineFamilyLabel]
 			discoveryTime, pending := p.pendingUnfitNodes[nodeName]
 			switch {
 			case !pending:
-				klog.V(5).Infof("Defrag/daemonset: EK node %s newly unfit — starting grace period.", nodeName)
+				klog.V(5).Infof("Defrag/daemonset: Resizable node %s (machine family %s) newly unfit — starting grace period.", nodeName, machineFamily)
 				newPending[nodeName] = now
 			case p.clock.Since(discoveryTime) >= p.gracePeriod:
-				klog.V(5).Infof("Defrag/daemonset: EK node %s grace period expired — marking candidate.", nodeName)
+				klog.V(5).Infof("Defrag/daemonset: Resizable node %s (machine family %s) grace period expired — marking candidate.", nodeName, machineFamily)
 				unfitNodes = append(unfitNodes, nodeName)
 			default:
-				klog.V(5).Infof("Defrag/daemonset: EK node %s still within grace period.", nodeName)
+				klog.V(5).Infof("Defrag/daemonset: Resizable node %s (machine family %s) still within grace period.", nodeName, machineFamily)
 				newPending[nodeName] = discoveryTime
 			}
 		}
@@ -163,11 +163,11 @@ func (p *plugin) checkNodeStatus(
 		return NodeUnfit
 	}
 
-	// EK nodes require grace period to give them a chance to be upsized; others are immediately unfit.
-	if machineFamily == machinetypes.EK.Name() {
+	// Resizable nodes require grace period to give them a chance to be upsized; others are immediately unfit.
+	if p.config.ResizableVmManager != nil && p.config.ResizableVmManager.IsResizingEnabled(machineFamily) {
 		return NodeNeedsGrace
 	}
-	klog.V(5).Infof("Defrag/daemonset: Non-EK node %s unfit, marking candidate immediately", node.Name)
+	klog.V(5).Infof("Defrag/daemonset: Non-resizable node %s unfit, marking candidate immediately", node.Name)
 	return NodeUnfit
 }
 

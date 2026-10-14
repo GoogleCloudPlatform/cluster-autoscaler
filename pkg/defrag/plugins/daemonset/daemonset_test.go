@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -36,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/testutil"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	clocktesting "k8s.io/utils/clock/testing"
@@ -63,6 +65,7 @@ func TestDaemonSetPluginNewCandidate(t *testing.T) {
 		crds                      []crd.CRD
 		nodeNames                 []string
 		maxCandidateNodesCount    int
+		resizableVmManager        operationtracker.Manager
 		wantNodes                 []string
 		wantLatestUnfitNodesCount int
 	}{
@@ -107,22 +110,43 @@ func TestDaemonSetPluginNewCandidate(t *testing.T) {
 			wantLatestUnfitNodesCount: 2,
 		},
 		{
-			name: "all EK nodes cannot schedule DS, enter grace period",
+			name: "all resizable nodes cannot schedule DS, enter grace period",
 			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
-				withEKLabel(test.BuildTestNode("n1", 500, 10)): {},
-				withEKLabel(test.BuildTestNode("n2", 500, 10)): {},
+				withMachineFamilyLabel(test.BuildTestNode("n1", 500, 10), machinetypes.EK):  {},
+				withMachineFamilyLabel(test.BuildTestNode("n2", 500, 10), machinetypes.E4):  {},
+				withMachineFamilyLabel(test.BuildTestNode("n3", 500, 10), machinetypes.E4A): {},
 			},
 			pods: []*apiv1.Pod{
 				newDSPod(ds, "n1", test.MarkUnschedulable()),
 				newDSPod(ds, "n2", test.MarkUnschedulable()),
+				newDSPod(ds, "n3", test.MarkUnschedulable()),
 			},
 			autopilotEnabled:          true,
-			nodeNames:                 []string{"n1", "n2"},
+			nodeNames:                 []string{"n1", "n2", "n3"},
+			resizableVmManager:        &mockResizableVmManager{resizingEnabledFamilies: sets.New(machinetypes.EK.Name(), machinetypes.E4.Name(), machinetypes.E4A.Name())},
 			wantNodes:                 nil, // Does not become a candidate immediately
 			wantLatestUnfitNodesCount: 0,
 		},
 		{
-			name: "Non-EK node cannot schedule DS, becomes candidate immediately",
+			name: "resizable nodes cannot schedule DS with resizing disabled, become candidates immediately",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				withMachineFamilyLabel(test.BuildTestNode("n1", 500, 10), machinetypes.EK):  {},
+				withMachineFamilyLabel(test.BuildTestNode("n2", 500, 10), machinetypes.E4):  {},
+				withMachineFamilyLabel(test.BuildTestNode("n3", 500, 10), machinetypes.E4A): {},
+			},
+			pods: []*apiv1.Pod{
+				newDSPod(ds, "n1", test.MarkUnschedulable()),
+				newDSPod(ds, "n2", test.MarkUnschedulable()),
+				newDSPod(ds, "n3", test.MarkUnschedulable()),
+			},
+			autopilotEnabled:          true,
+			nodeNames:                 []string{"n1", "n2", "n3"},
+			resizableVmManager:        &mockResizableVmManager{resizingEnabledFamilies: sets.New[string]()},
+			wantNodes:                 []string{"n1", "n2", "n3"},
+			wantLatestUnfitNodesCount: 3,
+		},
+		{
+			name: "Non-resizable node cannot schedule DS, becomes candidate immediately",
 			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
 				withNonEKLabel(test.BuildTestNode("n1", 500, 10)): {},
 				withNonEKLabel(test.BuildTestNode("n2", 500, 10)): {},
@@ -335,6 +359,7 @@ func TestDaemonSetPluginNewCandidate(t *testing.T) {
 				Autopilot:             tc.autopilotEnabled,
 				NPCLister:             crdLister,
 				MaxCandidateNodeCount: tc.maxCandidateNodesCount,
+				ResizableVmManager:    tc.resizableVmManager,
 			}
 			plugin := NewPlugin(pluginsConfig)
 			candidate := plugin.NewCandidate(ctx, tc.nodeNames)
@@ -510,14 +535,17 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 		wantUnfitCount     int
 		markPodSchedulable bool
 	}
+	resizableFamilies := []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E4, machinetypes.E4A}
 	testCases := []struct {
-		name  string
-		node  *apiv1.Node
-		steps []step
+		name               string
+		families           []machinetypes.MachineFamily
+		resizableVmManager operationtracker.Manager
+		steps              []step
 	}{
 		{
-			name: "EK node unfit, expires grace period",
-			node: withEKLabel(test.BuildTestNode("n1", 500, 10)),
+			name:               "Resizable node unfit, expires grace period",
+			families:           resizableFamilies,
+			resizableVmManager: &mockResizableVmManager{resizingEnabledFamilies: sets.New(machinetypes.EK.Name(), machinetypes.E4.Name(), machinetypes.E4A.Name())},
 			steps: []step{
 				{
 					// Node is found unfit, enters pending.
@@ -543,8 +571,9 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 			},
 		},
 		{
-			name: "EK node unfit, fixed during grace period",
-			node: withEKLabel(test.BuildTestNode("n1", 500, 10)),
+			name:               "Resizable node unfit, fixed during grace period",
+			families:           resizableFamilies,
+			resizableVmManager: &mockResizableVmManager{resizingEnabledFamilies: sets.New(machinetypes.EK.Name(), machinetypes.E4.Name(), machinetypes.E4A.Name())},
 			steps: []step{
 				{
 					// Node is found unfit, enters pending.
@@ -554,7 +583,7 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 					wantUnfitCount:     0,
 				},
 				{
-					// Node is fixed (e.g. EK upsize), removed from pending.
+					// Node is fixed (e.g. upsize), removed from pending.
 					timeAdvance: 5 * time.Second,
 					updateNodeFunc: func(n *apiv1.Node) {
 						n.Status.Capacity[apiv1.ResourceCPU] = *resource.NewMilliQuantity(2000, resource.DecimalSI)
@@ -568,8 +597,9 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 			},
 		},
 		{
-			name: "Non-EK node unfit, becomes candidate immediately",
-			node: withNonEKLabel(test.BuildTestNode("n1", 500, 10)),
+			name:               "Resizable node unfit with resizing disabled, becomes candidate immediately",
+			families:           resizableFamilies,
+			resizableVmManager: &mockResizableVmManager{resizingEnabledFamilies: sets.New[string]()},
 			steps: []step{
 				{
 					// Node is found unfit, becomes candidate immediately.
@@ -581,8 +611,8 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 			},
 		},
 		{
-			name: "Missing label node unfit, becomes candidate immediately",
-			node: test.BuildTestNode("n1", 500, 10),
+			name:     "Non-resizable node unfit, becomes candidate immediately",
+			families: []machinetypes.MachineFamily{machinetypes.E2},
 			steps: []step{
 				{
 					// Node is found unfit, becomes candidate immediately.
@@ -596,44 +626,49 @@ func TestDaemonSetPluginNewCandidate_GracePeriod(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			pod := newDSPod(ds, tc.node.Name, test.MarkUnschedulable())
-			podLister := kubernetes.NewTestPodLister([]*apiv1.Pod{pod})
-			ctx := &context.AutoscalingContext{
-				ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
-				AutoscalingKubeClients: context.AutoscalingKubeClients{
-					ListerRegistry: kubernetes.NewListerRegistry(nil, nil, podLister, nil, nil, nil, nil, nil, nil),
-				},
-			}
-			assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(tc.node)))
-			nodeNames := []string{tc.node.Name}
-			plugin, fakeClock := newTestPluginWithClock(config.PluginsConfig{Autopilot: true})
-			plugin.gracePeriod = testGracePeriod
-			for i, step := range tc.steps {
-				if step.markPodSchedulable {
-					scheduled := &apiv1.PodCondition{
-						Type:   apiv1.PodScheduled,
-						Status: apiv1.ConditionTrue,
+			for _, family := range tc.families {
+				t.Run(family.Name(), func(t *testing.T) {
+					node := withMachineFamilyLabel(test.BuildTestNode("n1", 500, 10), family)
+					pod := newDSPod(ds, node.Name, test.MarkUnschedulable())
+					podLister := kubernetes.NewTestPodLister([]*apiv1.Pod{pod})
+					ctx := &context.AutoscalingContext{
+						ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+						AutoscalingKubeClients: context.AutoscalingKubeClients{
+							ListerRegistry: kubernetes.NewListerRegistry(nil, nil, podLister, nil, nil, nil, nil, nil, nil),
+						},
 					}
-					podutil.UpdatePodCondition(&pod.Status, scheduled)
-				}
-				fakeClock.Step(step.timeAdvance)
-				if step.updateNodeFunc != nil {
-					nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(tc.node.Name)
-					assert.NoError(t, err, "Step %d: failed to get node info", i+1)
-					newNode := nodeInfo.Node().DeepCopy()
-					step.updateNodeFunc(newNode)
-					nodeInfo.SetNode(newNode)
-				}
-				candidate := plugin.NewCandidate(ctx, nodeNames)
-				assert.Equal(t, step.wantPendingCount, len(plugin.pendingUnfitNodes), "Step %d: wrong pending count", i+1)
-				assert.Equal(t, step.wantUnfitCount, plugin.LatestUnfitNodesCount(), "Step %d: wrong unfit count", i+1)
-				if step.wantCandidateNodes == nil {
-					assert.Nil(t, candidate, "Step %d: expected nil candidate", i+1)
-				} else {
-					if assert.NotNil(t, candidate, "Step %d: expected non-nil candidate", i+1) {
-						assert.Equal(t, step.wantCandidateNodes, candidate.Nodes, "Step %d: wrong candidate nodes", i+1)
+					assert.NoError(t, ctx.ClusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(node)))
+					nodeNames := []string{node.Name}
+					plugin, fakeClock := newTestPluginWithClock(config.PluginsConfig{Autopilot: true, ResizableVmManager: tc.resizableVmManager})
+					plugin.gracePeriod = testGracePeriod
+					for i, step := range tc.steps {
+						if step.markPodSchedulable {
+							scheduled := &apiv1.PodCondition{
+								Type:   apiv1.PodScheduled,
+								Status: apiv1.ConditionTrue,
+							}
+							podutil.UpdatePodCondition(&pod.Status, scheduled)
+						}
+						fakeClock.Step(step.timeAdvance)
+						if step.updateNodeFunc != nil {
+							nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(node.Name)
+							assert.NoError(t, err, "Step %d: failed to get node info", i+1)
+							newNode := nodeInfo.Node().DeepCopy()
+							step.updateNodeFunc(newNode)
+							nodeInfo.SetNode(newNode)
+						}
+						candidate := plugin.NewCandidate(ctx, nodeNames)
+						assert.Equal(t, step.wantPendingCount, len(plugin.pendingUnfitNodes), "Step %d: wrong pending count", i+1)
+						assert.Equal(t, step.wantUnfitCount, plugin.LatestUnfitNodesCount(), "Step %d: wrong unfit count", i+1)
+						if step.wantCandidateNodes == nil {
+							assert.Nil(t, candidate, "Step %d: expected nil candidate", i+1)
+						} else {
+							if assert.NotNil(t, candidate, "Step %d: expected non-nil candidate", i+1) {
+								assert.Equal(t, step.wantCandidateNodes, candidate.Nodes, "Step %d: wrong candidate nodes", i+1)
+							}
+						}
 					}
-				}
+				})
 			}
 		})
 	}
@@ -692,21 +727,26 @@ func newTestPluginWithClock(config config.PluginsConfig) (*plugin, *clocktesting
 	return plugin, fakeClock
 }
 
-func withEKLabel(node *apiv1.Node) *apiv1.Node {
+func withMachineFamilyLabel(node *apiv1.Node, family machinetypes.MachineFamily) *apiv1.Node {
 	if node.Labels == nil {
 		node.Labels = make(map[string]string)
 	}
-	node.Labels[gkelabels.MachineFamilyLabel] = machinetypes.EK.Name()
+	node.Labels[gkelabels.MachineFamilyLabel] = family.Name()
 	return node
 }
 
-// Helper to add a non-EK machine family label to a node
+// Helper to add a non-resizable machine family label to a node
 func withNonEKLabel(node *apiv1.Node) *apiv1.Node {
-	if node.Labels == nil {
-		node.Labels = make(map[string]string)
-	}
-	node.Labels[gkelabels.MachineFamilyLabel] = machinetypes.E2.Name()
-	return node
+	return withMachineFamilyLabel(node, machinetypes.E2)
+}
+
+type mockResizableVmManager struct {
+	operationtracker.Manager
+	resizingEnabledFamilies sets.Set[string]
+}
+
+func (m *mockResizableVmManager) IsResizingEnabled(machineFamily string) bool {
+	return m.resizingEnabledFamilies.Has(machineFamily)
 }
 
 type errorPodLister struct {
