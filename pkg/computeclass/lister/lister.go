@@ -75,4 +75,15 @@ type Lister interface {
 	Default() (name string, label string, found bool)
 	// SetCloudProvider sets cloud provider so that lister is aware of cluster metadata
 	SetCloudProvider(provider listerCloudProvider)
+	// IsNodeGroupOwned returns whether the given NodeGroup is owned by this
+	// autoscaler instance.
+	IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool
+	// IsPodOwned returns whether the given Pod is owned by this autoscaler
+	// instance.
+	IsPodOwned(pod *apiv1.Pod) bool
+	// IsNodeOwned returns whether the given Node is owned by this autoscaler
+	// instance, based on its ComputeClass label. It expects a real node: fake
+	// nodes, e.g. clusterstate.FakeNode, have no ComputeClass label and resolve
+	// to the default ComputeClass.
+	IsNodeOwned(node *apiv1.Node) bool
 }

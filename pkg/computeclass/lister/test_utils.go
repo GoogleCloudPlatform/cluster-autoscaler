@@ -216,6 +216,18 @@ func (l *MockCrdLister) crdByName(crdName string) (crd.CRD, bool) {
 // SetCloudProvider sets cloud provider
 func (l *MockCrdLister) SetCloudProvider(provider listerCloudProvider) {}
 
+func (l *MockCrdLister) IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool {
+	return true
+}
+
+func (l *MockCrdLister) IsPodOwned(pod *apiv1.Pod) bool {
+	return true
+}
+
+func (l *MockCrdLister) IsNodeOwned(node *apiv1.Node) bool {
+	return true
+}
+
 func (l *MockCrdLister) CrdAnnotations(name string) (map[string]string, error) {
 	c, err := l.GetCrd(name)
 	if err != nil || c == nil {

@@ -29,6 +29,9 @@ type AutoscalingOptionsProvider interface {
 	ScaleDownUnneededTime(cloudprovider.NodeGroup) (time.Duration, bool, error)
 	ScaleDownUtilizationThreshold(cloudprovider.NodeGroup) (float64, bool, error)
 	ScaleDownGpuUtilizationThreshold(cloudprovider.NodeGroup) (float64, bool, error)
+	// IsNodeGroupOwned returns whether the given node group is owned by this CA
+	// instance.
+	IsNodeGroupOwned(cloudprovider.NodeGroup) bool
 }
 
 func NewAutoscalingOptionsProvider(lister lister.Lister, experimentsManager experiments.Manager) AutoscalingOptionsProvider {
@@ -41,6 +44,13 @@ func NewAutoscalingOptionsProvider(lister lister.Lister, experimentsManager expe
 type autoscalingOptionsProvider struct {
 	lister             lister.Lister
 	experimentsManager experiments.Manager
+}
+
+func (p *autoscalingOptionsProvider) IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool {
+	if p.lister == nil {
+		return true
+	}
+	return p.lister.IsNodeGroupOwned(nodeGroup)
 }
 
 func (p *autoscalingOptionsProvider) getCRDConsolidationDelay(nodeGroup cloudprovider.NodeGroup) (time.Duration, bool, error) {
