@@ -104,6 +104,10 @@ func (a *Aggregator) processMessage(msg UpdateMessage) {
 		klog.Warningf("CRD %s/%s not found, skipping status update", msg.Id.CRDLabel, msg.Id.CRDName)
 		return
 	}
+	if _, tracked := a.statusMap[statusKey(crd)]; msg.OnlyIfTracked && !tracked {
+		klog.V(4).Infof("CRD %s/%s is not tracked by this aggregator, skipping status update", msg.Id.CRDLabel, msg.Id.CRDName)
+		return
+	}
 
 	// 2. Apply the Functional Mutator
 	// This merges the partial update into the master state safely.
@@ -163,10 +167,7 @@ func (a *Aggregator) makeUpdates(ctx context.Context) {
 }
 
 func (a *Aggregator) getOrCreateStatus(crdObj crd.CRD) crd.CRDStatus {
-	id := CRDId{
-		CRDName:  crdObj.Name(),
-		CRDLabel: crdObj.Label(),
-	}
+	id := statusKey(crdObj)
 
 	if status, ok := a.statusMap[id]; ok {
 		return status
@@ -176,6 +177,14 @@ func (a *Aggregator) getOrCreateStatus(crdObj crd.CRD) crd.CRDStatus {
 
 	a.statusMap[id] = status
 	return status
+}
+
+// statusKey returns the key under which the status of a CRD is tracked.
+func statusKey(crdObj crd.CRD) CRDId {
+	return CRDId{
+		CRDName:  crdObj.Name(),
+		CRDLabel: crdObj.Label(),
+	}
 }
 
 func errorCode(err error) string {

@@ -15,11 +15,16 @@
 package providers
 
 import (
+	"fmt"
+
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	resizable_vm_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/klog/v2"
 )
 
 type e4AutoprovisioningProvider struct {
+	mode                        resizable_vm_types.E4AutoprovisioningMode
 	experimentsManager          experiments.Manager
 	status                      LaunchStatus
 	bpChecker                   *balloonPodChecker
@@ -33,8 +38,33 @@ type e4AutoprovisioningProvider struct {
 	isPrioritizationEnabled     bool
 }
 
-func newE4AutoprovisioningProvider(experimentsManager experiments.Manager, bpChecker *balloonPodChecker, autopilotEnabled bool, enabledOnManagedNodesCAFlag bool, metrics resizableVmMetrics) *e4AutoprovisioningProvider {
+// parseE4AutoprovisioningMode parses E4Autoprovisioning Mode
+func parseE4AutoprovisioningMode(e4Autoprovisioning string) (resizable_vm_types.E4AutoprovisioningMode, error) {
+	if e4Autoprovisioning == "" {
+		return resizable_vm_types.E4AutoprovisioningUnspecified, nil
+	}
+	e4AutoprovisioningMode := resizable_vm_types.E4AutoprovisioningMode(e4Autoprovisioning)
+
+	switch e4AutoprovisioningMode {
+	case resizable_vm_types.E4AutoprovisioningUnspecified,
+		resizable_vm_types.E4AutoprovisioningDisabled,
+		resizable_vm_types.E4AutoprovisioningEnabledNoResize,
+		resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize:
+		// valid values, do nothing
+	default:
+		return "", fmt.Errorf("unrecognized flag for E4Autoprovisioning: %q", e4AutoprovisioningMode)
+	}
+	return e4AutoprovisioningMode, nil
+}
+
+func newE4AutoprovisioningProvider(e4Autoprovisioning string, experimentsManager experiments.Manager, bpChecker *balloonPodChecker, autopilotEnabled bool, enabledOnManagedNodesCAFlag bool, metrics resizableVmMetrics) (*e4AutoprovisioningProvider, error) {
+	e4AutoprovisioningMode, err := parseE4AutoprovisioningMode(e4Autoprovisioning)
+	if err != nil {
+		return nil, fmt.Errorf("error creating e4AutoprovisioningProvider: %v", err)
+	}
+
 	return &e4AutoprovisioningProvider{
+		mode:               e4AutoprovisioningMode,
 		experimentsManager: experimentsManager,
 		status: LaunchStatus{
 			phase:  launchNotEnabled,
@@ -44,7 +74,7 @@ func newE4AutoprovisioningProvider(experimentsManager experiments.Manager, bpChe
 		autopilotEnabled:            autopilotEnabled,
 		enabledOnManagedNodesCAFlag: enabledOnManagedNodesCAFlag,
 		metrics:                     metrics,
-	}
+	}, nil
 }
 
 func (p *e4AutoprovisioningProvider) refresh() {
@@ -75,6 +105,22 @@ func (p *e4AutoprovisioningProvider) refreshPrioritizationStatus() {
 }
 
 func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
+	switch p.mode {
+	case resizable_vm_types.E4AutoprovisioningDisabled:
+		p.status = LaunchStatus{phase: launchDisabled, source: launchUndefined}
+		return
+	case resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize:
+		if !p.bpChecker.isBalloonPodCreatable {
+			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
+			return
+		}
+		p.status = LaunchStatus{phase: launchCoarseGrainedResize, source: launchClusterProto}
+		return
+	case resizable_vm_types.E4AutoprovisioningEnabledNoResize:
+		p.status = LaunchStatus{phase: launchEnabledNoResize, source: launchClusterProto}
+		return
+	}
+
 	if p.experimentsManager == nil {
 		p.status = LaunchStatus{phase: launchNotEnabled, source: launchUndefined}
 		return
@@ -93,6 +139,10 @@ func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
 		return
 	}
 
+	// E4AutoprovisioningUnspecified is a valid state where we just want to disable E4 without logging an error.
+	if p.mode != resizable_vm_types.E4AutoprovisioningUnspecified {
+		klog.Errorf("Unrecognized E4AutoprovisioningMode, defaulting to disabled: %q", p.mode)
+	}
 	p.status = LaunchStatus{phase: launchNotEnabled, source: launchUndefined}
 }
 

@@ -31,7 +31,6 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	gce_api "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -39,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	"k8s.io/utils/ptr"
@@ -7363,13 +7363,13 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		Build()
 
 	res1 := reservations.BuildSingleMachineReservation("n2-standard-2", "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a")
-	res1.Id = 1
+	res1.ID = 1
 	res1.Name = "res-name"
 	res1.SelfLink = "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a/reservations/res-name"
 	res1.SpecificReservationRequired = true
 
 	res2 := reservations.BuildSingleMachineReservation("e2-standard-2", "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-b")
-	res2.Id = 2
+	res2.ID = 2
 	res2.Name = "res-name"
 	res2.SelfLink = "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-b/reservations/res-name"
 	res2.SpecificReservationRequired = true
@@ -7633,7 +7633,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		enableReservationMatch          bool
 		pods                            []*apiv1.Pod
 		ccs                             []computeclass.CRD
-		reservations                    []*gce_api.Reservation
+		reservations                    []*reservation.Reservation
 		tpuRequest                      TpuRequest
 		enabledFeatures                 []string
 		wantRequirements                []nodeGroupRequirements
@@ -7647,27 +7647,27 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Node Selectors] Reservation Pod With Matching Reservation": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1},
+			reservations:           []*reservation.Reservation{res1},
 			wantRequirements:       []nodeGroupRequirements{resReq},
 		},
 		"[Node Selectors] Reservation Pod With Matching Reservation and Local SSD Steering, flag1 enabled": {
 			pods:                   []*apiv1.Pod{resPodLocalSsd},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resLocalSsd},
+			reservations:           []*reservation.Reservation{resLocalSsd},
 			enabledFeatures:        []string{experiments.SliceOfHardwareReservationSteerLocalSSDFlag},
 			wantRequirements:       []nodeGroupRequirements{resReqLocalSsd},
 		},
 		"[Node Selectors] Reservation Pod With Matching Reservation and Local SSD Steering, flag2 enabled": {
 			pods:                   []*apiv1.Pod{resPodLocalSsd},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resLocalSsd},
+			reservations:           []*reservation.Reservation{resLocalSsd},
 			enabledFeatures:        []string{experiments.SliceOfHardwareReservationSteerLocalSSD2Flag},
 			wantRequirements:       []nodeGroupRequirements{resReqLocalSsd},
 		},
 		"[Node Selectors] Specific Reservation Pod with Non-Specific Reservation": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1Any},
+			reservations:           []*reservation.Reservation{res1Any},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"SpecificReservationRequired is not enabled so reservation cannot be specifically targeted for consumption")},
@@ -7675,25 +7675,25 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Node Selectors] Any Reservation Pod No Matching Needed": {
 			pods:                   []*apiv1.Pod{resAnyPod},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1Any},
+			reservations:           []*reservation.Reservation{res1Any},
 			wantRequirements:       []nodeGroupRequirements{resReqAny},
 		},
 		"[Node Selectors] Local Reservation Pod When ReservationMatch Disabled, reservation exists": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements:       []nodeGroupRequirements{resReqWithoutMatch},
 		},
 		"[Node Selectors] Shared Reservation Pod When ReservationMatch Disabled": {
 			pods:                   []*apiv1.Pod{resPodShared},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements:       []nodeGroupRequirements{sharedResReqWithoutMatch},
 		},
 		"[Node Selectors] Reservation Pod without TPU Specifying an Aggregrate Reservation": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resTpu},
+			reservations:           []*reservation.Reservation{resTpu},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Unable to consume aggregate reservation for non-TPU workloads")},
@@ -7701,7 +7701,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Node Selectors] Reservation Pod without TPU request but with accelerator labels": {
 			pods:                   []*apiv1.Pod{resPodWithAcceleratorLabels},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resTpu},
+			reservations:           []*reservation.Reservation{resTpu},
 			wantRequirements: []nodeGroupRequirements{
 				{
 					pods:                     []*apiv1.Pod{resPodWithAcceleratorLabels},
@@ -7723,7 +7723,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                            []*apiv1.Pod{resPod},
 			enableReservationMatch:          false,
 			disableSpecificTypeReservations: true,
-			reservations:                    []*gce_api.Reservation{},
+			reservations:                    []*reservation.Reservation{},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Specifying reservations without TPUs are not supported")},
@@ -7732,46 +7732,46 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                            []*apiv1.Pod{resPod},
 			enableReservationMatch:          false,
 			disableSpecificTypeReservations: true,
-			reservations:                    []*gce_api.Reservation{},
+			reservations:                    []*reservation.Reservation{},
 			tpuRequest:                      TpuRequest{TpuType: "tpu-v4-podslice", ChipsPerNode: 4, Topology: "2x2x1"},
 			wantRequirements:                []nodeGroupRequirements{resReqTpu},
 		},
 		"[Node Selectors/Vertex] Reservation Pod With No Matching Reservation When ReservationMatch & ReservationMatchRequired Disabled": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements:       []nodeGroupRequirements{resReqWithoutMatch},
 		},
 		"[Node Selectors/Vertex] Reservation Pod with TPU With No Matching Reservation When When ReservationMatch & ReservationMatchRequired Disabled": {
 			pods:                   []*apiv1.Pod{resPod},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			tpuRequest:             TpuRequest{TpuType: "tpu-v4-podslice", ChipsPerNode: 4, Topology: "2x2x1"},
 			wantRequirements:       []nodeGroupRequirements{resReqTpu},
 		},
 		"[Node Selectors] Reservation With Bad Affinity": {
 			pods:                   []*apiv1.Pod{resPodBadAffinity},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1},
+			reservations:           []*reservation.Reservation{res1},
 			wantErrs:               map[types.UID]errors.AutoscalerError{"uuid": reservations.NewUnsupportedReservationAffinityError("foobar", "must be one of the supported values of [any any-reservation-then-fail none specific] or not set")},
 		},
 		"[Node Selectors] Shared Reservation Pod": {
 			pods:                   []*apiv1.Pod{resPodShared},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resShared},
+			reservations:           []*reservation.Reservation{resShared},
 			wantRequirements:       []nodeGroupRequirements{resReqShared},
 		},
 		"[Node Selectors] None affinity reservation": {
 			pods:                   []*apiv1.Pod{resNonePod},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements:       []nodeGroupRequirements{resReqNone},
 		},
 		"[CC] Reservation Pod With Matching Reservation": {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1},
+			reservations:           []*reservation.Reservation{res1},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReq),
@@ -7785,7 +7785,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCCWithZones},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1, res2},
+			reservations:           []*reservation.Reservation{res1, res2},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReq),
@@ -7800,7 +7800,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCCWithOtherZones},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1, res2},
+			reservations:           []*reservation.Reservation{res1, res2},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Specified reservation either does not exist or has no ready capacity to consume")},
@@ -7809,7 +7809,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1Any},
+			reservations:           []*reservation.Reservation{res1Any},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"SpecificReservationRequired is not enabled so reservation cannot be specifically targeted for consumption")},
@@ -7818,7 +7818,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resAnyCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1Any},
+			reservations:           []*reservation.Reservation{res1Any},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqAny),
@@ -7832,7 +7832,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resTpu},
+			reservations:           []*reservation.Reservation{resTpu},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Unable to consume aggregate reservation for non-TPU workloads")},
@@ -7842,7 +7842,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			ccs:                             []computeclass.CRD{resCC},
 			enableReservationMatch:          false,
 			disableSpecificTypeReservations: true,
-			reservations:                    []*gce_api.Reservation{},
+			reservations:                    []*reservation.Reservation{},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Specifying reservations without TPUs are not supported")},
@@ -7852,7 +7852,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			ccs:                             []computeclass.CRD{resCC},
 			enableReservationMatch:          false,
 			disableSpecificTypeReservations: true,
-			reservations:                    []*gce_api.Reservation{},
+			reservations:                    []*reservation.Reservation{},
 			tpuRequest:                      TpuRequest{TpuType: "tpu-v4-podslice", ChipsPerNode: 4, Topology: "2x2x1"},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
@@ -7867,7 +7867,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCC},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqWithoutMatch),
@@ -7881,7 +7881,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resCC},
 			enableReservationMatch: false,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			tpuRequest:             TpuRequest{TpuType: "tpu-v4-podslice", ChipsPerNode: 4, Topology: "2x2x1"},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
@@ -7896,14 +7896,14 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resBadAffinityCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1},
+			reservations:           []*reservation.Reservation{res1},
 			wantErrs:               map[types.UID]errors.AutoscalerError{"uuid": reservations.NewUnsupportedReservationAffinityError("foobar", "must be one of the supported values of [any any-reservation-then-fail none specific] or not set")},
 		},
 		"[CC] Shared Reservation Pod": {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resSharedCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resShared},
+			reservations:           []*reservation.Reservation{resShared},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqShared),
@@ -7917,7 +7917,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 			pods:                   []*apiv1.Pod{resCCPod},
 			ccs:                    []computeclass.CRD{resNoneCC},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{},
+			reservations:           []*reservation.Reservation{},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqNone),
@@ -7930,7 +7930,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] invalid placement policy": {
 			pods:                   []*apiv1.Pod{resPodSpecificAffinity},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resInvalidPlacementPolicy},
+			reservations:           []*reservation.Reservation{resInvalidPlacementPolicy},
 			wantErrs: map[types.UID]errors.AutoscalerError{
 				"uuid": reservations.NewErrUnusableReservation(
 					gceclient.ReservationRef{Name: "res-name", Project: "12345"},
@@ -7940,7 +7940,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] reservation with valid placement policy under policy label": {
 			pods:                   []*apiv1.Pod{resPodSpecificAffinity},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resPlacementPolicy1},
+			reservations:           []*reservation.Reservation{resPlacementPolicy1},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqSpecificAffinity),
@@ -7951,7 +7951,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] reservation with valid placement policy under placement label": {
 			pods:                   []*apiv1.Pod{resPodSpecificAffinity},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resPlacementPolicy2},
+			reservations:           []*reservation.Reservation{resPlacementPolicy2},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqSpecificAffinity),
@@ -7962,7 +7962,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] reservation with valid placement policy while conflicting compact placement police label is provided": {
 			pods:                   []*apiv1.Pod{addCompactPlacementPolicyLabel(resPodSpecificAffinity.DeepCopy(), "other-placement-policy")},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resPlacementPolicy1},
+			reservations:           []*reservation.Reservation{resPlacementPolicy1},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "12345"},
 				"Unable to consume specific reservation with placement policy when conflicting placement policy (other-placement-policy) is provided via node selectors."),
@@ -7971,7 +7971,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] reservation with valid placement policy while compact placement group label is provided": {
 			pods:                   []*apiv1.Pod{resPodSpecificAffintyCompactPlacementGroup},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resPlacementPolicy1},
+			reservations:           []*reservation.Reservation{resPlacementPolicy1},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqSpecificAffinityPlacementGroup),
@@ -7982,7 +7982,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] reservation with valid placement policy is in other project": {
 			pods:                   []*apiv1.Pod{resPodSpecificAffinityOtherProject},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{resPlacementPolicyShared},
+			reservations:           []*reservation.Reservation{resPlacementPolicyShared},
 			wantErrs: map[types.UID]errors.AutoscalerError{"uuid": reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-name", Project: "other-project"},
 				"Shared reservations with placement policy are not supported")},
@@ -7990,7 +7990,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 		"[Placement policy inferred from reservation] placement policy missing from reservation, policy provided via node selector labels": {
 			pods:                   []*apiv1.Pod{resPodPlacementPolicyFromLabels},
 			enableReservationMatch: true,
-			reservations:           []*gce_api.Reservation{res1},
+			reservations:           []*reservation.Reservation{res1},
 			wantRequirements: []nodeGroupRequirements{
 				newTestNodeGroupRequirements(
 					copyReqsFrom(resReqSpecificAffinityPlacementGroupNoReservationPolicy),
@@ -8960,7 +8960,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 	for desc, tc := range map[string]struct {
 		ngReq                  *nodeGroupRequirements
 		podReq                 *podrequirements.Requirements
-		reservations           []*gce_api.Reservation
+		reservations           []*reservation.Reservation
 		reservationBlocks      []*gceclient.GceReservationBlock
 		enableReservationMatch bool
 		expectedErr            error
@@ -8978,7 +8978,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 					gkelabels.ReservationProjectLabel: podrequirements.NewValues(projectId),
 				}),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2,
 			},
 			enableReservationMatch: true,
@@ -8993,7 +8993,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 					gkelabels.ReservationProjectLabel: podrequirements.NewValues(projectId),
 				}),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2,
 			},
 			enableReservationMatch: true,
@@ -9011,7 +9011,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 					gkelabels.ReservationProjectLabel: podrequirements.NewValues(projectId),
 				}),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2,
 			},
 		},
@@ -9028,7 +9028,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 					gkelabels.ReservationProjectLabel: podrequirements.NewValues(sharedProject),
 				}),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2, rsv3,
 			},
 		},
@@ -9046,7 +9046,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 					gkelabels.ReservationBlocksLabel: podrequirements.NewValues("block-a"),
 				}),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2,
 			},
 			reservationBlocks: []*gceclient.GceReservationBlock{
@@ -9066,7 +9066,7 @@ func TestReservationGenerator_updateRequirements(t *testing.T) {
 				),
 			},
 			podReq: &podrequirements.Requirements{},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2, rsv3,
 			},
 		},
@@ -9104,7 +9104,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 
 	for desc, tc := range map[string]struct {
 		ngReq           nodeGroupRequirements
-		reservations    []*gce_api.Reservation
+		reservations    []*reservation.Reservation
 		wantErr         error
 		wantNgReqsCount int
 		wantZones       []string
@@ -9113,7 +9113,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 			ngReq: nodeGroupRequirements{
 				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				reservations.New(reservationName, "us-central1-a"),
 				reservations.New(reservationName, "us-central1-b")},
 			wantNgReqsCount: 1,
@@ -9124,7 +9124,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 				machineSpec:    machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
 				specifiedZones: []string{"us-central1-a", "us-central1-b"},
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				reservations.New(reservationName, "us-central1-a"),
 				reservations.New(reservationName, "us-central1-b", reservations.WithMachine("n2-standard-4"))},
 			wantErr: reservations.NewErrUnusableReservation(
@@ -9136,7 +9136,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 			ngReq: nodeGroupRequirements{
 				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				reservations.New(reservationName, "us-central1-a"),
 				reservations.New(reservationName, "us-central1-b", reservations.WithMachine("n2-standard-4"))},
 			wantNgReqsCount: 2,
@@ -9146,7 +9146,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 				machineSpec:    machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
 				specifiedZones: []string{"us-central1-a", "us-central1-b"},
 			},
-			reservations: []*gce_api.Reservation{reservations.New(reservationName, "us-central1-a")},
+			reservations: []*reservation.Reservation{reservations.New(reservationName, "us-central1-a")},
 			wantErr: reservations.NewErrUnusableReservation(
 				gceclient.ReservationRef{Name: "res-group", Project: projectId},
 				"Reservation is missing in specified zone us-central1-b",
@@ -9156,7 +9156,7 @@ func TestReservationGenerator_GenerateNodeGroupRequirements(t *testing.T) {
 			ngReq: nodeGroupRequirements{
 				machineSpec: machinetypes.NewMachineSpecSingleFamily(machinetypes.N2, machinetypes.AnyPlatform, "", ""),
 			},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				reservations.NewAny(reservationName, "us-central1-a"),
 				reservations.New(reservationName, "us-central1-b", reservations.WithAggregate("us-central1-b", "")),
 			},
@@ -11992,7 +11992,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
 	testCases := []struct {
 		name              string
-		reservations      []*gce_api.Reservation
+		reservations      []*reservation.Reservation
 		reservationBlocks map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 		req               *reservationRequirements
 		subBlocksDisabled bool
@@ -12001,7 +12001,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 	}{
 		{
 			name: "reservation name not specified",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -12020,7 +12020,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		},
 		{
 			name: "block exists",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -12036,7 +12036,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		},
 		{
 			name: "block does not exist",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -12055,7 +12055,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		},
 		{
 			name: "sub-block exists",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -12084,7 +12084,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		},
 		{
 			name: "sub-block does not exist",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -12115,7 +12115,7 @@ func TestReservationGenerator_matchReservationBlock(t *testing.T) {
 		},
 		{
 			name: "sub-block specified, sub-blocks disabled",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{

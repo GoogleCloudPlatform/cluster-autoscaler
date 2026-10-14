@@ -149,6 +149,8 @@ type GkeManager interface {
 	DeleteInstances(instances []gce.GceRef) error
 	// GetMigForInstance returns MigConfig of the given Instance
 	GetMigForInstance(instance gce.GceRef) (gce.Mig, error)
+	// IsMigBlocked returns whether the given MIG is currently marked as blocked.
+	IsMigBlocked(migRef gce.GceRef) bool
 	// GetMigNodes returns mig nodes.
 	GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error)
 	// Refresh updates both GCE and GKE resources.
@@ -607,7 +609,7 @@ func CreateGkeManager(
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
 ) (GkeManager, error) {
 	// Create cache and mig lister
-	migLister := NewGkeMigLister(cache, blockListRefreshIntervalTime, markedIrretrievableRefreshIntervalTime, maxIrretrievableErrsBeforeBlocked)
+	migLister := NewGkeMigLister(cache, BlockListRefreshIntervalTime, MarkedIrretrievableRefreshIntervalTime, MaxIrretrievableErrsBeforeBlocked)
 
 	domainUrl := strings.TrimSuffix(gceConnectionConfig.Endpoint, "/")
 	gceService := client.GCE
@@ -1776,6 +1778,11 @@ func (m *gkeManagerImpl) GetMigForInstance(instance gce.GceRef) (gce.Mig, error)
 	return m.migInfoProvider.GetMigForInstance(context.TODO(), instance)
 }
 
+// IsMigBlocked returns whether the given MIG is currently marked as blocked.
+func (m *gkeManagerImpl) IsMigBlocked(migRef gce.GceRef) bool {
+	return m.cache.IsMigBlocked(migRef)
+}
+
 // GetMigNodes returns instances that belong to a MIG.
 func (m *gkeManagerImpl) GetMigNodes(mig gce.Mig) ([]gce.GceInstance, error) {
 	return m.migInfoProvider.GetMigInstances(context.TODO(), mig.GceRef())
@@ -1998,8 +2005,7 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 		}
 
 		// Once GCE MIGs list got updated drop instance templates for no longer tracked instance groups
-		migs := m.migLister.GetMigs()
-		m.cache.DropInstanceTemplatesForMissingMigs(context.TODO(), migs)
+		m.dropInstanceTemplatesForUnregisteredMigs()
 	}
 	// ProvisioningRequest Manager depends on MIG status it should be refreshed after the main loop
 	if m.provisioningRequestManager != nil {
@@ -2009,6 +2015,13 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 		}
 	}
 	return m.initializeOnce()
+}
+
+// dropInstanceTemplatesForUnregisteredMigs drops cached instance templates of
+// MIGs that are no longer registered, note that templates of temporarily
+// blocked MIGs are kept so that we don't refetch them after getting unblocked
+func (m *gkeManagerImpl) dropInstanceTemplatesForUnregisteredMigs() {
+	m.cache.DropInstanceTemplatesForMissingMigs(context.TODO(), m.cache.GetMigs())
 }
 
 func (m *gkeManagerImpl) queuedProvisioningMigGceRefs() (map[gce.GceRef]common.GkeMigWrapper, map[gce.GceRef]common.GkeMigWrapper) {
@@ -2895,6 +2908,11 @@ func (m *gkeManagerImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
 	}
 	if mig == nil {
 		klog.V(4).Infof("[InstanceByRef] Mig for %v not found", ref)
+		return nil
+	}
+
+	if m.IsMigBlocked(mig.GceRef()) {
+		klog.V(4).Infof("[InstanceByRef] Mig %v for %v is blocked, skipping instance lookup", mig.GceRef(), ref)
 		return nil
 	}
 

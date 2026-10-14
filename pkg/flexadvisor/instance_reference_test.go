@@ -114,7 +114,7 @@ func TestConstructInstanceReference(t *testing.T) {
 			name:      "Error - Incorrect NodeGroup type",
 			nodeGroup: &mockOtherNodeGroup{},
 			want:      nil,
-			wantErr:   fmt.Errorf("unexpected cloudprovider.NodeGroup type, got: *flexadvisor.mockOtherNodeGroup, want: gke.NodeGroup"),
+			wantErr:   fmt.Errorf("ccc label/flexibility scope key not found in the nodeGroup. err: expected GkeMig"),
 		},
 		{
 			name:      "Error - Missing ComputeClassLabel",
@@ -291,4 +291,32 @@ func TestConstructInstanceReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConstructInstanceReferenceForScope(t *testing.T) {
+	t.Run("Success - Unlabelled Autopilot node group with explicit scope key", func(t *testing.T) {
+		ng := newTestMig("us-central1-a", "e2-standard-4", map[string]string{}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
+		got, err := ConstructInstanceReferenceForScope(ng, "general-purpose", experiments.NewMockManager())
+		assert.NoError(t, err)
+		assert.Equal(t, &InstanceReference{
+			Zone:                "us-central1-a",
+			FlexibilityScopeKey: "general-purpose",
+			InstanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
+		}, got)
+	})
+
+	t.Run("Error - Empty flexibility scope key", func(t *testing.T) {
+		ng := newTestMig("us-central1-a", "e2-standard-4", map[string]string{}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
+		got, err := ConstructInstanceReferenceForScope(ng, "", experiments.NewMockManager())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "ccc label/flexibility scope key not found in the nodeGroup")
+		assert.Nil(t, got)
+	})
+
+	t.Run("Error - Incorrect NodeGroup type", func(t *testing.T) {
+		got, err := ConstructInstanceReferenceForScope(&mockOtherNodeGroup{}, "general-purpose", experiments.NewMockManager())
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected cloudprovider.NodeGroup type, got: *flexadvisor.mockOtherNodeGroup, want: gke.NodeGroup")
+		assert.Nil(t, got)
+	})
 }

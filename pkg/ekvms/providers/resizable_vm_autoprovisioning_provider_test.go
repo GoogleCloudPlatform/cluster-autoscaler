@@ -125,7 +125,7 @@ func TestNodesCount(t *testing.T) {
 	bpChecker := &balloonPodChecker{isBalloonPodCreatable: true}
 
 	ekProvider, _ := newEkAutoprovisioningProvider(string(resizable_vm_types.EkAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
-	e4Provider := newE4AutoprovisioningProvider(em, bpChecker, true, true, mockMetrics)
+	e4Provider, _ := newE4AutoprovisioningProvider(string(resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 	e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 
 	provider := &ResizableVmAutoprovisioningProvider{
@@ -216,7 +216,7 @@ func TestHasActiveResizableNodes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ekProvider, _ := newEkAutoprovisioningProvider(tc.ekMode, em, bpChecker, true, true, mockMetrics)
-			e4Provider := newE4AutoprovisioningProvider(em, bpChecker, true, true, mockMetrics)
+			e4Provider, _ := newE4AutoprovisioningProvider(string(resizable_vm_types.E4AutoprovisioningUnspecified), em, bpChecker, true, true, mockMetrics)
 			e4aProvider, _ := newE4aAutoprovisioningProvider(tc.e4aMode, em, bpChecker, true, true, mockMetrics)
 
 			provider := &ResizableVmAutoprovisioningProvider{
@@ -348,7 +348,7 @@ func TestIsE4StatefulEnabledInAutopilot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			em := experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentFlags, nil)
 			ekProvider, _ := newEkAutoprovisioningProvider(string(resizable_vm_types.EkAutoprovisioningDisabled), em, bpChecker, true, true, mockMetrics)
-			e4Provider := newE4AutoprovisioningProvider(em, bpChecker, tc.autopilotEnabled, tc.managedNodesFlag, mockMetrics)
+			e4Provider, _ := newE4AutoprovisioningProvider(string(resizable_vm_types.E4AutoprovisioningUnspecified), em, bpChecker, tc.autopilotEnabled, tc.managedNodesFlag, mockMetrics)
 			e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningDisabled), em, bpChecker, true, true, mockMetrics)
 
 			provider := &ResizableVmAutoprovisioningProvider{
@@ -372,8 +372,10 @@ func TestResizingEnabled(t *testing.T) {
 		machineFamily     string
 		ekLaunchPhase     launchPhase
 		e4aLaunchPhase    launchPhase
+		e4LaunchPhase     launchPhase
 		autopilotEnabled  bool
 		e4aOnManagedNodes bool
+		e4OnManagedNodes  bool
 		want              bool
 	}{
 		{
@@ -428,6 +430,20 @@ func TestResizingEnabled(t *testing.T) {
 			e4aOnManagedNodes: true,
 			want:              true,
 		},
+		{
+			name:             "e4_resizing_should_be_enabled_with_autopilot_mode_and_e4_launch_coarse_grained_resize",
+			machineFamily:    "e4",
+			e4LaunchPhase:    launchCoarseGrainedResize,
+			autopilotEnabled: true,
+			want:             true,
+		},
+		{
+			name:             "e4_resizing_should_be_enabled_with_managed_nodes_and_e4_launch_coarse_grained_resize",
+			machineFamily:    "e4",
+			e4LaunchPhase:    launchCoarseGrainedResize,
+			e4OnManagedNodes: true,
+			want:             true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ekAutoprovisioningProvider := &ekAutoprovisioningProvider{
@@ -445,11 +461,20 @@ func TestResizingEnabled(t *testing.T) {
 				autopilotEnabled:      tc.autopilotEnabled,
 				enabledOnManagedNodes: tc.e4aOnManagedNodes,
 			}
+			e4AutoprovisioningProvider := &e4AutoprovisioningProvider{
+				status: LaunchStatus{
+					phase:  tc.e4LaunchPhase,
+					source: "",
+				},
+				autopilotEnabled:      tc.autopilotEnabled,
+				enabledOnManagedNodes: tc.e4OnManagedNodes,
+			}
 			p := &ResizableVmAutoprovisioningProvider{
 				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
 				autoprovisioningProviders: map[string]autoprovisioningProvider{
 					machinetypes.EK.Name():  ekAutoprovisioningProvider,
 					machinetypes.E4A.Name(): e4aAutoprovisioningProvider,
+					machinetypes.E4.Name():  e4AutoprovisioningProvider,
 				},
 			}
 

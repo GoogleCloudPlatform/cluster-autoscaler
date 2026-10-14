@@ -69,3 +69,12 @@ const (
 	E4aAutoprovisioningEnabledNoResize            E4aAutoprovisioningMode = "E4A_AUTOPROVISIONING_ENABLED_NO_RESIZE"
 	E4aAutoprovisioningEnabledCoarseGrainedResize E4aAutoprovisioningMode = "E4A_AUTOPROVISIONING_ENABLED_COARSE_GRAINED_RESIZE"
 )
+
+type E4AutoprovisioningMode string
+
+const (
+	E4AutoprovisioningUnspecified                E4AutoprovisioningMode = "E4_AUTOPROVISIONING_UNSPECIFIED"
+	E4AutoprovisioningDisabled                   E4AutoprovisioningMode = "E4_AUTOPROVISIONING_DISABLED"
+	E4AutoprovisioningEnabledNoResize            E4AutoprovisioningMode = "E4_AUTOPROVISIONING_ENABLED_NO_RESIZE"
+	E4AutoprovisioningEnabledCoarseGrainedResize E4AutoprovisioningMode = "E4_AUTOPROVISIONING_ENABLED_COARSE_GRAINED_RESIZE"
+)

@@ -94,6 +94,10 @@ type TestInfrastructure struct {
 	Snapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter
 	// MachineConfigProvider provides GKE machine hardware configuration specs.
 	MachineConfigProvider *machinetypes.MachineConfigProvider
+	// GkeCache holds the GKE cache instance.
+	GkeCache *gke.GkeCache
+	// GceCache holds the GCE cache instance.
+	GceCache *gce.GceCache
 }
 
 // SetupInfrastructure initializes the standard set of test dependencies.
@@ -110,10 +114,15 @@ func SetupInfrastructure(ctx context.Context, t testing.TB) *TestInfrastructure 
 
 	mcp := machinetypes.NewMachineConfigProvider(nil)
 
+	gceCache := gce.NewGceCache()
+	gkeCache := gke.NewGkeCache(gceCache, nodetemplate.NewCache())
+
 	return &TestInfrastructure{
 		Fakes:                 fakes,
 		Snapshotter:           snapshotter,
 		MachineConfigProvider: mcp,
+		GkeCache:              gkeCache,
+		GceCache:              gceCache,
 	}
 }
 
@@ -268,8 +277,8 @@ func DefaultAutoscalingBuilder(
 		return nil, err
 	}
 
-	gceCache := gce.NewGceCache()
-	gkeCache := gke.NewGkeCache(gceCache, nodetemplate.NewCache())
+	gkeCache := infra.GkeCache
+	gceCache := infra.GceCache
 
 	bulkMigClient, err := bulkmig.NewBulkMigClientBeta(httpClient, config.ProjectID, fakeOptions.UserAgent, fakeOptions.GceEndpoint, fakeGceClient, gceCache)
 	if err != nil {

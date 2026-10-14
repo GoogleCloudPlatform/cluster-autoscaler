@@ -21,9 +21,9 @@ import (
 	"math/rand"
 	"time"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/preemption"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
@@ -189,7 +189,7 @@ func (p *gkePriceBased) BestOption(ctx context.Context, expansionOptions []expan
 		// continuing without stabilization.
 	}
 
-	var gceReservations []*gce_api.Reservation
+	var gceReservations []*reservation.Reservation
 	if p.reservationsPuller != nil {
 		gceReservations = p.reservationsPuller.GetReservations()
 	}
@@ -387,7 +387,7 @@ func buildPod(name string, millicpu, mem, ephStr int64) *apiv1.Pod {
 	}
 }
 
-func (p *gkePriceBased) totalNodePrice(option expander.Option, node *apiv1.Node, gceReservations []*gce_api.Reservation, minAddedNodeCount int, now time.Time, then time.Time) (float64, int64, error) {
+func (p *gkePriceBased) totalNodePrice(option expander.Option, node *apiv1.Node, gceReservations []*reservation.Reservation, minAddedNodeCount int, now time.Time, then time.Time) (float64, int64, error) {
 	nodePrice, err := p.pricingModel.NodePrice(context.TODO(), node, now, then)
 	if err != nil {
 		return 0.0, 0, err

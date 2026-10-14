@@ -130,16 +130,30 @@ func (p *ScaleDownStatusHistoryProcessor) Process(ctx context.Context, autoscali
 			status.TrySendRuleUpdate(p.updatesCh, status.UpdateMessage{
 				Id: crdIdVal,
 				Mutate: func(s crd.CRDStatus) {
+					now := metav1.NewTime(p.now())
 					current := s.GetRuleScalingHistory(rIdxVal)
 					updated := crd.ScalingEventsHistory{}
 					if current != nil {
 						updated = *current
 					}
 					updated.ConsolidatedNodesCount += deltaVal
-					updated.MeasuredAt = metav1.NewTime(p.now())
+					updated.MeasuredAt = now
+					// The first consolidation recorded for a priority also starts its
+					// collection window. Leaving MeasuredSince at the zero time is not a
+					// cosmetic problem: it serialises to null, the CRD types measuredSince as
+					// a non-nullable string, and the API server then rejects the *entire*
+					// status patch - taking down resourceInfo, conditions and the
+					// consolidation breakdown along with it. Observed on a live cluster as
+					// "priorityStatuses[0].scalingEventsHistory.measuredSince: Invalid value:
+					// \"null\"", after which that ComputeClass stopped being updated at all.
+					// The converter should guard against this too, see toCccScalingEventsHistory.
+					if updated.MeasuredSince.IsZero() {
+						updated.MeasuredSince = now
+					}
 					s.UpdateRuleScalingHistory(rIdxVal, updated)
 				},
 			}, rIdxVal)
+
 		}
 	}
 }

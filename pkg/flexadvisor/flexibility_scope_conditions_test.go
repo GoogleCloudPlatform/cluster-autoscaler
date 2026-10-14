@@ -269,7 +269,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
 				updatesCh := make(chan status.UpdateMessage, 10)
 
-				fa, err := NewFlexAdvisor(ctx, mockProvider, mockLister, instanceConfigCloudProvider, optionsTracker, updatesCh)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, mockLister, instanceConfigCloudProvider, optionsTracker, updatesCh, nil)
 				assert.NoError(t, err)
 
 				setupScopeAvailability(t, fa, mockProvider, "ccc-1", crd1, tc.availability)

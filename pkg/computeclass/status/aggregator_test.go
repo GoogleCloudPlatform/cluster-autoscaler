@@ -70,13 +70,14 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 	now := time.Now()
 
 	testCases := []struct {
-		name      string
-		crds      []crd.CRD
-		msgId     CRDId
-		setup     func(status crd.CRDStatus)
-		mutate    Mutator
-		wantDirty bool
-		wantInMap bool
+		name          string
+		crds          []crd.CRD
+		msgId         CRDId
+		setup         func(status crd.CRDStatus)
+		mutate        Mutator
+		onlyIfTracked bool
+		wantDirty     bool
+		wantInMap     bool
 	}{
 		{
 			name:  "valid mutation changing status marks CRD as dirty",
@@ -133,6 +134,31 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 			wantDirty: false,
 			wantInMap: false,
 		},
+		{
+			// Starting to track the CRD would make this aggregator patch it
+			// on its next flush, taking over fields another shard owns.
+			name:  "message restricted to tracked CRDs is dropped for a CRD without a status",
+			crds:  []crd.CRD{crd1},
+			msgId: CRDId{CRDLabel: testCrdLabel, CRDName: "test-ccc"},
+			mutate: func(status crd.CRDStatus) {
+				status.UpdateConditions([]metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}})
+			},
+			onlyIfTracked: true,
+			wantDirty:     false,
+			wantInMap:     false,
+		},
+		{
+			name:  "message restricted to tracked CRDs is applied to a CRD with a status",
+			crds:  []crd.CRD{crd1},
+			msgId: CRDId{CRDLabel: testCrdLabel, CRDName: "test-ccc"},
+			setup: func(status crd.CRDStatus) {},
+			mutate: func(status crd.CRDStatus) {
+				status.UpdateConditions([]metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}})
+			},
+			onlyIfTracked: true,
+			wantDirty:     true,
+			wantInMap:     true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -155,8 +181,9 @@ func TestAggregator_ProcessMessage(t *testing.T) {
 			}
 
 			aggregator.processMessage(UpdateMessage{
-				Id:     tc.msgId,
-				Mutate: tc.mutate,
+				Id:            tc.msgId,
+				Mutate:        tc.mutate,
+				OnlyIfTracked: tc.onlyIfTracked,
 			})
 
 			assert.Equal(t, tc.wantDirty, aggregator.dirtySet[tc.msgId])

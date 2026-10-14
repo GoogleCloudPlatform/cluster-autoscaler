@@ -303,8 +303,7 @@ func initCapacityBufferMetricsProcessor(experimentsManager experiments.Manager, 
 func buildScaleDownSetProcessors(
 	provider GkeCloudProvider,
 	options *internalopts.AutoscalingOptions,
-	npcCrdLister npc_lister.Lister,
-	experimentsManager experiments.Manager,
+	minCapacityProcessor *scaledown.AtomicMinCapacityProcessor,
 ) []nodes.ScaleDownSetProcessor {
 	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
 		internal_processors.NewMinSizeProcessor(provider),
@@ -321,8 +320,8 @@ func buildScaleDownSetProcessors(
 	if options.EnableComputeClassMinCapacity {
 		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
 		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
-		// groups, which are exempt from the per-node TargetNodeCountQuota.
-		scaleDownSetProcessors = append(scaleDownSetProcessors, scaledown.NewAtomicMinCapacityProcessor(npcCrdLister, experimentsManager))
+		// groups and nodes being deleted, which are exempt from the per-node TargetNodeCountQuota.
+		scaleDownSetProcessors = append(scaleDownSetProcessors, minCapacityProcessor)
 	}
 	return scaleDownSetProcessors
 }
@@ -403,7 +402,7 @@ func setUpProcessors(
 	cbReady := false
 	if cbEnabled {
 		var err error
-		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, kubeConfig)
+		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, manager)
 		cbReady = err == nil && capacitybufferClient != nil
 	}
 
@@ -532,7 +531,7 @@ func setUpProcessors(
 	scaleDownComparers = append(scaleDownComparers, npcCrdComparer)
 
 	var ekvmsProcessor *ekvms_processor.ScaleUpNodeProcessor
-	var resizableVmManager *ekvms_operationtracker.ManagerImpl
+	var resizableVmManager ekvms_operationtracker.Manager
 	var resizableMachineTypesProvider internalcfg.Provider[sets.Set[string]]
 
 	if options.EkvmsFixerEnabled {
@@ -567,6 +566,7 @@ func setUpProcessors(
 		machineTypeFlags := map[string]string{
 			machinetypes.EK.Name():  options.EkMachineTypes,
 			machinetypes.E4A.Name(): options.E4aMachineTypes,
+			machinetypes.E4.Name():  options.E4MachineTypes,
 		}
 		experimentFlags := map[string]string{
 			machinetypes.EK.Name():  experiments.EkMachineTypesFlag,
@@ -624,6 +624,9 @@ func setUpProcessors(
 		}
 	}
 
+	// Shared by the scale-down set processors and defrag.
+	atomicMinCapacityProcessor := scaledown.NewAtomicMinCapacityProcessor(ccLister, experimentsManager)
+
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
 			CandidateLimit:   options.DefragCandidateLimit,
@@ -631,6 +634,11 @@ func setUpProcessors(
 			ScaleUpTimeout:   options.DefragScaleUpTimeout,
 			ScaleDownTimeout: options.DefragScaleDownTimeout,
 			ScaleDownDelay:   options.DefragScaleDownDelay,
+			// The only reader of the block reasons is the config drift
+			// reporter below, so the flag that enables it also decides whether
+			// defrag pays for recording them.
+			RecordBlockReasons:    options.ComputeClassConfigDriftReporting,
+			EnableScaleDownFilter: options.EnableComputeClassMinCapacity,
 		}
 		pluginsConfig := defrag_plugins_config.New(defrag_plugins_config.Options{
 			MaxCandidateNodeCount: options.DefragCandidateNodeLimit,
@@ -656,6 +664,7 @@ func setUpProcessors(
 			FairnessEnforcer:         sharedFairnessManager.CreateEnforcer(defrag_processor.DefragProcessorName),
 			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
 			CcLister:                 ccLister,
+			ScaleDownNodesFilter:     atomicMinCapacityProcessor,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -669,8 +678,16 @@ func setUpProcessors(
 	}
 
 	var cbPodInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
+	var cbAutoscalingStatusProcessor *capacitybuffers.CapacityBufferAutoscalingStatusProcessor
 	if options.CapacitybufferPodInjectionEnabled && cbReady {
 		cbPodInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffer.ActiveProvisioningStrategy}, capacitybufferPodsRegistry, true)
+		if options.CapacityBufferReadyReplicasEnabled {
+			readyReplicasController := capacitybuffers.NewReadyReplicasController(manager.GetClient())
+			if err := readyReplicasController.SetupWithManager(manager); err != nil {
+				return nil, fmt.Errorf("failed to setup CapacityBuffer ReadyReplicas controller: %w", err)
+			}
+			cbAutoscalingStatusProcessor = capacitybuffers.NewCapacityBufferAutoscalingStatusProcessor(readyReplicasController, capacitybufferPodsRegistry)
+		}
 	}
 
 	var podInjectionProcessor *podinjection.PodInjectionPodListProcessor
@@ -742,6 +759,7 @@ func setUpProcessors(
 
 	var crdStatusHistoryProcessor *history.AutoscalingStatusHistoryProcessor
 	var crdResourcesReportingProcessor *npc_status.CrdResourceReportingProcessor
+	var crdConfigDriftProcessor *npc_status.ConfigDriftReportingProcessor
 	if options.EnhancedCrdStatusReporting && updatesCh != nil {
 		sharedScaleUpData := history.NewScaleUpData()
 		crdHistoryProcessor := history.NewScaleUpStatusHistoryProcessor(ccLister, provider, sharedScaleUpData, updatesCh, minCapacityObserver, experimentsManager)
@@ -753,6 +771,18 @@ func setUpProcessors(
 
 		crdScaleDownHistoryProcessor := history.NewScaleDownStatusHistoryProcessor(ccLister, provider, updatesCh, experimentsManager)
 		scaleDownProcessorChain.AddProcessor(crdScaleDownHistoryProcessor)
+
+		// Defrag is what actually migrates drifted nodes, and the reasons it
+		// records are the only explanation of why a node is not being migrated.
+		// With it disabled there is no migration to report the progress of.
+		if options.ComputeClassConfigDriftReporting && options.DefragEnabled {
+			crdConfigDriftProcessor = npc_status.NewConfigDriftReportingProcessor(ccLister, updatesCh, computeclass.NewMatcher(ccLister, provider), *defragProcessor, experimentsManager)
+		}
+
+		if options.EnableComputeClassScaleDownStatus {
+			crdScaleDownBlockedProcessor := history.NewScaleDownBlockedStatusProcessor(ccLister, provider, updatesCh, experimentsManager, options.ScaleDownBlockingNodeLabels)
+			scaleDownProcessorChain.AddProcessor(crdScaleDownBlockedProcessor)
+		}
 	}
 
 	var mutationInjector *daemonsetmutation.Injector
@@ -764,7 +794,7 @@ func setUpProcessors(
 		mutationController.Start()
 	}
 
-	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdStatusHistoryProcessor)
+	autoscalingProcessors.AutoscalingStatusProcessor = internal_processors.NewGkeInternalAutoscalingStatusProcessor(quotaProcessor, vizAutoscalingStatusProcessor, edpNodeTaintingProcessor, edpMetrics, crdResourcesReportingProcessor, crdConfigDriftProcessor, crdStatusHistoryProcessor, cbAutoscalingStatusProcessor)
 
 	apNodeGroupListProcessor, apNodeGroupManager := initAutoprovisioningProcessors(optionsTracker, *options, provider, backoff, scaleBlockingProcessor, reservationsPuller, ccLister, matcher, allowlistedSystemLabelsMatcher, experimentsManager, autoscalingKubeClients.ListerRegistry, resizableMachineTypesProvider, reservationBlocksPuller, resourcePolicyPuller, mutationInjector)
 	autoscalingProcessors.NodeGroupListProcessor = apNodeGroupListProcessor
@@ -806,10 +836,9 @@ func setUpProcessors(
 	// processing order, it's initialized as the final NodeGroupListProcessor.
 	npcProcessor := npc_processors.NewNodeGroupListProcessor(ccLister, autoscalingProcessors.NodeGroupListProcessor, internalmetrics.Metrics, provider)
 	autoscalingProcessors.NodeGroupListProcessor = npcProcessor
+
 	binpackingLimiters := []binpacking.BinpackingLimiter{autoscalingProcessors.BinpackingLimiter, npcProcessor}
-	if options.GCEFlexAdvisorEnabled {
-		binpackingLimiters = append(binpackingLimiters, flexadvisor.NewBinpackingLimiter(scaleUpLimiterTracker))
-	}
+
 	autoscalingProcessors.BinpackingLimiter = binpacking.NewCombinedLimiter(binpackingLimiters)
 	npcCrdScaleUpStatusProcessor := npc_processors.NewCrdScaleUpStatusProcessor(ccLister, provider, internalmetrics.Metrics)
 	if err := scaleUpProcessorChain.AddProcessor(npcCrdScaleUpStatusProcessor); err != nil {
@@ -825,7 +854,7 @@ func setUpProcessors(
 	autoscalingProcessors.BinpackingLimiter = metricsbinpacking.NewBinpackingMetricsProcessor(autoscalingProcessors.BinpackingLimiter)
 	autoscalingProcessors.NodeGroupManager = apNodeGroupManager
 	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(
-		buildScaleDownSetProcessors(provider, options, ccLister, experimentsManager))
+		buildScaleDownSetProcessors(provider, options, atomicMinCapacityProcessor))
 
 	var nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	nodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: internal_processors.IsGkeNodeInfoSimilar}

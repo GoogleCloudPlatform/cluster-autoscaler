@@ -17,13 +17,14 @@ package conditions
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
-	gceapiv1 "google.golang.org/api/compute/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	gcereservation "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 )
@@ -79,13 +80,13 @@ func (ch *reservationConfigChecker) checkRule(rule rules.Rule) *metav1.Condition
 	return nil
 }
 
-func (ch *reservationConfigChecker) validateReservationsInSpecificZones(reservation rules.Reservation, gceReservations []*gceapiv1.Reservation, rule rules.Rule) []string {
+func (ch *reservationConfigChecker) validateReservationsInSpecificZones(reservation rules.Reservation, gceReservations []*gcereservation.Reservation, rule rules.Rule) []string {
 	var errMsgs []string
-	var firstRsv *gceapiv1.Reservation
+	var firstRsv *gcereservation.Reservation
 	var firstZone string
 
 	for _, reqZone := range reservation.Zones() {
-		var gceReservation *gceapiv1.Reservation
+		var gceReservation *gcereservation.Reservation
 		for _, r := range gceReservations {
 			if gceclient.GetReservationZone(r) == reqZone {
 				gceReservation = r
@@ -118,7 +119,7 @@ func (ch *reservationConfigChecker) validateReservationsInSpecificZones(reservat
 	return errMsgs
 }
 
-func (ch *reservationConfigChecker) validateAgainstRule(gceReservation *gceapiv1.Reservation, reservation rules.Reservation, rule rules.Rule) error {
+func (ch *reservationConfigChecker) validateAgainstRule(gceReservation *gcereservation.Reservation, reservation rules.Reservation, rule rules.Rule) error {
 	var err error
 
 	if !gceReservation.SpecificReservationRequired {
@@ -148,7 +149,7 @@ func (ch *reservationConfigChecker) conditionType() string {
 	return RuleMisconfiguredCondition
 }
 
-func (ch *reservationConfigChecker) validateReservationBlock(reservation rules.Reservation, gceReservation *gceapiv1.Reservation) *metav1.Condition {
+func (ch *reservationConfigChecker) validateReservationBlock(reservation rules.Reservation, gceReservation *gcereservation.Reservation) *metav1.Condition {
 	prj := reservation.Project()
 	if prj == "" {
 		// The project can be unspecified in CCC reservation config
@@ -161,7 +162,7 @@ func (ch *reservationConfigChecker) validateReservationBlock(reservation rules.R
 	return nil
 }
 
-func areReservationsCompatible(r1, r2 *gceapiv1.Reservation) bool {
+func areReservationsCompatible(r1, r2 *gcereservation.Reservation) bool {
 	if r1.SpecificReservationRequired != r2.SpecificReservationRequired {
 		return false
 	}
@@ -187,29 +188,11 @@ func areReservationsCompatible(r1, r2 *gceapiv1.Reservation) bool {
 		if p1 == nil || p2 == nil {
 			return false
 		}
-		if p1.MachineType != p2.MachineType {
+		if p1.MachineType != p2.MachineType || p1.MinCPUPlatform != p2.MinCPUPlatform {
 			return false
 		}
-		if p1.MinCpuPlatform != p2.MinCpuPlatform {
+		if !slices.Equal(p1.LocalSSDs, p2.LocalSSDs) || !slices.Equal(p1.GuestAccelerators, p2.GuestAccelerators) {
 			return false
-		}
-
-		if len(p1.LocalSsds) != len(p2.LocalSsds) {
-			return false
-		}
-		for i := range p1.LocalSsds {
-			if p1.LocalSsds[i].Interface != p2.LocalSsds[i].Interface || p1.LocalSsds[i].DiskSizeGb != p2.LocalSsds[i].DiskSizeGb {
-				return false
-			}
-		}
-
-		if len(p1.GuestAccelerators) != len(p2.GuestAccelerators) {
-			return false
-		}
-		for i := range p1.GuestAccelerators {
-			if p1.GuestAccelerators[i].AcceleratorType != p2.GuestAccelerators[i].AcceleratorType || p1.GuestAccelerators[i].AcceleratorCount != p2.GuestAccelerators[i].AcceleratorCount {
-				return false
-			}
 		}
 	}
 	return true

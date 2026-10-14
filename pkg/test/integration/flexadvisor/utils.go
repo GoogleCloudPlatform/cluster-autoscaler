@@ -52,9 +52,12 @@ func stockOutError() cloudprovider.InstanceErrorInfo {
 // PrimeFlexAdvisorCache primes FlexAdvisor cache by adding a temporary pod that triggers registration but cannot schedule.
 func PrimeFlexAdvisorCache(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, infra *integration.TestInfrastructure, cccName string) {
 	t.Helper()
-	tmpPod := tu.BuildTestPod("temporary-pod", 100, 100, pod.WithCCC(cccName), tu.MarkUnschedulable())
+	tmpPod := tu.BuildTestPod("temporary-pod", 100, 100, tu.MarkUnschedulable())
+	if cccName != "" {
+		pod.WithCCC(cccName)(tmpPod)
+	}
 	// Add an invalid node selector to ensure it doesn't match any node group.
-	tmpPod.Spec.NodeSelector["invalid-selector"] = "true"
+	pod.WithNodeSelectorEntry("invalid-selector", "true")(tmpPod)
 	infra.Fakes.K8s.AddPod(tmpPod)
 
 	// Run one cycle to trigger registration and background fetch.

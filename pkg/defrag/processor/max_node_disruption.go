@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown"
@@ -159,7 +160,10 @@ func (t *MaxNodeDisruptionTracker) Budget(crdName string) (int, bool) {
 
 // FilterNodesViolatingMaxDisruption filters scale-down candidates that would violate
 // their ComputeClass's MaxNodeDisruption limit.
-func (t *MaxNodeDisruptionTracker) FilterNodesViolatingMaxDisruption(ctx *ca_context.AutoscalingContext, nodes []string) []string {
+//
+// Nodes held back by an exhausted budget are recorded in reasons, which may be
+// nil when the caller does not collect them.
+func (t *MaxNodeDisruptionTracker) FilterNodesViolatingMaxDisruption(ctx *ca_context.AutoscalingContext, nodes []string, reasons *observability.Registry) []string {
 	if t == nil || t.ccLister == nil || len(t.remainingDisruptionBudget) == 0 || len(nodes) == 0 {
 		return nodes
 	}
@@ -209,6 +213,7 @@ func (t *MaxNodeDisruptionTracker) FilterNodesViolatingMaxDisruption(ctx *ca_con
 				result = append(result, node.Name)
 			} else {
 				klog.V(1).Infof("Skipping %s - compute class %s max node disruption reached", node.Name, crdName)
+				reasons.Record(node.Name, observability.DisruptionBudgetReached)
 			}
 		} else {
 			result = append(result, node.Name)

@@ -31,6 +31,7 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"google.golang.org/api/option"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -133,6 +134,7 @@ func TestNodeGroupForNode(t *testing.T) {
 		gkeNodePoolLabel                            string
 		cachedMigsForNodePool                       []*GkeMig
 		getBasenameForMigErr                        error
+		migBlocked                                  bool
 		expectedError                               bool
 	}{
 		{
@@ -160,6 +162,14 @@ func TestNodeGroupForNode(t *testing.T) {
 			providerId:       fmt.Sprintf("gce://%s/%s/%s", migRef.Project, migRef.Zone, validNodeName),
 			cachedInstanceId: gce.GceRef{Project: migRef.Project, Zone: migRef.Zone, Name: validNodeName},
 			upcoming:         false,
+		},
+		{
+			testName:         "valid ProviderID but MIG is blocked",
+			nodeName:         validNodeName,
+			providerId:       fmt.Sprintf("gce://%s/%s/%s", migRef.Project, migRef.Zone, validNodeName),
+			cachedInstanceId: gce.GceRef{Project: migRef.Project, Zone: migRef.Zone, Name: validNodeName},
+			upcoming:         false,
+			migBlocked:       true,
 		},
 		{
 			testName:      "invalid ProviderID",
@@ -246,6 +256,9 @@ func TestNodeGroupForNode(t *testing.T) {
 				},
 				test.getBasenameForMigErr,
 			)
+			if test.migBlocked {
+				gkeManagerMock.On("IsMigBlocked", migRef).Return(true)
+			}
 			gke := &gkeCloudProviderImpl{gkeManager: gkeManagerMock, resolveInstanceRefUsingNodePoolLabel: !test.disableResolveInstanceRefUsingNodePoolLabel}
 
 			node := BuildTestNode(test.nodeName, 1000, 1000)
@@ -262,6 +275,9 @@ func TestNodeGroupForNode(t *testing.T) {
 
 			if test.expectedError {
 				assert.Error(t, err)
+			} else if test.migBlocked {
+				assert.NoError(t, err)
+				assert.Nil(t, nodeGroup)
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, mig, nodeGroup)
@@ -1756,6 +1772,10 @@ func (m *migForNodeGkeManagerMock) GetMigForInstance(instance gce.GceRef) (gce.M
 	return m.mig, nil
 }
 
+func (m *migForNodeGkeManagerMock) IsMigBlocked(migRef gce.GceRef) bool {
+	return false
+}
+
 func TestGkeMigForNode(t *testing.T) {
 	type notMigType struct {
 		*GkeMig
@@ -3177,7 +3197,7 @@ func TestIsReservationCompatible(t *testing.T) {
 					Values:                 []string{tt.affinityName},
 				}
 			}
-			rsv := &gcev1.Reservation{
+			rsv := &reservation.Reservation{
 				Name:                        tt.reservationName,
 				SpecificReservationRequired: tt.specificReservationReq,
 			}

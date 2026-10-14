@@ -372,6 +372,9 @@ func kubeletConfigFromCCRule(rule rules.Rule) *gkeclient.NodeKubeletConfig {
 			kubeletConfig.ReservedResourcesConfig.MemoryReservedMib = *val
 		}
 	}
+	if reservedSystemCpus := rule.ReservedSystemCpus(); reservedSystemCpus != nil {
+		kubeletConfig.ReservedSystemCpus = *reservedSystemCpus
+	}
 
 	if reflect.DeepEqual(kubeletConfig, &gkeclient.NodeKubeletConfig{}) {
 		return nil
@@ -704,6 +707,9 @@ func kubeletConfigSignature(kubeletConfig *gkeclient.NodeKubeletConfig) string {
 		if len(parts) > 0 {
 			kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ReservedResourcesConfig: <%s>", strings.Join(parts, ", ")))
 		}
+	}
+	if kubeletConfig.ReservedSystemCpus != "" {
+		kubeletConfigParts = append(kubeletConfigParts, fmt.Sprintf("ReservedSystemCpus: %q", kubeletConfig.ReservedSystemCpus))
 	}
 
 	return fmt.Sprintf("kubelet-config: <%s>", strings.Join(kubeletConfigParts, ", "))

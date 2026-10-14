@@ -53,6 +53,8 @@ const (
 	// nonBlockingErrorReportInterval is how long an identical non-blocking error
 	// is suppressed for a given instance before being reported again.
 	nonBlockingErrorReportInterval = 5 * time.Minute
+	// maxClusterNameLengthInMigName is the maximum number of character from cluster name that included in the MIG name.
+	maxClusterNameLengthInMigName = 16
 )
 
 // ManagedInstance represents a GCE managed instance with the fields needed
@@ -266,7 +268,8 @@ type autoscalingInternalGceClient struct {
 	operationPerCallTimeout        time.Duration
 	instanceActionPollingFrequency time.Duration
 
-	recommendationApplier RecommendationApplier
+	recommendationApplier          RecommendationApplier
+	filterMigsByClusterNameEnabled bool
 }
 
 const (
@@ -275,6 +278,13 @@ const (
 
 // Option is a functional option for autoscalingInternalGceClient.
 type Option func(*autoscalingInternalGceClient)
+
+// WithFilterMigsByClusterName sets whether server-side filtering of MIGs by cluster name is enabled.
+func WithFilterMigsByClusterName(enabled bool) Option {
+	return func(c *autoscalingInternalGceClient) {
+		c.filterMigsByClusterNameEnabled = enabled
+	}
+}
 
 // WithInstanceActionPollingFrequency sets the polling frequency for instance
 // actions.
@@ -672,6 +682,32 @@ func (i *instanceListBuilder) build() []gce.GceInstance {
 func (client *autoscalingInternalGceClient) FetchAllInstances(ctx context.Context, project, zone, _ string) ([]gce.GceInstance, error) {
 	instances, err := client.AutoscalingGceClient.FetchAllInstances(ctx, project, zone, fmt.Sprintf("labels.goog-k8s-cluster-name=%s", client.clusterName))
 	return instances, err
+}
+
+// FetchAllMigs fetches all Managed Instance Groups of the cluster in the zone from the server.
+func (client *autoscalingInternalGceClient) FetchAllMigs(zone string) ([]*gce_api.InstanceGroupManager, error) {
+	migs := make([]*gce_api.InstanceGroupManager, 0)
+	call := client.gceService.InstanceGroupManagers.List(client.projectID, zone)
+	if client.filterMigsByClusterNameEnabled {
+		filter := getClusterMigFilter(client.clusterName)
+		call = call.Filter(filter)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultAPIOperationTimeout)
+	defer cancel()
+	start := time.Now()
+	lastRequestStart := start
+	err := call.Pages(ctx, func(list *gce_api.InstanceGroupManagerList) error {
+		gke_metrics.EmitGceLatency("instance_group_managers", "list_page", list, nil, lastRequestStart)
+		migs = append(migs, list.Items...)
+		lastRequestStart = time.Now()
+		return nil
+	})
+	gke_metrics.EmitGceLatency("instance_group_managers", "list", nil, err, start)
+	if err != nil {
+		gke_metrics.EmitGceLatency("instance_group_managers", "list_page", nil, err, lastRequestStart)
+		return nil, err
+	}
+	return migs, nil
 }
 
 func (client *autoscalingInternalGceClient) FetchReservationBlocksInReservation(reservationRef ReservationRef) ([]*GceReservationBlock, error) {
@@ -1091,4 +1127,13 @@ func getLastAttemptErrors(instance *gce_api_beta.ManagedInstance) []*gce_api_bet
 		return instance.LastAttempt.Errors.Errors
 	}
 	return nil
+}
+
+func getClusterMigFilter(clusterName string) string {
+	prefix := clusterName
+	if len(clusterName) > maxClusterNameLengthInMigName {
+		prefix = clusterName[:maxClusterNameLengthInMigName]
+	}
+	prefix = strings.TrimSuffix(prefix, "-")
+	return fmt.Sprintf("name eq \"(gke|gk3)-%s.*\"", prefix)
 }

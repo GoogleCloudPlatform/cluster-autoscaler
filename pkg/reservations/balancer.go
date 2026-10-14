@@ -20,10 +20,10 @@ import (
 	"fmt"
 	"reflect"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -103,7 +103,7 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.
 	return scaleUpInfos, nil
 }
 
-func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovider.NodeGroup, reservations []*gce_api.Reservation) ([]*balancingInfo, auto_errors.AutoscalerError) {
+func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovider.NodeGroup, reservations []*reservation.Reservation) ([]*balancingInfo, auto_errors.AutoscalerError) {
 	var balancingInfos []*balancingInfo
 	for _, group := range groups {
 		currentSize, err := group.TargetSize(context.TODO())
@@ -217,7 +217,7 @@ func unwrapNodeGroups(scaleUpInfos []nodegroupset.ScaleUpInfo) ([]nodegroupset.S
 }
 
 // consumeUpcomingScaleUps subtract resources from matching reservation for upcoming node groups.
-func (p *ReservationBalancingProcessor) consumeUpcomingScaleUps(context *autoscaling_context.AutoscalingContext, reservations []*gce_api.Reservation) []*gce_api.Reservation {
+func (p *ReservationBalancingProcessor) consumeUpcomingScaleUps(context *autoscaling_context.AutoscalingContext, reservations []*reservation.Reservation) []*reservation.Reservation {
 	if context == nil || context.CloudProvider == nil {
 		return reservations
 	}
@@ -229,7 +229,7 @@ func (p *ReservationBalancingProcessor) consumeUpcomingScaleUps(context *autosca
 	return adjusted
 }
 
-func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscalingCtx *autoscaling_context.AutoscalingContext, reservations []*gce_api.Reservation) map[uint64]int {
+func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscalingCtx *autoscaling_context.AutoscalingContext, reservations []*reservation.Reservation) map[uint64]int {
 	consumedReservations := make(map[uint64]int)
 	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
 		gkeMig, ok := ng.(*gke.GkeMig)
@@ -242,12 +242,12 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 		}
 		for _, rsv := range reservations {
 			if ok, _, _ := reservationMatch(p.provider, ng, rsv, p.localSSDDiskSizeProvider); ok {
-				unused := int(rsv.SpecificReservation.Count) - int(rsv.SpecificReservation.InUseCount) - consumedReservations[rsv.Id]
+				unused := int(rsv.SpecificReservation.AvailableCount) - consumedReservations[rsv.ID]
 				if size > unused {
-					consumedReservations[rsv.Id] += unused
+					consumedReservations[rsv.ID] += unused
 					size = size - unused
 				} else {
-					consumedReservations[rsv.Id] += size
+					consumedReservations[rsv.ID] += size
 					size = 0
 				}
 			}
@@ -256,16 +256,16 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 	return consumedReservations
 }
 
-func subtractReservations(reservations []*gce_api.Reservation, consumedReservations map[uint64]int) []*gce_api.Reservation {
-	var subtracted []*gce_api.Reservation
+func subtractReservations(reservations []*reservation.Reservation, consumedReservations map[uint64]int) []*reservation.Reservation {
+	var subtracted []*reservation.Reservation
 	for _, rsv := range reservations {
-		consumed := consumedReservations[rsv.Id]
+		consumed := consumedReservations[rsv.ID]
 		if consumed == 0 {
 			subtracted = append(subtracted, rsv)
 			continue
 		}
 		specRsvCopy := *rsv.SpecificReservation
-		specRsvCopy.InUseCount += int64(consumed)
+		specRsvCopy.AvailableCount -= int64(consumed)
 		rsvCopy := *rsv
 		rsvCopy.SpecificReservation = &specRsvCopy
 		subtracted = append(subtracted, &rsvCopy)
@@ -273,12 +273,12 @@ func subtractReservations(reservations []*gce_api.Reservation, consumedReservati
 	return subtracted
 }
 
-func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegroupset.ScaleUpInfo, reservations, pulledReservations []*gce_api.Reservation) []*gce_api.Reservation {
+func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegroupset.ScaleUpInfo, reservations, pulledReservations []*reservation.Reservation) []*reservation.Reservation {
 	usedReservations := map[gceclient.MetricLabels]int{}
-	pulledReservationMap := map[uint64]*gce_api.Reservation{}
+	pulledReservationMap := map[uint64]*reservation.Reservation{}
 
 	for _, pulledRsv := range pulledReservations {
-		pulledReservationMap[pulledRsv.Id] = pulledRsv
+		pulledReservationMap[pulledRsv.ID] = pulledRsv
 	}
 
 	for _, scaleUpInfo := range scaleUpInfos {
@@ -288,16 +288,16 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 
 		for _, rsv := range reservations {
 			if ok, _, _ := reservationMatch(p.provider, scaleUpInfo.Group, rsv, p.localSSDDiskSizeProvider); ok {
-				unusedNodes := int(rsv.SpecificReservation.Count - rsv.SpecificReservation.InUseCount)
+				unusedNodes := int(rsv.SpecificReservation.AvailableCount)
 
 				if unusedNodes > 0 {
-					pulledRsv, found := pulledReservationMap[rsv.Id]
+					pulledRsv, found := pulledReservationMap[rsv.ID]
 					if !found {
-						klog.Errorf("Reservation not fround. Self link: %v. This is unexpected", rsv.SelfLink)
+						klog.Errorf("Reservation not found. Self link: %v. This is unexpected", rsv.SelfLink)
 						continue
 					}
 					usedNodes := min(unusedNodes, newReservedNodes)
-					pulledRsv.SpecificReservation.InUseCount += int64(usedNodes)
+					pulledRsv.SpecificReservation.AvailableCount -= int64(usedNodes)
 					newReservedNodes -= usedNodes
 					usedReservations[gceclient.ReservationMetricLabels(pulledRsv)] += usedNodes
 				}

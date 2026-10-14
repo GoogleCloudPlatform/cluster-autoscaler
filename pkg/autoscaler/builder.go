@@ -624,7 +624,16 @@ func (b *Builder) Build(
 	loopStartObservers = append(loopStartObservers, b.prCache, prProcessor)
 	provreqProcessor = prProcessor
 
-	resizableVmAutoprovisioningProvider, err := ekvms_providers.NewResizableVmAutoprovisioningProvider(b.kubeClient, b.machineConfigProvider, experimentsManager, autoscalingOptions.AutopilotEnabled, autoscalingOptions.EkOnManagedNodesEnabled, autoscalingOptions.E4aOnManagedNodesEnabled, autoscalingOptions.EkAutoprovisioning, autoscalingOptions.E4aAutoprovisioning, internalmetrics.Metrics)
+	resizableVmAutoprovisioningFlags := ekvms_providers.ResizableVmAutoprovisioningFlags{
+		AutopilotEnabled:         autoscalingOptions.AutopilotEnabled,
+		EkAutoprovisioning:       autoscalingOptions.EkAutoprovisioning,
+		E4aAutoprovisioning:      autoscalingOptions.E4aAutoprovisioning,
+		E4Autoprovisioning:       autoscalingOptions.E4Autoprovisioning,
+		EkOnManagedNodesEnabled:  autoscalingOptions.EkOnManagedNodesEnabled,
+		E4aOnManagedNodesEnabled: autoscalingOptions.E4aOnManagedNodesEnabled,
+		E4OnManagedNodesEnabled:  autoscalingOptions.E4OnManagedNodesEnabled,
+	}
+	resizableVmAutoprovisioningProvider, err := ekvms_providers.NewResizableVmAutoprovisioningProvider(b.kubeClient, b.machineConfigProvider, experimentsManager, resizableVmAutoprovisioningFlags, internalmetrics.Metrics)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error creating ResizableVmAutoprovisioningProvider: %v", err)
 	}
@@ -769,6 +778,12 @@ func (b *Builder) Build(
 
 	if autoscalingOptions.EnhancedCrdStatusReporting {
 		cc_history.SetupHistoryResetObserver(cccInformer, cccStatusUpdatesCh, experimentsManager)
+		// Same gate as the reporting processor in processors.go: without defrag
+		// nothing reports config drift, so there is nothing for the observer to
+		// clear.
+		if autoscalingOptions.ComputeClassConfigDriftReporting && autoscalingOptions.DefragEnabled {
+			status.SetupConfigDriftResetObserver(cccInformer, cccStatusUpdatesCh, experimentsManager)
+		}
 	}
 
 	var minCapacityObserver cc_processors.MinCapacityObserver
@@ -842,9 +857,11 @@ func (b *Builder) Build(
 	// Initializing GCE Flex Advisor
 	var flexAdvisor instanceavailability.Provider
 	var scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker
+	var bypassTracker flexadvisor.RecommendationsBypassTracker
 	if autoscalingOptions.GCEFlexAdvisorEnabled {
 		scaleUpLimiterTracker = flexadvisor.NewScaleUpLimiterTracker(autoscalingOptions.GCEFlexAdvisorEnabled, experimentsManager)
-		flexAdvisor, err = flexadvisor.NewFlexAdvisor(bgContext, cloudProvider, b.npcCrdLister, cloudProvider, b.optsTracker, cccStatusUpdatesCh)
+		bypassTracker = flexadvisor.NewRecommendationsBypassTracker(experimentsManager)
+		flexAdvisor, err = flexadvisor.NewFlexAdvisor(bgContext, cloudProvider, b.npcCrdLister, cloudProvider, b.optsTracker, cccStatusUpdatesCh, bypassTracker)
 		if err != nil {
 			klog.Errorf("cannot create Flex Advisor. Error: %v", err)
 			return nil, nil, err
@@ -866,6 +883,7 @@ func (b *Builder) Build(
 			cloudProvider,
 			experimentsManager,
 			scaleUpLimiterTracker,
+			autoscalingOptions.BalanceSimilarNodeGroups,
 		))
 	}
 
@@ -1014,13 +1032,20 @@ func (b *Builder) Build(
 		autoscalingOptions.ClusterDefaultAllocationStrategy,
 		autoscalingOptions.GCEFlexAdvisorEnabled,
 		experimentsManager,
-		backoff)
+		backoff,
+		b.optsTracker)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
-	scaleUpOrchestrator := provreqorchestrator.NewWrapperOrchestrator(prOrchestrator)
+	scaleUpOrchestrator := flexadvisor.NewWrapperOrchestrator(
+		provreqorchestrator.NewWrapperOrchestrator(prOrchestrator),
+		b.npcCrdLister,
+		bypassTracker,
+		scaleUpLimiterTracker,
+		experimentsManager,
+	)
 
 	opts := coreoptions.AutoscalerOptions{
 		AutoscalingOptions:         autoscalingOptions.AutoscalingOptions,
@@ -1214,6 +1239,7 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.IncreasedNapMaxNodesFeatureName, "IncreasedNapMaxNodes", options.NapMaxNodes > optstracking.DecreasedNapMaxNodesCount)
 	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
 	logAndRecordFeatureMetric(internalmetrics.BalloonPodIpprResizeFeatureName, "BalloonPodIpprResize", options.BalloonPodIpprResizeEnabled)
+	logAndRecordFeatureMetric(internalmetrics.FilterMigsByClusterNameFeatureName, "Filter migs by cluster name", options.FilterMigsByClusterNameEnabled)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

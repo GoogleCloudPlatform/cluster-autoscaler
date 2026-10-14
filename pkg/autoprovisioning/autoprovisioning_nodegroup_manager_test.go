@@ -27,7 +27,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	gce "google.golang.org/api/compute/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -36,6 +35,7 @@ import (
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	kube_record "k8s.io/client-go/tools/record"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/utils"
@@ -1091,7 +1091,7 @@ func TestInjectedLocations(t *testing.T) {
 		enableUserAnyZoneSelection bool
 		zoneAgnosticShard          bool
 		podOpts                    []func(*apiv1.Pod)
-		reservations               []*gce.Reservation
+		reservations               []*reservation.Reservation
 		apZones                    []string
 		allZones                   []string
 		wantInjectedZones          []string
@@ -1110,7 +1110,7 @@ func TestInjectedLocations(t *testing.T) {
 			desc:                       "injects AP locations for zone-agnostic shard with reservations",
 			enableUserAnyZoneSelection: true,
 			zoneAgnosticShard:          true,
-			reservations: []*gce.Reservation{{
+			reservations: []*reservation.Reservation{{
 				SelfLink: "https://www.googleapis.com/compute/v1/projects/proj/zones/us-central1-a/reservations/my-res",
 			}},
 			apZones:           []string{"us-central1-a", "us-central1-b"},

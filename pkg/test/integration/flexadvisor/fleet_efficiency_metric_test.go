@@ -39,13 +39,22 @@ import (
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
-// TestFleetEfficiency_NodesWithAllocationStrategyMetric verifies that the nodes_with_allocation_strategy
-// metric is correctly recorded with appropriate labels (requested strategy, fallback reason, machine type,
-// and node count) across various allocation strategy and fallback scenarios in an end-to-end CA loop.
-func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
+// TestFleetEfficiency_AllocationStrategyMetrics verifies that the nodes_with_allocation_strategy
+// and scaleups_with_allocation_strategy metrics are correctly recorded with appropriate labels
+// across various allocation strategy, source, and fallback scenarios in an end-to-end CA loop.
+func TestFleetEfficiency_AllocationStrategyMetrics(t *testing.T) {
 
 	testCases := map[string]struct {
 		strategy                  *v1.AllocationStrategy
+		strategyDefaults          *v1.AllocationStrategyDefaults
+		customPriorities          []v1.Priority
+		whenUnsatisfiable         string
+		podFamily                 *string
+		noCccCrd                  bool
+		podComputeClass           string
+		podWithoutCCC             bool
+		autopilotEnabled          bool
+		clusterDefaultStrategy    internalopts.ClusterDefaultAllocationStrategy
 		isFlexStart               bool
 		podCount                  int
 		podCpuRequest             int64
@@ -56,6 +65,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 		expectedRequestedStrategy string
 		expectedFallbackReason    metrics.AllocationStrategyFallbackReason
 		expectedMachineType       string
+		expectedSource            metrics.AllocationStrategySource
 		expectedCount             float64
 	}{
 		"No fallback: Fleet Efficiency": {
@@ -71,6 +81,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "",
 			expectedMachineType:       "e2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"No fallback: Fleet Efficiency - Multi Node Scale Up": {
@@ -88,6 +99,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             2,
 		},
 		"No fallback: Lowest Cost strategy": {
@@ -103,6 +115,160 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "lowest-cost",
 			expectedFallbackReason:    "",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+			expectedCount:             1,
+		},
+		"No fallback: Default Cluster Strategy (Fleet Efficiency)": {
+			clusterDefaultStrategy: internalopts.ClusterDefaultAllocationStrategyFleetEfficiency,
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+			expectedCount:             1,
+		},
+		"No fallback: Default Cluster Strategy (Lowest Cost)": {
+			clusterDefaultStrategy: internalopts.ClusterDefaultAllocationStrategyLowestCost,
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "lowest-cost",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+			expectedCount:             1,
+		},
+		"No fallback: Custom Compute Class with PodFamily": {
+			podFamily: new("general-purpose"),
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+			expectedCount:             1,
+		},
+		"No fallback: Custom Compute Class with PodFamily and omitted sibling in same priorityScore": {
+			customPriorities: []v1.Priority{
+				{
+					PodFamily:     new("general-purpose"),
+					PriorityScore: new(100),
+				},
+				{
+					Nodepools:     []string{"pool-low-preference"},
+					PriorityScore: new(100),
+				},
+			},
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "lowest-cost",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCluster,
+			expectedCount:             1,
+		},
+		"No fallback: Custom Compute Class ScaleUpAnyway with AllocationStrategyDefaults": {
+			whenUnsatisfiable: "ScaleUpAnyway",
+			strategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: new(v1.AllocationStrategyFleetEfficiency),
+			},
+			customPriorities: []v1.Priority{
+				{
+					MachineFamily: new("e2"),
+					NodeLabels:    map[string]string{"unmatched-label": "true"},
+					PriorityScore: new(100),
+				},
+			},
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+			expectedCount:             1,
+		},
+		"Fallback: Custom Compute Class ScaleUpAnyway with AllocationStrategyDefaults and missing score": {
+			whenUnsatisfiable: "ScaleUpAnyway",
+			strategyDefaults: &v1.AllocationStrategyDefaults{
+				OnDemand: new(v1.AllocationStrategyFleetEfficiency),
+			},
+			customPriorities: []v1.Priority{
+				{
+					MachineFamily: new("n2"),
+					PriorityScore: new(100),
+				},
+			},
+			nodePools: []*gke_api_beta.NodePool{
+				integration.EmptyNodePool("pool-low-preference").WithMachineType("e2-standard-4").WithCCCLabel("test-ccc").Build(),
+				integration.EmptyNodePool("pool-high-preference").WithMachineType("e2-standard-8").WithCCCLabel("test-ccc").Build(),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("n2-standard-4").WithScore(0.2),
+				fake.NewGuidance("n2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    metrics.AllocationStrategyFallbackMissingScore,
+			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
+			expectedCount:             1,
+		},
+		"No fallback: Predefined Compute Class (Balanced on Autopilot)": {
+			noCccCrd:         true,
+			podComputeClass:  "Balanced",
+			autopilotEnabled: true,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("n2-standard-4").WithScore(0.2),
+				fake.NewGuidance("n2d-standard-4").WithScore(0.2),
+				fake.NewGuidance("n2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "n2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourcePredefinedComputeClass,
+			expectedCount:             1,
+		},
+		"No fallback: Autopilot Workload (Default x86 on Autopilot)": {
+			noCccCrd:         true,
+			podWithoutCCC:    true,
+			autopilotEnabled: true,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(0.2),
+				fake.NewGuidance("e2-standard-8").WithScore(0.9),
+			},
+			expectedRequestedStrategy: "fleet-efficiency",
+			expectedFallbackReason:    "",
+			expectedMachineType:       "e2-standard-8",
+			expectedSource:            metrics.AllocationStrategySourceAutopilotWorkload,
 			expectedCount:             1,
 		},
 		"Fallback: Missing Score": {
@@ -118,6 +284,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "missing_score",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"Fallback: Tie Break": {
@@ -133,6 +300,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "tie_break",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"Fallback: Reservation Present": {
@@ -146,11 +314,12 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 				fake.NewGuidance("e2-standard-8").WithScore(0.9),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation("e2-standard-4", ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine("e2-standard-4"), reservations.WithAvailableCount(1)),
 			},
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "reservation_present",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"Fallback: FA Error": {
@@ -166,6 +335,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "error",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"Fallback: FA Not Supported": {
@@ -178,6 +348,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "flex_advisor_not_supported",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 		"Fallback: Unsupported (Zonal Pod)": {
@@ -196,6 +367,7 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 			expectedRequestedStrategy: "fleet-efficiency",
 			expectedFallbackReason:    "unsupported",
 			expectedMachineType:       "e2-standard-4",
+			expectedSource:            metrics.AllocationStrategySourceCustomComputeClass,
 			expectedCount:             1,
 		},
 	}
@@ -209,40 +381,84 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 				nodepoolNames = append(nodepoolNames, np.Name)
 			}
 
-			cccCrd := ccc.NewComputeClassBuilder("test-ccc").
-				WithAllocationStrategyDefaults(&v1.AllocationStrategyDefaults{
+			priorities := tc.customPriorities
+			if len(priorities) == 0 {
+				priority := v1.Priority{
+					Nodepools:          nodepoolNames,
+					PriorityScore:      new(100),
+					AllocationStrategy: tc.strategy,
+				}
+				if tc.podFamily != nil {
+					priority.Nodepools = nil
+					priority.PodFamily = tc.podFamily
+				}
+				priorities = []v1.Priority{priority}
+			}
+
+			cccBuilder := ccc.NewComputeClassBuilder("test-ccc").
+				WithPriorities(priorities...)
+			if tc.whenUnsatisfiable != "" {
+				cccBuilder = cccBuilder.WithWhenUnsatisfiable(tc.whenUnsatisfiable)
+			}
+			if tc.strategyDefaults != nil {
+				cccBuilder = cccBuilder.WithAllocationStrategyDefaults(tc.strategyDefaults)
+			} else if tc.strategy != nil {
+				cccBuilder = cccBuilder.WithAllocationStrategyDefaults(&v1.AllocationStrategyDefaults{
 					OnDemand:  tc.strategy,
 					FlexStart: tc.strategy,
 					Spot:      tc.strategy,
-				}).
-				WithPriorities(
-					v1.Priority{
-						Nodepools:          nodepoolNames,
-						PriorityScore:      new(100),
-						AllocationStrategy: tc.strategy,
-					},
-				).
-				Build()
+				})
+			}
+			cccCrd := cccBuilder.Build()
 
 			overrides := []integration.Option[*internalopts.AutoscalingOptions]{
 				integration.WithMaxMemoryTotal(140 * 1024 * 1024 * 1024),
 				integration.WithFlexAdvisorEnabled(),
 			}
+			if tc.autopilotEnabled {
+				overrides = append(overrides,
+					integration.WithAutoProvisioningEnabled(),
+					func(o *internalopts.AutoscalingOptions) *internalopts.AutoscalingOptions {
+						o.AutopilotEnabled = true
+						o.NapDefaultMachineTypeFamily = "e2"
+						o.InternalOptions.EkAutoprovisioning = "EK_AUTOPROVISIONING_DISABLED"
+						return o
+					},
+				)
+			}
+			if tc.clusterDefaultStrategy != "" {
+				overrides = append(overrides, func(o *internalopts.AutoscalingOptions) *internalopts.AutoscalingOptions {
+					o.ClusterDefaultAllocationStrategy = tc.clusterDefaultStrategy
+					return o
+				})
+			}
 
 			// Explicitly set experiment overrides: FlexStartNonQueued enabled, FlexAdvisorTPU disabled
 			boolFlags := map[string]bool{
-				experiments.FlexAdvisorTPUEnabledFlag: false,
+				experiments.FlexAdvisorTPUEnabledFlag:            false,
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:  true,
+				experiments.DefaultAllocationStrategyEnabledFlag: true,
 			}
 			stringFlags := map[string]string{
-				experiments.FlexStartNonQueuedEnabledFlag: "0.0.0",
+				experiments.FlexStartNonQueuedEnabledFlag:             "0.0.0",
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag:  "0.0.0",
+				experiments.DefaultAllocationStrategyMinCAVersionFlag: "0.0.0",
 			}
 
 			testConfig := integration.NewTestConfig().
 				WithNodePools(tc.nodePools...).
-				WithCccCrds(cccCrd).
 				WithReservationsForDefaultProject(tc.reservations).
 				WithOverrides(overrides...).
 				WithExperimentOverrides(boolFlags, stringFlags)
+			if tc.autopilotEnabled || tc.podFamily != nil || len(tc.customPriorities) > 0 {
+				testConfig = testConfig.WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations(ZoneB),
+				)
+			}
+			if !tc.noCccCrd {
+				testConfig = testConfig.WithCccCrds(cccCrd)
+			}
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())
@@ -256,7 +472,14 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
 
-				PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+				if tc.podWithoutCCC {
+					PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "")
+				} else if tc.podComputeClass != "" {
+					PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, tc.podComputeClass)
+				} else {
+					PrimeFlexAdvisorCache(ctx, t, autoscaler, infra, "test-ccc")
+				}
+				metrics.ResetAllForTest()
 
 				podCount := tc.podCount
 				if podCount == 0 {
@@ -269,7 +492,14 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 
 				for i := 0; i < podCount; i++ {
 					podName := fmt.Sprintf("fe-metric-pod-%d", i)
-					testPod := tu.BuildTestPod(podName, cpuReq, 12000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable())
+					var testPod *apiv1.Pod
+					if tc.podWithoutCCC {
+						testPod = tu.BuildTestPod(podName, cpuReq, 12000, tu.MarkUnschedulable())
+					} else if tc.podComputeClass != "" {
+						testPod = tu.BuildTestPod(podName, cpuReq, 12000, pod.WithCCC(tc.podComputeClass), tu.MarkUnschedulable())
+					} else {
+						testPod = tu.BuildTestPod(podName, cpuReq, 12000, pod.WithCCC("test-ccc"), tu.MarkUnschedulable())
+					}
 					if tc.isFlexStart {
 						pod.WithFlexStart()(testPod)
 					}
@@ -292,14 +522,18 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric(t *testing.T) {
 				count, err := metrics.GetNodesWithAllocationStrategyCountForTest(tc.expectedRequestedStrategy, tc.expectedFallbackReason, tc.expectedMachineType)
 				assert.NoError(t, err)
 				assert.Equal(t, tc.expectedCount, count, "Expected nodes_with_allocation_strategy count to match for strategy=%s, reason=%s, machineType=%s", tc.expectedRequestedStrategy, tc.expectedFallbackReason, tc.expectedMachineType)
+
+				scaleupCount, err := metrics.GetScaleupsWithAllocationStrategyCountForTest(tc.expectedRequestedStrategy, tc.expectedFallbackReason, tc.expectedSource)
+				assert.NoError(t, err)
+				assert.Equal(t, float64(1), scaleupCount, "Expected scaleups_with_allocation_strategy count to match for strategy=%s, reason=%s, source=%s", tc.expectedRequestedStrategy, tc.expectedFallbackReason, tc.expectedSource)
 			})
 		})
 	}
 }
 
-// TestFleetEfficiency_NodesWithAllocationStrategyMetric_ExperimentDisabled verifies that no nodes_with_allocation_strategy
-// metric is recorded when the fleet efficiency filter is disabled via experiment flag.
-func TestFleetEfficiency_NodesWithAllocationStrategyMetric_ExperimentDisabled(t *testing.T) {
+// TestFleetEfficiency_AllocationStrategyMetrics_ExperimentDisabled verifies that no nodes_with_allocation_strategy
+// or scaleups_with_allocation_strategy metric is recorded when the fleet efficiency filter is disabled via experiment flag.
+func TestFleetEfficiency_AllocationStrategyMetrics_ExperimentDisabled(t *testing.T) {
 	metrics.ResetAllForTest()
 
 	cccCrd := ccc.NewComputeClassBuilder("test-ccc").
@@ -372,6 +606,12 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric_ExperimentDisabled(t 
 			"flex_advisor_not_supported",
 			"unsupported",
 		}
+		sources := []metrics.AllocationStrategySource{
+			metrics.AllocationStrategySourceCluster,
+			metrics.AllocationStrategySourceCustomComputeClass,
+			metrics.AllocationStrategySourcePredefinedComputeClass,
+			metrics.AllocationStrategySourceAutopilotWorkload,
+		}
 		for _, reason := range reasons {
 			count, err := metrics.GetNodesWithAllocationStrategyCountForTest("fleet-efficiency", reason, "e2-standard-4")
 			assert.NoError(t, err)
@@ -379,6 +619,11 @@ func TestFleetEfficiency_NodesWithAllocationStrategyMetric_ExperimentDisabled(t 
 			count8, err := metrics.GetNodesWithAllocationStrategyCountForTest("fleet-efficiency", reason, "e2-standard-8")
 			assert.NoError(t, err)
 			assert.Equal(t, float64(0), count8, "Metric should not be recorded when FleetEfficiencyStrategy experiment is disabled (reason=%s)", reason)
+			for _, source := range sources {
+				scaleupCount, err := metrics.GetScaleupsWithAllocationStrategyCountForTest("fleet-efficiency", reason, source)
+				assert.NoError(t, err)
+				assert.Equal(t, float64(0), scaleupCount, "scaleups_with_allocation_strategy should not be recorded when FleetEfficiencyStrategy experiment is disabled (reason=%s, source=%s)", reason, source)
+			}
 		}
 	})
 }

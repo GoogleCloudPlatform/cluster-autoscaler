@@ -295,6 +295,9 @@ func ruleOptsForNodeSystemConfig(cccNodeSystemConfig *ccc_api.NodeSystemConfig) 
 				rrc.MemoryReservedMib,
 			))
 		}
+		if reservedSystemCpus := cccNodeSystemConfig.KubeletConfig.ReservedSystemCpus; reservedSystemCpus != nil {
+			ruleOpts = append(ruleOpts, rules.WithReservedSystemCpusRule(*reservedSystemCpus))
+		}
 	}
 
 	return ruleOpts, nil

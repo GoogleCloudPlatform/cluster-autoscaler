@@ -17,7 +17,9 @@ package gceclient
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -27,11 +29,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
-func less(a, b *gce_api.Reservation) bool {
-	return a.Id < b.Id
+func less(a, b *reservation.Reservation) bool {
+	return a.ID < b.ID
 }
 
 func TestProjectPullerPullReservations(t *testing.T) {
@@ -95,7 +98,7 @@ func TestProjectPullerPullReservations(t *testing.T) {
 			assert.Equal(t, len(tc.wantReservations) == 0, puller.lastReservationSeen.Equal(time.Time{}))
 
 			result := puller.GetReservations()
-			if diff := cmp.Diff(tc.wantReservations, result, cmpopts.EquateEmpty()); diff != "" {
+			if diff := cmp.Diff(reservation.FromV1List(tc.wantReservations), result, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("ProjectPuller.GetReservations() diff (-want +got):\n%s", diff)
 			}
 		})
@@ -181,8 +184,8 @@ func TestPullConsumableReservations(t *testing.T) {
 
 			mGceClient := BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
-			crClient := consumablereservations.NewClientMock(func(ctx context.Context, projectID, zone string) ([]*gce_api.Reservation, consumablereservations.Error) {
-				return tc.callsPerZone[zone].reservations, tc.callsPerZone[zone].err
+			crClient := consumablereservations.NewClientMock(func(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, consumablereservations.Error) {
+				return reservation.FromV1List(tc.callsPerZone[zone].reservations), tc.callsPerZone[zone].err
 			})
 			gm := experiments.NewMockManager("ClusterAutoscaler::UseConsumableReservationsApi")
 
@@ -195,7 +198,7 @@ func TestPullConsumableReservations(t *testing.T) {
 			assert.Equal(t, len(tc.wantReservations) == 0, puller.lastConsumableReservationSeen.Equal(time.Time{}))
 
 			result := puller.GetReservations()
-			assert.ElementsMatch(t, tc.wantReservations, result)
+			assert.ElementsMatch(t, reservation.FromV1List(tc.wantReservations), result)
 		})
 	}
 }
@@ -298,13 +301,13 @@ func TestFilterReservations(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reservations, err := filterReservations(tc.reservations, tc.zones)
+			reservations, err := filterReservations(reservation.FromV1List(tc.reservations), tc.zones)
 
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
-				assert.ElementsMatch(t, tc.wantReservations, reservations)
+				assert.ElementsMatch(t, reservation.FromV1List(tc.wantReservations), reservations)
 			}
 		})
 	}
@@ -511,7 +514,7 @@ func TestPullerPullReservations(t *testing.T) {
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
 			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-b")
-			puller.consumableReservations = tc.consumableReservations
+			puller.consumableReservations = reservation.FromV1List(tc.consumableReservations)
 
 			for _, p := range tc.addProjectBeforeRun {
 				puller.AddProject(p)
@@ -523,7 +526,7 @@ func TestPullerPullReservations(t *testing.T) {
 			}
 
 			result := puller.GetReservations()
-			if diff := cmp.Diff(tc.wantReservations, result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+			if diff := cmp.Diff(reservation.FromV1List(tc.wantReservations), result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
 				t.Errorf("ProjectPuller.GetReservations() diff (-want +got):\n%s", diff)
 			}
 		})
@@ -648,7 +651,7 @@ func TestPullerPullReservationsInProject(t *testing.T) {
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
 			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-a")
-			puller.consumableReservations = tc.consumableReservations
+			puller.consumableReservations = reservation.FromV1List(tc.consumableReservations)
 
 			for _, p := range tc.addProjectBeforeRun {
 				puller.AddProject(p)
@@ -661,7 +664,7 @@ func TestPullerPullReservationsInProject(t *testing.T) {
 			}
 
 			result := puller.GetReservationsInProject(tc.inProject)
-			if diff := cmp.Diff(tc.wantReservations, result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+			if diff := cmp.Diff(reservation.FromV1List(tc.wantReservations), result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
 				t.Errorf("ProjectPuller.GetReservations() diff (-want +got):\n%s", diff)
 			}
 		})
@@ -705,9 +708,102 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 		wantLocal := []*gce_api.Reservation{localRsv}
 		wantShared := []*gce_api.Reservation{sharedRsv}
 
-		assert.ElementsMatch(t, wantLocal, puller.GetReservationsInProject(localProject))
-		assert.ElementsMatch(t, wantShared, puller.GetReservationsInProject(sharedProject))
+		assert.ElementsMatch(t, reservation.FromV1List(wantLocal), puller.GetReservationsInProject(localProject))
+		assert.ElementsMatch(t, reservation.FromV1List(wantShared), puller.GetReservationsInProject(sharedProject))
 	})
+}
+
+func TestReservationsPuller_SetReservations(t *testing.T) {
+	const (
+		localProject    = "local-proj"
+		sharedProject   = "shared-proj"
+		unpulledProject = "unpulled-proj"
+		zone            = "us-central1-a"
+	)
+	// newReservation returns a reservation of a single VM, with availableCount of 0 or 1.
+	newReservation := func(id uint64, project string, availableCount int64) *gce_api.Reservation {
+		rsv := buildSingleMachineReservation("fake-machine-type", zone)
+		rsv.Id = id
+		rsv.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/reservations/rsv-%d", project, zone, id)
+		rsv.SpecificReservation.InUseCount = rsv.SpecificReservation.Count - availableCount
+		return rsv
+	}
+	freeShared := reservation.FromV1(newReservation(1, sharedProject, 1))
+	usedShared := reservation.FromV1(newReservation(1, sharedProject, 0))
+	freeLocal := newReservation(2, localProject, 1)
+	usedLocal := reservation.FromV1(newReservation(2, localProject, 0))
+	freeUnpulled := reservation.FromV1(newReservation(3, unpulledProject, 1))
+	usedUnpulled := reservation.FromV1(newReservation(3, unpulledProject, 0))
+	availableCounts := func(rsvs []*reservation.Reservation) []int64 {
+		var result []int64
+		for _, rsv := range rsvs {
+			result = append(result, rsv.SpecificReservation.AvailableCount)
+		}
+		return result
+	}
+
+	testCases := []struct {
+		name                   string
+		localReservations      []*gce_api.Reservation
+		sharedProjectErr       error
+		consumableReservations []*reservation.Reservation
+		// usedReservation is passed to SetReservations, like the balancer does after a scale-up.
+		usedReservation *reservation.Reservation
+	}{
+		{
+			name:                   "reservation_returned_only_by_consumable_puller_and_project_cannot_be_pulled",
+			sharedProjectErr:       errors.New("googleapi: Error 403: Required 'compute.reservations.list' permission"),
+			consumableReservations: []*reservation.Reservation{freeShared},
+			usedReservation:        usedShared,
+		},
+		{
+			name:                   "reservation_returned_by_project_and_consumable_pullers",
+			localReservations:      []*gce_api.Reservation{freeLocal},
+			consumableReservations: []*reservation.Reservation{reservation.FromV1(freeLocal)},
+			usedReservation:        usedLocal,
+		},
+		{
+			name:                   "reservation_returned_only_by_consumable_puller_and_project_without_puller",
+			consumableReservations: []*reservation.Reservation{freeUnpulled},
+			usedReservation:        usedUnpulled,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mGceClient := BuildAutoscalingInternalGceClientMock().
+				WithFetchZones(func(region string) ([]string, error) { return []string{zone}, nil }).
+				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
+					if project == sharedProject {
+						return nil, tc.sharedProjectErr
+					}
+					return tc.localReservations, nil
+				})
+			gm := experiments.NewMockManager(experiments.ConsumableReservationExperimentName)
+			puller, err := NewReservationsPuller(mGceClient, nil, gm, localProject, true, zone)
+			if err != nil {
+				t.Fatalf("NewReservationsPuller() failed: %v", err)
+			}
+			puller.updateExperiments()
+			puller.AddProject(sharedProject)
+			pull := func() {
+				for _, pp := range puller.projectPullers {
+					pp.Loop()
+				}
+				puller.consumableReservations = slices.Clone(tc.consumableReservations)
+			}
+
+			pull()
+			puller.SetReservations([]*reservation.Reservation{tc.usedReservation})
+			if diff := cmp.Diff([]int64{0}, availableCounts(puller.GetReservations())); diff != "" {
+				t.Errorf("GetReservations() after SetReservations() available counts diff (-want +got):\n%s", diff)
+			}
+
+			pull()
+			if diff := cmp.Diff([]int64{1}, availableCounts(puller.GetReservations())); diff != "" {
+				t.Errorf("GetReservations() after the next pull available counts diff (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestPullerPullLocalReservations(t *testing.T) {
@@ -771,7 +867,7 @@ func TestPullerPullLocalReservations(t *testing.T) {
 			puller.Run(ctx)
 
 			result := puller.GetLocalReservations()
-			if diff := cmp.Diff(tc.wantReservations, result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+			if diff := cmp.Diff(reservation.FromV1List(tc.wantReservations), result, cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
 				t.Errorf("ProjectPuller.GetLocalReservations() diff (-want +got):\n%s", diff)
 			}
 		})

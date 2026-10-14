@@ -527,6 +527,15 @@ func WithScaleDownBlockingNodeLabels(blockingLabels ...string) Option[*config.Au
 	}
 }
 
+// WithComputeClassScaleDownStatusEnabled enables reporting the consolidation (scale-down)
+// status on the ComputeClass CRD. Only effective together with WithEnhancedCrdStatusReporting.
+func WithComputeClassScaleDownStatusEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EnableComputeClassScaleDownStatus = true
+		return o
+	}
+}
+
 // WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
 func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -539,6 +548,15 @@ func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
 func WithEnhancedCrdStatusReportingEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.EnhancedCrdStatusReporting = true
+		return o
+	}
+}
+
+// WithComputeClassConfigDriftReportingEnabled enables reporting config drift
+// migration progress in the ComputeClass status.
+func WithComputeClassConfigDriftReportingEnabled() Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ComputeClassConfigDriftReporting = true
 		return o
 	}
 }
@@ -575,6 +593,15 @@ func WithReservationsAnyLocationPolicyOverride(enabled bool) Option[*config.Auto
 	}
 }
 
+// WithUnremovableNodeRecheckTimeout overrides how long CA caches a failed drain simulation
+// before re-evaluating the node. The default of zero re-evaluates every loop.
+func WithUnremovableNodeRecheckTimeout(d time.Duration) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.UnremovableNodeRecheckTimeout = d
+		return o
+	}
+}
+
 // WithScaleDownDelayAfterAdd overrides the ScaleDownDelayAfterAdd setting.
 func WithScaleDownDelayAfterAdd(delay time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
@@ -587,6 +614,14 @@ func WithScaleDownDelayAfterAdd(delay time.Duration) Option[*config.AutoscalingO
 func WithScaleDownUnneededTime(d time.Duration) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.NodeGroupDefaults.ScaleDownUnneededTime = d
+		return o
+	}
+}
+
+// WithMaxNodeProvisionTime overrides the MaxNodeProvisionTime in NodeGroupDefaults.
+func WithMaxNodeProvisionTime(d time.Duration) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.NodeGroupDefaults.MaxNodeProvisionTime = d
 		return o
 	}
 }
@@ -1190,6 +1225,14 @@ func WithDefragScaleDownDelay(d time.Duration) Option[*config.AutoscalingOptions
 func WithDefragCandidateLimit(limit int) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.DefragCandidateLimit = limit
+		return o
+	}
+}
+
+// WithDefragCandidateNodeLimit sets the DefragCandidateNodeLimit option.
+func WithDefragCandidateNodeLimit(limit int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.DefragCandidateNodeLimit = limit
 		return o
 	}
 }

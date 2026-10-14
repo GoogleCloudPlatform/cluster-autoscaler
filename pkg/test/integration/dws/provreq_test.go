@@ -50,7 +50,7 @@ func TestProvisioningRequest_Stockout(t *testing.T) {
 
 		// Simulate a stockout error for the n1-highcpu-2 machine type in all zones by setting its capacity to 0 in the fake GCE service.
 		for _, zone := range integration.DefaultZones {
-			infra.Fakes.GceService.SetBackendMachineCount(zone, "n1-highcpu-2", 0)
+			infra.Fakes.GceService.SetOnDemandCapacity(zone, "n1-highcpu-2", 0)
 		}
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)

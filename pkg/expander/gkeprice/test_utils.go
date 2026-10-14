@@ -15,11 +15,10 @@
 package gkeprice
 
 import (
-	gce_api "google.golang.org/api/compute/v1"
-
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -118,13 +117,13 @@ func WithPvmUnfitnessPenalty() func(*gkePriceBased) {
 	}
 }
 
-// WithReservations sets GCE reservations for testing.
-func WithReservations(gceReservations []*gce_api.Reservation) func(*gkePriceBased) {
+// WithReservations sets reservations for testing.
+func WithReservations(rsvs []*reservation.Reservation) func(*gkePriceBased) {
 	return func(g *gkePriceBased) {
 		mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 			WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
 		puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
-		puller.SetReservations(gceReservations)
+		puller.SetReservations(rsvs)
 		g.reservationsPuller = puller
 	}
 }

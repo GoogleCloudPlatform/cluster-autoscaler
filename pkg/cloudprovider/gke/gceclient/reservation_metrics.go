@@ -15,7 +15,7 @@
 package gceclient
 
 import (
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 type MetricLabels struct {
@@ -24,15 +24,15 @@ type MetricLabels struct {
 	gpuType     string
 }
 
-func ReservationMetricLabels(reservation *gce_api.Reservation) MetricLabels {
-	instanceProperties := reservation.SpecificReservation.InstanceProperties
+func ReservationMetricLabels(rsv *reservation.Reservation) MetricLabels {
+	instanceProperties := rsv.SpecificReservation.InstanceProperties
 	gpuType := "NONE"
 	if len(instanceProperties.GuestAccelerators) > 0 {
 		gpuType = instanceProperties.GuestAccelerators[0].AcceleratorType
 	}
 
 	return MetricLabels{
-		zone:        GetReservationZone(reservation),
+		zone:        GetReservationZone(rsv),
 		machineType: instanceProperties.MachineType,
 		gpuType:     gpuType,
 	}

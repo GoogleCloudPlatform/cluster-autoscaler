@@ -15,13 +15,17 @@
 package ccc
 
 import (
+	"slices"
 	"sort"
 	"strconv"
 	"time"
 
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -104,6 +108,12 @@ func (s *cccCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
 	s.apiStatus.PriorityStatuses[idx].ConfigHash = hash
 }
 
+// UpdateRuleConsolidationStatus implements crd.CRDStatus.
+func (s *cccCRDStatus) UpdateRuleConsolidationStatus(ruleIdx string, status crd.ConsolidationStatus) {
+	idx := s.getOrCreatePriorityStatusIdx(ruleIdx)
+	s.apiStatus.PriorityStatuses[idx].Consolidation = toCccConsolidationStatus(status)
+}
+
 // ResetAllScalingHistories implements crd.CRDStatus.
 func (s *cccCRDStatus) ResetAllScalingHistories() {
 	for i := range s.apiStatus.PriorityStatuses {
@@ -115,6 +125,29 @@ func (s *cccCRDStatus) ResetAllScalingHistories() {
 func (s *cccCRDStatus) ResetAllResourceInfo() {
 	for i := range s.apiStatus.PriorityStatuses {
 		s.apiStatus.PriorityStatuses[i].ResourceInfo = []ccc_api.ResourceInfo{}
+	}
+}
+
+// UpdateConfigDriftInfo implements crd.CRDStatus.
+func (s *cccCRDStatus) UpdateConfigDriftInfo(info crd.ConfigDriftInfo) {
+	// Only the configDrift field belongs to this report; anything else under
+	// migration is left as it is, just as ResetConfigDriftInfo leaves it.
+	if s.apiStatus.Migration == nil {
+		s.apiStatus.Migration = &ccc_api.MigrationStatus{}
+	}
+	s.apiStatus.Migration.ConfigDrift = toCccConfigDriftStatus(info)
+}
+
+// ResetConfigDriftInfo implements crd.CRDStatus.
+func (s *cccCRDStatus) ResetConfigDriftInfo() {
+	if s.apiStatus.Migration == nil {
+		return
+	}
+	s.apiStatus.Migration.ConfigDrift = nil
+	if apiequality.Semantic.DeepEqual(*s.apiStatus.Migration, ccc_api.MigrationStatus{}) {
+		// Nothing else is reported under migration, so drop the wrapper too
+		// rather than leaving an empty object behind in the status.
+		s.apiStatus.Migration = nil
 	}
 }
 
@@ -218,6 +251,9 @@ func toCccResourceInfo(info crd.ResourceInfo) ccc_api.ResourceInfo {
 	}
 }
 
+// TODO(b/570549559): A zero MeasuredAt/MeasuredSince serialises to null, which the API server
+// rejects, failing the whole status patch. Handle it here (omit the field or default it) rather
+// than relying on every producer to set it.
 func toCccScalingEventsHistory(history crd.ScalingEventsHistory) *ccc_api.ScalingEventsHistory {
 	return &ccc_api.ScalingEventsHistory{
 		ConsolidatedNodesCount: &history.ConsolidatedNodesCount,
@@ -226,6 +262,119 @@ func toCccScalingEventsHistory(history crd.ScalingEventsHistory) *ccc_api.Scalin
 		MeasuredAt:             &history.MeasuredAt,
 		MeasuredSince:          &history.MeasuredSince,
 	}
+}
+
+func toCccConsolidationStatus(status crd.ConsolidationStatus) *ccc_api.ConsolidationStatus {
+	actuationInProgress := status.ActuationInProgress
+	notProcessed := status.NotProcessed
+	return &ccc_api.ConsolidationStatus{
+		ActuationInProgress: &actuationInProgress,
+		NotProcessed:        &notProcessed,
+		BlockedNodes:        toCccBlockedNodes(status.BlockedNodes),
+		MeasuredAt:          &status.MeasuredAt,
+	}
+}
+
+// toCccBlockedNodes converts the per-reason breakdown to the API type, preserving the order the
+// producer chose (the order CA evaluates the reasons in). Reasons outside the API enum are folded
+// into the catch-all: the API server rejects the whole status patch on a single invalid value, so
+// writing one through would take the rest of the status down with it. Counts are merged per
+// reason, because blockedNodes is a map-typed list keyed by reason and a folded entry may collide
+// with an existing catch-all entry; the merged entry keeps the position of its first occurrence.
+// Merged topology unit counts are summed, so they may count a unit shared by the merged reasons
+// more than once.
+func toCccBlockedNodes(blocked []crd.BlockedNodesByReason) []ccc_api.ConsolidationBlockedNodesInfo {
+	blockedNodes := make([]ccc_api.ConsolidationBlockedNodesInfo, 0, len(blocked))
+	indexByReason := make(map[string]int, len(blocked))
+	for _, b := range blocked {
+		if b.NodeCount <= 0 {
+			continue
+		}
+		reason := b.Reason
+		if !slices.Contains(crd.ConsolidationReasons, reason) {
+			klog.Warningf("Unknown consolidation blocked reason %q (%d nodes), reporting it as %s", reason, b.NodeCount, crd.ConsolidationReasonConsolidationBlocked)
+			reason = crd.ConsolidationReasonConsolidationBlocked
+		}
+		i, ok := indexByReason[reason]
+		if !ok {
+			i = len(blockedNodes)
+			indexByReason[reason] = i
+			blockedNodes = append(blockedNodes, ccc_api.ConsolidationBlockedNodesInfo{Reason: reason})
+		}
+		blockedNodes[i].NodeCount += b.NodeCount
+		if b.TopologyUnitCount > 0 {
+			if blockedNodes[i].TopologyUnitCount == nil {
+				blockedNodes[i].TopologyUnitCount = new(int)
+			}
+			*blockedNodes[i].TopologyUnitCount += b.TopologyUnitCount
+		}
+	}
+	return blockedNodes
+}
+
+// knownBlockReasons are the values the ComputeClass API accepts for
+// BlockedNodesInfo.Reason.
+//
+// The API declares the field as a closed enum. Rather than keeping a third copy
+// of the list here, the set is derived from the reasons the autoscaler can
+// produce, and TestBlockReasonsAreAcceptedByTheApi asserts that those and the
+// enum match exactly. The fallback below is therefore purely defensive.
+var knownBlockReasons = func() map[string]bool {
+	known := make(map[string]bool)
+	for _, reason := range observability.AllReasons() {
+		known[string(reason)] = true
+	}
+	return known
+}()
+
+// unknownBlockReasonFallback is where reasons the API does not know about are
+// counted.
+const unknownBlockReasonFallback = "MigrationBlocked"
+
+func toCccConfigDriftStatus(info crd.ConfigDriftInfo) *ccc_api.ConfigDriftStatus {
+	status := &ccc_api.ConfigDriftStatus{
+		CurrentNodes:   &info.CurrentNodes,
+		DriftedNodes:   &info.DriftedNodes,
+		MigratingNodes: &info.MigratingNodes,
+		MeasuredAt:     &info.MeasuredAt,
+	}
+	for _, blocked := range info.BlockedNodes {
+		if blocked.Count <= 0 {
+			// The API requires a count of at least one, and a reason blocking
+			// nothing carries no information anyway.
+			continue
+		}
+		reason := blocked.Reason
+		if !knownBlockReasons[reason] {
+			// The enum is closed, so an unrecognized reason would make the
+			// apiserver reject the entire status patch and lose every other
+			// counter with it. Counting those nodes under the catch-all keeps
+			// the report valid and the sum intact.
+			klog.Warningf("Reporting nodes blocked by unknown reason %q as %q", reason, unknownBlockReasonFallback)
+			reason = unknownBlockReasonFallback
+		}
+		if i := indexOfBlockedNodes(status.BlockedNodes, reason); i >= 0 {
+			// Folding an unknown reason into the catch-all can collide with an
+			// entry that is already there. The list is keyed by reason, so the
+			// counts have to be merged rather than appended.
+			status.BlockedNodes[i].Count += blocked.Count
+			continue
+		}
+		status.BlockedNodes = append(status.BlockedNodes, ccc_api.BlockedNodesInfo{
+			Reason: reason,
+			Count:  blocked.Count,
+		})
+	}
+	return status
+}
+
+func indexOfBlockedNodes(blockedNodes []ccc_api.BlockedNodesInfo, reason string) int {
+	for i, blocked := range blockedNodes {
+		if blocked.Reason == reason {
+			return i
+		}
+	}
+	return -1
 }
 
 func fromIntPointer(i *int) int {

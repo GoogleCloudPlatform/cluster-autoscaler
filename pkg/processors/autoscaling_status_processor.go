@@ -22,6 +22,7 @@ import (
 	crd_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/nodequota"
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	klog "k8s.io/klog/v2"
@@ -36,11 +37,14 @@ type GkeInternalAutoscalingStatusProcessor struct {
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor
 	edpMetrics                      *edps.Metrics
 	observabilityProcessor          *crd_status.CrdResourceReportingProcessor
+	configDriftProcessor            *crd_status.ConfigDriftReportingProcessor
 	autoscalingHistoryProcessor     *history.AutoscalingStatusHistoryProcessor
+	capacityBuffersProcessor        *capacitybuffers.CapacityBufferAutoscalingStatusProcessor
 }
 
 // Process calls various GKE AutoscalingStatusProcessors
 func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, csr *clusterstate.ClusterStateRegistry, now time.Time) error {
+	logger := klog.FromContext(ctx)
 	var err error
 	if p.quotaProcessor != nil {
 		err = p.quotaProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
@@ -81,11 +85,25 @@ func (p *GkeInternalAutoscalingStatusProcessor) Process(ctx context.Context, aut
 			err = processorErr
 		}
 	}
+	if p.configDriftProcessor != nil {
+		processorErr := p.configDriftProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
+		if processorErr != nil {
+			klog.Errorf("Config drift reporting processor failed: %v", processorErr)
+			err = processorErr
+		}
+	}
 	if p.autoscalingHistoryProcessor != nil {
 		historyErr := p.autoscalingHistoryProcessor.Process(context.TODO(), autoscalingCtx, csr, now)
 		if historyErr != nil {
 			klog.Errorf("Autoscaling history processor failed with error: %v", historyErr)
 			err = historyErr
+		}
+	}
+	if p.capacityBuffersProcessor != nil {
+		cbErr := p.capacityBuffersProcessor.Process(ctx, autoscalingCtx, csr, now)
+		if cbErr != nil {
+			logger.Error(cbErr, "CapacityBuffer autoscaling status processor failed")
+			err = cbErr
 		}
 	}
 	return err
@@ -105,8 +123,14 @@ func (p *GkeInternalAutoscalingStatusProcessor) CleanUp() {
 	if p.edpMetrics != nil {
 		p.edpMetrics.CleanUp()
 	}
+	if p.configDriftProcessor != nil {
+		p.configDriftProcessor.CleanUp()
+	}
 	if p.autoscalingHistoryProcessor != nil {
 		p.autoscalingHistoryProcessor.CleanUp()
+	}
+	if p.capacityBuffersProcessor != nil {
+		p.capacityBuffersProcessor.CleanUp()
 	}
 }
 
@@ -117,13 +141,17 @@ func NewGkeInternalAutoscalingStatusProcessor(
 	edpUpgradeNodeTaintingProcessor *edps.UpgradeNodeTaintingProcessor,
 	edpMetrics *edps.Metrics,
 	observabilityProcessor *status.CrdResourceReportingProcessor,
-	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor) *GkeInternalAutoscalingStatusProcessor {
+	configDriftProcessor *status.ConfigDriftReportingProcessor,
+	autoscalingHistoryProcessor *history.AutoscalingStatusHistoryProcessor,
+	capacityBuffersProcessor *capacitybuffers.CapacityBufferAutoscalingStatusProcessor) *GkeInternalAutoscalingStatusProcessor {
 	return &GkeInternalAutoscalingStatusProcessor{
 		quotaProcessor:                  quotaProcessor,
 		vizProcessor:                    vizProcessor,
 		edpUpgradeNodeTaintingProcessor: edpUpgradeNodeTaintingProcessor,
 		edpMetrics:                      edpMetrics,
 		observabilityProcessor:          observabilityProcessor,
+		configDriftProcessor:            configDriftProcessor,
 		autoscalingHistoryProcessor:     autoscalingHistoryProcessor,
+		capacityBuffersProcessor:        capacityBuffersProcessor,
 	}
 }

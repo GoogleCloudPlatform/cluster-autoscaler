@@ -74,6 +74,7 @@ var (
 	generalPurposeMachineFamilies                = flag.String("general-purpose-machine-families", "", "A comma-separated list of machine families enabled for general purpose workloads. The order of families determines their sequential scale-up priority tier. Empty (default value) means to use the default families.")
 	ekMachineTypes                               = flag.String("ek-machine-types", "", "A comma-separated list of EK machine types to override EK machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	e4aMachineTypes                              = flag.String("e4a-machine-types", "", "A comma-separated list of E4A machine types to override E4A machine types supported by NAP. Empty (default value) means to use the default (no override).")
+	e4MachineTypes                               = flag.String("e4-machine-types", "", "A comma-separated list of E4 machine types to override E4 machine types supported by NAP. Empty (default value) means to use the default (no override).")
 	ekDownsizeConfig                             = flag.String("ek-downsize-config", "{}", "An override for DownsizeConfig in json format for EK.")
 	e4aDownsizeConfig                            = flag.String("e4a-downsize-config", "{}", "An override for DownsizeConfig in json format for E4A.")
 	e4DownsizeConfig                             = flag.String("e4-downsize-config", "{}", "An override for DownsizeConfig in json format for E4.")
@@ -115,6 +116,7 @@ var (
 	ekvmsConcurrentResizeWorkers                 = flag.Int("ekvms-concurrent-resize-workers", 10, "Number of concurrent workers that will execute EK VMs resize operations.")
 	ekAutoprovisioning                           = flag.String("ek-autoprovisioning", string(resizable_types.EkAutoprovisioningUnspecified), "Specifies if EKs are enabled and if so, which resizing mode is used. If unspecified, can be overridden by experiment.")
 	e4aAutoprovisioning                          = flag.String("e4a-autoprovisioning", string(resizable_types.E4aAutoprovisioningUnspecified), "Specifies if E4As are enabled and if so, which resizing mode is used. If unspecified, can be overridden by experiment.")
+	e4Autoprovisioning                           = flag.String("e4-autoprovisioning", string(resizable_types.E4AutoprovisioningUnspecified), "Specifies if E4s are enabled and if so, which resizing mode is used. If unspecified, can be overridden by experiment.")
 	ekLookaheadMaxWorkloadSeparations            = flag.Int("ek-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by EK lookahead buffers.")
 	e4aLookaheadMaxWorkloadSeparations           = flag.Int("e4a-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by E4A lookahead buffers.")
 	e4LookaheadMaxWorkloadSeparations            = flag.Int("e4-lookahead-max-workload-separations", 0, "Maximum number of workload separations that will be supported by E4 lookahead buffers.")
@@ -123,6 +125,7 @@ var (
 	e4LookaheadPodStrategy                       = flag.String("e4-lookahead-pod-strategy", "{}", "Single-quote wrapped JSON string representing E4 lookahead pod strategy.")
 	ekOnManagedNodesEnabled                      = flag.Bool("enable-ek-on-managed-nodes", false, "Specifies if EKs are enabled on managed nodes.")
 	e4aOnManagedNodesEnabled                     = flag.Bool("enable-e4a-on-managed-nodes", false, "Specifies if E4As are enabled on managed nodes.")
+	e4OnManagedNodesEnabled                      = flag.Bool("enable-e4-on-managed-nodes", false, "Specifies if E4s are enabled on managed nodes.")
 	multiNetworkSupportEnabled                   = flag.Bool("multi-network-support-enabled", false, "Enables support for multi network pods.")
 	allowlistedSystemLabels                      = flag.String("allowlisted-system-labels", "", "[DEPRECATED] Use --allowlisted-system-label-patterns instead.")
 	allowlistedSystemLabelPatterns               = flag.String("allowlisted-system-label-patterns", "", "Comma separated list of allow listed system regex label patterns to be passed by NAP.")
@@ -142,9 +145,12 @@ var (
 	zoneTypesEnabled                     = flag.Bool("enable-zone-types", false, "Enables automatic AI zones selection via CCC zoneTypes field, see go/gke-auto-ai-zones for details.")
 	enableComputeClassMinCapacity        = flag.Bool("enable-compute-class-min-capacity", false, "Enables Compute Class minimum capacity support.")
 	enableComputeClassConfigHash         = flag.Bool("enable-compute-class-config-hash", false, "Enables Compute Class configuration hashing.")
+	computeClassConfigDriftReporting     = flag.Bool("compute-class-config-drift-reporting", false, "Whether to report the progress of migrating nodes that no longer match their Compute Class configuration in the Compute Class status. Requires --enhanced-crd-status-reporting and --defrag-enabled; the status is additionally gated per cluster by the ComputeClassConfigDriftStatus::Enabled experiment.")
+	enableComputeClassScaleDownStatus    = flag.Bool("enable-compute-class-scale-down-status", false, "Enables reporting of the per-priority consolidation (scale-down) status on the ComputeClass CRD. Requires --enhanced-crd-status-reporting.")
 	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
+	filterMigsByClusterNameEnabled       = flag.Bool("enable-filter-migs-by-cluster-name", true, "Whether GKE MIGs are filtered by cluster name on the GCE server-side is enabled.")
 
 	// See go/gke-ca-perf-node-pod-watch-selector, read Risks sections before using
 	nodeWatchLabelSelector = flag.String("node-watch-label-selector", "", "Label selector to filter nodes in informer watch, defaults to all nodes.")
@@ -322,6 +328,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		GeneralPurposeMachineFamilies:                parsedGpMachineFamilies,
 		EkMachineTypes:                               *ekMachineTypes,
 		E4aMachineTypes:                              *e4aMachineTypes,
+		E4MachineTypes:                               *e4MachineTypes,
 		EkDownsizeConfig:                             *ekDownsizeConfig,
 		E4aDownsizeConfig:                            *e4aDownsizeConfig,
 		E4DownsizeConfig:                             *e4DownsizeConfig,
@@ -363,8 +370,10 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		EkvmsConcurrentResizeWorkers:                 *ekvmsConcurrentResizeWorkers,
 		EkAutoprovisioning:                           *ekAutoprovisioning,
 		E4aAutoprovisioning:                          *e4aAutoprovisioning,
+		E4Autoprovisioning:                           *e4Autoprovisioning,
 		EkOnManagedNodesEnabled:                      *ekOnManagedNodesEnabled,
 		E4aOnManagedNodesEnabled:                     *e4aOnManagedNodesEnabled,
+		E4OnManagedNodesEnabled:                      *e4OnManagedNodesEnabled,
 		EkLookaheadMaxWorkloadSeparations:            *ekLookaheadMaxWorkloadSeparations,
 		E4aLookaheadMaxWorkloadSeparations:           *e4aLookaheadMaxWorkloadSeparations,
 		E4LookaheadMaxWorkloadSeparations:            *e4LookaheadMaxWorkloadSeparations,
@@ -404,6 +413,8 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ZoneTypesEnabled:                             *zoneTypesEnabled,
 		EnableComputeClassMinCapacity:                *enableComputeClassMinCapacity,
 		EnableComputeClassConfigHash:                 *enableComputeClassConfigHash,
+		ComputeClassConfigDriftReporting:             *computeClassConfigDriftReporting,
+		EnableComputeClassScaleDownStatus:            *enableComputeClassScaleDownStatus,
 		ScaleDownBlockingNodeLabels:                  parsedScaleDownBlockingNodeLabels,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,
@@ -413,5 +424,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		DaemonSetMutationEnabled:                     *daemonSetMutationEnabled,
 		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
 		ExperimentsConfigMap:                         *experimentsConfigMap,
+		FilterMigsByClusterNameEnabled:               *filterMigsByClusterNameEnabled,
 	}
 }

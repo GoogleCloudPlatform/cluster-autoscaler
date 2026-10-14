@@ -21,6 +21,7 @@ import (
 	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/cpuset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
@@ -131,6 +132,7 @@ type kubeletConfig struct {
 	shutdownGracePeriodCriticalPodsSeconds *int64
 	crashLoopBackOff                       *crashLoopBackOff
 	reservedResourcesConfig                *reservedResourcesConfig
+	reservedSystemCpus                     *string
 }
 
 // NodeSystemConfigRule is an interface for rules with node system config.
@@ -194,6 +196,7 @@ type NodeSystemConfigRule interface {
 	TimeZone() *string
 	CpuReservedMillicore() *int64
 	MemoryReservedMib() *int64
+	ReservedSystemCpus() *string
 }
 
 type nodeSystemConfigRule struct {
@@ -489,6 +492,9 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 				}
 			}
 		}
+		if ruleKubeletConfig.reservedSystemCpus != nil && !compareReservedSystemCpus(*ruleKubeletConfig.reservedSystemCpus, npKubeletConfig.ReservedSystemCpus) {
+			return false
+		}
 	}
 
 	if r.linuxNodeConfig != nil {
@@ -531,6 +537,25 @@ func (r *nodeSystemConfigRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 	}
 	return true
 }
+
+func compareReservedSystemCpus(ruleCpus, npCpus string) bool {
+	if ruleCpus == npCpus {
+		return true
+	}
+	if ruleCpus == "" || npCpus == "" {
+		return false
+	}
+	ruleSet, err := cpuset.Parse(ruleCpus)
+	if err != nil {
+		return false
+	}
+	npSet, err := cpuset.Parse(npCpus)
+	if err != nil {
+		return false
+	}
+	return ruleSet.Equals(npSet)
+}
+
 func compareEvictionThresholds(rule *evictionThresholds, mem, nodefs, imagefs, imagefsInodes, nodefsInodes, pid string) bool {
 	if rule.memoryAvailable != nil && *rule.memoryAvailable != mem {
 		return false
@@ -948,6 +973,14 @@ func (r *nodeSystemConfigRule) MemoryReservedMib() *int64 {
 	}
 	return r.kubeletConfig.reservedResourcesConfig.memoryReservedMib
 }
+
+func (r *nodeSystemConfigRule) ReservedSystemCpus() *string {
+	if r.kubeletConfig == nil {
+		return nil
+	}
+	return r.kubeletConfig.reservedSystemCpus
+}
+
 func (r *nodeSystemConfigRule) AdditionalEtcHosts() []*EtcHostsEntry {
 	if r.linuxNodeConfig == nil {
 		return nil
@@ -1660,6 +1693,15 @@ func WithReservedResourcesConfigRule(cpuReserved, memoryReserved *int64) RuleOpt
 			cpuReservedMillicore: cpuReserved,
 			memoryReservedMib:    memoryReserved,
 		}
+	}
+}
+
+func WithReservedSystemCpusRule(reservedSystemCpus string) RuleOption {
+	return func(r *rule) {
+		if r.nodeSystemConfigRule.kubeletConfig == nil {
+			r.nodeSystemConfigRule.kubeletConfig = &kubeletConfig{}
+		}
+		r.nodeSystemConfigRule.kubeletConfig.reservedSystemCpus = &reservedSystemCpus
 	}
 }
 

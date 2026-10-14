@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"strings"
 
-	gceapiv1 "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	gcereservation "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
@@ -30,8 +30,8 @@ import (
 )
 
 type ValidatorReservationsPuller interface {
-	GetLocalReservations() []*gceapiv1.Reservation
-	GetReservationsInProject(project string) []*gceapiv1.Reservation
+	GetLocalReservations() []*gcereservation.Reservation
+	GetReservationsInProject(project string) []*gcereservation.Reservation
 	AddProject(projectID string)
 }
 
@@ -40,20 +40,20 @@ type ValidatorReservationsPuller interface {
 type ReservationsCache struct {
 	puller ValidatorReservationsPuller
 	// cache maps Project -> Reservation Name -> Zone -> Reservation
-	cache map[string]map[string]map[string]*gceapiv1.Reservation
+	cache map[string]map[string]map[string]*gcereservation.Reservation
 }
 
 func NewReservationsCache(puller ValidatorReservationsPuller) *ReservationsCache {
 	return &ReservationsCache{
 		puller: puller,
-		cache:  map[string]map[string]map[string]*gceapiv1.Reservation{},
+		cache:  map[string]map[string]map[string]*gcereservation.Reservation{},
 	}
 }
 
 // PopulateForCrds fetches reservations affected by node config
 // rules in the CRDs provided and populates a cache from it.
 func (c *ReservationsCache) PopulateForCrds(crds []crd.CRD) {
-	c.cache = map[string]map[string]map[string]*gceapiv1.Reservation{}
+	c.cache = map[string]map[string]map[string]*gcereservation.Reservation{}
 	for _, crd := range crds {
 		for _, rule := range crd.Rules() {
 			for _, reservation := range rule.Reservations() {
@@ -66,7 +66,7 @@ func (c *ReservationsCache) PopulateForCrds(crds []crd.CRD) {
 // AddCacheForProject pulls reservations from specified project into a cache.
 // Considers empty project name to be local project.
 func (c *ReservationsCache) AddCacheForProject(project string) {
-	var reservationsInProject []*gceapiv1.Reservation
+	var reservationsInProject []*gcereservation.Reservation
 	if project != "" {
 		c.puller.AddProject(project)
 		reservationsInProject = c.puller.GetReservationsInProject(project)
@@ -75,12 +75,12 @@ func (c *ReservationsCache) AddCacheForProject(project string) {
 	}
 
 	if _, exists := c.cache[project]; !exists {
-		c.cache[project] = map[string]map[string]*gceapiv1.Reservation{}
+		c.cache[project] = map[string]map[string]*gcereservation.Reservation{}
 	}
 
 	for _, reservation := range reservationsInProject {
 		if _, exists := c.cache[project][reservation.Name]; !exists {
-			c.cache[project][reservation.Name] = map[string]*gceapiv1.Reservation{}
+			c.cache[project][reservation.Name] = map[string]*gcereservation.Reservation{}
 		}
 		zone := gceclient.GetReservationZone(reservation)
 		c.cache[project][reservation.Name][zone] = reservation
@@ -89,7 +89,7 @@ func (c *ReservationsCache) AddCacheForProject(project string) {
 
 // GetReservations tries to acquire reservations with a given name in a specified project.
 // Returns a slice of all matching reservations across zones. Returns empty slice if none found.
-func (c *ReservationsCache) GetReservations(name, project string) []*gceapiv1.Reservation {
+func (c *ReservationsCache) GetReservations(name, project string) []*gcereservation.Reservation {
 	reservationsInProject, exists := c.cache[project]
 	if !exists {
 		return nil
@@ -100,7 +100,7 @@ func (c *ReservationsCache) GetReservations(name, project string) []*gceapiv1.Re
 		return nil
 	}
 
-	var results []*gceapiv1.Reservation
+	var results []*gcereservation.Reservation
 	for _, res := range reservations {
 		results = append(results, res)
 	}
@@ -111,7 +111,7 @@ func (c *ReservationsCache) GetReservations(name, project string) []*gceapiv1.Re
 // properties specified in a node config rule.
 func matchSpecificReservationOrError(
 	provider CloudProvider,
-	gceReservation *gceapiv1.Reservation,
+	gceReservation *gcereservation.Reservation,
 	rule rules.Rule,
 	localSSDSizeProvider localssdsize.LocalSSDSizeProvider,
 ) error {
@@ -169,13 +169,13 @@ func matchSpecificReservationOrError(
 	}
 
 	// These options are ignored as they are not configured as part of CCC
-	minCpuPlatform := rsvProperties.MinCpuPlatform
+	minCPUPlatform := rsvProperties.MinCPUPlatform
 	// TODO(b/517097938): add zone validation once location support becomes part of CCC
 	zone := gceclient.GetReservationZone(gceReservation)
 
 	nodeShape := reservations.NodeShape{
 		MachineType:    machineType,
-		MinCpuPlatform: minCpuPlatform,
+		MinCpuPlatform: minCPUPlatform,
 		Accelerators:   accelerators,
 		LocalSSDSizes:  localSSDSizes,
 		Zone:           zone,
@@ -192,7 +192,7 @@ func matchSpecificReservationOrError(
 // matchAggregateReservationOrError matches aggregate reservation against properties specified in a node config rule.
 func matchAggregateReservationOrError(
 	provider CloudProvider,
-	gceReservation *gceapiv1.Reservation,
+	gceReservation *gcereservation.Reservation,
 	rule rules.Rule,
 ) error {
 	// Not trying to match any reservation, only specific are allowed

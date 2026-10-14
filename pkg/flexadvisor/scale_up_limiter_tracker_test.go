@@ -76,7 +76,7 @@ func TestScaleUpLimiterTracker_RecordingAndQuerying(t *testing.T) {
 			expectedScopes: nil,
 		},
 		{
-			name: "empty node group ID ignored - returns removed false and nil scopes",
+			name: "empty nodeGroupId is ignored - returns removed false and nil scopes",
 			recorded: []recordedOption{
 				{nodeGroupId: "", flexibilityScope: "scope-a"},
 			},
@@ -90,7 +90,7 @@ func TestScaleUpLimiterTracker_RecordingAndQuerying(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			tracker := NewScaleUpLimiterTracker(true, nil)
 			for _, rec := range tc.recorded {
-				tracker.MarkScaleUpOptionRemoved(rec.nodeGroupId, rec.flexibilityScope)
+				tracker.MarkScaleUpOptionRemovedByFlexAdvisor(rec.nodeGroupId, rec.flexibilityScope)
 			}
 			assert.Equal(t, tc.expectedRemove, tracker.WasNodeGroupRemovedByFlexAdvisor(tc.queryGroupId))
 			assert.Equal(t, tc.expectedScopes, tracker.GetFlexibilityScopesForNodeGroupIfRemoved(tc.queryGroupId))
@@ -100,7 +100,7 @@ func TestScaleUpLimiterTracker_RecordingAndQuerying(t *testing.T) {
 
 func TestReset_ClearsTrackedScopesAndNodeGroups(t *testing.T) {
 	tracker := NewScaleUpLimiterTracker(true, nil)
-	tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
+	tracker.MarkScaleUpOptionRemovedByFlexAdvisor("mig-1", "scope-1")
 
 	tracker.Reset()
 
@@ -143,7 +143,7 @@ func TestScaleUpLimiterTracker_Disabled(t *testing.T) {
 			}
 			tracker := NewScaleUpLimiterTracker(tc.gceFlexAdvisorEnabled, manager)
 
-			tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
+			tracker.MarkScaleUpOptionRemovedByFlexAdvisor("mig-1", "scope-1")
 
 			assert.False(t, tracker.WasNodeGroupRemovedByFlexAdvisor("mig-1"))
 			assert.Nil(t, tracker.GetFlexibilityScopesForNodeGroupIfRemoved("mig-1"))
@@ -159,7 +159,7 @@ func TestScaleUpLimiterTracker_ConcurrentAccess(t *testing.T) {
 		wg.Add(4)
 		go func() {
 			defer wg.Done()
-			tracker.MarkScaleUpOptionRemoved("mig-1", "scope-1")
+			tracker.MarkScaleUpOptionRemovedByFlexAdvisor("mig-1", "scope-1")
 		}()
 		go func() {
 			defer wg.Done()
@@ -263,6 +263,54 @@ func TestIsFlexAdvisorScaleUpLimiterTrackerEnabled(t *testing.T) {
 			}
 			got := IsFlexAdvisorScaleUpLimiterTrackerEnabled(tc.gceFlexAdvisorEnabled, manager)
 			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestScaleUpLimiterTracker_GetFlexibilityScopesConstrainedByFlexAdvisor(t *testing.T) {
+	type recordedOption struct {
+		nodeGroupId      string
+		flexibilityScope string
+	}
+	testCases := []struct {
+		name           string
+		enabled        bool
+		recorded       []recordedOption
+		expectedScopes []string
+	}{
+		{
+			name:           "no options recorded - returns nil",
+			enabled:        true,
+			recorded:       nil,
+			expectedScopes: nil,
+		},
+		{
+			name:    "multiple node groups and duplicate scopes - returns sorted deduplicated scopes",
+			enabled: true,
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-b"},
+				{nodeGroupId: "mig-2", flexibilityScope: "scope-a"},
+				{nodeGroupId: "mig-3", flexibilityScope: "scope-b"},
+			},
+			expectedScopes: []string{"scope-a", "scope-b"},
+		},
+		{
+			name:    "tracker disabled - returns nil",
+			enabled: false,
+			recorded: []recordedOption{
+				{nodeGroupId: "mig-1", flexibilityScope: "scope-a"},
+			},
+			expectedScopes: nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := NewScaleUpLimiterTracker(tc.enabled, nil)
+			for _, rec := range tc.recorded {
+				tracker.MarkScaleUpOptionRemovedByFlexAdvisor(rec.nodeGroupId, rec.flexibilityScope)
+			}
+			assert.Equal(t, tc.expectedScopes, tracker.GetFlexibilityScopesConstrainedByFlexAdvisor())
 		})
 	}
 }

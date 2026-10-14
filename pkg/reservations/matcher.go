@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/klog/v2"
@@ -57,12 +57,12 @@ const (
 )
 
 // MatchingUnusedReservations sums up all the unused reservations that match the given node group
-func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) int {
+func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) int {
 	availableCount := 0
 	notMatchingLogQuota := klogx.NewLoggingQuota(notMatchingLogLimit)
 	for _, rsv := range reservations {
 		if ok, reasons, nodeShape := reservationMatch(provider, nodegroup, rsv, localSSDDiskSizeProvider); ok {
-			reservationCount := int(rsv.SpecificReservation.Count - rsv.SpecificReservation.InUseCount)
+			reservationCount := int(rsv.SpecificReservation.AvailableCount)
 			availableCount += reservationCount
 			klog.V(4).Infof("Matching reservation found: nodegroup=%s, reservation=%s, availableCount=%d", nodegroup.Id(), rsv.Name, reservationCount)
 		} else {
@@ -80,7 +80,7 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 
 // reservationMatch checks if the nodegroup matches reservation.
 // https://cloud.google.com/compute/docs/instances/reservations-overview#vm-properties
-func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *gce_api.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) (bool, []string, NodeShape) {
+func reservationMatch(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, rsv *reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider) (bool, []string, NodeShape) {
 	mig, ok := nodegroup.(*gke.GkeMig)
 
 	if !ok {
@@ -126,7 +126,7 @@ type NodeShape struct {
 }
 
 // MatchSpecificReservationShape determines whether reservation matches specific machine shape including accelerator and local SSD including reasoning when they don't match.
-func MatchSpecificReservationShapeWithReasons(provider machineConfigProvider, rsv *gce_api.Reservation, nodeShape NodeShape, acceleratorStrictRequests bool) []string {
+func MatchSpecificReservationShapeWithReasons(provider machineConfigProvider, rsv *reservation.Reservation, nodeShape NodeShape, acceleratorStrictRequests bool) []string {
 	ip := rsv.SpecificReservation.InstanceProperties
 
 	var noMatchReasons []string
@@ -142,10 +142,10 @@ func MatchSpecificReservationShapeWithReasons(provider machineConfigProvider, rs
 	}
 
 	// Compare Minimum CPU platform.
-	instanceMinCpuPlatform := provider.MachineConfigProvider().GetOrDefaultMinCPUPlatform(nodeShape.MachineType, nodeShape.MinCpuPlatform)
-	rsvMinCpuPlatform := provider.MachineConfigProvider().GetOrDefaultMinCPUPlatform(nodeShape.MachineType, ip.MinCpuPlatform)
-	if instanceMinCpuPlatform != rsvMinCpuPlatform {
-		noMatchReasons = append(noMatchReasons, fmt.Sprintf(MinCpuPlatformNotMatching, instanceMinCpuPlatform, rsvMinCpuPlatform))
+	instanceMinCPUPlatform := provider.MachineConfigProvider().GetOrDefaultMinCPUPlatform(nodeShape.MachineType, nodeShape.MinCpuPlatform)
+	rsvMinCPUPlatform := provider.MachineConfigProvider().GetOrDefaultMinCPUPlatform(nodeShape.MachineType, ip.MinCPUPlatform)
+	if instanceMinCPUPlatform != rsvMinCPUPlatform {
+		noMatchReasons = append(noMatchReasons, fmt.Sprintf(MinCpuPlatformNotMatching, instanceMinCPUPlatform, rsvMinCPUPlatform))
 	}
 
 	// Compare GPU type and count.
@@ -195,7 +195,7 @@ func MatchSpecificReservationShapeWithReasons(provider machineConfigProvider, rs
 	}
 
 	// Prevent usage of unsupported local SSD interfaces
-	for _, ssd := range ip.LocalSsds {
+	for _, ssd := range ip.LocalSSDs {
 		if ssd.Interface != ssdNVME && ssd.Interface != ssdSCSI {
 			noMatchReasons = append(noMatchReasons, fmt.Sprintf(LocalSsdTypeNotSupported, ssd.Interface))
 		}
@@ -210,7 +210,7 @@ type machineConfigProvider interface {
 
 // MatchAggregateReservationShapeWithReasons determines whether aggregate reservation is matching
 // a given TPU shape while including reasoning when they don't match.
-func MatchAggregateReservationShapeWithReasons(provider machineConfigProvider, rsv *gce_api.Reservation, tpuType string, tpuTopology string, tpuCount int64) []string {
+func MatchAggregateReservationShapeWithReasons(provider machineConfigProvider, rsv *reservation.Reservation, tpuType string, tpuTopology string, tpuCount int64) []string {
 	tpuRequest := fmt.Sprintf("{%s, %s, %d}", tpuType, tpuTopology, tpuCount)
 	if !IsAggregateReservation(rsv) {
 		return []string{fmt.Sprintf(TpuAcceleratorMissing, tpuRequest)}
@@ -240,10 +240,10 @@ func MatchAggregateReservationShapeWithReasons(provider machineConfigProvider, r
 		return []string{fmt.Sprintf(MalformedTpuTopology, tpuTopology)}
 	}
 
-	for _, resource := range agg.ReservedResources {
-		rsvMachineFamily, ok := tpu.GetTpuMachineFamilyFromUrl(resource.Accelerator.AcceleratorType)
+	for _, resource := range agg.AvailableResources {
+		rsvMachineFamily, ok := tpu.GetTpuMachineFamilyFromUrl(resource.AcceleratorType)
 		if !ok {
-			klog.V(5).Infof("Unable to get TPU machine family for accelerator URL: %s", resource.Accelerator.AcceleratorType)
+			klog.V(5).Infof("Unable to get TPU machine family for accelerator URL: %s", resource.AcceleratorType)
 			continue
 		}
 
@@ -253,7 +253,7 @@ func MatchAggregateReservationShapeWithReasons(provider machineConfigProvider, r
 			continue
 		}
 
-		if chipsRequired > resource.Accelerator.AcceleratorCount {
+		if chipsRequired > resource.AcceleratorCount {
 			continue
 		}
 

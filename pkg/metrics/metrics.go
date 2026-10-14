@@ -155,6 +155,22 @@ const (
 	AllocationStrategyFallbackUnsupported AllocationStrategyFallbackReason = "unsupported"
 )
 
+// AllocationStrategySource describes the source from which the allocation strategy was resolved.
+type AllocationStrategySource string
+
+const (
+	// AllocationStrategySourceUnknown represents an unknown or unset allocation strategy source.
+	AllocationStrategySourceUnknown AllocationStrategySource = ""
+	// AllocationStrategySourceCluster represents a strategy that was not set explicitly on the matched CCC rule and was resolved from the cluster-level default (or the built-in lowest-cost default when the cluster-default override is disabled).
+	AllocationStrategySourceCluster AllocationStrategySource = "default"
+	// AllocationStrategySourceCustomComputeClass represents strategy derived from an explicit or defaulted Custom Compute Class (CCC).
+	AllocationStrategySourceCustomComputeClass AllocationStrategySource = "compute-class"
+	// AllocationStrategySourcePredefinedComputeClass represents strategy derived from a Predefined Compute Class (Balanced, Scale-Out).
+	AllocationStrategySourcePredefinedComputeClass AllocationStrategySource = "predefined-compute-class"
+	// AllocationStrategySourceAutopilotWorkload represents strategy derived from an unlabelled pay-per-pod Autopilot workload.
+	AllocationStrategySourceAutopilotWorkload AllocationStrategySource = "autopilot-workload"
+)
+
 // ReactionType defines the type of reaction CA has for a pod.
 type ReactionType uint8
 
@@ -1126,6 +1142,15 @@ var (
 		[]string{"requested_allocation_strategy", "fallback_reason", "machine_type"},
 	)
 
+	scaleupsWithAllocationStrategy = k8smetrics.NewCounterVec(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "scaleups_with_allocation_strategy",
+			Help:      "How many scale up attempts were evaluated with an allocation strategy",
+		},
+		[]string{"requested_allocation_strategy", "fallback_reason", "allocation_strategy_source"},
+	)
+
 	machineConfigSourceInfo = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1216,6 +1241,14 @@ var (
 		},
 		[]string{"status"},
 	)
+
+	flexAdvisorRecommendationsBypassCount = k8smetrics.NewCounter(
+		&k8smetrics.CounterOpts{
+			Namespace: caNamespace,
+			Name:      "flexadvisor_recommendations_bypass_count",
+			Help:      "Number of times FlexAdvisor recommendations bypass was attempted.",
+		},
+	)
 )
 
 // allMetrics is the single source of truth for all metrics to register.
@@ -1225,6 +1258,7 @@ var (
 var allMetrics = []k8smetrics.Registerable{
 	profile,
 	nodesWithAllocationStrategy,
+	scaleupsWithAllocationStrategy,
 	clusterType,
 	podShardCount,
 	unschedulablePodDuration,
@@ -1329,13 +1363,21 @@ var allMetrics = []k8smetrics.Registerable{
 	dsMutationResolutionsTotal,
 	dsMutationResolutionDuration,
 	componentFlagOverrides,
+	flexAdvisorRecommendationsBypassCount,
+}
+
+// FlagOverrideStats holds the counts of processed flag overrides for metrics reporting.
+type FlagOverrideStats struct {
+	ActiveCount       int
+	UnrecognizedCount int
+	RedundantCount    int
 }
 
 // UpdateComponentFlagOverrides sets the component overrides flag overrides metric.
-func UpdateComponentFlagOverrides(active, unrecognized, redundant int) {
-	componentFlagOverrides.WithLabelValues("active").Set(float64(active))
-	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(unrecognized))
-	componentFlagOverrides.WithLabelValues("redundant").Set(float64(redundant))
+func UpdateComponentFlagOverrides(stats FlagOverrideStats) {
+	componentFlagOverrides.WithLabelValues("active").Set(float64(stats.ActiveCount))
+	componentFlagOverrides.WithLabelValues("unrecognized").Set(float64(stats.UnrecognizedCount))
+	componentFlagOverrides.WithLabelValues("redundant").Set(float64(stats.RedundantCount))
 }
 
 // RegisterAll registers all metrics.
@@ -2093,9 +2135,19 @@ func (*prometheusMetrics) RegisterFlexAdvisorResponseError(reason FAResponseErro
 	flexAdvisorResponseErrors.WithLabelValues(string(reason)).Inc()
 }
 
+// RegisterFlexAdvisorBypassAttempt increments the count of Flex Advisor recommendations bypass attempts.
+func (*prometheusMetrics) RegisterFlexAdvisorBypassAttempt() {
+	flexAdvisorRecommendationsBypassCount.Inc()
+}
+
 // RegisterNodesWithAllocationStrategy records the nodes_with_allocation_strategy metric.
 func RegisterNodesWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string, count int) {
 	nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType).Add(float64(count))
+}
+
+// RegisterScaleupsWithAllocationStrategy records the scaleups_with_allocation_strategy metric.
+func RegisterScaleupsWithAllocationStrategy(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, source AllocationStrategySource) {
+	scaleupsWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), string(source)).Inc()
 }
 
 // RegisterCCStatusUpdate records a ComputeClass CRD status update attempt.

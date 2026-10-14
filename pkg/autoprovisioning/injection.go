@@ -28,7 +28,6 @@ import (
 	"time"
 
 	netapi "github.com/GoogleCloudPlatform/gke-networking-api/apis/network/v1"
-	gce_api "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
@@ -38,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
@@ -2761,9 +2761,9 @@ func (rg ReservationGenerator) generateRequirements(ngReq nodeGroupRequirements,
 		if steerFlagEnabled &&
 			r.SpecificReservation != nil &&
 			r.SpecificReservation.InstanceProperties != nil &&
-			len(r.SpecificReservation.InstanceProperties.LocalSsds) > 0 {
+			len(r.SpecificReservation.InstanceProperties.LocalSSDs) > 0 {
 			nvmeCount := 0
-			for _, ssd := range r.SpecificReservation.InstanceProperties.LocalSsds {
+			for _, ssd := range r.SpecificReservation.InstanceProperties.LocalSSDs {
 				if ssd.Interface == "NVME" {
 					nvmeCount += 1
 				}
@@ -2918,7 +2918,7 @@ func (gr *groupedReq) addZone(zone string) {
 	}
 }
 
-func (rg ReservationGenerator) inferPlacementPolicyFromReservation(r *gce_api.Reservation, ngReq *nodeGroupRequirements) (*placement.Spec, caerrors.AutoscalerError) {
+func (rg ReservationGenerator) inferPlacementPolicyFromReservation(r *reservation.Reservation, ngReq *nodeGroupRequirements) (*placement.Spec, caerrors.AutoscalerError) {
 	// Infer placement policy only from specific reservation.
 	if r.SpecificReservation == nil || !r.SpecificReservationRequired {
 		klog.Infof("Won't infer placement policy from reservation '%s' without requirement for or without specific reservation", r.Name)

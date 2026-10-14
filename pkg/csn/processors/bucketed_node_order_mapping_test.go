@@ -31,8 +31,8 @@ import (
 func TestBucketedNodeOrderMapping(t *testing.T) {
 	// Three priority buckets, like buffer consumption uses for normal pods:
 	// 0 = already consumed, 1 = chilling, 2 = suspended. Bucket 0 is visited first.
-	// Nodes without a priority (here: non-CSN nodes) go to an extra last bucket,
-	// which is visited last.
+	// Nodes without a priority (here: non-CSN nodes) are not in any bucket,
+	// so At returns -1 once it reaches them.
 	const numPriorities = 3
 	nodePriorities := map[string]int{
 		"consumed-1":  0,
@@ -52,7 +52,7 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 		// matches are the nodes that pods got scheduled on, in this order. For each of them
 		// the test calls MarkMatch, like the scheduler does after it places a pod on a node.
 		matches []string
-		// wantOrder is written one bucket per line: 0, 1, 2, then nodes without a priority.
+		// wantOrder is written one bucket per line: 0, 1, 2.
 		wantOrder []string
 	}{
 		{
@@ -62,11 +62,10 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
 				"suspended-1", "suspended-2", "suspended-3",
-				"non-csn-1", "non-csn-2",
 			},
 		},
 		{
-			// suspended-1 is still tried, just after suspended-3 and before the next bucket.
+			// suspended-1 is still tried, just after suspended-3.
 			description:        "A match makes the scan of its bucket start at the matched node",
 			startFromLastMatch: true,
 			matches:            []string{"suspended-2"},
@@ -74,7 +73,6 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
 				"suspended-2", "suspended-3", "suspended-1",
-				"non-csn-1", "non-csn-2",
 			},
 		},
 		{
@@ -85,7 +83,6 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 				"consumed-1", "consumed-2",
 				"chilling-2", "chilling-1",
 				"suspended-3", "suspended-1", "suspended-2",
-				"non-csn-1", "non-csn-2",
 			},
 		},
 		{
@@ -96,7 +93,6 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
 				"suspended-2", "suspended-3", "suspended-1",
-				"non-csn-1", "non-csn-2",
 			},
 		},
 		{
@@ -107,7 +103,6 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 				"consumed-1", "consumed-2",
 				"chilling-1", "chilling-2",
 				"suspended-1", "suspended-2", "suspended-3",
-				"non-csn-1", "non-csn-2",
 			},
 		},
 	}
@@ -127,13 +122,15 @@ func TestBucketedNodeOrderMapping(t *testing.T) {
 	}
 }
 
-// TestBucketedNodeOrderMappingMarkMatchOutOfRange checks that MarkMatch ignores indices outside the collection.
+// TestBucketedNodeOrderMappingMarkMatchOutOfRange checks that MarkMatch ignores indices outside the collection
+// or indices of nodes without a priority.
 func TestBucketedNodeOrderMappingMarkMatchOutOfRange(t *testing.T) {
-	nodeInfos := buildTestNodeInfos("suspended-1", "chilling-1", "suspended-2")
+	nodeInfos := buildTestNodeInfos("non-csn-1", "suspended-1", "chilling-1", "suspended-2")
 	mapping := newBucketedNodeOrderMapping(map[string]int{"chilling-1": 0, "suspended-1": 1, "suspended-2": 1}, 2, true)
 	mapping.Reset(nodeInfos)
 
 	mapping.MarkMatch(-1)
+	mapping.MarkMatch(0) // non-csn-1 has no priority
 	mapping.MarkMatch(len(nodeInfos))
 
 	assert.Equal(t, []string{"chilling-1", "suspended-1", "suspended-2"}, scanOrder(t, mapping, nodeInfos))
@@ -163,8 +160,8 @@ func TestBucketedNodeOrderMappingReset(t *testing.T) {
 		},
 		{
 			description:      "Added node rebuilds the order",
-			newSnapshotOrder: []string{"suspended-1", "chilling-1", "suspended-2", "non-csn-1"},
-			wantOrder:        []string{"chilling-1", "suspended-1", "suspended-2", "non-csn-1"},
+			newSnapshotOrder: []string{"non-csn-1", "suspended-1", "chilling-1", "suspended-2"},
+			wantOrder:        []string{"chilling-1", "suspended-1", "suspended-2"},
 		},
 		{
 			// chilling-2 is in bucket 0 like chilling-1, and comes before it in the snapshot.
@@ -261,14 +258,21 @@ func testNodeIndex(t *testing.T, nodeInfos []*framework.NodeInfo, name string) i
 	return idx
 }
 
-// scanOrder returns the names of the nodes in the order the mapping visits them.
+// scanOrder returns the names of the nodes in the order the mapping visits them,
+// stopping when At returns -1, and checks that At keeps returning -1 afterwards.
 func scanOrder(t *testing.T, m *bucketedNodeOrderMapping, nodeInfos []*framework.NodeInfo) []string {
 	t.Helper()
 	order := make([]string, 0, len(nodeInfos))
 	for i := range nodeInfos {
 		idx := m.At(i)
+		if idx == -1 {
+			for j := i + 1; j < len(nodeInfos); j++ {
+				assert.Equal(t, -1, m.At(j), "At(%d)", j)
+			}
+			break
+		}
 		if idx < 0 || idx >= len(nodeInfos) {
-			t.Fatalf("At(%d) = %d, want an index in [0, %d)", i, idx, len(nodeInfos))
+			t.Fatalf("At(%d) = %d, want -1 or an index in [0, %d)", i, idx, len(nodeInfos))
 		}
 		order = append(order, nodeInfos[idx].Node().Name)
 	}

@@ -106,6 +106,7 @@ type NodeKubeletConfig struct {
 	MemoryManager                          *MemoryManager           `json:"memoryManager,omitempty"`
 	PodPidsLimit                           int64                    `json:"podPidsLimit,omitempty,string"`
 	ReservedResourcesConfig                *ReservedResourcesConfig `json:"reservedResourcesConfig,omitempty"`
+	ReservedSystemCpus                     string                   `json:"reservedSystemCpus,omitempty"`
 	ShutdownGracePeriodCriticalPodsSeconds int64                    `json:"shutdownGracePeriodCriticalPodsSeconds,omitempty"`
 	ShutdownGracePeriodSeconds             int64                    `json:"shutdownGracePeriodSeconds,omitempty"`
 	SingleProcessOomKill                   bool                     `json:"singleProcessOomKill,omitempty"`

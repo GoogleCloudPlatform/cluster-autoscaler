@@ -142,12 +142,16 @@ func (f *Client) WithCluster(c *gkeapibeta.Cluster) (*Client, error) {
 		return f, nil
 	}
 
+	clusterPath := fmt.Sprintf("projects/%s/locations/%s/clusters/%s", f.project, f.location, c.Name)
 	for _, np := range c.NodePools {
 		if np.Version == "" {
 			np.Version = f.defaultNodePoolVersion()
 		}
 		if err := validateNodePool(np); err != nil {
 			return nil, fmt.Errorf("node pool validation failed for %s: %w", np.Name, err)
+		}
+		if np.SelfLink == "" {
+			np.SelfLink = fmt.Sprintf("%s/nodePools/%s", clusterPath, np.Name)
 		}
 		if len(np.InstanceGroupUrls) == 0 {
 			np.InstanceGroupUrls = f.instanceGroupURLs(np)
@@ -272,9 +276,8 @@ func (f *Client) CreateNodePool(clusterPath string, req *gkeapibeta.CreateNodePo
 	return operation, nil
 }
 
-// DeleteNodePool simulates node pool deletion.
-// Quiet assumption: Since the fake GCE client currently doesn't support deleting MIGs,
-// it hacks around this by resizing the MIG to 0 so the simulated instances disappear.
+// DeleteNodePool simulates node pool deletion. It removes the MIG and the instance
+// template of the pool in every zone, mirroring CreateNodePool.
 func (f *Client) DeleteNodePool(nodePoolPath string) (*gkeapibeta.Operation, error) {
 	f.Lock()
 	defer f.Unlock()
@@ -293,19 +296,16 @@ func (f *Client) DeleteNodePool(nodePoolPath string) (*gkeapibeta.Operation, err
 		return nil, fmt.Errorf("node pool %s not found", nodePoolPath)
 	}
 
-	if len(targetPool.InstanceGroupUrls) > 0 {
-		igmUrl := targetPool.InstanceGroupUrls[0]
+	for _, igmUrl := range targetPool.InstanceGroupUrls {
 		urlParts := strings.Split(igmUrl, "/")
 		migName := urlParts[len(urlParts)-1]
 		zone := urlParts[len(urlParts)-3]
 
-		err := f.gceClient.DeleteInstanceGroupManager(zone, migName)
-		if err != nil {
+		if err := f.gceClient.DeleteInstanceGroupManager(zone, migName); err != nil {
 			return nil, err
 		}
-		templateName := fmt.Sprintf("%s-tmpl", targetPool.Name)
-		err = f.gceClient.DeleteInstanceTemplate(templateName)
-		if err != nil {
+		templateName := fmt.Sprintf("%s-%s-tmpl", targetPool.Name, zone)
+		if err := f.gceClient.DeleteInstanceTemplate(templateName); err != nil {
 			return nil, err
 		}
 	}

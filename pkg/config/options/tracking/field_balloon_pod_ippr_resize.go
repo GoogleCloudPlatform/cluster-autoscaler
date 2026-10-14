@@ -33,5 +33,5 @@ var balloonPodIpprResizeEnabledField = trackedField{
 		optsToModify.BalloonPodIpprResizeEnabled = experimentsManager.DirectLaunchBoolFlag(experiments.BalloonPodIpprResizeFlag)
 		return nil
 	},
-	caRestartNeededOnValueChange: true,
+	caRestartNeededOnValueChange: false,
 }

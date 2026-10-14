@@ -16,6 +16,7 @@ package processors
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -50,12 +51,14 @@ import (
 //     HintingSimulator already holds pod UID -> node name hints from a previous pass.
 func BenchmarkCSNPodsLifecycleProcessor(b *testing.B) {
 	scenarios := []struct {
-		name         string
-		totalCSNPods int
-		totalNodes   int
-		assigned     bool
-		state        csn.NodeState
-		withHints    bool
+		name             string
+		totalCSNPods     int
+		totalNodes       int
+		totalNonCSNNodes int
+		numCCCs          int
+		assigned         bool
+		state            csn.NodeState
+		withHints        bool
 	}{
 		{
 			// First time scheduling 7,000 CSN pods onto 7,000 newly provisioned, unassigned Chilling CSN nodes.
@@ -84,13 +87,42 @@ func BenchmarkCSNPodsLifecycleProcessor(b *testing.B) {
 			state:        csn.NodeStateSuspended,
 			withHints:    true,
 		},
+		{
+			// First time scheduling 100 CSN pods across 5 ComputeClasses onto 100 unassigned Chilling CSN nodes alongside 7,000 unprioritized (non-CSN) nodes.
+			name:             "100CSNPods_FirstTime_UnassignedNodes_7kNonCSNNodes_5CCCs",
+			totalCSNPods:     100,
+			totalNodes:       100,
+			totalNonCSNNodes: 7000,
+			numCCCs:          5,
+			assigned:         false,
+			state:            csn.NodeStateChilling,
+			withHints:        false,
+		},
+		{
+			// First time scheduling 100 CSN pods across 100 ComputeClasses onto 100 unassigned Chilling CSN nodes alongside 7,000 unprioritized (non-CSN) nodes.
+			name:             "100CSNPods_FirstTime_UnassignedNodes_7kNonCSNNodes_100CCCs",
+			totalCSNPods:     100,
+			totalNodes:       100,
+			totalNonCSNNodes: 7000,
+			numCCCs:          100,
+			assigned:         false,
+			state:            csn.NodeStateChilling,
+			withHints:        false,
+		},
 	}
 
 	for _, sc := range scenarios {
 		b.Run(sc.name, func(b *testing.B) {
-			templateCSNPods, bufferRegistry := buildBenchmarkCSNPodsAndRegistry(sc.totalCSNPods)
-			nodes := buildBenchmarkCSNNodes(b, sc.totalNodes, sc.assigned, sc.state)
-			runCSNPodsLifecycleBenchmark(b, nodes, sc.state, templateCSNPods, bufferRegistry, sc.withHints)
+			numCCCs := sc.numCCCs
+			if numCCCs == 0 {
+				numCCCs = benchNumCCCs
+			}
+			templateCSNPods, bufferRegistry := buildBenchmarkCSNPodsAndRegistry(sc.totalCSNPods, numCCCs)
+			csnNodes := buildBenchmarkCSNNodes(b, sc.totalNodes, numCCCs, sc.assigned, sc.state)
+			nonCSNNodes := buildBenchmarkNonCSNNodes(sc.totalNonCSNNodes)
+			nodes := append(slices.Clone(csnNodes), nonCSNNodes...)
+			expectedRemainingPods := max(0, len(templateCSNPods)-sc.totalNodes)
+			runCSNPodsLifecycleBenchmark(b, nodes, sc.state, templateCSNPods, bufferRegistry, expectedRemainingPods, sc.withHints)
 		})
 	}
 }
@@ -101,10 +133,10 @@ func runCSNPodsLifecycleBenchmark(
 	state csn.NodeState,
 	templateCSNPods []*apiv1.Pod,
 	bufferRegistry *fakepods.Registry,
+	expectedRemainingPods int,
 	withHints bool,
 ) {
 	b.Helper()
-	expectedRemainingPods := max(0, len(templateCSNPods)-len(baseNodes))
 
 	b.ResetTimer()
 	for range b.N {
@@ -155,13 +187,13 @@ func runCSNPodsLifecycleIteration(
 }
 
 // buildBenchmarkCSNPodsAndRegistry creates totalCSNPods fake CapacityBuffer pods distributed
-// across benchNumCCCs standby CapacityBuffers and registers each pod UID in a fakepods.Registry.
-func buildBenchmarkCSNPodsAndRegistry(totalCSNPods int) ([]*apiv1.Pod, *fakepods.Registry) {
-	podsPerCCC := totalCSNPods / benchNumCCCs
+// across numCCCs standby CapacityBuffers and registers each pod UID in a fakepods.Registry.
+func buildBenchmarkCSNPodsAndRegistry(totalCSNPods, numCCCs int) ([]*apiv1.Pod, *fakepods.Registry) {
+	podsPerCCC := totalCSNPods / numCCCs
 	bufferRegistry := fakepods.NewRegistry(nil)
 	templateCSNPods := make([]*apiv1.Pod, 0, totalCSNPods)
 
-	for cccIdx := range benchNumCCCs {
+	for cccIdx := range numCCCs {
 		cccName := fmt.Sprintf("ccc-%d", cccIdx)
 		bufferName := fmt.Sprintf("capacity-buffer-%d", cccIdx)
 		bufferUID := types.UID(fmt.Sprintf("buffer-uid-%d", cccIdx))

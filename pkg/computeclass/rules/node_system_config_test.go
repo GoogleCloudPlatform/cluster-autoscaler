@@ -1548,6 +1548,48 @@ func TestNodeSystemConfig(t *testing.T) {
 			),
 			expected: false,
 		},
+		{
+			name: "rule with ReservedSystemCpus - matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					ReservedSystemCpus: "0-3",
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithReservedSystemCpusRule("0-3"),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with ReservedSystemCpus - equivalent cpuset spelling matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					ReservedSystemCpus: "0,1",
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithReservedSystemCpusRule("0-1"),
+			),
+			expected: true,
+		},
+		{
+			name: "rule with ReservedSystemCpus - non matching",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				KubeletConfig: &gkeclient.NodeKubeletConfig{
+					ReservedSystemCpus: "0-1",
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithReservedSystemCpusRule("0-3"),
+			),
+			expected: false,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {

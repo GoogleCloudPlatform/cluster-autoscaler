@@ -67,6 +67,8 @@ func BenchmarkBufferConsumptionProcessor(b *testing.B) {
 		name                string
 		totalPods           int
 		totalSuspendedNodes int
+		totalNonCSNNodes    int
+		numCCCs             int
 	}{
 		{
 			// Simulates partial buffer consumption (CL2_DEPLOYMENT_REPLICAS=2000, CL2_BUFFER_REPLICAS=7000):
@@ -82,12 +84,54 @@ func BenchmarkBufferConsumptionProcessor(b *testing.B) {
 			totalPods:           7000,
 			totalSuspendedNodes: 7000,
 		},
+		{
+			// Simulates buffer exhaustion across 5 ComputeClasses with many unprioritized (non-CSN) nodes:
+			// 2,000 workload pods (400 per CCC) when 100 suspended CSN nodes (20 per CCC) are available alongside 7,000 non-CSN nodes.
+			name:                "2kDeploymentPods_100SuspendedNodes_7kNonCSNNodes_5CCCs",
+			totalPods:           2000,
+			totalSuspendedNodes: 100,
+			totalNonCSNNodes:    7000,
+			numCCCs:             5,
+		},
+		{
+			// Simulates large-scale buffer exhaustion across 5 ComputeClasses with many unprioritized (non-CSN) nodes:
+			// 7,000 workload pods (1,400 per CCC) when 100 suspended CSN nodes (20 per CCC) are available alongside 7,000 non-CSN nodes.
+			name:                "7kDeploymentPods_100SuspendedNodes_7kNonCSNNodes_5CCCs",
+			totalPods:           7000,
+			totalSuspendedNodes: 100,
+			totalNonCSNNodes:    7000,
+			numCCCs:             5,
+		},
+		{
+			// Simulates buffer exhaustion across 100 ComputeClasses with many unprioritized (non-CSN) nodes:
+			// 2,000 workload pods (20 per CCC) when 100 suspended CSN nodes (1 per CCC) are available alongside 7,000 non-CSN nodes.
+			name:                "2kDeploymentPods_100SuspendedNodes_7kNonCSNNodes_100CCCs",
+			totalPods:           2000,
+			totalSuspendedNodes: 100,
+			totalNonCSNNodes:    7000,
+			numCCCs:             100,
+		},
+		{
+			// Simulates large-scale buffer exhaustion across 100 ComputeClasses with many unprioritized (non-CSN) nodes:
+			// 7,000 workload pods (70 per CCC) when 100 suspended CSN nodes (1 per CCC) are available alongside 7,000 non-CSN nodes.
+			name:                "7kDeploymentPods_100SuspendedNodes_7kNonCSNNodes_100CCCs",
+			totalPods:           7000,
+			totalSuspendedNodes: 100,
+			totalNonCSNNodes:    7000,
+			numCCCs:             100,
+		},
 	}
 
 	for _, sc := range scenarios {
 		b.Run(sc.name, func(b *testing.B) {
-			baseNodes := buildBenchmarkCSNNodes(b, sc.totalSuspendedNodes, true, csn.NodeStateSuspended)
-			templatePods := buildBenchmarkWorkloadPods(sc.totalPods)
+			numCCCs := sc.numCCCs
+			if numCCCs == 0 {
+				numCCCs = benchNumCCCs
+			}
+			csnNodes := buildBenchmarkCSNNodes(b, sc.totalSuspendedNodes, numCCCs, true, csn.NodeStateSuspended)
+			nonCSNNodes := buildBenchmarkNonCSNNodes(sc.totalNonCSNNodes)
+			baseNodes := append(slices.Clone(csnNodes), nonCSNNodes...)
+			templatePods := buildBenchmarkWorkloadPods(sc.totalPods, numCCCs)
 			podLister := kubernetes.NewTestPodLister(nil)
 			nodeLister := kubernetes.NewTestNodeLister(baseNodes)
 			listerRegistry := kubernetes.NewListerRegistry(nodeLister, nil, podLister, nil, nil, nil, nil, nil, nil)
@@ -121,14 +165,27 @@ func BenchmarkBufferConsumptionProcessor(b *testing.B) {
 	}
 }
 
-// buildBenchmarkCSNNodes creates totalNodes CSN nodes distributed evenly across benchNumCCCs
+// buildBenchmarkNonCSNNodes creates totalNodes regular (non-CSN) nodes that do not have
+// CSN labels or priorities.
+func buildBenchmarkNonCSNNodes(totalNodes int) []*apiv1.Node {
+	if totalNodes == 0 {
+		return nil
+	}
+	nodes := make([]*apiv1.Node, totalNodes)
+	for i := range totalNodes {
+		nodes[i] = test.BuildTestNode(fmt.Sprintf("regular-node-%d", i), benchNodeCPU, benchNodeMem)
+	}
+	return nodes
+}
+
+// buildBenchmarkCSNNodes creates totalNodes CSN nodes distributed evenly across numCCCs
 // ComputeClasses with soft workload separation labels/taints and optional buffer assignment.
-func buildBenchmarkCSNNodes(b *testing.B, totalNodes int, assigned bool, state csn.NodeState) []*apiv1.Node {
+func buildBenchmarkCSNNodes(b *testing.B, totalNodes, numCCCs int, assigned bool, state csn.NodeState) []*apiv1.Node {
 	b.Helper()
-	nodesPerCCC := totalNodes / benchNumCCCs
+	nodesPerCCC := totalNodes / numCCCs
 	nodes := make([]*apiv1.Node, 0, totalNodes)
 
-	for cccIdx := range benchNumCCCs {
+	for cccIdx := range numCCCs {
 		cccName := fmt.Sprintf("ccc-%d", cccIdx)
 		bufferID := fmt.Sprintf("default/capacity-buffer-%d", cccIdx)
 		mutators := []nodeMutator{
@@ -169,14 +226,16 @@ func prepareBenchmarkSnapshotAndController(
 		if err := clusterSnapshot.AddNodeInfo(framework.NewNodeInfo(node.DeepCopy(), nil)); err != nil {
 			b.Fatalf("Failed to add node %q into cluster snapshot: %v", node.Name, err)
 		}
-		csnNodes = append(csnNodes, nodecontroller.CSNNode{
-			Name:         node.Name,
-			DesiredState: state,
-		})
+		if csn.IsCSNNode(node) {
+			csnNodes = append(csnNodes, nodecontroller.CSNNode{
+				Name:         node.Name,
+				DesiredState: state,
+			})
+		}
 	}
 
 	mockController := nodecontrollertesting.NewMockCSNNodeController(csnNodes)
-	for _, n := range baseNodes {
+	for _, n := range csnNodes {
 		mockController.SetCurrentState(n.Name, state)
 	}
 	return clusterSnapshot, mockController
@@ -195,12 +254,12 @@ func buildBenchmarkPodForCCC(podName, cccName string) *apiv1.Pod {
 }
 
 // buildBenchmarkWorkloadPods creates totalPods unschedulable ReplicaSet workload pods
-// distributed evenly across benchNumCCCs ComputeClasses.
-func buildBenchmarkWorkloadPods(totalPods int) []*apiv1.Pod {
-	podsPerCCC := totalPods / benchNumCCCs
+// distributed evenly across numCCCs ComputeClasses.
+func buildBenchmarkWorkloadPods(totalPods, numCCCs int) []*apiv1.Pod {
+	podsPerCCC := totalPods / numCCCs
 	pods := make([]*apiv1.Pod, 0, totalPods)
 
-	for cccIdx := range benchNumCCCs {
+	for cccIdx := range numCCCs {
 		cccName := fmt.Sprintf("ccc-%d", cccIdx)
 		groupName := fmt.Sprintf("group-%d", cccIdx)
 		controllerUID := types.UID(fmt.Sprintf("replicaset-uid-%d", cccIdx))

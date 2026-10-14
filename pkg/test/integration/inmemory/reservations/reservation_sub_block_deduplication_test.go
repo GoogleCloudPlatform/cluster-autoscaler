@@ -29,6 +29,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	ccc_builder "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -147,7 +148,13 @@ func TestReservationSubBlockDeduplication(t *testing.T) {
 					}),
 				).
 				WithNodePools(existingPool).
-				WithCccCrds(cc)
+				WithCccCrds(cc).
+				AddReservation(project, reservations.NewV1(
+					resName, zone,
+					reservations.WithMachine(fmt.Sprintf("%s-standard-4t", tpuType)),
+					reservations.WithProject(project),
+					reservations.WithAvailableCount(16),
+				))
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx, cancel := context.WithCancel(t.Context())

@@ -18,17 +18,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
@@ -36,7 +40,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
@@ -58,8 +61,9 @@ type fleetEfficiencyFilter struct {
 	gceFlexAdvisorEnabled            bool
 	experimentsManager               experiments.Manager
 	// backoff is the scale-up backoff shared between NAP and the core scale-up logic. It is used to
-	// exclude zones in which uncreated NAP candidates cannot currently be scaled up. May be nil.
-	backoff base_backoff.Backoff
+	// exclude zones in which !mig.exists node groups cannot currently be scaled up. May be nil.
+	backoff        base_backoff.Backoff
+	optionsTracker *optstracking.OptionsTracker
 }
 
 // NewFilter creates a new instance of the fleet efficiency Filter.
@@ -74,6 +78,7 @@ func NewFilter(
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
 	backoff base_backoff.Backoff,
+	optionsTracker *optstracking.OptionsTracker,
 ) *fleetEfficiencyFilter {
 	return &fleetEfficiencyFilter{
 		flexAdvisor:                      flexAdvisor,
@@ -86,6 +91,7 @@ func NewFilter(
 		gceFlexAdvisorEnabled:            gceFlexAdvisorEnabled,
 		experimentsManager:               experimentsManager,
 		backoff:                          backoff,
+		optionsTracker:                   optionsTracker,
 	}
 }
 
@@ -102,30 +108,37 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	// Verify the allocation strategy.
 	samplePod := expansionOptions[0].Pods[0]
-	crd, _, err := f.cccLister.PodCrd(samplePod)
+	crd, source, err := f.getPodCrd(samplePod)
 	if err != nil {
 		klog.Errorf("FleetEfficiencyFilter: failed to get the CRD for pod: %v", err)
 		// We don't know the allocation strategy, do not record any metrics at this point.
 		return expansionOptions
 	}
 	if crd == nil {
-		// Allocation strategy is only supported for CCC, do not record metrics.
+		// Allocation strategy is only supported for CCC or pay-per-pod autopilot workloads, do not record metrics.
 		klog.V(4).Infof("FleetEfficiencyFilter: pod %s/%s does not use a ComputeClass, skipping", samplePod.Namespace, samplePod.Name)
 		return expansionOptions
 	}
-	if !f.isFleetEfficiencyStrategySelected(crd, expansionOptions) {
+	isFleetEfficiency, effectiveSource := f.isFleetEfficiencyStrategySelected(crd, source, expansionOptions)
+	if !isFleetEfficiency {
 		klog.V(4).Infof("FleetEfficiencyFilter: allocation strategy is not fleet-efficiency (CCC %s, cluster default %q), skipping", crd.Name(), f.getClusterDefaultAllocationStrategy())
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyLowestCost, metrics.AllocationStrategyFallbackNone, effectiveSource)
 	}
 
-	if nodeGroupId, found := f.usableReservationNodeGroup(expansionOptions); found {
+	// The node group sets of every option are resolved once and shared by the reservation check and scoring.
+	nodeGroupSets := make([]flexadvisor.NodeGroupSet, len(expansionOptions))
+	for i, option := range expansionOptions {
+		nodeGroupSets[i] = flexadvisor.NewNodeGroupSet(ctx, option.NodeGroup, option.SimilarNodeGroups, f.cloudProvider)
+	}
+
+	if nodeGroupId, found := f.usableReservationNodeGroup(nodeGroupSets); found {
 		klog.V(4).Infof("FleetEfficiencyFilter: node group %s has matching unused reservations (CCC %s), falling back to lowest-cost", nodeGroupId, crd.Name())
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackReservationPresent, effectiveSource)
 	}
 
 	if reason, explanation, shouldFallback := shouldFallbackToLowestCost(expansionOptions); shouldFallback {
 		klog.V(4).Infof("FleetEfficiencyFilter: %s (CCC %s), falling back to lowest-cost with reason %q", explanation, crd.Name(), reason)
-		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
+		return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason, effectiveSource)
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: evaluating %d expansion options (CCC %s)", len(expansionOptions), crd.Name())
@@ -134,7 +147,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	scores := make([]float64, len(expansionOptions))
 	maxScore := -1.0
 	for i, option := range expansionOptions {
-		score, err := f.scoreOption(ctx, option, crd, nodeInfo)
+		score, err := f.scoreOption(nodeGroupSets[i], crd, nodeInfo)
 		if err != nil {
 			nodeGroupId := "unknown"
 			if option.NodeGroup != nil {
@@ -142,7 +155,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 			}
 			reason := determineFallbackReason(err)
 			klog.V(4).Infof("FleetEfficiencyFilter: failed to score option %s (CCC %s), falling back to lowest-cost with reason %q: %v", nodeGroupId, crd.Name(), reason, err)
-			return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason)
+			return f.fallbackAndRecordMetric(ctx, expansionOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, reason, effectiveSource)
 		}
 
 		klog.V(5).Infof("FleetEfficiencyFilter: fleet efficiency score for option %s (CCC %s) is %f", option.NodeGroup.Id(), crd.Name(), score)
@@ -171,12 +184,12 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 
 	if len(bestOptions) == 1 {
 		klog.V(4).Infof("FleetEfficiencyFilter: selected best option %s (CCC %s)", bestOptions[0].NodeGroup.Id(), crd.Name())
-		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, &bestOptions[0])
+		f.recordMetric(cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackNone, effectiveSource, &bestOptions[0])
 		return bestOptions
 	}
 
 	klog.V(4).Infof("FleetEfficiencyFilter: tie break between %d options (CCC %s), fallback to lowest-cost", len(bestOptions), crd.Name())
-	return f.fallbackAndRecordMetric(ctx, bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak)
+	return f.fallbackAndRecordMetric(ctx, bestOptions, nodeInfo, cccv1.AllocationStrategyFleetEfficiency, metrics.AllocationStrategyFallbackTieBreak, effectiveSource)
 }
 
 // shouldFallbackToLowestCost returns whether fleet efficiency cannot be used for the given options because
@@ -230,7 +243,7 @@ func determineFallbackReason(err error) metrics.AllocationStrategyFallbackReason
 	return metrics.AllocationStrategyFallbackError
 }
 
-func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, option *expander.Option) {
+func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, allocationStrategySource metrics.AllocationStrategySource, option *expander.Option) {
 	if option == nil {
 		klog.Fatal("FleetEfficiencyFilter: recordMetric called with nil option")
 		return
@@ -240,15 +253,16 @@ func (f *fleetEfficiencyFilter) recordMetric(requestedStrategy cccv1.AllocationS
 		machineType = gkeNodeGroup.MachineType()
 	}
 	metrics.RegisterNodesWithAllocationStrategy(string(requestedStrategy), fallbackReason, machineType, option.NodeCount)
+	metrics.RegisterScaleupsWithAllocationStrategy(string(requestedStrategy), fallbackReason, allocationStrategySource)
 }
 
-func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason) []expander.Option {
+func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, expansionOptions []expander.Option, nodeInfo map[string]*framework.NodeInfo, requestedStrategy cccv1.AllocationStrategy, fallbackReason metrics.AllocationStrategyFallbackReason, allocationStrategySource metrics.AllocationStrategySource) []expander.Option {
 	if f.fallback == nil {
 		return expansionOptions
 	}
 	selected := f.fallback.BestOption(ctx, expansionOptions, nodeInfo)
 	if selected != nil {
-		f.recordMetric(requestedStrategy, fallbackReason, selected)
+		f.recordMetric(requestedStrategy, fallbackReason, allocationStrategySource, selected)
 		return []expander.Option{*selected}
 	}
 	// This should never happen, since fallback should be gke_price which always returns one option.
@@ -257,97 +271,9 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, exp
 	return expansionOptions
 }
 
-func (f *fleetEfficiencyFilter) targetZonesForOption(ctx context.Context, option expander.Option, nodeInfos map[string]*framework.NodeInfo) ([]string, error) {
-	if option.NodeGroup == nil {
-		return nil, errors.New("option has nil node group")
-	}
-	gkeNg, ok := option.NodeGroup.(gke.NodeGroup)
-	if !ok {
-		return nil, fmt.Errorf("node group %s is not a GKE node group", option.NodeGroup.Id())
-	}
-
-	isExistingOrUpcoming := option.NodeGroup.Exist(ctx) || gkeNg.IsUpcoming()
-
-	// Existing or upcoming node group:
-	// The scalable zones are exactly the zones of the healthy MIGs in this option
-	// (NodeGroup + SimilarNodeGroups, as ComputeSimilarNodeGroups excludes backed-off MIGs).
-	if isExistingOrUpcoming || len(option.SimilarNodeGroups) > 0 {
-		var rawZones []string
-		rawZones = append(rawZones, gkeNg.GceRef().Zone)
-		for _, ng := range option.SimilarNodeGroups {
-			if similarGkeNg, ok := ng.(gke.NodeGroup); ok {
-				rawZones = append(rawZones, similarGkeNg.GceRef().Zone)
-			}
-		}
-		return sanitizeZones(rawZones), nil
-	}
-
-	// Uncreated NAP candidate node group:
-	// Score it across the locations that GKE will create the node pool in. These are computed by the same code
-	// that builds the node pool spec on creation, so that fleet efficiency does not re-derive them.
-	candidateZones, err := f.plannedNodePoolLocations(gkeNg)
-	if err != nil {
-		return nil, err
-	}
-	if len(candidateZones) == 0 {
-		return []string{gkeNg.GceRef().Zone}, nil
-	}
-
-	// Exclude zones in which the candidate is backed off, so that backed-off (e.g. stocked-out) zones
-	// do not create phantom scores for the uncreated candidate.
-	// Zones that are merely not covered by existing node pools are intentionally kept.
-	// An empty result means that the candidate is not scalable in any of its target zones.
-	backedOff := f.backedOffZonesForCandidate(gkeNg, candidateZones, nodeInfos)
-	if len(backedOff) == 0 {
-		return candidateZones, nil
-	}
-	var availableZones []string
-	for _, z := range candidateZones {
-		if !backedOff[z] {
-			availableZones = append(availableZones, z)
-		}
-	}
-	klog.V(5).Infof("FleetEfficiencyFilter: excluding backed-off zones %v from target zones %v of uncreated node group %s", sortedZones(backedOff), candidateZones, gkeNg.Id())
-	return availableZones, nil
-}
-
-// plannedNodePoolLocations returns the sanitized locations that a node pool created from the given uncreated
-// candidate would span. Returns an error if locations cannot be determined; in that case node pool creation would fail too.
-func (f *fleetEfficiencyFilter) plannedNodePoolLocations(candidate gke.NodeGroup) ([]string, error) {
-	mig := candidate.GetMig()
-	if f.cloudProvider == nil || mig == nil {
-		return nil, nil
-	}
-	locations, err := f.cloudProvider.PlannedNodePoolLocations(mig)
-	if err != nil {
-		klog.Warningf("FleetEfficiencyFilter: couldn't determine planned node pool locations for uncreated node group %s: %v", candidate.Id(), err)
-		return nil, fmt.Errorf("couldn't determine planned node pool locations for %s: %w", candidate.Id(), err)
-	}
-	return sanitizeZones(locations), nil
-}
-
-// backedOffZonesForCandidate returns the subset of zones in which an uncreated candidate node group
-// is backed off, according to the scale-up backoff shared with NAP and the core logic (e.g. resource-based
-// backoff after a stockout on an autoprovisioned node pool, or backoff of the same node pool shape created
-// earlier by NAP).
-func (f *fleetEfficiencyFilter) backedOffZonesForCandidate(candidate gke.NodeGroup, zones []string, nodeInfos map[string]*framework.NodeInfo) map[string]bool {
-	backedOff := make(map[string]bool)
-	mig := candidate.GetMig()
-	if f.backoff == nil || mig == nil {
-		return backedOff
-	}
-	now := time.Now()
-	candidateNodeInfo := nodeInfos[candidate.Id()]
-	for _, z := range zones {
-		if f.backoff.BackoffStatus(mig.ShallowCopyInZone(z), nodeInfoInZone(candidateNodeInfo, z), now).IsBackedOff {
-			backedOff[z] = true
-		}
-	}
-	return backedOff
-}
-
-func (f *fleetEfficiencyFilter) scoreOption(ctx context.Context, option expander.Option, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
-	instanceRef, err := flexadvisor.ConstructInstanceReference(option.NodeGroup, f.cccLister, f.experimentsManager)
+func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSet, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
+	nodeGroup := nodeGroupSet.Representative()
+	instanceRef, err := flexadvisor.ConstructInstanceReferenceForScope(nodeGroup, crd.Name(), f.experimentsManager)
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
 	}
@@ -356,19 +282,20 @@ func (f *fleetEfficiencyFilter) scoreOption(ctx context.Context, option expander
 		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 	}
 
-	targetZones, err := f.targetZonesForOption(ctx, option, nodeInfos)
+	targetZones, err := nodeGroupSet.TargetZonesForScoring(f.backoff, nodeInfos)
 	if err != nil {
 		return 0, err
 	}
 	if len(targetZones) == 0 {
-		// Only uncreated candidates can end up without target zones, when all of them are backed off.
-		// Score the candidate with 0 so that it loses to any healthy option (> 0). If all candidates
-		// are backed off (all score 0), they tie at 0 and tie-breaking falls back to lowest-cost.
-		klog.V(5).Infof("FleetEfficiencyFilter: all target zones are backed off for uncreated node group %s, scoring 0", option.NodeGroup.Id())
+		// Only !mig.exists node groups can end up without target zones, when all
+		// of them are backed off. Score the option with 0 so that it loses to any healthy option (> 0). If
+		// all options are backed off (all score 0), they tie at 0 and tie-breaking falls back to lowest-cost.
+		klog.V(5).Infof("FleetEfficiencyFilter: all target zones are backed off for non-existing node group %s, scoring 0", nodeGroup.Id())
 		return 0.0, nil
 	}
 
-	scoreZone := func(zone string) (float64, error) {
+	totalScore := 0.0
+	for _, zone := range targetZones {
 		score, found := snapshot.GcePreferenceScore(zone)
 		if !found {
 			return 0, fmt.Errorf("%w for scope %s and zone %s", ErrPreferenceScoreNotPresent, instanceRef.FlexibilityScopeKey, zone)
@@ -377,75 +304,181 @@ func (f *fleetEfficiencyFilter) scoreOption(ctx context.Context, option expander
 			// TODO(b/527312993): Move the filtering to flex advisor (reject invalid scores).
 			return 0, fmt.Errorf("invalid GCE Preference Score (%f) for scope %s and zone %s", score, instanceRef.FlexibilityScopeKey, zone)
 		}
-		klog.V(5).Infof("FleetEfficiencyFilter: gce preference score for node group %s in zone %s is %f (CCC %s)", option.NodeGroup.Id(), zone, score, crd.Name())
-		return score, nil
-	}
-
-	totalScore := 0.0
-	count := 0
-	for _, zone := range targetZones {
-		score, err := scoreZone(zone)
-		if err != nil {
-			return 0, err
-		}
+		klog.V(5).Infof("FleetEfficiencyFilter: gce preference score for node group %s in zone %s is %f (CCC %s)", nodeGroup.Id(), zone, score, crd.Name())
 		totalScore += score
-		count++
 	}
 
-	if count == 0 {
-		return 0, fmt.Errorf("no node groups scored")
-	}
-
-	return totalScore / float64(count), nil
+	return totalScore / float64(len(targetZones)), nil
 }
 
-func getMatchedRule(ccc crd.CRD, opt expander.Option) rules.Rule {
+func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.AllocationStrategySource, error) {
+	if pod == nil {
+		return nil, metrics.AllocationStrategySourceUnknown, nil
+	}
+	crd, name, err := f.cccLister.PodCrd(pod)
+	if err != nil {
+		return nil, metrics.AllocationStrategySourceUnknown, err
+	}
+	if crd != nil {
+		return crd, metrics.AllocationStrategySourceCustomComputeClass, nil
+	}
+	if f.cloudProvider != nil && f.cloudProvider.IsAutopilotEnabled() && experiments.IsPayPerPodFleetEfficiencyEnabled(f.experimentsManager) {
+		projectId, _, _ := f.cloudProvider.GetClusterInfo()
+		if machinetypes.IsPredefinedComputeClass(name) {
+			if !flexadvisor.IsFlexAdvisorPCCSupportEnabled(f.experimentsManager) {
+				return nil, metrics.AllocationStrategySourceUnknown, nil
+			}
+			if billing.GetBillingModel(pod, nil, name, true) == billing.PodBasedBilling {
+				pcc, err := machinetypes.ToPredefinedComputeClass(name)
+				if err != nil {
+					return nil, metrics.AllocationStrategySourceUnknown, err
+				}
+				return ccc.NewPccCrd(pcc, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourcePredefinedComputeClass, nil
+			}
+			return nil, metrics.AllocationStrategySourceUnknown, nil
+		}
+		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod); ok {
+			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourceAutopilotWorkload, nil
+		}
+	}
+	return nil, metrics.AllocationStrategySourceUnknown, nil
+}
+
+// getMatchedRules returns all rules in the highest-priority matching ruleGroup that match opt.NodeGroup,
+// or nil if no rule in any ruleGroup matches.
+func getMatchedRules(ccc crd.CRD, opt expander.Option) []rules.Rule {
 	for _, ruleGroup := range ccc.GroupedRules() {
+		var matched []rules.Rule
 		for _, rule := range ruleGroup {
 			if rule.Matches(opt.NodeGroup) {
-				return rule
+				matched = append(matched, rule)
 			}
+		}
+		if len(matched) > 0 {
+			return matched
 		}
 	}
 	return nil
 }
 
-// isFleetEfficiencyStrategySelected determines whether the fleet-efficiency allocation strategy
-// should be used for the given candidate expansion options.
+// getRuleStrategy returns the allocation strategy configured on the CRD for a single matched rule
+// (or nil rule when evaluating an unmatched ScaleUpAnyway option), or nil if the CRD does not
+// specify one (in which case the caller inherits the cluster default strategy).
 //
-// CCC rules sharing the same priorityScore can define conflicting allocation strategies
-// (or omit them). To resolve conflicts deterministically across all candidate expansion
-// options in the priorityScore group, we enforce the following precedence:
-//  1. Explicit non-fleet-efficiency strategy (e.g., lowest-cost): overrides explicit
-//     fleet-efficiency and cluster defaults. CCC validation assumes lowest-cost when
-//     conflicting strategies are present in the same priority score, so any explicit
-//     non-fleet-efficiency strategy takes highest precedence. Note that having conflicting
-//     strategies in the same priority score is possible only for a non-default cluster
-//     allocation strategy (other than lowest-cost), where one rule explicitly specifies
-//     lowest-cost and another omits the strategy (inheriting the cluster default).
-//  2. Explicit fleet-efficiency strategy: overrides cluster defaults.
-//  3. Omitted (nil) strategy: inherits the cluster default allocation strategy.
-func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, opts []expander.Option) bool {
-	hasFleetEfficiency := false
-	for _, opt := range opts {
-		if sr, ok := getMatchedRule(ccc, opt).(rules.AllocationStrategyRule); ok {
-			strategy := sr.AllocationStrategy()
-			if strategy != nil && *strategy != cccv1.AllocationStrategyFleetEfficiency {
-				// Explicit non-fleet-efficiency strategy (e.g., lowest-cost) overrides everything in this priorityScore group.
-				// Note that conflicting strategies in the same priority score are possible only for a non-default cluster
-				// allocation strategy (other than lowest-cost), where one rule specifies lowest-cost and another omits it.
-				return false
-			}
-			if strategy != nil && *strategy == cccv1.AllocationStrategyFleetEfficiency {
-				hasFleetEfficiency = true
-			}
+//   - Matched non-nodepools rule (rule != nil && len(rule.NodePoolNames()) == 0):
+//     ccc.AllocationStrategyDefaults() and the podFamily fleet-efficiency default have already been
+//     applied during rule construction in applyDefaultsToPriority according to the rule's
+//     provisioning model, so sr.AllocationStrategy() is returned directly without falling through
+//     to ccc.AllocationStrategyDefaults().
+//   - Matched nodepools rule with nil strategy or unmatched ScaleUpAnyway option (rule == nil):
+//     Because Kubernetes CEL validation forbids setting spot or flexStart on a nodepools priority
+//     rule, applyDefaultsToPriority leaves AllocationStrategy nil on nodepools rules that omit it;
+//     similarly, unmatched whenUnsatisfiable: ScaleUpAnyway options have no matched rule. In both
+//     cases, getRuleStrategy falls through to ccc.AllocationStrategyDefaults() and derives the
+//     provisioning model (FlexStart, Spot, or OnDemand) from the candidate node group spec.
+func getRuleStrategy(ccc crd.CRD, rule rules.Rule, opt expander.Option) *cccv1.AllocationStrategy {
+	if ccc == nil {
+		return nil
+	}
+	if rule != nil {
+		if sr, ok := rule.(rules.AllocationStrategyRule); ok && sr.AllocationStrategy() != nil {
+			return sr.AllocationStrategy()
+		}
+		if len(rule.NodePoolNames()) == 0 {
+			return nil
 		}
 	}
-	if hasFleetEfficiency {
-		// Explicit fleet-efficiency overrides cluster default.
-		return true
+	defaults := ccc.AllocationStrategyDefaults()
+	if defaults == nil {
+		return nil
 	}
-	return f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
+	if gkeNg, ok := opt.NodeGroup.(gke.NodeGroup); ok && gkeNg.Spec() != nil {
+		spec := gkeNg.Spec()
+		if spec.FlexStart {
+			return defaults.FlexStart
+		}
+		if spec.Spot {
+			return defaults.Spot
+		}
+	}
+	return defaults.OnDemand
+}
+
+// getOptionStrategies returns the resolved allocation strategies for all rules in the highest
+// matching priorityScore group for opt.NodeGroup, or a single strategy resolved via
+// getRuleStrategy(ccc, nil, opt) if no rule matches (whenUnsatisfiable: ScaleUpAnyway).
+func getOptionStrategies(ccc crd.CRD, opt expander.Option) []*cccv1.AllocationStrategy {
+	if ccc == nil {
+		return []*cccv1.AllocationStrategy{nil}
+	}
+	matchedRules := getMatchedRules(ccc, opt)
+	if len(matchedRules) == 0 {
+		return []*cccv1.AllocationStrategy{getRuleStrategy(ccc, nil, opt)}
+	}
+	strategies := make([]*cccv1.AllocationStrategy, 0, len(matchedRules))
+	for _, rule := range matchedRules {
+		strategies = append(strategies, getRuleStrategy(ccc, rule, opt))
+	}
+	return strategies
+}
+
+// isFleetEfficiencyStrategySelected determines whether the fleet-efficiency allocation strategy
+// should be used for the given candidate expansion options, along with the resolved strategy source.
+//
+// CCC admission webhook validation rejects priorities sharing the same priorityScore with
+// conflicting strategies by assuming omitted strategies default to lowest-cost. However,
+// runtime conflicts in the same priorityScore can still arise in three valid configurations:
+//  1. Cluster default is fleet-efficiency, and one rule explicitly specifies lowest-cost while
+//     a sibling rule omits allocationStrategy (inheriting the cluster default).
+//  2. Cluster default is lowest-cost (or the DefaultAllocationStrategy experiment is disabled),
+//     and a podFamily rule omits allocationStrategy (defaulting to fleet-efficiency in
+//     applyDefaultsToPriority when PayPerPodFleetEfficiency is enabled) while a sibling rule
+//     also omits allocationStrategy (retaining a nil strategy that inherits lowest-cost).
+//  3. A nodepools rule (or sibling nodepools rules) omits allocationStrategy and matches node
+//     pools with different provisioning models (e.g. On-Demand and Spot) when
+//     allocationStrategyDefaults specifies fleet-efficiency for one model and omits (or sets
+//     lowest-cost for) the other.
+//
+// Similarly, when ScaleUpAnyway options do not match any priority rule, their strategy is
+// resolved from the CCC's allocationStrategyDefaults (if present) or remains nil.
+//
+// To resolve conflicts deterministically across all candidate expansion options and all matching
+// rules in the priorityScore group, we enforce lowest-cost precedence:
+//  1. Explicit non-fleet-efficiency strategy (e.g., lowest-cost) on the CRD: overrides
+//     fleet-efficiency and cluster defaults (source = crdSource).
+//  2. Omitted (nil) strategy on the CRD when the cluster default is not fleet-efficiency
+//     (i.e. lowest-cost): overrides fleet-efficiency (source = cluster).
+//  3. Explicit or defaulted fleet-efficiency strategy on the CRD (with all other options
+//     also resolving to fleet-efficiency): selects fleet-efficiency (source = crdSource).
+//  4. All options have omitted (nil) strategies on the CRD: inherits the cluster default
+//     allocation strategy (source = cluster).
+func (f *fleetEfficiencyFilter) isFleetEfficiencyStrategySelected(ccc crd.CRD, crdSource metrics.AllocationStrategySource, opts []expander.Option) (bool, metrics.AllocationStrategySource) {
+	clusterDefaultIsFleetEfficiency := f.getClusterDefaultAllocationStrategy() == options.ClusterDefaultAllocationStrategyFleetEfficiency
+	hasCrdFleetEfficiency := false
+	hasClusterLowestCost := false
+	for _, opt := range opts {
+		for _, strategy := range getOptionStrategies(ccc, opt) {
+			if strategy == nil {
+				if !clusterDefaultIsFleetEfficiency {
+					hasClusterLowestCost = true
+				}
+				continue
+			}
+			if *strategy != cccv1.AllocationStrategyFleetEfficiency {
+				// Explicit non-fleet-efficiency strategy (e.g., lowest-cost) overrides everything in this priorityScore group.
+				return false, crdSource
+			}
+			hasCrdFleetEfficiency = true
+		}
+	}
+	if hasClusterLowestCost {
+		// An omitted strategy inherits the cluster default (lowest-cost), which takes precedence over fleet-efficiency.
+		return false, metrics.AllocationStrategySourceCluster
+	}
+	if hasCrdFleetEfficiency {
+		return true, crdSource
+	}
+	return clusterDefaultIsFleetEfficiency, metrics.AllocationStrategySourceCluster
 }
 
 // getClusterDefaultAllocationStrategy returns the cluster default allocation strategy, taken from the CLI flag
@@ -463,9 +496,10 @@ func (f *fleetEfficiencyFilter) getClusterDefaultAllocationStrategy() options.Cl
 	return clusterStrategy
 }
 
-// usableReservationNodeGroup returns the id of the first node group in the given options that has matching
-// unused reservations, and whether such a node group was found.
-func (f *fleetEfficiencyFilter) usableReservationNodeGroup(expansionOptions []expander.Option) (string, bool) {
+// usableReservationNodeGroup returns the id of the first zonal node group in the given options that
+// has matching unused reservations, and whether such a node group was found. For uncreated candidates,
+// all planned zones are checked.
+func (f *fleetEfficiencyFilter) usableReservationNodeGroup(nodeGroupSets []flexadvisor.NodeGroupSet) (string, bool) {
 	if f.reservationsPuller == nil {
 		return "", false
 	}
@@ -473,9 +507,8 @@ func (f *fleetEfficiencyFilter) usableReservationNodeGroup(expansionOptions []ex
 	if len(gceReservations) == 0 {
 		return "", false
 	}
-	for _, option := range expansionOptions {
-		nodeGroups := append([]cloudprovider.NodeGroup{option.NodeGroup}, option.SimilarNodeGroups...)
-		for _, nodeGroup := range nodeGroups {
+	for _, ngs := range nodeGroupSets {
+		for _, nodeGroup := range ngs.NodeGroups() {
 			if reservations.MatchingUnusedReservations(f.cloudProvider, nodeGroup, gceReservations, f.localSSDDiskSizeProvider) > 0 {
 				return nodeGroup.Id(), true
 			}

@@ -631,7 +631,7 @@ func (e *ErrUnknownNodePoolName) IsIgnoredGenerationError() bool {
 
 // cccCrdFromPCC builds CustomComputeClass CRD from PredefinedComputeClass object
 func (g *instanceConfigGenerator) cccCrdFromPCC(flexibilityScopeKey string) (crd.CRD, error) {
-	if !isFlexAdvisorPCCSupportEnabled(g.optionsTracker.ExperimentsManager()) {
+	if g.optionsTracker != nil && !IsFlexAdvisorPCCSupportEnabled(g.optionsTracker.ExperimentsManager()) {
 		return nil, fmt.Errorf("predefined compute class %q is not supported: FlexAdvisorPCCSupport is disabled", flexibilityScopeKey)
 	}
 	if !g.provider.IsAutopilotEnabled() {

@@ -159,3 +159,12 @@ type Plugin interface {
 	// to be requiring defrag for the latest candidate returned by the NewCandidate method
 	LatestUnfitNodesCount() int
 }
+
+// AtomicGroupReporter is optionally implemented by plugins that build atomic
+// candidates.
+type AtomicGroupReporter interface {
+	// LatestAtomicGroupBlockedNodes returns the nodes that the latest
+	// NewCandidate call held back only because other members of their atomic
+	// group weren't among the nodes passed to it.
+	LatestAtomicGroupBlockedNodes() []string
+}

@@ -34,6 +34,18 @@ func IsComputeClassEnhancedObservabilityEnabled(manager experiments.Manager) boo
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag, true)
 }
 
+// IsComputeClassScaleDownStatusEnabled returns true if reporting the consolidation (scale-down)
+// status on the ComputeClass CRD is enabled. The feature is rolled out with the
+// --enable-compute-class-scale-down-status flag; this experiment is a kill switch, so it
+// defaults to enabled.
+func IsComputeClassScaleDownStatusEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassScaleDownStatusEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassScaleDownStatusMinCAVersionFlag, true)
+}
+
 // IsComputeClassConfigHashEnabled returns true if the ComputeClass config hashing feature is enabled.
 func IsComputeClassConfigHashEnabled(manager experiments.Manager) bool {
 	if manager == nil {
@@ -50,4 +62,13 @@ func IsComputeClassCapacityBuffersEnabled(manager experiments.Manager) bool {
 	}
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassCapacityBuffersFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassCapacityBuffersMinCAVersionFlag, false)
+}
+
+// IsComputeClassConfigDriftStatusEnabled returns true if reporting config drift migration progress in the ComputeClass status is enabled.
+func IsComputeClassConfigDriftStatusEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassConfigDriftStatusEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassConfigDriftStatusMinCAVersionFlag, true)
 }

@@ -17,10 +17,12 @@ package queue
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	k8smetrics "k8s.io/component-base/metrics"
+	"k8s.io/component-base/metrics/testutil"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/ops"
 	statetest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/state/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/internal/test"
@@ -139,6 +141,44 @@ func TestWorkQueueMetrics(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWorkQueueWaitDurations(t *testing.T) {
+	mig := gce.GceRef{Project: "p1", Zone: "z1", Name: "m1"}
+	label := ops.SuspendOp.String()
+	const mergeDelay = 100 * time.Millisecond
+
+	q := NewWorkQueue(10, &statetest.MockStateManager{})
+	sumBefore, countBefore := waitDurations(t, label)
+
+	// n1 creates a batch, and n2 joins it after mergeDelay.
+	assert.NoError(t, q.Enqueue(ops.Operation{MIG: mig, Type: ops.SuspendOp, NodeNames: set.New("n1")}))
+	time.Sleep(mergeDelay)
+	assert.NoError(t, q.Enqueue(ops.Operation{MIG: mig, Type: ops.SuspendOp, NodeNames: set.New("n2")}))
+	_, ok := q.Dequeue(t.Context())
+	assert.True(t, ok)
+
+	sum, count := waitDurations(t, label)
+	// One sample for the whole batch, even though it has 2 nodes.
+	assert.Equal(t, countBefore+1, count)
+	// The wait is measured from batch creation, so n2 joining doesn't reset it.
+	assert.GreaterOrEqual(t, sum-sumBefore, mergeDelay.Seconds())
+}
+
+// waitDurations returns the current sum and count of opQueueWaitDurations
+// for opType.
+func waitDurations(t *testing.T, opType string) (float64, uint64) {
+	t.Helper()
+	h := opQueueWaitDurations.WithLabelValues(opType)
+	sum, err := testutil.GetHistogramMetricValue(h)
+	if err != nil {
+		t.Fatalf("Error when getting metric sum: %v", err)
+	}
+	count, err := testutil.GetHistogramMetricCount(h)
+	if err != nil {
+		t.Fatalf("Error when getting metric count: %v", err)
+	}
+	return sum, count
 }
 
 func delta(expected float64, metric k8smetrics.Registerable, labels ...string) *test.MetricDelta {

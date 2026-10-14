@@ -21,6 +21,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -114,6 +115,19 @@ func (p *Processor) FilterNoScaleDownNodeGroups(ctx *ca_context.AutoscalingConte
 // GetPodDestinationCandidates is a no-op, this processor needs to define it to implement ScaleDownNodeProcessor.
 func (p *Processor) GetPodDestinationCandidates(_ *ca_context.AutoscalingContext, nodes []*apiv1.Node) ([]*apiv1.Node, errors.AutoscalerError) {
 	return nodes, nil
+}
+
+// ExclusionReason implements scaledown.ExclusionReasonProvider.
+//
+// Every node this processor removes belongs to a MIG that some BlockedMigsSource
+// has put on hold. Most sources do so for an operation on the node pool, such
+// as a blue-green upgrade or a TPU reconciliation; the snowflake source holds
+// a pool back for as long as it stays snowflaked, with nothing running. The
+// reason covers both: the pool is being held by the platform, not by anything
+// about the node or its workload, and the per-MIG BlockedMigReasonSet is
+// available should a finer mapping ever be wanted.
+func (p *Processor) ExclusionReason() observability.BlockReason {
+	return observability.NodePoolOperationInProgress
 }
 
 // GetScaleDownCandidates removes nodes belonging to blocked MIGs from being considered as candidates for scale-down.

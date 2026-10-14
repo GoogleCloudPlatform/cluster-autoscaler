@@ -82,11 +82,17 @@ const ComputeClassEnhancedObservabilityMinCAVersionFlag = "ComputeClassEnhancedO
 const ComputeClassConfigHashEnabledFlag = "ComputeClassConfigHash::Enabled"
 const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVersion"
 
+const ComputeClassScaleDownStatusEnabledFlag = "ComputeClassScaleDownStatus::Enabled"
+const ComputeClassScaleDownStatusMinCAVersionFlag = "ComputeClassScaleDownStatus::MinCAVersion"
+
 const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
 const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
 
 const ComputeClassCapacityBuffersFlag = "ComputeClassCapacityBuffers::Enabled"
 const ComputeClassCapacityBuffersMinCAVersionFlag = "ComputeClassCapacityBuffers::MinCAVersion"
+
+const ComputeClassConfigDriftStatusEnabledFlag = "ComputeClassConfigDriftStatus::Enabled"
+const ComputeClassConfigDriftStatusMinCAVersionFlag = "ComputeClassConfigDriftStatus::MinCAVersion"
 
 const MultitenancyScaleToZeroProcessorFlag = "Multitenancy::EnablePerTenantScaleToZero"
 const MultitenancyEnablePerTenantP4SAFlag = "Multitenancy::EnablePerTenantP4SAInClusterAutoscaler"
@@ -202,6 +208,15 @@ const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersi
 const FlexAdvisorLateRegistrationEnabledFlag = "FlexAdvisorLateRegistration::Enabled"
 const FlexAdvisorLateRegistrationMinCAVersionFlag = "FlexAdvisorLateRegistration::MinCAVersion"
 
+const FlexAdvisorRecommendationsBypassEnabledFlag = "FlexAdvisor::RecommendationsBypassEnabled"
+const FlexAdvisorRecommendationsBypassMinCAVersionFlag = "FlexAdvisor::RecommendationsBypassMinCAVersion"
+
+// FlexAdvisorRecommendationsBypassMeasurementWindowFlag length in minutes of measurement window within which we should count blocked scale ups that contribute for bypass threshold
+const FlexAdvisorRecommendationsBypassMeasurementWindowFlag = "FlexAdvisor::RecommendationsBypassMeasurementWindow"
+
+// FlexAdvisorRecommendationsBypassCountThresholdFlag how many blocked scale ups must happen within window for recommendations enforcement to be paused
+const FlexAdvisorRecommendationsBypassCountThresholdFlag = "FlexAdvisor::RecommendationsBypassCountThreshold"
+
 const FlexAdvisorEnableDebugLogsFlag = "FlexAdvisor::EnableDebugLogs"
 
 const FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag = "FlexAdvisor::AwaitInstanceAvailabilityTimeoutSeconds"
@@ -229,6 +244,9 @@ const FlexAdvisorScaleUpLimiterTrackerMinCAVersionFlag = "FlexAdvisorScaleUpLimi
 
 const FlexAdvisorEnableReservationSpecificMigsProcessingFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessing"
 const FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag = "FlexAdvisor::EnableReservationSpecificMigsProcessingMinCAVersion"
+
+const FlexAdvisorNapZoneSetExpansionEnabledFlag = "FlexAdvisorNapZoneSetExpansionEnabled::Enabled"
+const FlexAdvisorNapZoneSetExpansionMinCAVersionFlag = "FlexAdvisorNapZoneSetExpansionEnabled::MinCAVersion"
 
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
@@ -283,3 +301,6 @@ const SpecificTypeReservationWithoutMatchEnabledFlag = "SpecificTypeReservationW
 
 const ReservationsAnyLocationPolicyOverrideMinCAVersionFlag = "ReservationsAnyLocationPolicyOverride::MinCAVersion"
 const ReservationsAnyLocationPolicyOverrideEnabledFlag = "ReservationsAnyLocationPolicyOverride::Enabled"
+
+const FilterMigsByClusterNameEnabledFlag = "FilterMigsByClusterName::Enabled"
+const FilterMigsByClusterNameMinCAVersionFlag = "FilterMigsByClusterName::MinCAVersion"

@@ -53,6 +53,8 @@ type Manager interface {
 	UpdateNodesScaleDownAllowedCache(map[string]bool)
 	// InvalidateNodesScaleDownAllowed invalidates the cache storing information about whether nodes are allowed to be scaled down.
 	InvalidateNodesScaleDownAllowedCache()
+	// NodesCount returns the number of resizable nodes for a given machine family.
+	NodesCount(machineFamily string) int
 }
 
 // CloudProvider is the subset of GkeCloudProvider needed for resizable VM manager.

@@ -15,22 +15,22 @@
 package reservations
 
 import (
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
-func IsSpecificReservation(rsv *gce_api.Reservation) bool {
+func IsSpecificReservation(rsv *reservation.Reservation) bool {
 	return rsv.SpecificReservation != nil
 }
 
-func IsAggregateReservation(rsv *gce_api.Reservation) bool {
+func IsAggregateReservation(rsv *reservation.Reservation) bool {
 	return rsv.AggregateReservation != nil
 }
 
-func getTotalLocalSSDSize(ip *gce_api.AllocationSpecificSKUAllocationReservedInstanceProperties, targetInterface string) int64 {
+func getTotalLocalSSDSize(ip *reservation.InstanceProperties, targetInterface string) int64 {
 	var totalLocalSSDSize int64
-	for _, ssd := range ip.LocalSsds {
+	for _, ssd := range ip.LocalSSDs {
 		if ssd.Interface == targetInterface {
-			totalLocalSSDSize += ssd.DiskSizeGb
+			totalLocalSSDSize += ssd.DiskSizeGB
 		}
 	}
 	return totalLocalSSDSize

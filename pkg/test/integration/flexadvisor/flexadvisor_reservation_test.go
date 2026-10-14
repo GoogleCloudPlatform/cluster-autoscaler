@@ -26,12 +26,14 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	"k8s.io/utils/ptr"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -51,7 +53,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(StockOutMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -62,7 +64,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(UnknownAvailabilityMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(UnknownAvailabilityMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -72,7 +74,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(AvailableMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(AvailableMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-1",
 		},
@@ -83,7 +85,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneA, 0, 1),
+				reservations.NewAnyV1("", ZoneA, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-2",
 		},
@@ -94,7 +96,7 @@ func TestReservationAndFAReturnNoCapacitySinglePod(t *testing.T) {
 				integration.EmptyNodePool("pool-2").WithMachineType(AvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, "us-east1-a", 0, 1),
+				reservations.NewAnyV1("", "us-east1-a", reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			expectedToScheduleOn: "pool-2",
 		},
@@ -158,7 +160,7 @@ func TestReservationAndFAReturnNoCapacityMultiplePods(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(OneInstanceAvailableMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(OneInstanceAvailableMachineType, ZoneB, 10, 10),
+				fullyUsedReservation(OneInstanceAvailableMachineType, ZoneB, 10),
 			},
 			pods: []*apiv1.Pod{ // one node fits only one pod
 				tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc")),
@@ -176,7 +178,7 @@ func TestReservationAndFAReturnNoCapacityMultiplePods(t *testing.T) {
 				integration.EmptyNodePool("pool-1").WithMachineType(StockOutMachineType).WithCCCLabel("test-ccc").Build(),
 			},
 			reservations: []*compute.Reservation{
-				reservations.BuildMultipleMachineReservation(ZeroCapacityRecommendationMachineType, ZoneB, 0, 1),
+				reservations.NewAnyV1("", ZoneB, reservations.WithMachine(ZeroCapacityRecommendationMachineType), reservations.WithAvailableCount(1)),
 			},
 			pods: []*apiv1.Pod{ // one node fits only one pod
 				tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc")),
@@ -249,7 +251,7 @@ func TestReservationEnforcesTwoStepAllocation(t *testing.T) {
 		integration.EmptyNodePool("pool-2").WithMachineType(StockOutMachineType).WithCCCLabel(crd.Name).Build(),
 	}
 	rsrvs := []*compute.Reservation{
-		reservations.BuildMultipleMachineReservation(OneInstanceAvailableMachineType, "us-central1-b", 0, 1),
+		reservations.NewAnyV1("", "us-central1-b", reservations.WithMachine(OneInstanceAvailableMachineType), reservations.WithAvailableCount(1)),
 	}
 	// one node fits only one pod
 	pod1 := tu.BuildTestPod("pod-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
@@ -304,4 +306,74 @@ func TestReservationEnforcesTwoStepAllocation(t *testing.T) {
 		assert.Contains(t, pod1After2ndRun.Spec.NodeName, "pool-1")
 		assert.Contains(t, pod2After2ndRun.Spec.NodeName, "pool-1")
 	})
+}
+
+// TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone verifies that an uncreated
+// NAP candidate with an unused ANY reservation in a non-representative planned zone is not eliminated
+// by instanceAvailabilityThreshold when FA reports 0 on-demand capacity across all zones.
+func TestUncreatedNAPCandidateWithUnusedReservationInNonRepresentativeZone(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("test-ccc").
+		WithNodePoolAutoCreation(true).
+		WithPriorities(
+			v1.Priority{
+				MachineType: ptr.To("n2-standard-4"),
+			},
+		).
+		Build()
+
+	res := reservations.NewAnyV1("", ZoneB, reservations.WithMachine("n2-standard-4"), reservations.WithAvailableCount(1))
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithReservationsForDefaultProject([]*compute.Reservation{res}).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+			integration.WithAutoprovisioningLocations(ZoneA, ZoneB, ZoneC),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithBalanceSimilarNodeGroups(),
+		).
+		WithExperiments(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		// FA reports 0 capacity across all zones for n2-standard-4.
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneA).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneB).WithCapacity(0).WithScore(0.5),
+			fake.NewGuidance("n2-standard-4").WithZone(ZoneC).WithCapacity(0).WithScore(0.5),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		pod := tu.BuildTestPod("standard-pod", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("test-ccc"))
+		infra.Fakes.K8s.AddPod(pod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		assert.Equal(t, 1, len(infra.Fakes.K8s.Nodes().Items), "Expected 1 node to be created using reservation")
+		node := infra.Fakes.K8s.Nodes().Items[0]
+		assert.Equal(t, "n2-standard-4", node.Labels[apiv1.LabelInstanceTypeStable], "Expected node to be n2-standard-4")
+		assert.Equal(t, ZoneB, node.Labels[apiv1.LabelTopologyZone], "Expected node to be created in ZoneB where reservation exists")
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "standard-pod", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
+	})
+}
+
+// fullyUsedReservation returns a reservation of count VMs, all of which are in use.
+func fullyUsedReservation(machineType, zone string, count int64) *compute.Reservation {
+	rsv := reservations.NewAnyV1("", zone, reservations.WithMachine(machineType))
+	rsv.SpecificReservation.Count = count
+	rsv.SpecificReservation.InUseCount = count
+	return rsv
 }

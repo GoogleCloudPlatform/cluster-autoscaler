@@ -17,10 +17,10 @@ package estimator
 import (
 	"context"
 
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
@@ -88,7 +88,7 @@ func (t *reservationsThreshold) NodeLimit(ctx context.Context, nodeGroup cloudpr
 }
 
 // Returns minimum of available reservations and max node limit for the node group
-func (t *reservationsThreshold) unusedReservationsCount(nodeGroup cloudprovider.NodeGroup, allReservations []*gce_api.Reservation) int {
+func (t *reservationsThreshold) unusedReservationsCount(nodeGroup cloudprovider.NodeGroup, allReservations []*reservation.Reservation) int {
 	availableReservations := reservations.MatchingUnusedReservations(t.cloudProvider, nodeGroup, allReservations, t.localSSDDiskSizeProvider)
 	if availableReservations <= 0 {
 		return 0

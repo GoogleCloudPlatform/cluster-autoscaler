@@ -24,6 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	cccLister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/edp"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/fleetefficiency"
@@ -60,6 +61,7 @@ func ExpanderStrategyFromString(
 	gceFlexAdvisorEnabled bool,
 	experimentsManager experiments.Manager,
 	scaleUpBackoff backoff.Backoff,
+	optionsTracker *optstracking.OptionsTracker,
 ) (expander.Strategy, errors.AutoscalerError) {
 
 	var gkePriceExpander filterStrategy
@@ -95,7 +97,7 @@ func ExpanderStrategyFromString(
 		return mppn.NewFilter(r, autopilotEnabled)
 	})
 	expanderFactory.RegisterFilter(internalopts.FleetEfficiencyExpanderName, func() expander.Filter {
-		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, getGkePriceExpander(), cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager, scaleUpBackoff)
+		return fleetefficiency.NewFilter(flexAdvisor, cccLister, reservationsPuller, getGkePriceExpander(), cloudProvider, localSSDDiskSizeProvider, clusterDefaultAllocationStrategy, gceFlexAdvisorEnabled, experimentsManager, scaleUpBackoff, optionsTracker)
 	})
 
 	return expanderFactory.Build(expanderNames)

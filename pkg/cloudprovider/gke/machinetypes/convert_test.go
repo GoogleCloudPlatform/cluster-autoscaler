@@ -1691,9 +1691,8 @@ func TestToMachineTypeObject(t *testing.T) {
 					withSupportedDisksOverride([]string{"pd-standard", "pd-ssd"}).
 					withDefaultDiskOverride("pd-standard")
 				mt.ephemeralLocalSsdCfg = &ephemeralLocalSsdConfig{
-					automaticDiskCount: ptr.To[int64](2),
-					allowedDiskCounts:  map[int]bool{1: true, 2: true, 4: true},
-					diskSize:           375,
+					allowedDiskCounts: map[int]bool{1: true, 2: true, 4: true},
+					diskSize:          375,
 				}
 				return mt
 			}(),
@@ -1722,9 +1721,8 @@ func TestToMachineTypeObject(t *testing.T) {
 				mt := newTestMachineTypeInfo("mt-1", 4, 16).
 					withDefaultDiskOverride("pd-standard")
 				mt.ephemeralLocalSsdCfg = &ephemeralLocalSsdConfig{
-					automaticDiskCount: ptr.To[int64](2),
-					allowedDiskCounts:  nil,
-					diskSize:           375,
+					allowedDiskCounts: nil,
+					diskSize:          375,
 				}
 				return mt
 			}(),
@@ -2153,30 +2151,24 @@ func TestExtractSsdConfig(t *testing.T) {
 			want:  nil,
 		},
 		{
-			name: "empty available counts",
-			input: &mcv1.LocalSSDConfig{
-				DefaultCount:    2,
-				AvailableCounts: nil,
-				DiskSize:        375,
-			},
-			want: &ephemeralLocalSsdConfig{
-				automaticDiskCount: ptr.To[int64](2),
-				allowedDiskCounts:  nil,
-				diskSize:           375,
-			},
+			name:  "zero default with allowed counts is not fixed",
+			input: &mcv1.LocalSSDConfig{DefaultCount: 0, AvailableCounts: []int64{1, 2, 4}, DiskSize: 375},
+			want:  &ephemeralLocalSsdConfig{allowedDiskCounts: map[int]bool{1: true, 2: true, 4: true}, diskSize: 375},
 		},
 		{
-			name: "valid available counts",
-			input: &mcv1.LocalSSDConfig{
-				DefaultCount:    4,
-				AvailableCounts: []int64{1, 2, 4},
-				DiskSize:        375,
-			},
-			want: &ephemeralLocalSsdConfig{
-				automaticDiskCount: ptr.To[int64](4),
-				allowedDiskCounts:  map[int]bool{1: true, 2: true, 4: true},
-				diskSize:           375,
-			},
+			name:  "single allowed count equal to default is fixed",
+			input: &mcv1.LocalSSDConfig{DefaultCount: 2, AvailableCounts: []int64{2}, DiskSize: 375},
+			want:  &ephemeralLocalSsdConfig{automaticDiskCount: ptr.To[int64](2), allowedDiskCounts: map[int]bool{2: true}, diskSize: 375},
+		},
+		{
+			name:  "default with multiple allowed counts is not fixed",
+			input: &mcv1.LocalSSDConfig{DefaultCount: 2, AvailableCounts: []int64{1, 2, 4}, DiskSize: 375},
+			want:  &ephemeralLocalSsdConfig{allowedDiskCounts: map[int]bool{1: true, 2: true, 4: true}, diskSize: 375},
+		},
+		{
+			name:  "default with no allowed counts is not fixed",
+			input: &mcv1.LocalSSDConfig{DefaultCount: 2, AvailableCounts: nil, DiskSize: 375},
+			want:  &ephemeralLocalSsdConfig{diskSize: 375},
 		},
 	}
 

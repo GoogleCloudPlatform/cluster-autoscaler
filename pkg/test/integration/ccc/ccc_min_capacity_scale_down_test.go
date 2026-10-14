@@ -20,11 +20,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"slices"
 	"sort"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
@@ -32,7 +34,9 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -383,6 +387,210 @@ func TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods(t *testing.T) {
 				"expected node %s from the occupied slice %q to be kept; the idle slice should have been removed", n.Name, occupiedPool)
 		}
 	})
+}
+
+// TestCCCMinCapacityDefragCreateBeforeDelete recycles, with create-before-delete
+// defrag, one node (or one NAP-provisioned TPU slice) of a ComputeClass sitting
+// on its min capacity, while the replacement is not registered with k8s.
+// Neither defrag nor scale-down may count the upcoming replacement towards the
+// min capacity: all initial nodes must stay until the replacement registers,
+// if ever. Once it does, the recycled nodes go.
+func TestCCCMinCapacityDefragCreateBeforeDelete(t *testing.T) {
+	const (
+		cccName       = "my-ccc"
+		tpuPolicyName = "test-policy"
+	)
+	testCases := []struct {
+		name string
+		// configure adds the case-specific setup to the shared test config.
+		configure func(*integration.TestConfig) *integration.TestConfig
+		// resourcePolicy, if set, is registered in the fake GCE before CA starts.
+		resourcePolicy *gceclient.GceResourcePolicy
+		minCapacity    int
+		// recycled selects the nodes annotated for defrag; last is the last node by name.
+		recycled func(node, last *apiv1.Node) bool
+	}{
+		{
+			name: "non-atomic",
+			configure: func(c *integration.TestConfig) *integration.TestConfig {
+				return c.
+					WithNodePools(integration.DefaultNodePool(
+						integration.WithNodePoolName("pool"),
+						integration.WithNodePoolMachineType("n1-standard-1"),
+						integration.WithNodePoolSize(3),
+						integration.WithNodePoolMin(0),
+						integration.WithNodePoolMax(4),
+						integration.WithNodePoolLocations("us-central1-b"),
+						integration.WithNodePoolLabels(map[string]string{gke_labels.ComputeClassLabel: cccName}),
+						integration.WithNodePoolAutoscalingEnabled(true),
+					)).
+					WithCccCrds(ccc.NewComputeClassBuilder(cccName).
+						WithTargetNodeCount(ptr.To(3)).
+						AddPriority(v1.Priority{MachineType: ptr.To("n1-standard-1")}).
+						Build())
+			},
+			minCapacity: 3,
+			recycled: func(node, last *apiv1.Node) bool {
+				return node.Name == last.Name
+			},
+		},
+		{
+			// NAP provisions two 16-node PROVISION_ONLY tpu7x slices for the
+			// min capacity through the ComputeClass placement (workload) policy.
+			name: "atomic TPU slices provisioned by NAP",
+			configure: func(c *integration.TestConfig) *integration.TestConfig {
+				return c.
+					WithExperiments(experiments.ResourcePolicyPullerFlag).
+					WithOverrides(
+						integration.WithAutoProvisioningEnabled(),
+						integration.WithCompactPlacementEnabled(true),
+						// Let a candidate cover a whole 16-node slice.
+						integration.WithDefragCandidateNodeLimit(16),
+					).
+					WithClusterOverrides(
+						integration.WithClusterAutoProvisioningEnabled(),
+						integration.WithClusterResourceLimits([]*gke_api_beta.ResourceLimit{
+							{ResourceType: "cpu", Maximum: integration.DefaultMaxCoresResourceLimit},
+							{ResourceType: "memory", Maximum: integration.DefaultMaxMemoryResourceLimit},
+							{ResourceType: "tpu7x", Maximum: 1000000},
+						}),
+					).
+					WithCccCrds(ccc.NewComputeClassBuilder(cccName).
+						WithNapEnabled().
+						WithTargetNodeCount(ptr.To(32)).
+						WithPriorities(v1.Priority{
+							MachineFamily: ptr.To("tpu7x"),
+							Tpu:           &v1.TPU{Type: "tpu7x", Count: 4, Topology: "4x4x4"},
+							Placement:     &v1.Placement{PolicyName: tpuPolicyName},
+						}).
+						Build())
+			},
+			resourcePolicy: &gceclient.GceResourcePolicy{
+				Name:   tpuPolicyName,
+				Status: "READY",
+				WorkloadPolicy: gceclient.WorkloadPolicy{
+					AcceleratorTopology:     "4x4x4",
+					AcceleratorTopologyMode: gceclient.AcceleratorTopologyModeProvisionOnly,
+				},
+			},
+			minCapacity: 32,
+			recycled: func(node, last *apiv1.Node) bool {
+				return node.Labels[gke_labels.GkeNodePoolLabel] == last.Labels[gke_labels.GkeNodePoolLabel]
+			},
+		},
+	}
+	registrations := []struct {
+		name string
+		// registersAfter is the number of loops after which the replacement
+		// registers with k8s; 0 means never.
+		registersAfter int
+	}{
+		{name: "replacement never registers"},
+		{name: "replacement registers late", registersAfter: 4},
+	}
+	for _, tc := range testCases {
+		for _, registration := range registrations {
+			t.Run(tc.name+"/"+registration.name, func(t *testing.T) {
+				testConfig := tc.configure(integration.NewTestConfig().
+					WithOverrides(
+						integration.WithComputeClassMinCapacityEnabled(),
+						integration.WithDefragEnabled("annotation"),
+						integration.WithDefragCandidateLimit(16),
+						integration.WithMaxDrainParallelism(16),
+						integration.WithMaxScaleDownParallelism(16),
+						integration.WithScaleDownUnneededTime(time.Second),
+						integration.WithMaxNodeProvisionTime(15*time.Minute),
+					))
+
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					infra := integration.SetupInfrastructure(ctx, t)
+					if tc.resourcePolicy != nil {
+						infra.Fakes.GceService.WithResourcePolicies(tc.resourcePolicy)
+					}
+					autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+					assert.NoError(t, err)
+					defer integration_synctest.TearDown(cancel)
+
+					// Wait for the min capacity to be in place (NAP provisions it over a few loops).
+					listNodes := func() []apiv1.Node {
+						nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+						assert.NoError(t, err)
+						return nodes.Items
+					}
+					for i := 0; i < 10 && len(listNodes()) < tc.minCapacity; i++ {
+						integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+					}
+					nodes := listNodes()
+					if !assert.Len(t, nodes, tc.minCapacity, "expected the ComputeClass to sit exactly on its min capacity") {
+						return
+					}
+
+					sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
+					last := nodes[len(nodes)-1].DeepCopy()
+					initial := map[string]bool{}
+					recycled := map[string]bool{}
+					for _, node := range nodes {
+						if tc.recycled(&node, last) {
+							metav1.SetMetaDataAnnotation(&node.ObjectMeta, "defrag.cluster-autoscaler.kubernetes.io", "create-before-delete")
+							infra.Fakes.K8s.UpdateNode(&node)
+							recycled[node.Name] = true
+						}
+						initial[node.Name] = true
+					}
+
+					// Defrag picks the candidate and provisions a replacement, which the
+					// fake registers right away: drop its Node objects so that it stays
+					// upcoming until it registers.
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+					nodes = listNodes()
+					assert.Greater(t, len(nodes), len(initial), "expected the defrag replacement to be created")
+					var replacement []apiv1.Node
+					for _, node := range nodes {
+						if !initial[node.Name] {
+							replacement = append(replacement, node)
+							infra.Fakes.K8s.DeleteNode(node.Name)
+						}
+					}
+
+					unregisteredLoops := 8
+					if registration.registersAfter > 0 {
+						unregisteredLoops = registration.registersAfter
+					}
+					for i := 0; i < unregisteredLoops; i++ {
+						integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+						present := map[string]bool{}
+						for _, node := range listNodes() {
+							present[node.Name] = true
+						}
+						for name := range initial {
+							assert.True(t, present[name], "node %s removed in loop %d while the replacement is not registered", name, i)
+						}
+					}
+					if registration.registersAfter == 0 {
+						return
+					}
+
+					// Once the replacement registers, the recycled nodes can go.
+					for i := range replacement {
+						infra.Fakes.K8s.AddNode(&replacement[i])
+					}
+					for i := 0; i < 10; i++ {
+						integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+						nodes = listNodes()
+						assert.GreaterOrEqual(t, len(nodes), tc.minCapacity, "ComputeClass below its min capacity in loop %d after the replacement registered", i)
+						if !slices.ContainsFunc(nodes, func(node apiv1.Node) bool { return recycled[node.Name] }) {
+							break
+						}
+					}
+					for _, node := range nodes {
+						assert.False(t, recycled[node.Name], "recycled node %s not removed after the replacement registered", node.Name)
+					}
+					assert.Len(t, nodes, tc.minCapacity, "expected the ComputeClass to end on its min capacity")
+				})
+			})
+		}
+	}
 }
 
 // atomicTPUNodePool builds a pre-existing multi-host TPU node pool (one 16-node

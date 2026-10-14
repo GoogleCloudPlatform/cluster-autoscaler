@@ -17,18 +17,18 @@ package consumablereservations
 import (
 	"context"
 
-	gce_api "google.golang.org/api/compute/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 type clientMock struct {
-	fetchConsumableReservations func(ctx context.Context, projectID, zone string) ([]*gce_api.Reservation, Error)
+	fetchConsumableReservations func(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, Error)
 }
 
-func (m *clientMock) FetchConsumableReservations(ctx context.Context, projectID, zone string) ([]*gce_api.Reservation, Error) {
+func (m *clientMock) FetchConsumableReservations(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, Error) {
 	return m.fetchConsumableReservations(ctx, projectID, zone)
 }
 
-func NewClientMock(f func(ctx context.Context, projectID, zone string) ([]*gce_api.Reservation, Error)) *clientMock {
+func NewClientMock(f func(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, Error)) *clientMock {
 	return &clientMock{
 		fetchConsumableReservations: f,
 	}

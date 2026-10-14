@@ -29,6 +29,7 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	provider_gce "k8s.io/cloud-provider-gcp/providers/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	gcereservation "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/resourcemanager"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
@@ -64,7 +65,7 @@ type CloudProvider interface {
 }
 
 type ReservationProvider interface {
-	GetReservations(name, project string) []*gceapiv1.Reservation
+	GetReservations(name, project string) []*gcereservation.Reservation
 	PopulateForCrds(crds []crd.CRD)
 }
 

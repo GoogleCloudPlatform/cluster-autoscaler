@@ -30,6 +30,17 @@ type UpdateMessage struct {
 	Id CRDId
 	// Mutate contains the logic to apply the specific update (e.g., updating CRD ResourceInfo).
 	Mutate Mutator
+	// OnlyIfTracked drops the update unless the aggregator already holds a
+	// status for the CRD, rather than starting one.
+	//
+	// Meant for updates that clear state: there is nothing to clear on a CRD
+	// this aggregator has never reported on, and an update that only exists
+	// to clear should not be the reason a CRD starts being tracked and
+	// patched. It expresses that intent, not a guarantee about sharding; all
+	// shards patch as the same field owner with the full status they hold,
+	// so a shard that tracks a CRD for any other reason takes its fields over
+	// on its next flush regardless of this flag.
+	OnlyIfTracked bool
 }
 
 // CRDId identifies a CRD by its label and name.

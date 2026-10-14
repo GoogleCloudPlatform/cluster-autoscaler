@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/drift"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/klog/v2"
@@ -32,6 +33,7 @@ import (
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 )
 
 const (
@@ -41,16 +43,19 @@ const (
 
 type plugin struct {
 	config                config.PluginsConfig
-	matcher               computeclass.Matcher
+	evaluator             *drift.Evaluator
 	latestUnfitNodesCount int
-	listerValid           bool
+	// latestAtomicGroupBlocked lists the nodes that the latest NewCandidate
+	// call held back because their atomic group was incomplete.
+	latestAtomicGroupBlocked []string
+	listerValid              bool
 }
 
 // NewPlugin returns a new nodeconfigdrift defrag plugin instance.
 func NewPlugin(config config.PluginsConfig) defrag.Plugin {
 	return &plugin{
 		config:      config,
-		matcher:     computeclass.NewMatcher(config.NPCLister, config.Provider),
+		evaluator:   drift.NewEvaluator(config.NPCLister, computeclass.NewMatcher(config.NPCLister, config.Provider)),
 		listerValid: config.NPCLister != nil && !reflect.ValueOf(config.NPCLister).IsNil(),
 	}
 }
@@ -60,13 +65,15 @@ func (p *plugin) String() string {
 }
 
 type candidateNodeGroupInfo struct {
-	nodes    []string
-	mode     defrag.Mode
-	isAtomic bool
-	limit    int
+	nodeGroupID string
+	nodes       []string
+	mode        defrag.Mode
+	isAtomic    bool
+	limit       int
 }
 
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
+	p.latestAtomicGroupBlocked = nil
 	if !p.isListerValid() {
 		klog.V(2).Infof("Not creating candidate, npc crd lister is nil. NPCs / CCCs might be disabled")
 		return nil
@@ -74,6 +81,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 
 	candidateNodeGroups, groupKeys, driftedNodesCount := p.candidateNodeGroups(ctx, nodeNames)
 	p.latestUnfitNodesCount = driftedNodesCount
+	groupKeys = p.dropIncompleteAtomicGroups(ctx, candidateNodeGroups, groupKeys)
 
 	if len(groupKeys) == 0 {
 		return nil
@@ -93,7 +101,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 func (p *plugin) candidateNodeGroups(ctx *ca_context.AutoscalingContext, nodeNames []string) (map[string]*candidateNodeGroupInfo, []string, int) {
 	candidateNodeGroups := make(map[string]*candidateNodeGroupInfo)
 	var candidateNodeGroupKeys []string
-	isDriftedByNodeGroup := make(map[string]bool)
+	driftCache := drift.NewCache(p.evaluator)
 	driftedNodesCount := 0
 
 	for _, nodeName := range nodeNames {
@@ -106,14 +114,7 @@ func (p *plugin) candidateNodeGroups(ctx *ca_context.AutoscalingContext, nodeNam
 			continue
 		}
 
-		nodeGroupId := nodeGroup.Id()
-		isDrifted, evaluated := isDriftedByNodeGroup[nodeGroupId]
-		if !evaluated {
-			isDrifted = p.evaluateNodeGroupDrift(nodeGroup)
-			isDriftedByNodeGroup[nodeGroupId] = isDrifted
-		}
-
-		if isDrifted {
+		if driftCache.EvaluateNodeGroup(nodeGroup).Drifted {
 			groupKey, mode, isAtomic := p.getAtomicGroupKey(ctx, nodeName, nodeGroup)
 			if groupKey == "" {
 				continue
@@ -122,9 +123,10 @@ func (p *plugin) candidateNodeGroups(ctx *ca_context.AutoscalingContext, nodeNam
 			if !exists {
 				candidateNodeGroupKeys = append(candidateNodeGroupKeys, groupKey)
 				group = &candidateNodeGroupInfo{
-					mode:     mode,
-					isAtomic: isAtomic,
-					limit:    p.candidateLimit(nodeGroup),
+					nodeGroupID: nodeGroup.Id(),
+					mode:        mode,
+					isAtomic:    isAtomic,
+					limit:       p.candidateLimit(nodeGroup),
 				}
 				candidateNodeGroups[groupKey] = group
 			}
@@ -134,6 +136,100 @@ func (p *plugin) candidateNodeGroups(ctx *ca_context.AutoscalingContext, nodeNam
 	}
 
 	return candidateNodeGroups, candidateNodeGroupKeys, driftedNodesCount
+}
+
+// dropIncompleteAtomicGroups removes the atomic groups that are missing some of
+// their members and returns the remaining group keys.
+//
+// The processor filters out nodes that can't be migrated right now, for
+// example because of blocking pods or a backoff, before it calls NewCandidate.
+// The nodes passed in may therefore be only part of an atomic group, and a
+// candidate built from them would migrate the group piecemeal. Each atomic
+// group is compared with its full membership in the cluster snapshot instead,
+// and a group with missing members isn't offered as a candidate. Its available
+// members are remembered, so they can be reported as blocked by their group.
+func (p *plugin) dropIncompleteAtomicGroups(ctx *ca_context.AutoscalingContext, groups map[string]*candidateNodeGroupInfo, keys []string) []string {
+	atomicNodeGroupIDs := make(map[string]bool)
+	for _, key := range keys {
+		if group := groups[key]; group.isAtomic {
+			atomicNodeGroupIDs[group.nodeGroupID] = true
+		}
+	}
+	if len(atomicNodeGroupIDs) == 0 {
+		return keys
+	}
+
+	groupSizes, err := p.atomicGroupSizes(ctx, atomicNodeGroupIDs)
+	if err != nil {
+		// No atomic group can be shown to be complete. Skipping them all is
+		// safer than risking a partial migration.
+		klog.Errorf("Defrag %s: skipping atomic groups, failed to determine their members: %v", p.String(), err)
+	}
+
+	var kept []string
+	for _, key := range keys {
+		group := groups[key]
+		if !group.isAtomic {
+			kept = append(kept, key)
+			continue
+		}
+		if err != nil {
+			// The group is held back all the same, and its members should
+			// say so rather than read as free to migrate.
+			p.latestAtomicGroupBlocked = append(p.latestAtomicGroupBlocked, group.nodes...)
+			continue
+		}
+		if len(group.nodes) < groupSizes[key] {
+			klog.V(4).Infof("Defrag %s: atomic group %q has %d of %d nodes available, not creating a candidate", p.String(), key, len(group.nodes), groupSizes[key])
+			p.latestAtomicGroupBlocked = append(p.latestAtomicGroupBlocked, group.nodes...)
+			continue
+		}
+		kept = append(kept, key)
+	}
+	return kept
+}
+
+// atomicGroupSizes counts the nodes in the cluster snapshot that belong to each
+// atomic group of the given node groups, keyed by atomic group key.
+//
+// Drift is evaluated per node group and the atomic group key includes the node
+// group, so every node counted here is drifted if its group is.
+//
+// Only registered nodes count. An upcoming node is a placeholder for capacity
+// still being provisioned: the processor never offers it, so counting it would
+// hold the group's real members back under a reason nothing else explains. A
+// member already gone from the snapshot is not waited for either; its deletion
+// is under way, and the rest of the group should follow rather than wait for a
+// node that is not coming back.
+//
+// A node whose node group cannot be determined is a different matter: it may be
+// a member of any of the groups, and the same lookup failure keeps it out of the
+// nodes offered to NewCandidate, so skipping it here would make its group look
+// complete without it. The error is returned instead, and the caller holds every
+// atomic group back for this loop.
+func (p *plugin) atomicGroupSizes(ctx *ca_context.AutoscalingContext, nodeGroupIDs map[string]bool) (map[string]int, error) {
+	nodeInfos, err := ctx.ClusterSnapshot.ListNodeInfos()
+	if err != nil {
+		return nil, err
+	}
+	sizes := make(map[string]int)
+	for _, nodeInfo := range nodeInfos {
+		node := nodeInfo.Node()
+		if _, upcoming := node.Annotations[annotations.NodeUpcomingAnnotation]; upcoming {
+			continue
+		}
+		nodeGroup, err := p.getNodeGroup(ctx, node.Name)
+		if err != nil {
+			return nil, err
+		}
+		if nodeGroup == nil || !nodeGroupIDs[nodeGroup.Id()] {
+			continue
+		}
+		if key, _, isAtomic := p.getAtomicGroupKey(ctx, node.Name, nodeGroup); isAtomic {
+			sizes[key]++
+		}
+	}
+	return sizes, nil
 }
 
 func (p *plugin) candidateLimit(nodeGroup cloudprovider.NodeGroup) int {
@@ -194,7 +290,7 @@ func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNam
 	}
 
 	var validNodes []string
-	isDriftedByNodeGroup := make(map[string]bool)
+	driftCache := drift.NewCache(p.evaluator)
 	for _, nodeName := range nodeNames {
 		nodeGroup, err := p.getNodeGroup(ctx, nodeName)
 		if err != nil {
@@ -205,14 +301,7 @@ func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNam
 			continue
 		}
 
-		nodeGroupId := nodeGroup.Id()
-		isDrifted, evaluated := isDriftedByNodeGroup[nodeGroupId]
-		if !evaluated {
-			isDrifted = p.evaluateNodeGroupDrift(nodeGroup)
-			isDriftedByNodeGroup[nodeGroupId] = isDrifted
-		}
-
-		if isDrifted {
+		if driftCache.EvaluateNodeGroup(nodeGroup).Drifted {
 			validNodes = append(validNodes, nodeName)
 		}
 	}
@@ -258,7 +347,7 @@ func (p *plugin) IsExpansionOptionValid(ctx *ca_context.AutoscalingContext, cand
 		return false
 	}
 
-	return p.isNodeGroupCompliant(option.NodeGroup, candidateCrd)
+	return p.evaluator.IsNodeGroupCompliant(option.NodeGroup, candidateCrd)
 }
 
 func (p *plugin) BackoffDuration(_ *ca_context.AutoscalingContext, _ *defrag.Candidate) time.Duration {
@@ -273,35 +362,13 @@ func (p *plugin) LatestUnfitNodesCount() int {
 	return p.latestUnfitNodesCount
 }
 
+// LatestAtomicGroupBlockedNodes implements defrag.AtomicGroupReporter.
+func (p *plugin) LatestAtomicGroupBlockedNodes() []string {
+	return p.latestAtomicGroupBlocked
+}
+
 func (p *plugin) isListerValid() bool {
 	return p.listerValid
-}
-
-func (p *plugin) isNodeGroupDrifted(nodeGroup cloudprovider.NodeGroup, c crd.CRD) bool {
-	if !p.matcher.MatchesCrdLabel(nodeGroup, c) {
-		return false
-	}
-	return !p.isNodeGroupCompliant(nodeGroup, c)
-}
-
-func (p *plugin) isNodeGroupCompliant(nodeGroup cloudprovider.NodeGroup, c crd.CRD) bool {
-	if len(c.Rules()) > 0 && !c.ScaleUpAnyway() {
-		found, _, _ := p.matcher.FirstMatchedRule(nodeGroup, c)
-		return found
-	}
-	return p.matcher.MatchesCrdConfig(nodeGroup, c)
-}
-
-func (p *plugin) evaluateNodeGroupDrift(nodeGroup cloudprovider.NodeGroup) bool {
-	c, cName, err := p.config.NPCLister.NodeGroupCrd(nodeGroup)
-	if err != nil {
-		klog.Errorf("failed to get CRD for node group %v: %v", nodeGroup.Id(), err)
-		return false
-	}
-	if c != nil && cName != "" && c.ConfigDrift() {
-		return p.isNodeGroupDrifted(nodeGroup, c)
-	}
-	return false
 }
 
 func (p *plugin) getNodeGroup(ctx *ca_context.AutoscalingContext, nodeName string) (cloudprovider.NodeGroup, error) {

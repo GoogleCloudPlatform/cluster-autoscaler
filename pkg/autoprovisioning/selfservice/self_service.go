@@ -58,6 +58,7 @@ func InitSelfService(experimentsManager experiments.Manager) {
 		newNestedVirtualization(experimentsManager),
 		newCustomImage(),
 		newSubnetPriorities(),
+		newAdditionalNetworks(),
 		newNetworkTags(),
 		newContainerdConfig(),
 		newResourceLabels(),

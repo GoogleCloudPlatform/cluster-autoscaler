@@ -223,6 +223,10 @@ func TestFlexStartTPU_Queued_NAP(t *testing.T) {
 					integration.WithAutoProvisioningEnabled(),
 					func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 						o.InternalOptions.ProvisioningLabelEnabled = true
+						// The node pool is created with target size 0 and no capacity ever
+						// arrives, so NAP cleanup (part of scale-down) would delete it in the
+						// same loop. Disable scale-down to keep the pool for inspection.
+						o.ScaleDownEnabled = false
 						return o
 					},
 				).
@@ -241,7 +245,7 @@ func TestFlexStartTPU_Queued_NAP(t *testing.T) {
 				infra := integration.SetupInfrastructure(ctx, t)
 
 				for _, zone := range integration.DefaultZones {
-					infra.Fakes.GceService.SetBackendMachineCount(zone, tc.machineType, 0)
+					infra.Fakes.GceService.SetOnDemandCapacity(zone, tc.machineType, 0)
 				}
 
 				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
@@ -262,11 +266,8 @@ func TestFlexStartTPU_Queued_NAP(t *testing.T) {
 
 				// The second loop advances the virtual clock by the scale-up failure timeout,
 				// allowing the ProvisioningRequest Reconciler to mark the PR as Failed.
-				// We use RunOnceAfter and ignore the error because the synchronous deletion from
-				// fakeGCE causes a brief "not found" error in the CA node registry during the same loop.
-				// This does not happen when using real Autoscaler, as the deletion there is asynchronous
-				// and takes a few minutes, hence it never happens that a node pool is deleted in the same loop
-				// as the CA is trying to read it.
+				// We use RunOnceAfter and ignore the error because the scale-up itself fails
+				// (no capacity is available); this test only inspects the created node pool spec.
 				_ = integration_synctest.RunOnceAfter(ctx, t, autoscaler, reconciler.MaxObtainabilityStrategyUnreconciledPeriod)
 
 				nps := infra.Fakes.GkeService.MustGetAutoprovisionedNodePools(t)

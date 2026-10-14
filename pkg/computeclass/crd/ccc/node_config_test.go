@@ -203,6 +203,7 @@ func TestRuleOptsForNodeSystemConfig(t *testing.T) {
 						CpuReservedMillicore: int64Ptr(100),
 						MemoryReservedMib:    int64Ptr(200),
 					},
+					ReservedSystemCpus: stringPtr("0-3"),
 				},
 			},
 			expected: []rules.RuleOption{
@@ -248,6 +249,7 @@ func TestRuleOptsForNodeSystemConfig(t *testing.T) {
 				rules.WithShutdownGracePeriodCriticalPodsSecondsRule(60),
 				rules.WithCrashLoopBackOffMaxContainerRestartPeriodRule("10s"),
 				rules.WithReservedResourcesConfigRule(int64Ptr(100), int64Ptr(200)),
+				rules.WithReservedSystemCpusRule("0-3"),
 			},
 		},
 		{

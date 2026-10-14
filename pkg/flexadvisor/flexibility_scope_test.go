@@ -134,7 +134,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
 				tc.initialSetup(fa, mockProvider)
@@ -187,7 +187,7 @@ func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
 		configKey := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature()
 		availability := api.NewTestInstanceAvailabilityBuilder("scope-1", configKey).WithZonalInstanceCount(map[string]int{"us-west1-a": 10}).Build()
 
-		fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+		fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 		assert.NoError(t, err)
 
 		mockProvider.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{configKey: availability}, nil).Once()
@@ -262,6 +262,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 			mockLister,
 			instanceConfigCloudProvider,
 			optionsTracker,
+			nil,
 			nil,
 			withInstanceConfigGenerator(instanceConfigGenerator),
 		)
@@ -422,7 +423,7 @@ func TestResponseValidation_Metrics(t *testing.T) {
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 
-				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
 				mockProvider.On("FetchCapacityGuidance").Return(tc.mockCapacityGuidance, nil)

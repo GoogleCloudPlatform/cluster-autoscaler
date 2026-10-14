@@ -199,6 +199,10 @@ func (t *testCrd) ResourceManagerTags() []Tag {
 	return t.resourceManagerTags
 }
 
+func (t *testCrd) AllocationStrategyDefaults() *cccv1.AllocationStrategyDefaults {
+	return t.allocationStrategyDefaults
+}
+
 func (t *testCrd) TpuDriverMode() TpuDriverMode {
 	return t.tpuDriverMode
 }
@@ -448,6 +452,7 @@ func CompareCrd(t *testing.T, c1, c2 CRD) {
 	assert.Equal(t, c1.UserDefinedLabels(), c2.UserDefinedLabels())
 	assert.Equal(t, c1.UserDefinedTaints(), c2.UserDefinedTaints())
 	assert.Equal(t, c1.ResourceManagerTags(), c2.ResourceManagerTags())
+	assert.Equal(t, c1.AllocationStrategyDefaults(), c2.AllocationStrategyDefaults())
 	assert.Equal(t, c1.TargetNodeCount(), c2.TargetNodeCount())
 	assert.Equal(t, c1.ArchitectureTaintBehavior(), c2.ArchitectureTaintBehavior())
 	assert.Equal(t, c1.MaxNodeDisruption(), c2.MaxNodeDisruption())
@@ -537,9 +542,12 @@ func NewMockCRDStatus(existingRuleConditions map[string][]metav1.Condition) *Moc
 	m.On("UpdateRuleConditions", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleResourceInfo", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleScalingHistory", mock.Anything, mock.Anything).Return().Maybe()
+	m.On("UpdateRuleConsolidationStatus", mock.Anything, mock.Anything).Return().Maybe()
 	m.On("UpdateRuleConfigHash", mock.Anything, mock.Anything).Return().Maybe()
+	m.On("UpdateConfigDriftInfo", mock.Anything).Return().Maybe()
 	m.On("ResetAllScalingHistories").Return().Maybe()
 	m.On("ResetAllResourceInfo").Return().Maybe()
+	m.On("ResetConfigDriftInfo").Return().Maybe()
 	m.On("GetConditions").Return(([]metav1.Condition)(nil)).Maybe()
 	m.On("GetRuleConditions", mock.Anything).Return(([]metav1.Condition)(nil)).Maybe()
 	m.On("GetRuleScalingHistory", mock.Anything).Return((*ScalingEventsHistory)(nil)).Maybe()
@@ -571,8 +579,17 @@ func (m *MockCRDStatus) UpdateRuleScalingHistory(ruleIdx string, history Scaling
 	m.Called(ruleIdx, history)
 }
 
+// UpdateRuleConsolidationStatus implements CRDStatus.
+func (m *MockCRDStatus) UpdateRuleConsolidationStatus(ruleIdx string, status ConsolidationStatus) {
+	m.Called(ruleIdx, status)
+}
+
 func (m *MockCRDStatus) UpdateRuleConfigHash(ruleIdx string, hash string) {
 	m.Called(ruleIdx, hash)
+}
+
+func (m *MockCRDStatus) UpdateConfigDriftInfo(info ConfigDriftInfo) {
+	m.Called(info)
 }
 
 func (m *MockCRDStatus) ResetAllScalingHistories() {
@@ -580,6 +597,10 @@ func (m *MockCRDStatus) ResetAllScalingHistories() {
 }
 
 func (m *MockCRDStatus) ResetAllResourceInfo() {
+	m.Called()
+}
+
+func (m *MockCRDStatus) ResetConfigDriftInfo() {
 	m.Called()
 }
 

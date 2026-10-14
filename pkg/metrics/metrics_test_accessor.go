@@ -30,6 +30,11 @@ func GetFlexAdvisorResponseErrorsCountForTest(reason FAResponseErrorReason) (flo
 	return testutil.GetCounterMetricValue(gauge)
 }
 
+// GetFlexAdvisorRecommendationsBypassCountForTest returns the current count of Flex Advisor recommendations bypass attempts (only for tests).
+func GetFlexAdvisorRecommendationsBypassCountForTest() (float64, error) {
+	return testutil.GetCounterMetricValue(flexAdvisorRecommendationsBypassCount)
+}
+
 // GetMachineConfigSourceInfoValueForTest returns the current value for a given family and source (only for tests).
 func GetMachineConfigSourceInfoValueForTest(machineFamily, configSource string) (float64, error) {
 	gauge := machineConfigSourceInfo.WithLabelValues(machineFamily, configSource)
@@ -39,6 +44,12 @@ func GetMachineConfigSourceInfoValueForTest(machineFamily, configSource string) 
 // GetNodesWithAllocationStrategyCountForTest returns the current count for given labels (only for tests).
 func GetNodesWithAllocationStrategyCountForTest(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, machineType string) (float64, error) {
 	counter := nodesWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), machineType)
+	return testutil.GetCounterMetricValue(counter)
+}
+
+// GetScaleupsWithAllocationStrategyCountForTest returns the current count for given labels (only for tests).
+func GetScaleupsWithAllocationStrategyCountForTest(requestedStrategy string, fallbackReason AllocationStrategyFallbackReason, source AllocationStrategySource) (float64, error) {
+	counter := scaleupsWithAllocationStrategy.WithLabelValues(requestedStrategy, string(fallbackReason), string(source))
 	return testutil.GetCounterMetricValue(counter)
 }
 

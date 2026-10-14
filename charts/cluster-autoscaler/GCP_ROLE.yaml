@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# [START gke_selfhostedautoscaler_gcprole]
 title: Self Hosted Cluster Autoscaler Role
 description: Least privilege role for self-hosted CA to manage GKE clusters
 stage: BETA
@@ -36,3 +37,4 @@ includedPermissions:
 - container.clusters.get
 - container.clusters.update
 - container.operations.get
+# [END gke_selfhostedautoscaler_gcprole]

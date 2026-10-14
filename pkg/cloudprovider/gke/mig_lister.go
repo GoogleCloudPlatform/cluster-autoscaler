@@ -15,24 +15,27 @@
 package gke
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
 	"google.golang.org/api/googleapi"
 
+	machinerynet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 const (
-	// maxIrretrievableErrsBeforeBlocked is number of NodeGroup can be irretrievable before its blocked
-	maxIrretrievableErrsBeforeBlocked = 3
-	// markedIrretrievableRefreshIntervalTime is the time before marked irretrievable list is refreshed
-	markedIrretrievableRefreshIntervalTime = 24 * time.Hour
-	// blockListRefreshIntervalTime is the time before the blocked list is refreshed
-	blockListRefreshIntervalTime = 15 * time.Minute
+	// MaxIrretrievableErrsBeforeBlocked is number of NodeGroup can be irretrievable before its blocked
+	MaxIrretrievableErrsBeforeBlocked = 3
+	// MarkedIrretrievableRefreshIntervalTime is the time before marked irretrievable list is refreshed
+	MarkedIrretrievableRefreshIntervalTime = 24 * time.Hour
+	// BlockListRefreshIntervalTime is the time before the blocked list is refreshed
+	BlockListRefreshIntervalTime = 15 * time.Minute
 )
 
 // IrretrievableMigBlockReason informs why the MIG has been blocked.
@@ -131,9 +134,56 @@ func (l *gkeMigLister) GetGkeMigsLocations() []string {
 func (l *gkeMigLister) HandleMigIssue(migRef gce.GceRef, err error) {
 	if isNotFoundError(err) {
 		l.cache.MarkIrretrievableMig(migRef, l.maxIrretrievableErrsBeforeBlocked, IrretrievableMigReasonNotFound)
-	} else if isServerError(err) {
+	} else if isServerError(err) || isUnreachableError(err) {
 		l.cache.MarkIrretrievableMig(migRef, l.maxIrretrievableErrsBeforeBlocked, IrretrievableMigReasonServerError)
 	}
+}
+
+// isUnreachableError returns true if err is a transport-level failure, i.e. GCE
+// never produced a usable HTTP response (DNS/dial failures, timeouts,
+// connection refused/reset before or while reading the response).
+//
+// Any *googleapi.Error means GCE did respond, so it is never treated as
+// unreachable, context.Canceled is not counted either, as it is caused by the caller.
+func isUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var gErr *googleapi.Error
+	if errors.As(err, &gErr) {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// Any net.Error reporting Timeout(), including *url.Error (which delegates
+	// to its cause), http.Client.Timeout and i/o deadlines on the connection.
+	if machinerynet.IsTimeout(err) {
+		return true
+	}
+	// Connection terminated by the peer or the transport: io.EOF /
+	// io.ErrUnexpectedEOF (directly or as the cause of a *url.Error),
+	// "connection reset by peer", http2 GOAWAY, closed network connection.
+	if machinerynet.IsProbableEOF(err) {
+		return true
+	}
+	// ECONNREFUSED / ECONNRESET anywhere in the chain
+	// (*url.Error -> *net.OpError -> *os.SyscallError -> syscall.Errno).
+	if machinerynet.IsConnectionRefused(err) || machinerynet.IsConnectionReset(err) {
+		return true
+	}
+	// Hostname resolution failures (no such host, resolver unreachable); not
+	// covered by the helpers above unless the lookup timed out.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return true
+	}
+
+	return false
 }
 
 func isServerError(err error) bool {

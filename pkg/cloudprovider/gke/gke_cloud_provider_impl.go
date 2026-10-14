@@ -35,6 +35,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -400,7 +401,22 @@ func (p *gkeCloudProviderImpl) NodeGroupForNode(ctx context.Context, node *apiv1
 		return nil, err
 	}
 	mig, err := p.gkeManager.GetMigForInstance(ref)
-	return mig, err
+	if err != nil || mig == nil {
+		return nil, err
+	}
+	if gkeMig, ok := mig.(*GkeMig); ok && gkeMig != nil {
+		// If a MIG is blocked, it is omitted from migLister.GetMigs(). When all MIGs in a zone
+		// are blocked, bulk caching skips that zone and evicts its templates from the cache.
+		// If we returned the node group here, CA core (e.g. during readiness checks) would query
+		// node group options or target sizes, triggering synchronous single-MIG FetchMig and
+		// FetchMigTemplate GCE API calls for every node in the blocked zone (causing an API GET
+		// storm on a service that is already failing). Returning (nil, nil) causes CA core to
+		// treat existing nodes as unmanaged, avoiding these calls without failing the autoscaler loop.
+		if p.gkeManager.IsMigBlocked(gkeMig.GceRef()) {
+			return nil, nil
+		}
+	}
+	return mig, nil
 }
 
 func (p *gkeCloudProviderImpl) instanceRefForNode(node *apiv1.Node) (gce.GceRef, error) {
@@ -2291,7 +2307,7 @@ func (mig *GkeMig) ShallowCopyInZone(z string) *GkeMig {
 }
 
 // IsReservationCompatible checks if given reservation is compatible with the created MIG.
-func (mig *GkeMig) IsReservationCompatible(rsv *gce_api.Reservation) (bool, string) {
+func (mig *GkeMig) IsReservationCompatible(rsv *reservation.Reservation) (bool, string) {
 	migReservationAffinity := mig.Spec().ReservationAffinity
 	migReservationAffinityType := gkeclient.ReservationAffinityAny
 	migReservationAffinityName := ""

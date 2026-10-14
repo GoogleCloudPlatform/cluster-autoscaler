@@ -91,11 +91,9 @@ func NewCccCrd(ccc *v1.ComputeClass, projectId string, autopilotEnabled bool, pr
 // NewPccCrd builds a CustomComputeClass CRD from a PredefinedComputeClass object.
 func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
 	var strategy *v1.AllocationStrategy
-	var priorityScore *int
 	if optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
 		if autopilotEnabled && !pcc.IsSliceOfHardware() && !pcc.IsAcceleratorClass() {
 			strategy = ptr.To(v1.AllocationStrategyFleetEfficiency)
-			priorityScore = ptr.To(100)
 		}
 	}
 	var priorities []v1.Priority
@@ -103,7 +101,7 @@ func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopi
 		familyRef := family.Name()
 		priority := v1.Priority{
 			MachineFamily:      &familyRef,
-			PriorityScore:      priorityScore,
+			PriorityScore:      ptr.To(100),
 			AllocationStrategy: strategy,
 		}
 		priorities = append(priorities, priority)
@@ -447,7 +445,7 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 	result := []v1.Priority{}
 	for i := range ccc.Spec.Priorities {
 		priority := ccc.Spec.Priorities[i]
-		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults, ccc.Spec.AllocationStrategyDefaults)
+		applyDefaultsToPriority(&priority, ccc.Spec.PriorityDefaults, ccc.Spec.AllocationStrategyDefaults, ccc.optionsTracker)
 		result = append(result, priority)
 	}
 
@@ -455,7 +453,7 @@ func (ccc *cccCrd) priorities() []v1.Priority {
 }
 
 // applyDefaultsToPriority applies the default field to priority if it is not present in priority.
-func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults, allocationStrategyDefaults *v1.AllocationStrategyDefaults) {
+func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefaults, allocationStrategyDefaults *v1.AllocationStrategyDefaults, optionsTracker *optstracking.OptionsTracker) {
 	if defaults != nil {
 		// Check for Node System Config.
 		if priority.NodeSystemConfig == nil {
@@ -471,7 +469,7 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		}
 	}
 
-	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil {
+	if priority.AllocationStrategy == nil && allocationStrategyDefaults != nil && priority.Nodepools == nil {
 		if priority.FlexStart != nil && priority.FlexStart.Enabled {
 			priority.AllocationStrategy = allocationStrategyDefaults.FlexStart
 		} else if priority.Spot != nil && *priority.Spot {
@@ -479,6 +477,10 @@ func applyDefaultsToPriority(priority *v1.Priority, defaults *v1.PriorityDefault
 		} else {
 			priority.AllocationStrategy = allocationStrategyDefaults.OnDemand
 		}
+	}
+
+	if priority.AllocationStrategy == nil && priority.PodFamily != nil && priority.Nodepools == nil && rules.IsPodFamily(*priority.PodFamily) && optionsTracker != nil && experiments.IsPayPerPodFleetEfficiencyEnabled(optionsTracker.ExperimentsManager()) {
+		priority.AllocationStrategy = new(v1.AllocationStrategyFleetEfficiency)
 	}
 }
 
@@ -834,6 +836,14 @@ func (ccc *cccCrd) TpuDriverMode() crd.TpuDriverMode {
 		klog.Warningf("Unknown TPU driver mode for CCC (%s): %v, defaulting to device plugin", ccc.Name(), ccc.Spec.NodePoolConfig.Tpu.DriverMode)
 		return crd.TpuDriverModeDevicePlugin
 	}
+}
+
+// AllocationStrategyDefaults returns the global AllocationStrategyDefaults for the CCC.
+func (ccc *cccCrd) AllocationStrategyDefaults() *v1.AllocationStrategyDefaults {
+	if ccc == nil || ccc.ComputeClass == nil {
+		return nil
+	}
+	return ccc.Spec.AllocationStrategyDefaults.DeepCopy()
 }
 
 func (ccc *cccCrd) getGPURequest(machineType *string, gpu *v1.GPU) (gpuRequest *machinetypes.GpuRequest) {

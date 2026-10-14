@@ -20,8 +20,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	gce_api "google.golang.org/api/compute/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 )
 
 func TestBlocksPullerPullReservationBlocks(t *testing.T) {
@@ -30,14 +30,14 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 
 	// Define reservations
 	rsv1 := BuildReservationWithLink("zone-A", "fake-machine-type", projectID, "rsv1")
-	rsv1.Id = 1
+	rsv1.ID = 1
 	rsv2 := BuildReservationWithLink("zone-B", "fake-machine-type", projectID, "rsv2")
-	rsv2.Id = 2
+	rsv2.ID = 2
 	rsv3 := BuildReservationWithLink("zone-B", "fake-machine-type", sharedPrjID, "rsv3")
-	rsv3.Id = 3
+	rsv3.ID = 3
 	rsv4 := BuildReservationWithLink("zone-B", "fake-machine-type", sharedPrjID, "rsv4")
-	rsv4.Id = 4
-	rsv4.ResourceStatus = &gce_api.AllocationResourceStatus{ReservationBlockCount: 0}
+	rsv4.ID = 4
+	rsv4.ResourceStatus = &reservation.ResourceStatus{ReservationBlockCount: 0}
 
 	rsv1Ref := gceclient.GetReservationRefFromReservation(*rsv1)
 	rsv2Ref := gceclient.GetReservationRefFromReservation(*rsv2)
@@ -53,14 +53,14 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 	testCases := []struct {
 		name                  string
 		sharedPrjs            []string
-		reservations          []*gce_api.Reservation
+		reservations          []*reservation.Reservation
 		reservationBlocks     map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 		wantReservationBlocks map[gceclient.ReservationRef][]*gceclient.GceReservationBlock
 		errors                map[gceclient.ReservationRef]error
 	}{
 		{
 			name: "ReservationBlocksInProject",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -74,7 +74,7 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 		},
 		{
 			name: "NoReservationBlocksAvailable",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				{},
 			},
 			reservationBlocks:     map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{},
@@ -82,7 +82,7 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 		},
 		{
 			name: "ReservationBlocksInReservationError",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -98,7 +98,7 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 		{
 			name:       "ReservationBlocksFromCurrentAndSharedProjects",
 			sharedPrjs: []string{sharedPrjID},
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1, rsv2, rsv3,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -114,7 +114,7 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 		},
 		{
 			name: "FilterNotReadyReservationBlocks",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv1,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -129,7 +129,7 @@ func TestBlocksPullerPullReservationBlocks(t *testing.T) {
 		},
 		{
 			name: "CloudProviderIsNotCalledIfReservationBlocksCountIsZero",
-			reservations: []*gce_api.Reservation{
+			reservations: []*reservation.Reservation{
 				rsv4,
 			},
 			reservationBlocks: map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
@@ -166,9 +166,9 @@ func TestBlocksPullerRemoveStaleReservations(t *testing.T) {
 	projectID := "project"
 
 	rsv1 := BuildReservationWithLink("zone-A", "fake-machine-type", projectID, "rsv1")
-	rsv1.Id = 1
+	rsv1.ID = 1
 	rsv2 := BuildReservationWithLink("zone-B", "fake-machine-type", projectID, "rsv2")
-	rsv2.Id = 2
+	rsv2.ID = 2
 
 	rsv1Key := gceclient.GetReservationRefFromReservation(*rsv1)
 	rsv2Key := gceclient.GetReservationRefFromReservation(*rsv2)
@@ -177,10 +177,10 @@ func TestBlocksPullerRemoveStaleReservations(t *testing.T) {
 	rsvb2 := BuildSingleReservationBlock("rb2", 1, 0, "zone-B")
 
 	// Initial reservations (both rsv1 and rsv2)
-	initialReservations := []*gce_api.Reservation{rsv1, rsv2}
+	initialReservations := []*reservation.Reservation{rsv1, rsv2}
 
 	// Reservations after rsv2 is removed
-	updatedReservations := []*gce_api.Reservation{rsv1}
+	updatedReservations := []*reservation.Reservation{rsv1}
 
 	rbs := map[gceclient.ReservationRef][]*gceclient.GceReservationBlock{
 		rsv1Key: {rsvb1},

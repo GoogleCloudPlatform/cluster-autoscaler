@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	csisnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/csi/snapshot"
 	drasnapshot "sigs.k8s.io/cluster-autoscaler/pkg/simulator/dynamicresources/snapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -858,10 +859,16 @@ func TestNodeConfigDriftIsListerValid(t *testing.T) {
 }
 
 func initTestCase(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []crd.CRD, crdLabel string) (*ca_context.AutoscalingContext, defrag.Plugin) {
+	return initTestCaseWithLookupErrors(t, nodeGroups, crds, crdLabel, nil)
+}
+
+// initTestCaseWithLookupErrors is initTestCase with a cloud provider that fails
+// to resolve the node group of the named nodes.
+func initTestCaseWithLookupErrors(t *testing.T, nodeGroups []testutil.ExtendedNodeGroup, crds []crd.CRD, crdLabel string, lookupErrorNodes []string) (*ca_context.AutoscalingContext, defrag.Plugin) {
 	crdLister := npc_lister.NewMockCrdLister(crds)
 	crdLister.SetCrdLabel(crdLabel)
 
-	cp := testCloudProvider.NewTestCloudProviderBuilder().Build()
+	cp := testCloudProvider.NewTestCloudProviderBuilder().WithNodeProcessingError(lookupErrorNodes).Build()
 	var allNodes []*apiv1.Node
 	for _, ng := range nodeGroups {
 		mig := testutil.CreateMig(ng, testutil.MakeMockGkeManager())
@@ -1166,4 +1173,190 @@ func TestNodeConfigDriftNewCandidateAtomicGroupingAndLimits(t *testing.T) {
 			assert.Equal(t, tc.wantLatestUnfitNodesCount, p.LatestUnfitNodesCount())
 		})
 	}
+}
+
+func TestNodeConfigDriftNewCandidateIncompleteAtomicGroup(t *testing.T) {
+	n2Family := "n2"
+	atomicCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("ccc-atomic"),
+		crd.WithConfigDrift(true),
+		crd.WithRules([]rules.Rule{rules.NewMachineSpecRule(&n2Family, nil, nil, nil)}),
+		crd.WithAtomicGroupLabels([]string{"tier"}),
+	)
+	nonAtomicCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("ccc-non-atomic"),
+		crd.WithConfigDrift(true),
+		crd.WithRules([]rules.Rule{rules.NewMachineSpecRule(&n2Family, nil, nil, nil)}),
+	)
+	// tiers maps node names to the value of their "tier" label.
+	driftedGroup := func(name string, c crd.CRD, tiers map[string]string) testutil.ExtendedNodeGroup {
+		var nodes []*apiv1.Node
+		for nodeName, tier := range tiers {
+			node := test.BuildTestNode(nodeName, 1000, 10)
+			node.Labels = map[string]string{"tier": tier}
+			nodes = append(nodes, node)
+		}
+		return testutil.ExtendedNodeGroup{
+			Name:  name,
+			Nodes: nodes,
+			Spec: &gkeclient.NodePoolSpec{
+				Labels:      map[string]string{testCrdLabel: c.Name()},
+				MachineType: "e2-standard-4",
+			},
+		}
+	}
+
+	// upcoming marks one node of the group as a placeholder for capacity that
+	// is still being provisioned.
+	upcoming := func(group testutil.ExtendedNodeGroup, nodeName string) testutil.ExtendedNodeGroup {
+		for _, node := range group.Nodes {
+			if node.Name == nodeName {
+				node.Annotations = map[string]string{annotations.NodeUpcomingAnnotation: "true"}
+			}
+		}
+		return group
+	}
+
+	testCases := []struct {
+		name       string
+		crd        crd.CRD
+		nodeGroups []testutil.ExtendedNodeGroup
+		// lookupErrorNodes are nodes whose node group the cloud provider fails to resolve.
+		lookupErrorNodes []string
+		nodeNames        []string
+		wantCandidate    []string
+		wantIsAtomic     bool
+		wantBlockedNodes []string
+	}{
+		{
+			name: "complete atomic group becomes a candidate",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "a"}),
+			},
+			nodeNames:     []string{"n1", "n2", "n3"},
+			wantCandidate: []string{"n1", "n2", "n3"},
+			wantIsAtomic:  true,
+		},
+		{
+			name: "atomic group with a member filtered out is held back",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "a", "n4": "a"}),
+			},
+			nodeNames:        []string{"n1", "n2", "n3"},
+			wantBlockedNodes: []string{"n1", "n2", "n3"},
+		},
+		{
+			name: "only the incomplete atomic group is held back",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "b", "n4": "b"}),
+			},
+			nodeNames:        []string{"n1", "n2", "n3"},
+			wantCandidate:    []string{"n1", "n2"},
+			wantIsAtomic:     true,
+			wantBlockedNodes: []string{"n3"},
+		},
+		{
+			name: "nodes with the same labels in another node group are a separate group",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a"}),
+				driftedGroup("group2", atomicCrd, map[string]string{"n3": "a"}),
+			},
+			nodeNames:     []string{"n1", "n2"},
+			wantCandidate: []string{"n1", "n2"},
+			wantIsAtomic:  true,
+		},
+		{
+			// The processor never offers an upcoming node, so counting it as a
+			// member would hold the group back for as long as it provisions,
+			// with nothing in the status to explain why.
+			name: "an upcoming node is not a missing member",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				upcoming(driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "a"}), "n3"),
+			},
+			nodeNames:     []string{"n1", "n2"},
+			wantCandidate: []string{"n1", "n2"},
+			wantIsAtomic:  true,
+		},
+		{
+			// n3's node group cannot be resolved, which keeps it out of the
+			// offered nodes as well. Counting only the resolvable members would
+			// make the group of n1 and n2 look complete and migrate it without
+			// n3, so no atomic group may be offered at all. The members that
+			// were offered are reported as held back by their group.
+			name: "a member whose node group cannot be determined holds every atomic group back",
+			crd:  atomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", atomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "a"}),
+			},
+			lookupErrorNodes: []string{"n3"},
+			nodeNames:        []string{"n1", "n2", "n3"},
+			wantBlockedNodes: []string{"n1", "n2"},
+		},
+		{
+			name: "non-atomic group with nodes filtered out still becomes a candidate",
+			crd:  nonAtomicCrd,
+			nodeGroups: []testutil.ExtendedNodeGroup{
+				driftedGroup("group1", nonAtomicCrd, map[string]string{"n1": "a", "n2": "a", "n3": "a"}),
+			},
+			nodeNames:     []string{"n1", "n2"},
+			wantCandidate: []string{"n1", "n2"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, p := initTestCaseWithLookupErrors(t, tc.nodeGroups, []crd.CRD{tc.crd}, testCrdLabel, tc.lookupErrorNodes)
+			candidate := p.NewCandidate(ctx, tc.nodeNames)
+
+			if tc.wantCandidate == nil {
+				assert.Nil(t, candidate)
+			} else if assert.NotNil(t, candidate) {
+				assert.ElementsMatch(t, tc.wantCandidate, candidate.Nodes)
+				assert.Equal(t, tc.wantIsAtomic, candidate.IsAtomic)
+			}
+			reporter, ok := p.(defrag.AtomicGroupReporter)
+			assert.True(t, ok)
+			assert.ElementsMatch(t, tc.wantBlockedNodes, reporter.LatestAtomicGroupBlockedNodes())
+		})
+	}
+}
+
+func TestNodeConfigDriftAtomicGroupBlockedNodesAreReset(t *testing.T) {
+	n2Family := "n2"
+	atomicCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("ccc-atomic"),
+		crd.WithConfigDrift(true),
+		crd.WithRules([]rules.Rule{rules.NewMachineSpecRule(&n2Family, nil, nil, nil)}),
+		crd.WithAtomicGroupLabels([]string{"tier"}),
+	)
+	var nodes []*apiv1.Node
+	for _, name := range []string{"n1", "n2"} {
+		node := test.BuildTestNode(name, 1000, 10)
+		node.Labels = map[string]string{"tier": "a"}
+		nodes = append(nodes, node)
+	}
+	nodeGroups := []testutil.ExtendedNodeGroup{{
+		Name:  "group1",
+		Nodes: nodes,
+		Spec: &gkeclient.NodePoolSpec{
+			Labels:      map[string]string{testCrdLabel: atomicCrd.Name()},
+			MachineType: "e2-standard-4",
+		},
+	}}
+	ctx, p := initTestCase(t, nodeGroups, []crd.CRD{atomicCrd}, testCrdLabel)
+	reporter := p.(defrag.AtomicGroupReporter)
+
+	assert.Nil(t, p.NewCandidate(ctx, []string{"n1"}))
+	assert.Equal(t, []string{"n1"}, reporter.LatestAtomicGroupBlockedNodes())
+
+	assert.NotNil(t, p.NewCandidate(ctx, []string{"n1", "n2"}))
+	assert.Empty(t, reporter.LatestAtomicGroupBlockedNodes())
 }

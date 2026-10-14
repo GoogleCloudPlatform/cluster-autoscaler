@@ -32,6 +32,7 @@ import (
 	gce_api "google.golang.org/api/compute/v1"
 	gce_api_compute "google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -5517,6 +5518,109 @@ func TestInstanceByRef(t *testing.T) {
 	}
 }
 
+func TestInstanceByRefBlockedMig(t *testing.T) {
+	migRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: gkeMigA}
+	instanceRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "gce-mig-a-inst1"}
+	instance := gce.GceInstance{Instance: cloudprovider.Instance{Id: instanceRef.ToProviderId()}}
+
+	tests := map[string]struct {
+		migBlocked     bool
+		wantFetchCalls int
+		wantInstance   *gce.GceInstance
+	}{
+		"BlockedMigSkipsGceCall": {
+			migBlocked:     true,
+			wantFetchCalls: 0,
+			wantInstance:   nil,
+		},
+		"UnblockedMigFetchesInstances": {
+			migBlocked:     false,
+			wantFetchCalls: 1,
+			wantInstance:   &gce.GceInstance{Instance: cloudprovider.Instance{Id: instanceRef.ToProviderId()}},
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gceCache := gce.NewGceCache()
+			cache := NewGkeCache(gceCache, nodetemplate.NewCache())
+			cache.RegisterMig(&GkeMig{gceRef: migRef})
+			// Populate the instance -> MIG mapping, then drop the MIG instances as
+			// refresh() does every loop, so that listing instances requires a GCE call.
+			assert.NoError(t, gceCache.SetMigInstances(migRef, []gce.GceInstance{instance}, time.Now()))
+			gceCache.InvalidateMigInstances(context.TODO(), migRef)
+			if tc.migBlocked {
+				cache.MarkIrretrievableMig(migRef, 1, IrretrievableMigReasonServerError)
+			}
+
+			migLister := NewGkeMigLister(cache, irretrievableMigRefreshTime, irretrievableMigRefreshTime, 2)
+			gceClient := &mockAutoscalingGceClient{}
+			if tc.wantFetchCalls > 0 {
+				gceClient.On("FetchMigInstances", migRef).Return([]gce.GceInstance{instance}, nil).Times(tc.wantFetchCalls)
+			}
+			// set migInstancesMinRefreshWaitTime to 0 to force fetching instances that are not in the cache
+			migInfoProvider := gce.NewCachingMigInfoProvider(gceCache, migLister, gceClient, projectId, 1, 0*time.Second, false, false)
+			m := &gkeManagerImpl{
+				cache:           cache,
+				migLister:       migLister,
+				migInfoProvider: migInfoProvider,
+			}
+
+			got := m.InstanceByRef(instanceRef)
+
+			assert.Equal(t, tc.wantInstance, got)
+			gceClient.AssertExpectations(t)
+			gceClient.AssertNumberOfCalls(t, "FetchMigInstances", tc.wantFetchCalls)
+		})
+	}
+}
+
+func TestDropInstanceTemplatesForUnregisteredMigs(t *testing.T) {
+	blockedMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "blocked-mig"}
+	unblockedMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "unblocked-mig"}
+	unregisteredMigRef := gce.GceRef{Project: projectId, Zone: zoneA, Name: "unregistered-mig"}
+
+	tests := map[string]struct {
+		migRef           gce.GceRef
+		wantTemplateKept bool
+	}{
+		"BlockedMigTemplateKept": {
+			migRef:           blockedMigRef,
+			wantTemplateKept: true,
+		},
+		"UnblockedMigTemplateKept": {
+			migRef:           unblockedMigRef,
+			wantTemplateKept: true,
+		},
+		"UnregisteredMigTemplateDropped": {
+			migRef:           unregisteredMigRef,
+			wantTemplateKept: false,
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			gceCache := gce.NewGceCache()
+			cache := NewGkeCache(gceCache, nodetemplate.NewCache())
+			cache.RegisterMig(&GkeMig{gceRef: blockedMigRef})
+			cache.RegisterMig(&GkeMig{gceRef: unblockedMigRef})
+			cache.MarkIrretrievableMig(blockedMigRef, 1, IrretrievableMigReasonServerError)
+			for _, ref := range []gce.GceRef{blockedMigRef, unblockedMigRef, unregisteredMigRef} {
+				gceCache.SetMigInstanceTemplate(ref, &gce_api_compute.InstanceTemplate{Name: ref.Name})
+			}
+			m := &gkeManagerImpl{
+				cache:     cache,
+				migLister: NewGkeMigLister(cache, irretrievableMigRefreshTime, irretrievableMigRefreshTime, 1),
+			}
+
+			m.dropInstanceTemplatesForUnregisteredMigs()
+
+			_, found := gceCache.GetMigInstanceTemplate(context.TODO(), tc.migRef)
+			assert.Equal(t, tc.wantTemplateKept, found)
+		})
+	}
+}
+
 func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 	testCases := []struct {
 		name                                    string
@@ -6079,15 +6183,15 @@ func TestGetDeploymentType(t *testing.T) {
 	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 		WithFetchZones(func(region string) ([]string, error) { return []string{zoneB}, nil })
 
-	reservations := []*gce_api.Reservation{
+	reservations := []*reservation.Reservation{
 		{
-			Id:             1234,
+			ID:             1234,
 			Name:           "dense-res",
 			DeploymentType: "DENSE",
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/dense-res",
 		},
 		{
-			Id:             12345,
+			ID:             12345,
 			Name:           "unspecified-res",
 			DeploymentType: "UNSPECIFIED",
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/unspecified-res",

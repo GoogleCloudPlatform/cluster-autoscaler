@@ -56,6 +56,12 @@ func TestTrackedFieldSetValue(t *testing.T) {
 		gracefulDegradationStringExperimentFlags = map[string]string{
 			minCAVersion: experiments.GracefulDegradationMinCAVersionFlag,
 		}
+		filterMigsByClusterNameBoolExperimentFlags = map[string]string{
+			enabled: experiments.FilterMigsByClusterNameEnabledFlag,
+		}
+		filterMigsByClusterNameStringExperimentFlags = map[string]string{
+			minCAVersion: experiments.FilterMigsByClusterNameMinCAVersionFlag,
+		}
 	)
 
 	for _, trackedFieldTc := range []struct {
@@ -112,6 +118,18 @@ func TestTrackedFieldSetValue(t *testing.T) {
 			},
 			getFlag: func(opts internalopts.AutoscalingOptions) bool {
 				return opts.GracefulDegradationEnabled
+			},
+		},
+		{
+			name:                  "FilterMigsByClusterNameEnabled",
+			field:                 filterMigsByClusterNameEnabledField,
+			boolExperimentFlags:   filterMigsByClusterNameBoolExperimentFlags,
+			stringExperimentFlags: filterMigsByClusterNameStringExperimentFlags,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.FilterMigsByClusterNameEnabled = value
+			},
+			getFlag: func(opts internalopts.AutoscalingOptions) bool {
+				return opts.FilterMigsByClusterNameEnabled
 			},
 		},
 	} {
@@ -307,6 +325,13 @@ func TestTrackedFieldValueEqual(t *testing.T) {
 			field: gracefulDegradationEnabledField,
 			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
 				opts.GracefulDegradationEnabled = value
+			},
+		},
+		{
+			name:  "FilterMigsByClusterNameEnabled",
+			field: filterMigsByClusterNameEnabledField,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.FilterMigsByClusterNameEnabled = value
 			},
 		},
 	} {

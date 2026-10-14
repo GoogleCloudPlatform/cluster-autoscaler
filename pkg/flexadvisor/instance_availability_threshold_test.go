@@ -16,17 +16,18 @@ package flexadvisor
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"google.golang.org/api/compute/v1"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gceprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -53,35 +54,41 @@ func newTestMigWithAffinity(zone, machineType string, labels map[string]string, 
 	return mig
 }
 
+func newTestUncreatedMig(zone, machineType string, labels map[string]string) *gke.GkeMig {
+	fakeGke := gke.NewFakeGkeManagerBuilder().WithMigTemplateNode(buildNodeWithLabels(labels)).Build()
+	return gke.NewTestGkeMigBuilder().
+		SetGceRef(gceprovider.GceRef{Zone: zone, Name: "mig-" + zone}).
+		SetGkeManager(fakeGke).
+		SetExist(false).
+		SetAutoprovisioned(true).
+		SetSpec(&gkeclient.NodePoolSpec{
+			MachineType: machineType,
+			Labels:      labels,
+		}).Build()
+}
+
 func TestNodeLimit(t *testing.T) {
+	// Planned locations of uncreated node groups come from the test cloud provider's autoprovisioning locations
+	// (us-central1-a, us-central1-b, us-central1-c) unless the spec specifies locations.
+	napMigA := newTestUncreatedMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"})
+	napMigSpecifiedLocations := newTestUncreatedMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"})
+	napMigSpecifiedLocations.Spec().Locations = []string{"us-central1-b", "us-central1-c"}
+
 	mig1 := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
-	rsv1 := reservations.NewAny("", "us-central1-a", reservations.WithId(1), reservations.WithCounts(0, 100), reservations.WithMachine("n2-standard-4"))
-	rsv2 := reservations.NewAny("", "us-central1-b", reservations.WithId(2), reservations.WithCounts(100, 300), reservations.WithMachine("n2-standard-4"))
+	rsv1 := reservations.NewAny("", "us-central1-a", reservations.WithId(1), reservations.WithAvailableCount(100), reservations.WithMachine("n2-standard-4"))
+	rsv2 := reservations.NewAny("", "us-central1-b", reservations.WithId(2), reservations.WithAvailableCount(200), reservations.WithMachine("n2-standard-4"))
 	rsv3 := reservations.New("a4x-rsv", "us-central1-c",
 		reservations.WithId(3),
 		reservations.WithMachine("a4x-highgpu-4g"),
-		reservations.WithCounts(0, 18),
-		reservations.WithGuestAccelerators([]*compute.AcceleratorConfig{
+		reservations.WithAvailableCount(18),
+		reservations.WithGuestAccelerators([]reservation.AcceleratorResource{
 			{
 				AcceleratorType:  "nvidia-gb200",
 				AcceleratorCount: 4,
 			},
 		}),
 	)
-
-	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-		WithFetchZones(func(region string) ([]string, error) {
-			return []string{"us-central1-a", "us-central1-b", "us-central1-c"}, nil
-		}).
-		WithFetchReservationsInProject(func(project string) ([]*compute.Reservation, error) {
-			return []*compute.Reservation{rsv1, rsv2, rsv3}, nil
-		})
-	puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "project-1", false, "us-central1")
-	assert.NoError(t, err)
-
-	stop := make(chan struct{})
-	puller.Run(context.Background())
-	defer close(stop)
+	puller := reservations.NewTestingReservationsPuller(reservations.DefaultProject, nil, []*reservation.Reservation{rsv1, rsv2, rsv3})
 
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -95,7 +102,11 @@ func TestNodeLimit(t *testing.T) {
 		nodeGroup          cloudprovider.NodeGroup
 		estimationContext  estimator.EstimationContext
 		experimentsManager experiments.Manager
-		want               int
+		// plannedLocationsErr, if set, is returned by the cloud provider's PlannedNodePoolLocations.
+		plannedLocationsErr error
+		// balanceSimilarNodeGroupsDisabled, if set, constructs the threshold with BalanceSimilarNodeGroups disabled.
+		balanceSimilarNodeGroupsDisabled bool
+		want                             int
 	}{
 		{
 			name: "single node group without similar node groups",
@@ -132,9 +143,21 @@ func TestNodeLimit(t *testing.T) {
 			want: 600,
 		},
 		{
-			name: "no more capacity",
+			name: "negative capacity in some zones does not deduct positive capacity in another zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 300}).Build().NewSnapshot()).Times(3)
+			},
+			nodeGroup: mig1,
+			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
+				newTestMig("us-central1-b", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+				newTestMig("us-central1-c", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
+			}, 0),
+			want: 300,
+		},
+		{
+			name: "no more capacity across all zones",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot()).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -291,30 +314,134 @@ func TestNodeLimit(t *testing.T) {
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
 			want:              0,
 		},
+		{
+			name: "uncreated NAP node group - experiment enabled sums FA capacity across all planned zones",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
+						Build().
+						NewSnapshot(),
+					).Times(3)
+			},
+			nodeGroup:          napMigA,
+			estimationContext:  estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			want:               330, // ZoneA (0 FA + 100 rsv1) + ZoneB (10 FA + 200 rsv2) + ZoneC (20 FA) = 330
+		},
+		{
+			name: "uncreated NAP node group - experiment disabled evaluates only representative zone",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
+						Build().
+						NewSnapshot(),
+					).Once()
+			},
+			nodeGroup:          napMigA,
+			estimationContext:  estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager: experiments.NewMockManager(),
+			want:               100, // Evaluates only ZoneA: 0 FA + 100 rsv1 = 100
+		},
+		{
+			name: "uncreated NAP node group - experiment enabled sums unused reservations across all planned zones",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 0, "us-central1-c": 0}).
+						Build().
+						NewSnapshot(),
+					).Times(3)
+			},
+			nodeGroup:          napMigA,
+			estimationContext:  estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			want:               300, // ZoneA (100 rsv1) + ZoneB (200 rsv2) = 300
+		},
+		{
+			name: "uncreated NAP node group - only specified locations are evaluated, even if the representative zone is not among them",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
+						Build().
+						NewSnapshot(),
+					).Times(2)
+			},
+			nodeGroup:          napMigSpecifiedLocations,
+			estimationContext:  estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			want:               230, // ZoneB (10 FA + 200 rsv2) + ZoneC (20 FA) = 230; ZoneA is not planned
+		},
+		{
+			name: "uncreated NAP node group - experiment enabled but BalanceSimilarNodeGroups disabled evaluates only representative zone",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
+						Build().
+						NewSnapshot(),
+					).Once()
+			},
+			nodeGroup:                        napMigA,
+			estimationContext:                estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager:               experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			balanceSimilarNodeGroupsDisabled: true,
+			want:                             100, // Evaluates only ZoneA: 0 FA + 100 rsv1 = 100
+		},
+		{
+			name: "uncreated NAP node group - planned locations error falls back to representative zone",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
+						Build().
+						NewSnapshot(),
+					).Once()
+			},
+			nodeGroup:           napMigA,
+			estimationContext:   estimator.NewEstimationContext(0, nil, 0),
+			experimentsManager:  experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			plannedLocationsErr: errors.New("cannot determine locations"),
+			want:                100, // Evaluates only ZoneA: 0 FA + 100 rsv1 = 100
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			manager := tc.experimentsManager
+			if manager == nil {
+				manager = experiments.NewMockManager()
+			}
 			mockProvider := new(instanceavailability.MockProvider)
 			if tc.initialSetup != nil {
 				tc.initialSetup(mockProvider)
 			}
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
-			cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+			var cloudProvider InstanceAvailabilityCloudProvider = gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				WithAutoprovisioningLocations("us-central1-a", "us-central1-b", "us-central1-c").
 				Build()
-
-			manager := tc.experimentsManager
-			if manager == nil {
-				manager = experiments.NewMockManager()
+			if tc.plannedLocationsErr != nil {
+				cloudProvider = &failingPlannedLocationsCloudProvider{InstanceAvailabilityCloudProvider: cloudProvider, err: tc.plannedLocationsErr}
 			}
-			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager, nil)
+			threshold := NewInstanceAvailabilityThreshold(mockProvider, puller, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, manager, nil, !tc.balanceSimilarNodeGroupsDisabled)
 			got := threshold.NodeLimit(context.TODO(), tc.nodeGroup, tc.estimationContext)
 
 			assert.Equal(t, tc.want, got.Limit)
 			mockProvider.AssertExpectations(t)
 		})
 	}
+}
+
+type failingPlannedLocationsCloudProvider struct {
+	InstanceAvailabilityCloudProvider
+	err error
+}
+
+func (p *failingPlannedLocationsCloudProvider) PlannedNodePoolLocations(_ *gke.GkeMig) ([]string, error) {
+	return nil, p.err
 }
 
 func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
@@ -331,7 +458,7 @@ func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	tracker := NewScaleUpLimiterTracker(true, nil)
-	threshold := NewInstanceAvailabilityThreshold(mockProvider, nil, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, experiments.NewMockManager(), tracker)
+	threshold := NewInstanceAvailabilityThreshold(mockProvider, nil, localssdsize.NewSimpleLocalSSDProvider(), mockLister, cloudProvider, experiments.NewMockManager(), tracker, true)
 	mig := newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
 
 	result := threshold.NodeLimit(context.TODO(), mig, estimator.NewEstimationContext(0, nil, 0))
@@ -339,4 +466,68 @@ func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
 	assert.Equal(t, -1, result.Limit)
 	assert.True(t, tracker.WasNodeGroupRemovedByFlexAdvisor(mig.Id()))
 	assert.Equal(t, []string{"scope-1"}, tracker.GetFlexibilityScopesForNodeGroupIfRemoved(mig.Id()))
+}
+
+func TestNodeGroupsToEvaluate(t *testing.T) {
+	existingMigA := newTestMig("us-central1-a", "e2-standard-4", nil, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
+	existingMigB := newTestMig("us-central1-b", "e2-standard-4", nil, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration)
+	napMigA := newTestUncreatedMig("us-central1-a", "n2-standard-4", nil)
+	napMigB := napMigA.ShallowCopyInZone("us-central1-b")
+	napMigC := napMigA.ShallowCopyInZone("us-central1-c")
+
+	cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		WithAutoprovisioningLocations("us-central1-a", "us-central1-b", "us-central1-c").
+		Build()
+
+	testCases := []struct {
+		name                             string
+		nodeGroup                        cloudprovider.NodeGroup
+		similarNodeGroups                []cloudprovider.NodeGroup
+		experimentsManager               experiments.Manager
+		balanceSimilarNodeGroupsDisabled bool
+		want                             []cloudprovider.NodeGroup
+	}{
+		{
+			name:               "experiment disabled - returns deduplicated similarNodeGroups followed by nodeGroup",
+			nodeGroup:          existingMigA,
+			similarNodeGroups:  []cloudprovider.NodeGroup{existingMigB, existingMigA},
+			experimentsManager: experiments.NewMockManager(),
+			want:               []cloudprovider.NodeGroup{existingMigB, existingMigA},
+		},
+		{
+			name:               "experiment disabled - uncreated NAP node group is not expanded across planned zones",
+			nodeGroup:          napMigA,
+			experimentsManager: experiments.NewMockManager(),
+			want:               []cloudprovider.NodeGroup{napMigA},
+		},
+		{
+			name:               "experiment enabled - existing node group with similar node groups",
+			nodeGroup:          existingMigA,
+			similarNodeGroups:  []cloudprovider.NodeGroup{existingMigB, existingMigA},
+			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			want:               []cloudprovider.NodeGroup{existingMigA, existingMigB},
+		},
+		{
+			name:               "experiment enabled - uncreated NAP node group expands across planned zones",
+			nodeGroup:          napMigA,
+			experimentsManager: experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			want:               []cloudprovider.NodeGroup{napMigA, napMigB, napMigC},
+		},
+		{
+			name:                             "experiment enabled but BalanceSimilarNodeGroups disabled - uncreated NAP node group is not expanded",
+			nodeGroup:                        napMigA,
+			experimentsManager:               experiments.NewMockManager(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag),
+			balanceSimilarNodeGroupsDisabled: true,
+			want:                             []cloudprovider.NodeGroup{napMigA},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			threshold := NewInstanceAvailabilityThreshold(nil, nil, nil, nil, cloudProvider, tc.experimentsManager, nil, !tc.balanceSimilarNodeGroupsDisabled)
+			got := threshold.nodeGroupsToEvaluate(context.Background(), tc.nodeGroup, tc.similarNodeGroups)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

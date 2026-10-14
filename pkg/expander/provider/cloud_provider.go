@@ -16,18 +16,16 @@ package provider
 
 import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 // GkeExpanderCloudProvider is a CloudProvider sub-interface used in expander package.
 type GkeExpanderCloudProvider interface {
 	cloudprovider.CloudProvider
+	gke.PlannedLocationsProvider
+	ccc.DataProvider
 
 	GetClusterInfo() (projectId, location, clusterName string)
 	IsAutopilotEnabled() bool
-	MachineConfigProvider() *machinetypes.MachineConfigProvider
-	// PlannedNodePoolLocations returns the locations that a node pool created from the given (not yet existing)
-	// MIG would span, using the same computation as node pool creation.
-	PlannedNodePoolLocations(mig *gke.GkeMig) ([]string, error)
 }
