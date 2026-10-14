@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"time"
 
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -31,9 +33,14 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	oss_metrics "sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	auto_errors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
+)
+
+const (
+	firstFetchTimeout = 15 * time.Second
 )
 
 // ScaleUpBalancer tries to keep the new sizes of similar NodeGroups balanced, when scaling up respecting the guidance from Flex Advisor.
@@ -119,7 +126,8 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(ctx context.Context, autos
 
 	balancingInfos, maxNewNodesFromFA, err := BalancingInfoFromFlexAdvisor(b.provider, b.cccLister, scaleUpInfos, b.experimentsManager, newNodes)
 	if err != nil {
-		klog.V(4).Infof("FlexAdvisor: Falling back to balancing logic, due to an error extracting balancing info from Flex Advisor err: %v", err)
+		// TODO(b/578827298): this enters for any non-CCC scale up, consider distinguishing between actual error and not supported node groups to log warning/error
+		klog.Warningf("FlexAdvisor: Falling back to balancing logic, due to an error extracting balancing info from Flex Advisor err: %v", err)
 		return b.NodeGroupSetProcessor.BalanceScaleUpBetweenGroups(ctx, autoscalingCtx, groups, newNodes)
 	}
 
@@ -220,8 +228,23 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 		}
 
 		if !found {
-			snapshot, err = provider.AwaitInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+			snapshot, err = awaitSnapshot(provider, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, experimentsManager)
 			if err != nil {
+				var unavailableErr InstanceConfigUnavailableError
+				if errors.As(err, &unavailableErr) {
+					switch unavailableErr.reason {
+					case InstanceConfigUnavailableReasonFetchError:
+						provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissFetchFailed, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+					case InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse:
+						provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissNoInstanceConfigKey, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+					case InstanceConfigUnavailableReasonStale:
+						provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissStale, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+					case InstanceConfigUnavailableReasonTimeout:
+						provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissFirstFetchTimeout, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+					default:
+						provider.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissUnknownReason, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+					}
+				}
 				return []*balancingInfo{}, 0, err
 			}
 			snapshots[instanceRef.FlexibilityScopeKey][instanceRef.InstanceConfigKey] = snapshot
@@ -257,6 +280,40 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 	}
 	klog.V(4).Infof("FlexAdvisor: Max scaleup size based on FlexAdvisor: %v (looking for: %v), guidanceIds used: %v, balancingInfos: %v", possibleMaxScaleUpSize, newNodes, slices.Collect(maps.Keys(guidanceIdsUsed)), balancingInfos)
 	return balancingInfos, possibleMaxScaleUpSize, nil
+}
+
+func awaitSnapshot(provider instanceavailability.Provider, flexibilityScopeKey, instanceConfigKey string, experimentsManager experiments.Manager) (*instanceavailability.Snapshot, error) {
+	waitStart := time.Now()
+	defer func() {
+		// Historically this metric was emitted only on balancer await. Other places where we fetch the data should emit separate one
+		oss_metrics.UpdateDuration(context.TODO(), "FlexAdvisor:AwaitInstanceAvailability", time.Since(waitStart))
+	}()
+	return provider.AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey, getBalancerAwaitTimeout(experimentsManager))
+}
+
+func getBalancerAwaitTimeout(experimentsManager experiments.Manager) time.Duration {
+	if experimentsManager == nil {
+		return firstFetchTimeout
+	}
+	durationString := experimentsManager.EvaluateStringFlagOrFailsafe(
+		experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag,
+		// We could fmt.Sprintf here firstFetchTimeout value, we explicitly handle default value lower in case there was bug in further processing of experiment value
+		"",
+	)
+	if durationString == "" {
+		return firstFetchTimeout
+	}
+	parsedSeconds, err := strconv.ParseInt(durationString, 10, 64)
+	if err != nil || parsedSeconds <= 0 {
+		klog.Errorf("FlexAdvisor: invalid value for flag %s: %q, defaulting to %v. error: %v",
+			experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag,
+			durationString,
+			firstFetchTimeout,
+			err,
+		)
+		return firstFetchTimeout
+	}
+	return time.Duration(parsedSeconds) * time.Second
 }
 
 func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) []*balancingInfo {

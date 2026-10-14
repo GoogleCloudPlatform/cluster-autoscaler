@@ -276,7 +276,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 
 				fa.RegisterFlexibilityScope("ccc-1")
 				// we want the cache to be populated, it's ok to call this for empty instanceConfigKey.
-				fa.AwaitInstanceAvailability("ccc-1", "")
+				fa.AwaitAvailabilitySnapshotWithTimeout("ccc-1", "", firstFetchTimeout)
 
 				mockStatus := &mockCrdStatus{}
 

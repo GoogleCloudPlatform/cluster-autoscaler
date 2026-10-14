@@ -143,7 +143,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 					"us-central1-c": 91,
 				}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 1.0, "us-central1-c": 1.0})
 
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Once().Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-1", mock.Anything, map[string]int{
 					"us-central1-a": 91,
 					"us-central1-b": 91,
@@ -177,7 +177,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 80,
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot1.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot1, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Once().Return(snapshot1, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-1", mock.Anything, map[string]int{"us-central1-a": 60, "us-central1-b": 10, "us-central1-c": 10}).Once().Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -207,7 +207,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 80,
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot2.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot2, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Once().Return(snapshot2, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-2", mock.Anything, map[string]int{"us-central1-a": 65, "us-central1-b": 15}).Once().Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -231,7 +231,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 5,
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{tpuMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       tpuMig,
@@ -287,7 +287,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x1").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x1", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -307,7 +307,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: FLEX_START, maxRunDuration: 3600, acceleratorTopology: 2x2x5", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -327,7 +327,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x5", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -373,7 +373,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: FLEX_START, maxRunDuration: 3600", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -391,8 +391,8 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			newNodes: 80,
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot2.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Maybe().Panic("AwaitInstanceAvailability: should not be called")
-				provider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
+				provider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 			},
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
@@ -426,7 +426,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       specificReservationMig,
@@ -456,7 +456,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 			withFallbackBalancers: func(provider *instanceavailability.MockProvider, experimentsManager experiments.Manager, lister lister.Lister, registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
 				mockBalancer := new(testutil.MockBalancer)
-				provider.On("AwaitInstanceAvailability", "ccc-1", mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, []cloudprovider.NodeGroup{mig1, specificReservationMig}, 5).Return([]nodegroupset.ScaleUpInfo{
 					{
 						Group:       mig1,
@@ -496,7 +496,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -515,7 +515,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-flex", "", map[string]int{"us-central1-a": 10}, map[string]float64{"us-central1-a": 1.0})
 				snapshot.SetProvider(provider)
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot, nil)
 				provider.On("MarkUsed", "ccc-1", "", "guidance-flex", mock.Anything, map[string]int{"us-central1-a": 5}).Return(nil)
 			},
 			wantScaleUpInfos: []nodegroupset.ScaleUpInfo{
@@ -679,11 +679,12 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 		wantBalancingInfos         []*balancingInfo
 		wantPossibleMaxScaleUpSize int
 		wantErr                    error
+		wantCacheQueryResults      []metrics.FACacheQueryResult
 	}{
 		{
 			name: "balancing info for one mig",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot1, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot1, nil)
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -701,7 +702,7 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 		{
 			name: "balancing info multiple migs from same flexibility scope and instance configuration",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot1, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot1, nil)
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -726,7 +727,7 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 		{
 			name: "doesnt filter out options without capacity",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot1, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot1, nil)
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -758,7 +759,7 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 		{
 			name: "DWS - FlexAdvisorDWS disabled - returns error",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(nil, fmt.Errorf("not found"))
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(nil, fmt.Errorf("not found"))
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -770,9 +771,89 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 			wantErr:                    fmt.Errorf("not found"),
 		},
 		{
+			name: "InstanceConfigUnavailableError with FetchError reason - emits FACacheMissFetchFailed and returns error",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(nil, InstanceConfigUnavailableError{
+					reason:              InstanceConfigUnavailableReasonFetchError,
+					flexibilityScopeKey: "ccc-1",
+					lastFetchError:      fmt.Errorf("api call failed"),
+				})
+			},
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				scaleUpInfo1,
+			},
+			wantBalancingInfos:         []*balancingInfo{},
+			wantPossibleMaxScaleUpSize: 0,
+			wantErr: InstanceConfigUnavailableError{
+				reason:              InstanceConfigUnavailableReasonFetchError,
+				flexibilityScopeKey: "ccc-1",
+				lastFetchError:      fmt.Errorf("api call failed"),
+			},
+			wantCacheQueryResults: []metrics.FACacheQueryResult{metrics.FACacheMissFetchFailed},
+		},
+		{
+			name: "InstanceConfigUnavailableError with InstanceConfigNotPresentInGceResponse reason - emits FACacheMissNoInstanceConfigKey and returns error",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(nil, InstanceConfigUnavailableError{
+					reason:              InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse,
+					flexibilityScopeKey: "ccc-1",
+					instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
+				})
+			},
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				scaleUpInfo1,
+			},
+			wantBalancingInfos:         []*balancingInfo{},
+			wantPossibleMaxScaleUpSize: 0,
+			wantErr: InstanceConfigUnavailableError{
+				reason:              InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse,
+				flexibilityScopeKey: "ccc-1",
+				instanceConfigKey:   "machineType: e2-standard-4, provisioningMode: STANDARD",
+			},
+			wantCacheQueryResults: []metrics.FACacheQueryResult{metrics.FACacheMissNoInstanceConfigKey},
+		},
+		{
+			name: "InstanceConfigUnavailableError with Stale reason - emits FACacheMissStale and returns error",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(nil, InstanceConfigUnavailableError{
+					reason:              InstanceConfigUnavailableReasonStale,
+					flexibilityScopeKey: "ccc-1",
+				})
+			},
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				scaleUpInfo1,
+			},
+			wantBalancingInfos:         []*balancingInfo{},
+			wantPossibleMaxScaleUpSize: 0,
+			wantErr: InstanceConfigUnavailableError{
+				reason:              InstanceConfigUnavailableReasonStale,
+				flexibilityScopeKey: "ccc-1",
+			},
+			wantCacheQueryResults: []metrics.FACacheQueryResult{metrics.FACacheMissStale},
+		},
+		{
+			name: "InstanceConfigUnavailableError with Timeout reason - emits FACacheMissFirstFetchTimeout and returns error",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(nil, InstanceConfigUnavailableError{
+					reason:              InstanceConfigUnavailableReasonTimeout,
+					flexibilityScopeKey: "ccc-1",
+				})
+			},
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				scaleUpInfo1,
+			},
+			wantBalancingInfos:         []*balancingInfo{},
+			wantPossibleMaxScaleUpSize: 0,
+			wantErr: InstanceConfigUnavailableError{
+				reason:              InstanceConfigUnavailableReasonTimeout,
+				flexibilityScopeKey: "ccc-1",
+			},
+			wantCacheQueryResults: []metrics.FACacheQueryResult{metrics.FACacheMissFirstFetchTimeout},
+		},
+		{
 			name: "should cap capacityLimit either by (MaxSize - CurrentSize) or snapshot data",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot2, nil)
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot2, nil)
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -797,8 +878,8 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 		{
 			name: "multiple migs from same flexibility scope with different instance configurations - bumps scope ttl once",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot1, nil).Once()
-				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-8, provisioningMode: STANDARD").Return(snapshot2, nil).Once()
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Return(snapshot1, nil).Once()
+				provider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-8, provisioningMode: STANDARD", mock.Anything).Return(snapshot2, nil).Once()
 			},
 			scaleUpInfos: []nodegroupset.ScaleUpInfo{
 				scaleUpInfo1,
@@ -825,7 +906,10 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockProvider := &instanceavailability.MockProvider{}
-			mockProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Return()
+			var gotCacheQueryResults []metrics.FACacheQueryResult
+			mockProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+				gotCacheQueryResults = append(gotCacheQueryResults, args.Get(0).(metrics.FACacheQueryResult))
+			}).Return()
 			bumpedScopes := map[string]int{}
 			mockProvider.On("BumpScopeTtl", mock.Anything).Run(func(args mock.Arguments) {
 				bumpedScopes[args.String(0)]++
@@ -842,6 +926,11 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 			assert.ElementsMatch(t, tc.wantBalancingInfos, gotBalancingInfo)
 			assert.Equal(t, tc.wantPossibleMaxScaleUpSize, gotPossibleMaxScaleUpSize)
 			assert.Equal(t, tc.wantErr, gotErr)
+			if tc.wantCacheQueryResults != nil {
+				assert.Equal(t, tc.wantCacheQueryResults, gotCacheQueryResults)
+			} else if tc.wantErr != nil {
+				assert.Empty(t, gotCacheQueryResults)
+			}
 			// All scale up infos share the ccc-1 scope: the balancer must mark it as used exactly once, regardless of
 			// how many migs it covers or whether the await succeeded.
 			assert.Equal(t, map[string]int{"ccc-1": 1}, bumpedScopes, "BumpScopeTtl must be called once per distinct scope")
@@ -1059,7 +1148,7 @@ func TestBalanceScaleUpBetweenGroups_Recommendation(t *testing.T) {
 
 	snapshot := instanceavailability.NewSnapshot(mockProvider, "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", "test-fa-guidance-id", "test-fa-spec-key", map[string]int{"us-central1-a": 100}, map[string]float64{"us-central1-a": 1.0})
 
-	mockProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot, nil)
+	mockProvider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Once().Return(snapshot, nil)
 	mockProvider.On("MarkUsed", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", "test-fa-guidance-id", mock.Anything, map[string]int{"us-central1-a": 50}).Once().Return(nil)
 	mockProvider.On("BumpScopeTtl", "ccc-1").Once().Return(nil)
 

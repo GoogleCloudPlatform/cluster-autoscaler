@@ -16,6 +16,7 @@ package flexadvisor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -133,8 +134,8 @@ func addScopeDataRaceBackgroundJob(f *flexAdvisor, flexibilityScopeKey string) {
 			field := val.Field(i)
 			fieldName := val.Type().Field(i).Name
 			fieldType := field.Type().String()
-			// don't overwrite mutexes or other fields considered const
-			if fieldType == "sync.Mutex" || fieldType == "sync.WaitGroup" || fieldName == "flexibilityScopeKey" || fieldName == "provider" || fieldName == "cancelFunc" {
+			// don't overwrite mutexes, atomics, or other fields considered const
+			if fieldType == "sync.Mutex" || fieldType == "sync.RWMutex" || fieldType == "sync.WaitGroup" || fieldType == "atomic.Bool" || fieldName == "flexibilityScopeKey" || fieldName == "provider" || fieldName == "cancelFunc" {
 				continue
 			}
 			ptr := unsafe.Pointer(field.UnsafeAddr())
@@ -176,7 +177,7 @@ func addScopeDataRaceBackgroundJob(f *flexAdvisor, flexibilityScopeKey string) {
 	}()
 }
 
-func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
+func TestFlexAdvisor_GetAvailabilitySnapshot(t *testing.T) {
 	wantedAvailability := api.NewTestInstanceAvailabilityBuilder("scope-1", "InstanceConfig-key-1").Build()
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
@@ -225,7 +226,7 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("scope-1")
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 			},
@@ -242,7 +243,7 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("scope-1")
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -271,10 +272,10 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("scope-1")
 
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
-				snapShot, err = f.AwaitInstanceAvailability("scope-1", "non-existent-key")
+				snapShot, err = f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "non-existent-key", firstFetchTimeout)
 			},
 			scopeKeyToCheck:    "scope-1",
 			instanceKeyToCheck: "InstanceConfig-key-1",
@@ -289,7 +290,7 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("scope-1")
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -308,7 +309,7 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("scope-1")
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -334,11 +335,13 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
-				result := fa.GetInstanceAvailability(tc.scopeKeyToCheck, tc.instanceKeyToCheck)
+				result, err := fa.GetAvailabilitySnapshot(tc.scopeKeyToCheck, tc.instanceKeyToCheck)
 
 				if tc.want == nil {
+					assert.Error(t, err)
 					assert.Nil(t, result, "Wanted fa return nil result")
 				} else {
+					assert.NoError(t, err)
 					result.SetProvider(nil)
 					assert.NotNil(t, result, "Wanted fa return non-nil result")
 					assert.Equal(t, *tc.want, *result, "The returned value did not match the wanted value")
@@ -397,7 +400,7 @@ func TestFlexAdvisor_RegisterFlexibilityScope(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				f.RegisterFlexibilityScope("existing-scope")
-				snapShot, err := f.AwaitInstanceAvailability("existing-scope", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("existing-scope", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 			},
@@ -417,7 +420,7 @@ func TestFlexAdvisor_RegisterFlexibilityScope(t *testing.T) {
 				tc.initialSetup(fa, mockProvider)
 				fa.RegisterFlexibilityScope(tc.scopeKey)
 
-				result, err := fa.AwaitInstanceAvailability(tc.scopeKey, "InstanceConfig-key-1")
+				result, err := fa.AwaitAvailabilitySnapshotWithTimeout(tc.scopeKey, "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NoError(t, err)
 				assert.NotNil(t, result)
 			})
@@ -555,7 +558,7 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 					"InstanceConfig-key-1": instanceConfig1,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.NoError(t, err)
 			},
@@ -569,8 +572,14 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
 				p.On("FetchCapacityGuidance").Return(nil, fmt.Errorf("api call failed")).Once()
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("instanceConfigKey=InstanceConfig-key-1 not present in availability data after refresh, flexibilityScopeKey=scope-1, lastRefreshErr=api call failed, cccState=, cccUsesScaleUpAnyway=false, keyGenerationState=not_generated"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:                  InstanceConfigUnavailableReasonFetchError,
+				flexibilityScopeKey:     "scope-1",
+				lastSuccessfulRefreshAt: time.Time{},
+				lastFetchError:          fmt.Errorf("api call failed"),
+			},
+			wantErrContains: fmt.Sprintf("last refresh resulted in error, not using availability data, flexibilityScopeKey=scope-1, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=api call failed", InstanceConfigUnavailableReasonFetchError, time.Time{}),
 		},
 		{
 			name:        "Successful fetch but instance key not found",
@@ -582,8 +591,13 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("instanceConfigKey=non-existent-key not present in availability data after refresh, flexibilityScopeKey=scope-1, lastRefreshErr=<nil>, cccState=, cccUsesScaleUpAnyway=false, keyGenerationState=not_generated"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:              InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse,
+				flexibilityScopeKey: "scope-1",
+				instanceConfigKey:   "non-existent-key",
+			},
+			wantErrContains: "instanceConfigKey=non-existent-key not present in scope data, flexibilityScopeKey=scope-1",
 		},
 		{
 			name:        "doesn't timeout after 10 seconds",
@@ -613,8 +627,13 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 					}
 				}).Return(nil, fmt.Errorf("GCE timeout")).Once()
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("timeout waiting for GCE Flex Advisor consultation, flexibilityScopeKey=scope-1"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:                  InstanceConfigUnavailableReasonTimeout,
+				flexibilityScopeKey:     "scope-1",
+				lastSuccessfulRefreshAt: time.Time{},
+			},
+			wantErrContains: fmt.Sprintf("timeout when waiting for first fetch, no data available, flexibilityScopeKey=scope-1, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=<nil>", InstanceConfigUnavailableReasonTimeout, time.Time{}),
 		},
 		{
 			name:        "times out after 5 seconds via experiment",
@@ -632,8 +651,13 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 			enabledFeatures: map[string]string{
 				experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag: "5",
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("timeout waiting for GCE Flex Advisor consultation, flexibilityScopeKey=scope-1"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:                  InstanceConfigUnavailableReasonTimeout,
+				flexibilityScopeKey:     "scope-1",
+				lastSuccessfulRefreshAt: time.Time{},
+			},
+			wantErrContains: fmt.Sprintf("timeout when waiting for first fetch, no data available, flexibilityScopeKey=scope-1, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=<nil>", InstanceConfigUnavailableReasonTimeout, time.Time{}),
 		},
 		{
 			name:        "invalid experiment timeout value falls back to 15 seconds",
@@ -649,8 +673,13 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 			enabledFeatures: map[string]string{
 				experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag: "invalid-value",
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("timeout waiting for GCE Flex Advisor consultation, flexibilityScopeKey=scope-1"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:                  InstanceConfigUnavailableReasonTimeout,
+				flexibilityScopeKey:     "scope-1",
+				lastSuccessfulRefreshAt: time.Time{},
+			},
+			wantErrContains: fmt.Sprintf("timeout when waiting for first fetch, no data available, flexibilityScopeKey=scope-1, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=<nil>", InstanceConfigUnavailableReasonTimeout, time.Time{}),
 		},
 		{
 			name:        "negative experiment timeout value falls back to 15 seconds",
@@ -666,8 +695,13 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 			enabledFeatures: map[string]string{
 				experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag: "-10",
 			},
-			want:    nil,
-			wantErr: fmt.Errorf("timeout waiting for GCE Flex Advisor consultation, flexibilityScopeKey=scope-1"),
+			want: nil,
+			wantErr: InstanceConfigUnavailableError{
+				reason:                  InstanceConfigUnavailableReasonTimeout,
+				flexibilityScopeKey:     "scope-1",
+				lastSuccessfulRefreshAt: time.Time{},
+			},
+			wantErrContains: fmt.Sprintf("timeout when waiting for first fetch, no data available, flexibilityScopeKey=scope-1, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=<nil>", InstanceConfigUnavailableReasonTimeout, time.Time{}),
 		},
 		{
 			name:        "Scope is stale, returns error",
@@ -679,7 +713,7 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 					"InstanceConfig-key-1": instanceConfig1,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.NoError(t, err)
 
@@ -690,7 +724,31 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 				scope.mutex.Unlock()
 			},
 			want:            nil,
-			wantErrContains: "scope is stale, not using availability data, flexibilityScopeKey=scope-1",
+			wantErrContains: fmt.Sprintf("scope is stale, not using availability data, flexibilityScopeKey=scope-1, reason=%v", InstanceConfigUnavailableReasonStale),
+		},
+		{
+			name:        "Scope is stale with last refresh error, returns FetchError",
+			scopeKey:    "scope-1",
+			instanceKey: "InstanceConfig-key-1",
+			initialSetup: func(f *flexAdvisor, p *mockAdviceProvider) {
+				instanceConfig1.SetProvider(nil)
+				mockApiResponse := map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": instanceConfig1,
+				}
+				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
+				assert.NotNil(t, snapShot)
+				assert.NoError(t, err)
+
+				scope, ok, _ := f.getScope("scope-1")
+				assert.True(t, ok)
+				scope.mutex.Lock()
+				scope.lastSuccessfulRefreshAt = f.clock.Now().Add(-1 * time.Hour)
+				scope.lastErr = fmt.Errorf("subsequent refresh failed")
+				scope.mutex.Unlock()
+			},
+			want:            nil,
+			wantErrContains: fmt.Sprintf("last refresh resulted in error, not using availability data, flexibilityScopeKey=scope-1, reason=%v", InstanceConfigUnavailableReasonFetchError),
 		},
 		{
 			name:        "data race test",
@@ -705,7 +763,7 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 					"InstanceConfig-key-1": instanceConfig1,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.NoError(t, err)
 			},
@@ -753,13 +811,15 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
 
-				result, err := fa.AwaitInstanceAvailability(tc.scopeKey, tc.instanceKey)
-				if tc.wantErr != nil {
+				result, err := fa.AwaitAvailabilitySnapshotWithTimeout(tc.scopeKey, tc.instanceKey, getBalancerAwaitTimeout(fa.optionsTracker.ExperimentsManager()))
+				if tc.wantErr != nil || tc.wantErrContains != "" {
 					assert.Nil(t, result)
-					assert.Equal(t, tc.wantErr, err)
-				} else if tc.wantErrContains != "" {
-					assert.Nil(t, result)
-					assert.ErrorContains(t, err, tc.wantErrContains)
+					if tc.wantErr != nil {
+						assert.Equal(t, tc.wantErr, err)
+					}
+					if tc.wantErrContains != "" {
+						assert.ErrorContains(t, err, tc.wantErrContains)
+					}
 				} else {
 					assert.NotNil(t, result)
 					assert.NoError(t, err)
@@ -830,7 +890,7 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 				}, nil)
 
 				// 1. Make the initial call to populate the cache and trigger the first API call.
-				_, err = fa.AwaitInstanceAvailability("my-scope", "instance-1")
+				_, err = fa.AwaitAvailabilitySnapshotWithTimeout("my-scope", "instance-1", firstFetchTimeout)
 				assert.NoError(t, err)
 
 				// 2. Wait for step 1 to finish before incrementing the clock.
@@ -892,7 +952,7 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 				p.On("FetchCapacityGuidance").Return(nil, nil)
 				f.RegisterFlexibilityScope("flex-scope-1")
 			},
-			wantErr: fmt.Errorf("instance configuration not found for flexibilityScopeKey: flex-scope-1, instanceConfigurationKey: non-existent-config"),
+			wantErr: fmt.Errorf("availability data not found for flexibilityScopeKey=flex-scope-1, instanceConfigKey=non-existent-config"),
 		},
 		{
 			name:                      "successfully calls InstanceAvailability.MarkUsed",
@@ -905,7 +965,7 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				p.On("SendCapacityDecision", mock.AnythingOfType("ProvisioningDecisionNotification")).Return(nil)
-				snapShot, err := f.AwaitInstanceAvailability("flex-scope-1", "config-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("flex-scope-1", "config-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 			},
@@ -926,7 +986,7 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponse, nil)
 				p.On("SendCapacityDecision", mock.AnythingOfType("ProvisioningDecisionNotification")).Return(nil)
-				snapShot, err := f.AwaitInstanceAvailability("flex-scope-1", "config-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("flex-scope-1", "config-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 			},
@@ -953,7 +1013,8 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 				if tc.wantErr != nil {
 					assert.Equal(t, tc.wantErr, err)
 				} else {
-					got := fa.GetInstanceAvailability(tc.flexibilityScopeKey, tc.instanceConfigKey)
+					got, getErr := fa.GetAvailabilitySnapshot(tc.flexibilityScopeKey, tc.instanceConfigKey)
+					assert.NoError(t, getErr)
 					for zone, wantCount := range tc.wantInstances {
 						gotZone, _ := got.MaxAvailableInstances(zone)
 						assert.Equal(t, wantCount, gotZone)
@@ -1477,17 +1538,11 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 
 	testCases := []struct {
 		name        string
-		nilScope    bool
 		stringFlags map[string]string
 		refreshTime func(now time.Time) time.Time
 		clockStep   time.Duration
 		want        bool
 	}{
-		{
-			name:     "nil scope - not stale",
-			nilScope: true,
-			want:     false,
-		},
 		{
 			name: "scope never successfully refreshed - not stale",
 			want: false,
@@ -1575,19 +1630,22 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
-				var scope *flexibilityScope
-				if !tc.nilScope {
-					scope = newFlexibilityScope(nil, "scope-1", func() {})
-					if tc.refreshTime != nil {
-						scope.lastSuccessfulRefreshAt = tc.refreshTime(time.Now())
-					}
+				scope := newFlexibilityScope(nil, "scope-1", func() {})
+				scope.firstFetchFinished.Store(true)
+				if tc.refreshTime != nil {
+					scope.lastSuccessfulRefreshAt = tc.refreshTime(time.Now())
 				}
+				fa.rwMutex.Lock()
+				fa.scopes["scope-1"] = scope
+				fa.rwMutex.Unlock()
 
 				if tc.clockStep > 0 {
 					time.Sleep(tc.clockStep)
 				}
 
-				got := fa.isStale(scope)
+				_, err = fa.awaitFirstFetch("scope-1", "InstanceConfig-key-1", 0)
+				var unavailableErr InstanceConfigUnavailableError
+				got := errors.As(err, &unavailableErr) && unavailableErr.reason == InstanceConfigUnavailableReasonStale
 				assert.Equal(t, tc.want, got)
 			})
 		})
@@ -2061,15 +2119,15 @@ func TestFlexAdvisor_BumpScopeTtl_AndReadMethodsDoNotUpdateKeepAlive(t *testing.
 		{
 			name: "GetInstanceAvailability on existing scope - keep-alive untouched",
 			action: func(t *testing.T, f *flexAdvisor) {
-				f.GetInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				f.GetAvailabilitySnapshot("scope-1", "InstanceConfig-key-1")
 			},
 			wantScopeExists: true,
 			wantActiveFor:   7 * time.Minute,
 		},
 		{
-			name: "AwaitInstanceAvailability on existing scope - keep-alive untouched",
+			name: "AwaitInstanceAvailabilityWithTimeout on existing scope - keep-alive untouched",
 			action: func(t *testing.T, f *flexAdvisor) {
-				_, _ = f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				_, _ = f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 			},
 			wantScopeExists: true,
 			wantActiveFor:   7 * time.Minute,
@@ -2136,6 +2194,99 @@ func TestFlexAdvisor_BumpScopeTtl_AndReadMethodsDoNotUpdateKeepAlive(t *testing.
 
 				assert.Equal(t, tc.wantScopeExists, found)
 				assert.Equal(t, tc.wantActiveFor, activeUntil.Sub(now))
+			})
+		})
+	}
+}
+
+func TestFlexAdvisor_UnifiedGetAndAwaitWithTimeout(t *testing.T) {
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "scope-1"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	testCases := []struct {
+		name           string
+		fetchDelay     time.Duration
+		fetchErr       error
+		call           func(t *testing.T, f *flexAdvisor) (*instanceavailability.Snapshot, error)
+		wantErrSubstr  string
+		wantElapsed    time.Duration
+		wantSnapshotOk bool
+	}{
+		{
+			name:       "GetAvailabilitySnapshot on cold scope with fetch in flight - returns error immediately without blocking",
+			fetchDelay: 2 * time.Second,
+			call: func(t *testing.T, f *flexAdvisor) (*instanceavailability.Snapshot, error) {
+				return f.GetAvailabilitySnapshot("scope-1", "InstanceConfig-key-1")
+			},
+			wantErrSubstr:  "timeout when waiting for first fetch",
+			wantElapsed:    0,
+			wantSnapshotOk: false,
+		},
+		{
+			name:       "AwaitAvailabilitySnapshotWithTimeout with 15s timeout on cold scope with 2s fetch - blocks for 2s and returns snapshot",
+			fetchDelay: 2 * time.Second,
+			call: func(t *testing.T, f *flexAdvisor) (*instanceavailability.Snapshot, error) {
+				return f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
+			},
+			wantElapsed:    2 * time.Second,
+			wantSnapshotOk: true,
+		},
+		{
+			name:       "AwaitAvailabilitySnapshotWithTimeout with 0s timeout - returns error immediately without blocking",
+			fetchDelay: 2 * time.Second,
+			call: func(t *testing.T, f *flexAdvisor) (*instanceavailability.Snapshot, error) {
+				return f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", 0)
+			},
+			wantErrSubstr:  "timeout when waiting for first fetch",
+			wantElapsed:    0,
+			wantSnapshotOk: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mockProvider := &mockAdviceProvider{}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
+				assert.NoError(t, err)
+
+				availability := api.NewTestInstanceAvailabilityBuilder("scope-1", "InstanceConfig-key-1").Build()
+				availability.SetProvider(nil)
+				mockProvider.On("FetchCapacityGuidance").Run(func(mock.Arguments) {
+					select {
+					case <-time.After(tc.fetchDelay):
+					case <-ctx.Done():
+					}
+				}).Return(map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": availability,
+				}, tc.fetchErr)
+
+				assert.NoError(t, fa.RegisterFlexibilityScope("scope-1"))
+
+				start := time.Now()
+				snap, callErr := tc.call(t, fa)
+				elapsed := time.Since(start)
+
+				assert.Equal(t, tc.wantElapsed, elapsed)
+				if tc.wantErrSubstr != "" {
+					assert.ErrorContains(t, callErr, tc.wantErrSubstr)
+					assert.Nil(t, snap)
+				} else {
+					assert.NoError(t, callErr)
+					assert.Equal(t, tc.wantSnapshotOk, snap != nil)
+				}
 			})
 		})
 	}

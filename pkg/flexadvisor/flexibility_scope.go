@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -40,8 +41,9 @@ type flexibilityScope struct {
 	provider                instanceavailability.Provider
 	flexibilityScopeKey     string
 	instanceConfigs         map[string]*api.InstanceAvailability
-	mutex                   sync.Mutex
+	mutex                   sync.RWMutex
 	firstFetchWG            sync.WaitGroup
+	firstFetchFinished      atomic.Bool
 	cancelFunc              context.CancelFunc
 	lastErr                 error
 	lastSuccessfulRefreshAt time.Time
@@ -84,6 +86,7 @@ func newScopeWorker(scope *flexibilityScope, f *flexAdvisor) *scopeWorker {
 
 func (w *scopeWorker) run(ctx context.Context) {
 	w.refreshScope(ctx)
+	w.scope.firstFetchFinished.Store(true)
 	w.scope.firstFetchWG.Done()
 
 	interval := calculateRefreshInterval(w.experimentsManager)
@@ -244,9 +247,9 @@ func newFlexibilityScope(provider instanceavailability.Provider, flexibilityScop
 	return scope
 }
 
-func (s *flexibilityScope) getInstanceConfig(instanceConfigKey string) *api.InstanceAvailability {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+func (s *flexibilityScope) getAvailabilityData(instanceConfigKey string) *api.InstanceAvailability {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	return s.instanceConfigs[instanceConfigKey]
 }
 
@@ -256,12 +259,12 @@ type inFlightProvisions struct {
 }
 
 func (s *flexibilityScope) copyInstancesBeingProvisioned() *inFlightProvisions {
-	s.mutex.Lock()
+	s.mutex.RLock()
 	configsToProcess := make([]*api.InstanceAvailability, 0, len(s.instanceConfigs))
 	for _, config := range s.instanceConfigs {
 		configsToProcess = append(configsToProcess, config)
 	}
-	s.mutex.Unlock()
+	s.mutex.RUnlock()
 
 	inflight := &inFlightProvisions{
 		byInstanceConfig: make(map[string]api.ZonalProvisionCounts),
@@ -291,15 +294,25 @@ func (s *flexibilityScope) finishRefresh(newConfigs map[string]*api.InstanceAvai
 	}
 }
 
-func (s *flexibilityScope) getLastErr() error {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
-	return s.lastErr
+// fetchStats holds a point-in-time snapshot of a scope's most recent refresh error and last successful refresh timestamp.
+type fetchStats struct {
+	lastFetchError          error
+	lastSuccessfulRefreshAt time.Time
+}
+
+// getFetchStats returns the scope's last refresh error and last successful refresh timestamp under a single read lock.
+func (s *flexibilityScope) getFetchStats() fetchStats {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return fetchStats{
+		s.lastErr,
+		s.lastSuccessfulRefreshAt,
+	}
 }
 
 func (s *flexibilityScope) getLastSuccessfulRefreshAt() time.Time {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	return s.lastSuccessfulRefreshAt
 }
 
@@ -308,14 +321,14 @@ func (s *flexibilityScope) getLastSuccessfulRefreshAt() time.Time {
 // true - was generated, was capped
 // no value - was not generated
 func (s *flexibilityScope) getKeyCapState(instanceConfigKey string) (bool, bool) {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	val, ok := s.cappedKeysMap[instanceConfigKey]
 	return val, ok
 }
 
 func (s *flexibilityScope) getGeneratedUsing() crd.CRD {
-	s.mutex.Lock()
-	defer s.mutex.Unlock()
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
 	return s.generatedUsing
 }

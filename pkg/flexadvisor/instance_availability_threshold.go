@@ -18,6 +18,7 @@ import (
 	"context"
 	"maps"
 	"slices"
+	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -26,10 +27,15 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
+)
+
+const (
+	logLevel4 = 4
 )
 
 type instanceAvailabilityThreshold struct {
@@ -44,6 +50,7 @@ type instanceAvailabilityThreshold struct {
 	// uncreated NAP candidate is summed across its planned zones only when it is set, as only then is the
 	// scale-up spread across the zonal MIGs after the node pool is created.
 	balanceSimilarNodeGroups bool
+	errorLogLimiter          *logging.LogRateLimiter
 }
 
 type InstanceAvailabilityCloudProvider interface {
@@ -62,6 +69,7 @@ func NewInstanceAvailabilityThreshold(provider instanceavailability.Provider, pu
 		experimentsManager:       experimentsManager,
 		limiterTracker:           limiterTracker,
 		balanceSimilarNodeGroups: balanceSimilarNodeGroups,
+		errorLogLimiter:          logging.NewLogRateLimiter(5, 30*time.Second),
 	}
 }
 
@@ -91,15 +99,16 @@ func (t *instanceAvailabilityThreshold) NodeLimit(ctx context.Context, nodeGroup
 		}
 		flexibilityScopes[instanceRef.FlexibilityScopeKey] = true
 
-		snapshot := t.provider.GetInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
-		if snapshot == nil {
+		snapshot, err := t.provider.GetAvailabilitySnapshot(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+		if err != nil {
+			t.errorLogLimiter.Warningf(logLevel4, "FlexAdvisor: could not get scope data flexibilityScopeKey=%v, instanceConfigKey=%v, err=%v", instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, err)
 			return estimator.NodeLimitResult{Limit: 0}
 		}
 		reservationCount := t.allUnusedReservations(ng)
 		maxInstancesFromFA, ok := snapshot.MaxAvailableInstances(instanceRef.Zone)
 		if !ok {
 			// if we didn't receive available instances from GCE FlexAdvisor for at least one zone, we don't apply node limit to the node group at all
-			klog.Warningf("FlexAdvisor: NodeLimit not applied to nodeGroup %s due to unknown availability in the zone, zone=%v, flexibilityScopeKey=%v, guidanceId=%v", nodeGroup.Id(), instanceRef.Zone, instanceRef.InstanceConfigKey, snapshot.GuidanceId())
+			klog.Errorf("FlexAdvisor: NodeLimit not applied to nodeGroup=%s due to unknown availability in the zone=%v, flexibilityScopeKey=%v, instanceConfigKey=%v, guidanceId=%v", nodeGroup.Id(), instanceRef.Zone, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, snapshot.GuidanceId())
 			return estimator.NodeLimitResult{Limit: 0}
 		}
 

@@ -32,7 +32,6 @@ import (
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
-	oss_metrics "sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 )
 
 const (
@@ -40,7 +39,6 @@ const (
 	keepAliveInterval         = 10 * time.Minute
 	defaultMaxScopes          = 50
 	defaultMaxInstanceConfigs = 200
-	firstFetchTimeout         = 15 * time.Second
 	scopeStalenessThreshold   = 30 * time.Second
 )
 
@@ -53,6 +51,63 @@ func formatBoolPtr(b *bool) string {
 
 type flexAdvisorMetrics interface {
 	IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, cccState metrics.CccState, isScaleUpAnyway *bool, keyGenerationState metrics.KeyGenerationState)
+}
+
+// InstanceConfigUnavailableReason describes why availability data could not be retrieved for an instanceConfigKey.
+type InstanceConfigUnavailableReason int
+
+const (
+	InstanceConfigUnavailableReasonUnknown InstanceConfigUnavailableReason = iota
+	// InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse indicates that the scope was refreshed successfully,
+	// but the requested instanceConfigKey was not present in the GCE Flex Advisor response.
+	InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse
+	// InstanceConfigUnavailableReasonFetchError indicates that the scope has no fresh data because the last refresh attempt failed with an error.
+	InstanceConfigUnavailableReasonFetchError
+	// InstanceConfigUnavailableReasonTimeout indicates that the initial scope fetch did not complete within the requested timeout.
+	InstanceConfigUnavailableReasonTimeout
+	// InstanceConfigUnavailableReasonStale indicates that the scope's cached availability data has exceeded the staleness threshold.
+	InstanceConfigUnavailableReasonStale
+)
+
+func (r InstanceConfigUnavailableReason) String() string {
+	switch r {
+	case InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse:
+		return "InstanceConfigNotPresentInGceResponse"
+	case InstanceConfigUnavailableReasonFetchError:
+		return "FetchError"
+	case InstanceConfigUnavailableReasonTimeout:
+		return "Timeout"
+	case InstanceConfigUnavailableReasonStale:
+		return "Stale"
+	default:
+		return "Unknown"
+	}
+}
+
+// InstanceConfigUnavailableError is returned by GetAvailabilitySnapshot and AwaitAvailabilitySnapshotWithTimeout
+// when the flexibility scope does not contain usable availability data for the requested instanceConfigKey.
+type InstanceConfigUnavailableError struct {
+	reason                  InstanceConfigUnavailableReason
+	flexibilityScopeKey     string
+	instanceConfigKey       string
+	lastSuccessfulRefreshAt time.Time
+	stalenessDiff           time.Duration
+	lastFetchError          error
+}
+
+func (e InstanceConfigUnavailableError) Error() string {
+	switch e.reason {
+	case InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse:
+		return fmt.Sprintf("instanceConfigKey=%v not present in scope data, flexibilityScopeKey=%v", e.instanceConfigKey, e.flexibilityScopeKey)
+	case InstanceConfigUnavailableReasonFetchError:
+		return fmt.Sprintf("last refresh resulted in error, not using availability data, flexibilityScopeKey=%v, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", e.flexibilityScopeKey, e.reason, e.lastSuccessfulRefreshAt, e.lastFetchError)
+	case InstanceConfigUnavailableReasonTimeout:
+		return fmt.Sprintf("timeout when waiting for first fetch, no data available, flexibilityScopeKey=%v, reason=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", e.flexibilityScopeKey, e.reason, e.lastSuccessfulRefreshAt, e.lastFetchError)
+	case InstanceConfigUnavailableReasonStale:
+		return fmt.Sprintf("scope is stale, not using availability data, flexibilityScopeKey=%v, reason=%v, lastSuccessfulRefreshAt=%v (diff: %v), lastRefreshErr=%v", e.flexibilityScopeKey, e.reason, e.lastSuccessfulRefreshAt, e.stalenessDiff, e.lastFetchError)
+	default:
+		return fmt.Sprintf("data not available, flexibilityScopeKey=%v, reason=%v, lastSuccessfulRefreshAt=%v (diff: %v), lastRefreshErr=%v", e.flexibilityScopeKey, e.reason, e.lastSuccessfulRefreshAt, e.stalenessDiff, e.lastFetchError)
+	}
 }
 
 type flexAdvisor struct {
@@ -107,37 +162,12 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 	return f, nil
 }
 
-// GetInstanceAvailability tries to get InstanceAvailability from cache. Unlike AwaitInstanceAvailability if cache is not available, it does not wait for background job to fetch it.
-// WARNING: THIS METHOD DOES NOT UPDATE KEEP-ALIVE. This method is meant to be as non-blocking as possible, acquiring only RLocks in happy path. See b/514258103 for more
-func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *instanceavailability.Snapshot {
+func (f *flexAdvisor) isRecommendationsEnforcementPaused(flexibilityScopeKey, instanceConfigKey string) bool {
 	if f.bypassTracker != nil && f.bypassTracker.IsRecommendationsEnforcementPaused(flexibilityScopeKey) {
 		klog.Infof("FlexAdvisor: recommendations enforcement is paused for flexibilityScopeKey=%v, skipping returning availability data for instanceConfigKey=%v", flexibilityScopeKey, instanceConfigKey)
-		return nil
+		return true
 	}
-	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
-	if !scopeFound || scope == nil {
-		if isAtCapacity {
-			klog.Warningf("FlexAdvisor: failed to add scope during GetInstanceAvailability, flexibilityScopeKey=%v, err=active scope limit reached", flexibilityScopeKey)
-			return nil
-		}
-		var err error
-		scope, err = f.getOrAddFlexibilityScope(flexibilityScopeKey, false)
-		if err != nil {
-			klog.Warningf("FlexAdvisor: failed to add scope during GetInstanceAvailability, flexibilityScopeKey=%v, err=%v", flexibilityScopeKey, err)
-			return nil
-		}
-	}
-
-	if f.isStale(scope) {
-		klog.Errorf("FlexAdvisor: scope is stale while trying to GetInstanceAvailability, not using availability data. flexibilityScopeKey=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", flexibilityScopeKey, scope.getLastSuccessfulRefreshAt(), scope.getLastErr())
-		return nil
-	}
-
-	config := scope.getInstanceConfig(instanceConfigKey)
-	if config == nil {
-		return nil
-	}
-	return config.NewSnapshot()
+	return false
 }
 
 func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error {
@@ -145,10 +175,119 @@ func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error
 	return err
 }
 
+// GetAvailabilitySnapshot blocks until the scope's first fetch finishes (up to timeout) and returns thread-safe snapshot of the scope data
+func (f *flexAdvisor) GetAvailabilitySnapshot(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
+	return f.AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey, 0)
+}
+
+// AwaitAvailabilitySnapshotWithTimeout blocks until the scope's first fetch finishes (up to a timeout) and returns thread-safe snapshot of the scope data
+func (f *flexAdvisor) AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*instanceavailability.Snapshot, error) {
+	scope, err := f.awaitFirstFetch(flexibilityScopeKey, instanceConfigKey, timeout)
+	if err != nil {
+		return nil, err
+	}
+
+	data := scope.getAvailabilityData(instanceConfigKey)
+	if data == nil {
+		return nil, InstanceConfigUnavailableError{
+			reason:              InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse,
+			flexibilityScopeKey: flexibilityScopeKey,
+			instanceConfigKey:   instanceConfigKey,
+		}
+	}
+
+	return data.NewSnapshot(), nil
+}
+
+func (f *flexAdvisor) awaitFirstFetch(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*flexibilityScope, error) {
+	if f.isRecommendationsEnforcementPaused(flexibilityScopeKey, instanceConfigKey) {
+		return nil, fmt.Errorf("recommendations enforcement is paused for flexibilityScopeKey=%v", flexibilityScopeKey)
+	}
+
+	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
+	if !scopeFound || scope == nil {
+		if isAtCapacity {
+			return nil, fmt.Errorf("failed to dynamically add scope, err=active scope limit of %d reached", f.getMaxScopes())
+		}
+		var addErr error
+		scope, addErr = f.getOrAddFlexibilityScope(flexibilityScopeKey, false)
+		if addErr != nil {
+			return nil, fmt.Errorf("failed to dynamically add scope, err=%v", addErr)
+		}
+	}
+
+	f.waitForFirstFetchWithTimeout(scope, timeout)
+
+	fetchStats := scope.getFetchStats()
+
+	var stalenessDiff time.Duration
+	if !fetchStats.lastSuccessfulRefreshAt.IsZero() {
+		stalenessDiff = f.clock.Since(fetchStats.lastSuccessfulRefreshAt)
+		// Data has been fetched and is fresh enough
+		if stalenessDiff <= f.getScopeStalenessThreshold() {
+			return scope, nil
+		}
+	}
+	if fetchStats.lastFetchError != nil {
+		return nil, InstanceConfigUnavailableError{
+			reason:                  InstanceConfigUnavailableReasonFetchError,
+			flexibilityScopeKey:     flexibilityScopeKey,
+			lastSuccessfulRefreshAt: fetchStats.lastSuccessfulRefreshAt,
+			lastFetchError:          fetchStats.lastFetchError,
+		}
+	}
+	if fetchStats.lastSuccessfulRefreshAt.IsZero() {
+		return nil, InstanceConfigUnavailableError{
+			reason:                  InstanceConfigUnavailableReasonTimeout,
+			flexibilityScopeKey:     flexibilityScopeKey,
+			lastSuccessfulRefreshAt: fetchStats.lastSuccessfulRefreshAt,
+			lastFetchError:          fetchStats.lastFetchError,
+		}
+	}
+	// There was no error during last fetch, but data is stale - this usually means there's bug in background worker timer/queue/worker is stuck at GCE query
+	return nil, InstanceConfigUnavailableError{
+		reason:                  InstanceConfigUnavailableReasonStale,
+		flexibilityScopeKey:     flexibilityScopeKey,
+		lastSuccessfulRefreshAt: fetchStats.lastSuccessfulRefreshAt,
+		stalenessDiff:           stalenessDiff,
+	}
+}
+
+// waitForFirstFetchWithTimeout blocks until the scope's first fetch finishes or timeout elapses
+func (f *flexAdvisor) waitForFirstFetchWithTimeout(scope *flexibilityScope, timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	// TODO(b/577169104): separate boolean for storing whether we had first fetch won't be necessary after switch to channels
+	if scope.firstFetchFinished.Load() {
+		return
+	}
+	waitStart := time.Now()
+	defer func() {
+		waitDuration := time.Since(waitStart)
+		if waitDuration > 100*time.Millisecond {
+			klog.Warningf("FlexAdvisor: waited %v for GCE Flex Advisor consultation, flexibilityScopeKey=%v", waitDuration, scope.flexibilityScopeKey)
+		}
+	}()
+	firstFetchDone := make(chan struct{})
+	go func() {
+		scope.firstFetchWG.Wait()
+		close(firstFetchDone)
+	}()
+	timer := f.clock.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-firstFetchDone:
+	case <-timer.C():
+		return
+	}
+}
+
 // BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
 // Returns an error if the flexibility scope does not exist.
 // Consumers that act on availability data (the balancer) must call it explicitly, as read methods
-// (GetInstanceAvailability, AwaitInstanceAvailability) never extend a scope's keep-alive implicitly.
+// (GetAvailabilitySnapshot, AwaitAvailabilitySnapshotWithTimeout) never extend a scope's keep-alive implicitly.
 func (f *flexAdvisor) BumpScopeTtl(flexibilityScopeKey string) error {
 	scopeTtl := f.getScopeTtl()
 
@@ -160,104 +299,6 @@ func (f *flexAdvisor) BumpScopeTtl(flexibilityScopeKey string) error {
 	}
 	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
 	return nil
-}
-
-// AwaitInstanceAvailability blocking await for scope's recommendations data.
-// WARNING: THIS METHOD DOES NOT UPDATE KEEP-ALIVE, callers that use the data should call BumpScopeTtl.
-func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
-	if f.bypassTracker != nil && f.bypassTracker.IsRecommendationsEnforcementPaused(flexibilityScopeKey) {
-		klog.Infof("FlexAdvisor: recommendations enforcement is paused for flexibilityScopeKey=%v, skipping returning availability data for instanceConfigKey=%v", flexibilityScopeKey, instanceConfigKey)
-		return nil, fmt.Errorf("recommendations enforcement is paused for flexibilityScopeKey=%v", flexibilityScopeKey)
-	}
-	waitStart := time.Now()
-	var err error
-	defer func() {
-		waitDuration := time.Since(waitStart)
-		oss_metrics.UpdateDuration(context.TODO(), "FlexAdvisor:AwaitInstanceAvailability", waitDuration)
-		if waitDuration > 100*time.Millisecond {
-			if err == nil {
-				klog.Warningf("FlexAdvisor: waited %v for GCE Flex Advisor consultation, flexibilityScopeKey=%v, err=nil", waitDuration, flexibilityScopeKey)
-			} else {
-				klog.Errorf("FlexAdvisor: waited %v for GCE Flex Advisor consultation, flexibilityScopeKey=%v, err=%v", waitDuration, flexibilityScopeKey, err)
-			}
-		}
-	}()
-	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
-	if !scopeFound || scope == nil {
-		if isAtCapacity {
-			return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=active scope limit of %d reached", f.getMaxScopes())
-		}
-		var addErr error
-		scope, addErr = f.getOrAddFlexibilityScope(flexibilityScopeKey, false)
-		if addErr != nil {
-			return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=%v", addErr)
-		}
-	}
-	err = f.waitForFirstFetchOrTimeOut(scope)
-	if err != nil {
-		return nil, err
-	}
-
-	if f.isStale(scope) {
-		return nil, fmt.Errorf("scope is stale, not using availability data, flexibilityScopeKey=%v, lastSuccessfulRefreshAt=%v, lastRefreshErr=%v", flexibilityScopeKey, scope.getLastSuccessfulRefreshAt(), scope.getLastErr())
-	}
-
-	value := scope.getInstanceConfig(instanceConfigKey)
-	if value == nil {
-		lastErr := scope.getLastErr()
-		err = fmt.Errorf("instanceConfigKey=%v not present in availability data after refresh, flexibilityScopeKey=%v, lastRefreshErr=%v, cccState=%v, cccUsesScaleUpAnyway=%v, keyGenerationState=%v", instanceConfigKey, flexibilityScopeKey, lastErr, f.cccState(scope), formatBoolPtr(f.isScaleUpAnyway(scope)), f.keyGenerationState(scope, instanceConfigKey))
-		if lastErr != nil {
-			f.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissFetchFailed, flexibilityScopeKey, instanceConfigKey)
-		} else {
-			f.IncrementFlexAdvisorCacheQueryCount(metrics.FACacheMissNoInstanceConfigKey, flexibilityScopeKey, instanceConfigKey)
-		}
-		return nil, err
-	}
-
-	return value.NewSnapshot(), nil
-}
-
-func (f *flexAdvisor) waitForFirstFetchOrTimeOut(scope *flexibilityScope) error {
-	firstFetchDone := make(chan struct{})
-	go func() {
-		scope.firstFetchWG.Wait()
-		close(firstFetchDone)
-	}()
-	timeout := f.calculateFirstFetchTimeout()
-	timer := f.clock.NewTimer(timeout)
-	defer timer.Stop()
-
-	select {
-	case <-firstFetchDone:
-		return nil
-	case <-timer.C():
-		return fmt.Errorf("timeout waiting for GCE Flex Advisor consultation, flexibilityScopeKey=%v", scope.flexibilityScopeKey)
-	}
-}
-
-func (f *flexAdvisor) calculateFirstFetchTimeout() time.Duration {
-	if f.optionsTracker == nil {
-		return firstFetchTimeout
-	}
-	durationString := f.optionsTracker.ExperimentsManager().EvaluateStringFlagOrFailsafe(
-		experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag,
-		// We could fmt.Sprintf here firstFetchTimeout value, we explicitly handle default value lower in case there was bug in further processing of experiment value
-		"",
-	)
-	if durationString == "" {
-		return firstFetchTimeout
-	}
-	parsedSeconds, err := strconv.ParseInt(durationString, 10, 64)
-	if err != nil || parsedSeconds <= 0 {
-		klog.Errorf("FlexAdvisor: invalid value for flag %s: %q, defaulting to %v. error: %v",
-			experiments.FlexAdvisorAwaitInstanceAvailabilityTimeoutSecondsFlag,
-			durationString,
-			firstFetchTimeout,
-			err,
-		)
-		return firstFetchTimeout
-	}
-	return time.Duration(parsedSeconds) * time.Second
 }
 
 func calculateRefreshInterval(manager experiments.Manager) time.Duration {
@@ -291,19 +332,6 @@ func (f *flexAdvisor) getScopeStalenessThreshold() time.Duration {
 	return threshold
 }
 
-// isStale returns whether scope has not been updated within required threshold. If not initial fetch has been done yet returns false
-func (f *flexAdvisor) isStale(scope *flexibilityScope) bool {
-	if scope == nil {
-		return false
-	}
-	lastRefresh := scope.getLastSuccessfulRefreshAt()
-	if lastRefresh.IsZero() {
-		// There was no single successful fetch, data array should be empty
-		return false
-	}
-	return f.clock.Since(lastRefresh) > f.getScopeStalenessThreshold()
-}
-
 // IncrementFlexAdvisorCacheQueryCount gathers additional debugging info and calls underlying prometheus' IncrementFlexAdvisorCacheQueryCount
 func (f *flexAdvisor) IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, flexibilityScopeKey string, instanceConfigKey string) {
 	if result == metrics.FACacheHit {
@@ -319,6 +347,14 @@ func (f *flexAdvisor) IncrementFlexAdvisorCacheQueryCount(result metrics.FACache
 	keyGenerationState := f.keyGenerationState(scope, instanceConfigKey)
 
 	f.metrics.IncrementFlexAdvisorCacheQueryCount(result, cccState, isScaleUpAnyway, keyGenerationState)
+	switch result {
+	case metrics.FACacheMissNoZone,
+		metrics.FACacheMissNoInstanceConfigKey,
+		metrics.FACacheMissFetchFailed:
+		klog.Errorf("FlexAdvisor: reported cache miss flexibilityScopeKey=%v, result=%v, keyGenerationState=%v, cccState=%v, isScaleUpAnyway=%v", flexibilityScopeKey, result, keyGenerationState, cccState, formatBoolPtr(isScaleUpAnyway))
+	default:
+		klog.Warningf("FlexAdvisor: reported cache metric flexibilityScopeKey=%v, result=%v, keyGenerationState=%v, cccState=%v, isScaleUpAnyway=%v", flexibilityScopeKey, result, keyGenerationState, cccState, formatBoolPtr(isScaleUpAnyway))
+	}
 }
 
 // cccState whether scope keys where generated using outdated CRD
@@ -390,11 +426,11 @@ func (f *flexAdvisor) MarkUsed(flexibilityScopeKey, instanceConfigKey, guidanceI
 	if !scopeFound || scope == nil {
 		return fmt.Errorf("flexibility scope not found for key: %s", flexibilityScopeKey)
 	}
-	config := scope.getInstanceConfig(instanceConfigKey)
-	if config == nil {
-		return fmt.Errorf("instance configuration not found for flexibilityScopeKey: %s, instanceConfigurationKey: %s", flexibilityScopeKey, instanceConfigKey)
+	data := scope.getAvailabilityData(instanceConfigKey)
+	if data == nil {
+		return fmt.Errorf("availability data not found for flexibilityScopeKey=%s, instanceConfigKey=%s", flexibilityScopeKey, instanceConfigKey)
 	}
-	config.MarkUsed(zonalInstancesToProvision, decisionId, guidanceId)
+	data.MarkUsed(zonalInstancesToProvision, decisionId, guidanceId)
 	return nil
 }
 
@@ -439,6 +475,9 @@ func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, b
 	f.rwMutex.RLock()
 	defer f.rwMutex.RUnlock()
 	scope, scopeFound := f.scopes[flexibilityScopeKey]
+	if scopeFound && scope != nil {
+		return scope, true, false
+	}
 
 	maxScopes := f.getMaxScopes()
 	isAtCapacity := len(f.scopes) >= maxScopes
@@ -462,6 +501,7 @@ func (f *flexAdvisor) getScopeTtl() time.Duration {
 
 // getOrAddFlexibilityScope returns the scope, registering it (which starts its background refresh) if missing.
 // If the scope is already registered, its keep-alive is extended only when bumpScopeTtl is true.
+// TODO(b/577169261): we should not have to upsert the scope if we remove the async expiration
 func (f *flexAdvisor) getOrAddFlexibilityScope(flexibilityScopeKey string, bumpScopeTtl bool) (*flexibilityScope, error) {
 	scopeTtl := f.getScopeTtl()
 

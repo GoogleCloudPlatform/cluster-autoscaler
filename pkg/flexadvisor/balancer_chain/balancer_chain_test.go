@@ -149,7 +149,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			},
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, http403Err).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(nil)
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
@@ -163,7 +163,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			},
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, rlaNonHttp403Err).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(nil)
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
@@ -178,7 +178,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			},
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(getSnapshotForProvider(iaProvider), nil)
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
 				iaProvider.On("MarkUsed", "ccc-1", "", "guidance-1", mock.Anything, map[string]int{"us-central1-a": 91, "us-central1-b": 91}).Once().Return(nil)
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
@@ -192,7 +192,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			},
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3),
@@ -206,7 +206,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			},
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMigInvalidCCC1, locationAnyMigInvalidCCC2, locationAnyMigInvalidCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("value not found")).Once()
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("value not found")).Once()
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMigInvalidCCC1, locationAnyMigInvalidCCC2, locationAnyMigInvalidCCC3),
@@ -221,7 +221,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, http403Err).Once()
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3),
@@ -236,7 +236,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, rlaNonHttp403Err).Once()
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMigNoCCC1, locationAnyMigNoCCC2, locationAnyMigNoCCC3),
@@ -251,7 +251,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, rlaNonHttp403Err).Once()
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("OSS balancer: should not be called")
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Return(getSnapshotForProvider(iaProvider), nil).Once()
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Return(getSnapshotForProvider(iaProvider), nil).Once()
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(nil)
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
@@ -266,7 +266,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Maybe().Panic("should not be called")
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(getScaleUpInfos(locationBalancedMigNoCCC1, locationBalancedMigNoCCC2, locationBalancedMigNoCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationBalancedMigNoCCC1, locationBalancedMigNoCCC2, locationBalancedMigNoCCC3),
@@ -281,7 +281,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Maybe().Panic("should not be called")
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(getScaleUpInfos(locationBalancedMigInvalidCCC1, locationBalancedMigInvalidCCC2, locationBalancedMigInvalidCCC3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Return(nil, fmt.Errorf("value not found")).Twice()
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Return(nil, fmt.Errorf("value not found")).Twice()
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationBalancedMigInvalidCCC1, locationBalancedMigInvalidCCC2, locationBalancedMigInvalidCCC3),
@@ -296,7 +296,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Maybe().Panic("should not be called")
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("OSS balancer: should not be called")
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Once().Return(getSnapshotForProvider(iaProvider), nil)
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(nil)
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationBalancedMig1, locationBalancedMig2, locationBalancedMig3),
@@ -311,7 +311,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3), nil).Once()
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("OSS balancer: should not be called")
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
@@ -326,7 +326,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 			initialSetup: func(balancersChain *balancersChain, iaProvider *instanceavailability.MockProvider) {
 				balancersChain.rlaService.On("Balance", mock.Anything, mock.Anything).Return(nil, http403Err).Once()
 				balancersChain.ossBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3), nil).Once()
-				iaProvider.On("AwaitInstanceAvailability", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitInstanceAvailability: should not be called")
+				iaProvider.On("AwaitAvailabilitySnapshotWithTimeout", mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("AwaitAvailabilitySnapshotWithTimeout: should not be called")
 				iaProvider.On("MarkUsed", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("MarkUsed: should not be called")
 			},
 			wantScaleUpInfos: getScaleUpInfos(locationAnyMig1, locationAnyMig2, locationAnyMig3),
