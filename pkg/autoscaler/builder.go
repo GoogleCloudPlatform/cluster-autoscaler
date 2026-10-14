@@ -913,9 +913,16 @@ func (b *Builder) Build(
 	napResourceTrimmer = internalestimator.NewNapResourceTrimmer(ca, cloudProvider, autoscalingOptions.AutopilotEnabled)
 	napResourceAnalyzerFunc = napResourceTrimmer.NapResourceAnalyzerFunc()
 
+	estimationLimiter := internalestimator.NewEstimationLimiterWrapper(
+		estimator.NewThresholdBasedEstimationLimiter(thresholds),
+		flexAdvisor,
+		b.npcCrdLister,
+		experimentsManager,
+	)
+
 	estimatorBuilder, err := estimator.NewEstimatorBuilder(
 		autoscalingOptions.EstimatorName,
-		estimator.NewThresholdBasedEstimationLimiter(thresholds),
+		estimationLimiter,
 		edps.NewExtendedDurationPodsFirstDecreasingPodOrderer(),
 		napResourceAnalyzerFunc,
 		autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled,
@@ -1058,6 +1065,7 @@ func (b *Builder) Build(
 		b.npcCrdLister,
 		bypassTracker,
 		scaleUpLimiterTracker,
+		[]flexadvisor.ScaleUpEndProcessor{estimationLimiter},
 		experimentsManager,
 	)
 

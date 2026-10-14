@@ -38,6 +38,10 @@ type Provider interface {
 	// BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
 	// Consumers that act on availability data (the balancer) must call it explicitly, as read methods do not update keep-alive.
 	BumpScopeTtl(flexibilityScopeKey string) error
+	// AwaitFlexibilityScopeWithTimeout blocks until the flexibility scope finishes its first fetch (or time outs).
+	// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.
+	// Does not update keep-alive of an existing scope.
+	AwaitFlexibilityScopeWithTimeout(flexibilityScopeKey string, timeout time.Duration) error
 	// AwaitAvailabilitySnapshotWithTimeout returns a Snapshot of instance availability, blocking up to timeout
 	// if the scope's first fetch is still in flight.
 	// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.

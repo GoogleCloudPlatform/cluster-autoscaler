@@ -257,6 +257,15 @@ const FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag = "FlexAdvisorPodFamil
 const FlexAdvisorSkipUnneededSpotConfigsEnabledFlag = "FlexAdvisorSkipUnneededSpotConfigs::Enabled"
 const FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag = "FlexAdvisorSkipUnneededSpotConfigs::MinCAVersion"
 
+// FlexAdvisorBinpackerBlockEnabledFlag enables blocking (within the per-loop time budget) in the bin packer
+// when waiting for the initial fetch of a flexibility scope.
+const FlexAdvisorBinpackerBlockEnabledFlag = "FlexAdvisor::BinpackerBlockEnabled"
+const FlexAdvisorBinpackerBlockMinCAVersionFlag = "FlexAdvisor::BinpackerBlockMinCAVersion"
+
+// FlexAdvisorBinpackerBlockTimeBudgetFlag controls how long in seconds the bin packer may block, at most once per
+// scale-up pass, waiting for the initial fetch of a flexibility scope (default: 3s, 0 disables blocking).
+const FlexAdvisorBinpackerBlockTimeBudgetFlag = "FlexAdvisor::BinpackerBlockTimeBudget"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"
