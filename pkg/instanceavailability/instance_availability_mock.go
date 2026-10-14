@@ -68,3 +68,7 @@ func (m *MockProvider) MarkUsed(flexibilityScopeKey, instanceConfigKey, guidance
 func (m *MockProvider) IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, flexibilityScopeKey string, instanceConfigKey string) {
 	m.Called(result, flexibilityScopeKey, instanceConfigKey)
 }
+
+func (m *MockProvider) SetPollingMode(flexibilityScopeKey string, mode PollingMode) {
+	m.Called(flexibilityScopeKey, mode)
+}

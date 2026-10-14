@@ -27,6 +27,7 @@ import (
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/unhelpable"
@@ -64,6 +65,7 @@ func buildProcessorOrder() (map[reflect.Type]int, error) {
 		{reflect.TypeOf(new(metrics_processors.ScaleUpStatusMetricsProcessor)).Elem(), 13},
 		{reflect.TypeOf(new(unhelpable.UnhelpablePodTracker)).Elem(), 14},
 		{reflect.TypeOf(new(podstate.PodStateObserver)).Elem(), 15},
+		{reflect.TypeOf(new(flexadvisor.ScaleUpStatusProcessor)).Elem(), 16},
 	}
 	for _, entry := range entries {
 		if _, exists := order[entry.processor]; exists {

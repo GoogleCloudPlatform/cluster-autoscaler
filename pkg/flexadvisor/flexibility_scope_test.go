@@ -133,7 +133,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, adaptivePollingTestManager(false, nil))
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
@@ -187,7 +187,7 @@ func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
 		}, "", false, crd.TestDefaultDataProvider(), nil)
 
 		instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
-		optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+		optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, adaptivePollingTestManager(false, nil))
 
 		configKey := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature()
 		availability := api.NewTestInstanceAvailabilityBuilder("scope-1", configKey).WithZonalInstanceCount(map[string]int{"us-west1-a": 10}).Build()
@@ -196,6 +196,7 @@ func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
 		assert.NoError(t, err)
 
 		mockProvider.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{configKey: availability}, nil).Once()
+		assert.NoError(t, fa.RegisterFlexibilityScope("scope-1"))
 		_, err = fa.AwaitAvailabilitySnapshotWithTimeout("scope-1", configKey, firstFetchTimeout)
 		assert.NoError(t, err)
 
@@ -227,7 +228,7 @@ func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
 		// Wait for flooder to block on time.After
 		synctest.Wait()
 
-		// Step 1s at a time for 15 seconds
+		// Step 1s at a time for 101 seconds (10 full 10s refresh intervals)
 		for i := 0; i < expectedCountFetchCalls*10+1; i++ {
 			time.Sleep(1 * time.Second)
 			synctest.Wait()
@@ -259,7 +260,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 		})
 
 		instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-central1-a"}, nil, machinetypes.E2, true, nil)
-		optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+		optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, adaptivePollingTestManager(false, nil))
 		instanceConfigGenerator := NewInstanceConfigGenerator(ctx, mockLister, instanceConfigCloudProvider, optionsTracker, WithMaxInstanceConfigs(maxInstanceConfigs))
 
 		fa, err := NewFlexAdvisor(ctx,
@@ -463,11 +464,11 @@ func TestFlexibilityScope_LastSuccessfulRefreshAt(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			scope := newFlexibilityScope(nil, "scope-1", func() {})
+			scope := newFlexibilityScope(nil, "scope-1", nil, func() {})
 			scope.lastSuccessfulRefreshAt = tc.initialTime
 
 			scope.finishRefresh(nil, &inFlightProvisions{}, nil, nil, tc.refreshedAt, tc.err)
-			assert.Equal(t, tc.wantTime, scope.getLastSuccessfulRefreshAt())
+			assert.Equal(t, tc.wantTime, scope.getFetchStats().lastSuccessfulRefreshAt)
 		})
 	}
 }

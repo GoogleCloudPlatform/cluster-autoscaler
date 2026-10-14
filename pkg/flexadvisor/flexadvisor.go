@@ -35,11 +35,12 @@ import (
 )
 
 const (
-	refreshInterval           = 10 * time.Second
-	keepAliveInterval         = 10 * time.Minute
-	defaultMaxScopes          = 50
-	defaultMaxInstanceConfigs = 200
-	scopeStalenessThreshold   = 30 * time.Second
+	keepAliveInterval          = 10 * time.Minute
+	defaultMaxScopes           = 50
+	defaultMaxInstanceConfigs  = 200
+	scopeStalenessThreshold    = 30 * time.Second
+	defaultFastRefreshInterval = 10 * time.Second
+	defaultSlowRefreshInterval = 20 * time.Second
 )
 
 func formatBoolPtr(b *bool) string {
@@ -158,7 +159,7 @@ func NewFlexAdvisor(ctx context.Context, adviceProvider api.AdviceProvider, cccL
 		opt(f)
 	}
 
-	go wait.BackoffUntil(f.removeExpiredFlexibilityScopes, &backOffManager{f.clock, refreshInterval, nil}, true, f.context.Done())
+	go wait.BackoffUntil(f.removeExpiredFlexibilityScopes, &backOffManager{f.clock, defaultFastRefreshInterval, nil}, true, f.context.Done())
 	return f, nil
 }
 
@@ -311,26 +312,61 @@ func (f *flexAdvisor) BumpScopeTtl(flexibilityScopeKey string) error {
 	return nil
 }
 
-func calculateRefreshInterval(manager experiments.Manager) time.Duration {
-	if manager == nil {
-		return refreshInterval
+func (f *flexAdvisor) experimentsManager() experiments.Manager {
+	if f.optionsTracker == nil {
+		return nil
 	}
-	duration := manager.EvaluateDurationSecondsFlagOrFailsafe(
-		experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag,
-		refreshInterval,
-	)
-	if duration <= 0 {
-		return refreshInterval
-	}
-	return duration
+	return f.optionsTracker.ExperimentsManager()
 }
 
+// SetPollingMode sets the background refresh polling mode for an existing flexibility scope when adaptive polling is enabled.
+// No-op if the scope is not registered.
+func (f *flexAdvisor) SetPollingMode(flexibilityScopeKey string, mode PollingMode) {
+	if !IsFlexAdvisorAdaptivePollingEnabled(f.experimentsManager()) {
+		return
+	}
+	scope, found, _ := f.getScope(flexibilityScopeKey)
+	if !found || scope == nil {
+		return
+	}
+	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
+		klog.Infof("FlexAdvisor: setting pollingMode=%v for flexibilityScopeKey=%v", mode, flexibilityScopeKey)
+	}
+	scope.setPollingMode(mode)
+}
+
+func getRefreshIntervalForPollingMode(manager experiments.Manager, pollingMode PollingMode) time.Duration {
+	if manager == nil {
+		return defaultFastRefreshInterval
+	}
+	switch pollingMode {
+	case PollingModeSlow:
+		if interval := manager.EvaluateDurationSecondsFlagOrFailsafe(
+			experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag,
+			defaultSlowRefreshInterval,
+		); interval > 0 {
+			return interval
+		}
+		return defaultSlowRefreshInterval
+	default:
+		if interval := manager.EvaluateDurationSecondsFlagOrFailsafe(
+			experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag,
+			defaultFastRefreshInterval,
+		); interval > 0 {
+			return interval
+		}
+		return defaultFastRefreshInterval
+	}
+}
+
+// getScopeStalenessThreshold returns the staleness threshold for a flexibility scope.
+// Derive default staleness from PollingModeNormal (not Slow) so cached slow-polled data still respects the normal freshness budget.
 func (f *flexAdvisor) getScopeStalenessThreshold() time.Duration {
-	if f.optionsTracker == nil || f.optionsTracker.ExperimentsManager() == nil {
+	manager := f.experimentsManager()
+	if manager == nil {
 		return scopeStalenessThreshold
 	}
-	manager := f.optionsTracker.ExperimentsManager()
-	refInterval := calculateRefreshInterval(manager)
+	refInterval := getRefreshIntervalForPollingMode(manager, PollingModeNormal)
 	defaultThreshold := max(scopeStalenessThreshold, 3*refInterval)
 	threshold := manager.EvaluateDurationSecondsFlagOrFailsafe(
 		experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag,
@@ -472,8 +508,8 @@ func (f *flexAdvisor) scopeExpired(key string, now time.Time) bool {
 
 func (f *flexAdvisor) getMaxScopes() int {
 	maxScopes := 0
-	if f.optionsTracker != nil {
-		maxScopes = f.optionsTracker.ExperimentsManager().EvaluateIntFlagOrFailsafe(experiments.FlexAdvisorMaxActiveScopes, defaultMaxScopes)
+	if manager := f.experimentsManager(); manager != nil {
+		maxScopes = manager.EvaluateIntFlagOrFailsafe(experiments.FlexAdvisorMaxActiveScopes, defaultMaxScopes)
 	}
 	if maxScopes <= 0 {
 		maxScopes = defaultMaxScopes
@@ -496,10 +532,11 @@ func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, b
 }
 
 func (f *flexAdvisor) getScopeTtl() time.Duration {
-	if f.optionsTracker == nil || f.optionsTracker.ExperimentsManager() == nil {
+	manager := f.experimentsManager()
+	if manager == nil {
 		return keepAliveInterval
 	}
-	duration := f.optionsTracker.ExperimentsManager().EvaluateDurationSecondsFlagOrFailsafe(
+	duration := manager.EvaluateDurationSecondsFlagOrFailsafe(
 		experiments.FlexAdvisorScopeKeepAliveSecondsFlag,
 		keepAliveInterval,
 	)
@@ -532,7 +569,7 @@ func (f *flexAdvisor) getOrAddFlexibilityScope(flexibilityScopeKey string, bumpS
 		return nil, fmt.Errorf("active scope limit of %d reached", maxScopes)
 	}
 	ctx, cancel := context.WithCancel(f.context)
-	scope = newFlexibilityScope(f, flexibilityScopeKey, cancel)
+	scope = newFlexibilityScope(f, flexibilityScopeKey, f.experimentsManager(), cancel)
 
 	f.scopes[flexibilityScopeKey] = scope
 	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
@@ -672,4 +709,14 @@ func IsFlexAdvisorBinpackerBlockEnabled(manager experiments.Manager) bool {
 	return IsFlexAdvisorProcessingEnabled(manager) &&
 		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorBinpackerBlockEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag, true)
+}
+
+// IsFlexAdvisorAdaptivePollingEnabled returns whether adaptive (fast/slow) background polling is enabled.
+func IsFlexAdvisorAdaptivePollingEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return IsFlexAdvisorProcessingEnabled(manager) &&
+		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorAdaptivePollingEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag, true)
 }

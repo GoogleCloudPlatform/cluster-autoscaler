@@ -479,7 +479,14 @@ func (b *Builder) setUpProcessors(
 	)
 
 	podSharder := podsharding.NewGkePodSharder(provider, options.CSNEnabled, allowlistedSystemLabelsMatcher)
-	podShardSelector := podsharding.NewLruPodShardSelector()
+	var flexAdvisorShardProcessor podsharding.ShardProcessor
+	if options.GCEFlexAdvisorEnabled {
+		flexAdvisorShardProcessor = flexadvisor.NewShardProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)
+		if err := scaleUpProcessorChain.AddProcessor(flexadvisor.NewScaleUpStatusProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)); err != nil {
+			return nil, err
+		}
+	}
+	podShardSelector := podsharding.NewLruPodShardSelector(flexAdvisorShardProcessor)
 	podShardFilter := podsharding.NewPredicatePodShardFilter(ccLister, options.CSNEnabled)
 	podShardingProcessor := podsharding.NewPodShardingProcessor(podSharder, podShardSelector, podShardFilter)
 

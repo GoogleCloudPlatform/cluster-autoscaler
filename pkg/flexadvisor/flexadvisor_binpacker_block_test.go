@@ -40,8 +40,8 @@ import (
 )
 
 const (
-	binpackerBlockTestScopeKey          = "scope-1"
-	binpackerBlockTestInstanceConfigKey = "InstanceConfig-key-1"
+	testScopeKey          = "scope-1"
+	testInstanceConfigKey = "InstanceConfig-key-1"
 )
 
 func binpackerBlockTestManager(enabled bool, stringFlags map[string]string) experiments.Manager {
@@ -51,10 +51,10 @@ func binpackerBlockTestManager(enabled bool, stringFlags map[string]string) expe
 	}, stringFlags)
 }
 
-func newBinpackerBlockTestFlexAdvisor(t *testing.T, ctx context.Context, manager experiments.Manager, opts ...flexAdvisorConstructorOption) (*flexAdvisor, *mockAdviceProvider) {
+func newTestFlexAdvisorWithServer(t *testing.T, ctx context.Context, manager experiments.Manager, opts ...flexAdvisorConstructorOption) (*flexAdvisor, *mockAdviceProvider) {
 	t.Helper()
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
-		ObjectMeta: metav1.ObjectMeta{Name: binpackerBlockTestScopeKey},
+		ObjectMeta: metav1.ObjectMeta{Name: testScopeKey},
 		Spec: v1.ComputeClassSpec{
 			Priorities: []v1.Priority{{MachineType: ptr.To("e2-standard-2")}},
 		},
@@ -67,10 +67,10 @@ func newBinpackerBlockTestFlexAdvisor(t *testing.T, ctx context.Context, manager
 	return fa, mockProvider
 }
 
-func binpackerBlockTestAvailabilityResponse() map[string]*api.InstanceAvailability {
-	availability := api.NewTestInstanceAvailabilityBuilder(binpackerBlockTestScopeKey, binpackerBlockTestInstanceConfigKey).Build()
+func testAvailabilityResponse() map[string]*api.InstanceAvailability {
+	availability := api.NewTestInstanceAvailabilityBuilder(testScopeKey, testInstanceConfigKey).Build()
 	availability.SetProvider(nil)
-	return map[string]*api.InstanceAvailability{binpackerBlockTestInstanceConfigKey: availability}
+	return map[string]*api.InstanceAvailability{testInstanceConfigKey: availability}
 }
 
 func fetchBlockedUntilContextDone(f *flexAdvisor, p *mockAdviceProvider) {
@@ -82,28 +82,28 @@ func fetchBlockedUntilContextDone(f *flexAdvisor, p *mockAdviceProvider) {
 func fetchDelayed(p *mockAdviceProvider, delay time.Duration) {
 	p.On("FetchCapacityGuidance").Run(func(mock.Arguments) {
 		time.Sleep(delay)
-	}).Return(binpackerBlockTestAvailabilityResponse(), nil).Once()
-	p.On("FetchCapacityGuidance").Return(binpackerBlockTestAvailabilityResponse(), nil)
+	}).Return(testAvailabilityResponse(), nil).Once()
+	p.On("FetchCapacityGuidance").Return(testAvailabilityResponse(), nil)
 }
 
 func registerWithFetchDone(t *testing.T, f *flexAdvisor, p *mockAdviceProvider) {
 	t.Helper()
-	p.On("FetchCapacityGuidance").Return(binpackerBlockTestAvailabilityResponse(), nil)
-	assert.NoError(t, f.RegisterFlexibilityScope(binpackerBlockTestScopeKey))
+	p.On("FetchCapacityGuidance").Return(testAvailabilityResponse(), nil)
+	assert.NoError(t, f.RegisterFlexibilityScope(testScopeKey))
 	synctest.Wait()
 }
 
 func registerWithFetchFailed(t *testing.T, f *flexAdvisor, p *mockAdviceProvider) {
 	t.Helper()
 	p.On("FetchCapacityGuidance").Return(nil, fmt.Errorf("api call failed"))
-	assert.NoError(t, f.RegisterFlexibilityScope(binpackerBlockTestScopeKey))
+	assert.NoError(t, f.RegisterFlexibilityScope(testScopeKey))
 	synctest.Wait()
 }
 
 func registerWithFetchInFlight(t *testing.T, f *flexAdvisor, p *mockAdviceProvider) {
 	t.Helper()
 	fetchBlockedUntilContextDone(f, p)
-	assert.NoError(t, f.RegisterFlexibilityScope(binpackerBlockTestScopeKey))
+	assert.NoError(t, f.RegisterFlexibilityScope(testScopeKey))
 }
 
 func scopeActiveFor(f *flexAdvisor, key string) (time.Duration, bool) {
@@ -155,11 +155,11 @@ func TestFlexAdvisor_GetAvailabilitySnapshot_NeverBlocks(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				manager := binpackerBlockTestManager(tc.binpackerBlock, nil)
-				fa, mockProvider := newBinpackerBlockTestFlexAdvisor(t, ctx, manager)
+				fa, mockProvider := newTestFlexAdvisorWithServer(t, ctx, manager)
 				tc.setup(t, fa, mockProvider)
 
 				start := time.Now()
-				snapshot, err := fa.GetAvailabilitySnapshot(binpackerBlockTestScopeKey, binpackerBlockTestInstanceConfigKey)
+				snapshot, err := fa.GetAvailabilitySnapshot(testScopeKey, testInstanceConfigKey)
 				waited := time.Since(start)
 
 				assert.Equal(t, tc.wantSnapshot, snapshot != nil)
@@ -184,7 +184,7 @@ func TestFlexAdvisor_AwaitFlexibilityScopeWithTimeout(t *testing.T) {
 			timeout: 3 * time.Second,
 			setup: func(t *testing.T, f *flexAdvisor, p *mockAdviceProvider) {
 				fetchDelayed(p, 1*time.Second)
-				assert.NoError(t, f.RegisterFlexibilityScope(binpackerBlockTestScopeKey))
+				assert.NoError(t, f.RegisterFlexibilityScope(testScopeKey))
 			},
 			wantWaited:        1 * time.Second,
 			wantSnapshotAfter: true,
@@ -241,11 +241,11 @@ func TestFlexAdvisor_AwaitFlexibilityScopeWithTimeout(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				manager := binpackerBlockTestManager(true, nil)
-				fa, mockProvider := newBinpackerBlockTestFlexAdvisor(t, ctx, manager)
+				fa, mockProvider := newTestFlexAdvisorWithServer(t, ctx, manager)
 				tc.setup(t, fa, mockProvider)
 
 				start := time.Now()
-				err := fa.AwaitFlexibilityScopeWithTimeout(binpackerBlockTestScopeKey, tc.timeout)
+				err := fa.AwaitFlexibilityScopeWithTimeout(testScopeKey, tc.timeout)
 				waited := time.Since(start)
 
 				if tc.wantErrContains != "" {
@@ -255,7 +255,7 @@ func TestFlexAdvisor_AwaitFlexibilityScopeWithTimeout(t *testing.T) {
 				}
 				assert.Equal(t, tc.wantWaited, waited, "blocked duration mismatch")
 
-				snapshot, _ := fa.GetAvailabilitySnapshot(binpackerBlockTestScopeKey, binpackerBlockTestInstanceConfigKey)
+				snapshot, _ := fa.GetAvailabilitySnapshot(testScopeKey, testInstanceConfigKey)
 				assert.Equal(t, tc.wantSnapshotAfter, snapshot != nil, "snapshot presence after await mismatch")
 			})
 		})
@@ -271,28 +271,28 @@ func TestFlexAdvisor_TtlSemantics_WithBinpackerBlock(t *testing.T) {
 		{
 			name: "GetAvailabilitySnapshot on existing scope - keep-alive untouched",
 			call: func(t *testing.T, f *flexAdvisor) {
-				_, _ = f.GetAvailabilitySnapshot(binpackerBlockTestScopeKey, binpackerBlockTestInstanceConfigKey)
+				_, _ = f.GetAvailabilitySnapshot(testScopeKey, testInstanceConfigKey)
 			},
 			wantRemaining: keepAliveInterval - 50*time.Second,
 		},
 		{
 			name: "AwaitFlexibilityScopeWithTimeout on existing scope - keep-alive untouched",
 			call: func(t *testing.T, f *flexAdvisor) {
-				_ = f.AwaitFlexibilityScopeWithTimeout(binpackerBlockTestScopeKey, 3*time.Second)
+				_ = f.AwaitFlexibilityScopeWithTimeout(testScopeKey, 3*time.Second)
 			},
 			wantRemaining: keepAliveInterval - 50*time.Second,
 		},
 		{
 			name: "AwaitAvailabilitySnapshotWithTimeout on existing scope - keep-alive untouched",
 			call: func(t *testing.T, f *flexAdvisor) {
-				_, _ = f.AwaitAvailabilitySnapshotWithTimeout(binpackerBlockTestScopeKey, binpackerBlockTestInstanceConfigKey, firstFetchTimeout)
+				_, _ = f.AwaitAvailabilitySnapshotWithTimeout(testScopeKey, testInstanceConfigKey, firstFetchTimeout)
 			},
 			wantRemaining: keepAliveInterval - 50*time.Second,
 		},
 		{
 			name: "BumpScopeTtl on existing scope - keep-alive extended back to 10m",
 			call: func(t *testing.T, f *flexAdvisor) {
-				assert.NoError(t, f.BumpScopeTtl(binpackerBlockTestScopeKey))
+				assert.NoError(t, f.BumpScopeTtl(testScopeKey))
 			},
 			wantRemaining: keepAliveInterval,
 		},
@@ -304,14 +304,14 @@ func TestFlexAdvisor_TtlSemantics_WithBinpackerBlock(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				manager := binpackerBlockTestManager(true, nil)
-				fa, mockProvider := newBinpackerBlockTestFlexAdvisor(t, ctx, manager)
+				fa, mockProvider := newTestFlexAdvisorWithServer(t, ctx, manager)
 				registerWithFetchDone(t, fa, mockProvider)
 				time.Sleep(50 * time.Second)
 				synctest.Wait()
 
 				tc.call(t, fa)
 
-				activeForAfter, found := scopeActiveFor(fa, binpackerBlockTestScopeKey)
+				activeForAfter, found := scopeActiveFor(fa, testScopeKey)
 				assert.True(t, found)
 				assert.Equal(t, tc.wantRemaining, activeForAfter)
 			})
@@ -323,17 +323,17 @@ func TestIsFlexAdvisorBinpackerBlockEnabled(t *testing.T) {
 	testCases := []struct {
 		name               string
 		experimentsManager experiments.Manager
-		expected           bool
+		want               bool
 	}{
 		{
 			name:               "nil experiments manager - returns false",
 			experimentsManager: nil,
-			expected:           false,
+			want:               false,
 		},
 		{
 			name:               "default flags - returns true",
 			experimentsManager: experiments.NewMockManager(),
-			expected:           true,
+			want:               true,
 		},
 		{
 			name: "bool flag disabled even when min CA version met - returns false",
@@ -341,7 +341,7 @@ func TestIsFlexAdvisorBinpackerBlockEnabled(t *testing.T) {
 				experiments.FlexAdvisorBinpackerBlockEnabledFlag:      false,
 				experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag: true,
 			}, nil),
-			expected: false,
+			want: false,
 		},
 		{
 			name: "bool flag enabled and min CA version met - returns true",
@@ -349,7 +349,7 @@ func TestIsFlexAdvisorBinpackerBlockEnabled(t *testing.T) {
 				experiments.FlexAdvisorBinpackerBlockEnabledFlag:      true,
 				experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag: true,
 			}, nil),
-			expected: true,
+			want: true,
 		},
 		{
 			name: "bool flag enabled but min CA version not met - returns false",
@@ -357,7 +357,7 @@ func TestIsFlexAdvisorBinpackerBlockEnabled(t *testing.T) {
 				experiments.FlexAdvisorBinpackerBlockEnabledFlag:      true,
 				experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag: false,
 			}, nil),
-			expected: false,
+			want: false,
 		},
 		{
 			name: "bool flag enabled and min CA version met but FlexAdvisorProcessing disabled - returns false",
@@ -366,13 +366,13 @@ func TestIsFlexAdvisorBinpackerBlockEnabled(t *testing.T) {
 				experiments.FlexAdvisorBinpackerBlockEnabledFlag:      true,
 				experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag: true,
 			}, nil),
-			expected: false,
+			want: false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, IsFlexAdvisorBinpackerBlockEnabled(tc.experimentsManager))
+			assert.Equal(t, tc.want, IsFlexAdvisorBinpackerBlockEnabled(tc.experimentsManager))
 		})
 	}
 }

@@ -1070,6 +1070,7 @@ func (b *Builder) Build(
 	prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
 	scaleUpOrchestrator := flexadvisor.NewWrapperOrchestrator(
 		provreqorchestrator.NewWrapperOrchestrator(prOrchestrator),
+		flexAdvisor,
 		b.npcCrdLister,
 		bypassTracker,
 		scaleUpLimiterTracker,

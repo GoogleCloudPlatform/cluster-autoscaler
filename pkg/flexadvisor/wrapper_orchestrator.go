@@ -20,8 +20,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podsharding"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -47,7 +50,9 @@ type ScaleUpEndProcessor interface {
 // WrapperOrchestrator wraps a scaleup.Orchestrator to manage FlexAdvisor per-pass
 // limiter tracking and recommendations bypass lifecycle within a single execution layer.
 type WrapperOrchestrator struct {
+	autoscalingCtx       *ca_context.AutoscalingContext
 	wrappedOrchestrator  scaleup.Orchestrator
+	flexAdvisor          instanceavailability.Provider
 	cccLister            lister.Lister
 	bypassTracker        RecommendationsBypassTracker
 	limiterTracker       ScaleUpLimiterTracker
@@ -67,6 +72,7 @@ func withWrapperOrchestratorMetrics(m wrapperOrchestratorMetrics) wrapperOrchest
 // NewWrapperOrchestrator returns a new WrapperOrchestrator for FlexAdvisor.
 func NewWrapperOrchestrator(
 	wrappedOrchestrator scaleup.Orchestrator,
+	flexAdvisor instanceavailability.Provider,
 	cccLister lister.Lister,
 	bypassTracker RecommendationsBypassTracker,
 	limiterTracker ScaleUpLimiterTracker,
@@ -76,6 +82,7 @@ func NewWrapperOrchestrator(
 ) *WrapperOrchestrator {
 	o := &WrapperOrchestrator{
 		wrappedOrchestrator:  wrappedOrchestrator,
+		flexAdvisor:          flexAdvisor,
 		cccLister:            cccLister,
 		bypassTracker:        bypassTracker,
 		limiterTracker:       limiterTracker,
@@ -98,6 +105,7 @@ func (o *WrapperOrchestrator) Initialize(
 	taintConfig taints.TaintConfig,
 	quotasTrackerFactory *resourcequotas.TrackerFactory,
 ) {
+	o.autoscalingCtx = autoscalingCtx
 	o.wrappedOrchestrator.Initialize(autoscalingCtx, processors, clusterStateRegistry, estimatorBuilder, taintConfig, quotasTrackerFactory)
 }
 
@@ -126,14 +134,32 @@ func (o *WrapperOrchestrator) ScaleUp(
 		}
 	}()
 
-	if !isFlexAdvisorRecommendationsBypassEnabled(o.experimentsManager) || o.bypassTracker == nil || o.cccLister == nil {
-		return o.wrappedOrchestrator.ScaleUp(ctx, unschedulablePods, nodes, daemonSets, nodeInfos, allOrNothing)
+	shard := podsharding.GetSelectedPodShard(o.autoscalingCtx)
+	flexibilityScopeKey, _ := flexibilityScopeKeyFromShard(shard, o.cccLister)
+
+	if IsFlexAdvisorAdaptivePollingEnabled(o.experimentsManager) {
+		if o.flexAdvisor != nil && flexibilityScopeKey != "" {
+			// In salvo mode ScaleUp() and ScaleUpStatusProcessors are called multiple times per single shard, in case it was switched to slow polling
+			// we switch it back to fast. This change can be picked up by scope worker, but unless significant time passed, refresh will not be retriggered
+			o.flexAdvisor.SetPollingMode(flexibilityScopeKey, PollingModeNormal)
+			defer o.flexAdvisor.SetPollingMode(flexibilityScopeKey, PollingModeSlow)
+		}
+
+		if o.flexAdvisor != nil && flexibilityScopeKey == "" && shard != nil && shard.NodeGroupDescriptor.ProvisioningClassName == "" {
+			// This is a non-CCC, non-provreq shard - try to register synthetic CCCs
+			// SetPollingMode will only actually change their mode if they have been previously registered, meaning
+			// there are some unschedulablePods pending that were picked up by pod list processor that will use general-purpose or general-purpose-arm (or such scope has been used recently
+			// and has not yet expired)
+			// We don't check explicitly whether these synthetic CCCs will actually be used in this shard as 1. cost of checking is high 2. cost of just activating them is low
+			for _, syntheticPayPerPodCcc := range []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily} {
+				o.flexAdvisor.SetPollingMode(syntheticPayPerPodCcc, PollingModeNormal)
+				defer o.flexAdvisor.SetPollingMode(syntheticPayPerPodCcc, PollingModeSlow)
+			}
+		}
 	}
 
-	var flexibilityScopeKey string
-	if len(unschedulablePods) > 0 {
-		// PodCrd defaults to GetDefaultCrd() if pod doesn't have CCC
-		_, flexibilityScopeKey, _ = o.cccLister.PodCrd(unschedulablePods[0])
+	if !isFlexAdvisorRecommendationsBypassEnabled(o.experimentsManager) || o.bypassTracker == nil || o.cccLister == nil {
+		return o.wrappedOrchestrator.ScaleUp(ctx, unschedulablePods, nodes, daemonSets, nodeInfos, allOrNothing)
 	}
 
 	if flexibilityScopeKey != "" && o.bypassTracker.HasReachedBypassThreshold(flexibilityScopeKey) {
