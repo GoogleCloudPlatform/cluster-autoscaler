@@ -54,8 +54,10 @@ const (
 	// their pods can be scheduled on already existing nodes. This is the default.
 	CreateBeforeDelete Mode = iota
 	// DeleteBeforeCreate means that the candidate nodes should be scaled-down ASAP,
-	// even if there is no place in the cluster to schedule them. This mode should
-	// be used iff. there is no possibility of scale-up before the nodes are deleted.
+	// even if there is no place in the cluster to schedule their pods. Atomic
+	// candidates are scaled down as a whole; partial candidates are scaled down
+	// node by node as they are processed, including the nodes whose pods have
+	// nowhere to go yet. The pods are handed over to scale-up in the same loop.
 	DeleteBeforeCreate
 )
 

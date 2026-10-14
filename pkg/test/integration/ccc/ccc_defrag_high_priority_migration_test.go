@@ -24,16 +24,14 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
-	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/reactors"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
@@ -107,35 +105,7 @@ func TestCCCMinCapacityDefragPrevention(t *testing.T) {
 		defer integration_synctest.TearDown(cancel)
 		infra := integration.SetupInfrastructure(ctx, t)
 
-		// Intercept eviction requests and delete the pods from the fake client,
-		// simulating the behavior of a real API server eviction controller.
-		infra.Fakes.KubeClient.PrependReactor("create", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
-			if action.GetSubresource() != "eviction" {
-				return false, nil, nil
-			}
-			createAction, ok := action.(clientgotesting.CreateAction)
-			if !ok {
-				return false, nil, nil
-			}
-			eviction, ok := createAction.GetObject().(*policyv1beta1.Eviction)
-			if !ok {
-				return false, nil, nil
-			}
-			podName := eviction.Name
-			namespace := eviction.Namespace
-
-			// Delete the pod asynchronously to avoid blocking the reactor.
-			go func() {
-				err := infra.Fakes.KubeClient.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
-				if err != nil {
-					t.Logf("Eviction controller mock: failed to delete evicted pod %s/%s: %v", namespace, podName, err)
-				} else {
-					t.Logf("Eviction controller mock: successfully deleted pod %s/%s", namespace, podName)
-				}
-			}()
-
-			return true, eviction, nil
-		})
+		reactors.PrependMockEvictionReactor(infra.Fakes.KubeClient)
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)

@@ -24,10 +24,8 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
-	policyv1beta1 "k8s.io/api/policy/v1beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/utils/ptr"
 	cataints "sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -35,6 +33,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/reactors"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 )
 
@@ -104,31 +103,7 @@ func TestCCCNodeConfigDriftActiveMigration(t *testing.T) {
 		defer integration_synctest.TearDown(cancel)
 		infra := integration.SetupInfrastructure(ctx, t)
 
-		// Mock eviction controller: delete the evicted pod from fake client.
-		infra.Fakes.KubeClient.PrependReactor("create", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
-			if action.GetSubresource() != "eviction" {
-				return false, nil, nil
-			}
-			createAction, ok := action.(clientgotesting.CreateAction)
-			if !ok {
-				return false, nil, nil
-			}
-			eviction, ok := createAction.GetObject().(*policyv1beta1.Eviction)
-			if !ok {
-				return false, nil, nil
-			}
-			podName := eviction.Name
-			namespace := eviction.Namespace
-
-			go func() {
-				err := infra.Fakes.KubeClient.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
-				if err != nil {
-					t.Logf("Eviction mock: failed to delete evicted pod %s/%s: %v", namespace, podName, err)
-				}
-			}()
-
-			return true, eviction, nil
-		})
+		reactors.PrependMockEvictionReactor(infra.Fakes.KubeClient)
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
@@ -348,31 +323,7 @@ func TestCCCMinCapacityNodeConfigDriftActiveMigration(t *testing.T) {
 
 		infra := integration.SetupInfrastructure(ctx, t)
 
-		// Mock eviction controller: delete the evicted pod from fake client.
-		infra.Fakes.KubeClient.PrependReactor("create", "pods", func(action clientgotesting.Action) (handled bool, ret runtime.Object, err error) {
-			if action.GetSubresource() != "eviction" {
-				return false, nil, nil
-			}
-			createAction, ok := action.(clientgotesting.CreateAction)
-			if !ok {
-				return false, nil, nil
-			}
-			eviction, ok := createAction.GetObject().(*policyv1beta1.Eviction)
-			if !ok {
-				return false, nil, nil
-			}
-			podName := eviction.Name
-			namespace := eviction.Namespace
-
-			go func() {
-				err := infra.Fakes.KubeClient.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{})
-				if err != nil {
-					t.Logf("Eviction mock: failed to delete evicted pod %s/%s: %v", namespace, podName, err)
-				}
-			}()
-
-			return true, eviction, nil
-		})
+		reactors.PrependMockEvictionReactor(infra.Fakes.KubeClient)
 
 		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
 		assert.NoError(t, err)
@@ -964,5 +915,143 @@ func TestCCCNodeConfigDriftAtomicGroupExceedsMaxNodeDisruption(t *testing.T) {
 		for _, n := range afterNodes.Items {
 			assert.False(t, cataints.HasToBeDeletedTaint(&n), "No node should be tainted for deletion: %s", n.Name)
 		}
+	})
+}
+
+// TestCCCNodeConfigDriftDeleteBeforeCreatePartial tests a ComputeClass with
+// migrationStrategy DeleteBeforeCreate and no atomicGroupLabels, which yields
+// non-atomic defrag candidates. A drifted node whose pod has nowhere
+// to go yet is tainted for deletion in the same loop that requests its
+// replacement, instead of waiting for the replacement to become ready first.
+func TestCCCNodeConfigDriftDeleteBeforeCreatePartial(t *testing.T) {
+	cccName := "drift-dbc-partial-ccc"
+
+	// CCC with ConfigDrift enabled, required node label "tier: frontend", n2 priority rule,
+	// DeleteBeforeCreate strategy and no atomic group labels.
+	cc := ccc.NewComputeClassBuilder(cccName).
+		WithNodePoolConfig(&v1.NodePoolConfig{
+			NodeLabels: map[string]string{
+				"tier": "frontend",
+			},
+		}).
+		AddPriority(v1.Priority{
+			MachineFamily: ptr.To("n2"),
+		}).
+		WithConfigDrift(true).
+		WithMigrationStrategy(v1.MigrationStrategyDeleteBeforeCreate).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cc).
+		WithNodePools(
+			// Target compliant node pool: size 1, n2-standard-2, tier=frontend.
+			integration.DefaultNodePool(
+				integration.WithNodePoolName("ng-compliant"),
+				integration.WithNodePoolMachineType("n2-standard-2"),
+				integration.WithNodePoolSize(1),
+				integration.WithNodePoolLocations("us-central1-a"),
+				integration.WithNodePoolLabels(map[string]string{
+					labels.ComputeClassLabel:  cccName,
+					labels.MachineFamilyLabel: "n2",
+					"tier":                    "frontend",
+				}),
+				integration.WithNodePoolMin(0),
+				integration.WithNodePoolMax(10),
+				integration.WithNodePoolAutoscalingEnabled(true),
+			),
+			// Source drifted node pool: size 1, e2-standard-2, missing "tier" label.
+			integration.DefaultNodePool(
+				integration.WithNodePoolName("ng-drifted"),
+				integration.WithNodePoolMachineType("e2-standard-2"),
+				integration.WithNodePoolSize(1),
+				integration.WithNodePoolLocations("us-central1-a"),
+				integration.WithNodePoolLabels(map[string]string{
+					labels.ComputeClassLabel:  cccName,
+					labels.MachineFamilyLabel: "e2",
+				}),
+				integration.WithNodePoolMin(0),
+				integration.WithNodePoolMax(10),
+				integration.WithNodePoolAutoscalingEnabled(true),
+			),
+		).
+		WithOverrides(
+			integration.WithScaleDownUnneededTime(time.Minute),
+			integration.WithScaleDownDelayAfterAdd(time.Minute),
+			integration.WithScaleDownUtilizationThreshold(0.5),
+			integration.WithDefragEnabled("nodeconfigdrift"),
+			integration.WithDefragCandidateLimit(10),
+			integration.WithMaxDrainParallelism(10),
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer integration_synctest.TearDown(cancel)
+		infra := integration.SetupInfrastructure(ctx, t)
+		reactors.PrependMockEvictionReactor(infra.Fakes.KubeClient)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		if err != nil {
+			return
+		}
+
+		// Initial nodes: 1 compliant + 1 drifted.
+		nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		assert.NoError(t, err)
+		assert.Len(t, nodes.Items, 2)
+
+		// A 60% CPU workload pod on every node: the drifted node's pod does not
+		// fit next to the compliant node's pod, so the drifted node cannot be
+		// removed until a replacement exists, and regular scale-down leaves
+		// both nodes alone.
+		var driftedPod *apiv1.Pod
+		for i, n := range nodes.Items {
+			pod := tu.BuildTestPod(fmt.Sprintf("workload-pod-%d", i), 1200, 100)
+			tu.SetRSPodSpec(pod, fmt.Sprintf("rs-%d", i))
+			pod.Spec.NodeName = n.Name
+			_, err = infra.Fakes.KubeClient.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+			assert.NoError(t, err)
+			if n.Labels[labels.MachineFamilyLabel] == "e2" {
+				driftedPod = pod
+			}
+		}
+		if !assert.NotNil(t, driftedPod, "Expected a pod on the drifted (e2) node") {
+			return
+		}
+
+		countNodes := func() (taintedDrifted, untaintedDrifted, compliant int) {
+			currentNodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+			assert.NoError(t, err)
+			for _, n := range currentNodes.Items {
+				switch n.Labels[labels.MachineFamilyLabel] {
+				case "n2":
+					compliant++
+				case "e2":
+					if cataints.HasToBeDeletedTaint(&n) {
+						taintedDrifted++
+					} else {
+						untaintedDrifted++
+					}
+				}
+			}
+			return taintedDrifted, untaintedDrifted, compliant
+		}
+
+		// Loop 1: defrag picks the drifted node, starts deleting it right away
+		// and requests the replacement in the same loop.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 2*time.Minute)
+		taintedDrifted, untaintedDrifted, _ := countNodes()
+		assert.Equal(t, 0, untaintedDrifted, "Drifted node must be taken out of service without waiting for its replacement")
+		_, err = infra.Fakes.KubeClient.CoreV1().Pods(driftedPod.Namespace).Get(ctx, driftedPod.Name, metav1.GetOptions{})
+		assert.True(t, apierrors.IsNotFound(err), "Drifted node's pod must be evicted without waiting for its replacement, got: %v", err)
+		t.Logf("after loop 1: %d drifted node(s) still draining, %d already deleted", taintedDrifted, 1-taintedDrifted)
+
+		// Loop 2: the replacement node is ready and the drifted node must
+		// never have returned to service.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		taintedDrifted, untaintedDrifted, compliant := countNodes()
+		assert.GreaterOrEqual(t, compliant, 2, "Expected the replacement (n2) node to be scaled up")
+		assert.Equal(t, 0, untaintedDrifted, "Drifted node must not be back in service")
+		t.Logf("after loop 2: %d drifted node(s) still draining, %d already deleted", taintedDrifted, 1-taintedDrifted)
 	})
 }
