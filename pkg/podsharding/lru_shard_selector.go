@@ -14,16 +14,34 @@
 
 package podsharding
 
-// LruPodShardSelector is a PodShardSelector which picks shards in least-recently picked order
-type LruPodShardSelector struct {
-	lruMap     map[ShardSignature]uint64
-	useCounter uint64
+import (
+	"cmp"
+	"slices"
+)
+
+// ShardProcessor is notified by LruPodShardSelector about the order in which shards are going to be processed.
+type ShardProcessor interface {
+	// ShouldProcess returns whether ProcessIncomingShards should be invoked during shard selection.
+	ShouldProcess() bool
+	// ProcessIncomingShards is called once per selection with all shards ordered from the least recently selected
+	// to the most recently selected one, i.e. shards[0] is the shard selected for the current loop and shards[1:]
+	// are the shards that will be selected in the following loops (assuming the set of shards does not change).
+	ProcessIncomingShards(shards []*PodShard)
 }
 
-// NewLruPodShardSelector creates PodShardSelector which picks shards in least-recently picked order
-func NewLruPodShardSelector() PodShardSelector {
+// LruPodShardSelector is a PodShardSelector which picks shards in least-recently picked order
+type LruPodShardSelector struct {
+	lruMap         map[ShardSignature]uint64
+	useCounter     uint64
+	shardProcessor ShardProcessor
+}
+
+// NewLruPodShardSelector creates PodShardSelector which picks shards in least-recently picked order.
+// shardProcessor may be nil, in which case no notifications about the shard selection order are sent.
+func NewLruPodShardSelector(shardProcessor ShardProcessor) PodShardSelector {
 	return &LruPodShardSelector{
-		lruMap: make(map[ShardSignature]uint64),
+		lruMap:         make(map[ShardSignature]uint64),
+		shardProcessor: shardProcessor,
 	}
 }
 
@@ -54,6 +72,19 @@ func (selector *LruPodShardSelector) SelectPodShard(shards []*PodShard) *PodShar
 			selectedShardTime = shardTime
 		}
 	}
+	if selector.shardProcessor != nil && selector.shardProcessor.ShouldProcess() {
+		selector.shardProcessor.ProcessIncomingShards(selector.incomingShards(shards))
+	}
 	selector.lruMap[selectedShard.Signature()] = selector.useCounter
 	return selectedShard
+}
+
+// incomingShards returns a copy of shards ordered from the least recently selected to the most recently selected one.
+// TODO(b/580929011): Avoid repeated uncached Signature() allocations inside the sort comparator.
+func (selector *LruPodShardSelector) incomingShards(shards []*PodShard) []*PodShard {
+	incoming := slices.Clone(shards)
+	slices.SortStableFunc(incoming, func(a, b *PodShard) int {
+		return cmp.Compare(selector.lruMap[a.Signature()], selector.lruMap[b.Signature()])
+	})
+	return incoming
 }

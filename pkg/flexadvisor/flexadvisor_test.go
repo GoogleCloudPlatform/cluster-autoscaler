@@ -134,8 +134,8 @@ func addScopeDataRaceBackgroundJob(f *flexAdvisor, flexibilityScopeKey string) {
 			field := val.Field(i)
 			fieldName := val.Type().Field(i).Name
 			fieldType := field.Type().String()
-			// don't overwrite mutexes, atomics, or other fields considered const
-			if fieldType == "sync.Mutex" || fieldType == "sync.RWMutex" || fieldType == "sync.WaitGroup" || fieldType == "atomic.Bool" || fieldName == "flexibilityScopeKey" || fieldName == "provider" || fieldName == "cancelFunc" {
+			// don't overwrite mutexes, atomics, channels, or other fields considered const
+			if fieldType == "sync.Mutex" || fieldType == "sync.RWMutex" || fieldType == "sync.WaitGroup" || fieldType == "atomic.Bool" || fieldName == "pollingMode" || fieldName == "flexibilityScopeKey" || fieldName == "provider" || fieldName == "cancelFunc" || fieldName == "pollingModeCh" {
 				continue
 			}
 			ptr := unsafe.Pointer(field.UnsafeAddr())
@@ -1630,7 +1630,7 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
-				scope := newFlexibilityScope(nil, "scope-1", func() {})
+				scope := newFlexibilityScope(nil, "scope-1", manager, func() {})
 				scope.firstFetchFinished.Store(true)
 				if tc.refreshTime != nil {
 					scope.lastSuccessfulRefreshAt = tc.refreshTime(time.Now())
@@ -1778,7 +1778,7 @@ func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
 			fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{updatedGeneralPurposeCrd}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 			assert.NoError(t, err)
 
-			scope := newFlexibilityScope(nil, rules.GeneralPurposePodFamily, func() {})
+			scope := newFlexibilityScope(nil, rules.GeneralPurposePodFamily, optionsTracker.ExperimentsManager(), func() {})
 			scope.generatedUsing = staleGeneralPurposeCrd
 
 			assert.Equal(t, tc.wantCccState, fa.cccState(scope))
@@ -1787,57 +1787,118 @@ func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
 	}
 }
 
-func TestCalculateRefreshInterval(t *testing.T) {
+func TestGetRefreshIntervalForPollingMode(t *testing.T) {
 	testCases := []struct {
 		name        string
 		nilManager  bool
+		pollingMode PollingMode
 		stringFlags map[string]string
 		want        time.Duration
 	}{
 		{
-			name:       "nil manager returns default 10s",
-			nilManager: true,
-			want:       10 * time.Second,
+			name:        "nil manager normal polling - returns default 10s",
+			nilManager:  true,
+			pollingMode: PollingModeNormal,
+			want:        10 * time.Second,
 		},
 		{
-			name:        "no experiment returns default 10s",
+			name:        "nil manager slow polling - returns default 10s",
+			nilManager:  true,
+			pollingMode: PollingModeSlow,
+			want:        10 * time.Second,
+		},
+		{
+			name:        "no experiment normal polling - returns default 10s",
+			pollingMode: PollingModeNormal,
 			stringFlags: nil,
 			want:        10 * time.Second,
 		},
 		{
-			name: "custom valid interval 5s",
+			name:        "no experiment slow polling - returns default 20s",
+			pollingMode: PollingModeSlow,
+			stringFlags: nil,
+			want:        20 * time.Second,
+		},
+		{
+			name:        "custom valid normal interval 5s - returns 5s",
+			pollingMode: PollingModeNormal,
 			stringFlags: map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "5",
 			},
 			want: 5 * time.Second,
 		},
 		{
-			name: "custom valid interval 20s",
+			name:        "custom valid normal interval 20s - returns 20s",
+			pollingMode: PollingModeNormal,
 			stringFlags: map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "20",
 			},
 			want: 20 * time.Second,
 		},
 		{
-			name: "zero value falls back to default 10s",
+			name:        "custom valid slow interval 45s - returns 45s",
+			pollingMode: PollingModeSlow,
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "45",
+			},
+			want: 45 * time.Second,
+		},
+		{
+			name:        "invalid polling mode with custom normal interval 5s - evaluates ScopeRefreshIntervalSecondsFlag and returns 5s",
+			pollingMode: PollingMode(99),
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag:        "5",
+				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "45",
+			},
+			want: 5 * time.Second,
+		},
+		{
+			name:        "zero normal interval value - falls back to default 10s",
+			pollingMode: PollingModeNormal,
 			stringFlags: map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "0",
 			},
 			want: 10 * time.Second,
 		},
 		{
-			name: "negative value falls back to default 10s",
+			name:        "negative normal interval value - falls back to default 10s",
+			pollingMode: PollingModeNormal,
 			stringFlags: map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "-5",
 			},
 			want: 10 * time.Second,
 		},
 		{
-			name: "invalid unparseable value falls back to default 10s",
+			name:        "invalid unparseable normal interval value - falls back to default 10s",
+			pollingMode: PollingModeNormal,
 			stringFlags: map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "not-a-number",
 			},
 			want: 10 * time.Second,
+		},
+		{
+			name:        "zero slow interval value - falls back to default 20s",
+			pollingMode: PollingModeSlow,
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "0",
+			},
+			want: 20 * time.Second,
+		},
+		{
+			name:        "negative slow interval value - falls back to default 20s",
+			pollingMode: PollingModeSlow,
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "-5",
+			},
+			want: 20 * time.Second,
+		},
+		{
+			name:        "slow interval with duration suffix 20s (non-integer) - falls back to default 20s",
+			pollingMode: PollingModeSlow,
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "20s",
+			},
+			want: 20 * time.Second,
 		},
 	}
 	for _, tc := range testCases {
@@ -1846,7 +1907,7 @@ func TestCalculateRefreshInterval(t *testing.T) {
 			if !tc.nilManager {
 				manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
 			}
-			got := calculateRefreshInterval(manager)
+			got := getRefreshIntervalForPollingMode(manager, tc.pollingMode)
 			assert.Equal(t, tc.want, got)
 		})
 	}

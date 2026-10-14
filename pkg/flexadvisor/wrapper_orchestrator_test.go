@@ -20,6 +20,7 @@ import (
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -28,11 +29,15 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podsharding"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	ca_processors "sigs.k8s.io/cluster-autoscaler/pkg/processors"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -103,6 +108,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 		crds                      []crd.CRD
 		defaultCccEnabled         bool
 		unschedulablePods         []*apiv1.Pod
+		selectedShard             *podsharding.PodShard
 		experimentsManager        experiments.Manager
 		setupTrackers             func(bypassTracker RecommendationsBypassTracker, limiterTracker ScaleUpLimiterTracker)
 		innerScaleUp              func(bypassTracker RecommendationsBypassTracker, limiterTracker ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError)
@@ -115,6 +121,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "ScaleUpNoOptionsAvailable with FA-constrained scope - marks scope blocked and keeps limiterTracker for downstream status processors",
 			crds:              []crd.CRD{crdScope1, crdScope2},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, limiterTracker ScaleUpLimiterTracker) {
 				limiterTracker.MarkScaleUpOptionRemovedByFlexAdvisor("stale-mig", "scope-2")
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -133,6 +140,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "ScaleUpSuccessful after 2 prior blocks - resets counters for active scope",
 			crds:              []crd.CRD{crdScope1, crdScope2},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"scope-1"})
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -151,6 +159,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "threshold reached (3 blocks) for active scope - pauses enforcement during ScaleUp and increments metric",
 			crds:              []crd.CRD{crdScope1, crdScope2},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"scope-1"})
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -167,10 +176,73 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			expectedMetrics:           1,
 		},
 		{
+			name:              "mixed shard with plain pod first and adaptive polling enabled - resolves explicit CCC scope from autoscalingCtx instead of default",
+			crds:              []crd.CRD{crdScope1, crdDefault},
+			defaultCccEnabled: true,
+			unschedulablePods: []*apiv1.Pod{podWithoutCCC, podScope1},
+			selectedShard:     cccShard("scope-1"),
+			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"default"})
+				bypassTracker.MarkBlocked([]string{"default"})
+				bypassTracker.MarkBlocked([]string{"default"})
+			},
+			innerScaleUp: func(_ RecommendationsBypassTracker, _ ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError) {
+				return &status.ScaleUpStatus{Result: status.ScaleUpSuccessful}, nil
+			},
+			expectedPausedDuringRun:   map[string]bool{"scope-1": true, "default": false},
+			expectedThresholdAfterRun: map[string]bool{"scope-1": false, "default": true},
+			expectedMetrics:           1,
+		},
+		{
+			name:              "mixed shard with plain pod first and adaptive polling disabled - still resolves explicit CCC scope from autoscalingCtx instead of default",
+			crds:              []crd.CRD{crdScope1, crdDefault},
+			defaultCccEnabled: true,
+			unschedulablePods: []*apiv1.Pod{podWithoutCCC, podScope1},
+			selectedShard:     cccShard("scope-1"),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
+			}, nil),
+			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"default"})
+				bypassTracker.MarkBlocked([]string{"default"})
+				bypassTracker.MarkBlocked([]string{"default"})
+			},
+			innerScaleUp: func(_ RecommendationsBypassTracker, _ ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError) {
+				return &status.ScaleUpStatus{Result: status.ScaleUpSuccessful}, nil
+			},
+			expectedPausedDuringRun:   map[string]bool{"scope-1": true, "default": false},
+			expectedThresholdAfterRun: map[string]bool{"scope-1": false, "default": true},
+			expectedMetrics:           1,
+		},
+		{
+			name:              "provisioning request shard - does not consume bypass or reset counters for CCC scope",
+			crds:              []crd.CRD{crdScope1},
+			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     provReqShard("scope-1"),
+			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+				bypassTracker.MarkBlocked([]string{"scope-1"})
+			},
+			innerScaleUp: func(_ RecommendationsBypassTracker, _ ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError) {
+				return &status.ScaleUpStatus{Result: status.ScaleUpSuccessful}, nil
+			},
+			expectedPausedDuringRun:   map[string]bool{"scope-1": false},
+			expectedThresholdAfterRun: map[string]bool{"scope-1": true},
+			expectedMetrics:           0,
+		},
+		{
 			name:              "non-CCC pod shard with Default CCC enabled - pauses default scope during ScaleUp when default reached threshold",
 			crds:              []crd.CRD{crdScope1, crdDefault},
 			defaultCccEnabled: true,
 			unschedulablePods: []*apiv1.Pod{podWithoutCCC},
+			selectedShard:     plainShard("basic"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"default"})
 				bypassTracker.MarkBlocked([]string{"default"})
@@ -187,6 +259,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "non-CCC pod shard without Default CCC - does not pause blocked CCC scope",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podWithoutCCC},
+			selectedShard:     plainShard("basic"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"scope-1"})
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -203,6 +276,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "ScaleUpError does not reset counters or mark blocked",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"scope-1"})
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -220,6 +294,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "FlexAdvisorRecommendationsBypassEnabledFlag disabled - does not pause or mark blocked, and resets limiterTracker",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 				experiments.FlexAdvisorRecommendationsBypassEnabledFlag: false,
 			}, nil),
@@ -240,6 +315,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			name:              "FlexAdvisorProcessingEnabledFlag disabled - does not pause even with 3 blocks",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 				experiments.FlexAdvisorProcessingEnabledFlag: false,
 			}, nil),
@@ -283,8 +359,16 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 				return tc.innerScaleUp(bypassTracker, limiterTracker)
 			}
 
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
+			}
+			if tc.selectedShard != nil {
+				podsharding.TestSetPodShard(autoscalingCtx, tc.selectedShard)
+			}
+
 			mockMetrics := &mockWrapperOrchestratorMetrics{}
-			wrapper := NewWrapperOrchestrator(inner, mockLister, bypassTracker, limiterTracker, nil, manager, withWrapperOrchestratorMetrics(mockMetrics))
+			wrapper := NewWrapperOrchestrator(inner, nil, mockLister, bypassTracker, limiterTracker, nil, manager, withWrapperOrchestratorMetrics(mockMetrics))
+			wrapper.Initialize(autoscalingCtx, nil, nil, nil, taints.TaintConfig{}, nil)
 
 			_, _ = wrapper.ScaleUp(context.Background(), tc.unschedulablePods, nil, nil, nil, false)
 
@@ -378,7 +462,8 @@ func TestWrapperOrchestrator_ScaleUp_ScaleUpEndProcessors(t *testing.T) {
 				},
 			}
 
-			wrapper := NewWrapperOrchestrator(inner, mockLister, bypassTracker, limiterTracker, processors, tc.experimentsManager)
+			wrapper := NewWrapperOrchestrator(inner, nil, mockLister, bypassTracker, limiterTracker, processors, tc.experimentsManager)
+			wrapper.Initialize(&ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}, nil, nil, nil, taints.TaintConfig{}, nil)
 			_, _ = wrapper.ScaleUp(context.Background(), tc.unschedulablePods, nil, nil, nil, false)
 
 			assert.Equal(t, tc.wantEvents, events)
@@ -386,11 +471,241 @@ func TestWrapperOrchestrator_ScaleUp_ScaleUpEndProcessors(t *testing.T) {
 	}
 }
 
+func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
+	crdScope1 := ccc.NewCccCrd(&v1.ComputeClass{ObjectMeta: metav1.ObjectMeta{Name: "scope-1"}}, "", false, nil, nil)
+	crdDefault := ccc.NewCccCrd(&v1.ComputeClass{ObjectMeta: metav1.ObjectMeta{Name: "default"}}, "", false, nil, nil)
+
+	podScope1 := testPod("scope-1")
+	podWithoutCCC := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "basic-pod"}}
+
+	syntheticPayPerPodScopes := []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily}
+	syntheticPayPerPodOrder := []string{
+		"SetPollingMode:general-purpose:normal",
+		"SetPollingMode:general-purpose-arm:normal",
+		"innerScaleUp",
+		"SetPollingMode:general-purpose-arm:slow",
+		"SetPollingMode:general-purpose:slow",
+	}
+
+	testCases := []struct {
+		name               string
+		crds               []crd.CRD
+		defaultCccEnabled  bool
+		nilProvider        bool
+		unschedulablePods  []*apiv1.Pod
+		selectedShard      *podsharding.PodShard
+		experimentsManager experiments.Manager
+		innerScaleUpResult status.ScaleUpResult
+		innerScaleUpErr    errors.AutoscalerError
+		wantScopes         []string
+		wantExpectedOrder  []string
+	}{
+		{
+			name:               "adaptive polling enabled, explicit CCC shard - sets PollingModeNormal before and PollingModeSlow after inner ScaleUp",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			selectedShard:      cccShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         []string{"scope-1"},
+			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+		},
+		{
+			name:               "adaptive polling enabled, mixed shard with plain pod at unschedulablePods[0] without default CCC - resolves explicit CCC scope from autoscalingCtx",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podWithoutCCC, podScope1},
+			selectedShard:      cccShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         []string{"scope-1"},
+			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+		},
+		{
+			name:               "adaptive polling enabled, mixed shard with plain pod at unschedulablePods[0] and default CCC enabled - resolves explicit CCC scope instead of default",
+			crds:               []crd.CRD{crdScope1, crdDefault},
+			defaultCccEnabled:  true,
+			unschedulablePods:  []*apiv1.Pod{podWithoutCCC, podScope1},
+			selectedShard:      cccShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         []string{"scope-1"},
+			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+		},
+		{
+			name:              "adaptive polling enabled, recommendations bypass disabled (early return path) - still sets PollingModeNormal before and PollingModeSlow after inner ScaleUp",
+			crds:              []crd.CRD{crdScope1},
+			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     cccShard("scope-1"),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorRecommendationsBypassEnabledFlag: false,
+			}, nil),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         []string{"scope-1"},
+			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+		},
+		{
+			name:               "adaptive polling enabled, plain shard with default CCC enabled - sets PollingModeNormal before and PollingModeSlow after inner ScaleUp for default scope",
+			crds:               []crd.CRD{crdScope1, crdDefault},
+			defaultCccEnabled:  true,
+			unschedulablePods:  []*apiv1.Pod{podWithoutCCC},
+			selectedShard:      plainShard("basic"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         []string{"default"},
+			wantExpectedOrder:  []string{"SetPollingMode:default:normal", "innerScaleUp", "SetPollingMode:default:slow"},
+		},
+		{
+			name:               "adaptive polling enabled, plain shard without default CCC - activates synthetic Pay-Per-Pod scopes before and demotes after inner ScaleUp",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podWithoutCCC},
+			selectedShard:      plainShard("basic"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantScopes:         syntheticPayPerPodScopes,
+			wantExpectedOrder:  syntheticPayPerPodOrder,
+		},
+		{
+			name:               "adaptive polling enabled, provisioning request shard - skipped without calling SetPollingMode",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			selectedShard:      provReqShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:               "adaptive polling enabled, no selected shard in autoscalingCtx - does not call SetPollingMode",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			selectedShard:      nil,
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:              "adaptive polling disabled via bool flag - does not call SetPollingMode",
+			crds:              []crd.CRD{crdScope1},
+			unschedulablePods: []*apiv1.Pod{podScope1},
+			selectedShard:     plainShard("ignored"),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
+			}, nil),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:              "adaptive polling disabled via min CA version flag - does not call SetPollingMode",
+			crds:              []crd.CRD{crdScope1, crdDefault},
+			defaultCccEnabled: true,
+			unschedulablePods: []*apiv1.Pod{podWithoutCCC, podScope1},
+			selectedShard:     cccShard("scope-1"),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
+				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: false,
+			}, nil),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:              "adaptive polling disabled, plain pod without default CCC - does not call SetPollingMode",
+			crds:              []crd.CRD{crdScope1},
+			unschedulablePods: []*apiv1.Pod{podWithoutCCC},
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
+			}, nil),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:              "adaptive polling disabled, empty unschedulable pods - does not call SetPollingMode",
+			crds:              []crd.CRD{crdScope1},
+			unschedulablePods: nil,
+			selectedShard:     cccShard("scope-1"),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
+			}, nil),
+			innerScaleUpResult: status.ScaleUpNotTried,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+		{
+			name:               "inner ScaleUp returns error - still sets PollingModeSlow via defer",
+			crds:               []crd.CRD{crdScope1},
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			selectedShard:      cccShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpError,
+			innerScaleUpErr:    errors.NewAutoscalerError(errors.CloudProviderError, "simulated error"),
+			wantScopes:         []string{"scope-1"},
+			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+		},
+		{
+			name:               "nil provider - does not panic",
+			crds:               []crd.CRD{crdScope1},
+			nilProvider:        true,
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			selectedShard:      cccShard("scope-1"),
+			innerScaleUpResult: status.ScaleUpSuccessful,
+			wantExpectedOrder:  []string{"innerScaleUp"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			manager := tc.experimentsManager
+			if manager == nil {
+				manager = experiments.NewMockManager()
+			}
+			var callOrder []string
+			mockProvider := new(instanceavailability.MockProvider)
+			var provider instanceavailability.Provider
+			if !tc.nilProvider {
+				for _, scope := range tc.wantScopes {
+					mockProvider.On("SetPollingMode", scope, PollingModeNormal).Run(func(args mock.Arguments) {
+						callOrder = append(callOrder, "SetPollingMode:"+args.String(0)+":normal")
+					}).Once()
+					mockProvider.On("SetPollingMode", scope, PollingModeSlow).Run(func(args mock.Arguments) {
+						callOrder = append(callOrder, "SetPollingMode:"+args.String(0)+":slow")
+					}).Once()
+				}
+				provider = mockProvider
+			}
+
+			mockLister := lister.NewMockCrdListerWithLabel(tc.crds, labels.ComputeClassLabel)
+			if tc.defaultCccEnabled {
+				mockLister.SetDefaultCrdName("default")
+			}
+
+			inner := &fakeInnerOrchestrator{
+				onScaleUp: func(_ RecommendationsBypassTracker, _ ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError) {
+					callOrder = append(callOrder, "innerScaleUp")
+					return &status.ScaleUpStatus{Result: tc.innerScaleUpResult}, tc.innerScaleUpErr
+				},
+			}
+
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
+			}
+			if tc.selectedShard != nil {
+				podsharding.TestSetPodShard(autoscalingCtx, tc.selectedShard)
+			}
+
+			wrapper := NewWrapperOrchestrator(
+				inner,
+				provider,
+				mockLister,
+				NewRecommendationsBypassTracker(manager),
+				NewScaleUpLimiterTracker(true, manager),
+				nil,
+				manager,
+			)
+			wrapper.Initialize(autoscalingCtx, nil, nil, nil, taints.TaintConfig{}, nil)
+			_, _ = wrapper.ScaleUp(context.Background(), tc.unschedulablePods, nil, nil, nil, false)
+
+			assert.Equal(t, tc.wantExpectedOrder, callOrder)
+			mockProvider.AssertExpectations(t)
+		})
+	}
+}
+
 func TestWrapperOrchestrator_InitializeAndMinSizeDelegation(t *testing.T) {
 	inner := &fakeInnerOrchestrator{}
-	wrapper := NewWrapperOrchestrator(inner, nil, nil, nil, nil, nil)
+	wrapper := NewWrapperOrchestrator(inner, nil, nil, nil, nil, nil, nil)
+	autoscalingCtx := &ca_context.AutoscalingContext{}
 
-	wrapper.Initialize(nil, nil, nil, nil, taints.TaintConfig{}, nil)
+	wrapper.Initialize(autoscalingCtx, nil, nil, nil, taints.TaintConfig{}, nil)
+	assert.Same(t, autoscalingCtx, wrapper.autoscalingCtx)
 	assert.True(t, inner.initialized)
 
 	scaleUpStatus, err := wrapper.ScaleUpToNodeGroupMinSize(context.Background(), nil, nil)

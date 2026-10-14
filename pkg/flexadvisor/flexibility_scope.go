@@ -37,16 +37,28 @@ import (
 
 const provisioningDecisionNotificationChanSize = 10
 
+// PollingMode is an alias for instanceavailability.PollingMode.
+type PollingMode = instanceavailability.PollingMode
+
+const (
+	PollingModeNormal = instanceavailability.PollingModeNormal
+	PollingModeSlow   = instanceavailability.PollingModeSlow
+)
+
 type flexibilityScope struct {
 	provider                instanceavailability.Provider
 	flexibilityScopeKey     string
+	experimentsManager      experiments.Manager
 	instanceConfigs         map[string]*api.InstanceAvailability
 	mutex                   sync.RWMutex
 	firstFetchWG            sync.WaitGroup
 	firstFetchFinished      atomic.Bool
+	pollingMode             atomicValue[PollingMode]
+	pollingModeCh           chan struct{}
 	cancelFunc              context.CancelFunc
 	lastErr                 error
 	lastSuccessfulRefreshAt time.Time
+	lastRefreshAttemptAt    time.Time
 	// cappedKeysMap contains all generated keys:
 	// - If a key was capped locally (not sent to the backend), its value is true.
 	// - If a key was sent to the backend, its value is false.
@@ -84,36 +96,73 @@ func newScopeWorker(scope *flexibilityScope, f *flexAdvisor) *scopeWorker {
 	}
 }
 
+func stopTimer(timer clock.Timer) {
+	if !timer.Stop() {
+		// Pre 1.23 drain was needed because timer.Stop() may have left dangling events.
+		// On Go 1.23+, drain is still needed because k8s.io/utils/clock/testing.FakeClock uses a buffered channel
+		// whose Stop/Reset does not drain unread ticks, so an explicit non-blocking drain is required. If we get rid of
+		// FakeClock we should be able to just use timer.Stop()
+		select {
+		case <-timer.C():
+		default:
+		}
+	}
+}
+
 func (w *scopeWorker) run(ctx context.Context) {
 	w.refreshScope(ctx)
 	w.scope.firstFetchFinished.Store(true)
 	w.scope.firstFetchWG.Done()
 
-	interval := calculateRefreshInterval(w.experimentsManager)
-	timer := w.clock.NewTimer(interval)
+	timer := w.clock.NewTimer(w.currentRefreshInterval())
 	defer timer.Stop()
 	for {
-		// 1. Non-blocking check for the timer first (Priority)
-		select {
-		case <-timer.C():
-			w.refreshScope(ctx)
-			timer.Reset(calculateRefreshInterval(w.experimentsManager))
-			continue // Skip the rest, start the loop over
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			return
-		default:
+		}
+		w.drainPollingModeCh()
+		// if previous loop ended not because of timer, make sure to reset and drain it
+		stopTimer(timer)
+		// Make sure since last refresh try (successful or not) it hasn't elapsed more than expected refresh interval (starvation bug)
+		if w.clock.Since(w.scope.getLastRefreshAttemptAt()) >= w.currentRefreshInterval() {
+			w.refreshScope(ctx)
 		}
 
-		// 2. Normal processing
+		elapsedSinceLastAttempt := w.currentRefreshInterval() - w.clock.Since(w.scope.getLastRefreshAttemptAt())
+		// 1 second is used as lower bound instead of 0 to always have some space between subsequent attempts in case
+		// there's issue with our elapsedSinceLastAttempt calculations
+		timer.Reset(max(1*time.Second, elapsedSinceLastAttempt))
+
 		select {
 		case <-timer.C():
-			w.refreshScope(ctx)
-			timer.Reset(calculateRefreshInterval(w.experimentsManager))
+			continue
+		case <-w.scope.pollingModeCh:
+			if !IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
+				continue
+			}
+			// Potentially do faster `usualInterval * 0.5` refresh if we switched to fast polling
+			if w.scope.getPollingMode() == PollingModeNormal && w.clock.Since(w.scope.getLastRefreshAttemptAt()) >= w.currentRefreshInterval()/2 {
+				w.refreshScope(ctx)
+			}
 		case decision := <-w.provisioningDecisionChan:
 			w.sendProvisioningDecision(ctx, decision)
 		case <-ctx.Done():
 			return
 		}
+	}
+}
+
+func (w *scopeWorker) currentRefreshInterval() time.Duration {
+	if IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
+		return getRefreshIntervalForPollingMode(w.experimentsManager, w.scope.getPollingMode())
+	}
+	return getRefreshIntervalForPollingMode(w.experimentsManager, PollingModeNormal)
+}
+
+func (w *scopeWorker) drainPollingModeCh() {
+	select {
+	case <-w.scope.pollingModeCh:
+	default:
 	}
 }
 
@@ -125,6 +174,13 @@ func (w *scopeWorker) run(ctx context.Context) {
 // GCE guarantees that if API call for decision notification finished it will account,
 // that capacity change for the subsequent scope refreshes.
 func (w *scopeWorker) refreshScope(ctx context.Context) {
+	defer func() {
+		w.scope.mutex.Lock()
+		defer w.scope.mutex.Unlock()
+		// lastRefreshAttemptAt should be set here instead of just in finishRefresh, because if FlexAdvisorProcessing is disabled and we don't update lastRefreshAttemptAt our refresh routine will take 100% of cpu
+		// just entering refreshScope and immediately returning
+		w.scope.lastRefreshAttemptAt = w.clock.Now()
+	}()
 	if !IsFlexAdvisorProcessingEnabled(w.experimentsManager) {
 		klog.Infof("FlexAdvisor[async-worker]: loop processing is disabled by FlexAdvisorProcessing experiment, background worker returning early for flexibilityScopeKey=%v", w.scope.flexibilityScopeKey)
 		return
@@ -236,15 +292,37 @@ func (w *scopeWorker) sendProvisioningDecision(ctx context.Context, decision api
 	}
 }
 
-func newFlexibilityScope(provider instanceavailability.Provider, flexibilityScopeKey string, cancelFunc context.CancelFunc) *flexibilityScope {
+func newFlexibilityScope(provider instanceavailability.Provider, flexibilityScopeKey string, experimentsManager experiments.Manager, cancelFunc context.CancelFunc) *flexibilityScope {
+	pollingMode := PollingModeNormal
+	if IsFlexAdvisorAdaptivePollingEnabled(experimentsManager) {
+		pollingMode = PollingModeSlow
+	}
 	scope := &flexibilityScope{
 		provider:            provider,
 		flexibilityScopeKey: flexibilityScopeKey,
+		experimentsManager:  experimentsManager,
 		instanceConfigs:     make(map[string]*api.InstanceAvailability),
+		pollingModeCh:       make(chan struct{}, 1),
 		cancelFunc:          cancelFunc,
 	}
+	scope.pollingMode.Store(pollingMode)
 	scope.firstFetchWG.Add(1)
 	return scope
+}
+
+// setPollingMode sets pollingMode and issues message to a channel if pollingMode has changed
+func (s *flexibilityScope) setPollingMode(pollingMode PollingMode) {
+	if prevMode := s.pollingMode.Swap(pollingMode); prevMode != pollingMode {
+		klog.Infof("FlexAdvisor: changed pollingMode %v to %v for flexibilityScopeKey=%v", prevMode, pollingMode, s.flexibilityScopeKey)
+		select {
+		case s.pollingModeCh <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (s *flexibilityScope) getPollingMode() PollingMode {
+	return s.pollingMode.Load()
 }
 
 func (s *flexibilityScope) getAvailabilityData(instanceConfigKey string) *api.InstanceAvailability {
@@ -310,10 +388,10 @@ func (s *flexibilityScope) getFetchStats() fetchStats {
 	}
 }
 
-func (s *flexibilityScope) getLastSuccessfulRefreshAt() time.Time {
+func (s *flexibilityScope) getLastRefreshAttemptAt() time.Time {
 	s.mutex.RLock()
 	defer s.mutex.RUnlock()
-	return s.lastSuccessfulRefreshAt
+	return s.lastRefreshAttemptAt
 }
 
 // getKeyCapState returns instanceConfigKey generation cap state:
