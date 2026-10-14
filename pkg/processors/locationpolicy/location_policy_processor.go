@@ -127,7 +127,8 @@ func (s *Processor) BalanceScaleUpBetweenGroups(ctx context.Context, autoscaling
 		if faErr == nil {
 			flexadvisor.MarkUsed(balancingInfos)
 		} else {
-			klog.Infof("FlexAdvisor: not notifying GCE about scale up decision in RLA balancer, got error while fetching FA data: %v", faErr)
+			// TODO(b/578827298): this enters for any non-CCC scale up, consider distinguishing between actual error and not supported node groups to log warning/error
+			klog.Warningf("FlexAdvisor: not notifying GCE about scale up decision in RLA balancer, got error while fetching FA data: %v", faErr)
 		}
 	}
 	return scaleUpInfos, nil

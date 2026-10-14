@@ -111,7 +111,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "single node group without similar node groups",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100}).Build().NewSnapshot()).Once()
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100}).Build().NewSnapshot(), nil).Once()
 			},
 			nodeGroup:         newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
@@ -120,7 +120,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "single node group with similar node groups with no duplicates",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100, "us-central1-b": 200, "us-central1-c": 300}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100, "us-central1-b": 200, "us-central1-c": 300}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -132,7 +132,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "single node group with similar node groups with first node group duplicates",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100, "us-central1-b": 200, "us-central1-c": 300}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 100, "us-central1-b": 200, "us-central1-c": 300}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -145,7 +145,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "negative capacity in some zones does not deduct positive capacity in another zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 300}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 300}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -157,7 +157,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "no more capacity across all zones",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: mig1,
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -176,7 +176,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "account for matching reservations",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": -100, "us-central1-b": -200, "us-central1-c": 0}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: newTestMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -188,7 +188,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "account for matching reservations and guidance",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 200, "us-central1-c": 0}).Build().NewSnapshot()).Times(3)
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 200, "us-central1-c": 0}).Build().NewSnapshot(), nil).Times(3)
 			},
 			nodeGroup: newTestMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -200,7 +200,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "missing availability for zone from FlexAdvisor",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-b": 200}).Build().NewSnapshot()).Once()
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-b": 200}).Build().NewSnapshot(), nil).Once()
 			},
 			nodeGroup:         newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
@@ -209,7 +209,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "account for matching reservations with subblock affinity",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").WithZonalInstanceCount(map[string]int{"us-central1-c": -100}).Build().NewSnapshot()).Once()
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").WithZonalInstanceCount(map[string]int{"us-central1-c": -100}).Build().NewSnapshot(), nil).Once()
 			},
 			nodeGroup:         newTestMigWithAffinity("us-central1-c", "a4x-highgpu-4g", map[string]string{labels.ComputeClassLabel: "scope-1"}, gkeclient.ReservationAffinitySpecific, "projects/shared-project/reservations/a4x-rsv/reservationBlocks/block-1/reservationSubBlocks/sub-block-1", []*gke_api_beta.AcceleratorConfig{{AcceleratorType: "nvidia-gb200", AcceleratorCount: 4}}),
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
@@ -219,9 +219,9 @@ func TestNodeLimit(t *testing.T) {
 			name: "nodeGroup with specific reservation affinity - does not apply limit and skips FlexAdvisor when EnableReservationSpecificMigsProcessing is disabled",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
 				provider.
-					On("GetInstanceAvailability", mock.Anything, mock.Anything).
+					On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).
 					Maybe().
-					Panic("GetInstanceAvailability: should not be called")
+					Panic("GetAvailabilitySnapshot: should not be called")
 			},
 			nodeGroup: newTestMigWithAffinity(
 				"us-central1-c",
@@ -240,9 +240,9 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "similar nodeGroup with specific reservation affinity - does not apply limit and skips FlexAdvisor when EnableReservationSpecificMigsProcessing is disabled",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", mock.Anything, mock.Anything).
+				provider.On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).
 					Maybe().
-					Panic("GetInstanceAvailability: should not be called")
+					Panic("GetAvailabilitySnapshot: should not be called")
 			},
 			nodeGroup: newTestMig(
 				"us-central1-a",
@@ -272,11 +272,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "nodeGroup with specific reservation affinity - processed when EnableReservationSpecificMigsProcessing is enabled",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: a4x-highgpu-4g, provisioningMode: STANDARD, gpuType: nvidia-gb200, gpuCount: 4").
 						WithZonalInstanceCount(map[string]int{"us-central1-c": 50}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Once()
 			},
 			nodeGroup: newTestMigWithAffinity(
@@ -293,7 +294,7 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "bin packer processing disabled globally - returns early",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Maybe().Panic("GetInstanceAvailability: should not be called")
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").Maybe().Panic("GetAvailabilitySnapshot: should not be called")
 			},
 			nodeGroup: newTestMig("us-central1-a", "n2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, []cloudprovider.NodeGroup{
@@ -306,9 +307,9 @@ func TestNodeLimit(t *testing.T) {
 			want: 0,
 		},
 		{
-			name: "GetInstanceAvailability returns nil - doesn't apply limits",
+			name: "GetAvailabilitySnapshot returns error - doesn't apply limits",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(nil).Once()
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(nil, errors.New("not available")).Once()
 			},
 			nodeGroup:         newTestMig("us-central1-a", "e2-standard-4", map[string]string{labels.ComputeClassLabel: "scope-1"}, false, false, nil, EmptyTpuType, EmptyTpuTopology, api.EmptyMaxRunDuration),
 			estimationContext: estimator.NewEstimationContext(0, nil, 0),
@@ -317,11 +318,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - experiment enabled sums FA capacity across all planned zones",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Times(3)
 			},
 			nodeGroup:          napMigA,
@@ -332,11 +334,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - experiment disabled evaluates only representative zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Once()
 			},
 			nodeGroup:          napMigA,
@@ -347,11 +350,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - experiment enabled sums unused reservations across all planned zones",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 0, "us-central1-c": 0}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Times(3)
 			},
 			nodeGroup:          napMigA,
@@ -362,11 +366,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - only specified locations are evaluated, even if the representative zone is not among them",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Times(2)
 			},
 			nodeGroup:          napMigSpecifiedLocations,
@@ -377,11 +382,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - experiment enabled but BalanceSimilarNodeGroups disabled evaluates only representative zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Once()
 			},
 			nodeGroup:                        napMigA,
@@ -393,11 +399,12 @@ func TestNodeLimit(t *testing.T) {
 		{
 			name: "uncreated NAP node group - planned locations error falls back to representative zone",
 			initialSetup: func(provider *instanceavailability.MockProvider) {
-				provider.On("GetInstanceAvailability", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
+				provider.On("GetAvailabilitySnapshot", "scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 					Return(api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: n2-standard-4, provisioningMode: STANDARD").
 						WithZonalInstanceCount(map[string]int{"us-central1-a": 0, "us-central1-b": 10, "us-central1-c": 20}).
 						Build().
 						NewSnapshot(),
+						nil,
 					).Once()
 			},
 			nodeGroup:           napMigA,
@@ -447,7 +454,7 @@ func (p *failingPlannedLocationsCloudProvider) PlannedNodePoolLocations(_ *gke.G
 func TestNodeLimit_MarksOptionRemovedWhenMaxNodeLimitZero(t *testing.T) {
 	mockProvider := new(instanceavailability.MockProvider)
 	snapshot := api.NewTestInstanceAvailabilityBuilder("scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").WithZonalInstanceCount(map[string]int{"us-central1-a": 0}).Build().NewSnapshot()
-	mockProvider.On("GetInstanceAvailability", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot).Once()
+	mockProvider.On("GetAvailabilitySnapshot", "scope-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil).Once()
 	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "scope-1",

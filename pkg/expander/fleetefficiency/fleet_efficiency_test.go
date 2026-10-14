@@ -302,10 +302,11 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 }
 
 func setupMockSnapshot(m *instanceavailability.MockProvider, machineType string, scores map[string]float64) {
-	m.On("GetInstanceAvailability", mock.Anything, mock.MatchedBy(func(s string) bool {
+	m.On("GetAvailabilitySnapshot", mock.Anything, mock.MatchedBy(func(s string) bool {
 		return strings.Contains(s, machineType)
 	})).Return(
 		instanceavailability.NewSnapshot(m, "test-ccc", machineType, "guidance", "", nil, scores),
+		nil,
 	).Once()
 }
 
@@ -315,7 +316,7 @@ func defaultFlexAdvisorSetup(m *instanceavailability.MockProvider) {
 }
 
 func flexAdvisorNotCalledSetup(m *instanceavailability.MockProvider) {
-	m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Maybe().Panic("flexadvisor: should not be called")
+	m.On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).Maybe().Panic("flexadvisor: should not be called")
 }
 
 func TestFleetEfficiencyFilter_SelectingStrategy(t *testing.T) {
@@ -463,8 +464,9 @@ func TestFleetEfficiencyFilter_Reservations(t *testing.T) {
 				reservations.BuildAvailableReservationWithID(1, "n2-standard-4", "us-central1-b", 5),
 			},
 			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
-				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Maybe().Return(
+				m.On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).Maybe().Return(
 					instanceavailability.NewSnapshot(m, "test-ccc", "n2-standard-4", "guidance", "", nil, map[string]float64{"us-central1-a": 0.2}),
+					nil,
 				)
 			},
 			expectedBestOptions: []expander.Option{optNap, f.optFleet1},
@@ -609,8 +611,7 @@ func TestFleetEfficiencyFilter_Scoring(t *testing.T) {
 			crds:    []crd.CRD{f.crdRuleFleet},
 			options: []expander.Option{f.optFleet1, f.optFleet2},
 			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
-				var snapshot *instanceavailability.Snapshot = nil
-				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Return(snapshot).Once()
+				m.On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).Return((*instanceavailability.Snapshot)(nil), errors.New("snapshot not found")).Once()
 			},
 			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
 		},
@@ -1255,7 +1256,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			name:    "Fallback - MissingScore (Snapshot not found)",
 			options: []expander.Option{optFleet1},
 			setupMock: func(m *instanceavailability.MockProvider) {
-				m.On("GetInstanceAvailability", mock.Anything, mock.Anything).Return((*instanceavailability.Snapshot)(nil)).Once()
+				m.On("GetAvailabilitySnapshot", mock.Anything, mock.Anything).Return((*instanceavailability.Snapshot)(nil), errors.New("snapshot not found")).Once()
 			},
 			expectedRequestedStrategy: cccv1.AllocationStrategyFleetEfficiency,
 			expectedReason:            metrics.AllocationStrategyFallbackMissingScore,
@@ -2103,10 +2104,11 @@ func TestFleetEfficiencyFilter_FallbackPrecedenceResolution(t *testing.T) {
 	}
 }
 func setupMockSnapshotForScope(m *instanceavailability.MockProvider, scopeKey, machineType string, scores map[string]float64) {
-	m.On("GetInstanceAvailability", scopeKey, mock.MatchedBy(func(s string) bool {
+	m.On("GetAvailabilitySnapshot", scopeKey, mock.MatchedBy(func(s string) bool {
 		return strings.Contains(s, machineType)
 	})).Return(
 		instanceavailability.NewSnapshot(m, scopeKey, machineType, "guidance", "", nil, scores),
+		nil,
 	).Once()
 }
 

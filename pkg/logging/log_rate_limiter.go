@@ -58,6 +58,19 @@ func newLogRateLimiterWithClock(limit int, window time.Duration, c clock.Passive
 	}
 }
 
+// Warningf attempts to log. If the token bucket is empty, it drops the log.
+func (t *LogRateLimiter) Warningf(level klog.Level, format string, args ...any) {
+	if !klog.V(level).Enabled() {
+		return
+	}
+
+	if t.limiter.TryAccept() {
+		klog.WarningfDepth(1, format, args...)
+	} else {
+		t.dropped.Add(1)
+	}
+}
+
 // Logf attempts to log. If the token bucket is empty, it drops the log.
 func (t *LogRateLimiter) Logf(level klog.Level, format string, args ...any) {
 	if !klog.V(level).Enabled() {
@@ -65,7 +78,7 @@ func (t *LogRateLimiter) Logf(level klog.Level, format string, args ...any) {
 	}
 
 	if t.limiter.TryAccept() {
-		klog.V(level).Infof(format, args...)
+		klog.Infof(format, args...)
 	} else {
 		t.dropped.Add(1)
 	}

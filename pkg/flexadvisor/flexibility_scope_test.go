@@ -70,7 +70,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 					"InstanceConfig-key-1": oldAvailability1,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponseFirst, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -92,7 +92,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 					"InstanceConfig-key-1": oldAvailability1,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponseFirst, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -110,7 +110,7 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 					"InstanceConfig-key-2": oldAvailability2,
 				}
 				p.On("FetchCapacityGuidance").Return(mockApiResponseFirst, nil).Once()
-				snapShot, err := f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+				snapShot, err := f.AwaitAvailabilitySnapshotWithTimeout("scope-1", "InstanceConfig-key-1", firstFetchTimeout)
 				assert.NotNil(t, snapShot)
 				assert.Nil(t, err)
 
@@ -148,16 +148,21 @@ func TestDoApiCallAndUpdateScope(t *testing.T) {
 				synctest.Wait()
 
 				for instanceConfigKey, wantSnapshot := range tc.want {
-					got := fa.GetInstanceAvailability("scope-1", instanceConfigKey)
+					got, err := fa.GetAvailabilitySnapshot("scope-1", instanceConfigKey)
+					assert.NoError(t, err)
 					assert.NotNil(t, got)
 					got.SetProvider(nil)
 					assert.Equal(t, *wantSnapshot, *got)
 				}
 
 				for _, removedKey := range tc.wantRemovedInstanceConfigKeys {
-					got, err := fa.AwaitInstanceAvailability("scope-1", removedKey)
+					got, err := fa.AwaitAvailabilitySnapshotWithTimeout("scope-1", removedKey, firstFetchTimeout)
 					assert.Nil(t, got)
-					assert.Equal(t, fmt.Errorf("instanceConfigKey=%s not present in availability data after refresh, flexibilityScopeKey=scope-1, lastRefreshErr=<nil>, cccState=, cccUsesScaleUpAnyway=false, keyGenerationState=not_generated", removedKey), err)
+					assert.Equal(t, InstanceConfigUnavailableError{
+						reason:              InstanceConfigUnavailableReasonInstanceConfigNotPresentInGceResponse,
+						flexibilityScopeKey: "scope-1",
+						instanceConfigKey:   removedKey,
+					}, err)
 				}
 			})
 		})
@@ -191,7 +196,7 @@ func TestScopeWorker_PeriodicRefreshWithConstantTraffic(t *testing.T) {
 		assert.NoError(t, err)
 
 		mockProvider.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{configKey: availability}, nil).Once()
-		_, err = fa.AwaitInstanceAvailability("scope-1", configKey)
+		_, err = fa.AwaitAvailabilitySnapshotWithTimeout("scope-1", configKey, firstFetchTimeout)
 		assert.NoError(t, err)
 
 		countFetchCalls := 0
@@ -419,8 +424,8 @@ func TestResponseValidation_Metrics(t *testing.T) {
 				initialVal, err := metrics.GetFlexAdvisorResponseErrorsCountForTest(tc.reason)
 				assert.NoError(t, err)
 
-				// AwaitInstanceAvailability will block until the first fetch (which registers the scope) completes
-				_, _ = fa.AwaitInstanceAvailability("scope-1", configKeyStandard)
+				// AwaitInstanceAvailabilityWithTimeout will block until the first fetch (which registers the scope) completes
+				_, _ = fa.AwaitAvailabilitySnapshotWithTimeout("scope-1", configKeyStandard, firstFetchTimeout)
 
 				val, err := metrics.GetFlexAdvisorResponseErrorsCountForTest(tc.reason)
 				assert.NoError(t, err)

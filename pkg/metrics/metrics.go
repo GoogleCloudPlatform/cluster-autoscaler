@@ -255,6 +255,12 @@ const (
 	FACacheMissNoZone FACacheQueryResult = "cache_miss_no_zone"
 	// FACacheMissNoInstanceConfigKey represents the case where instance config key is not in the cache.
 	FACacheMissNoInstanceConfigKey FACacheQueryResult = "cache_miss_no_instance_config_key"
+	// FACacheMissStale represents the case where the cached scope data has exceeded the staleness threshold.
+	FACacheMissStale FACacheQueryResult = "cache_miss_stale"
+	// FACacheMissFirstFetchTimeout represents the case where waiting for the scope's initial cache fetch timed out.
+	FACacheMissFirstFetchTimeout FACacheQueryResult = "cache_miss_first_fetch_timeout"
+	// FACacheMissUnknownReason represents a fallback case where availability data is unavailable for an unclassified reason.
+	FACacheMissUnknownReason FACacheQueryResult = "cache_miss_unknown_reason"
 	// FACacheMissFetchFailed represents the case where instance config key is not in the cache and the first cache fetch failed.
 	FACacheMissFetchFailed FACacheQueryResult = "cache_miss_fetch_failed"
 	// FACacheHit represents the case where Flex Advisor cache hit.

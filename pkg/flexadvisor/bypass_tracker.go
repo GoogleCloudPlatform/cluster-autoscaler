@@ -38,8 +38,8 @@ type RecommendationsBypassTracker interface {
 	RemoveBypasses()
 	// IsRecommendationsEnforcementPaused returns true if recommendations enforcement is currently paused (bypassed)
 	// for the given flexibility scope.
-	// Should be called when querying instance availability (flexAdvisor.GetInstanceAvailability and
-	// flexAdvisor.AwaitInstanceAvailability) to skip FlexAdvisor enforcement during an active bypass.
+	// Should be called when querying instance availability (flexAdvisor.GetAvailabilitySnapshot and
+	// flexAdvisor.AwaitAvailabilitySnapshotWithTimeout) to skip FlexAdvisor enforcement during an active bypass.
 	IsRecommendationsEnforcementPaused(flexibilityScopeKey string) bool
 	// HasReachedBypassThreshold returns true if the scope has been blocked enough times within the recent
 	// measurement window to be eligible for a recommendations bypass.

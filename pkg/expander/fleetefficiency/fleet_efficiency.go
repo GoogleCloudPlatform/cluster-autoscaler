@@ -277,9 +277,9 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
 	}
-	snapshot := f.flexAdvisor.GetInstanceAvailability(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
-	if snapshot == nil {
-		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+	snapshot, err := f.flexAdvisor.GetAvailabilitySnapshot(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+	if err != nil {
+		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s, err=%v", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, err)
 	}
 
 	targetZones, err := nodeGroupSet.TargetZonesForScoring(f.backoff, nodeInfos)

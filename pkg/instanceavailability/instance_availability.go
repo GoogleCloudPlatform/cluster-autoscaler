@@ -16,6 +16,7 @@ package instanceavailability
 
 import (
 	"fmt"
+	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
@@ -29,19 +30,19 @@ const (
 )
 
 type Provider interface {
-	// GetInstanceAvailability returns a Snapshot of instance availability if available, nil otherwise. Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing. non-blocking.
+	// GetAvailabilitySnapshot returns a Snapshot of instance availability if available, or an error otherwise. Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing. Non-blocking.
 	// Does not update keep-alive of an existing scope.
-	GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *Snapshot
+	GetAvailabilitySnapshot(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error)
 	// RegisterFlexibilityScope registers the flexibilityScopeKey in Provider, so it is fetched and refreshed in the background, extending its keep-alive if already registered.
 	RegisterFlexibilityScope(flexibilityScopeKey string) error
 	// BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
 	// Consumers that act on availability data (the balancer) must call it explicitly, as read methods do not update keep-alive.
 	BumpScopeTtl(flexibilityScopeKey string) error
-	// AwaitInstanceAvailability returns a Snapshot of instance availability in a blocking manner.
+	// AwaitAvailabilitySnapshotWithTimeout returns a Snapshot of instance availability, blocking up to timeout
+	// if the scope's first fetch is still in flight.
 	// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.
-	// Blocks until the background refresh operations to finish if they are running for the first time.
 	// Does not update keep-alive of an existing scope.
-	AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error)
+	AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*Snapshot, error)
 	// MarkUsed in-place updates current InstanceAvailability with information about VMs decided to be provisioned.
 	MarkUsed(flexibilityScopeKey, instanceConfigKey, guidanceId, decisionId string, zonalInstancesToProvision map[string]int) error
 	// TODO(b/514577515): move balancing phase metrics reporting to single place, remove IncrementFlexAdvisorCacheQueryCount from this interface

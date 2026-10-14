@@ -15,6 +15,8 @@
 package instanceavailability
 
 import (
+	"time"
+
 	"github.com/stretchr/testify/mock"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
@@ -24,12 +26,8 @@ type MockProvider struct {
 	mock.Mock
 }
 
-func (m *MockProvider) GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *Snapshot {
-	args := m.Called(flexibilityScopeKey, instanceConfigKey)
-	if args.Get(0) == nil {
-		return nil
-	}
-	return args.Get(0).(*Snapshot)
+func (m *MockProvider) GetAvailabilitySnapshot(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error) {
+	return snapshotFromMockArgs(m.Called(flexibilityScopeKey, instanceConfigKey))
 }
 
 func (m *MockProvider) RegisterFlexibilityScope(flexibilityScopeKey string) error {
@@ -42,12 +40,19 @@ func (m *MockProvider) BumpScopeTtl(flexibilityScopeKey string) error {
 	return args.Error(0)
 }
 
-func (m *MockProvider) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error) {
-	args := m.Called(flexibilityScopeKey, instanceConfigKey)
-	if args.Get(1) != nil {
-		return nil, args.Error(1)
+func (m *MockProvider) AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*Snapshot, error) {
+	return snapshotFromMockArgs(m.Called(flexibilityScopeKey, instanceConfigKey, timeout))
+}
+
+func snapshotFromMockArgs(args mock.Arguments) (*Snapshot, error) {
+	if err := args.Error(1); err != nil {
+		return nil, err
 	}
-	return args.Get(0).(*Snapshot), nil
+	snapshot, ok := args.Get(0).(*Snapshot)
+	if !ok || snapshot == nil {
+		panic("MockProvider: cannot return (nil, nil); either Snapshot or error must be non-nil")
+	}
+	return snapshot, nil
 }
 
 func (m *MockProvider) MarkUsed(flexibilityScopeKey, instanceConfigKey, guidanceId, decisionId string, zonalInstancesToProvision map[string]int) error {
