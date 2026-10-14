@@ -111,7 +111,7 @@ func TestConfigProvider(t *testing.T) {
 			if tc.flagValue != "" {
 				stringFlags[experiments.ResizableVmChurnCircuitBreakerFlag] = tc.flagValue
 			}
-			p := NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags), caVersion)
+			p := NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags), "", caVersion)
 
 			if got := p.IsEnabled(); got != tc.wantEnabled {
 				t.Errorf("IsEnabled() = %v, want %v", got, tc.wantEnabled)
@@ -139,11 +139,133 @@ func TestConfigProvider(t *testing.T) {
 }
 
 func TestConfigProviderNilExperimentsManager(t *testing.T) {
-	p := NewConfigProvider(nil, version.Version{})
+	p := NewConfigProvider(nil, "", version.Version{})
 	if p.IsEnabled() {
 		t.Errorf("IsEnabled() = true, want false")
 	}
 	if got := p.ChurnWindow(); got != defaultChurnWindow {
 		t.Errorf("ChurnWindow() = %v, want %v", got, defaultChurnWindow)
 	}
+}
+
+func TestProviderProtoConfig(t *testing.T) {
+	caVersion, err := version.FromString("37.231.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const (
+		experimentFlag        = `{"minCaVersion": "37.225.0", "churnThreshold": 3}`
+		updatedExperimentFlag = `{"minCaVersion": "37.225.0", "churnThreshold": 9}`
+	)
+
+	for _, tc := range []struct {
+		desc               string
+		manifestConfig     string
+		experimentFlag     string
+		wantFromProto      bool
+		wantEnabled        bool
+		wantChurnThreshold int
+	}{
+		{
+			desc:               "manifest config not set, experiment is used",
+			experimentFlag:     experimentFlag,
+			wantEnabled:        true,
+			wantChurnThreshold: 3,
+		},
+		{
+			desc:               "empty manifest config, experiment is used",
+			manifestConfig:     "'{}'",
+			experimentFlag:     experimentFlag,
+			wantEnabled:        true,
+			wantChurnThreshold: 3,
+		},
+		{
+			desc:               "invalid manifest config, experiment is used",
+			manifestConfig:     "'this-is-invalid-json-string'",
+			experimentFlag:     experimentFlag,
+			wantEnabled:        true,
+			wantChurnThreshold: 3,
+		},
+		{
+			desc:               "manifest config takes precedence over the experiment",
+			manifestConfig:     `'{"minCaVersion": "37.225.0", "churnThreshold": 7}'`,
+			experimentFlag:     experimentFlag,
+			wantFromProto:      true,
+			wantEnabled:        true,
+			wantChurnThreshold: 7,
+		},
+		{
+			desc:               "whitespace-only manifest config is treated as not set, experiment is used",
+			manifestConfig:     "'   '",
+			experimentFlag:     experimentFlag,
+			wantEnabled:        true,
+			wantChurnThreshold: 3,
+		},
+		{
+			desc:               "empty manifest config surrounded by whitespace is treated as not set, experiment is used",
+			manifestConfig:     "' {} '",
+			experimentFlag:     experimentFlag,
+			wantEnabled:        true,
+			wantChurnThreshold: 3,
+		},
+		{
+			desc:               "manifest config surrounded by whitespace is trimmed and takes precedence over the experiment",
+			manifestConfig:     "' \t{\"minCaVersion\": \"37.225.0\", \"churnThreshold\": 7}\n '",
+			experimentFlag:     experimentFlag,
+			wantFromProto:      true,
+			wantEnabled:        true,
+			wantChurnThreshold: 7,
+		},
+		{
+			desc:               "manifest config without minCaVersion is disabled, the experiment is not used",
+			manifestConfig:     `'{"churnThreshold": 7}'`,
+			experimentFlag:     experimentFlag,
+			wantFromProto:      true,
+			wantEnabled:        false,
+			wantChurnThreshold: defaultChurnThreshold,
+		},
+		{
+			desc:               "manifest config with minCaVersion higher than the CA version is disabled",
+			manifestConfig:     `'{"minCaVersion": "999.0.0", "churnThreshold": 7}'`,
+			experimentFlag:     experimentFlag,
+			wantFromProto:      true,
+			wantEnabled:        false,
+			wantChurnThreshold: defaultChurnThreshold,
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			p := NewConfigProvider(newMockManagerWithChurnFlag(tc.experimentFlag), tc.manifestConfig, caVersion)
+
+			if got := p.(*configProviderImpl).fromProto; got != tc.wantFromProto {
+				t.Errorf("fromProto = %v, want %v", got, tc.wantFromProto)
+			}
+			if got := p.IsEnabled(); got != tc.wantEnabled {
+				t.Errorf("IsEnabled() = %v, want %v", got, tc.wantEnabled)
+			}
+			if got := p.ChurnThreshold(); got != tc.wantChurnThreshold {
+				t.Errorf("ChurnThreshold() = %v, want %v", got, tc.wantChurnThreshold)
+			}
+
+			// The manifest config is static, while the experiment config follows the experiment flag changes.
+			p.(*configProviderImpl).experimentsManager = newMockManagerWithChurnFlag(updatedExperimentFlag)
+			p.Refresh()
+			wantChurnThresholdAfterRefresh := 9
+			if tc.wantFromProto {
+				wantChurnThresholdAfterRefresh = tc.wantChurnThreshold
+			}
+			if got := p.ChurnThreshold(); got != wantChurnThresholdAfterRefresh {
+				t.Errorf("ChurnThreshold() after Refresh() = %v, want %v", got, wantChurnThresholdAfterRefresh)
+			}
+		})
+	}
+}
+
+// newMockManagerWithChurnFlag returns a mock experiments manager with the churn circuit breaker flag set to flagValue.
+// The flag is not set if flagValue is empty.
+func newMockManagerWithChurnFlag(flagValue string) experiments.Manager {
+	stringFlags := map[string]string{}
+	if flagValue != "" {
+		stringFlags[experiments.ResizableVmChurnCircuitBreakerFlag] = flagValue
+	}
+	return experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags)
 }

@@ -627,7 +627,7 @@ func (b *Builder) Build(
 		return nil, nil, err
 	}
 	resizableVmCustomThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(experimentsManager, caVersion)
-	churnTrackerConfigProvider := ekvms_churntracker.NewConfigProvider(experimentsManager, caVersion)
+	churnTrackerConfigProvider := ekvms_churntracker.NewConfigProvider(experimentsManager, autoscalingOptions.LookaheadChurnCircuitBreakerConfig, caVersion)
 
 	var provreqProcessor pods.PodListProcessor
 	prProcessor := provreq.NewProvReqProcessor(b.prClient, autoscalingOptions.CheckCapacityProcessorInstance)
