@@ -247,10 +247,34 @@ func AllowedNonWorkloadSeparationLabels(pods ...*apiv1.Pod) map[string]bool {
 	return allowedLabels
 }
 
-// GetRequirements returns information about scheduling requirements of a pod.
-func GetRequirements(pod *apiv1.Pod) *Requirements {
-	nodeSelectors := getNodeSelectors(pod)
-	nodeAffinities := getNodeAffinities(pod)
+// GetLabelRequirements returns the scheduling label requirements of a pod
+// extracted from nodeSelector and required nodeAffinity without computing
+// container resource or toleration requirements.
+func GetLabelRequirements(pod *apiv1.Pod) LabelRequirements {
+	return getLabelRequirements(pod, "")
+}
+
+// GetLabelRequirementsForKey is like GetLabelRequirements, but only considers
+// the given label key. It's cheaper when the caller is interested in a single
+// key, and returns the same Values for it.
+func GetLabelRequirementsForKey(pod *apiv1.Pod, key string) LabelRequirements {
+	return getLabelRequirements(pod, key)
+}
+
+// getLabelRequirements computes label requirements of a pod. If onlyKey is
+// non-empty, all other keys are skipped.
+//
+// onlyKey is purely a performance optimization for callers that construct
+// LabelRequirements only to read a single key, e.g.
+// FilteredCccLister.IsPodOwned, which reads only the ComputeClass label. It
+// avoids building Values for all the other node selectors and affinities of
+// the pod. The Values returned for onlyKey are the same as without it.
+func getLabelRequirements(pod *apiv1.Pod, onlyKey string) LabelRequirements {
+	if pod == nil {
+		return LabelRequirements{}
+	}
+	nodeSelectors := getNodeSelectors(pod, onlyKey)
+	nodeAffinities := getNodeAffinities(pod, onlyKey)
 	podAnnotations := pod.GetAnnotations()
 	labelReq := make(map[string]Values, len(nodeSelectors))
 
@@ -284,6 +308,14 @@ func GetRequirements(pod *apiv1.Pod) *Requirements {
 		labelReq[k] = affinityVal
 	}
 
+	return LabelRequirements{req: labelReq}
+}
+
+// GetRequirements returns information about scheduling requirements of a pod.
+func GetRequirements(pod *apiv1.Pod) *Requirements {
+	labelReq := GetLabelRequirements(pod)
+	podAnnotations := pod.GetAnnotations()
+
 	podRequests := podutils.PodRequests(pod)
 	podCap := getPodPerVMRequirements(podRequests)
 
@@ -299,7 +331,7 @@ func GetRequirements(pod *apiv1.Pod) *Requirements {
 	networkingAnnotation := strings.ReplaceAll(podAnnotations[netapi.InterfaceAnnotationKey], "\n", "")
 
 	var diskEncryptionKeyAnnotation string
-	if bootDiskEncryptionAnnotationKey, ok := labelReq[gkelabels.BootDiskEncryptionLabelKey]; ok {
+	if bootDiskEncryptionAnnotationKey, ok := labelReq.GetValues(gkelabels.BootDiskEncryptionLabelKey); ok {
 		var err error
 		diskEncryptionKeyAnnotation, err = getBootDiskEncryptionKey(bootDiskEncryptionAnnotationKey, podAnnotations)
 		if err != nil {
@@ -309,7 +341,7 @@ func GetRequirements(pod *apiv1.Pod) *Requirements {
 
 	return &Requirements{
 		Tolerations:                 getTolerations(pod),
-		LabelReq:                    LabelRequirements{req: labelReq},
+		LabelReq:                    labelReq,
 		PodRequests:                 podRequests,
 		PodCapacity:                 podCap,
 		NetworkingReq:               getNetworkingRequirements(podRequests),
@@ -379,27 +411,36 @@ func getTolerations(pod *apiv1.Pod) []apiv1.Toleration {
 	return result
 }
 
-// getNodeSelectors returns all node selector preferences.
-func getNodeSelectors(pod *apiv1.Pod) map[string]Values {
+// getNodeSelectors returns all node selector preferences. If onlyKey is
+// non-empty, only that key is returned, as an optimization for callers that
+// need a single key.
+func getNodeSelectors(pod *apiv1.Pod, onlyKey string) map[string]Values {
 	result := make(map[string]Values)
 	if pod.Spec.NodeSelector == nil {
 		return result
 	}
 	for k, v := range pod.Spec.NodeSelector {
+		if onlyKey != "" && k != onlyKey {
+			continue
+		}
 		result[k] = NewValues(v)
 	}
 	return result
 }
 
 // getNodeAffinities return these node affinity preferences which contain
-// affinity only for a single value.
-func getNodeAffinities(pod *apiv1.Pod) map[string]Values {
+// affinity only for a single value. If onlyKey is non-empty, only that key is
+// returned, as an optimization for callers that need a single key.
+func getNodeAffinities(pod *apiv1.Pod, onlyKey string) map[string]Values {
 	result := make(map[string]Values)
 	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil || pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
 		return result
 	}
 	for _, ns := range pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms {
 		for _, expression := range ns.MatchExpressions {
+			if onlyKey != "" && expression.Key != onlyKey {
+				continue
+			}
 			if expression.Operator == apiv1.NodeSelectorOpIn {
 				result[expression.Key] = NewValues(expression.Values...)
 			}

@@ -15,11 +15,16 @@
 package lister
 
 import (
+	"maps"
 	"slices"
 
 	apiv1 "k8s.io/api/core/v1"
+	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
@@ -113,6 +118,89 @@ func (f *FilteredCccLister) PodCrd(pod *apiv1.Pod) (crd.CRD, string, error) {
 // NodeGroupCrd returns CRD for NodeGroup if owned by this instance.
 func (f *FilteredCccLister) NodeGroupCrd(nodeGroup cloudprovider.NodeGroup) (crd.CRD, string, error) {
 	return f.ownedCrdWithName(f.baseLister.NodeGroupCrd(nodeGroup))
+}
+
+type specProvider interface {
+	Spec() *gkeclient.NodePoolSpec
+}
+
+func (f *FilteredCccLister) isCrdNameOwned(name string) bool {
+	if name == "" || machinetypes.IsPredefinedComputeClass(name) {
+		return f.handlesUnannotated
+	}
+	annotations, err := f.baseLister.CrdAnnotations(name)
+	if err != nil {
+		return f.handlesUnannotated
+	}
+	return IsOwned(annotations, f.autoscalerNames)
+}
+
+// IsNodeGroupOwned returns whether the given NodeGroup is owned by this
+// autoscaler instance.
+func (f *FilteredCccLister) IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool {
+	var name string
+	if mig, ok := nodeGroup.(specProvider); ok && mig != nil && mig.Spec() != nil && mig.Spec().Labels != nil {
+		name = mig.Spec().Labels[gkelabels.ComputeClassLabel]
+	}
+	if name == "" {
+		if defaultName, _, found := f.baseLister.Default(); found {
+			name = defaultName
+		}
+	}
+	return f.isCrdNameOwned(name)
+}
+
+// IsPodOwned returns whether the given Pod is owned by this autoscaler
+// instance.
+func (f *FilteredCccLister) IsPodOwned(pod *apiv1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	vals, found := podrequirements.GetLabelRequirementsForKey(pod, gkelabels.ComputeClassLabel).GetValues(gkelabels.ComputeClassLabel)
+	if !found || vals.IsAny() || len(vals.Get()) == 0 {
+		var name string
+		if defaultName, _, defaultFound := f.baseLister.Default(); defaultFound {
+			name = defaultName
+		}
+		return f.isCrdNameOwned(name)
+	}
+
+	var hasOwned, hasUnowned bool
+	for name := range vals.Get() {
+		if f.isCrdNameOwned(name) {
+			hasOwned = true
+		} else {
+			hasUnowned = true
+		}
+		if hasOwned && hasUnowned {
+			// Mixed ownership across multi-value In affinity falls back to
+			// unannotated handling.
+			klog.V(4).Infof("Pod %s/%s requires ComputeClasses %v owned by different autoscalers; falling back to unannotated handling (autoscalerNames=%v, owned=%v)",
+				pod.Namespace, pod.Name, slices.Sorted(maps.Keys(vals.Get())), f.autoscalerNames, f.handlesUnannotated)
+			return f.handlesUnannotated
+		}
+	}
+	return hasOwned
+}
+
+// IsNodeOwned returns whether the given Node is owned by this autoscaler
+// instance, based on its ComputeClass label. It expects a real node: fake
+// nodes, e.g. clusterstate.FakeNode, have no ComputeClass label and resolve to
+// the default ComputeClass.
+func (f *FilteredCccLister) IsNodeOwned(node *apiv1.Node) bool {
+	if node == nil {
+		return false
+	}
+	var name string
+	if node.Labels != nil {
+		name = node.Labels[gkelabels.ComputeClassLabel]
+	}
+	if name == "" {
+		if defaultName, _, found := f.baseLister.Default(); found {
+			name = defaultName
+		}
+	}
+	return f.isCrdNameOwned(name)
 }
 
 // NodeCrd returns CRD for Node if owned by this instance.

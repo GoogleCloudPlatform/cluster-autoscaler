@@ -125,6 +125,21 @@ func (l *cccLister) NodeGroupCrd(nodeGroup cloudprovider.NodeGroup) (crd.CRD, st
 	return c, name, err
 }
 
+// IsNodeGroupOwned returns true by default for unfiltered CCC lister.
+func (l *cccLister) IsNodeGroupOwned(nodeGroup cloudprovider.NodeGroup) bool {
+	return true
+}
+
+// IsPodOwned returns true by default for unfiltered CCC lister.
+func (l *cccLister) IsPodOwned(pod *corev1.Pod) bool {
+	return true
+}
+
+// IsNodeOwned returns true by default for unfiltered CCC lister.
+func (l *cccLister) IsNodeOwned(node *corev1.Node) bool {
+	return true
+}
+
 // NodeCrd returns the CCC for a node. CCC should be assigned iff
 // the node specifies it.
 func (l *cccLister) NodeCrd(node *corev1.Node) (crd.CRD, string, error) {

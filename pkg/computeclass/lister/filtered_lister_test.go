@@ -20,10 +20,13 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
 func mockCrd(name string, annotations map[string]string) crd.CRD {
@@ -142,6 +145,9 @@ func TestFilteredCccLister(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, cPod, "expected owned CRD %q to be found via PodCrd", crdName)
 				assert.Equal(t, crdName, namePod)
+				assert.True(t, filtered.IsPodOwned(pod), "expected pod with owned CRD %q to be owned", crdName)
+				node := &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{gkelabels.ComputeClassLabel: crdName}}}
+				assert.True(t, filtered.IsNodeOwned(node), "expected node with owned CRD %q to be owned", crdName)
 			}
 
 			for _, crdName := range tc.wantUnownedCrds {
@@ -165,8 +171,21 @@ func TestFilteredCccLister(t *testing.T) {
 				assert.NoError(t, err)
 				assert.Nil(t, cPod, "expected unowned CRD %q to be filtered out (nil) via PodCrd", crdName)
 				assert.Empty(t, namePod)
+				assert.False(t, filtered.IsPodOwned(pod), "expected pod with unowned CRD %q to NOT be owned", crdName)
+				node := &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{gkelabels.ComputeClassLabel: crdName}}}
+				assert.False(t, filtered.IsNodeOwned(node), "expected node with unowned CRD %q to NOT be owned", crdName)
 			}
 
+			unannotatedPod := &apiv1.Pod{}
+			assert.Equal(t, tc.wantHandlesUnannotated, filtered.IsPodOwned(unannotatedPod))
+
+			predefinedPod := &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					NodeSelector: map[string]string{gkelabels.ComputeClassLabel: "Balanced"},
+				},
+			}
+			assert.Equal(t, tc.wantHandlesUnannotated, filtered.IsPodOwned(predefinedPod))
+			assert.Equal(t, tc.wantHandlesUnannotated, filtered.IsNodeOwned(&apiv1.Node{}))
 		})
 	}
 }
@@ -249,6 +268,65 @@ func TestFilteredCccLister_DefaultHandling(t *testing.T) {
 	}
 }
 
+type mockSpecNodeGroup struct {
+	cloudprovider.NodeGroup
+	spec *gkeclient.NodePoolSpec
+}
+
+func (m *mockSpecNodeGroup) Spec() *gkeclient.NodePoolSpec {
+	return m.spec
+}
+
+func TestFilteredCccLister_IsNodeGroupOwned(t *testing.T) {
+	stdCrdUnannotated := mockCrd("std-unannotated", nil)
+	solverCrd := mockCrd("solver-crd", map[string]string{
+		options.AutoscalerNameAnnotation: options.SolverAutoscalerName,
+	})
+	mockBase := NewMockCrdListerWithLabel([]crd.CRD{stdCrdUnannotated, solverCrd}, gkelabels.ComputeClassLabel)
+
+	standardLister := NewFilteredCccLister(mockBase, []string{options.UnannotatedAutoscalerName, options.StandardAutoscalerName})
+	solverLister := NewFilteredCccLister(mockBase, []string{options.SolverAutoscalerName})
+
+	testCases := []struct {
+		name                string
+		nodeGroup           cloudprovider.NodeGroup
+		wantOwnedByStandard bool
+		wantOwnedBySolver   bool
+	}{
+		{
+			name:                "Unlabeled node group",
+			nodeGroup:           &mockSpecNodeGroup{spec: &gkeclient.NodePoolSpec{}},
+			wantOwnedByStandard: true,
+			wantOwnedBySolver:   false,
+		},
+		{
+			name:                "Predefined compute class node group",
+			nodeGroup:           &mockSpecNodeGroup{spec: &gkeclient.NodePoolSpec{Labels: map[string]string{gkelabels.ComputeClassLabel: "Balanced"}}},
+			wantOwnedByStandard: true,
+			wantOwnedBySolver:   false,
+		},
+		{
+			name:                "Unannotated CCC node group",
+			nodeGroup:           &mockSpecNodeGroup{spec: &gkeclient.NodePoolSpec{Labels: map[string]string{gkelabels.ComputeClassLabel: "std-unannotated"}}},
+			wantOwnedByStandard: true,
+			wantOwnedBySolver:   false,
+		},
+		{
+			name:                "Solver CCC node group",
+			nodeGroup:           &mockSpecNodeGroup{spec: &gkeclient.NodePoolSpec{Labels: map[string]string{gkelabels.ComputeClassLabel: "solver-crd"}}},
+			wantOwnedByStandard: false,
+			wantOwnedBySolver:   true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.wantOwnedByStandard, standardLister.IsNodeGroupOwned(tc.nodeGroup))
+			assert.Equal(t, tc.wantOwnedBySolver, solverLister.IsNodeGroupOwned(tc.nodeGroup))
+		})
+	}
+}
+
 func TestIsOwned(t *testing.T) {
 	unannotated := map[string]string{}
 	standardAnnotated := map[string]string{options.AutoscalerNameAnnotation: options.StandardAutoscalerName}
@@ -270,4 +348,51 @@ func TestIsOwned(t *testing.T) {
 	assert.False(t, IsOwned(unannotated, []string{options.SolverAutoscalerName}))
 	assert.False(t, IsOwned(standardAnnotated, []string{options.SolverAutoscalerName}))
 	assert.True(t, IsOwned(solverAnnotated, []string{options.SolverAutoscalerName}))
+}
+
+func TestFilteredCccLister_IsPodOwned_NodeAffinity(t *testing.T) {
+	stdCrd := mockCrd("std-crd", nil)
+	solverCrd := mockCrd("solver-crd", map[string]string{
+		options.AutoscalerNameAnnotation: options.SolverAutoscalerName,
+	})
+	solverCrd2 := mockCrd("solver-crd-2", map[string]string{
+		options.AutoscalerNameAnnotation: options.SolverAutoscalerName,
+	})
+	mockBase := NewMockCrdListerWithLabel([]crd.CRD{stdCrd, solverCrd, solverCrd2}, gkelabels.ComputeClassLabel)
+
+	standardLister := NewFilteredCccLister(mockBase, []string{options.UnannotatedAutoscalerName, options.StandardAutoscalerName})
+	solverLister := NewFilteredCccLister(mockBase, []string{options.SolverAutoscalerName})
+
+	podWithInAffinity := func(values ...string) *apiv1.Pod {
+		req := apiv1.NodeSelectorRequirement{Key: gkelabels.ComputeClassLabel, Operator: apiv1.NodeSelectorOpIn, Values: values}
+		ns := &apiv1.NodeSelector{NodeSelectorTerms: []apiv1.NodeSelectorTerm{{MatchExpressions: []apiv1.NodeSelectorRequirement{req}}}}
+		return &apiv1.Pod{Spec: apiv1.PodSpec{Affinity: &apiv1.Affinity{NodeAffinity: &apiv1.NodeAffinity{RequiredDuringSchedulingIgnoredDuringExecution: ns}}}}
+	}
+
+	// Single-value In affinity targeting solver-crd
+	solverAffinityPod := podWithInAffinity("solver-crd")
+	assert.False(t, standardLister.IsPodOwned(solverAffinityPod))
+	assert.True(t, solverLister.IsPodOwned(solverAffinityPod))
+
+	// Single-value In affinity overrides nodeSelector
+	overridePod := podWithInAffinity("solver-crd")
+	overridePod.Spec.NodeSelector = map[string]string{gkelabels.ComputeClassLabel: "std-crd"}
+	assert.False(t, standardLister.IsPodOwned(overridePod))
+	assert.True(t, solverLister.IsPodOwned(overridePod))
+
+	// Multi-value In affinity where all values belong to solver is owned by
+	// solver
+	multiSolverPod := podWithInAffinity("solver-crd", "solver-crd-2")
+	assert.False(t, standardLister.IsPodOwned(multiSolverPod))
+	assert.True(t, solverLister.IsPodOwned(multiSolverPod))
+
+	// Multi-value In affinity with mixed ownership falls back to unannotated
+	// handling
+	mixedAffinityPod := podWithInAffinity("solver-crd", "std-crd")
+	assert.True(t, standardLister.IsPodOwned(mixedAffinityPod))
+	assert.False(t, solverLister.IsPodOwned(mixedAffinityPod))
+
+	// nil pod is not owned
+	assert.False(t, standardLister.IsPodOwned(nil))
+	assert.False(t, solverLister.IsPodOwned(nil))
 }

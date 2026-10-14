@@ -102,7 +102,7 @@ func TestGetNodeSelectors(t *testing.T) {
 					NodeSelector: tc.nSelector,
 				},
 			}
-			r := getNodeSelectors(p)
+			r := getNodeSelectors(p, "")
 			if !reflect.DeepEqual(tc.expected, r) {
 				t.Errorf("Expected: %v, got: %v", tc.expected, r)
 			}
@@ -194,7 +194,7 @@ func TestGetNodeAffinities(t *testing.T) {
 					},
 				},
 			}
-			r := getNodeAffinities(p)
+			r := getNodeAffinities(p, "")
 			if !reflect.DeepEqual(tc.expected, r) {
 				t.Errorf("Expected: %v, got: %v", tc.expected, r)
 			}
@@ -1537,6 +1537,78 @@ func TestInterfaceAnnotation(t *testing.T) {
 			if diff := cmp.Diff(tc.wantAnnotation, gotReq.NetworkingAnnotation); diff != "" {
 				t.Errorf("GetRequirements.NetworkingAnnotation values diff (-want +got):\n%s", diff)
 			}
+		})
+	}
+}
+
+func podWithAffinity(nodeSelector map[string]string, terms ...[]apiv1.NodeSelectorRequirement) *apiv1.Pod {
+	pod := &apiv1.Pod{Spec: apiv1.PodSpec{NodeSelector: nodeSelector}}
+	if len(terms) > 0 {
+		var nsTerms []apiv1.NodeSelectorTerm
+		for _, exprs := range terms {
+			nsTerms = append(nsTerms, apiv1.NodeSelectorTerm{MatchExpressions: exprs})
+		}
+		pod.Spec.Affinity = &apiv1.Affinity{NodeAffinity: &apiv1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{NodeSelectorTerms: nsTerms},
+		}}
+	}
+	return pod
+}
+
+func in(key string, values ...string) apiv1.NodeSelectorRequirement {
+	return apiv1.NodeSelectorRequirement{Key: key, Operator: apiv1.NodeSelectorOpIn, Values: values}
+}
+
+func exists(key string) apiv1.NodeSelectorRequirement {
+	return apiv1.NodeSelectorRequirement{Key: key, Operator: apiv1.NodeSelectorOpExists}
+}
+
+func notIn(key string, values ...string) apiv1.NodeSelectorRequirement {
+	return apiv1.NodeSelectorRequirement{Key: key, Operator: apiv1.NodeSelectorOpNotIn, Values: values}
+}
+
+// assertForKeyMatchesFull checks that GetLabelRequirementsForKey returns, for
+// every key, exactly what
+// GetLabelRequirements returns for that key.
+func assertForKeyMatchesFull(t *testing.T, pod *apiv1.Pod, keys []string) {
+	t.Helper()
+	full := GetLabelRequirements(pod)
+	for _, key := range keys {
+		wantVals, wantFound := full.GetValues(key)
+		gotVals, gotFound := GetLabelRequirementsForKey(pod, key).GetValues(key)
+		assert.Equal(t, wantFound, gotFound, "key %q found mismatch", key)
+		assert.Equal(t, wantVals, gotVals, "key %q values mismatch", key)
+	}
+}
+
+func TestGetLabelRequirementsForKey_MatchesGetLabelRequirements(t *testing.T) {
+	ccc := gkelabels.ComputeClassLabel
+	resourceKey := gkelabels.ResourceLabelPrefix + "my-annotation"
+
+	testCases := map[string]*apiv1.Pod{
+		"nil pod":                           nil,
+		"empty pod":                         {},
+		"selector only":                     podWithAffinity(map[string]string{ccc: "a", "other": "x"}),
+		"affinity In only":                  podWithAffinity(nil, []apiv1.NodeSelectorRequirement{in(ccc, "a", "b"), in("other", "x")}),
+		"affinity Exists only":              podWithAffinity(nil, []apiv1.NodeSelectorRequirement{exists(ccc)}),
+		"affinity NotIn ignored":            podWithAffinity(nil, []apiv1.NodeSelectorRequirement{notIn(ccc, "a")}),
+		"affinity In overrides selector":    podWithAffinity(map[string]string{ccc: "a"}, []apiv1.NodeSelectorRequirement{in(ccc, "b")}),
+		"selector wins over Exists":         podWithAffinity(map[string]string{ccc: "a"}, []apiv1.NodeSelectorRequirement{exists(ccc)}),
+		"last In term wins":                 podWithAffinity(nil, []apiv1.NodeSelectorRequirement{in(ccc, "a")}, []apiv1.NodeSelectorRequirement{in(ccc, "b")}),
+		"Exists after In does not override": podWithAffinity(nil, []apiv1.NodeSelectorRequirement{in(ccc, "a"), exists(ccc)}),
+		"In after Exists overrides":         podWithAffinity(nil, []apiv1.NodeSelectorRequirement{exists(ccc), in(ccc, "a")}),
+		"other keys only":                   podWithAffinity(map[string]string{"other": "x"}, []apiv1.NodeSelectorRequirement{in("zone", "z1")}),
+		"resource label resolved from annotation": func() *apiv1.Pod {
+			p := podWithAffinity(map[string]string{resourceKey: "", ccc: "a"})
+			p.ObjectMeta = metav1.ObjectMeta{Annotations: map[string]string{"my-annotation": "resolved"}}
+			return p
+		}(),
+		"resource label with non-empty value": podWithAffinity(map[string]string{resourceKey: "not-empty"}),
+	}
+	keys := []string{ccc, "other", "zone", resourceKey, "missing"}
+	for name, pod := range testCases {
+		t.Run(name, func(t *testing.T) {
+			assertForKeyMatchesFull(t, pod, keys)
 		})
 	}
 }
