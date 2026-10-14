@@ -40,6 +40,11 @@ func (m *MockProvider) BumpScopeTtl(flexibilityScopeKey string) error {
 	return args.Error(0)
 }
 
+func (m *MockProvider) AwaitFlexibilityScopeWithTimeout(flexibilityScopeKey string, timeout time.Duration) error {
+	args := m.Called(flexibilityScopeKey, timeout)
+	return args.Error(0)
+}
+
 func (m *MockProvider) AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*Snapshot, error) {
 	return snapshotFromMockArgs(m.Called(flexibilityScopeKey, instanceConfigKey, timeout))
 }

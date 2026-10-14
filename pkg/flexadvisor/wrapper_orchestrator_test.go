@@ -284,7 +284,7 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			}
 
 			mockMetrics := &mockWrapperOrchestratorMetrics{}
-			wrapper := NewWrapperOrchestrator(inner, mockLister, bypassTracker, limiterTracker, manager, withWrapperOrchestratorMetrics(mockMetrics))
+			wrapper := NewWrapperOrchestrator(inner, mockLister, bypassTracker, limiterTracker, nil, manager, withWrapperOrchestratorMetrics(mockMetrics))
 
 			_, _ = wrapper.ScaleUp(context.Background(), tc.unschedulablePods, nil, nil, nil, false)
 
@@ -302,9 +302,93 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 	}
 }
 
+type fakeScaleUpEndProcessor struct {
+	onEnd func()
+}
+
+func (f *fakeScaleUpEndProcessor) OnScaleUpEnd() {
+	if f.onEnd != nil {
+		f.onEnd()
+	}
+}
+
+func TestWrapperOrchestrator_ScaleUp_ScaleUpEndProcessors(t *testing.T) {
+	crdScope1 := ccc.NewCccCrd(&v1.ComputeClass{ObjectMeta: metav1.ObjectMeta{Name: "scope-1"}}, "", false, nil, nil)
+	podScope1 := testPod("scope-1")
+
+	testCases := []struct {
+		name               string
+		unschedulablePods  []*apiv1.Pod
+		experimentsManager experiments.Manager
+		innerErr           errors.AutoscalerError
+		withNilProcessor   bool
+		wantEvents         []string
+	}{
+		{
+			name:               "normal ScaleUp - calls ScaleUpEndProcessors after inner ScaleUp completes",
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			experimentsManager: experiments.NewMockManager(),
+			wantEvents:         []string{"inner_scale_up", "end_processor_1", "end_processor_2"},
+		},
+		{
+			name:              "recommendations bypass disabled (early return path) - still calls ScaleUpEndProcessors after inner ScaleUp",
+			unschedulablePods: []*apiv1.Pod{podScope1},
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorRecommendationsBypassEnabledFlag: false,
+			}, nil),
+			wantEvents: []string{"inner_scale_up", "end_processor_1", "end_processor_2"},
+		},
+		{
+			name:               "inner ScaleUp returns error - still calls ScaleUpEndProcessors via defer",
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			experimentsManager: experiments.NewMockManager(),
+			innerErr:           errors.NewAutoscalerError(errors.CloudProviderError, "simulated error"),
+			wantEvents:         []string{"inner_scale_up", "end_processor_1", "end_processor_2"},
+		},
+		{
+			name:               "slice containing nil ScaleUpEndProcessor - skips nil and calls non-nil processors without panic",
+			unschedulablePods:  []*apiv1.Pod{podScope1},
+			experimentsManager: experiments.NewMockManager(),
+			withNilProcessor:   true,
+			wantEvents:         []string{"inner_scale_up", "end_processor_1", "end_processor_2"},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crdScope1}, labels.ComputeClassLabel)
+			bypassTracker := NewRecommendationsBypassTracker(tc.experimentsManager)
+			limiterTracker := NewScaleUpLimiterTracker(true, tc.experimentsManager)
+
+			var events []string
+			p1 := &fakeScaleUpEndProcessor{onEnd: func() { events = append(events, "end_processor_1") }}
+			p2 := &fakeScaleUpEndProcessor{onEnd: func() { events = append(events, "end_processor_2") }}
+			processors := []ScaleUpEndProcessor{p1, p2}
+			if tc.withNilProcessor {
+				processors = []ScaleUpEndProcessor{p1, nil, p2}
+			}
+
+			inner := &fakeInnerOrchestrator{
+				onScaleUp: func(_ RecommendationsBypassTracker, _ ScaleUpLimiterTracker) (*status.ScaleUpStatus, errors.AutoscalerError) {
+					events = append(events, "inner_scale_up")
+					if tc.innerErr != nil {
+						return &status.ScaleUpStatus{Result: status.ScaleUpError}, tc.innerErr
+					}
+					return &status.ScaleUpStatus{Result: status.ScaleUpSuccessful}, nil
+				},
+			}
+
+			wrapper := NewWrapperOrchestrator(inner, mockLister, bypassTracker, limiterTracker, processors, tc.experimentsManager)
+			_, _ = wrapper.ScaleUp(context.Background(), tc.unschedulablePods, nil, nil, nil, false)
+
+			assert.Equal(t, tc.wantEvents, events)
+		})
+	}
+}
+
 func TestWrapperOrchestrator_InitializeAndMinSizeDelegation(t *testing.T) {
 	inner := &fakeInnerOrchestrator{}
-	wrapper := NewWrapperOrchestrator(inner, nil, nil, nil, nil)
+	wrapper := NewWrapperOrchestrator(inner, nil, nil, nil, nil, nil)
 
 	wrapper.Initialize(nil, nil, nil, nil, taints.TaintConfig{}, nil)
 	assert.True(t, inner.initialized)

@@ -175,12 +175,22 @@ func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error
 	return err
 }
 
-// GetAvailabilitySnapshot blocks until the scope's first fetch finishes (up to timeout) and returns thread-safe snapshot of the scope data
+// GetAvailabilitySnapshot returns a thread-safe snapshot of the availability data for the given
+// flexibilityScopeKey and instanceConfigKey without blocking for an in-flight initial fetch.
 func (f *flexAdvisor) GetAvailabilitySnapshot(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
 	return f.AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey, 0)
 }
 
-// AwaitAvailabilitySnapshotWithTimeout blocks until the scope's first fetch finishes (up to a timeout) and returns thread-safe snapshot of the scope data
+// AwaitFlexibilityScopeWithTimeout blocks until the scope's first fetch finishes (up to timeout).
+// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.
+// Does not update keep-alive of an existing scope.
+func (f *flexAdvisor) AwaitFlexibilityScopeWithTimeout(flexibilityScopeKey string, timeout time.Duration) error {
+	_, err := f.awaitFirstFetch(flexibilityScopeKey, "", timeout)
+	return err
+}
+
+// AwaitAvailabilitySnapshotWithTimeout blocks until the scope's first fetch finishes (up to timeout)
+// and returns a thread-safe snapshot of the availability data for the given flexibilityScopeKey and instanceConfigKey.
 func (f *flexAdvisor) AwaitAvailabilitySnapshotWithTimeout(flexibilityScopeKey, instanceConfigKey string, timeout time.Duration) (*instanceavailability.Snapshot, error) {
 	scope, err := f.awaitFirstFetch(flexibilityScopeKey, instanceConfigKey, timeout)
 	if err != nil {
@@ -652,4 +662,14 @@ func isFlexAdvisorRecommendationsBypassEnabled(manager experiments.Manager) bool
 		IsFlexAdvisorScaleUpLimiterTrackerEnabled(true, manager) &&
 		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorRecommendationsBypassEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorRecommendationsBypassMinCAVersionFlag, true)
+}
+
+// IsFlexAdvisorBinpackerBlockEnabled returns whether bounded blocking wait in bin-packing is enabled.
+func IsFlexAdvisorBinpackerBlockEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return false
+	}
+	return IsFlexAdvisorProcessingEnabled(manager) &&
+		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorBinpackerBlockEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag, true)
 }

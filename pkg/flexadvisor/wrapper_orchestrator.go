@@ -39,15 +39,21 @@ type wrapperOrchestratorMetrics interface {
 	RegisterFlexAdvisorBypassAttempt()
 }
 
+// ScaleUpEndProcessor is notified at the end of each ScaleUp pass.
+type ScaleUpEndProcessor interface {
+	OnScaleUpEnd()
+}
+
 // WrapperOrchestrator wraps a scaleup.Orchestrator to manage FlexAdvisor per-pass
 // limiter tracking and recommendations bypass lifecycle within a single execution layer.
 type WrapperOrchestrator struct {
-	wrappedOrchestrator scaleup.Orchestrator
-	cccLister           lister.Lister
-	bypassTracker       RecommendationsBypassTracker
-	limiterTracker      ScaleUpLimiterTracker
-	experimentsManager  experiments.Manager
-	metrics             wrapperOrchestratorMetrics
+	wrappedOrchestrator  scaleup.Orchestrator
+	cccLister            lister.Lister
+	bypassTracker        RecommendationsBypassTracker
+	limiterTracker       ScaleUpLimiterTracker
+	scaleUpEndProcessors []ScaleUpEndProcessor
+	experimentsManager   experiments.Manager
+	metrics              wrapperOrchestratorMetrics
 }
 
 type wrapperOrchestratorOption func(*WrapperOrchestrator)
@@ -64,16 +70,18 @@ func NewWrapperOrchestrator(
 	cccLister lister.Lister,
 	bypassTracker RecommendationsBypassTracker,
 	limiterTracker ScaleUpLimiterTracker,
+	scaleUpEndProcessors []ScaleUpEndProcessor,
 	experimentsManager experiments.Manager,
 	opts ...wrapperOrchestratorOption,
 ) *WrapperOrchestrator {
 	o := &WrapperOrchestrator{
-		wrappedOrchestrator: wrappedOrchestrator,
-		cccLister:           cccLister,
-		bypassTracker:       bypassTracker,
-		limiterTracker:      limiterTracker,
-		experimentsManager:  experimentsManager,
-		metrics:             metrics.Metrics,
+		wrappedOrchestrator:  wrappedOrchestrator,
+		cccLister:            cccLister,
+		bypassTracker:        bypassTracker,
+		limiterTracker:       limiterTracker,
+		scaleUpEndProcessors: scaleUpEndProcessors,
+		experimentsManager:   experimentsManager,
+		metrics:              metrics.Metrics,
 	}
 	for _, opt := range opts {
 		opt(o)
@@ -110,6 +118,13 @@ func (o *WrapperOrchestrator) ScaleUp(
 	if o.bypassTracker != nil {
 		o.bypassTracker.RemoveBypasses()
 	}
+	defer func() {
+		for _, p := range o.scaleUpEndProcessors {
+			if p != nil {
+				p.OnScaleUpEnd()
+			}
+		}
+	}()
 
 	if !isFlexAdvisorRecommendationsBypassEnabled(o.experimentsManager) || o.bypassTracker == nil || o.cccLister == nil {
 		return o.wrappedOrchestrator.ScaleUp(ctx, unschedulablePods, nodes, daemonSets, nodeInfos, allOrNothing)
