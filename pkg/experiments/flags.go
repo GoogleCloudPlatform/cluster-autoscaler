@@ -248,6 +248,9 @@ const FlexAdvisorEnableReservationSpecificMigsProcessingMinCAVersionFlag = "Flex
 const FlexAdvisorNapZoneSetExpansionEnabledFlag = "FlexAdvisorNapZoneSetExpansionEnabled::Enabled"
 const FlexAdvisorNapZoneSetExpansionMinCAVersionFlag = "FlexAdvisorNapZoneSetExpansionEnabled::MinCAVersion"
 
+const FlexAdvisorSendRankEnabledFlag = "FlexAdvisorSendRank::Enabled"
+const FlexAdvisorSendRankMinCAVersionFlag = "FlexAdvisorSendRank::MinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"
