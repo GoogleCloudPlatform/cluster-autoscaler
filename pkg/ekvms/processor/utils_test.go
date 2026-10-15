@@ -36,6 +36,11 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
+const (
+	miBToKiB = size.MiB / size.KiB
+	giBToKiB = size.GiB / size.KiB
+)
+
 func TestRemoveBalloonPod(t *testing.T) {
 	testCases := []struct {
 		desc         string

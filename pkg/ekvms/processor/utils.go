@@ -33,11 +33,6 @@ import (
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
-const (
-	miBToKiB = size.MiB / size.KiB
-	giBToKiB = size.GiB / size.KiB
-)
-
 // PreventScheduleOnLookaheadExperimentFlags maps machine family names to their corresponding experiment flag
 // that controls whether scheduling on lookahead nodes should be prevented.
 var PreventScheduleOnLookaheadExperimentFlags = map[string]string{
