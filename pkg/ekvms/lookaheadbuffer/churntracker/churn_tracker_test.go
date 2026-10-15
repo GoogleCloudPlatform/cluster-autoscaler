@@ -15,6 +15,7 @@
 package churntracker
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -609,6 +610,72 @@ func TestRecordScaledDownNodes(t *testing.T) {
 			}
 			if diff := cmp.Diff(tc.wantMetric, metrics.counts, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("RecordScaledDownNodes() churn events metric mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestRecordScaledDownNodesUpdatesBackoffs(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	// The default churnThreshold is 5 and the first backoff duration is 15m.
+	// Scaled down nodes created after windowStart are churn events, nodes created before it are not.
+	windowStart := now.Add(-defaultChurnLifetimeThreshold)
+	windowStartPlus3m := windowStart.Add(3 * time.Minute)
+	windowStartMinus15m := windowStart.Add(-15 * time.Minute)
+
+	// scaledDownNodes returns count scaled down EK nodes of testWorkloadID created at creationTime and their history.
+	scaledDownNodes := func(count int, creationTime time.Time) ([]*apiv1.Node, map[types.UID]*nodeHistory) {
+		nodes := make([]*apiv1.Node, 0, count)
+		history := make(map[types.UID]*nodeHistory, count)
+		for i := range count {
+			node := ekNodeInfo(fmt.Sprintf("node-%d", i)).Node()
+			nodes = append(nodes, node)
+			history[node.UID] = &nodeHistory{creationTime: creationTime, machineFamily: ekFamily, everHostedLookahead: true, lookaheadWorkloadID: testWorkloadID}
+		}
+		return nodes, history
+	}
+
+	for _, tc := range []struct {
+		desc             string
+		nodesCount       int
+		nodeCreationTime time.Time
+		wantBackedOff    bool
+		wantBackoffsLen  int
+	}{
+		{
+			desc:             "churn events below churnThreshold do not back off the workload separation",
+			nodesCount:       4,
+			nodeCreationTime: windowStartPlus3m,
+		},
+		{
+			desc:             "churn events reaching churnThreshold back off the workload separation",
+			nodesCount:       5,
+			nodeCreationTime: windowStartPlus3m,
+			wantBackedOff:    true,
+			wantBackoffsLen:  1,
+		},
+		{
+			desc:             "scaled down nodes created before windowStart are not churn events and do not update the backoffs",
+			nodesCount:       5,
+			nodeCreationTime: windowStartMinus15m,
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
+			nodes, history := scaledDownNodes(tc.nodesCount, tc.nodeCreationTime)
+			tracker.nodes = history
+
+			tracker.RecordScaledDownNodes(nodes)
+
+			if got := tracker.backoffManager.IsBackedOff(ekFamily, testWorkloadID); got != tc.wantBackedOff {
+				t.Errorf("IsBackedOff(%q, %q) = %v, want %v", ekFamily, testWorkloadID, got, tc.wantBackedOff)
+			}
+			// Other workload separations are never backed off.
+			if tracker.backoffManager.IsBackedOff(ekFamily, "") || tracker.backoffManager.IsBackedOff(e4aFamily, testWorkloadID) {
+				t.Errorf("IsBackedOff() = true for a workload separation without churn events, want false")
+			}
+			if got := len(tracker.backoffManager.backoffs); got != tc.wantBackoffsLen {
+				t.Errorf("number of backoffs = %d, want %d", got, tc.wantBackoffsLen)
 			}
 		})
 	}
