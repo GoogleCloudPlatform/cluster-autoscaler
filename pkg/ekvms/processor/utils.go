@@ -102,16 +102,6 @@ func removeBalloonPod(snapshot clustersnapshot.ClusterSnapshot, nodeInfo *framew
 	return newNodeInfo, nil
 }
 
-// isNodeEmpty returns true if a node only has system and/or daemon set pods.
-func isNodeEmpty(nodeInfo *framework.NodeInfo) bool {
-	for _, podInfo := range nodeInfo.Pods() {
-		if !isSystemPod(podInfo.Pod) && !podutils.IsDaemonSetPod(podInfo.Pod) {
-			return false
-		}
-	}
-	return true
-}
-
 func isResizableNode(node *apiv1.Node, mcp *machinetypes.MachineConfigProvider) bool {
 	isResizable, err := utils.IsResizableNode(node, mcp)
 	return err == nil && isResizable

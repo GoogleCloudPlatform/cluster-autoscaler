@@ -18,48 +18,11 @@ import (
 	"fmt"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 )
-
-func UpdateAllocatable(node *v1.Node, size size.Allocatable) {
-	allocatableCpu := *resource.NewMilliQuantity(size.MilliCpus, resource.DecimalSI)
-	allocatableMemory := *resource.NewQuantity(size.KBytes*1024, resource.DecimalSI)
-
-	if node.Status.Allocatable == nil {
-		node.Status.Allocatable = map[v1.ResourceName]resource.Quantity{}
-	}
-	node.Status.Allocatable[v1.ResourceMemory] = allocatableMemory
-	node.Status.Allocatable[v1.ResourceCPU] = allocatableCpu
-}
-
-// IsEkMachine returns true if the given node is a supported EK machine, based on instance label.
-// It will return an error if the instance label is not set.
-func IsEkMachine(node *v1.Node) (bool, error) {
-	// We expect GKE instance type to be GCE machine type
-	machineType, exists := GetMachineTypeFromLabels(node.Labels)
-	if !exists {
-		return false, fmt.Errorf("node %q does not have instance type label set", node.Name)
-	}
-
-	return IsEkMachineType(machineType)
-}
-
-// IsEkMachineType returns true if the given machineType is from EK machine family.
-func IsEkMachineType(machineType string) (bool, error) {
-	family, err := gce.GetMachineFamily(machineType)
-	if err != nil {
-		return false, err
-	}
-
-	if family != machinetypes.EK.Name() {
-		return false, nil
-	}
-	return true, nil
-}
 
 // IsResizableMachineType returns true if the given machineType is from a resizable machine family.
 func IsResizableMachineType(provider *machinetypes.MachineConfigProvider, machineType string) (bool, error) {
