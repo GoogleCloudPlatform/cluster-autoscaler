@@ -3336,11 +3336,11 @@ func TestConfigHash(t *testing.T) {
 		},
 	}
 	crdInstance := NewCccCrd(ccc, "proj1", false, provider, nil)
-	rules := crdInstance.Rules()
-	assert.Len(t, rules, 2)
+	crdRules := crdInstance.Rules()
+	assert.Len(t, crdRules, 2)
 
-	hashP1 := crdInstance.ConfigHash(rules[0])
-	hashP2 := crdInstance.ConfigHash(rules[1])
+	hashP1 := crdInstance.ConfigHash(crdRules[0])
+	hashP2 := crdInstance.ConfigHash(crdRules[1])
 
 	assert.NotEmpty(t, hashP1)
 	assert.NotEmpty(t, hashP2)
@@ -3373,19 +3373,151 @@ func TestConfigHash(t *testing.T) {
 	assert.Equal(t, hashP1, crdAddPriority.ConfigHash(rulesAddPriority[0]))
 	assert.Equal(t, hashP2, crdAddPriority.ConfigHash(rulesAddPriority[1]))
 
-	// 4. Change internal fields (CapacityCheckWaitTimeSeconds, PriorityScore, AllocationStrategy) - hashes should NOT change
+	// 4. Change non-node-pool fields (PriorityScore, AllocationStrategy, MinimumCapacity) - hashes should NOT change
 	cccInternalChange := ccc.DeepCopy()
-	val60 := 60
 	val1 := 1
+	targetNodes := 5
 	strategy := v1.AllocationStrategyLowestCost
-	cccInternalChange.Spec.Priorities[0].CapacityCheckWaitTimeSeconds = &val60
 	cccInternalChange.Spec.Priorities[0].PriorityScore = &val1
 	cccInternalChange.Spec.Priorities[0].AllocationStrategy = &strategy
+	cccInternalChange.Spec.Priorities[0].MinimumCapacity = &v1.MinimumCapacity{TargetNodeCount: &targetNodes}
 	crdInternalChange := NewCccCrd(cccInternalChange, "proj1", false, provider, nil)
 	rulesInternalChange := crdInternalChange.Rules()
 
 	assert.Equal(t, hashP1, crdInternalChange.ConfigHash(rulesInternalChange[0]))
 	assert.Equal(t, hashP2, crdInternalChange.ConfigHash(rulesInternalChange[1]))
+
+	// 5. Change CapacityCheckWaitTimeSeconds - hash for P1 SHOULD change
+	cccWaitTimeChange := ccc.DeepCopy()
+	val60 := 60
+	cccWaitTimeChange.Spec.Priorities[0].CapacityCheckWaitTimeSeconds = &val60
+	crdWaitTimeChange := NewCccCrd(cccWaitTimeChange, "proj1", false, provider, nil)
+	rulesWaitTimeChange := crdWaitTimeChange.Rules()
+
+	assert.NotEqual(t, hashP1, crdWaitTimeChange.ConfigHash(rulesWaitTimeChange[0]))
+	assert.Equal(t, hashP2, crdWaitTimeChange.ConfigHash(rulesWaitTimeChange[1]))
+
+	// 6. PriorityDefaults: changing a default should only change the hash of priorities that inherit it,
+	// not priorities that override it.
+	cccWithOverride := ccc.DeepCopy()
+	cccWithOverride.Spec.Priorities[0].Location = &v1.Location{Zones: []string{"us-central1-a"}}
+	crdWithOverride := NewCccCrd(cccWithOverride, "proj1", false, provider, nil)
+	rulesWithOverride := crdWithOverride.Rules()
+	hashOverrideP1 := crdWithOverride.ConfigHash(rulesWithOverride[0])
+	hashOverrideP2 := crdWithOverride.ConfigHash(rulesWithOverride[1])
+
+	cccWithDefaults := cccWithOverride.DeepCopy()
+	cccWithDefaults.Spec.PriorityDefaults = &v1.PriorityDefaults{
+		Location: &v1.Location{Zones: []string{"us-central1-b"}},
+	}
+	crdWithDefaults := NewCccCrd(cccWithDefaults, "proj1", false, provider, nil)
+	rulesWithDefaults := crdWithDefaults.Rules()
+
+	assert.Equal(t, hashOverrideP1, crdWithDefaults.ConfigHash(rulesWithDefaults[0]))
+	assert.NotEqual(t, hashOverrideP2, crdWithDefaults.ConfigHash(rulesWithDefaults[1]))
+
+	// 7. SelfServiceMetadata (CRD-level and Rule-level) should be included in ConfigHash
+	cccSelfService := ccc.DeepCopy()
+	cccSelfService.Spec.NodePoolAutoCreation = &v1.NodePoolAutoCreation{
+		Enabled: true,
+		ShieldedInstanceConfig: &v1.ShieldedInstanceConfig{
+			EnableSecureBoot: ptr.To(true),
+		},
+	}
+	crdSelfService := NewCccCrd(cccSelfService, "proj1", false, provider, nil)
+	rulesSelfService := crdSelfService.Rules()
+	assert.NotEqual(t, hashP1, crdSelfService.ConfigHash(rulesSelfService[0]))
+
+	customRuleA := rules.NewRule(rules.WithSelfServiceRule(map[string]string{"k": "v1"}))
+	customRuleB := rules.NewRule(rules.WithSelfServiceRule(map[string]string{"k": "v2"}))
+	assert.NotEqual(t, crdInstance.ConfigHash(customRuleA), crdInstance.ConfigHash(customRuleB))
+
+	// 8. Canonicalize slice ordering (taints, zones, networkTags, oauthScopes, resourceManagerTags)
+	cccOrderA := &v1.ComputeClass{
+		Spec: v1.ComputeClassSpec{
+			NodePoolConfig: &v1.NodePoolConfig{
+				Taints: []v1.TaintConfig{
+					{Key: "k2", Value: "v2", Effect: "NoSchedule"},
+					{Key: "k1", Value: "v1", Effect: "NoExecute"},
+				},
+				NetworkTags: []string{"tag-b", "tag-a"},
+				OAuthScopes: []string{"scope-b", "scope-a"},
+				ResourceManagerTags: []v1.Tags{
+					{Key: "rm-b", Value: "val-b"},
+					{Key: "rm-a", Value: "val-a"},
+				},
+			},
+			Priorities: []v1.Priority{
+				{
+					MachineType: &mt1,
+					Taints: []v1.TaintConfig{
+						{Key: "pk2", Value: "pv2", Effect: "NoSchedule"},
+						{Key: "pk1", Value: "pv1", Effect: "NoSchedule"},
+					},
+					Location: &v1.Location{
+						Zones: []string{"us-central1-b", "us-central1-a"},
+					},
+					Reservations: &v1.Reservations{
+						Affinity: v1.SpecificAffinity,
+						Specific: []v1.SpecificReservation{
+							{
+								Name:  "res1",
+								Zones: []string{"us-central1-b", "us-central1-a"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	cccOrderB := &v1.ComputeClass{
+		Spec: v1.ComputeClassSpec{
+			NodePoolConfig: &v1.NodePoolConfig{
+				Taints: []v1.TaintConfig{
+					{Key: "k1", Value: "v1", Effect: "NoExecute"},
+					{Key: "k2", Value: "v2", Effect: "NoSchedule"},
+				},
+				NetworkTags: []string{"tag-a", "tag-b"},
+				OAuthScopes: []string{"scope-a", "scope-b"},
+				ResourceManagerTags: []v1.Tags{
+					{Key: "rm-a", Value: "val-a"},
+					{Key: "rm-b", Value: "val-b"},
+				},
+			},
+			Priorities: []v1.Priority{
+				{
+					MachineType: &mt1,
+					Taints: []v1.TaintConfig{
+						{Key: "pk1", Value: "pv1", Effect: "NoSchedule"},
+						{Key: "pk2", Value: "pv2", Effect: "NoSchedule"},
+					},
+					Location: &v1.Location{
+						Zones: []string{"us-central1-a", "us-central1-b"},
+					},
+					Reservations: &v1.Reservations{
+						Affinity: v1.SpecificAffinity,
+						Specific: []v1.SpecificReservation{
+							{
+								Name:  "res1",
+								Zones: []string{"us-central1-a", "us-central1-b"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	crdOrderA := NewCccCrd(cccOrderA, "proj1", false, provider, nil)
+	crdOrderB := NewCccCrd(cccOrderB, "proj1", false, provider, nil)
+	assert.Equal(t, crdOrderA.ConfigHash(crdOrderA.Rules()[0]), crdOrderB.ConfigHash(crdOrderB.Rules()[0]))
+	// Verify original slices in cccOrderA were not mutated in place
+	assert.Equal(t, "k2", cccOrderA.Spec.NodePoolConfig.Taints[0].Key)
+	assert.Equal(t, "tag-b", cccOrderA.Spec.NodePoolConfig.NetworkTags[0])
+	assert.Equal(t, "scope-b", cccOrderA.Spec.NodePoolConfig.OAuthScopes[0])
+	assert.Equal(t, "rm-b", cccOrderA.Spec.NodePoolConfig.ResourceManagerTags[0].Key)
+	assert.Equal(t, "pk2", cccOrderA.Spec.Priorities[0].Taints[0].Key)
+	assert.Equal(t, "us-central1-b", cccOrderA.Spec.Priorities[0].Location.Zones[0])
+	assert.Equal(t, "us-central1-b", cccOrderA.Spec.Priorities[0].Reservations.Specific[0].Zones[0])
 }
 
 func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
