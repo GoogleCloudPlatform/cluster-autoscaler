@@ -71,6 +71,8 @@ type ChurnTracker struct {
 	mcp     *machinetypes.MachineConfigProvider
 	metrics churnMetrics
 	clock   clock.PassiveClock
+	// backoffManager decides which workload separations have their lookahead backed off, based on the churn events.
+	backoffManager *BackoffManager
 
 	nodes  map[types.UID]*nodeHistory
 	events churnEvents // churn events happened within the churnWindow
@@ -86,6 +88,7 @@ func NewChurnTracker(configProvider ConfigProvider, mcp *machinetypes.MachineCon
 		mcp:            mcp,
 		metrics:        metrics,
 		clock:          c,
+		backoffManager: NewBackoffManager(c, configProvider),
 		nodes:          make(map[types.UID]*nodeHistory),
 		events:         make(churnEvents),
 	}
@@ -159,6 +162,8 @@ func (t *ChurnTracker) RecordScaledDownNodes(nodes []*apiv1.Node) {
 		}
 		klog.V(4).Infof("%s: Recorded lookahead churn event for workload ID %q: node %q of machine family %q without running customer pods was scaled down after %v", logPrefix, history.lookaheadWorkloadID, node.Name, history.machineFamily, now.Sub(history.creationTime))
 	}
+	// UpdateEvents will reset and apply/update backoffs if needed.
+	t.backoffManager.UpdateEvents(t.events, now)
 }
 
 // cleanExpiredEvents removes churn events older than churnWindow.
