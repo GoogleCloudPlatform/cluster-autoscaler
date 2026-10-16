@@ -280,7 +280,6 @@ func (c *CSNNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.S
 	}
 
 	for ref, m := range migNodes {
-		namesList := m.nodes.UnsortedList()
 		err := c.workQueue.Enqueue(ops.Operation{
 			MIG:       ref,
 			Type:      ops.SuspendOp,
@@ -289,7 +288,7 @@ func (c *CSNNodeController) MarkAsSuspendable(nodes []*framework.NodeInfo) set.S
 		if err != nil {
 			klog.Errorf("%s failed to enqueue suspend op for MIG %v: %v", logPrefix, ref, err)
 		} else {
-			nodeNames.Insert(namesList...)
+			nodeNames.Insert(m.nodes.UnsortedList()...)
 		}
 	}
 

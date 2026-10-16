@@ -111,7 +111,7 @@ func (q *WorkQueue) addBatch(key opKey, nodeNames set.Set[string]) error {
 		return nil
 	}
 	// New batch.
-	q.opKeyToBatch[key] = batch{nodeNames: nodeNames, createdAt: time.Now()}
+	q.opKeyToBatch[key] = batch{nodeNames: nodeNames.Clone(), createdAt: time.Now()}
 	select {
 	// Success
 	case q.workNotifier <- key:
