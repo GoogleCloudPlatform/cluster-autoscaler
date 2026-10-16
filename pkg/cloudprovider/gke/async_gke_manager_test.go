@@ -20,6 +20,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -42,142 +43,156 @@ import (
 // Test names for async_gke_manager conflict with tests for gke_manager
 // To deduplicate the names use prefix: TestAsyncMgr_
 
-// testAsyncGkeMgrDefaultTimeout default timeout for waiting on async operations
-const testAsyncGkeMgrDefaultTimeout = 10 * time.Second
+const (
+	// testAsyncGkeMgrDefaultTimeout default timeout for waiting on async operations
+	testAsyncGkeMgrDefaultTimeout   = 10 * time.Second
+	defaultTestTaskQueueWorkerCount = 2
+	defaultTestTaskQueueSize        = 10
+)
 
 func TestAsyncMgr_AsyncNodePoolCreationWithScaleUpInMemAccounting(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	// when a node pool is scheduled to be created
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	// and upcoming migs are scaled up during async creation
-	upcomingMigs := result.AllCreatedMigs()
-	assert.Equal(t, 3, len(upcomingMigs))
-	assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[0], 10))
-	assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[1], 5))
-	assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[2], 2))
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	// then async result contains information about asynchronously scaled up node groups
-	asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	createdMigs := asyncResult.CreationResult.AllCreatedNodeGroups()
-	assert.Equal(t, 3, len(createdMigs))
-	assert.Equal(t, map[string]string{
-		(createdMigs[0].Id()): upcomingMigs[0].Id(),
-		(createdMigs[1].Id()): upcomingMigs[1].Id(),
-		(createdMigs[2].Id()): upcomingMigs[2].Id(),
-	}, asyncResult.CreatedToUpcomingMapping)
-	// and initializer received scale-ups for upcoming node groups
-	assert.Equal(t, map[string]int64{
-		(upcomingMigs[0].Id()): 10,
-		(upcomingMigs[1].Id()): 5,
-		(upcomingMigs[2].Id()): 2,
-	}, initializer.TargetSizes())
-	ctx.assertNoOngoingNodePoolOps()
-	// and migs are registered in cache
-	ctx.assertMigRegisteredInCache(createdMigs[0])
-	ctx.assertMigRegisteredInCache(createdMigs[1])
-	ctx.assertMigRegisteredInCache(createdMigs[2])
-	// and upcoming migs should be registered as injected
-	for i := range createdMigs {
-		createdMig := createdMigs[i].(*GkeMig)
-		injectedMig := ctx.gkeManager.GetInjectedMig(createdMig)
-		assert.Equal(t, mig.Id(), injectedMig.Id(), "Expected injected mig %v registered for created mig %v", mig.Id(), createdMig.Id())
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		// when a node pool is scheduled to be created
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		// and upcoming migs are scaled up during async creation
+		upcomingMigs := result.AllCreatedMigs()
+		assert.Equal(t, 3, len(upcomingMigs))
+		assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[0], 10))
+		assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[1], 5))
+		assert.NoError(t, ctx.asyncGkeManager.SetMigSize(upcomingMigs[2], 2))
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		// then async result contains information about asynchronously scaled up node groups
+		asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		createdMigs := asyncResult.CreationResult.AllCreatedNodeGroups()
+		assert.Equal(t, 3, len(createdMigs))
+		assert.Equal(t, map[string]string{
+			(createdMigs[0].Id()): upcomingMigs[0].Id(),
+			(createdMigs[1].Id()): upcomingMigs[1].Id(),
+			(createdMigs[2].Id()): upcomingMigs[2].Id(),
+		}, asyncResult.CreatedToUpcomingMapping)
+		// and initializer received scale-ups for upcoming node groups
+		assert.Equal(t, map[string]int64{
+			(upcomingMigs[0].Id()): 10,
+			(upcomingMigs[1].Id()): 5,
+			(upcomingMigs[2].Id()): 2,
+		}, initializer.TargetSizes())
+		ctx.assertNoOngoingNodePoolOps()
+		// and migs are registered in cache
+		ctx.assertMigRegisteredInCache(createdMigs[0])
+		ctx.assertMigRegisteredInCache(createdMigs[1])
+		ctx.assertMigRegisteredInCache(createdMigs[2])
+		// and upcoming migs should be registered as injected
+		for i := range createdMigs {
+			createdMig := createdMigs[i].(*GkeMig)
+			injectedMig := ctx.gkeManager.GetInjectedMig(createdMig)
+			assert.Equal(t, mig.Id(), injectedMig.Id(), "Expected injected mig %v registered for created mig %v", mig.Id(), createdMig.Id())
+		}
+	})
 }
 
 func TestAsyncMgr_AsyncNodePoolCreationPreservesMainMig(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	_, sampleNodePool := ctx.sampleMigWithNodePool()
-	zones := sampleNodePool.Spec.Locations
-	assert.Equal(t, 3, len(zones))
-	for _, zone := range zones {
-		mig, _ := ctx.sampleMigWithNodePool()
-		mig.gceRef = gce.GceRef{Project: mig.gceRef.Project, Zone: zone, Name: mig.gceRef.Name}
-		result, _ := ctx.createNodePoolAsyncOrFail(mig)
-		assert.Equal(t, zone, result.MainCreatedMig.GceRef().Zone)
-		assert.Equal(t, 2, len(result.ExtraCreatedMigs))
-		assert.NotEqual(t, zone, result.ExtraCreatedMigs[0].GceRef().Zone)
-		assert.NotEqual(t, zone, result.ExtraCreatedMigs[1].GceRef().Zone)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		_, sampleNodePool := ctx.sampleMigWithNodePool()
+		zones := sampleNodePool.Spec.Locations
+		assert.Equal(t, 3, len(zones))
+		for _, zone := range zones {
+			mig, _ := ctx.sampleMigWithNodePool()
+			mig.gceRef = gce.GceRef{Project: mig.gceRef.Project, Zone: zone, Name: mig.gceRef.Name}
+			result, _ := ctx.createNodePoolAsyncOrFail(mig)
+			assert.Equal(t, zone, result.MainCreatedMig.GceRef().Zone)
+			assert.Equal(t, 2, len(result.ExtraCreatedMigs))
+			assert.NotEqual(t, zone, result.ExtraCreatedMigs[0].GceRef().Zone)
+			assert.NotEqual(t, zone, result.ExtraCreatedMigs[1].GceRef().Zone)
+		}
+	})
 }
 
 func TestAsyncMgr_AsyncNodePoolCreationSetsNodePoolSpecInUpcomingMigs(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, pool := ctx.sampleMigWithNodePool()
-	result, _ := ctx.createNodePoolAsyncOrFail(mig)
-	spec := result.MainCreatedMig.Spec()
-	assert.Equal(t, pool.Name, spec.Labels[labels.GkeNodePoolLabel])
-	assert.NotEmpty(t, spec.ClusterNetworkPath)
-	assert.NotEmpty(t, spec.ClusterSubnetworkPath)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, pool := ctx.sampleMigWithNodePool()
+		result, _ := ctx.createNodePoolAsyncOrFail(mig)
+		spec := result.MainCreatedMig.Spec()
+		assert.Equal(t, pool.Name, spec.Labels[labels.GkeNodePoolLabel])
+		assert.NotEmpty(t, spec.ClusterNetworkPath)
+		assert.NotEmpty(t, spec.ClusterSubnetworkPath)
+	})
 }
 
 func TestAsyncMgr_AsyncNodePoolCreationWithTwoNodePools(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig1, nodePool1 := ctx.sampleMigWithNodePool()
-	mig2, nodePool2 := ctx.sampleMigWithNodePool()
-	// when two node pools are scheduled to be created
-	result1, initializer1 := ctx.createNodePoolAsyncOrFail(mig1)
-	result2, initializer2 := ctx.createNodePoolAsyncOrFail(mig2)
-	// and upcoming migs are scaled up during async node pool creations
-	assert.NoError(t, ctx.asyncGkeManager.SetMigSize(result1.MainCreatedMig, 10))
-	assert.NoError(t, ctx.asyncGkeManager.SetMigSize(result2.MainCreatedMig, 7))
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool1)
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool2)
-	// then async result should contains information about scaled up node pools
-	assert.Equal(t, map[string]int64{
-		(result1.MainCreatedMig.Id()): 10,
-	}, initializer1.TargetSizes())
-	assert.Equal(t, map[string]int64{
-		(result2.MainCreatedMig.Id()): 7,
-	}, initializer2.TargetSizes())
-	ctx.assertNoOngoingNodePoolOps()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig1, nodePool1 := ctx.sampleMigWithNodePool()
+		mig2, nodePool2 := ctx.sampleMigWithNodePool()
+		// when two node pools are scheduled to be created
+		result1, initializer1 := ctx.createNodePoolAsyncOrFail(mig1)
+		result2, initializer2 := ctx.createNodePoolAsyncOrFail(mig2)
+		// and upcoming migs are scaled up during async node pool creations
+		assert.NoError(t, ctx.asyncGkeManager.SetMigSize(result1.MainCreatedMig, 10))
+		assert.NoError(t, ctx.asyncGkeManager.SetMigSize(result2.MainCreatedMig, 7))
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool1)
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool2)
+		// then async result should contains information about scaled up node pools
+		assert.Equal(t, map[string]int64{
+			(result1.MainCreatedMig.Id()): 10,
+		}, initializer1.TargetSizes())
+		assert.Equal(t, map[string]int64{
+			(result2.MainCreatedMig.Id()): 7,
+		}, initializer2.TargetSizes())
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_AsyncNodePoolCreationWithDelayedNodePoolListing(t *testing.T) {
-	// Warning: this test is slow (1s) - GKE node pool is checked periodically
-	t.Parallel()
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	// when cluster reports new node pool with some delay
-	ctx.gkeManager.reportOnceEmptyCluster()
-	// and node pool is created
-	_, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	// then async node pool creation should still succeed
-	initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	ctx.assertNoOngoingNodePoolOps()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		// when cluster reports new node pool with some delay
+		ctx.gkeManager.reportOnceEmptyCluster()
+		// and node pool is created
+		_, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		// then async node pool creation should still succeed
+		initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_AsyncNodePoolCreationConsistencyBetweenScaleUpIterations(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	asyncGkeManager := ctx.asyncGkeManager
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		asyncGkeManager := ctx.asyncGkeManager
 
-	// when node pool is scheduled to be created
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	// then manager should return upcoming migs
-	for _, upcoming := range result.AllCreatedMigs() {
-		assert.True(t, asyncGkeManager.IsUpcoming(upcoming))
-	}
-	// and the same upcoming migs should be available for scale-up iteration
-	assert.Equal(t, asyncGkeManager.GetGkeMigs(), result.AllCreatedMigs())
+		// when node pool is scheduled to be created
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		// then manager should return upcoming migs
+		for _, upcoming := range result.AllCreatedMigs() {
+			assert.True(t, asyncGkeManager.IsUpcoming(upcoming))
+		}
+		// and the same upcoming migs should be available for scale-up iteration
+		assert.Equal(t, asyncGkeManager.GetGkeMigs(), result.AllCreatedMigs())
 
-	// when node pool creation finishes
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	// then async result should contain created node-groups still categorized as upcoming
-	asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	for _, created := range asyncResult.CreationResult.AllCreatedNodeGroups() {
-		assert.True(t, asyncGkeManager.IsUpcoming(created.(*GkeMig)))
-	}
-	// and scale-up logic should still see the upcoming node-groups
-	assert.Equal(t, asyncGkeManager.GetGkeMigs(), result.AllCreatedMigs())
+		// when node pool creation finishes
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		// then async result should contain created node-groups still categorized as upcoming
+		asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		for _, created := range asyncResult.CreationResult.AllCreatedNodeGroups() {
+			assert.True(t, asyncGkeManager.IsUpcoming(created.(*GkeMig)))
+		}
+		// and scale-up logic should still see the upcoming node-groups
+		assert.Equal(t, asyncGkeManager.GetGkeMigs(), result.AllCreatedMigs())
 
-	// when manager is refreshed at the beginning on a new scale-up iteration
-	ctx.awaitAsyncTasksAndRefresh()
-	// then created migs are visible to the scale-up loop and not categorized as upcoming
-	for _, mig := range asyncGkeManager.GetGkeMigs() {
-		assert.False(t, asyncGkeManager.IsUpcoming(mig))
-	}
+		// when manager is refreshed at the beginning on a new scale-up iteration
+		ctx.awaitAsyncTasksAndRefresh()
+		// then created migs are visible to the scale-up loop and not categorized as upcoming
+		for _, mig := range asyncGkeManager.GetGkeMigs() {
+			assert.False(t, asyncGkeManager.IsUpcoming(mig))
+		}
+	})
 }
 
 func TestAsyncMgr_CreateNodePoolAsyncWithAsyncFailures(t *testing.T) {
@@ -211,19 +226,21 @@ func TestAsyncMgr_CreateNodePoolAsyncWithAsyncFailures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := newAsyncGkeManagerTestContext(t)
-			mig, nodePool := test.setup(ctx)
-			// when node pool is scheduled for creation
-			_, initializer := ctx.createNodePoolAsyncOrFail(mig)
-			ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-			ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
-			// then initializer is executed with proper error
-			asyncResult := initializer.AwaitResultOrFail()
-			assert.ErrorContains(t, asyncResult.Error, test.wantError)
-			// and node pool is cleaned up
-			ctx.awaitAsyncTasks()
-			assert.Equalf(t, test.wantNodePoolDeletion, ctx.gkeManager.attemptedDeletion(nodePool.Name), "Expected node pool deletion: %v", test.wantNodePoolDeletion)
-			ctx.assertNoOngoingNodePoolOps()
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				mig, nodePool := test.setup(ctx)
+				// when node pool is scheduled for creation
+				_, initializer := ctx.createNodePoolAsyncOrFail(mig)
+				ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+				ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
+				// then initializer is executed with proper error
+				asyncResult := initializer.AwaitResultOrFail()
+				assert.ErrorContains(t, asyncResult.Error, test.wantError)
+				// and node pool is cleaned up
+				ctx.awaitAsyncTasks()
+				assert.Equalf(t, test.wantNodePoolDeletion, ctx.gkeManager.attemptedDeletion(nodePool.Name), "Expected node pool deletion: %v", test.wantNodePoolDeletion)
+				ctx.assertNoOngoingNodePoolOps()
+			})
 		})
 	}
 }
@@ -273,96 +290,101 @@ func TestAsyncMgr_CreateNodePoolAsyncRetries(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := newAsyncGkeManagerTestContext(t)
-			ctx.asyncGkeManager.maxConcurrentErrorRetries = test.maxConcurrentRetries
-			ctx.asyncGkeManager.initialBackoffDuration = 0 * time.Millisecond
-			mig, nodePool := ctx.sampleMigWithNodePool()
-			// when GKE create operations fail
-			ctx.gkeManager.failNodePoolCreationWithRepeatingError(mig.NodePoolName(), test.err, test.errNumberOfRepetitions, test.followedBySuccess)
-			// and node pool is scheduled for creation
-			_, initializer := ctx.createNodePoolAsyncOrFail(mig)
-			ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-			// then initializer is executed with the GKE error
-			asyncResult := initializer.AwaitResultOrFail()
-			if test.wantErr {
-				assert.Error(t, asyncResult.Error)
-			} else {
-				assert.NoError(t, asyncResult.Error)
-			}
-			// finalizing deletion for potential clean up
-			ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
-			ctx.awaitAsyncTasks()
-			assert.Equal(t, test.wantCleanUp, ctx.gkeManager.attemptedDeletion(nodePool.Name))
-			ctx.assertNoOngoingNodePoolOps()
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				ctx.asyncGkeManager.maxConcurrentErrorRetries = test.maxConcurrentRetries
+				ctx.asyncGkeManager.initialBackoffDuration = 0 * time.Millisecond
+				mig, nodePool := ctx.sampleMigWithNodePool()
+				// when GKE create operations fail
+				ctx.gkeManager.failNodePoolCreationWithRepeatingError(mig.NodePoolName(), test.err, test.errNumberOfRepetitions, test.followedBySuccess)
+				// and node pool is scheduled for creation
+				_, initializer := ctx.createNodePoolAsyncOrFail(mig)
+				ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+				// then initializer is executed with the GKE error
+				asyncResult := initializer.AwaitResultOrFail()
+				if test.wantErr {
+					assert.Error(t, asyncResult.Error)
+				} else {
+					assert.NoError(t, asyncResult.Error)
+				}
+				// finalizing deletion for potential clean up
+				ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
+				ctx.awaitAsyncTasks()
+				assert.Equal(t, test.wantCleanUp, ctx.gkeManager.attemptedDeletion(nodePool.Name))
+				ctx.assertNoOngoingNodePoolOps()
+			})
 		})
 	}
 }
 
 func TestAsyncMgr_ScaleUpOfProcessedUpcomingNodePoolShouldScaleUpCreatedNodeGroup(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	asyncGkeManager := ctx.asyncGkeManager
-	// given already initialized async created node pool
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	ctx.awaitAsyncTasks()
-	// when upcoming node group are scaled up
-	upcomingMig := result.MainCreatedMig
-	createdMig := asyncResult.CreationResult.MainCreatedNodeGroup
-	assert.NoError(t, asyncGkeManager.SetMigSize(upcomingMig, 10))
-	// then the underlying created node groups should scaled up as well
-	assert.Equal(t, 10, ctx.gkeManager.GetMigInstances(createdMig.Id()))
-	// and when instance creation happens, it should trigger re-initialization
-	assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 1))
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		asyncGkeManager := ctx.asyncGkeManager
+		// given already initialized async created node pool
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		ctx.awaitAsyncTasks()
+		// when upcoming node group are scaled up
+		upcomingMig := result.MainCreatedMig
+		createdMig := asyncResult.CreationResult.MainCreatedNodeGroup
+		assert.NoError(t, asyncGkeManager.SetMigSize(upcomingMig, 10))
+		// then the underlying created node groups should scaled up as well
+		assert.Equal(t, 10, ctx.gkeManager.GetMigInstances(createdMig.Id()))
+		// and when instance creation happens, it should trigger re-initialization
+		assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 1))
 
-	// Await the second run of the initializer
-	_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		// Await the second run of the initializer
+		_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
 
-	// And verify the target size was updated to 11 (10 + 1)
-	assert.Equal(t, int64(11), initializer.GetTargetSize(upcomingMig.Id()))
-	ctx.assertNoOngoingNodePoolOps()
+		// And verify the target size was updated to 11 (10 + 1)
+		assert.Equal(t, int64(11), initializer.GetTargetSize(upcomingMig.Id()))
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_ScaleUpDuringInitializationShouldTriggerReinitialization(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	asyncGkeManager := ctx.asyncGkeManager
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		asyncGkeManager := ctx.asyncGkeManager
 
-	// Given a scheduled async node pool creation
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	upcomingMig := result.MainCreatedMig
+		// Given a scheduled async node pool creation
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		upcomingMig := result.MainCreatedMig
 
-	// Block the initializer so we can simulate concurrent activity
-	initializer.BlockInitialization()
+		// Block the initializer so we can simulate concurrent activity
+		initializer.BlockInitialization()
 
-	// Trigger the async node pool creation to finish and start initialization
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		// Trigger the async node pool creation to finish and start initialization
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
 
-	// Wait for the initializer to start running and hit the block
-	_ = initializer.AwaitResultOrFail()
+		// Wait for the initializer to start running and hit the block
+		_ = initializer.AwaitResultOrFail()
 
-	// When a scale-up happens during the initialization process
-	assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 5))
+		// When a scale-up happens during the initialization process
+		assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 5))
 
-	// Then unblock the first initialization run
-	initializer.UnblockInitialization()
+		// Then unblock the first initialization run
+		initializer.UnblockInitialization()
 
-	// And await the automatically triggered second run
-	_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		// And await the automatically triggered second run
+		_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
 
-	// Verify the target size was correctly updated
-	assert.Equal(t, int64(5), initializer.GetTargetSize(upcomingMig.Id()))
+		// Verify the target size was correctly updated
+		assert.Equal(t, int64(5), initializer.GetTargetSize(upcomingMig.Id()))
 
-	ctx.awaitAsyncTasks()
-	ctx.assertNoOngoingNodePoolOps()
+		ctx.awaitAsyncTasks()
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_GkeOperationScheduling(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	workers := ctx.taskQueueWorkerCount
+	workers := defaultTestTaskQueueWorkerCount
 	assert.Equal(t, 0, workers%2) // for easier test cases
-	queueSize := ctx.taskQueueSize
+	queueSize := defaultTestTaskQueueSize
 	capacity := workers + queueSize
 	tests := []struct {
 		name      string
@@ -402,29 +424,31 @@ func TestAsyncMgr_GkeOperationScheduling(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := newAsyncGkeManagerTestContext(t)
-			var err error = nil
-			// when GKE operations pile up
-			for range test.creations {
-				if err == nil {
-					mig, _ := ctx.sampleMigWithNodePool()
-					initializer := newAsyncNodeGroupInitializer(t)
-					_, err = ctx.asyncGkeManager.CreateNodePoolAsync(mig, initializer, initializer)
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				var err error = nil
+				// when GKE operations pile up
+				for range test.creations {
+					if err == nil {
+						mig, _ := ctx.sampleMigWithNodePool()
+						initializer := newAsyncNodeGroupInitializer(t)
+						_, err = ctx.asyncGkeManager.CreateNodePoolAsync(mig, initializer, initializer)
+					}
 				}
-			}
-			for range test.deletions {
-				if err == nil {
-					mig, _ := ctx.sampleCreatedMigWithNodePool()
-					err = ctx.asyncGkeManager.DeleteNodePoolAsync(mig, newAsyncNodeGroupFinalizer(t))
+				for range test.deletions {
+					if err == nil {
+						mig, _ := ctx.sampleCreatedMigWithNodePool()
+						err = ctx.asyncGkeManager.DeleteNodePoolAsync(mig, newAsyncNodeGroupFinalizer(t))
+					}
 				}
-			}
-			// then scheduling should fail when task queue capacity is reached
-			if test.wantErr {
-				assert.Error(t, err)
-				assert.Contains(t, err.Error(), "queue is full")
-			} else {
-				assert.NoError(t, err)
-			}
+				// then scheduling should fail when task queue capacity is reached
+				if test.wantErr {
+					assert.Error(t, err)
+					assert.Contains(t, err.Error(), "queue is full")
+				} else {
+					assert.NoError(t, err)
+				}
+			})
 		})
 	}
 }
@@ -443,200 +467,221 @@ func waitOrFail(t *testing.T, groupName string, wg *sync.WaitGroup) {
 }
 
 func TestAsyncMgr_MigSizeDuringAsyncNodePoolCreation(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	asyncGkeManager := ctx.asyncGkeManager
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		asyncGkeManager := ctx.asyncGkeManager
 
-	// when node pool is scheduled to be created
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	// then upcoming node-groups should be empty
-	for _, mig := range result.AllCreatedMigs() {
-		size, err := asyncGkeManager.GetMigSize(mig)
+		// when node pool is scheduled to be created
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		// then upcoming node-groups should be empty
+		for _, mig := range result.AllCreatedMigs() {
+			size, err := asyncGkeManager.GetMigSize(mig)
+			assert.NoError(t, err)
+			assert.Equal(t, int64(0), size)
+		}
+
+		// when upcoming mig is scale-up during async creation
+		mainMigSize := int64(10)
+		assert.NoError(t, asyncGkeManager.SetMigSize(result.MainCreatedMig, int64(mainMigSize)))
+		// then its target size is updated
+		size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
 		assert.NoError(t, err)
-		assert.Equal(t, int64(0), size)
-	}
+		assert.Equal(t, mainMigSize, size)
 
-	// when upcoming mig is scale-up during async creation
-	mainMigSize := int64(10)
-	assert.NoError(t, asyncGkeManager.SetMigSize(result.MainCreatedMig, int64(mainMigSize)))
-	// then its target size is updated
-	size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, mainMigSize, size)
+		// when creation is finalized
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		// then upcoming mig size should still include recent scale-up
+		size, err = asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Equal(t, mainMigSize, size)
 
-	// when creation is finalized
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	// then upcoming mig size should still include recent scale-up
-	size, err = asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, mainMigSize, size)
-
-	// when manager is refreshed
-	ctx.awaitAsyncTasksAndRefresh()
-	ctx.gkeManager.mock.On("GetMigSize", result.MainCreatedMig).Return(int64(0), fmt.Errorf("mig not found"))
-	ctx.gkeManager.mock.On("GetMigSize", asyncResult.CreationResult.MainCreatedNodeGroup.(*GkeMig)).Return(mainMigSize, nil)
-	// then there are no reported sizes for upcoming migs (there are no upcoming migs)
-	_, err = asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.ErrorContains(t, err, "mig not found")
-	// and created migs contain recent scale-ups
-	size, err = asyncGkeManager.GetMigSize(asyncResult.CreationResult.MainCreatedNodeGroup.(*GkeMig))
-	assert.NoError(t, err)
-	assert.Equal(t, mainMigSize, size)
+		// when manager is refreshed
+		ctx.awaitAsyncTasksAndRefresh()
+		ctx.gkeManager.mock.On("GetMigSize", result.MainCreatedMig).Return(int64(0), fmt.Errorf("mig not found"))
+		ctx.gkeManager.mock.On("GetMigSize", asyncResult.CreationResult.MainCreatedNodeGroup.(*GkeMig)).Return(mainMigSize, nil)
+		// then there are no reported sizes for upcoming migs (there are no upcoming migs)
+		_, err = asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.ErrorContains(t, err, "mig not found")
+		// and created migs contain recent scale-ups
+		size, err = asyncGkeManager.GetMigSize(asyncResult.CreationResult.MainCreatedNodeGroup.(*GkeMig))
+		assert.NoError(t, err)
+		assert.Equal(t, mainMigSize, size)
+	})
 }
 
 func TestAsyncMgr_GetAllNodePoolNames(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	asyncMig, asyncNodePool := ctx.sampleMigWithNodePool()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := ctx.asyncGkeManager
+		asyncMig, asyncNodePool := ctx.sampleMigWithNodePool()
 
-	// when there are 2 already created node pools
-	createdMig1, createdNodePool1 := ctx.sampleCreatedMigWithNodePool()
-	_, createdNodePool2 := ctx.sampleCreatedMigWithNodePool()
-	// and there is one node pool under async creation
-	ctx.createNodePoolAsyncOrFail(asyncMig)
-	// then all 3 node pool names are reported
-	names := asyncGkeManager.GetAllNodePoolNames()
-	assert.Equal(t, sets.New(createdNodePool1.Name, createdNodePool2.Name, asyncNodePool.Name), names)
+		// when there are 2 already created node pools
+		createdMig1, createdNodePool1 := ctx.sampleCreatedMigWithNodePool()
+		_, createdNodePool2 := ctx.sampleCreatedMigWithNodePool()
+		// and there is one node pool under async creation
+		ctx.createNodePoolAsyncOrFail(asyncMig)
+		// then all 3 node pool names are reported
+		names := asyncGkeManager.GetAllNodePoolNames()
+		assert.Equal(t, sets.New(createdNodePool1.Name, createdNodePool2.Name, asyncNodePool.Name), names)
 
-	// when already created node pool is asynchronously deleted
-	ctx.deleteNodePoolAsyncOrFail(createdMig1)
-	// then its name is not reported
-	names = asyncGkeManager.GetAllNodePoolNames()
-	assert.Equal(t, sets.New(createdNodePool2.Name, asyncNodePool.Name), names)
+		// when already created node pool is asynchronously deleted
+		ctx.deleteNodePoolAsyncOrFail(createdMig1)
+		// then its name is not reported
+		names = asyncGkeManager.GetAllNodePoolNames()
+		assert.Equal(t, sets.New(createdNodePool2.Name, asyncNodePool.Name), names)
+	})
 }
 
 func TestAsyncMgr_GetMigNodesDuringAsyncNodePoolDeletion(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	mig, _ := ctx.sampleCreatedMigWithNodePool()
-	// when there is a node belonging to an already created node pool
-	createdMigInstances := []gce.GceInstance{{NumericId: 123}}
-	ctx.gkeManager.mock.On("GetMigNodes", mig).Return(createdMigInstances, nil)
-	// then mig nodes are reported
-	instances, err := asyncGkeManager.GetMigNodes(mig)
-	assert.NoError(t, err)
-	assert.Equal(t, createdMigInstances, instances)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := ctx.asyncGkeManager
+		mig, _ := ctx.sampleCreatedMigWithNodePool()
+		// when there is a node belonging to an already created node pool
+		createdMigInstances := []gce.GceInstance{{NumericId: 123}}
+		ctx.gkeManager.mock.On("GetMigNodes", mig).Return(createdMigInstances, nil)
+		// then mig nodes are reported
+		instances, err := asyncGkeManager.GetMigNodes(mig)
+		assert.NoError(t, err)
+		assert.Equal(t, createdMigInstances, instances)
 
-	// when node pool is asynchronously deleted
-	ctx.deleteNodePoolAsyncOrFail(mig)
-	// then mig nodes are not reported
-	instances, err = asyncGkeManager.GetMigNodes(mig)
-	assert.NoError(t, err)
-	assert.Empty(t, instances)
+		// when node pool is asynchronously deleted
+		ctx.deleteNodePoolAsyncOrFail(mig)
+		// then mig nodes are not reported
+		instances, err = asyncGkeManager.GetMigNodes(mig)
+		assert.NoError(t, err)
+		assert.Empty(t, instances)
+	})
 }
 
 func TestAsyncMgr_GetMigNodesDuringAsyncNodePoolCreation(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	// when node pool is async created
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	// and it is scaled up
-	assert.NoError(t, asyncGkeManager.SetMigSize(result.MainCreatedMig, 1))
-	// then nodes are not reported for upcoming node pools (only target size is)
-	instances, err := asyncGkeManager.GetMigNodes(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Empty(t, instances)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := ctx.asyncGkeManager
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		// when node pool is async created
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		// and it is scaled up
+		assert.NoError(t, asyncGkeManager.SetMigSize(result.MainCreatedMig, 1))
+		// then nodes are not reported for upcoming node pools (only target size is)
+		instances, err := asyncGkeManager.GetMigNodes(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Empty(t, instances)
 
-	// when node pool creation finishes and it has some nodes registered
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	nodes := []gce.GceInstance{{NumericId: 123}}
-	ctx.gkeManager.mock.On("GetMigNodes", mig).Return(nodes, nil)
-	// then mig nodes are reported
-	reportedInstances, err := asyncGkeManager.GetMigNodes(mig)
-	assert.NoError(t, err)
-	assert.Equal(t, nodes, reportedInstances)
+		// when node pool creation finishes and it has some nodes registered
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		nodes := []gce.GceInstance{{NumericId: 123}}
+		ctx.gkeManager.mock.On("GetMigNodes", mig).Return(nodes, nil)
+		// then mig nodes are reported
+		reportedInstances, err := asyncGkeManager.GetMigNodes(mig)
+		assert.NoError(t, err)
+		assert.Equal(t, nodes, reportedInstances)
+	})
 }
 
 func TestAsyncMgr_IsMigStableDuringAsyncNodePoolDeletion(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	mig, _ := ctx.sampleCreatedMigWithNodePool()
-	// when there is a node belonging to an already created node pool
-	ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
-	// then mig stability is reported from underlying manager
-	stable, err := asyncGkeManager.IsMigStable(mig)
-	assert.NoError(t, err)
-	assert.True(t, stable)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := ctx.asyncGkeManager
+		mig, _ := ctx.sampleCreatedMigWithNodePool()
+		// when there is a node belonging to an already created node pool
+		ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
+		// then mig stability is reported from underlying manager
+		stable, err := asyncGkeManager.IsMigStable(mig)
+		assert.NoError(t, err)
+		assert.True(t, stable)
 
-	// when node pool is asynchronously deleted
-	ctx.deleteNodePoolAsyncOrFail(mig)
-	// then mig is reported as not stable without querying underlying manager
-	stable, err = asyncGkeManager.IsMigStable(mig)
-	assert.NoError(t, err)
-	assert.False(t, stable)
+		// when node pool is asynchronously deleted
+		ctx.deleteNodePoolAsyncOrFail(mig)
+		// then mig is reported as not stable without querying underlying manager
+		stable, err = asyncGkeManager.IsMigStable(mig)
+		assert.NoError(t, err)
+		assert.False(t, stable)
+	})
 }
 
 func TestAsyncMgr_IsMigStableDuringAsyncNodePoolCreation(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	mig, nodePool := ctx.sampleMigWithNodePool()
-	// when node pool is async created
-	result, initializer := ctx.createNodePoolAsyncOrFail(mig)
-	// then upcoming node pools are reported as not stable
-	stable, err := asyncGkeManager.IsMigStable(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.False(t, stable)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := ctx.asyncGkeManager
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		// when node pool is async created
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		// then upcoming node pools are reported as not stable
+		stable, err := asyncGkeManager.IsMigStable(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.False(t, stable)
 
-	// when node pool creation finishes
-	ctx.gkeManager.finalizeNodePoolCreation(nodePool)
-	initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
-	ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
-	// then mig stability is reported from underlying manager
-	stable, err = asyncGkeManager.IsMigStable(mig)
-	assert.NoError(t, err)
-	assert.True(t, stable)
+		// when node pool creation finishes
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		ctx.gkeManager.mock.On("IsMigStable", mig).Return(true, nil)
+		// then mig stability is reported from underlying manager
+		stable, err = asyncGkeManager.IsMigStable(mig)
+		assert.NoError(t, err)
+		assert.True(t, stable)
+	})
 }
 
 func TestAsyncMgr_ReturnsFilteredAsyncGkeMigs(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := ctx.asyncGkeManager
-	// there is uninitialized upcoming mig
-	uninitializedMig, _ := ctx.sampleMigWithNodePool()
-	result, _ := ctx.createNodePoolAsyncOrFail(uninitializedMig)
-	upcomingMigs := result.AllCreatedMigs()
-	// and one created mig
-	createdMig, _ := ctx.sampleCreatedMigWithNodePool()
-	ctx.gkeManager.mock.On("GetGkeMigsBlockedByServerError").Return(append(upcomingMigs, createdMig))
-	ctx.gkeManager.mock.On("GetGkeMigsBlockedByNotFoundError").Return(append(upcomingMigs, createdMig))
 	tests := []struct {
 		name     string
-		getMigs  func() []*GkeMig
-		wantMigs []string
+		getMigs  func(asyncGkeManager *asyncGkeManager) []*GkeMig
+		wantMigs func(createdMig *GkeMig, upcomingMigs []*GkeMig) []string
 	}{
 		{
 			name: "GetGkeMigs()",
-			getMigs: func() []*GkeMig {
+			getMigs: func(asyncGkeManager *asyncGkeManager) []*GkeMig {
 				return asyncGkeManager.GetGkeMigs()
 			},
-			wantMigs: []string{createdMig.Id(), upcomingMigs[0].Id(), upcomingMigs[1].Id(), upcomingMigs[2].Id()},
+			wantMigs: func(createdMig *GkeMig, upcomingMigs []*GkeMig) []string {
+				return []string{createdMig.Id(), upcomingMigs[0].Id(), upcomingMigs[1].Id(), upcomingMigs[2].Id()}
+			},
 		},
 		{
 			name: "GetGkeMigsBlockedByServerError()",
-			getMigs: func() []*GkeMig {
+			getMigs: func(asyncGkeManager *asyncGkeManager) []*GkeMig {
 				return asyncGkeManager.GetGkeMigsBlockedByServerError()
 			},
-			wantMigs: []string{createdMig.Id()},
+			wantMigs: func(createdMig *GkeMig, upcomingMigs []*GkeMig) []string {
+				return []string{createdMig.Id()}
+			},
 		},
 		{
 			name: "GetGkeMigsBlockedByNotFoundError()",
-			getMigs: func() []*GkeMig {
+			getMigs: func(asyncGkeManager *asyncGkeManager) []*GkeMig {
 				return asyncGkeManager.GetGkeMigsBlockedByNotFoundError()
 			},
-			wantMigs: []string{createdMig.Id()},
+			wantMigs: func(createdMig *GkeMig, upcomingMigs []*GkeMig) []string {
+				return []string{createdMig.Id()}
+			},
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			migs := test.getMigs()
-			wantMigIds := slice.SortStrings(test.wantMigs)
-			migIds := slice.SortStrings(nodeGroupIds(migs))
-			assert.Equal(t, wantMigIds, migIds)
-			for _, mig := range migs {
-				assert.Equal(t, asyncGkeManager, mig.gkeManager)
-			}
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				asyncGkeManager := ctx.asyncGkeManager
+				// there is uninitialized upcoming mig
+				uninitializedMig, _ := ctx.sampleMigWithNodePool()
+				result, _ := ctx.createNodePoolAsyncOrFail(uninitializedMig)
+				upcomingMigs := result.AllCreatedMigs()
+				// and one created mig
+				createdMig, _ := ctx.sampleCreatedMigWithNodePool()
+				ctx.gkeManager.mock.On("GetGkeMigsBlockedByServerError").Return(append(upcomingMigs, createdMig))
+				ctx.gkeManager.mock.On("GetGkeMigsBlockedByNotFoundError").Return(append(upcomingMigs, createdMig))
+
+				migs := test.getMigs(asyncGkeManager)
+				wantMigIds := slice.SortStrings(test.wantMigs(createdMig, upcomingMigs))
+				migIds := slice.SortStrings(nodeGroupIds(migs))
+				assert.Equal(t, wantMigIds, migIds)
+				for _, mig := range migs {
+					assert.Equal(t, asyncGkeManager, mig.gkeManager)
+				}
+			})
 		})
 	}
 }
@@ -702,188 +747,210 @@ func TestAsyncMgr_DeleteNodePool(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("Async/%s", test.name), func(t *testing.T) {
-			ctx := newAsyncGkeManagerTestContext(t)
-			asyncGkeManager := ctx.asyncGkeManager
-			mig, nodePool, cleanUp := test.migToRemove(ctx)
-			defer cleanUp()
-			finalizer := newAsyncNodeGroupFinalizer(t)
-			err := asyncGkeManager.DeleteNodePoolAsync(mig, finalizer)
-			if len(test.wantErr) > 0 {
-				assert.ErrorContains(t, err, test.wantErr)
-				return
-			}
-			assert.NoError(t, err)
-			ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
-			finalizer.AwaitSuccessfulResultOrFail()
-			if test.wantNoOngoingOps {
-				ctx.assertNoOngoingNodePoolOps()
-			}
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				asyncGkeManager := ctx.asyncGkeManager
+				mig, nodePool, cleanUp := test.migToRemove(ctx)
+				defer cleanUp()
+				finalizer := newAsyncNodeGroupFinalizer(t)
+				err := asyncGkeManager.DeleteNodePoolAsync(mig, finalizer)
+				if len(test.wantErr) > 0 {
+					assert.ErrorContains(t, err, test.wantErr)
+					return
+				}
+				assert.NoError(t, err)
+				ctx.gkeManager.finalizeNodePoolDeletion(nodePool.Name)
+				finalizer.AwaitSuccessfulResultOrFail()
+				if test.wantNoOngoingOps {
+					ctx.assertNoOngoingNodePoolOps()
+				}
+			})
 		})
 		t.Run(fmt.Sprintf("Sync/%s", test.name), func(t *testing.T) {
-			ctx := newAsyncGkeManagerTestContext(t)
-			asyncGkeManager := ctx.asyncGkeManager
-			mig, _, cleanUp := test.migToRemove(ctx)
-			defer cleanUp()
-			ctx.gkeManager.mock.On("DeleteNodePool", mig).Return(nil)
-			err := asyncGkeManager.DeleteNodePool(mig)
-			if len(test.wantErr) > 0 {
-				assert.ErrorContains(t, err, test.wantErr)
-				return
-			}
-			assert.NoError(t, err)
-			if test.wantNoOngoingOps {
-				ctx.assertNoOngoingNodePoolOps()
-			}
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				asyncGkeManager := ctx.asyncGkeManager
+				mig, _, cleanUp := test.migToRemove(ctx)
+				defer cleanUp()
+				ctx.gkeManager.mock.On("DeleteNodePool", mig).Return(nil)
+				err := asyncGkeManager.DeleteNodePool(mig)
+				if len(test.wantErr) > 0 {
+					assert.ErrorContains(t, err, test.wantErr)
+					return
+				}
+				assert.NoError(t, err)
+				if test.wantNoOngoingOps {
+					ctx.assertNoOngoingNodePoolOps()
+				}
+			})
 		})
 	}
 }
 
 func TestAsyncMgr_DeleteNodePoolAsync(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, _ := ctx.sampleCreatedMigWithNodePool()
-	// when node pool is deleted
-	ctx.awaitAsyncTasksAndRefresh()
-	finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
-	// and GKE operation succeeds
-	ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
-	// then finalizer is executed without error
-	asyncResult := finalizer.AwaitResultOrFail()
-	assert.NoError(t, asyncResult.Error)
-	ctx.assertNoOngoingNodePoolOps()
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, _ := ctx.sampleCreatedMigWithNodePool()
+		// when node pool is deleted
+		ctx.awaitAsyncTasksAndRefresh()
+		finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
+		// and GKE operation succeeds
+		ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
+		// then finalizer is executed without error
+		asyncResult := finalizer.AwaitResultOrFail()
+		assert.NoError(t, asyncResult.Error)
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_DeleteNodePoolAsyncWithAsyncFailures(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	mig, _ := ctx.sampleCreatedMigWithNodePool()
-	// when GKE delete operations fail
-	gkeError := fmt.Errorf("sample error")
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, _ := ctx.sampleCreatedMigWithNodePool()
+		// when GKE delete operations fail
+		gkeError := fmt.Errorf("sample error")
 
-	ctx.gkeManager.failNodePoolDeletion(mig.NodePoolName(), gkeError)
-	// and node pool is scheduled for deletion
-	finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
-	ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
-	// then finalizer is executed with the GKE error
-	asyncResult := finalizer.AwaitResultOrFail()
-	assert.ErrorContains(t, asyncResult.Error, "sample error")
+		ctx.gkeManager.failNodePoolDeletion(mig.NodePoolName(), gkeError)
+		// and node pool is scheduled for deletion
+		finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
+		ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
+		// then finalizer is executed with the GKE error
+		asyncResult := finalizer.AwaitResultOrFail()
+		assert.ErrorContains(t, asyncResult.Error, "sample error")
 
-	// when GKE operations succeed
-	ctx.gkeManager.failNodePoolDeletion(mig.NodePoolName(), nil)
-	// and node pool is deleted for the second time in next iteration
-	ctx.awaitAsyncTasksAndRefresh()
-	finalizer = ctx.deleteNodePoolAsyncOrFail(mig)
-	// and GKE operation succeeds
-	ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
-	// then finalizer is executed without error
-	asyncResult = finalizer.AwaitResultOrFail()
-	assert.NoError(t, asyncResult.Error)
-	ctx.assertNoOngoingNodePoolOps()
+		// when GKE operations succeed
+		ctx.gkeManager.failNodePoolDeletion(mig.NodePoolName(), nil)
+		// and node pool is deleted for the second time in next iteration
+		ctx.awaitAsyncTasksAndRefresh()
+		finalizer = ctx.deleteNodePoolAsyncOrFail(mig)
+		// and GKE operation succeeds
+		ctx.gkeManager.finalizeNodePoolDeletion(mig.NodePoolName())
+		// then finalizer is executed without error
+		asyncResult = finalizer.AwaitResultOrFail()
+		assert.NoError(t, asyncResult.Error)
+		ctx.assertNoOngoingNodePoolOps()
+	})
 }
 
 func TestAsyncMgr_DeleteNodePoolAsyncWithUpcomingQueuedNodePool(t *testing.T) {
-	ctx := newAsyncGkeManagerTestContext(t)
-	// given upcoming node pool queued for creation
-	var creationResult MigCreateNodePoolResult
-	var initializer *asyncNodeGroupInitializerMock
-	var mig *GkeMig
-	for range ctx.taskQueueWorkerCount + 1 {
-		mig, _ = ctx.sampleMigWithNodePool()
-		creationResult, initializer = ctx.createNodePoolAsyncOrFail(mig)
-	}
-	// when node pool is deleted
-	finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
-	// then its initializer is invoked with an error
-	creationAsyncResult := initializer.AwaitResultOrFail()
-	assert.Equal(t, migRefs(creationResult.AllCreatedMigs()), nodeGroupRefs(creationAsyncResult.InjectedMigs))
-	assert.ErrorContains(t, creationAsyncResult.Error, "node pool has been deleted when scheduled for creation")
-	// and its finalizer is invoked with upcoming node-groups
-	deletionAsyncResult := finalizer.AwaitResultOrFail()
-	assert.Equal(t, migRefs(creationResult.AllCreatedMigs()), nodeGroupRefs(deletionAsyncResult.Migs))
-	assert.NoError(t, deletionAsyncResult.Error)
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		// given upcoming node pool queued for creation
+		var creationResult MigCreateNodePoolResult
+		var initializer *asyncNodeGroupInitializerMock
+		var mig *GkeMig
+		for range ctx.taskQueueWorkerCount + 1 {
+			mig, _ = ctx.sampleMigWithNodePool()
+			creationResult, initializer = ctx.createNodePoolAsyncOrFail(mig)
+		}
+		// when node pool is deleted
+		finalizer := ctx.deleteNodePoolAsyncOrFail(mig)
+		// then its initializer is invoked with an error
+		creationAsyncResult := initializer.AwaitResultOrFail()
+		assert.Equal(t, migRefs(creationResult.AllCreatedMigs()), nodeGroupRefs(creationAsyncResult.InjectedMigs))
+		assert.ErrorContains(t, creationAsyncResult.Error, "node pool has been deleted when scheduled for creation")
+		// and its finalizer is invoked with upcoming node-groups
+		deletionAsyncResult := finalizer.AwaitResultOrFail()
+		assert.Equal(t, migRefs(creationResult.AllCreatedMigs()), nodeGroupRefs(deletionAsyncResult.Migs))
+		assert.NoError(t, deletionAsyncResult.Error)
+	})
 }
 
 func TestAsyncMgr_CreateInstances(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createNodePoolAsyncOrFail(mig)
-	// when instances are created for upcoming node-group
-	err := asyncGkeManager.CreateInstances(result.MainCreatedMig, 10)
-	assert.NoError(t, err)
-	// then its size is updated
-	size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(10), size)
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createNodePoolAsyncOrFail(mig)
+		// when instances are created for upcoming node-group
+		err := asyncGkeManager.CreateInstances(result.MainCreatedMig, 10)
+		assert.NoError(t, err)
+		// then its size is updated
+		size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), size)
+	})
 }
 
 func TestAsyncMgr_CreateResizeRequest(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createNodePoolAsyncOrFail(mig)
-	// when atomic resize request is created for upcoming node-group
-	err := asyncGkeManager.CreateResizeRequest(result.MainCreatedMig, 10)
-	assert.NoError(t, err)
-	// then its size is updated
-	size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(10), size)
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createNodePoolAsyncOrFail(mig)
+		// when atomic resize request is created for upcoming node-group
+		err := asyncGkeManager.CreateResizeRequest(result.MainCreatedMig, 10)
+		assert.NoError(t, err)
+		// then its size is updated
+		size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), size)
+	})
 }
 
 func TestAsyncMgr_CreateFlexResizeRequests(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createNodePoolAsyncOrFail(mig)
-	// when resize requests are created for upcoming node-group
-	err := asyncGkeManager.CreateFlexResizeRequests(result.MainCreatedMig, 10)
-	assert.NoError(t, err)
-	// then its size is updated
-	size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(10), size)
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createNodePoolAsyncOrFail(mig)
+		// when resize requests are created for upcoming node-group
+		err := asyncGkeManager.CreateFlexResizeRequests(result.MainCreatedMig, 10)
+		assert.NoError(t, err)
+		// then its size is updated
+		size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), size)
+	})
 }
 
 func TestAsyncMgr_CreateQueuedInstances(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createDWSNodePoolAsyncOrFail(mig)
-	// when a resize request is created for upcoming node-group
-	err := asyncGkeManager.CreateQueuedInstances(
-		prpods.ProvReqID{Namespace: "default", Name: "pr"}, result.MainCreatedMig, 10, manager.UpdateProvReqDetails)
-	assert.NoError(t, err)
-	// then its size is updated
-	size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(10), size)
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createDWSNodePoolAsyncOrFail(mig)
+		// when a resize request is created for upcoming node-group
+		err := asyncGkeManager.CreateQueuedInstances(
+			prpods.ProvReqID{Namespace: "default", Name: "pr"}, result.MainCreatedMig, 10, manager.UpdateProvReqDetails)
+		assert.NoError(t, err)
+		// then its size is updated
+		size, err := asyncGkeManager.GetMigSize(result.MainCreatedMig)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), size)
+	})
 }
 
 func TestAsyncMgr_CreateQueuedInstancesWithoutDWS(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createNodePoolAsyncOrFail(mig)
-	// when a resize request is created for upcoming node-group
-	err := asyncGkeManager.CreateQueuedInstances(
-		prpods.ProvReqID{Namespace: "default", Name: "pr"}, result.MainCreatedMig, 10, manager.UpdateProvReqDetails)
-	assert.Error(t, err)
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createNodePoolAsyncOrFail(mig)
+		// when a resize request is created for upcoming node-group
+		err := asyncGkeManager.CreateQueuedInstances(
+			prpods.ProvReqID{Namespace: "default", Name: "pr"}, result.MainCreatedMig, 10, manager.UpdateProvReqDetails)
+		assert.Error(t, err)
+	})
 }
 
 func TestAsyncMgr_AdvanceResizeRequestCleanUp(t *testing.T) {
-	testCtx := newAsyncGkeManagerTestContext(t)
-	asyncGkeManager := testCtx.asyncGkeManager
-	mig, _ := testCtx.sampleMigWithNodePool()
-	result, _ := testCtx.createNodePoolAsyncOrFail(mig)
-	// when atomic resize request is created for upcoming node-group
-	err := asyncGkeManager.CreateResizeRequest(result.MainCreatedMig, 10)
-	assert.NoError(t, err)
-	// and atomic resize request is deleted for upcoming node-group
-	err = asyncGkeManager.AdvanceResizeRequestCleanUp(resizerequestclient.ResizeRequestStatus{
-		MigName:  result.MainCreatedMig.GceRef().Name,
-		Zone:     result.MainCreatedMig.GceRef().Zone,
-		ResizeBy: 11,
+	synctest.Test(t, func(t *testing.T) {
+		testCtx := newAsyncGkeManagerTestContext(t)
+		asyncGkeManager := testCtx.asyncGkeManager
+		mig, _ := testCtx.sampleMigWithNodePool()
+		result, _ := testCtx.createNodePoolAsyncOrFail(mig)
+		// when atomic resize request is created for upcoming node-group
+		err := asyncGkeManager.CreateResizeRequest(result.MainCreatedMig, 10)
+		assert.NoError(t, err)
+		// and atomic resize request is deleted for upcoming node-group
+		err = asyncGkeManager.AdvanceResizeRequestCleanUp(resizerequestclient.ResizeRequestStatus{
+			MigName:  result.MainCreatedMig.GceRef().Name,
+			Zone:     result.MainCreatedMig.GceRef().Zone,
+			ResizeBy: 11,
+		})
+		assert.Error(t, err)
 	})
-	assert.Error(t, err)
 }
 
 func nodeGroupRefs(groups []interfaces.AutoprovisionedNodeGroup) []gce.GceRef {
@@ -910,11 +977,14 @@ type asyncGkeManagerTestContext struct {
 func newAsyncGkeManagerTestContext(t *testing.T) *asyncGkeManagerTestContext {
 	domainURL := ""
 	// some tests require to keep it even
-	taskQueueWorkerCount := 2
-	gkeManager := newTestExtendedGkeManager(t)
+	taskQueueWorkerCount := defaultTestTaskQueueWorkerCount
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	taskQueueSize := 10
+	gkeManager := newTestExtendedGkeManager(t, ctx)
+	t.Cleanup(func() {
+		cancel()
+		synctest.Wait()
+	})
+	taskQueueSize := defaultTestTaskQueueSize
 	gceCache := gce.NewGceCache()
 	cache := NewGkeCache(gceCache, nodetemplate.NewCache())
 	asyncGkeManager := newAsyncGkeManager(ctx, gkeManager, cache, taskQueueWorkerCount, taskQueueSize, domainURL)
@@ -1270,6 +1340,7 @@ type testExtendedGkeManager struct {
 	extendedGkeManager
 	mock                   *GkeManagerMock
 	t                      *testing.T
+	ctx                    context.Context
 	mutex                  sync.Mutex
 	domainUrl              string
 	nodePools              map[*gkeclient.NodePool][]*GkeMig
@@ -1283,7 +1354,7 @@ type testExtendedGkeManager struct {
 	deletedNodePools       map[string]struct{}
 }
 
-func newTestExtendedGkeManager(t *testing.T) *testExtendedGkeManager {
+func newTestExtendedGkeManager(t *testing.T, ctx context.Context) *testExtendedGkeManager {
 	gkeManagerMock := &GkeManagerMock{}
 	gkeManagerMock.On("Refresh").Return(nil)
 	gkeManagerMock.On("RefreshForce").Return(nil)
@@ -1291,6 +1362,7 @@ func newTestExtendedGkeManager(t *testing.T) *testExtendedGkeManager {
 		extendedGkeManager:     gkeManagerMock,
 		mock:                   gkeManagerMock,
 		t:                      t,
+		ctx:                    ctx,
 		domainUrl:              "",
 		nodePools:              make(map[*gkeclient.NodePool][]*GkeMig),
 		nodePoolSpecs:          make(map[*GkeMig]*gkeclient.NodePoolSpec),
@@ -1340,7 +1412,12 @@ func (c *testExtendedGkeManager) CreateNodePoolNoRefresh(nodePoolName string, no
 	}
 	creationCh := c.nodePoolCreationSignal[nodePoolName]
 	c.mutex.Unlock()
-	nodePool := <-creationCh
+	var nodePool *gkeclient.NodePool
+	select {
+	case nodePool = <-creationCh:
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if creationErr.error == nil || creationErr.NumberOfRepetitions == 0 {
@@ -1403,7 +1480,11 @@ func (c *testExtendedGkeManager) DeleteNodePoolNoRefresh(mig *GkeMig) error {
 	}
 	deletionCh := c.nodePoolDeletionSignal[nodePoolName]
 	c.mutex.Unlock()
-	<-deletionCh
+	select {
+	case <-deletionCh:
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	err := c.nodePoolDeletionErrs[nodePoolName]
