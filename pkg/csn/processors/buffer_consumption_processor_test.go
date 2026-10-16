@@ -72,6 +72,13 @@ func withoutSuspensionSchedulingConstraintsMutator() nodeMutator {
 	}
 }
 
+func withDeletionTimestamp() func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		now := metav1.Now()
+		pod.DeletionTimestamp = &now
+	}
+}
+
 func TestBufferConsumptionProcess(t *testing.T) {
 	testCases := []struct {
 		name                       string
@@ -526,6 +533,28 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectErr:                 false,
 			expectedUnschedulablePods: []string{},
 			expectedAllConsumedNodes:  []string{"node-1"},
+		},
+		{
+			name: "Mark suspended nodes as consumed if they have terminating pods without reporting invalid condition metric",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+				create8CPUTestNode(t, "node-2", csn.NodeStateSuspended),
+				create8CPUTestNode(t, "node-3", csn.NodeStateSuspended),
+			},
+			podsCreatedOutsideCA: []*apiv1.Pod{
+				test.BuildTestPod("ds-1", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-1"), withDeletionTimestamp()), // Chilling node with terminating DS pod should not be consumed.
+				test.BuildTestPod("ds-2", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-2")),                          // Suspended node with non-terminating DS pod should not be consumed.
+				test.BuildTestPod("ds-3", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-3"), withDeletionTimestamp()), // Suspended node with terminating DS pod should be consumed.
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+				{Name: "node-2", DesiredState: csn.NodeStateSuspended},
+				{Name: "node-3", DesiredState: csn.NodeStateSuspended},
+			},
+			experimentsManager:        experiments.NewMockManager(experiments.ColdStandbyNodesCheckPodsOnSuspendedNodes),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-3"},
 		},
 		{
 			name: "Pod age fallback disabled: old pod is scheduled on suspended node",

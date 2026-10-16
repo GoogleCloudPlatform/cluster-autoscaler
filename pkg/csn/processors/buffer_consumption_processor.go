@@ -30,6 +30,7 @@ import (
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/util/taints"
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -395,7 +396,8 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *cl
 	}
 
 	nodesToConsume := map[string]bool{}
-	blockingPods := map[string]string{} // From node name to pod identifier.
+	blockingPods := map[string]string{}    // From node name to pod identifier.
+	terminatingPods := map[string]string{} // From node name to pod identifier.
 	unexpectedSuspendedNodesWithPods := map[string]bool{}
 
 	nodeLister := kubeClients.AllNodeLister()
@@ -408,14 +410,18 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *cl
 		if nodeName == "" || nodeInfosMap[nodeName] == nil {
 			continue
 		}
-		if !csn.IsPodBlockingSuspension(pod) {
+		if csn.IsPodBlockingSuspension(pod) {
+			if nodeInfos.suspended[nodeName] != nil && isSchedulingBlockedBySuspension(nodeName, nodeLister) {
+				unexpectedSuspendedNodesWithPods[nodeName] = true
+			}
+			blockingPods[nodeName] = podId(pod)
+			nodesToConsume[nodeName] = true
 			continue
 		}
-		if nodeInfos.suspended[nodeName] != nil && isSchedulingBlockedBySuspension(nodeName, nodeLister) {
-			unexpectedSuspendedNodesWithPods[nodeName] = true
+		if nodeInfos.suspended[nodeName] != nil && controller.IsPodTerminating(pod) {
+			terminatingPods[nodeName] = podId(pod)
+			nodesToConsume[nodeName] = true
 		}
-		blockingPods[nodeName] = podId(pod)
-		nodesToConsume[nodeName] = true
 	}
 
 	for nodeName := range unexpectedSuspendedNodesWithPods {
@@ -429,6 +435,7 @@ func (p *BufferConsumptionProcessor) consumedNodesThroughInformers(nodeInfos *cl
 	}
 
 	logAlreadyConsumedNodes(blockingPods, "informers")
+	logNodesWithTerminatingPods(terminatingPods)
 	return nodesToConsume, nil
 }
 
@@ -444,11 +451,14 @@ func isSchedulingBlockedBySuspension(nodeName string, nodeLister kubernetes.Node
 }
 
 func logAlreadyConsumedNodes(suspensionBlockingPods map[string]string, source string) {
-	if len(suspensionBlockingPods) == 0 {
-		return
-	}
 	for nodeName, podId := range suspensionBlockingPods {
 		klog.V(4).Infof("%s node %q will be consumed bec it has pod %q that blocks suspension (verified through %s)", bufferConsumptionLogPrefix, nodeName, podId, source)
+	}
+}
+
+func logNodesWithTerminatingPods(terminatingPods map[string]string) {
+	for nodeName, podId := range terminatingPods {
+		klog.V(4).Infof("%s suspended node %q will be consumed bec it has terminating pod %q (verified through informers)", bufferConsumptionLogPrefix, nodeName, podId)
 	}
 }
 
