@@ -32,6 +32,7 @@ RUN \
     qemu-user-static \
     rsync \
     jq \
+    zstd \
     apt-transport-https \
     gpg \
     gnupg \
