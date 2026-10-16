@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
@@ -47,9 +48,18 @@ const (
 	largeNodeGroupID         = "large-node-group"
 	localSSDNodeGroupID      = "local-ssd-node-group"
 	largeLocalSSDNodeGroupID = "large-local-ssd-node-group"
+	// gpuNodeGroupID mimics a NAP GPU node group created for a GPU-only ComputeClass.
+	gpuNodeGroupID              = "gpu-node-group"
+	largeLocalSSDGPUNodeGroupID = "large-local-ssd-gpu-node-group"
+
+	// gpuComputeClass is the ComputeClass of the gpuNodeGroupID template.
+	gpuComputeClass = "gpu-class"
+	// gpuNodeGroupZone is the zone of the gpuNodeGroupID template.
+	gpuNodeGroupZone = "us-central1-b"
+	zoneLabel        = "topology.kubernetes.io/zone"
 
 	// defaultBufferName is the buffer most cases use. Node templates carry its buffer assignment
-	// label so that only the memory limit term can reject them.
+	// label so that only the suspension constraints can reject them.
 	defaultBufferName = "buffer"
 
 	// nodeGroupLabel marks each node group template with its own id.
@@ -57,6 +67,7 @@ const (
 
 	memoryLimitMessageFragment = "nodes with less memory"
 	localSSDMessageFragment    = "nodes without Local SSDs"
+	acceleratorMessageFragment = "nodes without accelerators"
 )
 
 // testEnv holds the fixtures shared by the processor test cases.
@@ -75,16 +86,27 @@ func newTestEnv(t *testing.T) *testEnv {
 	localSSDNode.Labels[labels.EphemeralLocalSsdLabel] = labels.EphemeralLocalSsdEnabledValue
 	largeLocalSSDNode := nodeWithMemoryScalingLevel(t, largeLocalSSDNodeGroupID, 256)
 	largeLocalSSDNode.Labels[labels.EphemeralLocalSsdLabel] = labels.EphemeralLocalSsdEnabledValue
+	gpuNode := nodeWithMemoryScalingLevel(t, gpuNodeGroupID, 16)
+	gpuNode.Labels[labels.GPULabel] = "nvidia-l4"
+	gpuNode.Labels[labels.ComputeClassLabel] = gpuComputeClass
+	gpuNode.Labels[zoneLabel] = gpuNodeGroupZone
+	largeLocalSSDGPUNode := nodeWithMemoryScalingLevel(t, largeLocalSSDGPUNodeGroupID, 256)
+	largeLocalSSDGPUNode.Labels[labels.EphemeralLocalSsdLabel] = labels.EphemeralLocalSsdEnabledValue
+	largeLocalSSDGPUNode.Labels[labels.GPULabel] = "nvidia-l4"
 	provider := testprovider.NewTestCloudProviderBuilder().WithMachineTemplates(map[string]*framework.NodeInfo{
-		smallNodeGroupID:         framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, smallNodeGroupID, 64)),
-		largeNodeGroupID:         framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, largeNodeGroupID, 256)),
-		localSSDNodeGroupID:      framework.NewTestNodeInfo(localSSDNode),
-		largeLocalSSDNodeGroupID: framework.NewTestNodeInfo(largeLocalSSDNode),
+		smallNodeGroupID:            framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, smallNodeGroupID, 64)),
+		largeNodeGroupID:            framework.NewTestNodeInfo(nodeWithMemoryScalingLevel(t, largeNodeGroupID, 256)),
+		localSSDNodeGroupID:         framework.NewTestNodeInfo(localSSDNode),
+		largeLocalSSDNodeGroupID:    framework.NewTestNodeInfo(largeLocalSSDNode),
+		gpuNodeGroupID:              framework.NewTestNodeInfo(gpuNode),
+		largeLocalSSDGPUNodeGroupID: framework.NewTestNodeInfo(largeLocalSSDGPUNode),
 	}).Build()
 	provider.AddNodeGroup(smallNodeGroupID, 0, 10, 0)
 	provider.AddNodeGroup(largeNodeGroupID, 0, 10, 0)
 	provider.AddNodeGroup(localSSDNodeGroupID, 0, 10, 0)
 	provider.AddNodeGroup(largeLocalSSDNodeGroupID, 0, 10, 0)
+	provider.AddNodeGroup(gpuNodeGroupID, 0, 10, 0)
+	provider.AddNodeGroup(largeLocalSSDGPUNodeGroupID, 0, 10, 0)
 
 	fakeRecorder := kube_record.NewFakeRecorder(20)
 	return &testEnv{
@@ -234,6 +256,88 @@ func TestCSNScaleUpStatusProcessor(t *testing.T) {
 					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, localSSDNodeGroupID, "NodeAffinity")}},
 				}
 			},
+		},
+		{
+			name: "pod directly requests a GPU",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-gpu", smallMemory, e.buffer, withGPURequest)
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: acceleratorMessageFragment,
+		},
+		{
+			// b/574314338: a GPU-only ComputeClass generates a standby PodTemplate with only cpu and
+			// memory requests and a compute class nodeSelector, so only the injected accelerator
+			// exclusion rejects the GPU node group NAP proposes for it.
+			name: "compute class pod blocked only by the injected accelerator affinity",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("compute-class", smallMemory, e.buffer, withNodeSelector(map[string]string{labels.ComputeClassLabel: gpuComputeClass}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, gpuNodeGroupID, "NodeAffinity")}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: acceleratorMessageFragment,
+		},
+		{
+			name: "GPU node group of a different compute class",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("other-compute-class", smallMemory, e.buffer, withNodeSelector(map[string]string{labels.ComputeClassLabel: "cpu-class"}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, gpuNodeGroupID, "NodeAffinity")}},
+				}
+			},
+		},
+		{
+			name: "GPU node group in a zone the pod's own affinity rejects",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				// The required zone term is set before MakePodCSN, so it survives stripping the
+				// suspension constraints and rejects the GPU node group on its own.
+				pod := e.csnPodForBuffer("other-zone", smallMemory, e.buffer,
+					withNodeSelector(map[string]string{labels.ComputeClassLabel: gpuComputeClass}),
+					withRequiredZone("us-central1-a"))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, gpuNodeGroupID, "NodeAffinity")}},
+				}
+			},
+		},
+		{
+			name: "GPU node group in the zone the pod's own affinity requires",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("same-zone", smallMemory, e.buffer,
+					withNodeSelector(map[string]string{labels.ComputeClassLabel: gpuComputeClass}),
+					withRequiredZone(gpuNodeGroupZone))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, gpuNodeGroupID, "NodeAffinity")}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: acceleratorMessageFragment,
+		},
+		{
+			name: "request blocked by the accelerator, memory and Local SSD affinities",
+			buildStatus: func(e *testEnv) *status.ScaleUpStatus {
+				pod := e.csnPodForBuffer("needs-large-lssd-gpu-group", smallMemory, e.buffer, withNodeSelector(map[string]string{nodeGroupLabel: largeLocalSSDGPUNodeGroupID}))
+				return &status.ScaleUpStatus{
+					Result:                  status.ScaleUpNoOptionsAvailable,
+					ConsideredNodeGroups:    e.provider.NodeGroups(t.Context()),
+					PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod, RejectedNodeGroups: rejectedFor(pod, largeLocalSSDGPUNodeGroupID, "NodeAffinity")}},
+				}
+			},
+			wantEvents:          1,
+			wantMessageFragment: acceleratorMessageFragment,
 		},
 		{
 			name: "regular workload pod",
@@ -430,6 +534,29 @@ func nodeWithMemoryScalingLevel(t *testing.T, name string, memoryGB int64) *apiv
 	// would make the pod's own nodeSelector a second reason for the node to be rejected.
 	node.Labels[nodeGroupLabel] = name
 	return node
+}
+
+func withGPURequest(pod *apiv1.Pod) {
+	pod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
+}
+
+// withRequiredZone gives pod its own required node affinity term restricting it to zone.
+func withRequiredZone(zone string) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.Spec.Affinity = &apiv1.Affinity{
+			NodeAffinity: &apiv1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+					NodeSelectorTerms: []apiv1.NodeSelectorTerm{{
+						MatchExpressions: []apiv1.NodeSelectorRequirement{{
+							Key:      zoneLabel,
+							Operator: apiv1.NodeSelectorOpIn,
+							Values:   []string{zone},
+						}},
+					}},
+				},
+			},
+		}
+	}
 }
 
 func rejectedFor(pod *apiv1.Pod, nodeGroupID, predicateName string) map[string]status.Reasons {

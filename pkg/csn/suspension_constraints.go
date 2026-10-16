@@ -22,9 +22,10 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
-// SuspensionConstraints validates whether CSN suspension constraints (memory limit, Local SSD
-// exclusion) are what prevent a standby buffer pod from scaling up, and formats the corresponding
-// warning event message.
+// SuspensionConstraints validates whether CSN suspension constraints (GPU/TPU exclusion, memory
+// limit, Local SSD exclusion) are what prevent a standby buffer pod from scaling up, and formats
+// the corresponding warning event message. Constraints are checked in that order, so when several
+// of them are violated, the order decides which message is shown.
 type SuspensionConstraints struct {
 	constraints []suspensionConstraint
 }
@@ -40,6 +41,12 @@ func NewSuspensionConstraints(experimentsManager experiments.Manager) Suspension
 	memoryLimit := NewMemoryLimit(experimentsManager)
 	return SuspensionConstraints{
 		constraints: []suspensionConstraint{
+			{
+				// Goes first because, unlike the memory limit, it is not expected to be lifted.
+				violatedByPod:  podRequestsAccelerator,
+				violatedByNode: hasAccelerator,
+				message:        "Standby buffers don't support nodes with GPUs or TPUs. Make sure the buffer configuration doesn't prevent the buffer from using nodes without accelerators.",
+			},
 			{
 				violatedByPod:  memoryLimit.exceededByPodRequest,
 				violatedByNode: memoryLimit.exceededByNode,
