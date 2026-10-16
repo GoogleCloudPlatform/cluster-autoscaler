@@ -166,6 +166,12 @@ func (t *ChurnTracker) RecordScaledDownNodes(nodes []*apiv1.Node) {
 	t.backoffManager.UpdateEvents(t.events, now)
 }
 
+// IsBackedOff returns true if the lookahead of the workload separation of the machine family is backed off.
+// It always returns false if the churn circuit breaker experiment is disabled.
+func (t *ChurnTracker) IsBackedOff(machineFamily, workloadID string) bool {
+	return t.backoffManager.IsBackedOff(machineFamily, workloadID)
+}
+
 // cleanExpiredEvents removes churn events older than churnWindow.
 func (t *ChurnTracker) cleanExpiredEvents() {
 	windowStart := t.clock.Now().Add(-t.configProvider.ChurnWindow())

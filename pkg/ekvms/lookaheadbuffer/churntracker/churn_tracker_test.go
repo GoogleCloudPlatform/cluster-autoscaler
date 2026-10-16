@@ -681,6 +681,36 @@ func TestRecordScaledDownNodesUpdatesBackoffs(t *testing.T) {
 	}
 }
 
+func TestChurnTrackerIsBackedOff(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	nowMinus5m := now.Add(-5 * time.Minute)
+	nowPlus15m := now.Add(15 * time.Minute)
+
+	tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
+	tracker.backoffManager.backoffs = backoffEvents{
+		{machineFamily: ekFamily, workloadID: testWorkloadID}: {tier: 1, endTime: nowPlus15m},
+		{machineFamily: e4aFamily, workloadID: ""}:            {tier: 1, endTime: nowMinus5m},
+	}
+
+	for _, tc := range []struct {
+		desc          string
+		machineFamily string
+		workloadID    string
+		want          bool
+	}{
+		{desc: "active backoff", machineFamily: ekFamily, workloadID: testWorkloadID, want: true},
+		{desc: "ended backoff", machineFamily: e4aFamily, workloadID: "", want: false},
+		{desc: "workload separation without backoff", machineFamily: ekFamily, workloadID: "", want: false},
+		{desc: "same workload ID of another machine family", machineFamily: e4aFamily, workloadID: testWorkloadID, want: false},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			if got := tracker.IsBackedOff(tc.machineFamily, tc.workloadID); got != tc.want {
+				t.Errorf("IsBackedOff(%q, %q) = %v, want %v", tc.machineFamily, tc.workloadID, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestChurnTrackerDisabled(t *testing.T) {
 	nodeInfo := ekNodeInfo("node", lookaheadPod("la-pod", 100, 100))
 	for _, tc := range []struct {

@@ -491,7 +491,7 @@ func TestPodRequestsPerWorkloadID(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			cccLister := lister.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
 			mcp := machinetypes.NewMachineConfigProvider(nil)
-			p := NewLookaheadPodInjectionProcessor(nil, nil, &mockWorkloadSeparationLimiter{limit: 10}, mcp, systempods.NewClassifier([]string{"kube-system"}), cccLister, calculator_test.NewWithProvider(mcp), nil)
+			p := NewLookaheadPodInjectionProcessor(nil, nil, &mockWorkloadSeparationLimiter{limit: 10}, mcp, systempods.NewClassifier([]string{"kube-system"}), cccLister, calculator_test.NewWithProvider(mcp), nil, nil)
 			taintsConfig := newTaintsConfig(tc.ignoredTaints)
 			cxWorkloadRequest := p.podRequestsPerMachineFamilyPerWorkloadID(tc.nodeInfos, &taintsConfig, tc.machineFamiliesWithLAEnabled)
 			assert.Equal(t, tc.expectedResourcesPerWID, cxWorkloadRequest)
@@ -879,7 +879,7 @@ func TestCreateLookaheadPodsForWorkloadID(t *testing.T) {
 
 			mcp := machinetypes.NewMachineConfigProvider(nil)
 			calculator := calculator_test.NewWithProvider(mcp)
-			p := NewLookaheadPodInjectionProcessor(&fakeLookaheadPodProvider{}, nil, nil, mcp, nil, nil, calculator, nil)
+			p := NewLookaheadPodInjectionProcessor(&fakeLookaheadPodProvider{}, nil, nil, mcp, nil, nil, calculator, nil, nil)
 			got, err := p.createLookaheadPodsForWorkloadID(tt.workloadID, tt.requests, machinetypes.EK.Name(), ctx)
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -905,6 +905,7 @@ func TestProcess(t *testing.T) {
 		unschedulablePods      []*apiv1.Pod
 		daemonSets             []*appsv1.DaemonSet
 		fetchingDaemonSetsErr  error
+		lookaheadChurnTracker  lookaheadChurnTracker
 		expectedPods           []*apiv1.Pod
 		expectedErr            bool
 	}{
@@ -1023,6 +1024,7 @@ func TestProcess(t *testing.T) {
 			unschedulablePods      []*apiv1.Pod
 			daemonSets             []*appsv1.DaemonSet
 			fetchingDaemonSetsErr  error
+			lookaheadChurnTracker  lookaheadChurnTracker
 			expectedPods           []*apiv1.Pod
 			expectedErr            bool
 		}{
@@ -1120,6 +1122,181 @@ func TestProcess(t *testing.T) {
 					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
 					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(0)),
 					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(1)),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				// The backed off workload separations are filtered out after the limiter, so the backed off top extra
+				// workload separation is not backfilled by the next one.
+				desc:                   fmt.Sprintf("%ss in three workload IDs - limited to default and 1 extra workload separation - backed off top workload separation is not backfilled", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 1,
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				// three workload separations: default, "workload-separation", compute-class:autopilot
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{family: {"NoSchedule:cloud.google.com/compute-class:autopilot": true}}},
+				unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss in three workload IDs - limited to default and 1 extra workload separation - backed off workload separation dropped by the limiter has no effect", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 1,
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				// three workload separations: default, "workload-separation", compute-class:autopilot
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{family: {"NoSchedule:workload-separation:yes": true}}},
+				unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("", 1000, 1000, family),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(1)),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss in three workload IDs - backed off default workload separation", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{family: {"": true}}},
+				unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:workload-separation:yes", 1000, 1000, family),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(0)),
+					lookaheadbuffer.BuildTestLookaheadPod("NoSchedule:cloud.google.com/compute-class:autopilot", 1000, 1000, family, lookaheadbuffer.WithPosition(1)),
+					test.BuildTestPod("pod-1", 100, 100),
+				},
+			},
+			{
+				desc:                   fmt.Sprintf("%ss in three workload IDs - all workload separations backed off - no lookahead pods", family),
+				launchStatus:           lookaheadbuffer_strategy.Enabled,
+				maxWorkloadSeparations: 10,
+				crds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("autopilot"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithAutopilotManaged(),
+						crd.WithRules([]rules.Rule{
+							rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
+						})),
+				},
+				nodeInfos: []*framework.NodeInfo{
+					framework.NewTestNodeInfo(
+						node32(family, "node-1", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						node32WithWorkloadSeparation(family, "node-2", 1000, 1000),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-3", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+					framework.NewTestNodeInfo(
+						ekvms_test.NewNodeBuilderFromNode(node32(family, "node-4", 32000, 128*giBToKiB*size.KiB)).WithTaint(apiv1.Taint{
+							Key:    gkelabels.ComputeClassLabel,
+							Value:  "autopilot",
+							Effect: apiv1.TaintEffectNoSchedule,
+						}).WithLabel(gkelabels.ComputeClassLabel, "autopilot").Build(),
+						test.BuildTestPod("pod-1", 32000, 100)),
+				},
+				lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{family: {"": true, "NoSchedule:workload-separation:yes": true, "NoSchedule:cloud.google.com/compute-class:autopilot": true}}},
+				unschedulablePods:     []*apiv1.Pod{test.BuildTestPod("pod-1", 100, 100)},
+				expectedPods: []*apiv1.Pod{
 					test.BuildTestPod("pod-1", 100, 100),
 				},
 			},
@@ -1303,7 +1480,8 @@ func TestProcess(t *testing.T) {
 				systempods.NewClassifier([]string{"kube-system"}),
 				cccLister,
 				calculator_test.NewWithProvider(mcp),
-				metrics)
+				metrics,
+				tc.lookaheadChurnTracker)
 
 			actualPods, actualErr := p.Process(context.TODO(), ctx, tc.unschedulablePods)
 			if tc.expectedErr {
@@ -1366,7 +1544,8 @@ func TestProcessMetricsOnErrors(t *testing.T) {
 				nil,
 				nil,
 				mockCalc,
-				metrics)
+				metrics,
+				nil)
 
 			ctx := &ca_context.AutoscalingContext{}
 			if tc.listNodeInfosErr != nil {
@@ -1712,4 +1891,63 @@ type mockMetrics struct {
 
 func (m *mockMetrics) UpdateLookaheadPodsCount(laPodsCount map[size.Allocatable]int) {
 	m.MethodCalled("UpdateLookaheadPodsCount", laPodsCount)
+}
+
+func TestFilterBackedOffWorkloads(t *testing.T) {
+	ekFamily := machinetypes.EK.Name()
+	e4aFamily := machinetypes.E4A.Name()
+	const separatedWorkloadID = "NoSchedule:group:one"
+	requests := apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("1")}
+
+	for _, tc := range []struct {
+		desc                  string
+		lookaheadChurnTracker lookaheadChurnTracker
+		requests              map[string]map[string]apiv1.ResourceList
+		wantRequests          map[string]map[string]apiv1.ResourceList
+	}{
+		{
+			desc:                  "nil backoff checker keeps all requests",
+			lookaheadChurnTracker: nil,
+			requests:              map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}},
+			wantRequests:          map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}},
+		},
+		{
+			desc:                  "no backed off workload separations keeps all requests",
+			lookaheadChurnTracker: &fakeLookaheadChurnTracker{},
+			requests:              map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}},
+			wantRequests:          map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}},
+		},
+		{
+			desc:                  "backed off workload separation is removed, other workload separations are kept",
+			lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{ekFamily: {separatedWorkloadID: true}}},
+			requests:              map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}},
+			wantRequests:          map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests}},
+		},
+		{
+			desc:                  "backoff is per machine family",
+			lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{ekFamily: {separatedWorkloadID: true}}},
+			requests:              map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests, separatedWorkloadID: requests}, e4aFamily: {separatedWorkloadID: requests}},
+			wantRequests:          map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests}, e4aFamily: {separatedWorkloadID: requests}},
+		},
+		{
+			desc:                  "machine family without requests left is removed",
+			lookaheadChurnTracker: &fakeLookaheadChurnTracker{backedOff: map[string]map[string]bool{e4aFamily: {separatedWorkloadID: true}}},
+			requests:              map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests}, e4aFamily: {separatedWorkloadID: requests}},
+			wantRequests:          map[string]map[string]apiv1.ResourceList{ekFamily: {"": requests}},
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			p := &LookaheadPodInjectionProcessor{lookaheadChurnTracker: tc.lookaheadChurnTracker}
+			assert.Equal(t, tc.wantRequests, p.filterBackedOffWorkloads(tc.requests))
+		})
+	}
+}
+
+// fakeLookaheadChurnTracker reports the workload separations in backedOff per machine family as backed off.
+type fakeLookaheadChurnTracker struct {
+	backedOff map[string]map[string]bool
+}
+
+func (f *fakeLookaheadChurnTracker) IsBackedOff(machineFamily, workloadID string) bool {
+	return f.backedOff[machineFamily][workloadID]
 }

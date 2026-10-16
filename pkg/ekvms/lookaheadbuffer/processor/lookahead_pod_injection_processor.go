@@ -75,6 +75,12 @@ type strategyProvider interface {
 	Strategy(machineFamily string) (lookaheadbuffer_strategy.LookaheadPodStrategy, error)
 }
 
+// lookaheadChurnTracker reports whether the lookahead of a workload separation of a machine family is backed off because
+// of lookahead churn.
+type lookaheadChurnTracker interface {
+	IsBackedOff(machineFamily, workloadID string) bool
+}
+
 // LookaheadPodInjectionProcessor injects lookahead pods to unschedulable pods.
 type LookaheadPodInjectionProcessor struct {
 	laPodProvider        lookaheadbuffer.PodProvider
@@ -88,10 +94,13 @@ type LookaheadPodInjectionProcessor struct {
 	// It won't be perfect (in fact it is impossible to make it perfect), but it doesn't need to be perfect since it is an optimization.
 	// Since the node creation is idempotent, it is only ran once at the beginning and cached.
 	sampleNodesPerMachineFamily map[string]*apiv1.Node
+	// lookaheadChurnTracker is used to skip the workload separations whose lookahead is backed off because of lookahead
+	// churn. Optional, may be nil.
+	lookaheadChurnTracker lookaheadChurnTracker
 }
 
 // NewLookaheadPodInjectionProcessor return an instance of LookaheadPodInjectionProcessor.
-func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider strategyProvider, limiter limiter, mcp *machinetypes.MachineConfigProvider, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics metrics) *LookaheadPodInjectionProcessor {
+func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider, strategyProvider strategyProvider, limiter limiter, mcp *machinetypes.MachineConfigProvider, systemPodsClassifier systempods.Classifier, cccLister lister.Lister, calc calculator.Calculator, metrics metrics, lookaheadChurnTracker lookaheadChurnTracker) *LookaheadPodInjectionProcessor {
 	sampleNodesPerMachineFamily := map[string]*apiv1.Node{}
 	for _, family := range mcp.ResizableFamilyNames() {
 		sampleNode, err := getSampleDefaultBiggestNode(calc, family)
@@ -111,6 +120,7 @@ func NewLookaheadPodInjectionProcessor(laPodProvider lookaheadbuffer.PodProvider
 		cccLister:                   cccLister,
 		metrics:                     metrics,
 		sampleNodesPerMachineFamily: sampleNodesPerMachineFamily,
+		lookaheadChurnTracker:       lookaheadChurnTracker,
 	}
 }
 
@@ -144,6 +154,9 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 	taintConfig := taintutils.NewTaintConfig(autoscalingCtx.AutoscalingOptions)
 	requests := p.podRequestsPerMachineFamilyPerWorkloadID(nodeInfos, &taintConfig, machineFamiliesWithLAEnabled)
 	topRequests := p.limiter.Limit(requests)
+	// Backed off workload separations are filtered out after the limit on purpose: to be sure that we have less LA pods in the churny situations
+	// and they are not backfilled by smaller requests.
+	topRequests = p.filterBackedOffWorkloads(topRequests)
 	lookaheadPods := p.createLookaheadPods(autoscalingCtx, topRequests)
 
 	p.emitLookaheadPodsCountMetric(lookaheadPods)
@@ -153,6 +166,26 @@ func (p *LookaheadPodInjectionProcessor) Process(ctx context.Context, autoscalin
 	}
 
 	return slices.Concat(lookaheadPods, unschedulablePods), nil
+}
+
+// filterBackedOffWorkloads removes the requests of the workload separations whose lookahead is backed off because of
+// lookahead churn, and the machine families without any requests left.
+func (p *LookaheadPodInjectionProcessor) filterBackedOffWorkloads(requestsPerMachineFamilyPerWorkloadID map[string]map[string]apiv1.ResourceList) map[string]map[string]apiv1.ResourceList {
+	if p.lookaheadChurnTracker == nil {
+		return requestsPerMachineFamilyPerWorkloadID
+	}
+	for machineFamily, requestsPerWorkloadID := range requestsPerMachineFamilyPerWorkloadID {
+		for id := range requestsPerWorkloadID {
+			if p.lookaheadChurnTracker.IsBackedOff(machineFamily, id) {
+				klog.V(4).Infof("Skipping lookahead pods for workload ID %q and machine family %q: lookahead is backed off because of lookahead churn", id, machineFamily)
+				delete(requestsPerWorkloadID, id)
+			}
+		}
+		if len(requestsPerWorkloadID) == 0 {
+			delete(requestsPerMachineFamilyPerWorkloadID, machineFamily)
+		}
+	}
+	return requestsPerMachineFamilyPerWorkloadID
 }
 
 func (p *LookaheadPodInjectionProcessor) launchStatus(machineFamily string) lookaheadbuffer_strategy.Status {
