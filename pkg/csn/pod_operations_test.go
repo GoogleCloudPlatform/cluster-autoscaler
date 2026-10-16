@@ -15,6 +15,7 @@
 package csn
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -339,6 +340,42 @@ func TestStripSuspensionConstraintsDeduplicatesTerms(t *testing.T) {
 			assert.Equal(t, tc.wantStripped, stripped)
 		})
 	}
+}
+
+func TestWithSuspensionConstraintsDoesNotShareBackingArrays(t *testing.T) {
+	original := []apiv1.NodeSelectorTerm{
+		{
+			MatchExpressions: []apiv1.NodeSelectorRequirement{
+				{Key: "topology.kubernetes.io/zone", Operator: apiv1.NodeSelectorOpIn, Values: []string{"us-central1-a"}},
+			},
+		},
+	}
+	// Spare capacity lets an append on a shallow copy write into the original's backing array.
+	original[0].MatchExpressions = slices.Grow(original[0].MatchExpressions, 10)
+	originalCopy := []apiv1.NodeSelectorTerm{*original[0].DeepCopy()}
+
+	expanded := withSuspensionConstraints(original, MemoryLimit{})
+	if !assert.Len(t, expanded, 2) {
+		return
+	}
+	want := expanded[1].DeepCopy()
+
+	// Mutating every expression of one generated term must leave the other generated term, the
+	// original terms and the shared injected requirements untouched.
+	for i := range expanded[0].MatchExpressions {
+		expanded[0].MatchExpressions[i].Key = "mutated"
+		for j := range expanded[0].MatchExpressions[i].Values {
+			expanded[0].MatchExpressions[i].Values[j] = "mutated"
+		}
+	}
+	expanded[0].MatchExpressions = append(expanded[0].MatchExpressions, apiv1.NodeSelectorRequirement{Key: "appended"})
+
+	assert.Equal(t, *want, expanded[1])
+	assert.Equal(t, originalCopy, original)
+	assert.Equal(t, []string{labels.EphemeralLocalSsdEnabledValue}, noLocalSSDRequirement.Values)
+	assert.Equal(t, []apiv1.NodeSelectorRequirement{
+		{Key: labels.EphemeralLocalSsdLabel, Operator: apiv1.NodeSelectorOpNotIn, Values: []string{labels.EphemeralLocalSsdEnabledValue}},
+	}, conjunctiveSuspensionRequirements)
 }
 
 func TestIsCSNPod(t *testing.T) {

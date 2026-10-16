@@ -101,14 +101,17 @@ var noLocalSSDRequirement = apiv1.NodeSelectorRequirement{
 	Values:   []string{labels.EphemeralLocalSsdEnabledValue},
 }
 
+// conjunctiveSuspensionRequirements must hold on every node that hosts a standby buffer.
+var conjunctiveSuspensionRequirements = []apiv1.NodeSelectorRequirement{noLocalSSDRequirement}
+
 // withSuspensionConstraints ANDs the Suspend/Resume requirements (the disjunctive memory limit
 // A1 OR A2 and the conjunctive Local SSD exclusion B) into every existing node selector term.
 //
 // Kubernetes ORs NodeSelectorTerms and only ANDs the requirements within a single term, so the
 // suspension constraints must not be appended as new terms - that would widen the pod's affinity
 // instead of narrowing it, letting a node satisfy the pod by matching the injected requirements
-// alone. The result is therefore the cross product with the memory requirements, with the Local SSD
-// requirement appended to every term:
+// alone. The result is therefore the cross product with the memory requirements, with the
+// conjunctive requirements B appended to every term:
 //
 //	(T1 OR T2) AND (A1 OR A2) AND B == (T1 AND A1 AND B) OR (T1 AND A2 AND B) OR (T2 AND A1 AND B) OR (T2 AND A2 AND B)
 func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit MemoryLimit) []apiv1.NodeSelectorTerm {
@@ -143,7 +146,13 @@ func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit Memor
 			// surprised that modifying a (sub)field of one term also modifies
 			// the same for the neighbouring term.
 			copied := *term.DeepCopy()
-			copied.MatchExpressions = append(copied.MatchExpressions, req, noLocalSSDRequirement)
+			expressions := make([]apiv1.NodeSelectorRequirement, 0, len(copied.MatchExpressions)+1+len(conjunctiveSuspensionRequirements))
+			expressions = append(expressions, copied.MatchExpressions...)
+			expressions = append(expressions, *req.DeepCopy())
+			for _, conjunctive := range conjunctiveSuspensionRequirements {
+				expressions = append(expressions, *conjunctive.DeepCopy())
+			}
+			copied.MatchExpressions = expressions
 			result = append(result, copied)
 		}
 	}
