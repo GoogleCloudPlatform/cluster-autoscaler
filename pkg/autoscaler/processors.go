@@ -543,6 +543,10 @@ func (b *Builder) setUpProcessors(
 	var ekvmsProcessor *ekvms_processor.ScaleUpNodeProcessor
 	var resizableVmManager ekvms_operationtracker.Manager
 	var resizableMachineTypesProvider internalcfg.Provider[sets.Set[string]]
+	// laChurnTracker records per-node lookahead history (updated by the EK scale-up processor)
+	// and lookahead churn events (recorded by the churn scale-down status processor).
+	// Without the EK fixer no nodeHistory is tracked, so no workload separation is ever backed off.
+	laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), internalmetrics.Metrics, clock.RealClock{})
 
 	if options.EkvmsFixerEnabled {
 		resizableVmBackoffManager := ekvms_backoff.NewManager(provider, resizableVmCustomThresholdsProvider, clock.RealClock{})
@@ -555,9 +559,6 @@ func (b *Builder) setUpProcessors(
 		// So we had to use a callback function to register the NodesCountProvider to ResizableVmAutoprovisioningProvider.
 		resizableVmAutoprovisioningProvider.RegisterNodesCountProvider(resizableVmManager)
 
-		// laChurnTracker records per-node lookahead history (updated by the EK scale-up processor)
-		// and lookahead churn events (recorded by the churn scale-down status processor).
-		laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), internalmetrics.Metrics, clock.RealClock{})
 		scaleDownProcessorChain.AddProcessor(ekvms_churntracker.NewChurnScaleDownStatusProcessor(laChurnTracker))
 
 		// Scale Up and Scale Down processors will be added by default but will be executed only if resize is enabled
@@ -735,7 +736,8 @@ func (b *Builder) setUpProcessors(
 		systemPodsClassifier,
 		ccLister,
 		resizeCalculator,
-		internalmetrics.Metrics)
+		internalmetrics.Metrics,
+		laChurnTracker)
 
 	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff, options.AllowedSchedulers)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {
