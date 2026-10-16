@@ -44,6 +44,14 @@ func TestMakePodCSN(t *testing.T) {
 		Key:      labels.MemoryScalingLevelLabel,
 		Operator: apiv1.NodeSelectorOpDoesNotExist,
 	}
+	noGPURequirement := apiv1.NodeSelectorRequirement{
+		Key:      labels.GPULabel,
+		Operator: apiv1.NodeSelectorOpDoesNotExist,
+	}
+	noTPURequirement := apiv1.NodeSelectorRequirement{
+		Key:      labels.TPULabel,
+		Operator: apiv1.NodeSelectorOpDoesNotExist,
+	}
 	zoneRequirement := func(zone string) apiv1.NodeSelectorRequirement {
 		return apiv1.NodeSelectorRequirement{
 			Key:      "topology.kubernetes.io/zone",
@@ -87,8 +95,8 @@ func TestMakePodCSN(t *testing.T) {
 			pod:      &apiv1.Pod{},
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
 			},
 		},
 		{
@@ -116,8 +124,8 @@ func TestMakePodCSN(t *testing.T) {
 			// nodeSelector is ANDed into the scheduling predicate separately, so the affinity is
 			// unaffected by it.
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
 			},
 		},
 		{
@@ -126,8 +134,8 @@ func TestMakePodCSN(t *testing.T) {
 			bufferId: "ns/buffer-3",
 			opts:     []PodOption{WithMemoryLimit(MemoryLimit{minUnsupportedGB: 129})},
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129"), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm("129"), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
 			},
 		},
 		{
@@ -135,8 +143,8 @@ func TestMakePodCSN(t *testing.T) {
 			pod:      podWithNodeSelectorTerms(apiv1.NodeSelectorTerm{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a")}}),
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
 			},
 		},
 		{
@@ -147,10 +155,10 @@ func TestMakePodCSN(t *testing.T) {
 			),
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement}},
-				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm, noLocalSSDRequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-a"), memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
+				{MatchExpressions: []apiv1.NodeSelectorRequirement{zoneRequirement("us-central1-b"), archRequirement, memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement}},
 			},
 		},
 		{
@@ -159,11 +167,11 @@ func TestMakePodCSN(t *testing.T) {
 			bufferId: "ns/buffer",
 			expectedTerms: []apiv1.NodeSelectorTerm{
 				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement},
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryLtTerm(defaultMemoryLimitStr), noLocalSSDRequirement, noGPURequirement, noTPURequirement},
 					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
 				},
 				{
-					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement},
+					MatchExpressions: []apiv1.NodeSelectorRequirement{memoryDoesNotExistTerm, noLocalSSDRequirement, noGPURequirement, noTPURequirement},
 					MatchFields:      []apiv1.NodeSelectorRequirement{nameField},
 				},
 			},
@@ -329,6 +337,39 @@ func TestStripSuspensionConstraintsDeduplicatesTerms(t *testing.T) {
 				},
 			},
 		},
+		{
+			// The user's own DoesNotExist on an accelerator label has the shape of the injected
+			// requirement and is stripped too. Accepted, since it means the same thing.
+			name: "terms with expressions that exclude or require accelerators",
+			originalTerms: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						zoneRequirement("us-central1-a"),
+						{Key: labels.GPULabel, Operator: apiv1.NodeSelectorOpDoesNotExist},
+					},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						{Key: labels.GPULabel, Operator: apiv1.NodeSelectorOpIn, Values: []string{"nvidia-l4"}},
+						{Key: labels.TPULabel, Operator: apiv1.NodeSelectorOpExists},
+					},
+				},
+			},
+			wantExpanded: 4,
+			wantStripped: []apiv1.NodeSelectorTerm{
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						zoneRequirement("us-central1-a"),
+					},
+				},
+				{
+					MatchExpressions: []apiv1.NodeSelectorRequirement{
+						{Key: labels.GPULabel, Operator: apiv1.NodeSelectorOpIn, Values: []string{"nvidia-l4"}},
+						{Key: labels.TPULabel, Operator: apiv1.NodeSelectorOpExists},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -375,6 +416,8 @@ func TestWithSuspensionConstraintsDoesNotShareBackingArrays(t *testing.T) {
 	assert.Equal(t, []string{labels.EphemeralLocalSsdEnabledValue}, noLocalSSDRequirement.Values)
 	assert.Equal(t, []apiv1.NodeSelectorRequirement{
 		{Key: labels.EphemeralLocalSsdLabel, Operator: apiv1.NodeSelectorOpNotIn, Values: []string{labels.EphemeralLocalSsdEnabledValue}},
+		{Key: labels.GPULabel, Operator: apiv1.NodeSelectorOpDoesNotExist},
+		{Key: labels.TPULabel, Operator: apiv1.NodeSelectorOpDoesNotExist},
 	}, conjunctiveSuspensionRequirements)
 }
 
