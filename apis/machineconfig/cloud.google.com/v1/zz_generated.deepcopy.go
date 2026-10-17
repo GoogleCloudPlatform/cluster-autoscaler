@@ -466,6 +466,11 @@ func (in *MachineProperties) DeepCopyInto(out *MachineProperties) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
+	if in.ExplicitRequestOnly != nil {
+		in, out := &in.ExplicitRequestOnly, &out.ExplicitRequestOnly
+		*out = new(bool)
+		**out = **in
+	}
 	if in.NAPDisabled != nil {
 		in, out := &in.NAPDisabled, &out.NAPDisabled
 		*out = new(bool)

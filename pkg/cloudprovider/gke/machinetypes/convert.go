@@ -485,6 +485,14 @@ func ToMachineTypeObject(
 		}
 	}
 
+	var explicitReqOnly bool
+	if mf != nil {
+		explicitReqOnly = ptr.Deref(mf.DefaultProperties.ExplicitRequestOnly, false)
+	}
+	if mt.Properties != nil {
+		explicitReqOnly = ptr.Deref(mt.Properties.ExplicitRequestOnly, explicitReqOnly)
+	}
+
 	newMt := MachineType{
 		MachineType: gce.MachineType{
 			Name:   mt.Name,
@@ -492,6 +500,7 @@ func ToMachineTypeObject(
 			Memory: mt.Resources.Memory * bytesPerMiB,
 		},
 		confidentialNodeCfg: confidentialNodeCfg,
+		explicitReqOnly:     explicitReqOnly,
 	}
 
 	if mt.Properties == nil {
@@ -506,9 +515,6 @@ func ToMachineTypeObject(
 	}
 	if mt.Properties.ThreadsPerCore != nil {
 		newMt = newMt.withThreadsPerCoreOverride(*mt.Properties.ThreadsPerCore)
-	}
-	if mt.Properties.NAPDisabled != nil && *mt.Properties.NAPDisabled {
-		newMt = newMt.withExplicitReqOnly()
 	}
 
 	if mt.Properties.BootDiskConfig != nil {

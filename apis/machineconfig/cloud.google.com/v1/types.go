@@ -147,6 +147,11 @@ type MachineProperties struct {
 	// +optional
 	PersistentDiskTypeConfigs []PersistentDiskTypeConfig `json:"persistentDiskTypeConfigs,omitempty"`
 
+	// ExplicitRequestOnly specifies if the machine configuration should only be provisioned when explicitly requested.
+	//
+	// +optional
+	ExplicitRequestOnly *bool `json:"explicitRequestOnly,omitempty"`
+
 	// NAPDisabled specifies if the machine configuration is excluded from autoprovisioning support.
 	//
 	// +optional

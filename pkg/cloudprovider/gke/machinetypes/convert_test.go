@@ -1212,6 +1212,88 @@ func TestToMachineFamilyObject_NAPDisabled(t *testing.T) {
 	}
 }
 
+func TestToMachineFamilyObject_ExplicitRequestOnly(t *testing.T) {
+	testCases := []struct {
+		name                       string
+		defaultExplicitRequestOnly *bool
+		types                      []mcv1.MachineType
+		wantExplicitReqOnly        map[string]bool
+	}{
+		{
+			name:                       "Family explicit request only by default",
+			defaultExplicitRequestOnly: ptr.To(true),
+			types: []mcv1.MachineType{
+				{Name: "t1", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}},
+				{Name: "t2", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}, Properties: &mcv1.MachineProperties{ExplicitRequestOnly: ptr.To(false)}},
+				{Name: "t3", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}, Properties: &mcv1.MachineProperties{}},
+			},
+			wantExplicitReqOnly: map[string]bool{
+				"t1": true,
+				"t2": false,
+				"t3": true,
+			},
+		},
+		{
+			name:                       "Family not explicit request only by default",
+			defaultExplicitRequestOnly: ptr.To(false),
+			types: []mcv1.MachineType{
+				{Name: "t1", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}},
+				{Name: "t2", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}, Properties: &mcv1.MachineProperties{ExplicitRequestOnly: ptr.To(true)}},
+			},
+			wantExplicitReqOnly: map[string]bool{
+				"t1": false,
+				"t2": true,
+			},
+		},
+		{
+			name:                       "Family nil (defaults to not explicit request only)",
+			defaultExplicitRequestOnly: nil,
+			types: []mcv1.MachineType{
+				{Name: "t1", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}},
+				{Name: "t2", Resources: mcv1.MachineResources{CPUs: 1, Memory: 1024}, Properties: &mcv1.MachineProperties{ExplicitRequestOnly: ptr.To(true)}},
+			},
+			wantExplicitReqOnly: map[string]bool{
+				"t1": false,
+				"t2": true,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name: "test-family",
+				DefaultProperties: mcv1.MachineProperties{
+					ExplicitRequestOnly: tc.defaultExplicitRequestOnly,
+				},
+				MachineTypes: tc.types,
+			}
+
+			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+			if gradedErr.Err != nil {
+				t.Fatalf("ToMachineFamilyObject() unexpected error = %v", gradedErr.Err)
+			}
+
+			if len(got.otherMachineTypes) != 0 {
+				t.Errorf("otherMachineTypes length = %d, want 0", len(got.otherMachineTypes))
+			}
+			if len(got.autoprovisionedMachineTypes) != len(tc.wantExplicitReqOnly) {
+				t.Fatalf("autoprovisionedMachineTypes length = %d, want %d", len(got.autoprovisionedMachineTypes), len(tc.wantExplicitReqOnly))
+			}
+			for name, wantExplicit := range tc.wantExplicitReqOnly {
+				mt, ok := got.autoprovisionedMachineTypes[name]
+				if !ok {
+					t.Errorf("Expected %q to be in autoprovisionedMachineTypes", name)
+					continue
+				}
+				if mt.explicitReqOnly != wantExplicit {
+					t.Errorf("autoprovisionedMachineTypes[%q].explicitReqOnly = %v, want %v", name, mt.explicitReqOnly, wantExplicit)
+				}
+			}
+		})
+	}
+}
+
 func TestToMachineFamilyObject_MachineTypeWeights(t *testing.T) {
 	testCases := []struct {
 		name    string
@@ -1523,7 +1605,7 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 			want: MachineFamily{
 				name: "c3",
 				otherMachineTypes: map[string]MachineType{
-					"c3-standard-4": newTestMachineTypeInfo("c3-standard-4", 4, 16).withExplicitReqOnly().withCpuPlatformRequirements(cpuReqsAmdTurin),
+					"c3-standard-4": newTestMachineTypeInfo("c3-standard-4", 4, 16).withCpuPlatformRequirements(cpuReqsAmdTurin),
 				},
 				supportedCpuPlatforms: CpuPlatformRequirements{
 					lowerBound: AmdGenoa,
@@ -1670,9 +1752,10 @@ func TestToMachineTypeObject(t *testing.T) {
 					CPUPlatforms: []mcv1.CPUPlatform{
 						crdAmdGenoaPlatform,
 					},
-					ThreadsPerCore:     ptr.To(int64(1)),
-					NAPDisabled:        ptr.To(true),
-					SystemArchitecture: ptr.To("arm64"), // will be neglected
+					ThreadsPerCore:      ptr.To(int64(1)),
+					ExplicitRequestOnly: ptr.To(true),
+					NAPDisabled:         ptr.To(true),    // will be neglected
+					SystemArchitecture:  ptr.To("arm64"), // will be neglected
 					BootDiskConfig: &mcv1.BootDiskConfig{
 						DefaultType: "pd-standard",
 						Types:       []string{"pd-standard", "pd-ssd"},
@@ -1742,6 +1825,20 @@ func TestToMachineTypeObject(t *testing.T) {
 				},
 			},
 			want: newTestMachineTypeInfo("mt-1", 8, 32),
+		},
+		{
+			name: "Machine type with ExplicitRequestOnly enabled",
+			input: &mcv1.MachineType{
+				Name: "mt-1",
+				Resources: mcv1.MachineResources{
+					CPUs:   4,
+					Memory: 16,
+				},
+				Properties: &mcv1.MachineProperties{
+					ExplicitRequestOnly: ptr.To(true),
+				},
+			},
+			want: newTestMachineTypeInfo("mt-1", 4, 16).withExplicitReqOnly(),
 		},
 	}
 
