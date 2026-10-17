@@ -180,7 +180,7 @@ func (f *privateNode) resolveValue(metadata Metadata) string {
 	return c
 }
 
-func (f *privateNode) UpdateMig(mig GkeMigSetter, metadata Metadata) {
+func (f *privateNode) UpdateMig(mig GkeMigSetter, metadata Metadata, autopilotManaged bool) {
 	if _, found := metadata[privateNodeFromCcc]; found {
 		// Skip private-node taint; CCC's separation taint handles isolation.
 		// Default CCC has no taint, which is also ok.
@@ -202,7 +202,10 @@ func (f *privateNode) UpdateMig(mig GkeMigSetter, metadata Metadata) {
 		return
 	}
 
-	if f.isAutopilotEnabled() {
+	// Only Autopilot and Autopilot-managed pods get the matching toleration
+	// injected by GCW (autopilot-workload-defaulter AutoTolerateTaints), so
+	// tainting Standard node pools would make them unschedulable.
+	if f.isAutopilotEnabled() || autopilotManaged {
 		taint := apiv1.Taint{
 			Key:    gkelabels.PrivateNodeLabel,
 			Value:  value,

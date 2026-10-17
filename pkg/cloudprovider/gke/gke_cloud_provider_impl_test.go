@@ -1571,6 +1571,53 @@ func TestNewNodeLocationPolicyUsesSelfService(t *testing.T) {
 	assert.Equal(t, LocationPolicyAny, mig.locationPolicy)
 }
 
+type mockPrivateNodeSpecBuilder struct{ autopilotManaged bool }
+
+func (s *mockPrivateNodeSpecBuilder) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, _ map[string]string, _ map[string]resource.Quantity) error {
+	spec.AutopilotManaged = s.autopilotManaged
+	// What selfservice.LabelRequirementsMetadata() yields for nodeSelector cloud.google.com/private-node=true.
+	spec.SelfServiceMetadata = selfservice.Metadata{"internal.private-node-from-label": "true"}
+	return nil
+}
+
+func TestNewNodeGroupPrivateNodeTaint(t *testing.T) {
+	privateNodeTaint := apiv1.Taint{Key: gkelabels.PrivateNodeLabel, Value: "true", Effect: apiv1.TaintEffectNoSchedule}
+	for _, tc := range []struct {
+		name             string
+		autopilotManaged bool
+		wantTaint        bool
+	}{
+		{name: "autopilot-managed node pool gets the private-node taint", autopilotManaged: true, wantTaint: true},
+		{name: "standard node pool does not get the private-node taint", autopilotManaged: false, wantTaint: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gkeManagerMock := &GkeManagerMock{}
+			gke := &gkeCloudProviderImpl{
+				gkeManager:            gkeManagerMock,
+				nodePoolSpecBuilders:  []napcloudprovider.NodePoolSpecBuilder{&mockPrivateNodeSpecBuilder{autopilotManaged: tc.autopilotManaged}},
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+			}
+			zone := "ss-moon-1"
+			gkeManagerMock.On("GetProjectId").Return("project1")
+			gkeManagerMock.On("GetMigTemplateNodeInfo", mock.AnythingOfType("*gke.GkeMig")).Return(framework.NewTestNodeInfo(&apiv1.Node{}), nil).Once()
+			gkeManagerMock.On("GetNumberOfSurgeNodesInMig", mock.AnythingOfType("*gke.GkeMig")).Return(0)
+			gkeManagerMock.On("GetAutoprovisioningLocations").Return([]string{zone}).Once()
+			gkeManagerMock.On("GetDefaultNodePoolDiskSizeGB").Return(int64(100))
+			gkeManagerMock.On("GetDefaultNodePoolDiskType").Return("pd-balanced")
+			gkeManagerMock.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.E2)
+
+			nodeGroup, err := gke.NewNodeGroup(context.TODO(), "e2-medium", nil, map[string]string{apiv1.LabelZoneFailureDomain: zone}, nil, nil)
+			assert.NoError(t, err)
+			taints := nodeGroup.(*GkeMig).Spec().Taints
+			if tc.wantTaint {
+				assert.Contains(t, taints, privateNodeTaint)
+			} else {
+				assert.NotContains(t, taints, privateNodeTaint)
+			}
+		})
+	}
+}
+
 func TestGceRefFromProviderId(t *testing.T) {
 	ref, err := gce.GceRefFromProviderId("gce://project1/us-central1-b/name1")
 	assert.NoError(t, err)
