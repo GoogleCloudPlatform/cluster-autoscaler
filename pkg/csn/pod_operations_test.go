@@ -15,6 +15,7 @@
 package csn
 
 import (
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,10 +24,13 @@ import (
 	"google.golang.org/protobuf/proto"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/component-helpers/scheduling/corev1/nodeaffinity"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	capacitybufferpodlister "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -210,6 +214,67 @@ func TestMakePodCSN(t *testing.T) {
 			})
 			assert.Equal(t, test.expectedTerms, test.pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms)
 			assert.True(t, IsCSNPod(test.pod))
+		})
+	}
+}
+
+func TestMakePodCSNAcceleratorNodes(t *testing.T) {
+	const computeClass = "mixed-class"
+	// Every node is a standby node of the same compute class. The soft workload separation
+	// label is needed because MakePodCSN adds it to the pod's nodeSelector, and
+	// RemoveBufferAssignmentWorkloadSeparation keeps it.
+	classNode := func(name string, extraLabels map[string]string) *apiv1.Node {
+		nodeLabels := map[string]string{
+			labels.ComputeClassLabel:           computeClass,
+			metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
+		}
+		maps.Copy(nodeLabels, extraLabels)
+		return test.BuildTestNode(name, 4000, 16*units.GB, test.WithNodeLabels(nodeLabels))
+	}
+
+	tests := []struct {
+		name      string
+		node      *apiv1.Node
+		wantMatch bool
+	}{
+		{
+			name:      "plain node",
+			node:      classNode("plain", nil),
+			wantMatch: true,
+		},
+		{
+			name:      "TPU node",
+			node:      classNode("tpu", map[string]string{labels.TPULabel: "tpu-v5-lite-podslice"}),
+			wantMatch: false,
+		},
+		{
+			name:      "GPU node",
+			node:      classNode("gpu", map[string]string{labels.GPULabel: labels.NvidiaL4}),
+			wantMatch: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "default"},
+				Spec: apiv1.PodSpec{
+					NodeSelector: map[string]string{labels.ComputeClassLabel: computeClass},
+				},
+			}
+
+			// Control: without the standby buffer constraints the pod matches every node of
+			// its class, so a mismatch below can only come from the injected requirements.
+			matched, err := nodeaffinity.GetRequiredNodeAffinity(p).Match(tc.node)
+			assert.NoError(t, err)
+			assert.True(t, matched, "pod must match the node before MakePodCSN")
+
+			// Mirrors CSNPodsLifecycleProcessor for a standby pod that has to scale up.
+			MakePodCSN(p, "default/buffer")
+			RemoveBufferAssignmentWorkloadSeparation(p)
+
+			matched, err = nodeaffinity.GetRequiredNodeAffinity(p).Match(tc.node)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantMatch, matched)
 		})
 	}
 }
