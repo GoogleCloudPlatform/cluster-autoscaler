@@ -1013,6 +1013,15 @@ var (
 		[]string{"launched_from", "config"},
 	)
 
+	lookaheadBackedOffWorkloadSeparations = k8smetrics.NewGaugeVec(
+		&k8smetrics.GaugeOpts{
+			Namespace: caNamespace,
+			Name:      "lookahead_backed_off_workload_separations",
+			Help:      "Number of workload separations per machine family and lookahead backoff tier whose lookahead is currently backed off.",
+		},
+		[]string{"machine_family", "tier"},
+	)
+
 	// TODO(b/494558643): Move it to OSS.
 	capacityBuffersPodsMetric = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
@@ -1362,6 +1371,7 @@ var allMetrics = []k8smetrics.Registerable{
 	nodesWithLookaheadPodsShape,
 	lookaheadChurnEventsTotal,
 	lookaheadChurnBreakerLaunchStatus,
+	lookaheadBackedOffWorkloadSeparations,
 	capacityBuffersPodsMetric,
 	capacityBuffersNumberMetric,
 	csnEnabled,
@@ -2080,6 +2090,12 @@ func (*prometheusMetrics) UpdateLookaheadChurnBreakerLaunchStatus(enabled bool, 
 	} else {
 		lookaheadChurnBreakerLaunchStatus.WithLabelValues(launchedFrom, config).Set(0)
 	}
+}
+
+// UpdateLookaheadBackedOffWorkloadSeparations sets the number of workload separations of the machine family whose
+// lookahead is currently backed off with the given tier.
+func (*prometheusMetrics) UpdateLookaheadBackedOffWorkloadSeparations(machineFamily string, tier, count int) {
+	lookaheadBackedOffWorkloadSeparations.WithLabelValues(machineFamily, strconv.Itoa(tier)).Set(float64(count))
 }
 
 func (pm *prometheusMetrics) UpdateResizableVmTotalNodesLookaheadSpace(machineFamily string, val size.Allocatable) {

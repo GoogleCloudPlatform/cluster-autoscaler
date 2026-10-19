@@ -388,7 +388,7 @@ func TestCleanExpiredEvents(t *testing.T) {
 			tracker := NewChurnTracker(enabledChurnTrackerProvider(), testMcp, nil, fakeclock.NewFakePassiveClock(now))
 			tracker.events = tc.events
 
-			tracker.cleanExpiredEvents()
+			tracker.cleanExpiredEvents(now)
 
 			if diff := cmp.Diff(tc.wantEvents, tracker.events); diff != "" {
 				t.Errorf("cleanExpiredEvents() events mismatch (-want +got):\n%s", diff)
@@ -681,6 +681,91 @@ func TestRecordScaledDownNodesUpdatesBackoffs(t *testing.T) {
 	}
 }
 
+func TestProcessNodeInfosUpdatesBackoffs(t *testing.T) {
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	// The default churnWindow and resetWindow are 30m, the default churnThreshold is 5.
+	nowMinus45m := now.Add(-45 * time.Minute)
+	nowMinus31m := now.Add(-31 * time.Minute)
+	nowMinus5m := now.Add(-5 * time.Minute)
+	nowPlus10m := now.Add(10 * time.Minute)
+	ekTestWorkload := workloadKey{machineFamily: ekFamily, workloadID: testWorkloadID}
+
+	// longChurnWindowProvider has a churnWindow longer than resetWindow, so that the churn events that caused a backoff
+	// can still be within churnWindow when the backoff is reset.
+	longChurnWindowProvider := func() ConfigProvider {
+		flags := map[string]string{experiments.ResizableVmChurnCircuitBreakerFlag: `{"minCaVersion": "0.0.0", "churnWindow": 3600, "churnThreshold": 3}`}
+		return NewConfigProvider(experiments.NewMockManagerWithOptions(version.Version{}, nil, flags), "", version.Version{}, nil)
+	}
+
+	for _, tc := range []struct {
+		desc string
+		// configProvider defaults to enabledChurnTrackerProvider.
+		configProvider ConfigProvider
+		backoffsBefore backoffEvents
+		eventsBefore   churnEvents
+		wantBackoffs   backoffEvents
+		wantEvents     churnEvents
+		wantMetric     map[backoffTierKey]int
+	}{
+		{
+			desc:           "active backoff is kept and reported",
+			backoffsBefore: backoffEvents{ekTestWorkload: {tier: 1, endTime: nowPlus10m}},
+			wantBackoffs:   backoffEvents{ekTestWorkload: {tier: 1, endTime: nowPlus10m}},
+			wantMetric:     map[backoffTierKey]int{{machineFamily: ekFamily, tier: 1}: 1},
+		},
+		{
+			desc:           "ended backoff within resetWindow is kept to remember its tier, but not reported as backed off",
+			backoffsBefore: backoffEvents{ekTestWorkload: {tier: 2, endTime: nowMinus5m}},
+			wantBackoffs:   backoffEvents{ekTestWorkload: {tier: 2, endTime: nowMinus5m}},
+		},
+		{
+			desc:           "backoff past resetWindow is reset without scaled down nodes",
+			backoffsBefore: backoffEvents{ekTestWorkload: {tier: 2, endTime: nowMinus31m}},
+			wantBackoffs:   backoffEvents{},
+		},
+		{
+			desc:           "churn events older than churnWindow are cleaned up and the backoff past resetWindow is reset",
+			backoffsBefore: backoffEvents{ekTestWorkload: {tier: 2, endTime: nowMinus31m}},
+			eventsBefore:   churnEvents{ekTestWorkload: {nowMinus45m, nowMinus45m}},
+			wantBackoffs:   backoffEvents{},
+			wantEvents:     churnEvents{},
+		},
+		{
+			desc:           "backoff past resetWindow is reset without triggering a new one from the churn events within churnWindow that caused it",
+			configProvider: longChurnWindowProvider(),
+			backoffsBefore: backoffEvents{ekTestWorkload: {tier: 1, endTime: nowMinus31m}},
+			eventsBefore:   churnEvents{ekTestWorkload: {nowMinus45m, nowMinus45m, nowMinus45m}},
+			wantBackoffs:   backoffEvents{},
+			wantEvents:     churnEvents{ekTestWorkload: {nowMinus45m, nowMinus45m, nowMinus45m}},
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			configProvider := tc.configProvider
+			if configProvider == nil {
+				configProvider = enabledChurnTrackerProvider()
+			}
+			metrics := &fakeChurnMetrics{}
+			tracker := NewChurnTracker(configProvider, testMcp, metrics, fakeclock.NewFakePassiveClock(now))
+			tracker.backoffManager.backoffs = tc.backoffsBefore
+			if tc.eventsBefore != nil {
+				tracker.events = tc.eventsBefore
+			}
+
+			tracker.ProcessNodeInfos(nil)
+
+			if diff := cmp.Diff(tc.wantBackoffs, tracker.backoffManager.backoffs, cmp.AllowUnexported(backoffData{}), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("ProcessNodeInfos() backoffs mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantEvents, tracker.events, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("ProcessNodeInfos() events mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(tc.wantMetric, metrics.backedOff, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("ProcessNodeInfos() metric mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestChurnTrackerIsBackedOff(t *testing.T) {
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	nowMinus5m := now.Add(-5 * time.Minute)
@@ -757,9 +842,11 @@ func TestRecordScaledDownNodesNilMetrics(t *testing.T) {
 	}
 }
 
-// fakeChurnMetrics counts the lookahead churn events registered per machine family.
+// fakeChurnMetrics counts the lookahead churn events registered per machine family and backoff tier applied per (machineFamily, workloadID).
 type fakeChurnMetrics struct {
 	counts map[string]int
+	// backedOff is the number of active backoffs per machine family and tier.
+	backedOff map[backoffTierKey]int
 }
 
 func (f *fakeChurnMetrics) RegisterLookaheadChurnEvent(machineFamily string) {
@@ -767,6 +854,13 @@ func (f *fakeChurnMetrics) RegisterLookaheadChurnEvent(machineFamily string) {
 		f.counts = make(map[string]int)
 	}
 	f.counts[machineFamily]++
+}
+
+func (f *fakeChurnMetrics) UpdateLookaheadBackedOffWorkloadSeparations(machineFamily string, tier, count int) {
+	if f.backedOff == nil {
+		f.backedOff = make(map[backoffTierKey]int)
+	}
+	f.backedOff[backoffTierKey{machineFamily: machineFamily, tier: tier}] = count
 }
 
 // bindTo marks the pod as bound to the node by kube-scheduler.
