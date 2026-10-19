@@ -121,7 +121,7 @@ func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfi
 			return nil
 		}
 		var err error
-		scope, err = f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+		scope, err = f.getOrAddFlexibilityScope(flexibilityScopeKey, false)
 		if err != nil {
 			klog.Warningf("FlexAdvisor: failed to add scope during GetInstanceAvailability, flexibilityScopeKey=%v, err=%v", flexibilityScopeKey, err)
 			return nil
@@ -141,14 +141,30 @@ func (f *flexAdvisor) GetInstanceAvailability(flexibilityScopeKey, instanceConfi
 }
 
 func (f *flexAdvisor) RegisterFlexibilityScope(flexibilityScopeKey string) error {
-	_, err := f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
+	_, err := f.getOrAddFlexibilityScope(flexibilityScopeKey, true)
 	return err
 }
 
+// BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
+// Returns an error if the flexibility scope does not exist.
+// Consumers that act on availability data (the balancer) must call it explicitly, as read methods
+// (GetInstanceAvailability, AwaitInstanceAvailability) never extend a scope's keep-alive implicitly.
+func (f *flexAdvisor) BumpScopeTtl(flexibilityScopeKey string) error {
+	scopeTtl := f.getScopeTtl()
+
+	f.rwMutex.Lock()
+	defer f.rwMutex.Unlock()
+
+	if _, found := f.scopes[flexibilityScopeKey]; !found {
+		return fmt.Errorf("flexibility scope not found for key: %s", flexibilityScopeKey)
+	}
+	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
+	return nil
+}
+
 // AwaitInstanceAvailability blocking await for scope's recommendations data.
-// Warning: updates ttl of scope on each await (vs GetInstanceAvailability which doesn't, read docstrings at GetInstanceAvailability)
+// WARNING: THIS METHOD DOES NOT UPDATE KEEP-ALIVE, callers that use the data should call BumpScopeTtl.
 func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*instanceavailability.Snapshot, error) {
-	// Warning: if bypass is active, scope's ttl won't get updated
 	if f.bypassTracker != nil && f.bypassTracker.IsRecommendationsEnforcementPaused(flexibilityScopeKey) {
 		klog.Infof("FlexAdvisor: recommendations enforcement is paused for flexibilityScopeKey=%v, skipping returning availability data for instanceConfigKey=%v", flexibilityScopeKey, instanceConfigKey)
 		return nil, fmt.Errorf("recommendations enforcement is paused for flexibilityScopeKey=%v", flexibilityScopeKey)
@@ -166,9 +182,16 @@ func (f *flexAdvisor) AwaitInstanceAvailability(flexibilityScopeKey, instanceCon
 			}
 		}
 	}()
-	scope, addErr := f.addFlexibilityScopeIfNotExist(flexibilityScopeKey)
-	if addErr != nil {
-		return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=%v", addErr)
+	scope, scopeFound, isAtCapacity := f.getScope(flexibilityScopeKey)
+	if !scopeFound || scope == nil {
+		if isAtCapacity {
+			return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=active scope limit of %d reached", f.getMaxScopes())
+		}
+		var addErr error
+		scope, addErr = f.getOrAddFlexibilityScope(flexibilityScopeKey, false)
+		if addErr != nil {
+			return nil, fmt.Errorf("FlexAdvisor: failed to add scope during AwaitInstanceAvailability, err=%v", addErr)
+		}
 	}
 	err = f.waitForFirstFetchOrTimeOut(scope)
 	if err != nil {
@@ -437,7 +460,9 @@ func (f *flexAdvisor) getScopeTtl() time.Duration {
 	return duration
 }
 
-func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) (*flexibilityScope, error) {
+// getOrAddFlexibilityScope returns the scope, registering it (which starts its background refresh) if missing.
+// If the scope is already registered, its keep-alive is extended only when bumpScopeTtl is true.
+func (f *flexAdvisor) getOrAddFlexibilityScope(flexibilityScopeKey string, bumpScopeTtl bool) (*flexibilityScope, error) {
 	scopeTtl := f.getScopeTtl()
 
 	f.rwMutex.Lock()
@@ -445,7 +470,9 @@ func (f *flexAdvisor) addFlexibilityScopeIfNotExist(flexibilityScopeKey string) 
 
 	scope, found := f.scopes[flexibilityScopeKey]
 	if found {
-		f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
+		if bumpScopeTtl {
+			f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
+		}
 		return scope, nil
 	}
 

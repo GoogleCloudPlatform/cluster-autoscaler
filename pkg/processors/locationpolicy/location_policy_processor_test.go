@@ -281,6 +281,7 @@ func TestLocationPolicyProcessor(t *testing.T) {
 			enabledExperimentFlags: []string{experiments.FlexAdvisorProcessingEnabledFlag, experiments.FlexAdvisorProcessingMinCAVersionFlag},
 			setupFlexAdvisor: func(iaProvider *instanceavailability.MockProvider) {
 				snapshot := instanceavailability.NewSnapshot(iaProvider, "ccc-1", "", "guidance-1", "", map[string]int{"us-test1-a": 10}, map[string]float64{"us-test1-a": 1.0})
+				iaProvider.On("BumpScopeTtl", "ccc-1").Return(nil).Once()
 				iaProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot, nil).Once()
 				iaProvider.On("MarkUsed", "ccc-1", "", "guidance-1", mock.Anything, map[string]int{"us-test1-a": 10}).Return(nil).Once()
 			},

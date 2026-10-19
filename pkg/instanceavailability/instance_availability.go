@@ -30,12 +30,17 @@ const (
 
 type Provider interface {
 	// GetInstanceAvailability returns a Snapshot of instance availability if available, nil otherwise. Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing. non-blocking.
+	// Does not update keep-alive of an existing scope.
 	GetInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) *Snapshot
-	// RegisterFlexibilityScope registers the flexibilityScopeKey in Provider, so it is fetched and refreshed in the background.
+	// RegisterFlexibilityScope registers the flexibilityScopeKey in Provider, so it is fetched and refreshed in the background, extending its keep-alive if already registered.
 	RegisterFlexibilityScope(flexibilityScopeKey string) error
+	// BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
+	// Consumers that act on availability data (the balancer) must call it explicitly, as read methods do not update keep-alive.
+	BumpScopeTtl(flexibilityScopeKey string) error
 	// AwaitInstanceAvailability returns a Snapshot of instance availability in a blocking manner.
 	// Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing in Provider.
 	// Blocks until the background refresh operations to finish if they are running for the first time.
+	// Does not update keep-alive of an existing scope.
 	AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error)
 	// MarkUsed in-place updates current InstanceAvailability with information about VMs decided to be provisioned.
 	MarkUsed(flexibilityScopeKey, instanceConfigKey, guidanceId, decisionId string, zonalInstancesToProvision map[string]int) error

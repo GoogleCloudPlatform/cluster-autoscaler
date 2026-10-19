@@ -2037,3 +2037,106 @@ func TestIsFlexAdvisorRecommendationsBypassEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestFlexAdvisor_BumpScopeTtl_AndReadMethodsDoNotUpdateKeepAlive(t *testing.T) {
+	crd1 := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "scope-1",
+		},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	testCases := []struct {
+		name            string
+		action          func(t *testing.T, f *flexAdvisor)
+		wantScopeExists bool
+		wantActiveFor   time.Duration
+	}{
+		{
+			name: "GetInstanceAvailability on existing scope - keep-alive untouched",
+			action: func(t *testing.T, f *flexAdvisor) {
+				f.GetInstanceAvailability("scope-1", "InstanceConfig-key-1")
+			},
+			wantScopeExists: true,
+			wantActiveFor:   7 * time.Minute,
+		},
+		{
+			name: "AwaitInstanceAvailability on existing scope - keep-alive untouched",
+			action: func(t *testing.T, f *flexAdvisor) {
+				_, _ = f.AwaitInstanceAvailability("scope-1", "InstanceConfig-key-1")
+			},
+			wantScopeExists: true,
+			wantActiveFor:   7 * time.Minute,
+		},
+		{
+			name: "BumpScopeTtl on existing scope - keep-alive extended back to 10m",
+			action: func(t *testing.T, f *flexAdvisor) {
+				assert.NoError(t, f.BumpScopeTtl("scope-1"))
+			},
+			wantScopeExists: true,
+			wantActiveFor:   10 * time.Minute,
+		},
+		{
+			name: "BumpScopeTtl on non-existent scope - returns error without registering scope",
+			action: func(t *testing.T, f *flexAdvisor) {
+				err := f.BumpScopeTtl("non-existent-scope")
+				assert.EqualError(t, err, "flexibility scope not found for key: non-existent-scope")
+				_, exists, _ := f.getScope("non-existent-scope")
+				assert.False(t, exists)
+			},
+			wantScopeExists: true,
+			wantActiveFor:   7 * time.Minute,
+		},
+		{
+			name: "RegisterFlexibilityScope on existing scope - keep-alive extended back to 10m",
+			action: func(t *testing.T, f *flexAdvisor) {
+				assert.NoError(t, f.RegisterFlexibilityScope("scope-1"))
+			},
+			wantScopeExists: true,
+			wantActiveFor:   10 * time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mockProvider := &mockAdviceProvider{}
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
+				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
+				assert.NoError(t, err)
+
+				availability := api.NewTestInstanceAvailabilityBuilder("scope-1", "InstanceConfig-key-1").Build()
+				availability.SetProvider(nil)
+				mockProvider.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{
+					"InstanceConfig-key-1": availability,
+				}, nil)
+
+				assert.NoError(t, fa.RegisterFlexibilityScope("scope-1"))
+				synctest.Wait()
+
+				// Advance 3 minutes into the 10-minute keep-alive window.
+				time.Sleep(3 * time.Minute)
+				synctest.Wait()
+
+				tc.action(t, fa)
+
+				fa.rwMutex.RLock()
+				activeUntil, found := fa.scopesActiveUntil["scope-1"]
+				now := fa.clock.Now()
+				fa.rwMutex.RUnlock()
+
+				assert.Equal(t, tc.wantScopeExists, found)
+				assert.Equal(t, tc.wantActiveFor, activeUntil.Sub(now))
+			})
+		})
+	}
+}

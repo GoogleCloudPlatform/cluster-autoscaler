@@ -37,6 +37,11 @@ func (m *MockProvider) RegisterFlexibilityScope(flexibilityScopeKey string) erro
 	return args.Error(0)
 }
 
+func (m *MockProvider) BumpScopeTtl(flexibilityScopeKey string) error {
+	args := m.Called(flexibilityScopeKey)
+	return args.Error(0)
+}
+
 func (m *MockProvider) AwaitInstanceAvailability(flexibilityScopeKey, instanceConfigKey string) (*Snapshot, error) {
 	args := m.Called(flexibilityScopeKey, instanceConfigKey)
 	if args.Get(1) != nil {
