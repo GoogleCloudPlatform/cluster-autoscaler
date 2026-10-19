@@ -142,11 +142,6 @@ func IsPredefinedComputeClass(computeClassName string) bool {
 	return found
 }
 
-// IsCustomComputeClass determines whether compute class is user defined.
-func IsCustomComputeClass(computeClassName string) bool {
-	return !IsPredefinedComputeClass(computeClassName)
-}
-
 // ComputeClassForMachineFamily return compute class for a machine family if it exists
 func ComputeClassForMachineFamily(family MachineFamily) (PredefinedComputeClass, bool) {
 	// This function is used by GKE pricing info to balance scale-ups between

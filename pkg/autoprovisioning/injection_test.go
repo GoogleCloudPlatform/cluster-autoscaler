@@ -3322,7 +3322,7 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			expectedClassName:     "Balanced",
 			expectedCpuScaling:    "1",
 			expectedMemoryScaling: "4",
-			expectedTaints:        []apiv1.Taint{{Key: gkelabels.ComputeClassLabel, Value: "Balanced", Effect: apiv1.TaintEffectNoSchedule}},
+			expectedTaints:        nil,
 		},
 		"Scale-Out compute class, autopilot enabled, amd64 architecture": {
 			autopilotEnabled:      true,
@@ -3332,7 +3332,6 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			expectedCpuScaling:    "1",
 			expectedMemoryScaling: "4",
 			expectedTaints: []apiv1.Taint{
-				{Key: gkelabels.ComputeClassLabel, Value: "Scale-Out", Effect: apiv1.TaintEffectNoSchedule},
 				{Key: apiv1.LabelArchStable, Value: "amd64", Effect: apiv1.TaintEffectNoSchedule},
 			},
 		},
@@ -3344,7 +3343,6 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			expectedCpuScaling:    "1",
 			expectedMemoryScaling: "4",
 			expectedTaints: []apiv1.Taint{
-				{Key: gkelabels.ComputeClassLabel, Value: "Scale-Out", Effect: apiv1.TaintEffectNoSchedule},
 				{Key: apiv1.LabelArchStable, Value: "arm64", Effect: apiv1.TaintEffectNoSchedule},
 			},
 		},
@@ -3352,7 +3350,7 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			autopilotEnabled:      true,
 			machineType:           "n1-standard-1",
 			computeClassName:      "custom-compute-class",
-			expectedClassName:     "",
+			expectedClassName:     "custom-compute-class",
 			expectedCpuScaling:    "1",
 			expectedMemoryScaling: "4",
 			expectedTaints:        []apiv1.Taint{},
@@ -3461,7 +3459,6 @@ func TestMachineSelectionGenerator_UpdateNodePoolSpec_Autopilot(t *testing.T) {
 			}
 			assert.NoError(t, err)
 			assert.ElementsMatch(t, tc.expectedTaints, spec.Taints)
-			assert.Equal(t, tc.expectedClassName, spec.Labels[gkelabels.ComputeClassLabel])
 			assert.Equal(t, tc.expectedClassName, spec.ComputeClass)
 			assert.Equal(t, tc.expectedCpuScaling, spec.Labels[gkelabels.CpuScalingLevelLabel])
 			assert.Equal(t, tc.expectedMemoryScaling, spec.Labels[gkelabels.MemoryScalingLevelLabel])
@@ -5144,18 +5141,17 @@ func TestComputeClassGenerator_UpdateNodePoolSpec(t *testing.T) {
 				},
 			},
 		},
-		"standard, nothing injected for predefined compute class in CC mode": {
-			systemLabels: map[string]string{defaultCCLabel: machinetypes.AllComputeClasses()[0].Name()},
-			ccLabel:      gkelabels.ComputeClassLabel,
+		"autopilot, label and taint injected for predefined compute class in CC mode": {
+			systemLabels:     map[string]string{gkelabels.ComputeClassLabel: machinetypes.ScaleOutClass.Name()},
+			ccLabel:          gkelabels.ComputeClassLabel,
+			autopilotEnabled: true,
 			expectedSpec: &gkeclient.NodePoolSpec{
-				Labels: map[string]string{},
-			},
-		},
-		"autopilot, nothing injected for predefined compute class in CC mode": {
-			systemLabels: map[string]string{defaultCCLabel: machinetypes.AllComputeClasses()[0].Name()},
-			ccLabel:      gkelabels.ComputeClassLabel,
-			expectedSpec: &gkeclient.NodePoolSpec{
-				Labels: map[string]string{},
+				Labels: map[string]string{
+					gkelabels.ComputeClassLabel: machinetypes.ScaleOutClass.Name(),
+				},
+				Taints: []apiv1.Taint{
+					{Key: gkelabels.ComputeClassLabel, Value: machinetypes.ScaleOutClass.Name(), Effect: apiv1.TaintEffectNoSchedule},
+				},
 			},
 		},
 		"standard, autopilot managed - label, taint, autopilot managed set": {
