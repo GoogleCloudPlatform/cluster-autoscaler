@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 )
@@ -33,6 +34,11 @@ type backoffData struct {
 // backoffEvents are the lookahead backoffs per workload separation of a machine family.
 type backoffEvents map[workloadKey]backoffData
 
+type backoffTierKey struct {
+	machineFamily string
+	tier          int
+}
+
 // BackoffManager decides which workload separations should have their lookahead backed off, based on their churn events.
 //
 // A backoff is only ever started by reaching ChurnThreshold churn events within ChurnWindow. The first backoff of a
@@ -44,19 +50,24 @@ type backoffEvents map[workloadKey]backoffData
 type BackoffManager struct {
 	clock    clock.PassiveClock
 	provider ConfigProvider
+	metrics  churnMetrics
 
 	mu       sync.RWMutex
 	backoffs backoffEvents
+	// reportedTiers are the backoff tiers with workload separations reported by the last updateMetrics call, used to
+	// report 0 for the tiers without workload separations anymore.
+	reportedTiers sets.Set[backoffTierKey]
 }
 
 // NewBackoffManager returns a new initialized BackoffManager.
-func NewBackoffManager(c clock.PassiveClock, provider ConfigProvider) *BackoffManager {
+func NewBackoffManager(c clock.PassiveClock, provider ConfigProvider, metrics churnMetrics) *BackoffManager {
 	if c == nil {
 		c = clock.RealClock{}
 	}
 	return &BackoffManager{
 		clock:    c,
 		provider: provider,
+		metrics:  metrics,
 		backoffs: make(backoffEvents),
 	}
 }
@@ -75,10 +86,24 @@ func (m *BackoffManager) UpdateEvents(events churnEvents, now time.Time) {
 
 	m.resetBackoffs(events, now)
 	m.createOrUpdateBackoffEvents(events, now)
+	m.updateMetrics(now)
+}
+
+func (m *BackoffManager) ResetBackoffs(events churnEvents, now time.Time) {
+	if !m.isEnabled() {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.resetBackoffs(events, now)
+	m.updateMetrics(now)
 }
 
 // IsBackedOff returns true if the lookahead of the workload separation of the machine family is backed off.
-// Ended backoffs are only escalated or reset by UpdateEvents, so the map can contain ended backoffs.
+// Ended backoffs are only escalated by UpdateEvents or reset by UpdateEvents and ResetBackoffs, so the map can contain
+// already ended backoffs.
 func (m *BackoffManager) IsBackedOff(machineFamily, workloadID string) bool {
 	if !m.isEnabled() {
 		return false
@@ -147,6 +172,34 @@ func (m *BackoffManager) durationForTier(tier int) (int, time.Duration) {
 	durations := m.provider.BackoffDurations()
 	tier = min(tier, len(durations))
 	return tier, durations[tier-1]
+}
+
+// updateMetrics reports the number of workload separations per machine family and backoff tier whose lookahead is
+// backed off at now, i.e. only the active backoffs. Ended backoffs that are not reset yet are not counted, as their
+// lookahead is not suppressed anymore (IsBackedOff returns false). The tiers without active backoffs anymore (e.g.
+// ended, reset or escalated) since the last call are reported as 0.
+func (m *BackoffManager) updateMetrics(now time.Time) {
+	if m.metrics == nil {
+		return
+	}
+	counts := make(map[backoffTierKey]int)
+	for workloadKey, backoff := range m.backoffs {
+		if !now.Before(backoff.endTime) {
+			continue
+		}
+		counts[backoffTierKey{machineFamily: workloadKey.machineFamily, tier: backoff.tier}]++
+	}
+	for key := range m.reportedTiers {
+		if _, found := counts[key]; !found {
+			m.metrics.UpdateLookaheadBackedOffWorkloadSeparations(key.machineFamily, key.tier, 0)
+		}
+	}
+	reportedTiers := sets.New[backoffTierKey]()
+	for key, count := range counts {
+		m.metrics.UpdateLookaheadBackedOffWorkloadSeparations(key.machineFamily, key.tier, count)
+		reportedTiers.Insert(key)
+	}
+	m.reportedTiers = reportedTiers
 }
 
 // shouldReset indicates if the ended backoff should be reset:

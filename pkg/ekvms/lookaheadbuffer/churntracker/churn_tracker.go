@@ -57,9 +57,10 @@ type workloadKey struct {
 // churnEvents are the timestamps of churn events, tracked per workload separation of a machine family.
 type churnEvents map[workloadKey][]time.Time
 
-// churnMetrics is the subset of metrics emitted by the ChurnTracker.
+// churnMetrics is the subset of metrics emitted by the ChurnTracker and its BackoffManager.
 type churnMetrics interface {
 	RegisterLookaheadChurnEvent(machineFamily string)
+	UpdateLookaheadBackedOffWorkloadSeparations(machineFamily string, tier, count int)
 }
 
 // ChurnTracker tracks node history and lookahead churn events per workload separation.
@@ -88,7 +89,7 @@ func NewChurnTracker(configProvider ConfigProvider, mcp *machinetypes.MachineCon
 		mcp:            mcp,
 		metrics:        metrics,
 		clock:          c,
-		backoffManager: NewBackoffManager(c, configProvider),
+		backoffManager: NewBackoffManager(c, configProvider, metrics),
 		nodes:          make(map[types.UID]*nodeHistory),
 		events:         make(churnEvents),
 	}
@@ -97,6 +98,7 @@ func NewChurnTracker(configProvider ConfigProvider, mcp *machinetypes.MachineCon
 // ProcessNodeInfos updates existing nodeHistory entries or creates new ones for newly seen nodes, and drops entries
 // for nodes that have left the snapshot. Upcoming nodes and nodes of non-resizable machine families are skipped,
 // so the caller can pass all the nodes from the cluster snapshot.
+// It is expected to be called once per loop, it also resets the backoffs past ResetWindow.
 // It is a no-op if the churn circuit breaker experiment is disabled.
 func (t *ChurnTracker) ProcessNodeInfos(nodeInfos []*framework.NodeInfo) {
 	if !t.isEnabled() {
@@ -136,6 +138,9 @@ func (t *ChurnTracker) ProcessNodeInfos(nodeInfos []*framework.NodeInfo) {
 		updatedNodes[uid] = history
 	}
 	t.nodes = updatedNodes
+
+	t.cleanExpiredEvents(now)
+	t.backoffManager.ResetBackoffs(t.events, now)
 }
 
 // RecordScaledDownNodes records a churn event for each scaled-down node and checks if it qualifies as churn event.
@@ -145,8 +150,8 @@ func (t *ChurnTracker) RecordScaledDownNodes(nodes []*apiv1.Node) {
 		return
 	}
 
-	t.cleanExpiredEvents()
 	now := t.clock.Now()
+	t.cleanExpiredEvents(now)
 	for _, node := range nodes {
 		if node == nil {
 			continue
@@ -172,9 +177,9 @@ func (t *ChurnTracker) IsBackedOff(machineFamily, workloadID string) bool {
 	return t.backoffManager.IsBackedOff(machineFamily, workloadID)
 }
 
-// cleanExpiredEvents removes churn events older than churnWindow.
-func (t *ChurnTracker) cleanExpiredEvents() {
-	windowStart := t.clock.Now().Add(-t.configProvider.ChurnWindow())
+// cleanExpiredEvents removes churn events older than churnWindow before now.
+func (t *ChurnTracker) cleanExpiredEvents(now time.Time) {
+	windowStart := now.Add(-t.configProvider.ChurnWindow())
 	for key, eventsForWorkloadKey := range t.events {
 		// Since eventsForWorkloadKey correspond to the time of when we record the churn events, they will always be in ascending order. So it is safe to copy everything after the first non-stale event.
 		startIndex := indexOfFirstEventAfterTs(eventsForWorkloadKey, windowStart)
