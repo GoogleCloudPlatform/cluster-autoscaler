@@ -1801,6 +1801,10 @@ func (fake *FakeGkeManager) GetClusterVersion() string {
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) GetTargetNodeVersion() string {
+	panic("not implemented")
+}
+
 func (fake *FakeGkeManager) GetEmulatedClusterVersion() string {
 	panic("not implemented")
 }
@@ -2686,6 +2690,12 @@ func (m *GkeManagerMock) GetClusterName() string {
 
 // GetClusterVersion is a mocked method.
 func (m *GkeManagerMock) GetClusterVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+// GetTargetNodeVersion is a mocked method.
+func (m *GkeManagerMock) GetTargetNodeVersion() string {
 	args := m.Called()
 	return args.String(0)
 }

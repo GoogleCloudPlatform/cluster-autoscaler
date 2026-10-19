@@ -174,6 +174,10 @@ func (m vizNapTestGkeManager) GetClusterVersion() string {
 	return ""
 }
 
+func (m vizNapTestGkeManager) GetTargetNodeVersion() string {
+	return ""
+}
+
 func (m vizNapTestGkeManager) GetDowngradableVersion() string {
 	return ""
 }

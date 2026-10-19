@@ -105,7 +105,8 @@ type LocalSSDConfig struct {
 	LocalSsdCount                  int64
 	EphemeralStorageConfig         *gke_api_beta.EphemeralStorageConfig
 	EphemeralStorageLocalSsdConfig *gke_api_beta.EphemeralStorageLocalSsdConfig
-	// EphemeralCapacityGb is translated by the internal NodePoolTranslator until it propagates to the public API client.
+	// EphemeralCapacityGb is translated by the internal ClusterTranslator until
+	// it propagates to the public API client.
 	EphemeralCapacityGb     int64
 	LocalNvmeSsdBlockConfig *gke_api_beta.LocalNvmeSsdBlockConfig
 }
@@ -164,8 +165,9 @@ type MaxPodsConstraint struct {
 
 // Cluster contains cluster's fields we want to use.
 type Cluster struct {
-	Status         string
-	ClusterVersion string
+	Status            string
+	ClusterVersion    string
+	TargetNodeVersion string
 	// EmulatedClusterVersion is set on the Cluster proto (actual field name is CurrentEmulatedVersion) when the cluster has an ongoing "safer" upgrade
 	// where the API server is emulated to behave like this minor version. Has to be taken into account when CA depends on K8s APIs being enabled by default
 	// from some minor version. More details: go/gke-component-emulated-version.

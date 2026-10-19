@@ -266,9 +266,13 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		Capacity:    capacity,
 		Allocatable: t.CalculateAllocatable(capacity, kubeReserved, evictionHard),
 	}
-	if mig.Spec().NodeVersion != "" {
+	kubeletVersion := mig.Spec().NodeVersion
+	if kubeletVersion == "" {
+		kubeletVersion = version
+	}
+	if kubeletVersion != "" {
 		node.Status.NodeInfo = apiv1.NodeSystemInfo{
-			KubeletVersion: mig.Spec().NodeVersion,
+			KubeletVersion: kubeletVersion,
 		}
 	}
 

@@ -3239,12 +3239,12 @@ func TestUsesBulkProvisioning(t *testing.T) {
 }
 
 func TestMigVersion(t *testing.T) {
-	gkeManagerMock := &GkeManagerMock{}
 	tests := []struct {
 		name                string
 		autoprovisioned     bool
 		spec                *gkeclient.NodePoolSpec
 		nodeConfig          *NodeConfig
+		targetNodeVersion   string
 		downgradableVersion string
 		clusterVersion      string
 		wantVersion         string
@@ -3256,6 +3256,22 @@ func TestMigVersion(t *testing.T) {
 				NodeVersion: "1.32.9-gke.1726000",
 			},
 			wantVersion: "1.32.9-gke.1726000",
+		},
+		{
+			name:              "autoprovisioned without node version in spec, fallback to target node version",
+			autoprovisioned:   true,
+			spec:              &gkeclient.NodePoolSpec{},
+			targetNodeVersion: "1.32.0-gke.100",
+			wantVersion:       "1.32.0-gke.100",
+		},
+		{
+			name:                "autoprovisioned without node version in spec during rollback-safe upgrade with target node version, fallback to target node version",
+			autoprovisioned:     true,
+			spec:                &gkeclient.NodePoolSpec{},
+			targetNodeVersion:   "1.30.5-gke.100",
+			downgradableVersion: "1.31.5-gke.300",
+			clusterVersion:      "1.32.0-gke.100",
+			wantVersion:         "1.30.5-gke.100",
 		},
 		{
 			name:                "autoprovisioned without node version in spec during rollback-safe upgrade, fallback to downgradable version",
@@ -3289,6 +3305,7 @@ func TestMigVersion(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			gkeManagerMock := &GkeManagerMock{}
 			mig := &GkeMig{
 				autoprovisioned: tc.autoprovisioned,
 				spec:            tc.spec,
@@ -3296,10 +3313,19 @@ func TestMigVersion(t *testing.T) {
 				gkeManager:      gkeManagerMock,
 			}
 			if tc.autoprovisioned && (tc.spec == nil || tc.spec.NodeVersion == "") {
-				gkeManagerMock.On("GetDowngradableVersion").Return(tc.downgradableVersion).Once()
+				gkeManagerMock.On("GetTargetNodeVersion").Return(tc.targetNodeVersion).Once()
+				if tc.targetNodeVersion == "" {
+					gkeManagerMock.On("GetDowngradableVersion").Return(tc.downgradableVersion).Once()
+				} else if tc.downgradableVersion != "" {
+					gkeManagerMock.On("GetDowngradableVersion").Return(tc.downgradableVersion).Maybe()
+				}
 			}
 			if tc.clusterVersion != "" {
-				gkeManagerMock.On("GetClusterVersion").Return(tc.clusterVersion).Once()
+				if tc.targetNodeVersion == "" && tc.downgradableVersion == "" {
+					gkeManagerMock.On("GetClusterVersion").Return(tc.clusterVersion).Once()
+				} else {
+					gkeManagerMock.On("GetClusterVersion").Return(tc.clusterVersion).Maybe()
+				}
 			}
 			assert.Equal(t, tc.wantVersion, mig.Version())
 			mock.AssertExpectationsForObjects(t, gkeManagerMock)

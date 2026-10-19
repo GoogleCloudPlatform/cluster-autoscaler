@@ -1529,31 +1529,66 @@ func stringifyResourceList(resourceList apiv1.ResourceList) string {
 }
 
 func TestBuildNodeFromMigSpec_NodeVersion(t *testing.T) {
-	nodeVersion := "1.32.9-gke.1726000"
-	arch := gce.DefaultArch
-	mig := &GkeMig{
-		gceRef: gce.GceRef{
-			Project: "project1",
-			Zone:    "us-central1-b",
-			Name:    "nodeautoprovisioning-323233232",
+	testCases := []struct {
+		name               string
+		specNodeVersion    string
+		osInfoNodeVersion  string
+		wantKubeletVersion string
+	}{
+		{
+			name:               "spec node version",
+			specNodeVersion:    "1.32.9-gke.1726000",
+			osInfoNodeVersion:  "",
+			wantKubeletVersion: "1.32.9-gke.1726000",
 		},
-		gkeManager:      &GkeManagerMock{},
-		minSize:         0,
-		maxSize:         10000,
-		autoprovisioned: true,
-		exist:           true,
-		spec: &gkeclient.NodePoolSpec{
-			MachineType:        "n1-standard-1",
-			NodeVersion:        nodeVersion,
-			SystemArchitecture: &arch,
+		{
+			name:               "fallback to migOsInfo node version",
+			specNodeVersion:    "",
+			osInfoNodeVersion:  "1.36.4-gke.300",
+			wantKubeletVersion: "1.36.4-gke.300",
+		},
+		{
+			name:               "spec node version takes precedence over migOsInfo",
+			specNodeVersion:    "1.35.0-gke.100",
+			osInfoNodeVersion:  "1.36.4-gke.300",
+			wantKubeletVersion: "1.35.0-gke.100",
+		},
+		{
+			name:               "unset in both spec and migOsInfo",
+			specNodeVersion:    "",
+			osInfoNodeVersion:  "",
+			wantKubeletVersion: "",
 		},
 	}
-	tb := &GkeTemplateBuilder{}
-	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), "", false)
-	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
-	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 1, 1, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
-	assert.NoError(t, err)
-	assert.Equal(t, nodeVersion, node.Status.NodeInfo.KubeletVersion)
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			arch := gce.DefaultArch
+			mig := &GkeMig{
+				gceRef: gce.GceRef{
+					Project: "project1",
+					Zone:    "us-central1-b",
+					Name:    "nodeautoprovisioning-323233232",
+				},
+				gkeManager:      &GkeManagerMock{},
+				minSize:         0,
+				maxSize:         10000,
+				autoprovisioned: true,
+				exist:           true,
+				spec: &gkeclient.NodePoolSpec{
+					MachineType:        "n1-standard-1",
+					NodeVersion:        tc.specNodeVersion,
+					SystemArchitecture: &arch,
+				},
+			}
+			tb := &GkeTemplateBuilder{}
+			gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), tc.osInfoNodeVersion, false)
+			ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 1, 1, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantKubeletVersion, node.Status.NodeInfo.KubeletVersion)
+		})
+	}
 }
 
 func TestBuildNodeFromMigSpec_ReservedResourcesConfig(t *testing.T) {

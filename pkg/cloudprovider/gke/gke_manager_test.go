@@ -7604,3 +7604,66 @@ func TestGetPulledResourcePolicy(t *testing.T) {
 	assert.Nil(t, manager.GetPulledResourcePolicy("test-project", "unknown"))
 	assert.Nil(t, manager.GetPulledResourcePolicy("test-project", ""))
 }
+
+func TestRefreshTargetNodeVersion(t *testing.T) {
+	testCases := []struct {
+		name               string
+		targetNodeVersion  string
+		experimentsManager experiments.Manager
+		want               string
+	}{
+		{
+			name:               "enabled by default",
+			targetNodeVersion:  "1.32.0-gke.100",
+			experimentsManager: experiments.NewMockManager(),
+			want:               "1.32.0-gke.100",
+		},
+		{
+			name:              "disabled via flag",
+			targetNodeVersion: "1.32.0-gke.100",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ClusterTargetNodeVersionEnableFlag: false},
+				nil,
+			),
+			want: "",
+		},
+		{
+			name:               "empty target node version",
+			targetNodeVersion:  "",
+			experimentsManager: experiments.NewMockManager(),
+			want:               "",
+		},
+		{
+			name:               "nil options tracker defaults to enabled",
+			targetNodeVersion:  "1.32.0-gke.100",
+			experimentsManager: nil,
+			want:               "1.32.0-gke.100",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := NewHttpServerMock()
+			defer server.Close()
+			gkeClient := gkeclient.NewAutoscalingGkeClientMock(
+				func() (gkeclient.Cluster, error) {
+					return gkeclient.Cluster{
+						ClusterVersion:    "1.33.0-gke.100",
+						TargetNodeVersion: tc.targetNodeVersion,
+					}, nil
+				},
+				nil,
+				nil,
+			)
+			g := newTestGkeManager(t, server.URL, napDisabled, false, false, gkeClient, false, nil)
+			if tc.experimentsManager != nil {
+				g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, tc.experimentsManager)
+			} else {
+				g.optsTracker = nil
+			}
+			assert.NoError(t, g.refreshGkeResources())
+			assert.Equal(t, tc.want, g.GetTargetNodeVersion())
+		})
+	}
+}

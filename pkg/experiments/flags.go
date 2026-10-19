@@ -399,3 +399,13 @@ const AutopilotManagedNodePoolDefaultSurgeSettingsFlag = "Autopilot::ManagedNode
 // Note: evaluated before GkeManager fetches the Cluster proto, so Giraffe rules
 // targeting release_channel won't match here.
 const StandbyModeFeature = "StandbyMode"
+
+// ClusterTargetNodeVersionEnableFlag is a separate KCP-component (kcp_prod)
+// Giraffe kill-switch that gates using Cluster.TargetNodeVersion in Cluster
+// Autoscaler. It defaults to enabled (fail-open) and is independent of Cluster
+// Server's ClusterTargetNodeVersion::Enable flag (--env=prod), so disabling
+// the server-side flag does not disable this one; both must be mitigated
+// separately.
+// TODO(b/517121197): Remove once ClusterTargetNodeVersion::Enable is
+// cleaned up.
+const ClusterTargetNodeVersionEnableFlag = "ClusterTargetNodeVersion::Enable"

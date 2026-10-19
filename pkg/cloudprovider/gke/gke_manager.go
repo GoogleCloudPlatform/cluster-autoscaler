@@ -211,6 +211,10 @@ type GkeManager interface {
 	GetClusterName() string
 	// GetClusterVersion returns the version of the GKE cluster.
 	GetClusterVersion() string
+	// GetTargetNodeVersion returns the cluster-level default node version for
+	// new node pools, or an empty string if unset or disabled by
+	// ClusterTargetNodeVersion::Enable.
+	GetTargetNodeVersion() string
 	// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
 	// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
 	GetEmulatedClusterVersion() string
@@ -505,6 +509,7 @@ type gkeManagerImpl struct {
 	defaultMaxPodsPerNode           atomic.Int64
 	dataplaneV2Enabled              atomic.Bool
 	isDefaultCCCEnabled             atomic.Bool
+	targetNodeVersion               atomic.Pointer[string]
 	downgradableVersion             atomic.Pointer[string]
 
 	gkeService                 gkeclient.AutoscalingGkeClient
@@ -1957,6 +1962,16 @@ func (m *gkeManagerImpl) GetClusterVersion() string {
 	return m.clusterVersion
 }
 
+// GetTargetNodeVersion returns the cluster-level default node version for new
+// node pools, or an empty string if unset or disabled by
+// ClusterTargetNodeVersion::Enable.
+func (m *gkeManagerImpl) GetTargetNodeVersion() string {
+	if v := m.targetNodeVersion.Load(); v != nil {
+		return *v
+	}
+	return ""
+}
+
 // GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
 // phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
 func (m *gkeManagerImpl) GetEmulatedClusterVersion() string {
@@ -2262,6 +2277,13 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 		// This is done so that options are consistent during loop execution.
 		m.optsTracker.StoreCluster(cluster)
 	}
+	var targetNodeVersion *string
+	if cluster.TargetNodeVersion != "" {
+		if em := m.ExperimentsManager(); em == nil || em.EvaluateBoolFlagOrFailsafe(experiments.ClusterTargetNodeVersionEnableFlag, true) {
+			targetNodeVersion = &cluster.TargetNodeVersion
+		}
+	}
+	m.targetNodeVersion.Store(targetNodeVersion)
 
 	return nil
 }

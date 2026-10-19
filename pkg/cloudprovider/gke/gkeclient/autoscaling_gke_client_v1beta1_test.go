@@ -3667,7 +3667,8 @@ func TestBuildLocalSSDConfigFromNodeConfig(t *testing.T) {
 	assert.NotNil(t, blockCfg.LocalNvmeSsdBlockConfig)
 	assert.Equal(t, int64(4), blockCfg.LocalNvmeSsdBlockConfig.LocalSsdCount)
 
-	// EphemeralStorageLocalSsdConfig node config (EphemeralCapacityGb is populated by NodePoolTranslator)
+	// EphemeralStorageLocalSsdConfig node config (EphemeralCapacityGb is
+	// populated by ClusterTranslator)
 	ephemeralLssdNodeConfig := &gke_api_beta.NodeConfig{
 		EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
 			LocalSsdCount: 4,

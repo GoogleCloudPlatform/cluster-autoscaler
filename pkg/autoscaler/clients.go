@@ -329,11 +329,11 @@ func MustCreateGKEAPIClient(httpClient *http.Client, userAgent, endpoint string)
 }
 
 // MustCreateGKEClient returns the gke client.
-func MustCreateGKEClient(apiClient gkeapi.Client, nodePoolTranslator gkeclient.NodePoolTranslator, projectID, location string, opts internalopts.AutoscalingOptions, observer multitenancy.ProviderConfigObserver, machineConfigProvider *machinetypes.MachineConfigProvider, experimentsManager experiments.Manager) gkeclient.AutoscalingGkeClient {
+func MustCreateGKEClient(apiClient gkeapi.Client, clusterTranslator gkeclient.ClusterTranslator, projectID, location string, opts internalopts.AutoscalingOptions, observer multitenancy.ProviderConfigObserver, machineConfigProvider *machinetypes.MachineConfigProvider, experimentsManager experiments.Manager) gkeclient.AutoscalingGkeClient {
 	var client gkeclient.AutoscalingGkeClient
 	var err error
 	if opts.MultitenancyEnabled && observer != nil {
-		mtClient, err := gkeclient.NewMultitenancyGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
+		mtClient, err := gkeclient.NewMultitenancyGkeClientV1beta1(apiClient, clusterTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
 		if err != nil {
 			klog.Fatalf("Failed to create MT GKE Client: %v", err)
 		}
@@ -342,7 +342,7 @@ func MustCreateGKEClient(apiClient gkeapi.Client, nodePoolTranslator gkeclient.N
 		}
 		client = mtClient
 	} else {
-		client, err = gkeclient.NewAutoscalingGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
+		client, err = gkeclient.NewAutoscalingGkeClientV1beta1(apiClient, clusterTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
 		if err != nil {
 			klog.Fatalf("Failed to create GKE Client: %v", err)
 		}

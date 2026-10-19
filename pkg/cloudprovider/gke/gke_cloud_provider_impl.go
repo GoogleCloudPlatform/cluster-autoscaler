@@ -1332,6 +1332,9 @@ func (mig *GkeMig) Version() string {
 		if mig.spec != nil && mig.spec.NodeVersion != "" {
 			return mig.spec.NodeVersion
 		}
+		if targetNodeVersion := mig.gkeManager.GetTargetNodeVersion(); targetNodeVersion != "" {
+			return targetNodeVersion
+		}
 		// During phase 1 of a rollback-safe upgrade, GKE creates node pools at the downgradable
 		// version instead of the new control plane version.
 		if downgradableVersion := mig.gkeManager.GetDowngradableVersion(); downgradableVersion != "" {

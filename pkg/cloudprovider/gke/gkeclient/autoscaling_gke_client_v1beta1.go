@@ -90,8 +90,8 @@ const (
 )
 
 type autoscalingGkeClientV1beta1 struct {
-	apiClient          gkeapi.Client
-	nodePoolTranslator NodePoolTranslator
+	apiClient         gkeapi.Client
+	clusterTranslator ClusterTranslator
 
 	clusterPath   string
 	nodePoolPath  string
@@ -106,18 +106,21 @@ type autoscalingGkeClientV1beta1 struct {
 	napMaxNodes int
 }
 
-// NodePoolTranslator is auxiliary interface that enables additional translation
-// between gke_api_beta.Nodepool and their internal representation.
-type NodePoolTranslator interface {
+// ClusterTranslator is an auxiliary interface that enables additional translation
+// between gke_api_beta.Cluster/gke_api_beta.NodePool and their internal representation.
+type ClusterTranslator interface {
 	FromGkeApi(*NodePool, *gke_api_beta.NodePool)
 	ToGkeApi(*gke_api_beta.NodePool, *NodePoolSpec)
+	// TODO(b/579259408): Remove ClusterFromGkeApi and populate TargetNodeVersion
+	// directly in GetCluster once Cluster.target_node_version is public.
+	ClusterFromGkeApi(*Cluster, *gke_api_beta.Cluster)
 }
 
 // NewAutoscalingGkeClientV1beta1 creates a new client for communicating with GKE v1beta1 API.
-func NewAutoscalingGkeClientV1beta1(apiClient gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, provider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*autoscalingGkeClientV1beta1, error) {
+func NewAutoscalingGkeClientV1beta1(apiClient gkeapi.Client, clusterTranslator ClusterTranslator, projectId, location, clusterName string, provider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*autoscalingGkeClientV1beta1, error) {
 	autoscalingGkeClient := &autoscalingGkeClientV1beta1{
 		apiClient:             apiClient,
-		nodePoolTranslator:    nodePoolTranslator,
+		clusterTranslator:     clusterTranslator,
 		clusterPath:           fmt.Sprintf(clusterPathPrefix, projectId, location, clusterName),
 		nodePoolPath:          fmt.Sprintf(nodePoolPathPrefix, projectId, location, clusterName),
 		operationPath:         fmt.Sprintf(operationPathPrefix, projectId, location),
@@ -280,8 +283,8 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 			AutopilotManaged:   autopilotManaged,
 			Status:             pool.Status,
 		}
-		if m.nodePoolTranslator != nil {
-			m.nodePoolTranslator.FromGkeApi(&np, pool)
+		if m.clusterTranslator != nil {
+			m.clusterTranslator.FromGkeApi(&np, pool)
 		}
 		nodePools = append(nodePools, np)
 	}
@@ -319,7 +322,7 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 		clusterSubnetworkPath = clusterResponse.NetworkConfig.Subnetwork
 	}
 
-	return Cluster{
+	cluster := Cluster{
 		Status:                           clusterResponse.Status,
 		ClusterVersion:                   clusterResponse.CurrentMasterVersion,
 		EmulatedClusterVersion:           clusterResponse.CurrentEmulatedVersion,
@@ -347,7 +350,11 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 		NetworkPath:                      clusterNetworkPath,
 		SubnetworkPath:                   clusterSubnetworkPath,
 		Subnetwork:                       clusterResponse.Subnetwork,
-	}, nil
+	}
+	if m.clusterTranslator != nil {
+		m.clusterTranslator.ClusterFromGkeApi(&cluster, clusterResponse)
+	}
+	return cluster, nil
 }
 
 func placementGroup(pool *container.NodePool) placement.Spec {
@@ -979,8 +986,8 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 
 	selfservice.UpdateNodepool(pool, spec.SelfServiceMetadata)
 
-	if m.nodePoolTranslator != nil {
-		m.nodePoolTranslator.ToGkeApi(pool, spec)
+	if m.clusterTranslator != nil {
+		m.clusterTranslator.ToGkeApi(pool, spec)
 	}
 
 	// Overriding node pool disk encryption key after applying cluster defaults

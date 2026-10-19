@@ -42,8 +42,8 @@ type multitenancyGkeClientV1beta1 struct {
 
 var _ MultitenancyGKEClient = &multitenancyGkeClientV1beta1{}
 
-func NewMultitenancyGkeClientV1beta1(client gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, machineConfigProvider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*multitenancyGkeClientV1beta1, error) {
-	autoscalingGkeClient, err := NewAutoscalingGkeClientV1beta1(client, nodePoolTranslator, projectId, location, clusterName, machineConfigProvider, napMaxNodes, experimentsManager)
+func NewMultitenancyGkeClientV1beta1(client gkeapi.Client, clusterTranslator ClusterTranslator, projectId, location, clusterName string, machineConfigProvider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*multitenancyGkeClientV1beta1, error) {
+	autoscalingGkeClient, err := NewAutoscalingGkeClientV1beta1(client, clusterTranslator, projectId, location, clusterName, machineConfigProvider, napMaxNodes, experimentsManager)
 	if err != nil {
 		return nil, err
 	}
