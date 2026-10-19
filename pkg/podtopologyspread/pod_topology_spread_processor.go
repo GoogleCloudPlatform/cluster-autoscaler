@@ -28,7 +28,6 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -51,21 +50,28 @@ type namespacedLabelKeyValue struct {
 	value     string
 }
 
+// unhelpablePodTracker reports whether a pod is currently considered unhelpable by CA.
+type unhelpablePodTracker interface {
+	IsPodUnhelpable(pod *apiv1.Pod) bool
+}
+
 // Processor is a PodListProcessor that enforces pod topology spread constraints for ComputeClass.
 type Processor struct {
 	simulator         *scheduling.HintingSimulator
 	domainDiscoveries []PTSDomainDiscovery
 	clock             clock.PassiveClock
 	backoffs          map[types.UID]time.Time
+	unhelpableTracker unhelpablePodTracker
 }
 
 // NewPodTopologySpreadProcessor return an instance of PodTopologySpreadProcessor
-func NewPodTopologySpreadProcessor(domainDiscoveries []PTSDomainDiscovery) *Processor {
+func NewPodTopologySpreadProcessor(domainDiscoveries []PTSDomainDiscovery, unhelpableTracker unhelpablePodTracker) *Processor {
 	return &Processor{
 		simulator:         scheduling.NewHintingSimulator(),
 		domainDiscoveries: domainDiscoveries,
 		clock:             clock.RealClock{},
 		backoffs:          make(map[types.UID]time.Time),
+		unhelpableTracker: unhelpableTracker,
 	}
 }
 
@@ -224,7 +230,7 @@ func (p *Processor) updateBackoffs(unschedulablePods []*apiv1.Pod) {
 			targetUID = controllerRef.UID
 		}
 
-		if annotator.IsUnhelpablePod(pod) {
+		if p.unhelpableTracker != nil && p.unhelpableTracker.IsPodUnhelpable(pod) {
 			hasUnhelpable[targetUID] = true
 		}
 

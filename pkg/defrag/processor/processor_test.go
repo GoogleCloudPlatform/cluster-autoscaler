@@ -3457,7 +3457,7 @@ func TestCleanPickedCandidate(t *testing.T) {
 			})
 			processor.pickedCandidateInfo = &candidateInfo{}
 			maxLoopsBeforeAdmission := 5
-			sharedFairnessManager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission)
+			sharedFairnessManager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission, nil)
 			processor.fairnessEnforcer = sharedFairnessManager.CreateEnforcer(DefragProcessorName)
 			processor.fairnessEnforcer.Admit(nil) // sets previously admitted.
 

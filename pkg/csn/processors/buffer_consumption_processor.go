@@ -28,7 +28,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/logging"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/util/taints"
@@ -54,6 +53,11 @@ type csnMetrics interface {
 	UpdateCSNConsideredPods(counts map[internalmetrics.CSNConsideredPodsKey]int)
 }
 
+// unhelpablePodTracker reports whether a pod is currently considered unhelpable by CA.
+type unhelpablePodTracker interface {
+	IsPodUnhelpable(pod *apiv1.Pod) bool
+}
+
 // BufferConsumptionProcessor is a processor that consumes CSN nodes to schedule pods (and filter out scheduled pods). go/csn-in-ca
 type BufferConsumptionProcessor struct {
 	nodeController     csnNodeController
@@ -61,16 +65,22 @@ type BufferConsumptionProcessor struct {
 	experimentsManager experiments.Manager
 	metrics            csnMetrics
 	clock              clock.PassiveClock
+	unhelpableTracker  unhelpablePodTracker
 }
 
-func NewBufferConsumptionProcessor(nodeController csnNodeController, experimentsManager experiments.Manager) *BufferConsumptionProcessor {
+func NewBufferConsumptionProcessor(nodeController csnNodeController, experimentsManager experiments.Manager, unhelpableTracker unhelpablePodTracker) *BufferConsumptionProcessor {
 	return &BufferConsumptionProcessor{
 		nodeController:     nodeController,
 		simulator:          scheduling.NewHintingSimulator(),
 		experimentsManager: experimentsManager,
 		metrics:            internalmetrics.Metrics,
 		clock:              clock.RealClock{},
+		unhelpableTracker:  unhelpableTracker,
 	}
+}
+
+func (p *BufferConsumptionProcessor) isUnhelpablePod(pod *apiv1.Pod) bool {
+	return p.unhelpableTracker != nil && p.unhelpableTracker.IsPodUnhelpable(pod)
 }
 
 func (p *BufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
@@ -86,7 +96,7 @@ func (p *BufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx
 	// - If the CSN node is chilling, there is a chance that it might help the pod if the node is created after the pod is marked unhelpable.
 	//   But if this is true, then NAP is likely able to create a nodepool for it before it is unhelpable.
 	//   In the rare case this isn't true, scheduler will schedule it on the CSN node anyway blocking suspension.
-	helpablePods := slices.DeleteFunc(slices.Clone(unschedulablePods), annotator.IsUnhelpablePod)
+	helpablePods := slices.DeleteFunc(slices.Clone(unschedulablePods), p.isUnhelpablePod)
 
 	if unhelpablePodsNum := len(unschedulablePods) - len(helpablePods); unhelpablePodsNum > 0 {
 		klog.Infof("%s filtered out %d unhelpablePods", bufferConsumptionLogPrefix, unhelpablePodsNum)
@@ -261,7 +271,7 @@ func (p *BufferConsumptionProcessor) emitConsideredPodsMetrics(unschedulablePods
 	for _, pod := range unschedulablePods {
 		isOld := isPodTooOld(pod, now, threshold)
 		var status internalmetrics.CSNPodStatus
-		if annotator.IsUnhelpablePod(pod) {
+		if p.isUnhelpablePod(pod) {
 			status = internalmetrics.CSNPodUnhelpable
 		} else if nodesOfScheduledPods[pod] != "" {
 			status = internalmetrics.CSNPodScheduled

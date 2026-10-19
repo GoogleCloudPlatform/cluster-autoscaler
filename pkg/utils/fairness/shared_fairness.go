@@ -40,13 +40,15 @@ type sharedEnforcerManager struct {
 	lastAdmittedLoop int
 	// maximum number of loops to wait before admitting a processor
 	maxLoopsBeforeAdmission int
+	unhelpableTracker       unhelpablePodTracker
 }
 
-func NewSharedEnforcerManager(maxLoopsBeforeAdmission int) *sharedEnforcerManager {
+func NewSharedEnforcerManager(maxLoopsBeforeAdmission int, unhelpableTracker unhelpablePodTracker) *sharedEnforcerManager {
 	return &sharedEnforcerManager{
 		processors:              make(map[string]*sharedEnforcer),
 		lastAdmittedLoop:        0,
 		maxLoopsBeforeAdmission: maxLoopsBeforeAdmission,
+		unhelpableTracker:       unhelpableTracker,
 	}
 }
 
@@ -111,7 +113,7 @@ func (m *sharedEnforcerManager) admitInternal(unschedulablePods []*apiv1.Pod) bo
 		return true
 	}
 	loopsBetweenAdmissions := m.maxLoopsBeforeAdmission
-	if allUnhelpable(unschedulablePods) {
+	if allUnhelpable(unschedulablePods, m.unhelpableTracker) {
 		loopsBetweenAdmissions /= 2
 	}
 	return m.currentLoop-m.lastAdmittedLoop >= loopsBetweenAdmissions

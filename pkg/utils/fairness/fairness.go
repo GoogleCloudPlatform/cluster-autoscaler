@@ -18,7 +18,6 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 )
@@ -27,25 +26,32 @@ type FairnessEnforcer interface {
 	Admit(unschedulablePods []*apiv1.Pod) bool
 }
 
+// unhelpablePodTracker reports whether a pod is currently considered unhelpable by CA.
+type unhelpablePodTracker interface {
+	IsPodUnhelpable(pod *apiv1.Pod) bool
+}
+
 type enforcer struct {
 	processorName      string
 	previouslyAdmitted bool
 	lastAdmitted       time.Time
 	maxDelay           time.Duration
 	clock              clock.PassiveClock
+	unhelpableTracker  unhelpablePodTracker
 }
 
 // NewFairnessEnforcer creates a standalone fairness tracker for a single processor.
-func NewFairnessEnforcer(processorName string, maxDelay time.Duration) FairnessEnforcer {
-	return newEnforcerWithClock(processorName, maxDelay, clock.RealClock{})
+func NewFairnessEnforcer(processorName string, maxDelay time.Duration, unhelpableTracker unhelpablePodTracker) FairnessEnforcer {
+	return newEnforcerWithClock(processorName, maxDelay, clock.RealClock{}, unhelpableTracker)
 }
 
-func newEnforcerWithClock(processorName string, maxDelay time.Duration, c clock.PassiveClock) *enforcer {
+func newEnforcerWithClock(processorName string, maxDelay time.Duration, c clock.PassiveClock, unhelpableTracker unhelpablePodTracker) *enforcer {
 	return &enforcer{
-		processorName: processorName,
-		maxDelay:      maxDelay,
-		clock:         c,
-		lastAdmitted:  c.Now(),
+		processorName:     processorName,
+		maxDelay:          maxDelay,
+		clock:             c,
+		lastAdmitted:      c.Now(),
+		unhelpableTracker: unhelpableTracker,
 	}
 }
 
@@ -66,19 +72,19 @@ func (f *enforcer) admitInternal(unschedulablePods []*apiv1.Pod) bool {
 	if f.previouslyAdmitted {
 		return false
 	}
-	if allUnhelpable(unschedulablePods) {
+	if allUnhelpable(unschedulablePods, f.unhelpableTracker) {
 		return true
 	}
 	return f.clock.Since(f.lastAdmitted) > f.maxDelay
 }
 
-func isUnhelpable(p *apiv1.Pod) bool {
-	return p.Annotations != nil && p.Annotations[annotator.UnhelpableUntilAnnotation] == annotator.UnhelpableForever
+func isUnhelpable(p *apiv1.Pod, unhelpableTracker unhelpablePodTracker) bool {
+	return unhelpableTracker != nil && unhelpableTracker.IsPodUnhelpable(p)
 }
 
-func allUnhelpable(ps []*apiv1.Pod) bool {
+func allUnhelpable(ps []*apiv1.Pod, unhelpableTracker unhelpablePodTracker) bool {
 	for _, p := range ps {
-		if !isUnhelpable(p) {
+		if !isUnhelpable(p, unhelpableTracker) {
 			return false
 		}
 	}

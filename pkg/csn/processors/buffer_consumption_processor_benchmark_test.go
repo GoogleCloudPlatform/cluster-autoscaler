@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/unhelpable"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -149,7 +150,7 @@ func BenchmarkBufferConsumptionProcessor(b *testing.B) {
 					},
 				}
 
-				processor := NewBufferConsumptionProcessor(mockController, experiments.NewMockManager())
+				processor := NewBufferConsumptionProcessor(mockController, experiments.NewMockManager(), unhelpable.NewUnhelpablePodTracker())
 				processor.metrics = &mockCSNMetrics{}
 				pods := slices.Clone(templatePods)
 

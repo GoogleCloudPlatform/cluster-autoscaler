@@ -31,7 +31,6 @@ import (
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	autoscalingcontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
@@ -54,12 +53,20 @@ func (m *mockCSNMetrics) UpdateCSNConsideredPods(counts map[internalmetrics.CSNC
 	m.consideredPods = counts
 }
 
+const testUnhelpableAnnotation = "test-unhelpable"
+
+type fakeUnhelpableTracker struct{}
+
+func (fakeUnhelpableTracker) IsPodUnhelpable(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[testUnhelpableAnnotation] == "true"
+}
+
 func withUnhelpableAnnotation() func(*apiv1.Pod) {
 	return func(pod *apiv1.Pod) {
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		pod.Annotations[annotator.UnhelpableUntilAnnotation] = annotator.UnhelpableForever
+		pod.Annotations[testUnhelpableAnnotation] = "true"
 	}
 }
 
@@ -722,7 +729,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 				experimentsManager = experiments.NewMockManager()
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
+			processor := NewBufferConsumptionProcessor(mockController, experimentsManager, fakeUnhelpableTracker{})
 			processor.metrics = mockMetrics
 
 			remainingPods, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
@@ -830,7 +837,7 @@ func TestBufferConsumptionProcess_ConsideredPodsMetric(t *testing.T) {
 				experimentsManager = experiments.NewMockManager()
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
+			processor := NewBufferConsumptionProcessor(mockController, experimentsManager, fakeUnhelpableTracker{})
 			processor.metrics = mockMetrics
 
 			_, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
@@ -951,7 +958,7 @@ func TestPodAgeFallbackThreshold(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := NewBufferConsumptionProcessor(nil, tc.em)
+			p := NewBufferConsumptionProcessor(nil, tc.em, nil)
 			assert.Equal(t, tc.expected, p.podAgeFallbackThreshold())
 		})
 	}
