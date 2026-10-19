@@ -22,6 +22,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 
@@ -218,6 +219,105 @@ func TestProcessorE2E(t *testing.T) {
 			assert.ElementsMatch(t, tc.wantNodegroups, gotNodeGroups)
 		})
 	}
+}
+
+func TestProcess_FittingNodeGroupNotFilteredOutByTopologySpread(t *testing.T) {
+	noOpProcessor := &nodegroups.NoOpNodeGroupListProcessor{}
+	sohwNodeGroupListProcessor := NewNodeGroupListProcessor(noOpProcessor)
+	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
+
+	sohwExtraResources := map[string]resource.Quantity{
+		gkelabels.PodCapacityLabel: *resource.NewQuantity(1, resource.DecimalSI),
+	}
+	zoneALabels := map[string]string{
+		gkelabels.PodPerVMSizeLabel: "2",
+		gkelabels.PodCapacityLabel:  "1",
+		apiv1.LabelTopologyZone:     "zone-a",
+	}
+	zoneBLabels := map[string]string{
+		gkelabels.PodPerVMSizeLabel: "2",
+		gkelabels.PodCapacityLabel:  "1",
+		apiv1.LabelTopologyZone:     "zone-b",
+	}
+
+	nodeInfos := map[string]*framework.NodeInfo{}
+	// sohwZoneBSmall is in zone-b with only 4000m CPU, so pending-sohw-pod (8500m CPU)
+	// cannot fit on it due to insufficient CPU.
+	sohwZoneBSmall := buildMig("sohw-zone-b-small", "c3-standard-4", 4000, 16000, zoneBLabels, sohwExtraResources)
+	nodeInfos[sohwZoneBSmall.Id()], _ = sohwZoneBSmall.TemplateNodeInfo(context.TODO())
+	// sohwZoneALarge is in zone-a with 22000m CPU, which is large enough to fit pending-sohw-pod.
+	sohwZoneALarge := buildMig("sohw-zone-a-large", "c3-standard-22", 22000, 64000, zoneALabels, sohwExtraResources)
+	nodeInfos[sohwZoneALarge.Id()], _ = sohwZoneALarge.TemplateNodeInfo(context.TODO())
+
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineTypes("c3-standard-4", "c3-standard-22").
+		WithMachineTemplates(nodeInfos).
+		Build()
+
+	// The cluster currently has one node in zone-a running one matching pod (app=sohw),
+	// and zero nodes in zone-b.
+	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	existingNode := test.BuildTestNode("existing-zone-a", 22000, 64000)
+	existingNode.Labels = map[string]string{apiv1.LabelTopologyZone: "zone-a"}
+	existingPod := test.BuildTestPod("existing-sohw-pod", 8500, 10000)
+	existingPod.Labels = map[string]string{"app": "sohw"}
+	existingPod.Spec.NodeName = existingNode.Name
+	assert.NoError(t, snapshot.AddNodeInfo(framework.NewTestNodeInfo(existingNode, existingPod)))
+
+	// pending-sohw-pod requires 8500m CPU and has a DoNotSchedule TopologySpreadConstraint
+	// with MaxSkew=1 across zones.
+	// - When only zone-a nodes exist in ClusterSnapshot, scheduling pending-sohw-pod on
+	//   sohwZoneALarge (zone-a) satisfies PodTopologySpread (zone-a is the only zone domain).
+	// - However, if sohwZoneBSmall's template node (in zone-b, with 0 matching pods) is left
+	//   in ClusterSnapshot after failing the CPU check, zone-b becomes a second topology domain
+	//   with 0 matching pods. Scheduling pending-sohw-pod in zone-a would then result in
+	//   2 pods in zone-a vs 0 pods in zone-b (skew = 2 > MaxSkew = 1), causing PodTopologySpread
+	//   to reject sohwZoneALarge and filtering it out completely.
+	unschedulablePod := test.BuildTestPod("pending-sohw-pod", 8500, 10000)
+	unschedulablePod.Labels = map[string]string{"app": "sohw"}
+	unschedulablePod.Spec.Containers[0].Resources.Requests[gkelabels.PodCapacityLabel] = *resource.NewQuantity(1, resource.DecimalSI)
+	unschedulablePod.Spec.TopologySpreadConstraints = []apiv1.TopologySpreadConstraint{
+		{
+			MaxSkew:           1,
+			TopologyKey:       apiv1.LabelTopologyZone,
+			WhenUnsatisfiable: apiv1.DoNotSchedule,
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "sohw"},
+			},
+		},
+	}
+
+	autoscalingCtx := &ca_context.AutoscalingContext{
+		CloudProvider:        provider,
+		ProcessorCallbacks:   callbacks.NewTestProcessorCallbacks(),
+		ClusterSnapshot:      snapshot,
+		DebuggingSnapshotter: debuggingSnapshotter,
+	}
+
+	// 1. Baseline: when sohwZoneALarge is evaluated without an earlier zone-b candidate,
+	// it passes PodTopologySpread and is returned as a fitting Slice-of-Hardware node group.
+	gotAlone, _, err := sohwNodeGroupListProcessor.Process(
+		context.TODO(),
+		autoscalingCtx,
+		[]cloudprovider.NodeGroup{sohwZoneALarge},
+		nodeInfos,
+		[]*apiv1.Pod{unschedulablePod},
+	)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []cloudprovider.NodeGroup{sohwZoneALarge}, gotAlone)
+
+	// 2. Bug reproduction: when undersized sohwZoneBSmall (zone-b) is evaluated before
+	// fitting sohwZoneALarge (zone-a), sohwZoneBSmall's template node must not remain in
+	// ClusterSnapshot and cause sohwZoneALarge to fail PodTopologySpread and be filtered out.
+	gotAfterZoneBCandidate, _, err := sohwNodeGroupListProcessor.Process(
+		context.TODO(),
+		autoscalingCtx,
+		[]cloudprovider.NodeGroup{sohwZoneBSmall, sohwZoneALarge},
+		nodeInfos,
+		[]*apiv1.Pod{unschedulablePod},
+	)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []cloudprovider.NodeGroup{sohwZoneALarge}, gotAfterZoneBCandidate)
 }
 
 func buildMig(nodePoolName, machineType string, mCpu int64, mem int64, labels map[string]string, extraResources map[string]resource.Quantity) *gke.GkeMig {
