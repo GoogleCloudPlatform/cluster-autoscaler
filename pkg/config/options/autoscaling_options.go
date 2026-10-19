@@ -119,6 +119,7 @@ type InternalOptions struct {
 	ClusterHash                                  string
 	EnableKwokGceReconciler                      bool
 	KwokGceReconcilerInterval                    time.Duration
+	KwokGceReconcilerWorkers                     int
 	EkvmsMinVmSize                               apiv1.ResourceList
 	EkvmsIncrementStep                           apiv1.ResourceList
 	EkvmsAllocationSafetyBuffer                  apiv1.ResourceList

@@ -181,6 +181,7 @@ var (
 
 	enableKwokGceReconciler   = flag.Bool("enable-testonly-kwok-gce-reconciler", false, "Enable goroutine to reconcile GCE instances and K8s Nodes for KWOK integration.")
 	kwokGceReconcilerInterval = flag.Duration("testonly-kwok-gce-reconciler-interval", 10*time.Second, "Interval between KWOK GCE reconciler runs.")
+	kwokGceReconcilerWorkers  = flag.Int("testonly-kwok-gce-reconciler-workers", 16, "Number of Nodes the KWOK GCE reconciler creates in parallel.")
 )
 
 // ComponentVersion returns cluster autoscaler component version.
@@ -398,6 +399,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ParentProduct:                                *parentProduct,
 		EnableKwokGceReconciler:                      *enableKwokGceReconciler,
 		KwokGceReconcilerInterval:                    *kwokGceReconcilerInterval,
+		KwokGceReconcilerWorkers:                     *kwokGceReconcilerWorkers,
 		EkvmsMinVmSize:                               ekMinVmSize,
 		EkvmsIncrementStep:                           ekIncrementStep,
 		EkvmsAllocationSafetyBuffer:                  safetyBuffer,

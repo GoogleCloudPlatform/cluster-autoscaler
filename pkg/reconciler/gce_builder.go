@@ -89,12 +89,16 @@ type testInstanceOptions struct {
 	MigName     string
 	TemplateURL string
 	KubeEnv     string
+	ClusterName string
 }
 
 func buildTestInstance(opts testInstanceOptions) *gce_api.Instance {
 	inst := &gce_api.Instance{
 		Name:   opts.Name,
 		Status: opts.Status,
+	}
+	if opts.ClusterName != "" {
+		inst.Labels = map[string]string{clusterNameLabel: opts.ClusterName}
 	}
 	if opts.Zone != "" && opts.Project != "" {
 		inst.Zone = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s", opts.Project, opts.Zone)

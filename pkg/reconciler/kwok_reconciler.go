@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"sync"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -29,6 +30,9 @@ import (
 	gke_util "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 )
 
+// clusterNameLabel is the GCE instance label GKE sets to the owning cluster's name.
+const clusterNameLabel = "goog-k8s-cluster-name"
+
 // KwokGceReconciler reconciles GCE instances with K8s Nodes.
 type KwokGceReconciler struct {
 	kubeClient  client.Client
@@ -39,9 +43,11 @@ type KwokGceReconciler struct {
 	clusterName string
 	location    string
 	interval    time.Duration
+	workers     int
 }
 
-// NewKwokGceReconciler creates a new KwokGceReconciler instance.
+// NewKwokGceReconciler creates a new KwokGceReconciler instance. workers is the number of Nodes
+// created in parallel per reconcile loop; values below 1 mean 1.
 func NewKwokGceReconciler(
 	kubeClient client.Client,
 	gceClient gce.AutoscalingGceClient,
@@ -50,6 +56,7 @@ func NewKwokGceReconciler(
 	clusterName string,
 	location string,
 	interval time.Duration,
+	workers int,
 ) *KwokGceReconciler {
 	return &KwokGceReconciler{
 		kubeClient:  kubeClient,
@@ -60,6 +67,7 @@ func NewKwokGceReconciler(
 		clusterName: clusterName,
 		location:    location,
 		interval:    interval,
+		workers:     max(workers, 1),
 	}
 }
 
@@ -94,7 +102,7 @@ func (r *KwokGceReconciler) Reconcile(ctx context.Context) {
 	}
 
 	gceInstances := make(map[string]*gce_api.Instance)
-	filter := fmt.Sprintf("labels.goog-k8s-cluster-name=%s", r.clusterName)
+	filter := fmt.Sprintf("labels.%s=%s", clusterNameLabel, r.clusterName)
 	for _, zone := range zones {
 		// TODO: b/543357957 - For large scalability tests we should have some caching here
 		instances, err := r.fetchRawInstances(ctx, zone, filter)
@@ -103,6 +111,13 @@ func (r *KwokGceReconciler) Reconcile(ctx context.Context) {
 			continue
 		}
 		for _, inst := range instances {
+			// Re-check the label client-side: not every GCE endpoint (e.g. Fake GCE)
+			// honors the server-side filter, and registering instances of other
+			// clusters would add foreign Nodes to this cluster.
+			// TODO: b/565726126 - Remove once Fake GCE supports resource filtering.
+			if inst.Labels[clusterNameLabel] != r.clusterName {
+				continue
+			}
 			gceInstances[inst.Name] = inst
 		}
 	}
@@ -118,6 +133,8 @@ func (r *KwokGceReconciler) Reconcile(ctx context.Context) {
 		k8sNodes[node.Name] = node
 	}
 
+	sem := make(chan struct{}, r.workers)
+	var wg sync.WaitGroup
 	for name, inst := range gceInstances {
 		// Skip deleted or deleting instances
 		if inst.Status == "STOPPING" || inst.Status == "TERMINATED" {
@@ -125,18 +142,27 @@ func (r *KwokGceReconciler) Reconcile(ctx context.Context) {
 		}
 
 		if _, exists := k8sNodes[name]; !exists {
-			zone := path.Base(inst.Zone)
-			klog.Infof("[KwokReconciler] Creating K8s node for GCE instance %s in zone %s", name, zone)
-			node, err := r.nodeMapper.mapInstanceToNode(ctx, inst, zone)
-			if err != nil {
-				klog.Errorf("[KwokReconciler] Failed to construct Node object for %s: %v", name, err)
-				continue
-			}
-			if err := r.kubeClient.Create(ctx, node); err != nil {
-				klog.Errorf("[KwokReconciler] Failed to create K8s node %s: %v", name, err)
-			}
+			name := name
+			inst := inst
+			wg.Add(1)
+			sem <- struct{}{}
+			go func() {
+				defer wg.Done()
+				defer func() { <-sem }()
+				zone := path.Base(inst.Zone)
+				klog.Infof("[KwokReconciler] Creating K8s node for GCE instance %s in zone %s", name, zone)
+				node, err := r.nodeMapper.mapInstanceToNode(ctx, inst, zone)
+				if err != nil {
+					klog.Errorf("[KwokReconciler] Failed to construct Node object for %s: %v", name, err)
+					return
+				}
+				if err := r.kubeClient.Create(ctx, node); err != nil {
+					klog.Errorf("[KwokReconciler] Failed to create K8s node %s: %v", name, err)
+				}
+			}()
 		}
 	}
+	wg.Wait()
 }
 
 func (r *KwokGceReconciler) fetchRawInstances(ctx context.Context, zone, filter string) ([]*gce_api.Instance, error) {
