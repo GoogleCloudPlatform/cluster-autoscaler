@@ -2431,6 +2431,7 @@ func BuildGKE(ctx context.Context, config Config) (*gkeCloudProviderImpl, error)
 		DisableWIImagePullForRiptide:      opts.DisableWIImagePullForRiptide,
 		bulkGceMigInstancesListingEnabled: opts.GCEOptions.BulkMigInstancesListingEnabled,
 		allowlistedSystemLabelsMatcher:    allowlistedSystemLabelsMatcher,
+		cccAllowedSystemLabels:            sets.New(opts.CccAllowedSystemLabels...),
 		cpMaxParallelOps:                  opts.CpMaxParallelOps,
 		cpMaxQueuedOps:                    opts.CpMaxQueuedOps,
 		asyncNodePoolsEnabled:             opts.AsyncNodeGroupsEnabled,

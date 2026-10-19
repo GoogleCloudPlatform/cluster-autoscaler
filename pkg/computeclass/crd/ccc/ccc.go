@@ -807,11 +807,18 @@ func (ccc *cccCrd) UserDefinedLabels() map[string]string {
 	}
 	labels := make(map[string]string)
 	for k, v := range ccc.Spec.NodePoolConfig.NodeLabels {
-		if !gkelabels.IsSystemLabel(k) {
+		if !gkelabels.IsSystemLabel(k) || ccc.isAllowedSystemLabel(k) {
 			labels[k] = v
 		}
 	}
 	return labels
+}
+
+func (ccc *cccCrd) isAllowedSystemLabel(key string) bool {
+	if ccc.optionsTracker == nil {
+		return false
+	}
+	return slices.Contains(ccc.optionsTracker.Options().CccAllowedSystemLabels, key)
 }
 
 // UserDefinedTaints returns taints which are defined by the user in the CCC spec.nodePoolConfig.taints.

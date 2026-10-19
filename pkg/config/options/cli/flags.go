@@ -149,6 +149,7 @@ var (
 	computeClassConfigDriftReporting     = flag.Bool("compute-class-config-drift-reporting", false, "Whether to report the progress of migrating nodes that no longer match their Compute Class configuration in the Compute Class status. Requires --enhanced-crd-status-reporting and --defrag-enabled; the status is additionally gated per cluster by the ComputeClassConfigDriftStatus::Enabled experiment.")
 	enableComputeClassScaleDownStatus    = flag.Bool("enable-compute-class-scale-down-status", false, "Enables reporting of the per-priority consolidation (scale-down) status on the ComputeClass CRD. Requires --enhanced-crd-status-reporting.")
 	scaleDownBlockingNodeLabels          = flag.String("scale-down-blocking-node-labels", "", "Comma-separated list of node label keys that block scale-down. A node carrying any of these labels with a non-empty value is kept out of scale-down (and, for atomic node groups, keeps its whole cube). Empty (the default) disables the feature entirely. Set to cloud.google.com/gke-tpu-slice to protect TPU dynamic-slicing Slices, see go/ca-dynamic-slicing-early-scoping.")
+	cccAllowedSystemLabels               = flag.String("ccc-allowed-system-labels", "", "Comma-separated list of system label keys allowed in ComputeClass nodeLabels.")
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
 	filterMigsByClusterNameEnabled       = flag.Bool("enable-filter-migs-by-cluster-name", true, "Whether GKE MIGs are filtered by cluster name on the GCE server-side is enabled.")
@@ -282,37 +283,10 @@ func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) i
 		klog.Fatalf("Failed to parse compact placement flag: %v", err)
 	}
 
-	gpMachineFamilies := *generalPurposeMachineFamilies
-	var parsedGpMachineFamilies []string
-	if gpMachineFamilies != "" {
-		for _, f := range strings.Split(gpMachineFamilies, ",") {
-			trimmed := strings.TrimSpace(f)
-			if trimmed != "" {
-				parsedGpMachineFamilies = append(parsedGpMachineFamilies, trimmed)
-			}
-		}
-	}
-
-	var parsedScaleDownBlockingNodeLabels []string
-	if *scaleDownBlockingNodeLabels != "" {
-		for _, l := range strings.Split(*scaleDownBlockingNodeLabels, ",") {
-			trimmed := strings.TrimSpace(l)
-			if trimmed != "" {
-				parsedScaleDownBlockingNodeLabels = append(parsedScaleDownBlockingNodeLabels, trimmed)
-			}
-		}
-	}
-
-	autoscalerNameStr := *autoscalerNames
-	var parsedAutoscalerNames []string
-	if autoscalerNameStr != "" {
-		for _, name := range strings.Split(autoscalerNameStr, ",") {
-			trimmed := strings.TrimSpace(name)
-			if trimmed != "" {
-				parsedAutoscalerNames = append(parsedAutoscalerNames, trimmed)
-			}
-		}
-	}
+	parsedGpMachineFamilies := parseCommaSeparatedList(*generalPurposeMachineFamilies)
+	parsedScaleDownBlockingNodeLabels := parseCommaSeparatedList(*scaleDownBlockingNodeLabels)
+	parsedAutoscalerNames := parseCommaSeparatedList(*autoscalerNames)
+	parsedCccAllowedSystemLabels := parseCommaSeparatedList(*cccAllowedSystemLabels)
 
 	switch options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy) {
 	// Empty string allowed because the flag is optional (in which case defaults are derived from experiment flag ClusterDefaultAllocationStrategyFlag).
@@ -431,6 +405,7 @@ func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) i
 		ComputeClassConfigDriftReporting:             *computeClassConfigDriftReporting,
 		EnableComputeClassScaleDownStatus:            *enableComputeClassScaleDownStatus,
 		ScaleDownBlockingNodeLabels:                  parsedScaleDownBlockingNodeLabels,
+		CccAllowedSystemLabels:                       parsedCccAllowedSystemLabels,
 		NapMaxNodes:                                  *napMaxNodes,
 		NodeWatchLabelSelector:                       *nodeWatchLabelSelector,
 		NodeWatchFieldSelector:                       *nodeWatchFieldSelector,
@@ -442,4 +417,17 @@ func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) i
 		FilterMigsByClusterNameEnabled:               *filterMigsByClusterNameEnabled,
 		FlagOverrideResult:                           flagOverrideResult,
 	}
+}
+
+func parseCommaSeparatedList(val string) []string {
+	var parsed []string
+	if val != "" {
+		for _, item := range strings.Split(val, ",") {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				parsed = append(parsed, trimmed)
+			}
+		}
+	}
+	return parsed
 }

@@ -4064,6 +4064,7 @@ func TestNodeLabelsFiltering(t *testing.T) {
 		input                          map[string]string
 		expected                       map[string]string
 		allowlistedSystemLabelsMatcher *gkelabels.Matcher
+		cccAllowedSystemLabels         sets.Set[string]
 		bootDiskConfigEnabled          bool
 	}{
 		{
@@ -4176,11 +4177,25 @@ func TestNodeLabelsFiltering(t *testing.T) {
 			input:    map[string]string{gkelabels.ProvisioningRequestLabelKey: "rr0"},
 			expected: map[string]string{gkelabels.ProvisioningRequestLabelKey: "rr0"},
 		},
+		{
+			desc:                   "CCC allowed system label is not filtered out when configured",
+			input:                  map[string]string{"f": "1", "cloud.google.com/gke-upgrade-excluded": "true"},
+			expected:               map[string]string{"f": "1", "cloud.google.com/gke-upgrade-excluded": "true"},
+			cccAllowedSystemLabels: sets.New("cloud.google.com/gke-upgrade-excluded"),
+		},
+		{
+			desc:     "CCC allowed system label is filtered out when not configured",
+			input:    map[string]string{"f": "1", "cloud.google.com/gke-upgrade-excluded": "true"},
+			expected: map[string]string{"f": "1"},
+		},
 	}
 
 	for _, tc := range tcs {
 		t.Run(tc.desc, func(t *testing.T) {
-			gotGkeLabels := filterOutExternalSystemLabels(tc.input, tc.allowlistedSystemLabelsMatcher, GkeManagerOptions{bootDiskConfigEnabled: tc.bootDiskConfigEnabled})
+			gotGkeLabels := filterOutExternalSystemLabels(tc.input, tc.allowlistedSystemLabelsMatcher, GkeManagerOptions{
+				bootDiskConfigEnabled:  tc.bootDiskConfigEnabled,
+				cccAllowedSystemLabels: tc.cccAllowedSystemLabels,
+			})
 			assert.Equal(t, tc.expected, gotGkeLabels)
 		})
 	}

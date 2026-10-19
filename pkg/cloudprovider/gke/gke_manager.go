@@ -571,6 +571,7 @@ type GkeManagerOptions struct {
 	napDefaultMachineTypeFamily       string
 	bulkGceMigInstancesListingEnabled bool
 	allowlistedSystemLabelsMatcher    *gkelabels.Matcher
+	cccAllowedSystemLabels            sets.Set[string]
 	cpMaxParallelOps                  int
 	cpMaxQueuedOps                    int
 	asyncNodePoolsEnabled             bool
@@ -2762,6 +2763,7 @@ func filterOutExternalSystemLabels(labels map[string]string, matcher *gkelabels.
 	for k, v := range labels {
 		if !gkelabels.IsSystemLabel(k) ||
 			gkelabels.IsAddedByClusterAutoscaler(k, options.bootDiskConfigEnabled) ||
+			options.cccAllowedSystemLabels.Has(k) ||
 			matcher.Match(k) {
 			result[k] = v
 		}
