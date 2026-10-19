@@ -25,6 +25,8 @@ import (
 	google_api_container "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
@@ -358,4 +360,115 @@ func TestCCCRejectedErrors(t *testing.T) {
 			assert.Empty(t, updatedPod.Spec.NodeName, "Expected pod to remain unscheduled")
 		})
 	})
+}
+
+// TestComputeClassLabelsAndTaints verifies that ComputeClass labels and NoSchedule taints
+// are applied to autoprovisioned node pools in both Standard and Autopilot clusters for
+// custom and predefined compute classes.
+func TestComputeClassLabelsAndTaints(t *testing.T) {
+	testCases := []struct {
+		name             string
+		autopilotEnabled bool
+		cc               *v1.ComputeClass
+		podComputeClass  string
+		wantScaleUp      bool
+	}{
+		{
+			name:             "Standard cluster with custom ComputeClass",
+			autopilotEnabled: false,
+			cc: ccc.NewComputeClassBuilder("custom-ccc").
+				WithNapEnabled().
+				WithPriorities(v1.Priority{MachineType: ptr.To("n1-standard-4")}).
+				Build(),
+			podComputeClass: "custom-ccc",
+			wantScaleUp:     true,
+		},
+		{
+			name:             "Autopilot cluster with custom ComputeClass",
+			autopilotEnabled: true,
+			cc: ccc.NewComputeClassBuilder("custom-ccc").
+				WithNapEnabled().
+				WithAutopilot(true).
+				WithPriorities(v1.Priority{MachineType: ptr.To("n1-standard-4")}).
+				Build(),
+			podComputeClass: "custom-ccc",
+			wantScaleUp:     true,
+		},
+		{
+			name:             "Autopilot cluster with predefined ComputeClass",
+			autopilotEnabled: true,
+			podComputeClass:  "Balanced",
+			wantScaleUp:      true,
+		},
+		{
+			name:             "Standard cluster with predefined ComputeClass does not scale up",
+			autopilotEnabled: false,
+			podComputeClass:  "Balanced",
+			wantScaleUp:      false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			testConfig := integration.NewTestConfig().
+				WithOverrides(integration.WithAutoProvisioningEnabled()).
+				WithClusterOverrides(integration.WithClusterAutoProvisioningEnabled())
+
+			if testCase.autopilotEnabled {
+				testConfig.WithOverrides(func(options *config.AutoscalingOptions) *config.AutoscalingOptions {
+					options.AutopilotEnabled = true
+					options.NapDefaultMachineTypeFamily = "e2"
+					options.InternalOptions.EkAutoprovisioning = "EK_AUTOPROVISIONING_DISABLED"
+					return options
+				})
+			}
+			if testCase.cc != nil {
+				testConfig.WithCccCrds(testCase.cc)
+			}
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
+
+				infra := integration.SetupInfrastructure(ctx, t)
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+
+				p := tu.BuildTestPod("test-pod", 1000, 1000, tu.MarkUnschedulable(), pod.WithCCC(testCase.podComputeClass))
+				infra.Fakes.K8s.AddPod(p)
+
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				infra.Fakes.RunScheduler(ctx, t)
+
+				cluster, err := infra.Fakes.GkeService.GetCluster("projects/test-project/locations/us-central1/clusters/test-cluster")
+				assert.NoError(t, err)
+
+				if !testCase.wantScaleUp {
+					assert.Empty(t, cluster.NodePools, "Expected no node pools to be provisioned")
+					return
+				}
+
+				if assert.Len(t, cluster.NodePools, 1, "Expected 1 autoprovisioned node pool") {
+					np := cluster.NodePools[0]
+					assert.Equal(t, testCase.podComputeClass, np.Config.Labels[gkelabels.ComputeClassLabel])
+					assert.Contains(t, np.Config.Taints, &google_api_container.NodeTaint{
+						Key:    gkelabels.ComputeClassLabel,
+						Value:  testCase.podComputeClass,
+						Effect: "NO_SCHEDULE",
+					})
+				}
+
+				nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+				assert.NoError(t, err)
+				if assert.Len(t, nodes.Items, 1, "Expected 1 node in K8s") {
+					node := nodes.Items[0]
+					assert.Equal(t, testCase.podComputeClass, node.Labels[gkelabels.ComputeClassLabel])
+				}
+
+				updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, p.Name, metav1.GetOptions{})
+				assert.NoError(t, err)
+				assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected pod to be scheduled")
+			})
+		})
+	}
 }
