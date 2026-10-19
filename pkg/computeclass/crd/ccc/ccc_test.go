@@ -2833,9 +2833,10 @@ func TestPrioritySelfService(t *testing.T) {
 
 func TestUserDefinedLabels(t *testing.T) {
 	testCases := []struct {
-		name       string
-		ccc        *v1.ComputeClass
-		wantLabels map[string]string
+		name                   string
+		ccc                    *v1.ComputeClass
+		cccAllowedSystemLabels []string
+		wantLabels             map[string]string
 	}{
 		{
 			name: "no user defined labels",
@@ -2877,10 +2878,51 @@ func TestUserDefinedLabels(t *testing.T) {
 				"label-2": "label-2",
 			},
 		},
+		{
+			name: "user defined labels with allowed system label when flag is set",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						NodeLabels: map[string]string{
+							labels.ComputeClassLabel:                "compute-class",
+							"cloud.google.com/gke-upgrade-excluded": "true",
+							"label-2":                               "label-2",
+						},
+					},
+				},
+			},
+			cccAllowedSystemLabels: []string{"cloud.google.com/gke-upgrade-excluded"},
+			wantLabels: map[string]string{
+				"cloud.google.com/gke-upgrade-excluded": "true",
+				"label-2":                               "label-2",
+			},
+		},
+		{
+			name: "user defined labels with system label filtered out when flag is empty",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					NodePoolConfig: &v1.NodePoolConfig{
+						NodeLabels: map[string]string{
+							labels.ComputeClassLabel:                "compute-class",
+							"cloud.google.com/gke-upgrade-excluded": "true",
+							"label-2":                               "label-2",
+						},
+					},
+				},
+			},
+			wantLabels: map[string]string{
+				"label-2": "label-2",
+			},
+		},
 	}
 	for _, tc := range testCases {
-		gotCrd := NewCccCrd(tc.ccc, "", false, nil, testOptionsTracker(nil))
-		assert.Equal(t, tc.wantLabels, gotCrd.UserDefinedLabels())
+		t.Run(tc.name, func(t *testing.T) {
+			tracker := testOptionsTracker(func(opts *internalopts.InternalOptions) {
+				opts.CccAllowedSystemLabels = tc.cccAllowedSystemLabels
+			})
+			gotCrd := NewCccCrd(tc.ccc, "", false, nil, tracker)
+			assert.Equal(t, tc.wantLabels, gotCrd.UserDefinedLabels())
+		})
 	}
 }
 

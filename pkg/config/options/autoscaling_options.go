@@ -149,6 +149,7 @@ type InternalOptions struct {
 	ComputeClassCapacityBuffersEnabled           bool
 	ComputeClassCapacityBuffersCleanup           bool
 	ScaleDownBlockingNodeLabels                  []string
+	CccAllowedSystemLabels                       []string
 	NapMaxNodes                                  int
 	NodeWatchLabelSelector                       string
 	NodeWatchFieldSelector                       string

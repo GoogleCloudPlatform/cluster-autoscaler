@@ -186,6 +186,19 @@ func TestCCCConfigurations(t *testing.T) {
 		}).
 		Build()
 
+	cccUpgradeExcludedLabel := ccc.NewComputeClassBuilder("ccc-upgrade-excluded").
+		WithNapEnabled().
+		WithWhenUnsatisfiable("ScaleUpAnyway").
+		WithPriorities(v1.Priority{
+			MachineType: ptr.To("n1-standard-4"),
+		}).
+		WithNodePoolConfig(&v1.NodePoolConfig{
+			NodeLabels: map[string]string{
+				"cloud.google.com/gke-upgrade-excluded": "true",
+			},
+		}).
+		Build()
+
 	cccNestedVirtualizationEnabled := ccc.NewComputeClassBuilder("ccc-nv-enabled").
 		WithNapEnabled().
 		WithWhenUnsatisfiable("ScaleUpAnyway").
@@ -289,6 +302,19 @@ func TestCCCConfigurations(t *testing.T) {
 			}
 			assert.True(t, found, "Expected startup taint to be present on node pool, but got %v", np.Config.Taints)
 		}
+	})
+
+	runCCCConfigurationTest(t, "Upgrade excluded label in NodePoolConfig is propagated to provisioned node pool", cccUpgradeExcludedLabel, func(t *testing.T, cluster *google_api_container.Cluster) {
+		if assert.Equal(t, 1, len(cluster.NodePools)) {
+			np := cluster.NodePools[0]
+			assert.Equal(t, "true", np.Config.Labels["cloud.google.com/gke-upgrade-excluded"])
+		}
+	}, func(c *integration.TestConfig) {
+		c.WithOverrides(func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+			o.AllowlistedSystemLabels = "cloud.google.com/gke-accelerate-nap-features"
+			o.CccAllowedSystemLabels = []string{"cloud.google.com/gke-upgrade-excluded"}
+			return o
+		})
 	})
 
 	runCCCConfigurationTest(t, "Enable nested virtualization true in priority", cccNestedVirtualizationEnabled, func(t *testing.T, cluster *google_api_container.Cluster) {
