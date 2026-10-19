@@ -78,6 +78,7 @@ func TestSelectMachineSpec(t *testing.T) {
 		rule                                  rules.Rule
 		isStateless                           bool
 		isExtendedFallbacksEnabled            bool
+		isAutopilotNapDefaultFallbackEnabled  bool
 		generalPurposeMachineFamilies         []string
 		expectedMinCpuPlatform                *machinetypes.CpuPlatform
 		expectedFamilies                      []machinetypes.MachineFamily
@@ -802,10 +803,11 @@ func TestSelectMachineSpec(t *testing.T) {
 			},
 			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
 		},
-		"Autopilot stateless default pod returns GeneralPurposeMachineFamilies fallback candidate list": {
-			autopilotEnabled:              true,
-			isStateless:                   true,
-			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
+		"Autopilot stateless default pod with fallback enabled returns GeneralPurposeMachineFamilies fallback candidate list": {
+			autopilotEnabled:                     true,
+			isStateless:                          true,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			generalPurposeMachineFamilies:        []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
 			resizableVmInAutopilotEnabled: map[string]bool{
 				machinetypes.EK.Name(): true,
 				machinetypes.E4.Name(): true,
@@ -822,10 +824,11 @@ func TestSelectMachineSpec(t *testing.T) {
 				machinetypes.C4D,
 			},
 		},
-		"Autopilot stateless default pod with EK disabled filters EK from GeneralPurposeMachineFamilies": {
-			autopilotEnabled:              true,
-			isStateless:                   true,
-			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
+		"Autopilot stateless default pod with fallback enabled and EK disabled filters EK from GeneralPurposeMachineFamilies": {
+			autopilotEnabled:                     true,
+			isStateless:                          true,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			generalPurposeMachineFamilies:        []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
 			resizableVmInAutopilotEnabled: map[string]bool{
 				machinetypes.EK.Name(): false,
 				machinetypes.E4.Name(): true,
@@ -841,9 +844,10 @@ func TestSelectMachineSpec(t *testing.T) {
 				machinetypes.C4D,
 			},
 		},
-		"Autopilot stateful default pod returns GeneralPurposeMachineFamilies fallback candidate list": {
-			autopilotEnabled: true,
-			isStateless:      false,
+		"Autopilot stateful default pod with fallback enabled returns GeneralPurposeMachineFamilies fallback candidate list": {
+			autopilotEnabled:                     true,
+			isStateless:                          false,
+			isAutopilotNapDefaultFallbackEnabled: true,
 			resizableVmStatefulInAutopilotEnabled: map[string]bool{
 				machinetypes.E4.Name(): true,
 			},
@@ -864,11 +868,12 @@ func TestSelectMachineSpec(t *testing.T) {
 				machinetypes.C4D,
 			},
 		},
-		"Autopilot stateful default pod with E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
-			autopilotEnabled:              true,
-			isStateless:                   false,
-			generalPurposeMachineFamilies: []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.EK.Name(): true},
+		"Autopilot stateful default pod with fallback enabled and E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
+			autopilotEnabled:                     true,
+			isStateless:                          false,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			generalPurposeMachineFamilies:        []string{"e4", "ek", "e2", "n4", "n4d", "n2", "n2d", "c4", "c4d"},
+			resizableVmInAutopilotEnabled:        map[string]bool{machinetypes.EK.Name(): true},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.EK,
 				machinetypes.E2,
@@ -924,29 +929,32 @@ func TestSelectMachineSpec(t *testing.T) {
 				machinetypes.C4A,
 			},
 		},
-		"Autopilot stateless default pod with invalid machine family in GeneralPurposeMachineFamilies skips invalid family": {
-			autopilotEnabled:              true,
-			isStateless:                   true,
-			resizableVmInAutopilotEnabled: map[string]bool{machinetypes.E4.Name(): true},
-			generalPurposeMachineFamilies: []string{"e4", "invalid-fam", "e2"},
+		"Autopilot stateless default pod with fallback enabled and invalid machine family in GeneralPurposeMachineFamilies skips invalid family": {
+			autopilotEnabled:                     true,
+			isStateless:                          true,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			resizableVmInAutopilotEnabled:        map[string]bool{machinetypes.E4.Name(): true},
+			generalPurposeMachineFamilies:        []string{"e4", "invalid-fam", "e2"},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E4,
 				machinetypes.E2,
 			},
 		},
-		"Autopilot stateless default pod with E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
-			autopilotEnabled:              true,
-			isStateless:                   true,
-			generalPurposeMachineFamilies: []string{"e4", "e2", "n4"},
+		"Autopilot stateless default pod with fallback enabled and E4 disabled filters E4 from GeneralPurposeMachineFamilies": {
+			autopilotEnabled:                     true,
+			isStateless:                          true,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			generalPurposeMachineFamilies:        []string{"e4", "e2", "n4"},
 			expectedFamilies: []machinetypes.MachineFamily{
 				machinetypes.E2,
 				machinetypes.N4,
 			},
 		},
-		"Autopilot stateless default pod with whitespace and mixed-case in GeneralPurposeMachineFamilies resolves families correctly": {
-			autopilotEnabled:              true,
-			isStateless:                   true,
-			generalPurposeMachineFamilies: []string{" e4 ", "EK", " E2\t", "N4"},
+		"Autopilot stateless default pod with fallback enabled, whitespace and mixed-case in GeneralPurposeMachineFamilies resolves families correctly": {
+			autopilotEnabled:                     true,
+			isStateless:                          true,
+			isAutopilotNapDefaultFallbackEnabled: true,
+			generalPurposeMachineFamilies:        []string{" e4 ", "EK", " E2\t", "N4"},
 			resizableVmInAutopilotEnabled: map[string]bool{
 				machinetypes.EK.Name(): true,
 				machinetypes.E4.Name(): true,
@@ -976,6 +984,7 @@ func TestSelectMachineSpec(t *testing.T) {
 				WithAutopilotEnabled(tc.autopilotEnabled).
 				WithArmMachineFallbacksEnabled(tc.isArmMachineFallbacksEnabled).
 				WithExtendedFallbacksEnabled(tc.isExtendedFallbacksEnabled).
+				WithAutopilotNapDefaultFallbackEnabled(tc.isAutopilotNapDefaultFallbackEnabled).
 				WithGeneralPurposeMachineFamilies(tc.generalPurposeMachineFamilies).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil))
 			for family, enabled := range tc.resizableVmInAutopilotEnabled {

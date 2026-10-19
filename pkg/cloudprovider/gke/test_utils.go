@@ -758,8 +758,7 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithTrimmedLocations(zones []
 // Build returns a built test cloud provider
 func (b *TestAutoprovisioningCloudProviderBuilder) Build() *TestAutoprovisioningCloudProvider {
 	p := &TestAutoprovisioningCloudProvider{
-		TestCloudProvider:                    b.ossBuilder.Build(),
-		isAutopilotNapDefaultFallbackEnabled: true,
+		TestCloudProvider: b.ossBuilder.Build(),
 	}
 
 	for _, builder := range b.builders {
