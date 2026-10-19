@@ -1200,6 +1200,16 @@ var (
 				withExplicitReqOnly(),
 			NewMachineTypeInfo("c4d-highmem-384-metal", 384, 3024).
 				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4d-standard-384-lssd-metal", 384, 1536).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(20.850666).
+				withPreemptibleInstancePriceOverride(7.663170).
+				withExplicitReqOnly(),
+			NewMachineTypeInfo("c4d-highmem-384-lssd-metal", 384, 3072).
+				withAutomaticEphemeralLocalSsdCount(4).
+				withInstancePriceOverride(26.562543).
+				withPreemptibleInstancePriceOverride(9.647682).
+				withExplicitReqOnly(),
 		),
 		supportedCpuPlatforms:        CpuPlatformRequirements{lowerBound: AmdTurin, upperBound: AmdTurin},
 		supportCompactPlacement:      true,
@@ -3328,6 +3338,8 @@ var LocalSSDDiskSizes = map[string]uint64{
 	A4X.Name():                      3000,
 	"c4-standard-288-lssd-metal":    3000,
 	"c4-highmem-288-lssd-metal":     3000,
+	"c4d-standard-384-lssd-metal":   3000,
+	"c4d-highmem-384-lssd-metal":    3000,
 	"z3-highmem-192-metal":          6000,
 	"z3-highmem-192-highlssd-metal": 6000,
 }

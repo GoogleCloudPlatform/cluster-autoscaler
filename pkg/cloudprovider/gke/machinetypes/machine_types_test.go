@@ -2015,6 +2015,16 @@ func TestAutomaticEphemeralLocalSsdCountByMachineType(t *testing.T) {
 			expectFound:   true,
 			expectedCount: 12,
 		},
+		"expect 4 local ssds in c4d-standard-384-lssd-metal": {
+			machineName:   "c4d-standard-384-lssd-metal",
+			expectFound:   true,
+			expectedCount: 4,
+		},
+		"expect 4 local ssds in c4d-highmem-384-lssd-metal": {
+			machineName:   "c4d-highmem-384-lssd-metal",
+			expectFound:   true,
+			expectedCount: 4,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 			p := NewMachineConfigProvider(nil)
