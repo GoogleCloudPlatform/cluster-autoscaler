@@ -106,10 +106,10 @@ type fakeHandler struct {
 }
 
 func (f *fakeHandler) Handle(_ context.Context, op ops.Operation) (ops.Result, error) {
+	f.HandleChan <- op.Type
 	if f.Err != nil {
 		return ops.NewResult(), f.Err
 	}
-	f.HandleChan <- op.Type
 	f.mutex.Lock()
 	errs := maps.Clone(f.NodeErrs)
 	// errors only work for one call
@@ -224,6 +224,7 @@ func TestDispatcher(t *testing.T) {
 			},
 			expectedCounts: map[ops.OperationType]int{
 				ops.SuspendOp: 2,
+				ops.ConsumeOp: 1,
 			},
 			expectedClearPendingOpCalls: []clearPendingOpCall{
 				{Op: ops.SuspendOp, NodeNames: set.New("n1")},
