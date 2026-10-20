@@ -25,27 +25,28 @@ import (
 )
 
 func TestResizeErrorAs(t *testing.T) {
+	var resizeErr *ResizeError
+
 	// Useful when we only care if the error contains a resize error.
 	err1 := NewGuestAgentFailedToResizeError("test-family", errors.New("A resize error"))
-	assert.ErrorAs(t, err1, &ResizeErr)
+	assert.ErrorAs(t, err1, &resizeErr)
 
 	// Works even if resize error is wrapped using the %w directive.
 	err2 := fmt.Errorf("Wrapped resize error: %w", err1)
-	assert.ErrorAs(t, err2, &ResizeErr)
+	assert.ErrorAs(t, err2, &resizeErr)
 
 	// Using %v directive prevents correct unwrapping so the type information is lost.
 	err3 := fmt.Errorf("Wrapped resize error: %v", err1)
-	assert.False(t, errors.As(err3, &ResizeErr))
+	assert.False(t, errors.As(err3, &resizeErr))
 
 	// Can unwrap the error to access information stored in the custom error struct.
 	err4 := fmt.Errorf("Wrapped resize error: %w", err1)
-	var resizeErr *ResizeError
 	assert.ErrorAs(t, err4, &resizeErr)
 	assert.Equal(t, GuestAgentFailedToResizeError, resizeErr.ErrType)
 
 	// As expected, non-resize errors aren't of type ResizeError
 	err5 := errors.New("Not a resize error")
-	assert.False(t, errors.As(err5, &ResizeErr))
+	assert.False(t, errors.As(err5, &resizeErr))
 }
 
 func TestResizeErrorIs(t *testing.T) {

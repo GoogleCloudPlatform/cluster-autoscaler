@@ -31,7 +31,6 @@ import (
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	autoscalingcontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/store"
@@ -54,12 +53,20 @@ func (m *mockCSNMetrics) UpdateCSNConsideredPods(counts map[internalmetrics.CSNC
 	m.consideredPods = counts
 }
 
+const testUnhelpableAnnotation = "test-unhelpable"
+
+type fakeUnhelpableTracker struct{}
+
+func (fakeUnhelpableTracker) IsPodUnhelpable(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[testUnhelpableAnnotation] == "true"
+}
+
 func withUnhelpableAnnotation() func(*apiv1.Pod) {
 	return func(pod *apiv1.Pod) {
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
 		}
-		pod.Annotations[annotator.UnhelpableUntilAnnotation] = annotator.UnhelpableForever
+		pod.Annotations[testUnhelpableAnnotation] = "true"
 	}
 }
 
@@ -69,6 +76,13 @@ func withoutSuspensionSchedulingConstraintsMutator() nodeMutator {
 	return func(node *apiv1.Node) *apiv1.Node {
 		csn.RemoveSuspensionSchedulingConstraints(node)
 		return node
+	}
+}
+
+func withDeletionTimestamp() func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		now := metav1.Now()
+		pod.DeletionTimestamp = &now
 	}
 }
 
@@ -528,6 +542,28 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			expectedAllConsumedNodes:  []string{"node-1"},
 		},
 		{
+			name: "Mark suspended nodes as consumed if they have terminating pods without reporting invalid condition metric",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+				create8CPUTestNode(t, "node-2", csn.NodeStateSuspended),
+				create8CPUTestNode(t, "node-3", csn.NodeStateSuspended),
+			},
+			podsCreatedOutsideCA: []*apiv1.Pod{
+				test.BuildTestPod("ds-1", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-1"), withDeletionTimestamp()), // Chilling node with terminating DS pod should not be consumed.
+				test.BuildTestPod("ds-2", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-2")),                          // Suspended node with non-terminating DS pod should not be consumed.
+				test.BuildTestPod("ds-3", 1000, 1*GiB, test.WithDSController(), test.WithNodeName("node-3"), withDeletionTimestamp()), // Suspended node with terminating DS pod should be consumed.
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+				{Name: "node-2", DesiredState: csn.NodeStateSuspended},
+				{Name: "node-3", DesiredState: csn.NodeStateSuspended},
+			},
+			experimentsManager:        experiments.NewMockManager(experiments.ColdStandbyNodesCheckPodsOnSuspendedNodes),
+			expectErr:                 false,
+			expectedUnschedulablePods: []string{},
+			expectedAllConsumedNodes:  []string{"node-3"},
+		},
+		{
 			name: "Pod age fallback disabled: old pod is scheduled on suspended node",
 			initialNodes: []*apiv1.Node{
 				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
@@ -693,7 +729,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 				experimentsManager = experiments.NewMockManager()
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
+			processor := NewBufferConsumptionProcessor(mockController, experimentsManager, fakeUnhelpableTracker{})
 			processor.metrics = mockMetrics
 
 			remainingPods, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
@@ -801,7 +837,7 @@ func TestBufferConsumptionProcess_ConsideredPodsMetric(t *testing.T) {
 				experimentsManager = experiments.NewMockManager()
 			}
 			mockMetrics := &mockCSNMetrics{}
-			processor := NewBufferConsumptionProcessor(mockController, experimentsManager)
+			processor := NewBufferConsumptionProcessor(mockController, experimentsManager, fakeUnhelpableTracker{})
 			processor.metrics = mockMetrics
 
 			_, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
@@ -922,7 +958,7 @@ func TestPodAgeFallbackThreshold(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := NewBufferConsumptionProcessor(nil, tc.em)
+			p := NewBufferConsumptionProcessor(nil, tc.em, nil)
 			assert.Equal(t, tc.expected, p.podAgeFallbackThreshold())
 		})
 	}

@@ -27,6 +27,7 @@ import (
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaleup/equivalence"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroups"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
@@ -79,54 +80,55 @@ func (p *nodeGroupListProcessor) Process(ctx context.Context, autoscalingCtx *ca
 			klog.Warningf("Failed to get template node info for a node group")
 			continue
 		}
-		autoscalingCtx.ClusterSnapshot.Fork()
-		defer autoscalingCtx.ClusterSnapshot.Revert()
-		// Add node to cluster snapshot
-		if err := autoscalingCtx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
-			klog.Errorf("Couldn't add node to cluster snapshot: %v", err)
-			continue
-		}
-		// Check whether each unschedulablePodGroup can be scheduled on this node group.
-		for pi, unschedulablePodGroup := range unschedulablePodGroups {
-			// unschedulablePod is sample pod from equivalence group.
-			unschedulablePod := unschedulablePodGroup.Pods[0]
-			if unschedulablePod == nil {
-				continue
+		_, _ = clustersnapshot.WithForkedSnapshot(autoscalingCtx.ClusterSnapshot, func() (bool, error) {
+			// Add node to cluster snapshot
+			if err := autoscalingCtx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
+				klog.Errorf("Couldn't add node to cluster snapshot: %v", err)
+				return false, nil
 			}
-			// Check if slice of hardware pod.
-			podRequirements := podrequirements.GetRequirements(unschedulablePod)
-			if podRequirements.PodCapacity != "1" {
-				continue
-			}
-			// Check if pod schedulable on nodegroup.
-			if predicateErr := autoscalingCtx.ClusterSnapshot.CheckPredicates(unschedulablePod, nodeInfo.Node().Name); predicateErr != nil {
-				// Not schedulable
-				continue
-			}
-			// This node can fit pod.
-			mig, ok := nodeGroup.(*gke.GkeMig)
-			if !ok {
-				klog.Errorf("Couldn't cast to GkeMig: %v", nodeGroup)
-				continue
-			}
-			machineTypeName := mig.Spec().MachineType
-			currentMachineTypeInfo, err := mig.MachineConfigProvider().ToMachineType(machineTypeName)
-			if err != nil {
-				klog.Errorf("Error getting machine type: %s", err)
-				continue
-			}
+			// Check whether each unschedulablePodGroup can be scheduled on this node group.
+			for pi, unschedulablePodGroup := range unschedulablePodGroups {
+				// unschedulablePod is sample pod from equivalence group.
+				unschedulablePod := unschedulablePodGroup.Pods[0]
+				if unschedulablePod == nil {
+					continue
+				}
+				// Check if slice of hardware pod.
+				podRequirements := podrequirements.GetRequirements(unschedulablePod)
+				if podRequirements.PodCapacity != "1" {
+					continue
+				}
+				// Check if pod schedulable on nodegroup.
+				if predicateErr := autoscalingCtx.ClusterSnapshot.CheckPredicates(unschedulablePod, nodeInfo.Node().Name); predicateErr != nil {
+					// Not schedulable
+					continue
+				}
+				// This node can fit pod.
+				mig, ok := nodeGroup.(*gke.GkeMig)
+				if !ok {
+					klog.Errorf("Couldn't cast to GkeMig: %v", nodeGroup)
+					continue
+				}
+				machineTypeName := mig.Spec().MachineType
+				currentMachineTypeInfo, err := mig.MachineConfigProvider().ToMachineType(machineTypeName)
+				if err != nil {
+					klog.Errorf("Error getting machine type: %s", err)
+					continue
+				}
 
-			// Keep track of all the smallest machine sized node groups.
-			if (machinetypes.MachineType{}) == smallestMachineTypeInfo[pi] || smallestMachineTypeInfo[pi].Name == currentMachineTypeInfo.Name {
-				smallestMachineTypeInfo[pi] = currentMachineTypeInfo
-				smallestSohwNodeGroupsForPod[pi][ni] = true
-			} else if machinetypes.IsLargerThan(smallestMachineTypeInfo[pi], currentMachineTypeInfo) {
-				smallestMachineTypeInfo[pi] = currentMachineTypeInfo
-				// New smallest fitting node group found.
-				smallestSohwNodeGroupsForPod[pi] = map[int]bool{}
-				smallestSohwNodeGroupsForPod[pi][ni] = true
+				// Keep track of all the smallest machine sized node groups.
+				if (machinetypes.MachineType{}) == smallestMachineTypeInfo[pi] || smallestMachineTypeInfo[pi].Name == currentMachineTypeInfo.Name {
+					smallestMachineTypeInfo[pi] = currentMachineTypeInfo
+					smallestSohwNodeGroupsForPod[pi][ni] = true
+				} else if machinetypes.IsLargerThan(smallestMachineTypeInfo[pi], currentMachineTypeInfo) {
+					smallestMachineTypeInfo[pi] = currentMachineTypeInfo
+					// New smallest fitting node group found.
+					smallestSohwNodeGroupsForPod[pi] = map[int]bool{}
+					smallestSohwNodeGroupsForPod[pi][ni] = true
+				}
 			}
-		}
+			return false, nil
+		})
 	}
 	useSohwNodeGroups := map[int]bool{}
 	for pi, unschedulablePodGroup := range unschedulablePodGroups {

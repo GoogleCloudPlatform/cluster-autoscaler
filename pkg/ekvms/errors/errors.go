@@ -68,9 +68,6 @@ const (
 	// Http5xxError - resize failed due to an internal GCE error.
 	Http5xxError ResizeErrorType = "http5xxError"
 
-	// ClientError - error or timeout happened while waiting for GCE resize operation.
-	ClientError ResizeErrorType = "clientError"
-
 	// ResourceNotReadyError - error happened while trying to schedule a resize operation
 	// during another ongoing operation.
 	ResourceNotReadyError ResizeErrorType = "resourceNotReadyError"
@@ -130,9 +127,6 @@ const (
 	WaitForBetaOp GceClientResizeErrorSource = "GceClientWaitForBetaOp"
 	Empty         GceClientResizeErrorSource = ""
 )
-
-// ResizeErr is used for comparing errors using errors.As when we only care about the type.
-var ResizeErr = &ResizeError{}
 
 type ResizeError struct {
 	ErrType       ResizeErrorType
@@ -272,16 +266,6 @@ func NewGuestAgentResizeTimeout(machineFamily string, err error) error {
 		MachineFamily: machineFamily,
 		ErrType:       GuestAgentResizeTimeout,
 		Backoff:       NodeLevel,
-		VmState:       UnknownState,
-		OriginalError: err,
-	}
-}
-
-func NewClientError(machineFamily string, err error) error {
-	return &ResizeError{
-		MachineFamily: machineFamily,
-		ErrType:       ClientError,
-		Backoff:       ClusterLevel,
 		VmState:       UnknownState,
 		OriginalError: err,
 	}

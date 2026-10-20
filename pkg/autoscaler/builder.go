@@ -1145,6 +1145,7 @@ func (b *Builder) Build(
 			autoscalingOptions.ClusterName,
 			b.location,
 			autoscalingOptions.KwokGceReconcilerInterval,
+			autoscalingOptions.KwokGceReconcilerWorkers,
 		)
 		if err := b.manager.Add(kwokReconciler); err != nil {
 			return nil, nil, fmt.Errorf("failed to add KWOK GCE reconciler to manager: %w", err)

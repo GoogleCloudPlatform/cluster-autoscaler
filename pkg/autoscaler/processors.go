@@ -113,12 +113,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	kubernetes_util "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	metricsbinpacking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/binpacking"
 	cbmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	metricsccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/unhelpable"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodeannotator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodesnowflake"
@@ -603,7 +603,8 @@ func setUpProcessors(
 		return nil, err
 	}
 
-	sharedFairnessManager := fairness.NewSharedEnforcerManager(options.MaxLoopsBeforeAdmission)
+	unhelpablePodTracker := unhelpable.NewUnhelpablePodTracker()
+	sharedFairnessManager := fairness.NewSharedEnforcerManager(options.MaxLoopsBeforeAdmission, unhelpablePodTracker)
 
 	var csnPodsInjectionProcessor *cbprocessors.CapacityBufferPodListProcessor
 	var csnNodeReconciliationProcessor *csn_processors.NodeReconciliationProcessor
@@ -617,7 +618,7 @@ func setUpProcessors(
 		csnNodeController = nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
 		go csnNodeController.Run(context)
 		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
-		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager)
+		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager, unhelpablePodTracker)
 		csnCSNPodsLifecycleProcessor = csn_processors.NewCSNPodsLifecycleProcessor(csnNodeController, csnPodsInjectionProcessor, cbFakePodStateObserver, capacitybufferPodsRegistry, options.CSNDefaultRefreshFrequency, experimentsManager)
 		if err := scaleUpProcessorChain.AddProcessor(csn_processors.NewCSNScaleUpStatusProcessor(capacitybufferPodsRegistry, experimentsManager)); err != nil {
 			return nil, err
@@ -732,7 +733,7 @@ func setUpProcessors(
 		// Node Based DD should be the last processor as it is supposed to work only for the PTS domains for which we do not have a dedicated processor.
 		podtopologyspread.NewNodeBasedDomainDiscovery(experimentsManager, clusterSnapshot, provider),
 	}
-	podTopologySpreadProcessor := podtopologyspread.NewPodTopologySpreadProcessor(ptsDomainDiscoveries)
+	podTopologySpreadProcessor := podtopologyspread.NewPodTopologySpreadProcessor(ptsDomainDiscoveries, unhelpablePodTracker)
 	capacityBufferMetricsProcessor := initCapacityBufferMetricsProcessor(experimentsManager, capacitybufferClient, capacitybufferPodsRegistry, options.CapacitybufferPodInjectionEnabled && cbReady)
 
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
@@ -887,11 +888,10 @@ func setUpProcessors(
 		experimentsManager,
 	)
 
-	podAnnotator := annotator.NewPodAnnotator(kubeClient, podStatusAggregator)
 	if err := scaleUpProcessorChain.AddProcessor(metrics_processors.NewScaleUpStatusMetricsProcessor(podStatusAggregator, metricsFilter, ccLister)); err != nil {
 		return nil, err
 	}
-	if err := scaleUpProcessorChain.AddProcessor(podAnnotator); err != nil {
+	if err := scaleUpProcessorChain.AddProcessor(unhelpablePodTracker); err != nil {
 		return nil, err
 	}
 	if err := scaleUpProcessorChain.AddProcessor(psObserver); err != nil {
@@ -899,7 +899,6 @@ func setUpProcessors(
 	}
 	autoscalingProcessors.ScaleUpStatusProcessor = scaleUpProcessorChain
 	autoscalingProcessors.ScaleDownStatusProcessor = scaleDownProcessorChain
-	podAnnotator.Start(context, 1)
 
 	nodeAnnotator := nodeannotator.NewNodeAnnotator(kubeClient, autoscalingKubeClients.AllNodeLister(), nodeannotator.Config{})
 	cccNodeAnnotationPlugin := computeclass.NewCCCNodeAnnotatorPlugin(ccLister, provider)

@@ -640,11 +640,6 @@ func (m *mockNodeSizeRecommender) SetLocations(locations []string) {
 	m.Called(locations)
 }
 
-type mockManagerMetrics struct {
-	mock.Mock
-	mockPeriodicMetrics
-}
-
 // identitySizeCalculator assumes that size.VmSize and size.Allocatable are identical. This is handy for some testing.
 type identitySizeCalculator struct{}
 

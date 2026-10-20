@@ -539,6 +539,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 
 			mockProvider := new(instanceavailability.MockProvider)
 			mockProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			mockProvider.On("BumpScopeTtl", mock.Anything).Maybe().Return(nil)
 
 			registerMock(&mockProvider.Mock)
 
@@ -641,6 +642,7 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 	mig1 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-a", "ccc-1", gke.LocationPolicyBalanced, 100, 200, nil)
 	mig2 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-b", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 	mig3 := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-4", "us-central1-c", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
+	migDifferentMachine := createMockMigs(&gke.GkeManagerMock{}, "e2-standard-8", "us-central1-b", "ccc-1", gke.LocationPolicyBalanced, 150, 200, nil)
 
 	snapshot1 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-1", "", map[string]int{"us-central1-a": 100, "us-central1-b": 20, "us-central1-c": 0}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8, "us-central1-c": 0.8})
 	snapshot2 := instanceavailability.NewSnapshot(nil, "ccc-1", "", "guidance-2", "", map[string]int{"us-central1-a": 1000, "us-central1-b": 5}, map[string]float64{"us-central1-a": 1.0, "us-central1-b": 0.8})
@@ -659,6 +661,12 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 	}
 	scaleUpInfo3 := nodegroupset.ScaleUpInfo{
 		Group:       mig3,
+		CurrentSize: 150,
+		NewSize:     150,
+		MaxSize:     200,
+	}
+	scaleUpInfoDifferentMachine := nodegroupset.ScaleUpInfo{
+		Group:       migDifferentMachine,
 		CurrentSize: 150,
 		NewSize:     150,
 		MaxSize:     200,
@@ -786,12 +794,42 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 			},
 			wantPossibleMaxScaleUpSize: 105,
 		},
+		{
+			name: "multiple migs from same flexibility scope with different instance configurations - bumps scope ttl once",
+			initialSetup: func(provider *instanceavailability.MockProvider) {
+				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Return(snapshot1, nil).Once()
+				provider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-8, provisioningMode: STANDARD").Return(snapshot2, nil).Once()
+			},
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				scaleUpInfo1,
+				scaleUpInfoDifferentMachine,
+			},
+			wantBalancingInfos: []*balancingInfo{
+				{
+					scaleUpInfo:        scaleUpInfo1,
+					snapshot:           snapshot1,
+					capacityLimit:      100,
+					gcePreferenceScore: 1.0,
+				},
+				{
+					scaleUpInfo:        scaleUpInfoDifferentMachine,
+					snapshot:           snapshot2,
+					capacityLimit:      5,
+					gcePreferenceScore: 0.8,
+				},
+			},
+			wantPossibleMaxScaleUpSize: 105,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mockProvider := &instanceavailability.MockProvider{}
 			mockProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Return()
+			bumpedScopes := map[string]int{}
+			mockProvider.On("BumpScopeTtl", mock.Anything).Run(func(args mock.Arguments) {
+				bumpedScopes[args.String(0)]++
+			}).Return(nil)
 			if tc.initialSetup != nil {
 				tc.initialSetup(mockProvider)
 			}
@@ -804,6 +842,9 @@ func TestBalancingInfoFromFlexAdvisor(t *testing.T) {
 			assert.ElementsMatch(t, tc.wantBalancingInfos, gotBalancingInfo)
 			assert.Equal(t, tc.wantPossibleMaxScaleUpSize, gotPossibleMaxScaleUpSize)
 			assert.Equal(t, tc.wantErr, gotErr)
+			// All scale up infos share the ccc-1 scope: the balancer must mark it as used exactly once, regardless of
+			// how many migs it covers or whether the await succeeded.
+			assert.Equal(t, map[string]int{"ccc-1": 1}, bumpedScopes, "BumpScopeTtl must be called once per distinct scope")
 		})
 	}
 }
@@ -1020,6 +1061,7 @@ func TestBalanceScaleUpBetweenGroups_Recommendation(t *testing.T) {
 
 	mockProvider.On("AwaitInstanceAvailability", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD").Once().Return(snapshot, nil)
 	mockProvider.On("MarkUsed", "ccc-1", "machineType: e2-standard-4, provisioningMode: STANDARD", "test-fa-guidance-id", mock.Anything, map[string]int{"us-central1-a": 50}).Once().Return(nil)
+	mockProvider.On("BumpScopeTtl", "ccc-1").Once().Return(nil)
 
 	expectedRec := gke.ScaleUpRecommendation{
 		RecommendationId: "test-fa-guidance-id",

@@ -1302,19 +1302,7 @@ func (msg MachineSelectionGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePool
 	// machine families automatically get the corresponding toleration via a webhook.
 	computeClassName, computeClassSpecified := systemLabels[gkelabels.ComputeClassLabel]
 	if msg.cloudProvider.IsAutopilotEnabled() {
-
-		// Do not taint node pool with compute class if
-		// 1. The node pool has no compute class label.
-		// 2. The node pool has custom compute class specified.
-		if computeClassSpecified && !machinetypes.IsCustomComputeClass(computeClassName) {
-			spec.ComputeClass = computeClassName
-			spec.Labels[gkelabels.ComputeClassLabel] = computeClassName
-			spec.Taints = append(spec.Taints, apiv1.Taint{
-				Key:    gkelabels.ComputeClassLabel,
-				Value:  computeClassName,
-				Effect: apiv1.TaintEffectNoSchedule,
-			})
-		}
+		spec.ComputeClass = computeClassName
 
 		_, gpuSpecified := extraResources[gpu.ResourceNvidiaGPU]
 		_, tpuSpecified := extraResources[tpu.ResourceGoogleTPU]
@@ -2167,11 +2155,6 @@ func (ng ComputeClassGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec,
 	for _, label := range ng.lister.Labels() {
 		ccName, ccExists := systemLabels[label]
 		if !ccExists {
-			continue
-		}
-
-		// Do not inject anything in case compute class specified is predefined one
-		if label == gkelabels.ComputeClassLabel && machinetypes.IsPredefinedComputeClass(ccName) {
 			continue
 		}
 

@@ -277,25 +277,34 @@ func TestStorageNodeAffinityPodListProcessor_BoundPV(t *testing.T) {
 
 	processor := NewStorageNodeAffinityPodListProcessor(pvcInformer.Lister(), scInformer.Lister(), pvInformer.Lister())
 
+	scName := "hd-sc"
+	sc := &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: scName},
+		Provisioner: "pd.csi.storage.gke.io",
+		Parameters:  map[string]string{"type": "hyperdisk-balanced"},
+	}
+	err := scInformer.Informer().GetIndexer().Add(sc)
+	assert.NoError(t, err)
+
 	pvName := "bound-pv"
 	pv := &apiv1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{Name: pvName},
 		Spec: apiv1.PersistentVolumeSpec{
 			PersistentVolumeSource: apiv1.PersistentVolumeSource{
 				CSI: &apiv1.CSIPersistentVolumeSource{
-					Driver:           "pd.csi.storage.gke.io",
-					VolumeAttributes: map[string]string{"type": "hyperdisk-balanced"},
+					Driver: "pd.csi.storage.gke.io",
 				},
 			},
 		},
 	}
-	err := pvInformer.Informer().GetIndexer().Add(pv)
+	err = pvInformer.Informer().GetIndexer().Add(pv)
 	assert.NoError(t, err)
 
 	pvc := &apiv1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Name: "bound-pvc", Namespace: "default"},
 		Spec: apiv1.PersistentVolumeClaimSpec{
-			VolumeName: pvName,
+			StorageClassName: &scName,
+			VolumeName:       pvName,
 		},
 	}
 	err = pvcInformer.Informer().GetIndexer().Add(pvc)
@@ -322,4 +331,114 @@ func TestStorageNodeAffinityPodListProcessor_BoundPV(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, processedPods, 1)
 	assert.Equal(t, "true", processedPods[0].Spec.NodeSelector["disk-type.gke.io/hyperdisk-balanced"])
+}
+
+func TestStorageNodeAffinityPodListProcessor_BoundNonPdPVAndEmptyStorageClass(t *testing.T) {
+	emptySC := ""
+	defaultSCName := "standard-rwo"
+	defaultSC := &storagev1.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        defaultSCName,
+			Annotations: map[string]string{isDefaultStorageClassAnnotation: "true"},
+		},
+		Provisioner: "pd.csi.storage.gke.io",
+		Parameters:  map[string]string{"type": "pd-balanced"},
+	}
+
+	filestorePV := &apiv1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "filestore-pv"},
+		Spec: apiv1.PersistentVolumeSpec{
+			PersistentVolumeSource: apiv1.PersistentVolumeSource{
+				CSI: &apiv1.CSIPersistentVolumeSource{
+					Driver: "filestore.csi.storage.gke.io",
+				},
+			},
+		},
+	}
+	pdPVWithoutTypeAttr := &apiv1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pd-pv"},
+		Spec: apiv1.PersistentVolumeSpec{
+			PersistentVolumeSource: apiv1.PersistentVolumeSource{
+				CSI: &apiv1.CSIPersistentVolumeSource{
+					Driver: "pd.csi.storage.gke.io",
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name             string
+		pvc              *apiv1.PersistentVolumeClaim
+		wantNodeSelector map[string]string
+	}{
+		{
+			name: "bound to Filestore CSI PV with empty storageClassName does not fall back to default PD StorageClass",
+			pvc: &apiv1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "pvc", Namespace: "default"},
+				Spec: apiv1.PersistentVolumeClaimSpec{
+					StorageClassName: &emptySC,
+					VolumeName:       "filestore-pv",
+				},
+			},
+			wantNodeSelector: nil,
+		},
+		{
+			name: "unbound PVC with explicit empty storageClassName does not fall back to default PD StorageClass",
+			pvc: &apiv1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "pvc", Namespace: "default"},
+				Spec: apiv1.PersistentVolumeClaimSpec{
+					StorageClassName: &emptySC,
+				},
+			},
+			wantNodeSelector: nil,
+		},
+		{
+			name: "bound to PD CSI PV without volumeAttributes type falls back to PVC StorageClass",
+			pvc: &apiv1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "pvc", Namespace: "default"},
+				Spec: apiv1.PersistentVolumeClaimSpec{
+					StorageClassName: &defaultSCName,
+					VolumeName:       "pd-pv",
+				},
+			},
+			wantNodeSelector: map[string]string{"disk-type.gke.io/pd-balanced": "true"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			informerFactory := informers.NewSharedInformerFactory(fake.NewSimpleClientset(), 0)
+			pvcInformer := informerFactory.Core().V1().PersistentVolumeClaims()
+			scInformer := informerFactory.Storage().V1().StorageClasses()
+			pvInformer := informerFactory.Core().V1().PersistentVolumes()
+
+			assert.NoError(t, scInformer.Informer().GetIndexer().Add(defaultSC))
+			assert.NoError(t, pvInformer.Informer().GetIndexer().Add(filestorePV))
+			assert.NoError(t, pvInformer.Informer().GetIndexer().Add(pdPVWithoutTypeAttr))
+			assert.NoError(t, pvcInformer.Informer().GetIndexer().Add(tc.pvc))
+
+			processor := NewStorageNodeAffinityPodListProcessor(pvcInformer.Lister(), scInformer.Lister(), pvInformer.Lister())
+			pod := &apiv1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-pod", Namespace: "default"},
+				Spec: apiv1.PodSpec{
+					Volumes: []apiv1.Volume{
+						{
+							Name: "data",
+							VolumeSource: apiv1.VolumeSource{
+								PersistentVolumeClaim: &apiv1.PersistentVolumeClaimVolumeSource{
+									ClaimName: tc.pvc.Name,
+								},
+							},
+						},
+					},
+				},
+			}
+
+			ctx := &ca_context.AutoscalingContext{CloudProvider: &mockSerenityCloudProvider{}}
+			processedPods, err := processor.Process(context.TODO(), ctx, []*apiv1.Pod{pod})
+			assert.NoError(t, err)
+			assert.Len(t, processedPods, 1)
+			assert.Equal(t, tc.wantNodeSelector, processedPods[0].Spec.NodeSelector)
+		})
+	}
 }

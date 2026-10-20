@@ -25,6 +25,7 @@ type MachinePropertiesApplyConfiguration struct {
 	ThreadsPerCore            *int64                                       `json:"threadsPerCore,omitempty"`
 	BootDiskConfig            *BootDiskConfigApplyConfiguration            `json:"bootDiskConfig,omitempty"`
 	PersistentDiskTypeConfigs []PersistentDiskTypeConfigApplyConfiguration `json:"persistentDiskTypeConfigs,omitempty"`
+	ExplicitRequestOnly       *bool                                        `json:"explicitRequestOnly,omitempty"`
 	NAPDisabled               *bool                                        `json:"napDisabled,omitempty"`
 	SupportsConfidentialNodes *bool                                        `json:"supportsConfidentialNodes,omitempty"`
 	ConfidentialNodeConfig    *ConfidentialNodeConfigApplyConfiguration    `json:"confidentialNodeConfig,omitempty"`
@@ -92,6 +93,14 @@ func (b *MachinePropertiesApplyConfiguration) WithPersistentDiskTypeConfigs(valu
 		}
 		b.PersistentDiskTypeConfigs = append(b.PersistentDiskTypeConfigs, *values[i])
 	}
+	return b
+}
+
+// WithExplicitRequestOnly sets the ExplicitRequestOnly field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the ExplicitRequestOnly field is set to the value of the last call.
+func (b *MachinePropertiesApplyConfiguration) WithExplicitRequestOnly(value bool) *MachinePropertiesApplyConfiguration {
+	b.ExplicitRequestOnly = &value
 	return b
 }
 

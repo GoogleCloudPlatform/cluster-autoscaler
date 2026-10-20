@@ -34,8 +34,8 @@ import (
 const csnScaleUpFailedReason = "StandbyBufferScaleUpFailed"
 
 // CSNScaleUpStatusProcessor surfaces standby buffer scale-up failures caused by GCE VM
-// Suspend/Resume constraints (such as the memory limit or Local SSD restriction) as events on the
-// owning CapacityBuffer.
+// Suspend/Resume constraints (such as the memory limit, Local SSD restriction or GPU/TPU
+// exclusion) as events on the owning CapacityBuffer.
 //
 // Standby buffer fake pods carry node affinities restricting them to nodes that can be suspended
 // (see csn.MakePodCSN). When those affinities are what block the scale-up, the upstream eventing

@@ -23,6 +23,7 @@ import (
 //
 // podRequestsLocalSSD reports whether pod's own scheduling constraints require nodes with
 // ephemeral Local SSDs, which makes it unschedulable on any node that standby buffers support.
+// TODO(b/574455058): Make LocalSSD validation use the podrequirements package same as for GPUs
 func podRequestsLocalSSD(pod *apiv1.Pod) bool {
 	if pod == nil {
 		return false

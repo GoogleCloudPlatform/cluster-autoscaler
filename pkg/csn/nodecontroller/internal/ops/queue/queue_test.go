@@ -17,6 +17,7 @@ package queue
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,4 +347,45 @@ func TestDequeue_ContextCancel(t *testing.T) {
 	assert.False(t, ok)
 	assert.Equal(t, ops.Operation{}, op)
 	assert.Empty(t, sm.GetPendingOperationUpdateCalls())
+}
+
+func TestEnqueue_BatchMergeDoesNotMutateOrRaceCallerSet(t *testing.T) {
+	mig1 := gce.GceRef{Project: "p1", Zone: "z1", Name: "m1"}
+
+	for range 25 {
+		sm := &statetest.MockStateManager{}
+		q := NewWorkQueue(10, sm)
+
+		firstCallerSet := set.New("n1")
+		secondCallerSet := set.New("n2")
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			<-start
+			assert.NoError(t, q.Enqueue(ops.Operation{
+				MIG:       mig1,
+				Type:      ops.ConsumeOp,
+				NodeNames: firstCallerSet,
+			}))
+			assert.Equal(t, []string{"n1"}, firstCallerSet.UnsortedList())
+		}()
+
+		go func() {
+			defer wg.Done()
+			<-start
+			assert.NoError(t, q.Enqueue(ops.Operation{
+				MIG:       mig1,
+				Type:      ops.ConsumeOp,
+				NodeNames: secondCallerSet,
+			}))
+			assert.Equal(t, []string{"n2"}, secondCallerSet.UnsortedList())
+		}()
+
+		close(start)
+		wg.Wait()
+	}
 }

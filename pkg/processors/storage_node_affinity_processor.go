@@ -137,19 +137,20 @@ func requiredDiskTypes(pod *apiv1.Pod, pvcLister corelisters.PersistentVolumeCla
 		// 1. Bound PV Check (rescheduled / pre-bound workload)
 		if pvc.Spec.VolumeName != "" && pvLister != nil {
 			pv, err := pvLister.Get(pvc.Spec.VolumeName)
-			if err == nil && pv.Spec.CSI != nil && isGkePdDriver(pv.Spec.CSI.Driver) && pv.Spec.CSI.VolumeAttributes != nil {
-				diskType = pv.Spec.CSI.VolumeAttributes[storageTypeParameterKey]
-				klog.V(5).Infof("requiredDiskTypes: pod %s/%s -> PVC %s is BOUND to GKE PD PV %s with CSI type %q", pod.Namespace, pod.Name, claimName, pvc.Spec.VolumeName, diskType)
+			if err == nil && (pv.Spec.CSI == nil || !isGkePdDriver(pv.Spec.CSI.Driver)) {
+				klog.V(5).Infof("requiredDiskTypes: pod %s/%s -> PVC %s is BOUND to non-GKE-PD PV %s; skipping StorageClass fallback", pod.Namespace, pod.Name, claimName, pvc.Spec.VolumeName)
+				continue
 			}
 		}
 
 		// 2. Unbound PVC / StorageClass Check (new dynamic volume provisioning)
 		if diskType == "" && scLister != nil {
-			scName := ""
 			if pvc.Spec.StorageClassName != nil {
-				scName = *pvc.Spec.StorageClassName
-			}
-			if scName != "" {
+				scName := *pvc.Spec.StorageClassName
+				if scName == "" {
+					klog.V(5).Infof("requiredDiskTypes: pod %s/%s -> PVC %s has explicit empty storageClassName; skipping default StorageClass fallback", pod.Namespace, pod.Name, claimName)
+					continue
+				}
 				sc, err := scLister.Get(scName)
 				if err == nil && isGkePdDriver(sc.Provisioner) && sc.Parameters != nil {
 					diskType = sc.Parameters[storageTypeParameterKey]

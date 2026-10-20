@@ -213,6 +213,9 @@ func BalancingInfoFromFlexAdvisor(provider instanceavailability.Provider, cccLis
 		if scopeFound {
 			snapshot, found = scopeCache[instanceRef.InstanceConfigKey]
 		} else {
+			if bumpErr := provider.BumpScopeTtl(instanceRef.FlexibilityScopeKey); bumpErr != nil {
+				klog.Warningf("FlexAdvisor: failed to bump scope ttl, flexibilityScopeKey=%v, err=%v", instanceRef.FlexibilityScopeKey, bumpErr)
+			}
 			snapshots[instanceRef.FlexibilityScopeKey] = make(map[string]*instanceavailability.Snapshot)
 		}
 

@@ -341,6 +341,7 @@ func TestBalancerChainScaleUpAndNotifying(t *testing.T) {
 
 			iaProvider := new(instanceavailability.MockProvider)
 			iaProvider.On("IncrementFlexAdvisorCacheQueryCount", mock.Anything, mock.Anything, mock.Anything).Maybe().Return()
+			iaProvider.On("BumpScopeTtl", mock.Anything).Maybe().Return(nil)
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
 
 			balancersChain := balancersChain{}

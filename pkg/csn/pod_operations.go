@@ -101,14 +101,18 @@ var noLocalSSDRequirement = apiv1.NodeSelectorRequirement{
 	Values:   []string{labels.EphemeralLocalSsdEnabledValue},
 }
 
+// conjunctiveSuspensionRequirements must hold on every node that hosts a standby buffer.
+var conjunctiveSuspensionRequirements = append([]apiv1.NodeSelectorRequirement{noLocalSSDRequirement}, noAcceleratorRequirements...)
+
 // withSuspensionConstraints ANDs the Suspend/Resume requirements (the disjunctive memory limit
-// A1 OR A2 and the conjunctive Local SSD exclusion B) into every existing node selector term.
+// A1 OR A2 and the conjunctive exclusions B: no Local SSD, no GPU, no TPU) into every existing
+// node selector term.
 //
 // Kubernetes ORs NodeSelectorTerms and only ANDs the requirements within a single term, so the
 // suspension constraints must not be appended as new terms - that would widen the pod's affinity
 // instead of narrowing it, letting a node satisfy the pod by matching the injected requirements
-// alone. The result is therefore the cross product with the memory requirements, with the Local SSD
-// requirement appended to every term:
+// alone. The result is therefore the cross product with the memory requirements, with the
+// conjunctive requirements B appended to every term:
 //
 //	(T1 OR T2) AND (A1 OR A2) AND B == (T1 AND A1 AND B) OR (T1 AND A2 AND B) OR (T2 AND A1 AND B) OR (T2 AND A2 AND B)
 func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit MemoryLimit) []apiv1.NodeSelectorTerm {
@@ -143,7 +147,13 @@ func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit Memor
 			// surprised that modifying a (sub)field of one term also modifies
 			// the same for the neighbouring term.
 			copied := *term.DeepCopy()
-			copied.MatchExpressions = append(copied.MatchExpressions, req, noLocalSSDRequirement)
+			expressions := make([]apiv1.NodeSelectorRequirement, 0, len(copied.MatchExpressions)+1+len(conjunctiveSuspensionRequirements))
+			expressions = append(expressions, copied.MatchExpressions...)
+			expressions = append(expressions, *req.DeepCopy())
+			for _, conjunctive := range conjunctiveSuspensionRequirements {
+				expressions = append(expressions, *conjunctive.DeepCopy())
+			}
+			copied.MatchExpressions = expressions
 			result = append(result, copied)
 		}
 	}
@@ -157,10 +167,10 @@ func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit Memor
 //
 // Because withSuspensionConstraints duplicates each original user term across the two memory
 // requirement branches consecutively, stripping the injected expressions produces adjacent
-// duplicate terms (e.g. [T1, T2] -> [T1 + memLt + noLSSD, T1 + memDNE + noLSSD,
-// T2 + memLt + noLSSD, T2 + memDNE + noLSSD] -> [T1, T1, T2, T2]). Collapsing adjacent duplicates
-// in O(T) here is faster than leaving duplicates for nodeaffinity.NewRequiredNodeAffinity to
-// compile and Match to evaluate, while avoiding the O(T^2) cost of full slice deduplication.
+// duplicate terms (e.g. [T1, T2] -> [T1 + memLt + B, T1 + memDNE + B, T2 + memLt + B,
+// T2 + memDNE + B] -> [T1, T1, T2, T2], where B is noLSSD + noGPU + noTPU). Collapsing adjacent
+// duplicates in O(T) here is faster than leaving duplicates for nodeaffinity.NewRequiredNodeAffinity
+// to compile and Match to evaluate, while avoiding the O(T^2) cost of full slice deduplication.
 func requiredNodeAffinityWithoutSuspensionConstraints(pod *apiv1.Pod) nodeaffinity.RequiredNodeAffinity {
 	if pod.Spec.Affinity == nil ||
 		pod.Spec.Affinity.NodeAffinity == nil ||
@@ -224,6 +234,8 @@ func isSuspensionConstraint(req apiv1.NodeSelectorRequirement) bool {
 		return req.Operator == apiv1.NodeSelectorOpLt || req.Operator == apiv1.NodeSelectorOpDoesNotExist
 	case labels.EphemeralLocalSsdLabel:
 		return isLocalSSDRequirement(req, apiv1.NodeSelectorOpNotIn)
+	case labels.GPULabel, labels.TPULabel:
+		return req.Operator == apiv1.NodeSelectorOpDoesNotExist
 	default:
 		return false
 	}

@@ -52,6 +52,7 @@ func TestReconcile(t *testing.T) {
 			Status:      "RUNNING",
 			MigName:     "my-mig",
 			TemplateURL: globalTemplateURL("my-proj", "my-template"),
+			ClusterName: "my-cluster",
 			KubeEnv: buildTestKubeEnv(
 				map[string]string{"label1": "val1", "label2": "val2"},
 				[]string{"taint1=val1:NoSchedule"},
@@ -62,7 +63,7 @@ func TestReconcile(t *testing.T) {
 	server, gceService := newTestComputeServer(t, instances)
 	defer server.Close()
 
-	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second)
+	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second, 16)
 	rec.Reconcile(context.Background())
 
 	var nodeList apiv1.NodeList
@@ -163,13 +164,14 @@ func TestReconcileTemplateFallback(t *testing.T) {
 			Status:      "RUNNING",
 			MigName:     "my-mig",
 			TemplateURL: regionalTemplateURL("my-proj", "us-central1", "my-template"),
+			ClusterName: "my-cluster",
 		}),
 	}
 
 	server, gceService := newTestComputeServer(t, instances)
 	defer server.Close()
 
-	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second)
+	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second, 16)
 	rec.Reconcile(context.Background())
 
 	var nodeList apiv1.NodeList
@@ -239,13 +241,14 @@ func TestReconcileWithGPU(t *testing.T) {
 			Status:      "RUNNING",
 			MigName:     "gpu-mig",
 			TemplateURL: globalTemplateURL("my-proj", "gpu-template"),
+			ClusterName: "my-cluster",
 		}),
 	}
 
 	server, gceService := newTestComputeServer(t, instances)
 	defer server.Close()
 
-	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1-b", 10*time.Second)
+	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1-b", 10*time.Second, 16)
 	rec.Reconcile(context.Background())
 
 	var nodeList apiv1.NodeList
@@ -291,7 +294,7 @@ func TestReconcileSkipsStoppingAndTerminated(t *testing.T) {
 	server, gceService := newTestComputeServer(t, instances)
 	defer server.Close()
 
-	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second)
+	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second, 16)
 	rec.Reconcile(context.Background())
 
 	var nodeList apiv1.NodeList
@@ -300,6 +303,46 @@ func TestReconcileSkipsStoppingAndTerminated(t *testing.T) {
 	}
 	if len(nodeList.Items) != 0 {
 		t.Errorf("expected 0 nodes for stopping/terminated instances, got %d", len(nodeList.Items))
+	}
+}
+
+func TestReconcileSkipsInstancesOfOtherClusters(t *testing.T) {
+	kubeClient := newTestKubeClient(t)
+
+	fakeGce := fakegce.NewGceClient(t, nil).WithZones(map[string][]string{
+		"us-central1": {"us-central1-a"},
+	}, nil)
+
+	instances := []*gce_api.Instance{
+		buildTestInstance(testInstanceOptions{
+			Project:     "my-proj",
+			Zone:        "us-central1-a",
+			Name:        "foreign-instance",
+			MachineType: "n1-standard-4",
+			Status:      "RUNNING",
+			ClusterName: "other-cluster",
+		}),
+		buildTestInstance(testInstanceOptions{
+			Project:     "my-proj",
+			Zone:        "us-central1-a",
+			Name:        "unlabeled-instance",
+			MachineType: "n1-standard-4",
+			Status:      "RUNNING",
+		}),
+	}
+
+	server, gceService := newTestComputeServer(t, instances)
+	defer server.Close()
+
+	rec := NewKwokGceReconciler(kubeClient, fakeGce, gceService, "my-proj", "my-cluster", "us-central1", 10*time.Second, 16)
+	rec.Reconcile(context.Background())
+
+	var nodeList apiv1.NodeList
+	if err := kubeClient.List(context.Background(), &nodeList); err != nil {
+		t.Fatalf("failed to list nodes: %v", err)
+	}
+	if len(nodeList.Items) != 0 {
+		t.Errorf("expected 0 nodes for instances of other clusters, got %d", len(nodeList.Items))
 	}
 }
 

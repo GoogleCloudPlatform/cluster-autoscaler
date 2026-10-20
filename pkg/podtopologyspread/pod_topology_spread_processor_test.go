@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	clockutils "k8s.io/utils/clock/testing"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
@@ -37,7 +36,13 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
-const timeFormat = "2006-01-02T15:04:05-0700"
+const testUnhelpableAnnotation = "test-unhelpable"
+
+type fakeUnhelpableTracker struct{}
+
+func (fakeUnhelpableTracker) IsPodUnhelpable(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[testUnhelpableAnnotation] == "true"
+}
 
 type ptsEligibilityForTest struct {
 	domainNames         []string
@@ -1126,7 +1131,7 @@ func TestProcess(t *testing.T) {
 			expectedNewlyScheduledPods: nil,
 		},
 		{
-			description: "PTS pods not in backoff - resolved unhelpable annotation does not trigger backoff",
+			description: "PTS pods not in backoff - helpable pod does not trigger backoff",
 			pods: []*apiv1.Pod{
 				test.BuildTestPod("new-pod-1", 1, 1,
 					withOwnerReference("controller-uid"),
@@ -1138,7 +1143,6 @@ func TestProcess(t *testing.T) {
 				),
 				test.BuildTestPod("new-pod-2", 1, 1,
 					withOwnerReference("controller-uid"),
-					withAnnotations(map[string]string{annotator.UnhelpableUntilAnnotation: now.Format(timeFormat)}),
 					withPodTopologySpread(apiv1.TopologySpreadConstraint{
 						TopologyKey:       domainDiscovery1.topologyKey,
 						WhenUnsatisfiable: apiv1.DoNotSchedule,
@@ -1259,7 +1263,7 @@ func TestProcess(t *testing.T) {
 				domainKeys = append(domainKeys, domainDiscoveryConfig.topologyKey)
 				domainDiscoveries = append(domainDiscoveries, newFakeDomainDiscovery(domainDiscoveryConfig, tc.pods))
 			}
-			p := NewPodTopologySpreadProcessor(domainDiscoveries)
+			p := NewPodTopologySpreadProcessor(domainDiscoveries, fakeUnhelpableTracker{})
 			p.clock = clockutils.NewFakePassiveClock(now)
 
 			clusterSnapshot := testsnapshot.NewTestSnapshotOrDie(t)
@@ -1415,7 +1419,7 @@ func TestFilterPTSConfigs(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			p := NewPodTopologySpreadProcessor(nil)
+			p := NewPodTopologySpreadProcessor(nil, fakeUnhelpableTracker{})
 			p.clock = clockutils.NewFakePassiveClock(now)
 			assert.Equal(t, tc.wantConfigs, p.filterPTSConfigs(tc.configs))
 		})
@@ -1590,7 +1594,7 @@ func TestStatefulBackoff(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
-			p := NewPodTopologySpreadProcessor(nil)
+			p := NewPodTopologySpreadProcessor(nil, fakeUnhelpableTracker{})
 			fakeClock := clockutils.NewFakePassiveClock(testStart)
 			p.clock = fakeClock
 
@@ -1603,6 +1607,12 @@ func TestStatefulBackoff(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("Nil unhelpableTracker does not panic or add backoffs", func(t *testing.T) {
+		p := NewPodTopologySpreadProcessor(nil, nil)
+		p.Preprocess([]*apiv1.Pod{test.BuildTestPod("raw-pod-1", 1, 1, withUnhelpable())})
+		assert.Empty(t, p.backoffs)
+	})
 }
 
 func (f *fakeDomainDiscovery) EligiblePTSPods(pods []*apiv1.Pod) []PTSConfig {
@@ -1724,9 +1734,9 @@ func withOwnerReference(uid types.UID) func(*apiv1.Pod) {
 	}
 }
 
-// withUnhelpable marks the pod as unhelpable forever.
+// withUnhelpable marks the pod as unhelpable.
 func withUnhelpable() func(*apiv1.Pod) {
 	return withAnnotations(map[string]string{
-		annotator.UnhelpableUntilAnnotation: annotator.UnhelpableForever,
+		testUnhelpableAnnotation: "true",
 	})
 }

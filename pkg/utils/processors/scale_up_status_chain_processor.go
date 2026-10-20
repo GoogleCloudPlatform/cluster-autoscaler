@@ -27,9 +27,9 @@ import (
 	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_history "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/history"
 	csn_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/processors"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/unhelpable"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
@@ -61,7 +61,7 @@ func buildProcessorOrder() (map[reflect.Type]int, error) {
 		{reflect.TypeOf(new(npc_processors.CrdScaleUpStatusProcessor)).Elem(), 10},
 		{reflect.TypeOf(new(npc_history.ScaleUpStatusHistoryProcessor)).Elem(), 11},
 		{reflect.TypeOf(new(metrics_processors.ScaleUpStatusMetricsProcessor)).Elem(), 12},
-		{reflect.TypeOf(new(annotator.PodAnnotator)).Elem(), 13},
+		{reflect.TypeOf(new(unhelpable.UnhelpablePodTracker)).Elem(), 13},
 		{reflect.TypeOf(new(podstate.PodStateObserver)).Elem(), 14},
 	}
 	for _, entry := range entries {

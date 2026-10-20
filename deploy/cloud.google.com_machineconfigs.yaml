@@ -232,6 +232,11 @@ spec:
                           - name
                           type: object
                         type: array
+                      explicitRequestOnly:
+                        description: ExplicitRequestOnly specifies if the machine
+                          configuration should only be provisioned when explicitly
+                          requested.
+                        type: boolean
                       napDisabled:
                         description: NAPDisabled specifies if the machine configuration
                           is excluded from autoprovisioning support.
@@ -367,6 +372,11 @@ spec:
                                 - name
                                 type: object
                               type: array
+                            explicitRequestOnly:
+                              description: ExplicitRequestOnly specifies if the machine
+                                configuration should only be provisioned when explicitly
+                                requested.
+                              type: boolean
                             napDisabled:
                               description: NAPDisabled specifies if the machine configuration
                                 is excluded from autoprovisioning support.

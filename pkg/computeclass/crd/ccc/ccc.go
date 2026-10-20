@@ -15,6 +15,7 @@
 package ccc
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -924,30 +925,32 @@ func (ccc *cccCrd) ConfigHash(rule rules.Rule) string {
 	}
 
 	var matchedPriority *v1.Priority
-	for idx, r := range ccc.Rules() {
-		if r == rule {
-			priorities := ccc.priorities()
-			if idx < len(priorities) {
-				matchedPriority = &priorities[idx]
-				// nil-out the fields that do not affect the node pool configuration.
-				matchedPriority.CapacityCheckWaitTimeSeconds = nil
-				matchedPriority.PriorityScore = nil
-				matchedPriority.AllocationStrategy = nil
+	var ruleSelfServiceMetadata map[string]string
+	if rule != nil {
+		ruleSelfServiceMetadata = rule.SelfServiceMetadata()
+		for idx, r := range ccc.Rules() {
+			if r == rule {
+				priorities := ccc.priorities()
+				if idx < len(priorities) {
+					matchedPriority = canonicalizePriority(&priorities[idx])
+				}
+				break
 			}
-			break
 		}
 	}
 
 	data := struct {
-		NodePoolConfig   *v1.NodePoolConfig   `json:"nodePoolConfig,omitempty"`
-		NodePoolGroup    *v1.NodePoolGroup    `json:"nodePoolGroup,omitempty"`
-		PriorityDefaults *v1.PriorityDefaults `json:"priorityDefaults,omitempty"`
-		MatchedPriority  *v1.Priority         `json:"matchedPriority,omitempty"`
+		NodePoolConfig          *v1.NodePoolConfig `json:"nodePoolConfig,omitempty"`
+		NodePoolGroup           *v1.NodePoolGroup  `json:"nodePoolGroup,omitempty"`
+		MatchedPriority         *v1.Priority       `json:"matchedPriority,omitempty"`
+		SelfServiceMetadata     map[string]string  `json:"selfServiceMetadata,omitempty"`
+		RuleSelfServiceMetadata map[string]string  `json:"ruleSelfServiceMetadata,omitempty"`
 	}{
-		NodePoolConfig:   ccc.Spec.NodePoolConfig,
-		NodePoolGroup:    ccc.Spec.NodePoolGroup,
-		PriorityDefaults: ccc.Spec.PriorityDefaults,
-		MatchedPriority:  matchedPriority,
+		NodePoolConfig:          canonicalizeNodePoolConfig(ccc.Spec.NodePoolConfig),
+		NodePoolGroup:           ccc.Spec.NodePoolGroup,
+		MatchedPriority:         matchedPriority,
+		SelfServiceMetadata:     ccc.SelfServiceMetadata(),
+		RuleSelfServiceMetadata: ruleSelfServiceMetadata,
 	}
 
 	bytes, err := json.Marshal(data)
@@ -958,4 +961,53 @@ func (ccc *cccCrd) ConfigHash(rule rules.Rule) string {
 
 	hash := sha256.Sum256(bytes)
 	return fmt.Sprintf("%x", hash)[:32]
+}
+
+func canonicalizeTaints(taints []v1.TaintConfig) {
+	slices.SortFunc(taints, func(a, b v1.TaintConfig) int {
+		return cmp.Or(
+			cmp.Compare(a.Key, b.Key),
+			cmp.Compare(a.Value, b.Value),
+			cmp.Compare(a.Effect, b.Effect),
+		)
+	})
+}
+
+func canonicalizeNodePoolConfig(cfg *v1.NodePoolConfig) *v1.NodePoolConfig {
+	if cfg == nil {
+		return nil
+	}
+	copied := cfg.DeepCopy()
+	canonicalizeTaints(copied.Taints)
+	slices.Sort(copied.NetworkTags)
+	slices.Sort(copied.OAuthScopes)
+	slices.SortFunc(copied.ResourceManagerTags, func(a, b v1.Tags) int {
+		return cmp.Or(
+			cmp.Compare(a.Key, b.Key),
+			cmp.Compare(a.Value, b.Value),
+		)
+	})
+	return copied
+}
+
+func canonicalizePriority(p *v1.Priority) *v1.Priority {
+	if p == nil {
+		return nil
+	}
+	copied := p.DeepCopy()
+	// nil-out the fields that do not affect the node pool configuration.
+	copied.PriorityScore = nil
+	copied.AllocationStrategy = nil
+	copied.MinimumCapacity = nil
+
+	canonicalizeTaints(copied.Taints)
+	if copied.Location != nil {
+		slices.Sort(copied.Location.Zones)
+	}
+	if copied.Reservations != nil {
+		for i := range copied.Reservations.Specific {
+			slices.Sort(copied.Reservations.Specific[i].Zones)
+		}
+	}
+	return copied
 }

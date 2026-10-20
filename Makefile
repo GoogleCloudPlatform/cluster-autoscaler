@@ -18,10 +18,12 @@ endif
 
 ARM_EMULATOR_PATH?=/usr/bin/qemu-aarch64-static
 ifeq (${GOARCH},arm64)
-	ARM_EMULATOR_PARAMS=--exec ${ARM_EMULATOR_PATH}
+	ARM_EMULATOR_PARAMS=-p 8 --exec ${ARM_EMULATOR_PATH}
+	TEST_ENVVARS=GOMAXPROCS=4
 	RACE_TEST_PARAMS=
 else
 	ARM_EMULATOR_PARAMS=
+	TEST_ENVVARS=
 	RACE_TEST_PARAMS=-race
 endif
 
@@ -106,11 +108,11 @@ build-binary-no-internal-client: clean-binary compute-version
 
 .PHONY: test-unit
 test-unit: clean-binary build
-	CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} go test --test.short ${ARM_EMULATOR_PARAMS} ./... $(FLAGS)
+	CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} ${TEST_ENVVARS} go test --test.short ${ARM_EMULATOR_PARAMS} ./... $(FLAGS)
 
 .PHONY: test-unit-oss
 test-unit-oss: clean-binary build
-	go test --test.short ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler) $(FLAGS)
+	${TEST_ENVVARS} go test --test.short ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler) $(FLAGS)
 
 .PHONY: clean
 clean:
@@ -200,7 +202,7 @@ test-in-docker: clean-binary docker-builder
 	# synctest strictly requires the Go 1.23+ synchronous timer implementation, ensuring tests don't fall back to older async behaviors and fail.
 	docker run -e GODEBUG=asynctimerchan=0 -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${ARM_EMULATOR_PARAMS} ./...'
+	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} ${TEST_ENVVARS} GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-no-internal-client
 test-in-docker-no-internal-client: clean-binary docker-builder
@@ -210,13 +212,13 @@ test-in-docker-no-internal-client: clean-binary docker-builder
 		--tmpfs /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler/pkg/internalclients \
 		autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} GOOS=$(GOOS) GOARCH=$(GOARCH) go test -tags no_internal_clients ${ARM_EMULATOR_PARAMS} ./...'
+	  CA_RUN_LONG_TESTS=${CA_RUN_LONG_TESTS} CA_MANUAL_TEST=${CA_MANUAL_TEST} ${TEST_ENVVARS} GOOS=$(GOOS) GOARCH=$(GOARCH) go test -tags no_internal_clients ${ARM_EMULATOR_PARAMS} ./...'
 
 .PHONY: test-in-docker-oss
 test-in-docker-oss: clean-binary docker-builder
 	docker run -v ${GITROOT}:/tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler autoscaling-builder:latest bash -c \
 		'cd /tmpfs/gopath/src/k8s.io/gke-autoscaling/cluster-autoscaler && \
-		GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler)'
+		${TEST_ENVVARS} GOOS=$(GOOS) GOARCH=$(GOARCH) go test ${RACE_TEST_PARAMS} ${ARM_EMULATOR_PARAMS} $$(go list ./vendor/... | grep /vendor/k8s.io/autoscaler)'
 
 .PHONY: compile-proto
 compile-proto:

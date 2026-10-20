@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -61,7 +62,7 @@ type NodeStateManager struct {
 	experimentsSyncInterval time.Duration
 	backoffCleanupInterval  time.Duration
 
-	backoffEnabled     bool
+	backoffEnabled     atomic.Bool
 	backoff            base_backoff.Backoff
 	cloudProvider      CloudProvider
 	experimentsManager experiments.Manager
@@ -156,7 +157,7 @@ func NewNodeStateManager(nodeSource RegisterNodeHandler, opts ...Option) *NodeSt
 }
 
 func (m *NodeStateManager) IsBackoffEnabled() bool {
-	return m.backoffEnabled
+	return m.backoffEnabled.Load()
 }
 
 // UpdateBackoffStatus updates the IsBackedOff status for all suspended tracked nodes.
@@ -177,7 +178,7 @@ func (m *NodeStateManager) UpdateBackoffStatus() {
 }
 
 func (m *NodeStateManager) isNodeBackedOff(node *v1.Node) bool {
-	if m.backoff == nil || m.cloudProvider == nil || !m.backoffEnabled {
+	if m.backoff == nil || m.cloudProvider == nil || !m.backoffEnabled.Load() {
 		return false
 	}
 	mig, err := m.cloudProvider.GkeMigForNode(node)
@@ -222,10 +223,10 @@ func (m *NodeStateManager) updateBackoffEnabled() {
 	m.nodeMutex.Lock()
 	defer m.nodeMutex.Unlock()
 	if m.experimentsManager == nil {
-		m.backoffEnabled = false
+		m.backoffEnabled.Store(false)
 		return
 	}
-	m.backoffEnabled = m.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ColdStandbyNodesBackoffMinCAVersionFlag, false)
+	m.backoffEnabled.Store(m.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ColdStandbyNodesBackoffMinCAVersionFlag, false))
 }
 
 func (m *NodeStateManager) runPeriodically(ctx context.Context, interval time.Duration, f func()) {

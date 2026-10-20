@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
@@ -26,6 +27,8 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
 )
+
+const acceleratorMessage = "Standby buffers don't support nodes with GPUs or TPUs. Make sure the buffer configuration doesn't prevent the buffer from using nodes without accelerators."
 
 func TestSuspensionConstraintsBlocksPodRequest(t *testing.T) {
 	constraints := NewSuspensionConstraints(experiments.NewMockManagerWithOptions(version.Version{}, nil, nil))
@@ -53,6 +56,33 @@ func TestSuspensionConstraintsBlocksPodRequest(t *testing.T) {
 	msg, blocked = constraints.BlocksPodRequest(bothPod)
 	assert.True(t, blocked)
 	assert.Contains(t, msg, "209 GB of memory")
+
+	gpuPod := test.BuildTestPod("gpu", 100, 1*units.GB)
+	gpuPod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
+	MakePodCSN(gpuPod, "default/buffer")
+	msg, blocked = constraints.BlocksPodRequest(gpuPod)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
+
+	tpuSelectorPod := test.BuildTestPod("tpu-selector", 100, 1*units.GB)
+	tpuSelectorPod.Spec.NodeSelector = map[string]string{
+		labels.TPULabel: "tpu-v5-lite-podslice",
+	}
+	MakePodCSN(tpuSelectorPod, "default/buffer")
+	msg, blocked = constraints.BlocksPodRequest(tpuSelectorPod)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
+
+	// The accelerator constraint is checked before memory and Local SSD.
+	allPod := test.BuildTestPod("all", 100, 300*units.GB)
+	allPod.Spec.Containers[0].Resources.Requests["nvidia.com/gpu"] = resource.MustParse("1")
+	allPod.Spec.NodeSelector = map[string]string{
+		labels.EphemeralLocalSsdLabel: labels.EphemeralLocalSsdEnabledValue,
+	}
+	MakePodCSN(allPod, "default/buffer")
+	msg, blocked = constraints.BlocksPodRequest(allPod)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
 
 	normalPod := test.BuildTestPod("normal", 100, 1*units.GB)
 	MakePodCSN(normalPod, "default/buffer")
@@ -105,11 +135,25 @@ func TestSuspensionConstraintsBlocksPodOnAnyNode(t *testing.T) {
 		labels.MemoryScalingLevelLabel: "256",
 		labels.EphemeralLocalSsdLabel:  labels.EphemeralLocalSsdEnabledValue,
 	})
-	// Violates both constraints, but lacks the buffer assignment label required by the pod.
+	gpuNode := csnNodeWithLabels("gpu", map[string]string{
+		labels.MemoryScalingLevelLabel: "16",
+		labels.GPULabel:                "nvidia-l4",
+	})
+	tpuNode := csnNodeWithLabels("tpu", map[string]string{
+		labels.TPULabel: "tpu-v5-lite-podslice",
+	})
+	largeLSSDGPUNode := csnNodeWithLabels("large-lssd-gpu", map[string]string{
+		labels.MemoryScalingLevelLabel: "256",
+		labels.EphemeralLocalSsdLabel:  labels.EphemeralLocalSsdEnabledValue,
+		labels.GPULabel:                "nvidia-l4",
+	})
+	// Violates every constraint, but lacks the buffer assignment label required by the pod.
 	unrelatedNode := test.BuildTestNode("unrelated", 4000, 8*units.GB, test.WithNodeLabels(map[string]string{
 		metadata.SoftWorkloadSeparationKey: metadata.SoftWorkloadSeparationValue,
 		labels.MemoryScalingLevelLabel:     "256",
 		labels.EphemeralLocalSsdLabel:      labels.EphemeralLocalSsdEnabledValue,
+		labels.GPULabel:                    "nvidia-l4",
+		labels.TPULabel:                    "tpu-v5-lite-podslice",
 	}))
 
 	_, blocked := constraints.BlocksPodOnAnyNode(pod, smallNode, noLabelsCSNNode, unparsableMemNode, lssdDisabledNode, unrelatedNode)
@@ -132,10 +176,28 @@ func TestSuspensionConstraintsBlocksPodOnAnyNode(t *testing.T) {
 	assert.Contains(t, msg, "209 GB of memory")
 
 	// Even when the Local SSD node appears before the large memory node in the slice,
-	// constraint priority order (memory limit first) is deterministic.
+	// constraint priority order (memory limit before Local SSD) is deterministic.
 	msg, blocked = constraints.BlocksPodOnAnyNode(pod, lssdNode, largeNode)
 	assert.True(t, blocked)
 	assert.Contains(t, msg, "209 GB of memory")
+
+	msg, blocked = constraints.BlocksPodOnAnyNode(pod, gpuNode)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
+
+	msg, blocked = constraints.BlocksPodOnAnyNode(pod, tpuNode)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
+
+	// A node violating every constraint is attributed to the first one: accelerators.
+	msg, blocked = constraints.BlocksPodOnAnyNode(pod, largeLSSDGPUNode)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
+
+	// The accelerator constraint wins regardless of the node order.
+	msg, blocked = constraints.BlocksPodOnAnyNode(pod, largeLSSDNode, gpuNode)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
 
 	// Scans past non-blocking and unrelated nodes to find a blocking node.
 	msg, blocked = constraints.BlocksPodOnAnyNode(pod, smallNode, unrelatedNode, lssdNode)
@@ -187,6 +249,22 @@ func TestSuspensionConstraintsBlocksPodOnAnyNode(t *testing.T) {
 	msg, blocked = constraints.BlocksPodOnAnyNode(zoneAffinityPod, lssdNodeInZoneA)
 	assert.True(t, blocked)
 	assert.Contains(t, msg, "Local SSDs")
+
+	// The same counterfactual for the accelerator constraint: a GPU node outside the pod's own
+	// zone would not have matched even without the suspension constraints.
+	gpuNodeInZoneA := csnNodeWithLabels("gpu-zone-a", map[string]string{
+		labels.GPULabel:               "nvidia-l4",
+		"topology.kubernetes.io/zone": "us-central1-a",
+	})
+	gpuNodeInZoneB := csnNodeWithLabels("gpu-zone-b", map[string]string{
+		labels.GPULabel:               "nvidia-l4",
+		"topology.kubernetes.io/zone": "us-central1-b",
+	})
+	_, blocked = constraints.BlocksPodOnAnyNode(zoneAffinityPod, gpuNodeInZoneB)
+	assert.False(t, blocked)
+	msg, blocked = constraints.BlocksPodOnAnyNode(zoneAffinityPod, gpuNodeInZoneA)
+	assert.True(t, blocked)
+	assert.Equal(t, acceleratorMessage, msg)
 
 	// Non-default memory limit via experiment flag.
 	customConstraints := NewSuspensionConstraints(experiments.NewMockManagerWithOptions(version.Version{}, nil, flagsWithLimit("129")))

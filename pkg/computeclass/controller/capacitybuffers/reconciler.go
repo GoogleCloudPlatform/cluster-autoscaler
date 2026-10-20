@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/validation"
 	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	"k8s.io/client-go/rest"
@@ -151,6 +152,19 @@ func (r *Reconciler) reconcile(ctx context.Context, req reconcile.Request) (reco
 		r.deleteCache(req.Name)
 		klog.Infof("%s ComputeClass %s is marked for deletion; ignoring", logPrefix, cc.Name)
 		return reconcile.Result{}, nil
+	}
+
+	if len(cc.Spec.Buffers) > 0 && len(validation.IsValidLabelValue(cc.Name)) > 0 {
+		msg := fmt.Sprintf("ComputeClass name must be a valid label value of at most %d characters when capacity buffers are configured", validation.LabelValueMaxLength)
+		klog.Warningf("%s %s in ComputeClass %s", logPrefix, msg, cc.Name)
+		return reconcile.Result{}, r.updateStatus(
+			ctx,
+			&cc,
+			metav1.ConditionFalse,
+			"InvalidComputeClassName",
+			msg,
+			cc.Status.ObservedBuffers,
+		)
 	}
 
 	// Default missing or empty provisioning strategies and reject duplicate strategies.

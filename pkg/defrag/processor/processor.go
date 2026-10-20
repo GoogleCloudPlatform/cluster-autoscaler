@@ -467,8 +467,14 @@ func (p *Processor) processCandidate(info *candidateInfo, allCandidatesNodes map
 	}
 }
 
-// processCandidatePartial scales down nodes that can be already removed,
-// then simulates scheduling on the remaining nodes and returns unschedulable pods.
+// processCandidatePartial scales down the candidate nodes whose pods already fit
+// on other nodes, then simulates scheduling for the remaining nodes and returns
+// their unschedulable pods.
+//
+// In DeleteBeforeCreate mode the remaining nodes are scaled down as well, even
+// though their pods have nowhere to go yet, mirroring processCandidateAtomic.
+// Their unschedulable pods are still returned so that the replacement capacity
+// is requested in the same loop.
 func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNodes map[string]bool) ([]*apiv1.Pod, error) {
 	candidateNodeInfos, err := p.toNodeInfosMap(info)
 	if err != nil {
@@ -487,18 +493,27 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 	if info.defragPossibleMap == nil {
 		info.defragPossibleMap = make(map[string]time.Time)
 	}
+	deleteBeforeCreate := info.candidate.Mode == defrag.DeleteBeforeCreate
 	var nodesToScaleDown []string
+	// removedFromSnapshot tracks the nodes to scale down that the removal
+	// simulator took out of the snapshot. Only those need to be added back for
+	// actuation; unremovable nodes are still present.
+	removedFromSnapshot := make(map[string]bool)
 	for _, node := range removableNodes {
 		if _, ok := info.defragPossibleMap[node]; !ok {
 			info.defragPossibleMap[node] = p.clock.Now()
 		}
 		defragPossibleTime := info.defragPossibleMap[node]
-		if info.candidate.Mode == defrag.DeleteBeforeCreate || p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
+		if deleteBeforeCreate || p.clock.Since(defragPossibleTime) >= p.config.ScaleDownDelay {
 			nodesToScaleDown = append(nodesToScaleDown, node)
+			removedFromSnapshot[node] = true
 		}
 	}
 	for _, node := range unremovableNodes {
 		delete(info.defragPossibleMap, node)
+		if deleteBeforeCreate {
+			nodesToScaleDown = append(nodesToScaleDown, node)
+		}
 	}
 	// simulateNodeRemovals intentionally does not commit simulations for unremovable nodes.
 	// We perform a simulation for them here to get unschedulable pods.
@@ -524,6 +539,9 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 		// starting the scale down.
 		p.ctx.ClusterSnapshot.Fork()
 		for _, nodeName := range nodesToScaleDown {
+			if !removedFromSnapshot[nodeName] {
+				continue
+			}
 			nodeInfo := candidateNodeInfos[nodeName]
 			if err := p.ctx.ClusterSnapshot.AddNodeInfo(nodeInfo); err != nil {
 				p.ctx.ClusterSnapshot.Revert()
@@ -538,8 +556,9 @@ func (p *Processor) processCandidatePartial(info *candidateInfo, allCandidatesNo
 		metrics.Metrics.IncreaseDefragScaleDownNodesTotal(info.candidate.Plugin.String(), len(scaledDownNodes))
 	}
 	klog.V(4).Infof(
-		"Defrag candidate %v scheduling simulation (partial) - %d nodes scaled down, %d nodes left. Pods: %d on existing, %d on upcoming, %d unschedulable",
+		"Defrag candidate %v scheduling simulation (partial, delete before create: %t) - %d nodes scaled down, %d nodes left. Pods: %d on existing, %d on upcoming, %d unschedulable",
 		info.candidate,
+		deleteBeforeCreate,
 		len(nodesToScaleDown),
 		len(unremovableNodes),
 		len(candidatePods.schedulableOnExisting),

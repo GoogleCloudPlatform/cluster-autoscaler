@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability/rules"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -2069,7 +2070,10 @@ func TestProcessCandidate(t *testing.T) {
 		nodesWithPods     map[*apiv1.Node][]*apiv1.Pod
 		allCandidateNodes []string
 		isScaledDown      bool
-		candidateInfo     *candidateInfo
+		// scaledDownNodes marks only the given candidate nodes as already
+		// started, unlike isScaledDown which marks all of them.
+		scaledDownNodes []string
+		candidateInfo   *candidateInfo
 
 		wantStartDeletionCall  bool
 		wantStartDeletionNodes []*apiv1.Node
@@ -2078,7 +2082,9 @@ func TestProcessCandidate(t *testing.T) {
 		wantCandidatePods []*apiv1.Pod
 		wantCandidateInfo *candidateInfo
 		wantNodesWithPods map[*apiv1.Node][]*apiv1.Pod
-		wantErr           bool
+		// wantNodesAbsent lists nodes that must no longer be in the snapshot.
+		wantNodesAbsent []string
+		wantErr         bool
 		// minCapacityCrds, if set, enforces the ComputeClass min capacity with
 		// the real AtomicMinCapacityProcessor and these ComputeClasses.
 		minCapacityCrds []crdtest.CRD
@@ -2672,6 +2678,153 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			wantCandidatePods: []*apiv1.Pod{pod2, pod3},
 		},
+		{
+			name: "partial delete-before-create, unremovable nodes are scaled down too",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 10): {pod1, pod2},
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {},
+			},
+			allCandidateNodes: []string{"n1", "n2"},
+			candidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+			},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				buildReadyNode("n1", 1000, 10),
+				buildReadyNode("n2", 1000, 10),
+			},
+			wantCandidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+				defragPossibleMap: map[string]time.Time{
+					"n1": timeNow,
+				},
+			},
+			// n1 was removed by the removal simulator and its pods placed on n3;
+			// n2 stays in the snapshot with its pod even though it is being deleted.
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {pod1, pod2},
+			},
+			wantNodesAbsent:   []string{"n1"},
+			wantCandidatePods: []*apiv1.Pod{pod3},
+		},
+		{
+			name: "partial delete-before-create, nothing removable, whole candidate is scaled down",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 10): {pod1, pod2},
+				buildReadyNode("n2", 1000, 10): {pod3},
+			},
+			allCandidateNodes: []string{"n1", "n2"},
+			candidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+			},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				buildReadyNode("n1", 1000, 10),
+				buildReadyNode("n2", 1000, 10),
+			},
+			wantCandidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime:      timeNow,
+				defragPossibleMap: make(map[string]time.Time),
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 10): {pod1, pod2},
+				buildReadyNode("n2", 1000, 10): {pod3},
+			},
+			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
+		},
+		{
+			name: "partial delete-before-create, nodes already being scaled down are skipped",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 10): {pod1, pod2},
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {},
+			},
+			allCandidateNodes: []string{"n1", "n2"},
+			scaledDownNodes:   []string{"n1"},
+			candidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+			},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				buildReadyNode("n2", 1000, 10),
+			},
+			wantCandidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+				defragPossibleMap: map[string]time.Time{
+					"n1": timeNow,
+				},
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {pod1, pod2},
+			},
+			wantNodesAbsent:   []string{"n1"},
+			wantCandidatePods: []*apiv1.Pod{pod3},
+		},
+		{
+			name: "partial delete-before-create, error during node scale-down",
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n1", 1000, 10): {pod1, pod2},
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {},
+			},
+			allCandidateNodes: []string{"n1", "n2"},
+			candidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+			},
+			wantStartDeletionCall: true,
+			wantStartDeletionNodes: []*apiv1.Node{
+				buildReadyNode("n1", 1000, 10),
+				buildReadyNode("n2", 1000, 10),
+			},
+			wantStartDeletionError: caerrors.NewAutoscalerError("type", "msg"),
+			wantCandidateInfo: &candidateInfo{
+				candidate: &defrag.Candidate{
+					Nodes: []string{"n1", "n2"},
+					Mode:  defrag.DeleteBeforeCreate,
+				},
+				creationTime: timeNow,
+				defragPossibleMap: map[string]time.Time{
+					"n1": timeNow,
+				},
+			},
+			wantNodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				buildReadyNode("n2", 1000, 10): {pod3},
+				buildReadyNode("n3", 1000, 10): {pod1, pod2},
+			},
+			wantNodesAbsent: []string{"n1"},
+			wantErr:         true,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -2733,6 +2886,9 @@ func TestProcessCandidate(t *testing.T) {
 					processor.actuator.scaledDownNodes[nodeName] = timeNow
 				}
 			}
+			for _, nodeName := range tc.scaledDownNodes {
+				processor.actuator.scaledDownNodes[nodeName] = timeNow
+			}
 
 			allCandidateNodes := make(map[string]bool)
 			for _, node := range tc.allCandidateNodes {
@@ -2760,6 +2916,10 @@ func TestProcessCandidate(t *testing.T) {
 					pods = append(pods, podInfo.Pod)
 				}
 				assert.ElementsMatch(t, wantPods, pods)
+			}
+			for _, nodeName := range tc.wantNodesAbsent {
+				_, err := snapshot.GetNodeInfo(nodeName)
+				assert.ErrorIs(t, err, clustersnapshot.ErrNodeNotFound, "node %s should have been removed from the snapshot", nodeName)
 			}
 		})
 	}
@@ -3297,7 +3457,7 @@ func TestCleanPickedCandidate(t *testing.T) {
 			})
 			processor.pickedCandidateInfo = &candidateInfo{}
 			maxLoopsBeforeAdmission := 5
-			sharedFairnessManager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission)
+			sharedFairnessManager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission, nil)
 			processor.fairnessEnforcer = sharedFairnessManager.CreateEnforcer(DefragProcessorName)
 			processor.fairnessEnforcer.Admit(nil) // sets previously admitted.
 

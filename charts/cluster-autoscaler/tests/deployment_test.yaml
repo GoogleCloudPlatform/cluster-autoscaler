@@ -38,7 +38,7 @@ tests:
           value: RELEASE-NAME-cluster-autoscaler
       - equal:
           path: spec.template.spec.containers[0].image
-          value: registry.k8s.io/autoscaling/cluster-autoscaler:1.36.0
+          value: :1.37.0
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -126,7 +126,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: CLUSTERAUTOSCALER_VERSION
-            value: "1.36.0"
+            value: "1.37.0"
       - contains:
           path: spec.template.spec.containers[0].env
           content:

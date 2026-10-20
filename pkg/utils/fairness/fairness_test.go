@@ -18,14 +18,20 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/annotator"
-
 	"github.com/stretchr/testify/assert"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	. "k8s.io/utils/clock/testing"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
+
+const testUnhelpableAnnotation = "test-unhelpable"
+
+type fakeUnhelpableTracker struct{}
+
+func (fakeUnhelpableTracker) IsPodUnhelpable(pod *apiv1.Pod) bool {
+	return pod != nil && pod.Annotations[testUnhelpableAnnotation] == "true"
+}
 
 func TestAdmit(t *testing.T) {
 	t.Parallel()
@@ -85,7 +91,7 @@ func TestAdmit(t *testing.T) {
 			t.Parallel()
 			// Arbitrary non-zero date.
 			clock := NewFakePassiveClock(time.Date(1985, time.October, 21, 9, 0, 0, 0, time.UTC))
-			fe := newEnforcerWithClock("defrag", 5*time.Minute, clock)
+			fe := newEnforcerWithClock("defrag", 5*time.Minute, clock, fakeUnhelpableTracker{})
 			for i, want := range tc.want {
 				clock.SetTime(clock.Now().Add(tc.timeStep))
 				got := fe.Admit(tc.unschedulable)
@@ -94,10 +100,16 @@ func TestAdmit(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("nil unhelpableTracker treats pods as helpable", func(t *testing.T) {
+		t.Parallel()
+		fe := NewFairnessEnforcer("defrag", 5*time.Minute, nil)
+		assert.False(t, fe.Admit([]*apiv1.Pod{unhelpablePod("p1")}))
+	})
 }
 
 func unhelpablePod(name string) *apiv1.Pod {
 	p := test.BuildTestPod(name, 1, 1000)
-	p.Annotations[annotator.UnhelpableUntilAnnotation] = annotator.UnhelpableForever
+	p.Annotations[testUnhelpableAnnotation] = "true"
 	return p
 }

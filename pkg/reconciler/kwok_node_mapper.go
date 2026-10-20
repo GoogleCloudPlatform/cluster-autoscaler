@@ -28,16 +28,32 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodeprediction/fake"
 )
 
+// kwokNodeAnnotation marks Nodes that are managed (created and garbage-collected) by this reconciler.
+const kwokNodeAnnotation = "kwok.x-k8s.io/node"
+
 // kwokNodeMapper constructs Kubernetes Node objects for KWOK nodes from GCE Instances.
 type kwokNodeMapper struct {
 	gceClient gce.AutoscalingGceClient
 	projectID string
+	// Templates by URL and machine types by zone/name. Separate caches, so a
+	// template fetch never blocks machine type lookups.
+	templateCache    *fetchCache[*gce_api.InstanceTemplate]
+	machineTypeCache *fetchCache[*gce_api.MachineType]
 }
+
+// Cache sizes. Template URLs change with every node pool update, so that cache
+// is bounded; the live set is one template per MIG, and machine types are few.
+const (
+	templateCacheSize    = 1024
+	machineTypeCacheSize = 256
+)
 
 func newKwokNodeMapper(gceClient gce.AutoscalingGceClient, projectID string) *kwokNodeMapper {
 	return &kwokNodeMapper{
-		gceClient: gceClient,
-		projectID: projectID,
+		gceClient:        gceClient,
+		projectID:        projectID,
+		templateCache:    newFetchCache[*gce_api.InstanceTemplate](templateCacheSize),
+		machineTypeCache: newFetchCache[*gce_api.MachineType](machineTypeCacheSize),
 	}
 }
 
@@ -85,7 +101,9 @@ func (m *kwokNodeMapper) mapInstanceToNode(ctx context.Context, inst *gce_api.In
 	}
 	templateName := path.Base(meta.templateURL)
 	regional := strings.Contains(meta.templateURL, "/regions/")
-	template, err := m.gceClient.FetchMigTemplate(ctx, migRef, templateName, regional)
+	template, err := m.templateCache.get(ctx, meta.templateURL, func(ctx context.Context) (*gce_api.InstanceTemplate, error) {
+		return m.gceClient.FetchMigTemplate(ctx, migRef, templateName, regional)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch template %s for %s: %w", templateName, inst.Name, err)
 	}
@@ -100,7 +118,9 @@ func (m *kwokNodeMapper) mapInstanceToNode(ctx context.Context, inst *gce_api.In
 		return nil, fmt.Errorf("machine type not found for instance %s", inst.Name)
 	}
 
-	mt, err := m.gceClient.FetchMachineType(ctx, zone, machineType)
+	mt, err := m.machineTypeCache.get(ctx, zone+"/"+machineType, func(ctx context.Context) (*gce_api.MachineType, error) {
+		return m.gceClient.FetchMachineType(ctx, zone, machineType)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch machine type %s in zone %s: %w", machineType, zone, err)
 	}
@@ -131,7 +151,7 @@ func (m *kwokNodeMapper) mapInstanceToNode(ctx context.Context, inst *gce_api.In
 	}
 
 	// KWOK specific annotations and configurations
-	node.Annotations["kwok.x-k8s.io/node"] = "fake"
+	node.Annotations[kwokNodeAnnotation] = "fake"
 
 	// TODO: b/532099850 - When cloud-controller-manager handles setting ProviderID, replace setting ProviderID here with setting the node.cloudprovider.kubernetes.io/uninitialized taint.
 	node.Spec.ProviderID = fmt.Sprintf("gce://%s/%s/%s", m.projectID, zone, inst.Name)

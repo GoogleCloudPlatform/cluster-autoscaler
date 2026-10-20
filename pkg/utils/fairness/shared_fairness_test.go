@@ -52,7 +52,7 @@ func TestSharedAdmit(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			manager := NewSharedEnforcerManager(tc.maxLoops)
+			manager := NewSharedEnforcerManager(tc.maxLoops, fakeUnhelpableTracker{})
 			p1 := manager.CreateEnforcer("p1")
 			p2 := manager.CreateEnforcer("p2")
 
@@ -101,7 +101,7 @@ func TestSharedAdmitSingleProcessor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			manager := NewSharedEnforcerManager(tc.maxLoops)
+			manager := NewSharedEnforcerManager(tc.maxLoops, fakeUnhelpableTracker{})
 			defrag := manager.CreateEnforcer("defrag")
 
 			for i, want := range tc.want {

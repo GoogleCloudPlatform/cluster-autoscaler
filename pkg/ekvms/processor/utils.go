@@ -33,11 +33,6 @@ import (
 	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
 
-const (
-	miBToKiB = size.MiB / size.KiB
-	giBToKiB = size.GiB / size.KiB
-)
-
 // PreventScheduleOnLookaheadExperimentFlags maps machine family names to their corresponding experiment flag
 // that controls whether scheduling on lookahead nodes should be prevented.
 var PreventScheduleOnLookaheadExperimentFlags = map[string]string{
@@ -100,16 +95,6 @@ func removeBalloonPod(snapshot clustersnapshot.ClusterSnapshot, nodeInfo *framew
 		return nodeInfo, fmt.Errorf("getting node info for node %q failed: %v", nodeName, err)
 	}
 	return newNodeInfo, nil
-}
-
-// isNodeEmpty returns true if a node only has system and/or daemon set pods.
-func isNodeEmpty(nodeInfo *framework.NodeInfo) bool {
-	for _, podInfo := range nodeInfo.Pods() {
-		if !isSystemPod(podInfo.Pod) && !podutils.IsDaemonSetPod(podInfo.Pod) {
-			return false
-		}
-	}
-	return true
 }
 
 func isResizableNode(node *apiv1.Node, mcp *machinetypes.MachineConfigProvider) bool {

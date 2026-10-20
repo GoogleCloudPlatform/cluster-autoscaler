@@ -15,11 +15,9 @@
 package test
 
 import (
-	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -148,19 +146,4 @@ func (b *NodeBuilder) updateLabels(label string, value string) {
 		existingLabels = map[string]string{label: value}
 	}
 	b.node.SetLabels(existingLabels)
-}
-
-type MockMachineFamilyProvider struct {
-	mock.Mock
-}
-
-func NewMockMachineFamilyProvider(defaultFamily machinetypes.MachineFamily) *MockMachineFamilyProvider {
-	mfProvider := MockMachineFamilyProvider{}
-	mfProvider.On("GetAutoprovisioningDefaultFamily").Return(defaultFamily)
-	return &mfProvider
-}
-
-func (m *MockMachineFamilyProvider) GetAutoprovisioningDefaultFamily() machinetypes.MachineFamily {
-	args := m.Called()
-	return args.Get(0).(machinetypes.MachineFamily)
 }
