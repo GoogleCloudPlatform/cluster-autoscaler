@@ -40,15 +40,29 @@ var (
 				1024, 2048, 4096,
 			},
 		},
-		[]string{"op_type", "node_count_bucket"}, // number of node can grow quickly, so we use log2
+		// number of nodes can grow quickly, so we use log2 for node_count_bucket
+		[]string{"op_type", "node_count_bucket", "status"},
 	)
 )
 
+// opStatus is the status label of csn_processed_operations - describes the
+// result of processing an operation for a single node.
+type opStatus string
+
 const (
-	// `status` label - describes the result of processing an operation
-	opSuccess      = "success"
-	opRetryFailure = "retryable_failure"
-	opFailure      = "failure"
+	opSuccess      opStatus = "success"
+	opRetryFailure opStatus = "retryable_failure"
+	opFailure      opStatus = "failure"
+)
+
+// batchStatus is the status label of csn_operation_latency_seconds -
+// describes the result of processing a whole batch of nodes.
+type batchStatus string
+
+const (
+	batchSuccess      batchStatus = "success"
+	batchWithFailures batchStatus = "with_failures"
+	batchError        batchStatus = "error"
 )
 
 func init() {

@@ -113,7 +113,7 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 		beforeOp := time.Now()
 		res, err := handler(ctx, op)
 		nodeCountLog2 := math.Log2(float64(len(op.NodeNames)))
-		opLatencySeconds.WithLabelValues(op.Type.String(), strconv.Itoa(int(nodeCountLog2))).Observe(time.Since(beforeOp).Seconds())
+		opLatencySeconds.WithLabelValues(op.Type.String(), strconv.Itoa(int(nodeCountLog2)), string(batchStatusFor(res, err))).Observe(time.Since(beforeOp).Seconds())
 		if err != nil {
 			klog.Errorf("%s error handling operation %v: %v", logPrefix, op, err)
 			d.clearPendingOperation(op.Type, op.NodeNames)
@@ -129,6 +129,19 @@ func (d *Dispatcher) workerLoop(ctx context.Context) {
 		}
 		d.handleBackoff(op, res)
 	}
+}
+
+// batchStatusFor returns the status of processing a whole batch of nodes:
+// batchError if the handler returned an error, batchWithFailures if any node
+// failed, batchSuccess otherwise.
+func batchStatusFor(res ops.Result, err error) batchStatus {
+	if err != nil {
+		return batchError
+	}
+	if len(res.Errs) > 0 {
+		return batchWithFailures
+	}
+	return batchSuccess
 }
 
 // NodesAwaitingRetry returns the number of node-opType pairs that
@@ -178,7 +191,7 @@ type attemptKey struct {
 	code    string
 }
 
-func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status string, nodeNames set.Set[string], attempts map[string]int, errs map[string]error) {
+func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status opStatus, nodeNames set.Set[string], attempts map[string]int, errs map[string]error) {
 	counts := make(map[attemptKey]int)
 	for nodeName := range nodeNames {
 		code := ops.ErrorCodeNone
@@ -188,6 +201,6 @@ func (d *Dispatcher) countAndTrackByRetryCount(opType ops.OperationType, status 
 		counts[attemptKey{attempt: attempts[nodeName], code: code}]++
 	}
 	for ac, count := range counts {
-		opResultsTotal.WithLabelValues(opType.String(), status, strconv.Itoa(ac.attempt), ac.code).Add(float64(count))
+		opResultsTotal.WithLabelValues(opType.String(), string(status), strconv.Itoa(ac.attempt), ac.code).Add(float64(count))
 	}
 }
