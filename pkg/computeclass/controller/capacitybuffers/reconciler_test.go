@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -462,38 +463,68 @@ func (m *mockReconcileClient) Status() client.SubResourceWriter {
 	return m.statusWriter
 }
 
-func TestReconcile_DuplicateProvisioningStrategy(t *testing.T) {
+func TestReconcile_Validation(t *testing.T) {
 	tests := []struct {
-		name    string
-		buffers []ccapiv1.ComputeClassBuffer
+		name       string
+		ccName     string
+		buffers    []ccapiv1.ComputeClassBuffer
+		wantPTs    int
+		wantCBs    int
+		wantReason string
 	}{
 		{
-			name: "duplicate explicit standby strategy",
+			name:   "name at 63-character limit succeeds",
+			ccName: strings.Repeat("a", 63),
+			buffers: []ccapiv1.ComputeClassBuffer{
+				{ProvisioningStrategy: activeCapacityStrategy},
+			},
+			wantPTs:    1,
+			wantCBs:    1,
+			wantReason: "Pending",
+		},
+		{
+			name:   "name exceeding 63 characters",
+			ccName: strings.Repeat("a", 64),
+			buffers: []ccapiv1.ComputeClassBuffer{
+				{ProvisioningStrategy: activeCapacityStrategy},
+			},
+			wantReason: "InvalidComputeClassName",
+		},
+		{
+			name:   "duplicate explicit standby strategy",
+			ccName: "test-cc",
 			buffers: []ccapiv1.ComputeClassBuffer{
 				{ProvisioningStrategy: standbyCapacityStrategy},
 				{ProvisioningStrategy: standbyCapacityStrategy},
 			},
+			wantReason: "DuplicateProvisioningStrategy",
 		},
 		{
-			name: "duplicate explicit active strategy",
+			name:   "duplicate explicit active strategy",
+			ccName: "test-cc",
 			buffers: []ccapiv1.ComputeClassBuffer{
 				{ProvisioningStrategy: activeCapacityStrategy},
 				{ProvisioningStrategy: activeCapacityStrategy},
 			},
+			wantReason: "DuplicateProvisioningStrategy",
 		},
 		{
-			name: "duplicate empty default strategy",
+			name:   "duplicate empty default strategy",
+			ccName: "test-cc",
 			buffers: []ccapiv1.ComputeClassBuffer{
 				{ProvisioningStrategy: ""},
 				{ProvisioningStrategy: ""},
 			},
+			wantReason: "DuplicateProvisioningStrategy",
 		},
 		{
-			name: "empty default strategy combined with explicit active strategy",
+			name:   "empty default strategy combined with explicit active strategy",
+			ccName: "test-cc",
 			buffers: []ccapiv1.ComputeClassBuffer{
 				{ProvisioningStrategy: ""},
 				{ProvisioningStrategy: activeCapacityStrategy},
 			},
+			wantReason: "DuplicateProvisioningStrategy",
 		},
 	}
 
@@ -501,7 +532,7 @@ func TestReconcile_DuplicateProvisioningStrategy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cc := &ccapiv1.ComputeClass{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:       "test-cc",
+					Name:       tc.ccName,
 					Generation: 1,
 				},
 				Spec: ccapiv1.ComputeClassSpec{
@@ -517,10 +548,17 @@ func TestReconcile_DuplicateProvisioningStrategy(t *testing.T) {
 
 			r := &Reconciler{Client: mockClient}
 			_, err := r.Reconcile(context.Background(), reconcile.Request{
-				NamespacedName: types.NamespacedName{Name: "test-cc"},
+				NamespacedName: types.NamespacedName{Name: tc.ccName},
 			})
 			if err != nil {
 				t.Fatalf("Reconcile returned unexpected error: %v", err)
+			}
+
+			if len(mockClient.patchedPTs) != tc.wantPTs {
+				t.Errorf("Expected %d PodTemplate patches, got %d", tc.wantPTs, len(mockClient.patchedPTs))
+			}
+			if len(mockClient.createdCBs) != tc.wantCBs {
+				t.Errorf("Expected %d CapacityBuffer creates, got %d", tc.wantCBs, len(mockClient.createdCBs))
 			}
 
 			if len(statusWriter.patchedBytes) == 0 {
@@ -536,9 +574,9 @@ func TestReconcile_DuplicateProvisioningStrategy(t *testing.T) {
 			if cond == nil {
 				t.Fatalf("Expected %s condition to be present, got nil", conditionTypeBuffersConfigured)
 			}
-			if cond.Status != metav1.ConditionFalse || cond.Reason != "DuplicateProvisioningStrategy" {
-				t.Errorf("Expected status=False reason=DuplicateProvisioningStrategy, got status=%s reason=%s message=%q",
-					cond.Status, cond.Reason, cond.Message)
+			if cond.Status != metav1.ConditionFalse || cond.Reason != tc.wantReason {
+				t.Errorf("Expected status=False reason=%s, got status=%s reason=%s message=%q",
+					tc.wantReason, cond.Status, cond.Reason, cond.Message)
 			}
 		})
 	}
