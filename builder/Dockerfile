@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-FROM google-go.pkg.dev/golang:1.26.8-debian12
+FROM google-go.pkg.dev/golang:1.26.10
 LABEL maintainer="Marcin Wielgus <mwielgus@google.com>"
 
 ENV GO111MODULE=auto
