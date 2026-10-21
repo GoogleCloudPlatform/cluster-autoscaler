@@ -330,6 +330,7 @@ func newTestPodStateObserver(t *testing.T, pendingPods ...*v1.Pod) (*podstate.Po
 		false, // enablePendingPodsMetric
 		false, // enablePendingPodsPerCccMetric
 		-10,   // expendablePodsPriorityCutoff
+		nil,   // allowedSchedulers
 	)
 	if err != nil {
 		t.Fatalf("NewPodStateObserver() unexpected error: %v", err)

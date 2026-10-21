@@ -16,6 +16,7 @@ package podstate
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/ccc"
 	podstatetypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podkind"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/klog/v2"
@@ -35,9 +37,7 @@ import (
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	coreutils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
-	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	osspodutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
@@ -78,6 +78,9 @@ type PodStateObserver struct {
 	logLimiter                   *logging.LogRateLimiter
 	npcCrdLister                 npc_lister.Lister
 	expendablePodsPriorityCutoff int
+	// allowedSchedulers mirrors --allowed-scheduler-names. When non-empty, CA
+	// ignores pods targeting any other scheduler.
+	allowedSchedulers map[string]bool
 
 	mux                 sync.Mutex
 	unreportedPodStates map[types.UID]*podStateData
@@ -85,11 +88,11 @@ type PodStateObserver struct {
 }
 
 // NewPodStateObserver returns a new PodStateObserver.
-func NewPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int) (*PodStateObserver, error) {
-	return newPodStateObserver(informerFactory, reactionTimeMetrics, podsClassifier, npc_crd_lister, defaultPeriodicCheckFrequency, clock.RealClock{}, enablePendingPodsMetric, enablePendingPodsPerCccMetric, expendablePodsPriorityCutoff)
+func NewPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool) (*PodStateObserver, error) {
+	return newPodStateObserver(informerFactory, reactionTimeMetrics, podsClassifier, npc_crd_lister, defaultPeriodicCheckFrequency, clock.RealClock{}, enablePendingPodsMetric, enablePendingPodsPerCccMetric, expendablePodsPriorityCutoff, allowedSchedulers)
 }
 
-func newPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, periodicCheckFrequency time.Duration, clock clock.WithTicker, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int) (*PodStateObserver, error) {
+func newPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, periodicCheckFrequency time.Duration, clock clock.WithTicker, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool) (*PodStateObserver, error) {
 	o := &PodStateObserver{
 		autoscalerStartTime:    clock.Now(),
 		informerFactory:        informerFactory,
@@ -100,6 +103,7 @@ func newPodStateObserver(informerFactory informers.SharedInformerFactory, reacti
 
 		npcCrdLister:                 npc_crd_lister,
 		expendablePodsPriorityCutoff: expendablePodsPriorityCutoff,
+		allowedSchedulers:            allowedSchedulers,
 		unreportedPodStates:          make(map[types.UID]*podStateData),
 		reportedPodStates:            make(map[types.UID]*podStateData),
 	}
@@ -157,12 +161,7 @@ func (o *PodStateObserver) Process(ctx context.Context, autoscalingCtx *ca_conte
 func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.ReactionType) {
 	loggingQuota := logging.OverdueReactionsLoggingQuota()
 	now := o.clock.Now()
-	filteredPods := make([]*v1.Pod, 0, len(pods))
-	for _, pod := range pods {
-		if !fake.IsFake(pod) && !cb.IsFakeCapacityBuffersPod(pod) && !coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) && !osspodutils.IsDaemonSetPod(pod) {
-			filteredPods = append(filteredPods, pod)
-		}
-	}
+	filteredPods := slices.DeleteFunc(slices.Clone(pods), o.shouldIgnorePod)
 	reactionDataToReportReactionTime := o.updateAndGetReactionDataToReport(filteredPods, reactionType)
 	for pod, sd := range reactionDataToReportReactionTime {
 		t := getTimePassedFromBeingUnschedulable(now, sd)
@@ -177,6 +176,18 @@ func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.
 // CleanUp cleans up
 func (o *PodStateObserver) CleanUp() {
 	o.reportTimeoutPods()
+}
+
+// shouldIgnorePod reports whether the pod is out of scope for the reaction
+// time SLO, because CA either never acts on it or handles it outside the
+// regular scale-up loop.
+func (o *PodStateObserver) shouldIgnorePod(pod *v1.Pod) bool {
+	return osspodutils.IsDaemonSetPod(pod) ||
+		coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) ||
+		// Covers pods injected by CA processors as well as real pods consuming a
+		// ProvisioningRequest, which CA ignores in the regular scale-up loop.
+		podkind.IsSynthetic(pod) ||
+		(len(o.allowedSchedulers) > 0 && !o.allowedSchedulers[pod.Spec.SchedulerName])
 }
 
 // isPodAlreadyTrackedNoLock checks if the pod is present in either the unreported or reported map.
@@ -217,10 +228,11 @@ func (o *PodStateObserver) onAdd(obj interface{}) {
 	if pod.Spec.NodeName != "" {
 		return
 	}
-	if osspodutils.IsDaemonSetPod(pod) {
+	// CA skips terminating pods (see kube_util.ArrangePodsBySchedulability).
+	if pod.DeletionTimestamp != nil {
 		return
 	}
-	if coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) {
+	if o.shouldIgnorePod(pod) {
 		return
 	}
 
@@ -266,22 +278,29 @@ func (o *PodStateObserver) onUpdate(oldObj, newObj interface{}) {
 	}
 	// if pod is marked as unscheduled we want to store the last transition timestamp
 	o.updatePodUnschedulableTime(newPod)
-	if oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "" {
+	switch {
+	case oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "":
 		// Pods are only scheduled once in their lifetime, so we can safely delete it now.
 		o.observeReactionAndForgetPod(newPod, metrics.Scheduled)
+	case oldPod.DeletionTimestamp == nil && newPod.DeletionTimestamp != nil:
+		// A pod waiting on finalizers can stay around long after it starts
+		// terminating, but CA stops acting on it right away.
+		o.observeReactionAndForgetPod(newPod, metrics.Deleted)
 	}
 }
 
 func (o *PodStateObserver) onDelete(obj interface{}) {
+	// If the watch dropped before the deletion was seen, the informer passes a
+	// tombstone instead of the pod.
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
 	pod, ok := obj.(*v1.Pod)
 	if !ok {
 		klog.Warningf("Informer has incorrect object type: %v", obj)
 		return
 	}
 	if pod.Spec.NodeName != "" {
-		return
-	}
-	if coreutils.IsExpendablePod(pod, o.expendablePodsPriorityCutoff) {
 		return
 	}
 	o.observeReactionAndForgetPod(pod, metrics.Deleted)
