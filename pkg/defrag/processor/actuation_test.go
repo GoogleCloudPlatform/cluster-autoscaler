@@ -53,10 +53,11 @@ func TestStartScaleDown(t *testing.T) {
 
 		isScaleDownStatusProcessorSet bool
 
-		wantStartDeletionCall   bool
-		wantStartDeletionNodes  []*apiv1.Node
-		wantStartDeletionStatus *status.ScaleDownStatus
-		wantStartDeletionError  error
+		wantStartDeletionCall       bool
+		wantStartDeletionEmptyNodes []*apiv1.Node
+		wantStartDeletionDrainNodes []*apiv1.Node
+		wantStartDeletionStatus     *status.ScaleDownStatus
+		wantStartDeletionError      error
 
 		wantPdbs                        []*v1.PodDisruptionBudget
 		wantScaledDownNodes             []string
@@ -112,7 +113,7 @@ func TestStartScaleDown(t *testing.T) {
 			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n1", 100, 1),
 			},
 
@@ -129,6 +130,40 @@ func TestStartScaleDown(t *testing.T) {
 			wantCurrentCycleScaledDownNodes: []string{"n1"},
 		},
 		{
+			name: "Candidate with empty and DaemonSet-only nodes",
+			pdbs: []*v1.PodDisruptionBudget{
+				buildPdb("pdb-1", 2),
+			},
+			nodesWithPods: map[*apiv1.Node][]*apiv1.Pod{
+				test.BuildTestNode("n1", 100, 1): {},
+				test.BuildTestNode("n2", 100, 1): {test.SetDSPodSpec(test.BuildTestPod("ds-1", 10, 1))},
+				test.BuildTestNode("n3", 100, 1): {pdbPod1},
+			},
+			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
+			isScaleDownStatusProcessorSet: true,
+			wantStartDeletionCall:         true,
+			wantStartDeletionEmptyNodes: []*apiv1.Node{
+				test.BuildTestNode("n1", 100, 1),
+				test.BuildTestNode("n2", 100, 1),
+			},
+			wantStartDeletionDrainNodes: []*apiv1.Node{
+				test.BuildTestNode("n3", 100, 1),
+			},
+			wantStartDeletionStatus: &status.ScaleDownStatus{
+				Result: status.ScaleDownNodeDeleteStarted,
+				ScaledDownNodes: []*status.ScaleDownNode{
+					{Node: test.BuildTestNode("n1", 100, 1)},
+					{Node: test.BuildTestNode("n2", 100, 1)},
+					{Node: test.BuildTestNode("n3", 100, 1)},
+				},
+			},
+			wantPdbs: []*v1.PodDisruptionBudget{
+				buildPdb("pdb-1", 1),
+			},
+			wantScaledDownNodes:             []string{"n1", "n2", "n3"},
+			wantCurrentCycleScaledDownNodes: []string{"n1", "n2", "n3"},
+		},
+		{
 			name: "Candidate with multiple nodes, all nodes scale-down",
 			pdbs: []*v1.PodDisruptionBudget{
 				buildPdb("pdb-1", 2),
@@ -142,7 +177,7 @@ func TestStartScaleDown(t *testing.T) {
 			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n1", 100, 1),
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
@@ -173,7 +208,7 @@ func TestStartScaleDown(t *testing.T) {
 			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n1", 100, 1),
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
@@ -203,7 +238,7 @@ func TestStartScaleDown(t *testing.T) {
 			candidate:                     &defrag.Candidate{IsAtomic: true, Nodes: []string{"n1", "n2", "n3"}},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n1", 100, 1),
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
@@ -229,7 +264,7 @@ func TestStartScaleDown(t *testing.T) {
 			scaledDownNodes:               []string{"n1"},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
 			},
@@ -258,7 +293,7 @@ func TestStartScaleDown(t *testing.T) {
 			scaledDownNodes:               []string{"n1"},
 			isScaleDownStatusProcessorSet: false,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
 			},
@@ -307,7 +342,7 @@ func TestStartScaleDown(t *testing.T) {
 			wantStartDeletionStatus:       &status.ScaleDownStatus{},
 			isScaleDownStatusProcessorSet: true,
 			wantStartDeletionCall:         true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				test.BuildTestNode("n1", 100, 1),
 				test.BuildTestNode("n2", 100, 1),
 				test.BuildTestNode("n3", 100, 1),
@@ -328,7 +363,7 @@ func TestStartScaleDown(t *testing.T) {
 				scaleDownStatusProcessor = &mockScaleDownStatusProcessor{}
 			}
 			if tc.wantStartDeletionCall {
-				scaleDownActuator.On("StartDeletion", []*apiv1.Node(nil), tc.wantStartDeletionNodes).Return(
+				scaleDownActuator.On("StartDeletion", tc.wantStartDeletionEmptyNodes, tc.wantStartDeletionDrainNodes).Return(
 					tc.wantStartDeletionStatus.Result,
 					tc.wantStartDeletionStatus.ScaledDownNodes,
 					tc.wantStartDeletionError,
