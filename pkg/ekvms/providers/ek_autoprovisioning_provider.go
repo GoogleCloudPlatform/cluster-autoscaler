@@ -86,7 +86,7 @@ func (p *ekAutoprovisioningProvider) refreshManagedNodesStatus() {
 }
 
 func (p *ekAutoprovisioningProvider) refreshLaunchStatus() {
-	if !p.bpChecker.isBalloonPodCreatable {
+	if !p.bpChecker.isCreatable() {
 		p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 		return
 	}

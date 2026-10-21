@@ -88,7 +88,7 @@ func (p *e4aAutoprovisioningProvider) refreshLaunchStatus() {
 		p.status = LaunchStatus{phase: launchDisabled, source: launchUndefined}
 		return
 	case resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize:
-		if !p.bpChecker.isBalloonPodCreatable {
+		if !p.bpChecker.isCreatable() {
 			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 			return
 		}
@@ -100,7 +100,7 @@ func (p *e4aAutoprovisioningProvider) refreshLaunchStatus() {
 	}
 
 	if isE4aEnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4aWithResizeMinVersionFlag, true) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4aWithResizeEnabledFlag, true); isE4aEnabledWithExperiment {
-		if !p.bpChecker.isBalloonPodCreatable {
+		if !p.bpChecker.isCreatable() {
 			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 			return
 		}

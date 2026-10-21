@@ -17,6 +17,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -50,16 +51,25 @@ var balloonPodTestSizes = []balloonPodSize{
 }
 
 type balloonPodChecker struct {
-	clientSet                    clientset.Interface
+	clientSet   clientset.Interface
+	runInterval time.Duration
+
+	// mu protects isBalloonPodCreatable, balloonPodCreationErrorCount, and balloonPodSizeIndex.
+	mu                           sync.RWMutex
 	isBalloonPodCreatable        bool
 	balloonPodCreationErrorCount int
 	balloonPodSizeIndex          int
-	runInterval                  time.Duration
+}
+
+func (c *balloonPodChecker) isCreatable() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.isBalloonPodCreatable
 }
 
 func (c *balloonPodChecker) Run(ctx context.Context) {
 	wait.Until(func() {
-		if err := c.dryRunCreateBalloonPod(); err != nil {
+		if err := c.dryRunCreateBalloonPod(ctx); err != nil {
 			c.recordFailure(err)
 			return
 		}
@@ -67,13 +77,14 @@ func (c *balloonPodChecker) Run(ctx context.Context) {
 	}, c.runInterval, ctx.Done())
 }
 
-func (c *balloonPodChecker) dryRunCreateBalloonPod() error {
-	ctx, cancelFunc := context.WithTimeout(context.Background(), balloonPodCreationTimeout)
+func (c *balloonPodChecker) dryRunCreateBalloonPod(ctx context.Context) error {
+	ctx, cancelFunc := context.WithTimeout(ctx, balloonPodCreationTimeout)
 	defer cancelFunc()
 
 	node := &apiv1.Node{}
-	cpu := *resource.NewQuantity(c.currentSize().CPU, resource.DecimalSI)
-	memory := resource.MustParse(c.currentSize().Memory)
+	size := c.currentSize()
+	cpu := *resource.NewQuantity(size.CPU, resource.DecimalSI)
+	memory := resource.MustParse(size.Memory)
 	bp, err := operationtracker.GenerateBalloonPod(node, cpu, memory, false)
 	if err != nil {
 		return fmt.Errorf("balloon pod generation error: %v", err)
@@ -87,10 +98,14 @@ func (c *balloonPodChecker) dryRunCreateBalloonPod() error {
 }
 
 func (c *balloonPodChecker) currentSize() balloonPodSize {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return balloonPodTestSizes[c.balloonPodSizeIndex]
 }
 
 func (c *balloonPodChecker) resetSuccess() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if !c.isBalloonPodCreatable {
 		klog.Infof("Balloon pod dry run creation succeeded after failures")
 	}
@@ -101,9 +116,11 @@ func (c *balloonPodChecker) resetSuccess() {
 }
 
 func (c *balloonPodChecker) recordFailure(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.balloonPodCreationErrorCount++
 	if c.isBalloonPodCreatable && c.balloonPodCreationErrorCount == 3 {
-		klog.Warningf("Balloon pod dry run creation failed 3 times consecutively on size %v: %v", c.currentSize(), err)
+		klog.Warningf("Balloon pod dry run creation failed 3 times consecutively on size %v: %v", balloonPodTestSizes[c.balloonPodSizeIndex], err)
 		c.isBalloonPodCreatable = false
 	}
 }
