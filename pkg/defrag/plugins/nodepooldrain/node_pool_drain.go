@@ -47,28 +47,7 @@ func (*plugin) String() string {
 }
 
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
-	var suitableNodes []string
-	for _, nodeName := range nodeNames {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			klog.Errorf("Failed to get NodeInfo: %v", err)
-			continue
-		}
-
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), nodeInfo.Node())
-		if err != nil {
-			klog.Errorf("Failed to get NodeGroup: %v", err)
-			continue
-		}
-		if nodeGroup == nil {
-			continue
-		}
-
-		if nodeGroup.MaxSize(context.TODO()) == nodeDrainThreshold {
-			suitableNodes = append(suitableNodes, nodeName)
-		}
-	}
-
+	suitableNodes := p.ValidCandidateNodes(ctx, nodeNames)
 	p.latestUnfitNodesCount = len(suitableNodes)
 
 	if len(suitableNodes) == 0 {
