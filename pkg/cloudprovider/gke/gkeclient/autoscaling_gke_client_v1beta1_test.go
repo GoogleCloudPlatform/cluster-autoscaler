@@ -6291,3 +6291,75 @@ func TestGetCluster_ArchTaintBehavior(t *testing.T) {
 	assert.Equal(t, 1, len(cluster.NodePools))
 	assert.Equal(t, "NONE", cluster.NodePools[0].Spec.ArchTaintBehavior)
 }
+
+func TestGetCluster_AutopilotManaged(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		apiClusterResponse   string
+		wantAutopilotManaged bool
+	}{
+		{
+			name: "autopilotConfig unset",
+			apiClusterResponse: `{
+			  "createTime": "2017-10-24T12:20:00+00:00",
+			  "nodePools": [
+				{
+				  "name": "default-pool",
+				  "config": {},
+				  "status": "RUNNING"
+				}
+			  ]
+			}`,
+			wantAutopilotManaged: false,
+		},
+		{
+			name: "autopilotConfig disabled",
+			apiClusterResponse: `{
+			  "createTime": "2017-10-24T12:20:00+00:00",
+			  "nodePools": [
+				{
+				  "name": "default-pool",
+				  "config": {},
+				  "autopilotConfig": {
+					"enabled": false
+				  },
+				  "status": "RUNNING"
+				}
+			  ]
+			}`,
+			wantAutopilotManaged: false,
+		},
+		{
+			name: "autopilotConfig enabled",
+			apiClusterResponse: `{
+			  "createTime": "2017-10-24T12:20:00+00:00",
+			  "nodePools": [
+				{
+				  "name": "autopilot-managed-pool",
+				  "config": {},
+				  "autopilotConfig": {
+					"enabled": true
+				  },
+				  "status": "RUNNING"
+				}
+			  ]
+			}`,
+			wantAutopilotManaged: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+
+			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster-1").Return(tc.apiClusterResponse).Once()
+			client := newTestAutoscalingGkeClientV1beta1(t, "project1", "us-central1-b", "cluster-1", server.URL)
+
+			cluster, err := client.GetCluster()
+			assert.NoError(t, err)
+			if assert.Equal(t, 1, len(cluster.NodePools)) {
+				assert.Equal(t, tc.wantAutopilotManaged, cluster.NodePools[0].AutopilotManaged)
+				assert.Equal(t, tc.wantAutopilotManaged, cluster.NodePools[0].Spec.AutopilotManaged)
+			}
+		})
+	}
+}

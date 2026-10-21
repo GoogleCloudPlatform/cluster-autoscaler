@@ -264,6 +264,7 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 				PodIpv4CidrBlock:              podIpv4CidrBlock,
 				SecondaryBootDisks:            pool.Config.SecondaryBootDisks,
 				StoragePools:                  pool.Config.StoragePools,
+				AutopilotManaged:              autopilotManaged,
 				ServiceAccount:                pool.Config.ServiceAccount,
 				LinuxNodeConfig:               linuxNodeConfig(pool.Config.LinuxNodeConfig),
 				KubeletConfig:                 nodeKubeletConfig(pool.Config.KubeletConfig),
