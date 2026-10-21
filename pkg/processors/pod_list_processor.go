@@ -17,11 +17,13 @@ package processors
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/types"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/podlistprocessor"
 	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/pods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 
@@ -290,10 +292,19 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	unschedulablePodsBeforeFiltering := unschedulablePods
-	unschedulablePods, err = p.processAndObserve(p.defaultPodListerProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
+	unschedulablePods, err = p.defaultPodListerProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 	if err != nil {
 		return []*apiv1.Pod{}, err
 	}
+	// With graceful degradation, FilterOutSchedulable drops pods it ran out of
+	// time to evaluate, and they can't be told apart from schedulable pods. It
+	// sets GracefulDegradationLoopCount > 0 in exactly the loops where it does so.
+	// Pods it did find to fit are placed in the cluster snapshot.
+	removedPods := podutil.GetMissingPods(unschedulablePodsBeforeFiltering, unschedulablePods)
+	if autoscalingCtx.GracefulDegradationLoopCount > 0 {
+		removedPods = podsInSnapshot(autoscalingCtx.ClusterSnapshot, removedPods)
+	}
+	p.observePods(removedPods, metrics.NoActionNeeded)
 	klog.Infof("Unschedulable pods count after filtering out schedulable: %v", len(unschedulablePods))
 
 	if p.flexAdvisorPodListProcessor != nil && registerFlexAdvisorLate {
@@ -431,18 +442,44 @@ func (p *GkeInternalPodListProcessor) processAndObserve(processor podProcessor, 
 	if err != nil {
 		return []*apiv1.Pod{}, err
 	}
+	p.observePods(podutil.GetMissingPods(unschedulablePods, withoutSchedulable), reactionType)
+	return withoutSchedulable, nil
+}
 
-	if p.podStateObserver != nil || p.cbFakePodStateObserver != nil {
-		schedulablePods := podutil.GetMissingPods(unschedulablePods, withoutSchedulable)
-		if p.podStateObserver != nil {
-			p.podStateObserver.ObserveReaction(schedulablePods, reactionType)
-		}
-		if p.cbFakePodStateObserver != nil {
-			p.cbFakePodStateObserver.ObserveSchedulablePods(schedulablePods)
+// observePods reports the given pods as having received the given reaction.
+func (p *GkeInternalPodListProcessor) observePods(pods []*apiv1.Pod, reactionType metrics.ReactionType) {
+	if p.podStateObserver != nil {
+		p.podStateObserver.ObserveReaction(pods, reactionType)
+	}
+	if p.cbFakePodStateObserver != nil {
+		p.cbFakePodStateObserver.ObserveSchedulablePods(pods)
+	}
+}
+
+// podsInSnapshot returns the pods scheduled on any node in the snapshot,
+// including upcoming nodes.
+func podsInSnapshot(snapshot clustersnapshot.ClusterSnapshot, pods []*apiv1.Pod) []*apiv1.Pod {
+	if len(pods) == 0 {
+		return nil
+	}
+	nodeInfos, err := snapshot.ListNodeInfos()
+	if err != nil {
+		klog.Warningf("Failed to list NodeInfos from ClusterSnapshot: %v", err)
+		return nil
+	}
+	inSnapshot := make(map[types.UID]bool)
+	for _, nodeInfo := range nodeInfos {
+		for _, podInfo := range nodeInfo.Pods() {
+			inSnapshot[podInfo.Pod.UID] = true
 		}
 	}
-
-	return withoutSchedulable, nil
+	var placed []*apiv1.Pod
+	for _, pod := range pods {
+		if inSnapshot[pod.UID] {
+			placed = append(placed, pod)
+		}
+	}
+	return placed
 }
 
 // CleanUp cleans up all internal PodListProcessor.

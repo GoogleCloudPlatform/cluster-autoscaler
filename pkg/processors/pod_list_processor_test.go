@@ -17,6 +17,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -434,6 +436,114 @@ func TestScaleToZeroObservesPodState(t *testing.T) {
 				}
 				if diff := cmp.Diff(tc.wantReactions, reactionMetrics.reactions, cmp.AllowUnexported(observedReaction{})); diff != "" {
 					t.Errorf("observed reactions diff (-want +got):\n%s", diff)
+				}
+			})
+		})
+	}
+}
+
+// mockFilterOutSchedulable mimics FilterOutSchedulable: it places the pods that
+// fit in the cluster snapshot, drops both them and the pods it skipped from the
+// list, and sets GracefulDegradationLoopCount to the given value.
+type mockFilterOutSchedulable struct {
+	fits          map[*v1.Pod]string // pod -> node it fits on
+	skipped       []*v1.Pod
+	degradedLoops int
+}
+
+func (m *mockFilterOutSchedulable) Process(_ context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+	for pod, nodeName := range m.fits {
+		if err := autoscalingCtx.ClusterSnapshot.ForceAddPod(pod, nodeName); err != nil {
+			return nil, err
+		}
+	}
+	autoscalingCtx.GracefulDegradationLoopCount = m.degradedLoops
+	return slices.DeleteFunc(slices.Clone(unschedulablePods), func(pod *v1.Pod) bool {
+		_, fits := m.fits[pod]
+		return fits || slices.Contains(m.skipped, pod)
+	}), nil
+}
+
+func (m *mockFilterOutSchedulable) CleanUp() {}
+
+func TestGracefulDegradationObservesPodState(t *testing.T) {
+	newPod := func(name string) *v1.Pod {
+		return buildTestPod(namespaceDefault, name, func(p *v1.Pod) {
+			p.UID = types.UID(name + "-uid")
+		})
+	}
+	fitsOnNode, fitsOnUpcomingNode, skipped := newPod("fits-on-node"), newPod("fits-on-upcoming-node"), newPod("skipped")
+	noActionNeeded := observedReaction{systemPod: false, reactionType: metrics.NoActionNeeded}
+
+	// loop is what FilterOutSchedulable does in one CA loop, and the reactions
+	// observed in that loop.
+	type loop struct {
+		fits          map[*v1.Pod]string
+		skipped       []*v1.Pod
+		degradedLoops int
+		wantReactions []observedReaction
+	}
+	testCases := []struct {
+		name  string
+		loops []loop
+	}{
+		{
+			name: "not degraded: pods that fit observe NoActionNeeded",
+			loops: []loop{{
+				fits:          map[*v1.Pod]string{fitsOnNode: "node", fitsOnUpcomingNode: "upcoming-node"},
+				wantReactions: []observedReaction{noActionNeeded, noActionNeeded},
+			}},
+		},
+		{
+			name: "degraded: pods that fit observe NoActionNeeded, skipped pod is not observed",
+			loops: []loop{{
+				fits:          map[*v1.Pod]string{fitsOnNode: "node", fitsOnUpcomingNode: "upcoming-node"},
+				skipped:       []*v1.Pod{skipped},
+				degradedLoops: 1,
+				wantReactions: []observedReaction{noActionNeeded, noActionNeeded},
+			}},
+		},
+		{
+			name: "degradation ends: pod skipped while degraded observes NoActionNeeded once it fits",
+			loops: []loop{
+				{skipped: []*v1.Pod{skipped}, degradedLoops: 1},
+				{fits: map[*v1.Pod]string{skipped: "node"}, wantReactions: []observedReaction{noActionNeeded}},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			upcomingNode := test.BuildTestNode("upcoming-node", 1000, 1000)
+			upcomingNode.Annotations = map[string]string{annotations.NodeUpcomingAnnotation: "true"}
+			for _, node := range []*v1.Node{test.BuildTestNode("node", 1000, 1000), upcomingNode} {
+				if err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)); err != nil {
+					t.Fatalf("AddNodeInfo(%s) unexpected error: %v", node.Name, err)
+				}
+			}
+			synctest.Test(t, func(t *testing.T) {
+				unschedulablePods := []*v1.Pod{fitsOnNode, fitsOnUpcomingNode, skipped}
+				observer, reactionMetrics := newTestPodStateObserver(t, unschedulablePods...)
+				for i, l := range tc.loops {
+					reactionMetrics.reactions = nil
+					processor := &GkeInternalPodListProcessor{
+						defaultPodListerProcessor: &mockFilterOutSchedulable{fits: l.fits, skipped: l.skipped, degradedLoops: l.degradedLoops},
+						podStateObserver:          observer,
+						podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+						experimentsManager:        experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
+					}
+					autoscalingCtx := &ca_context.AutoscalingContext{
+						ClusterSnapshot: snapshot,
+					}
+
+					if _, err := processor.Process(context.Background(), autoscalingCtx, unschedulablePods); err != nil {
+						t.Fatalf("loop %d: processor.Process() unexpected error: %v", i+1, err)
+					}
+
+					if diff := cmp.Diff(l.wantReactions, reactionMetrics.reactions, cmp.AllowUnexported(observedReaction{})); diff != "" {
+						t.Errorf("loop %d: observed reactions diff (-want +got):\n%s", i+1, diff)
+					}
 				}
 			})
 		})
