@@ -15,7 +15,6 @@
 package reservations
 
 import (
-	"container/heap"
 	"context"
 	"fmt"
 	"reflect"
@@ -25,6 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/priorityqueue"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -150,8 +150,9 @@ func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) ([]*balan
 		return false
 	}
 
-	pq := make(balancingInfoPriorityQueue, 0)
-	heap.Init(&pq)
+	pq := priorityqueue.NewWithLessComparator(func(a, b *balancingInfo) bool {
+		return a.scaleUpInfo.NewSize < b.scaleUpInfo.NewSize
+	})
 	for _, info := range balancingInfos {
 		if !hasUnusedReservation(info) {
 			continue
@@ -159,11 +160,14 @@ func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) ([]*balan
 		if info.scaleUpInfo.NewSize >= info.scaleUpInfo.MaxSize {
 			continue
 		}
-		heap.Push(&pq, info)
+		pq.Push(info)
 	}
 
-	for pq.Len() > 0 && newNodes > 0 {
-		info := heap.Pop(&pq).(*balancingInfo)
+	for newNodes > 0 {
+		info, ok := pq.Pop()
+		if !ok {
+			break
+		}
 		if !claimReservationSlot(info) {
 			continue
 		}
@@ -176,7 +180,7 @@ func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) ([]*balan
 		if info.scaleUpInfo.NewSize >= info.scaleUpInfo.MaxSize {
 			continue
 		}
-		heap.Push(&pq, info)
+		pq.Push(info)
 	}
 
 	return balancingInfos, initialNodes - newNodes
@@ -368,41 +372,6 @@ func filterEmptyScaleUpInfos(scaleUpInfos []nodegroupset.ScaleUpInfo) []nodegrou
 type balancingInfo struct {
 	scaleUpInfo          nodegroupset.ScaleUpInfo
 	matchingReservations []*reservation.Reservation
-}
-
-// balancingInfoPriorityQueue implements heap.Interface and holds balancingInfo pointers.
-type balancingInfoPriorityQueue []*balancingInfo
-
-// Len is the number of elements in the collection.
-func (pq *balancingInfoPriorityQueue) Len() int {
-	return len(*pq)
-}
-
-// Less reports whether the element with index i must sort before the element with index j.
-// The priority is given to the node group that has a smaller number of nodes (to keep groups balanced).
-func (pq *balancingInfoPriorityQueue) Less(i, j int) bool {
-	return (*pq)[i].scaleUpInfo.NewSize < (*pq)[j].scaleUpInfo.NewSize
-}
-
-// Swap swaps the elements with indexes i and j.
-func (pq *balancingInfoPriorityQueue) Swap(i, j int) {
-	(*pq)[i], (*pq)[j] = (*pq)[j], (*pq)[i]
-}
-
-// Push adds an item to the queue.
-func (pq *balancingInfoPriorityQueue) Push(x any) {
-	item := x.(*balancingInfo)
-	*pq = append(*pq, item)
-}
-
-// Pop removes and returns the highest-priority item from the queue.
-func (pq *balancingInfoPriorityQueue) Pop() any {
-	old := *pq
-	n := len(old)
-	item := old[n-1]
-	old[n-1] = nil
-	*pq = old[0 : n-1]
-	return item
 }
 
 // nodeGroupWrapper wraps cloudprovider.NodeGroup to hide added nodes as current nodes,

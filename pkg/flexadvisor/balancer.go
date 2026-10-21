@@ -15,7 +15,6 @@
 package flexadvisor
 
 import (
-	"container/heap"
 	"context"
 	"errors"
 	"fmt"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/priorityqueue"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -324,14 +324,21 @@ func getBalancerAwaitTimeout(experimentsManager experiments.Manager) time.Durati
 }
 
 func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) []*balancingInfo {
-	pq := make(balancingInfoPriorityQueue, 0)
-	heap.Init(&pq)
+	pq := priorityqueue.NewWithLessComparator(func(a, b *balancingInfo) bool {
+		if a.scaleUpInfo.NewSize != b.scaleUpInfo.NewSize {
+			return a.scaleUpInfo.NewSize < b.scaleUpInfo.NewSize
+		}
+		return a.gcePreferenceScore > b.gcePreferenceScore
+	})
 	for _, info := range balancingInfos {
-		heap.Push(&pq, info)
+		pq.Push(info)
 	}
 
-	for pq.Len() > 0 && newNodes > 0 {
-		info := heap.Pop(&pq).(*balancingInfo)
+	for newNodes > 0 {
+		info, ok := pq.Pop()
+		if !ok {
+			break
+		}
 		if info.capacityLimit <= 0 {
 			continue
 		}
@@ -339,7 +346,7 @@ func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) []*balanc
 		info.capacityLimit -= 1
 		newNodes -= 1
 
-		heap.Push(&pq, info)
+		pq.Push(info)
 	}
 
 	// remove noop items
@@ -394,47 +401,4 @@ func getSampleGkeNodeGroup(groups []cloudprovider.NodeGroup) (gke.NodeGroup, err
 		return nil, fmt.Errorf("got a NodeGroup that is not castable to gke.NodeGroup: %v", groups[0])
 	}
 	return gkeNodeGroup, nil
-}
-
-// balancingInfoPriorityQueue implements heap.Interface and holds balancingInfo pointers.
-type balancingInfoPriorityQueue []*balancingInfo
-
-// Len is the number of elements in the collection.
-func (pq *balancingInfoPriorityQueue) Len() int {
-	return len(*pq)
-}
-
-// Less reports whether the element with index i
-// must sort before the element with index j.
-// The priority is given to the node group that:
-// 1. Has a smaller number of nodes (to keep groups balanced).
-// 2. As a tie-breaker, has a higher GCE preference score.
-func (pq *balancingInfoPriorityQueue) Less(i, j int) bool {
-	// If scaleUpInfo.NewSize are different, the one with fewer nodes has higher priority.
-	if (*pq)[i].scaleUpInfo.NewSize != (*pq)[j].scaleUpInfo.NewSize {
-		return (*pq)[i].scaleUpInfo.NewSize < (*pq)[j].scaleUpInfo.NewSize
-	}
-	// If scaleUpInfo.NewSize are the same, the one with the higher gce preference score has higher priority.
-	return (*pq)[i].gcePreferenceScore > (*pq)[j].gcePreferenceScore
-}
-
-// Swap swaps the elements with indexes i and j.
-func (pq *balancingInfoPriorityQueue) Swap(i, j int) {
-	(*pq)[i], (*pq)[j] = (*pq)[j], (*pq)[i]
-}
-
-// Push adds an item to the queue.
-func (pq *balancingInfoPriorityQueue) Push(x any) {
-	item := x.(*balancingInfo)
-	*pq = append(*pq, item)
-}
-
-// Pop removes and returns the highest-priority item from the queue.
-func (pq *balancingInfoPriorityQueue) Pop() any {
-	old := *pq
-	n := len(old)
-	item := old[n-1]
-	old[n-1] = nil
-	*pq = old[0 : n-1]
-	return item
 }
