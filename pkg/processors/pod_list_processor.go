@@ -50,14 +50,19 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 )
 
-type ScaleToZeroProcessor interface {
+// podProcessor filters or transforms the list of unschedulable pods.
+type podProcessor interface {
 	Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
+}
+
+type ScaleToZeroProcessor interface {
+	podProcessor
 	Drainable(drainContext *drainability.DrainContext, pod *apiv1.Pod, node *framework.NodeInfo) drainability.Status
 	Name() string
 }
 
 type DefragProcessor interface {
-	Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error)
+	podProcessor
 	DefragPickedCandidate() bool
 	CleanUp()
 }
@@ -270,7 +275,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	// TODO(b/519117759): Clean-up this experiment after launch.
 	runScaleToZeroLate := p.experimentsManager.DirectLaunchBoolFlag(experiments.ScaleToZeroLateRunFlag)
 	if p.scaleToZeroProcessor != nil && !runScaleToZeroLate {
-		unschedulablePods, err = p.scaleToZeroProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
+		unschedulablePods, err = p.processAndObserve(p.scaleToZeroProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -402,7 +407,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	if p.scaleToZeroProcessor != nil && runScaleToZeroLate {
-		unschedulablePods, err = p.scaleToZeroProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
+		unschedulablePods, err = p.processAndObserve(p.scaleToZeroProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -420,7 +425,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	return unschedulablePods, nil
 }
 
-func (p *GkeInternalPodListProcessor) processAndObserve(processor pods.PodListProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
+func (p *GkeInternalPodListProcessor) processAndObserve(processor podProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
 
 	withoutSchedulable, err := processor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 	if err != nil {

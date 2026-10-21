@@ -18,13 +18,26 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -282,5 +295,146 @@ func TestGkeInternalPodListProcessorCleanUp(t *testing.T) {
 	}
 	if !csnMock.cleanedUp {
 		t.Errorf("Expected csnBufferConsumptionProcessor.CleanUp to be called")
+	}
+}
+
+type observedReaction struct {
+	systemPod    bool
+	reactionType metrics.ReactionType
+}
+
+type mockReactionTimeMetrics struct {
+	reactions []observedReaction
+}
+
+func (m *mockReactionTimeMetrics) ObserveFirstReactionTime(_ time.Duration, systemPod bool, _ bool, _ bool, reactionType metrics.ReactionType, _ string) {
+	m.reactions = append(m.reactions, observedReaction{
+		systemPod:    systemPod,
+		reactionType: reactionType,
+	})
+}
+
+// newTestPodStateObserver returns a PodStateObserver that already tracks the
+// given pending pods, and the fake that records the reactions it reports.
+// It must be called inside a synctest bubble.
+func newTestPodStateObserver(t *testing.T, pendingPods ...*v1.Pod) (*podstate.PodStateObserver, *mockReactionTimeMetrics) {
+	t.Helper()
+	kubeClient := fake.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
+	reactionMetrics := &mockReactionTimeMetrics{}
+	observer, err := podstate.NewPodStateObserver(
+		informerFactory,
+		reactionMetrics,
+		systempods.NewClassifier([]string{metav1.NamespaceSystem}),
+		npc_lister.NewMockCrdLister(nil),
+		false, // enablePendingPodsMetric
+		false, // enablePendingPodsPerCccMetric
+		-10,   // expendablePodsPriorityCutoff
+	)
+	if err != nil {
+		t.Fatalf("NewPodStateObserver() unexpected error: %v", err)
+	}
+
+	stopCh := make(chan struct{})
+	t.Cleanup(func() { close(stopCh) })
+	informerFactory.Start(stopCh)
+	informerFactory.WaitForCacheSync(stopCh)
+
+	for _, pod := range pendingPods {
+		if _, err := kubeClient.CoreV1().Pods(pod.Namespace).Create(context.Background(), pod, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("Create(%s/%s) unexpected error: %v", pod.Namespace, pod.Name, err)
+		}
+	}
+	synctest.Wait()
+	return observer, reactionMetrics
+}
+
+func TestScaleToZeroObservesPodState(t *testing.T) {
+	systemPod := buildTestPod(metav1.NamespaceSystem, "kube-dns", func(p *v1.Pod) {
+		p.UID = types.UID("kube-dns-uid")
+	})
+	userPod := buildTestPod(namespaceDefault, "user-pod", func(p *v1.Pod) {
+		p.UID = types.UID("user-pod-uid")
+	})
+
+	testCases := []struct {
+		name                   string
+		scaleToZeroLateRunFlag bool
+		unschedulablePods      []*v1.Pod
+		wantRemainingPods      []*v1.Pod
+		wantReactions          []observedReaction
+	}{
+		{
+			name:                   "system pod filtered on 0-node cluster observes NoActionNeeded (early run)",
+			scaleToZeroLateRunFlag: false,
+			unschedulablePods:      []*v1.Pod{systemPod},
+			wantRemainingPods:      []*v1.Pod{},
+			wantReactions: []observedReaction{
+				{
+					systemPod:    true,
+					reactionType: metrics.NoActionNeeded,
+				},
+			},
+		},
+		{
+			name:                   "system pod filtered on 0-node cluster observes NoActionNeeded (late run)",
+			scaleToZeroLateRunFlag: true,
+			unschedulablePods:      []*v1.Pod{systemPod},
+			wantRemainingPods:      []*v1.Pod{},
+			wantReactions: []observedReaction{
+				{
+					systemPod:    true,
+					reactionType: metrics.NoActionNeeded,
+				},
+			},
+		},
+		{
+			name:                   "user pod pending on 0-node cluster prevents filtering and does not observe NoActionNeeded",
+			scaleToZeroLateRunFlag: false,
+			unschedulablePods:      []*v1.Pod{systemPod, userPod},
+			wantRemainingPods:      []*v1.Pod{systemPod, userPod},
+			wantReactions:          nil,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			synctest.Test(t, func(t *testing.T) {
+				observer, reactionMetrics := newTestPodStateObserver(t, tc.unschedulablePods...)
+
+				classifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
+				scaleToZero := NewScaleToZeroPodListProcessor(filter.NewMetricsFilter(), 5*time.Minute, classifier)
+				em := experiments.NewMockManagerWithOptions(
+					version.Version{},
+					map[string]bool{experiments.ScaleToZeroLateRunFlag: tc.scaleToZeroLateRunFlag},
+					map[string]string{},
+				)
+
+				processor := &GkeInternalPodListProcessor{
+					scaleToZeroProcessor:      scaleToZero,
+					defaultPodListerProcessor: &mockDefaultPodListProcessor{},
+					podStateObserver:          observer,
+					podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+					experimentsManager:        em,
+				}
+
+				autoscalingCtx := &ca_context.AutoscalingContext{
+					ClusterSnapshot: snapshot,
+				}
+
+				gotPods, err := processor.Process(context.Background(), autoscalingCtx, tc.unschedulablePods)
+				if err != nil {
+					t.Fatalf("processor.Process() unexpected error: %v", err)
+				}
+
+				if diff := cmp.Diff(tc.wantRemainingPods, gotPods, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("processor.Process() remaining pods diff (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantReactions, reactionMetrics.reactions, cmp.AllowUnexported(observedReaction{})); diff != "" {
+					t.Errorf("observed reactions diff (-want +got):\n%s", diff)
+				}
+			})
+		})
 	}
 }
