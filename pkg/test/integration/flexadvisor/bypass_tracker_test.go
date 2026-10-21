@@ -130,6 +130,11 @@ func TestFlexAdvisorRecommendationsBypass_SlidingWindowExpirationDoesNotTriggerB
 		testConfig := integration.NewTestConfig().
 			WithNodePools(nodePools...).
 			WithCccCrds(cccCrd).
+			WithExperimentOverrides(nil, map[string]string{
+				// Keep the primed FlexAdvisor scope alive across the 19m and 42m virtual clock jumps
+				// (default keepAliveInterval is 10m) so Loops 2 and 3 do not race on async scope re-registration.
+				experiments.FlexAdvisorScopeKeepAliveSecondsFlag: "3600",
+			}).
 			WithOverrides(
 				integration.WithMaxMemoryTotal(140*1024*1024*1024),
 				integration.WithFlexAdvisorEnabled(),
@@ -234,7 +239,8 @@ func TestFlexAdvisorRecommendationsBypass_MigsBlockedNotByFa(t *testing.T) {
 			assert.Empty(t, updatedPod.Spec.NodeName, "loop %d: expected pod-1 to remain unschedulable", loop)
 		}
 
-		// Phase 2: Advance time by 35 minutes so GCE backoffs expire, clear GCE stockouts,
+		// Phase 2: Advance time by 6 minutes so the 5-minute InitialNodeGroupBackoffDuration expires
+		// (while staying within the 10-minute FlexAdvisor scope keepAliveInterval), clear GCE stockouts,
 		// and update FA to block pool-fa (Capacity: 0) and pool-stockout (Capacity: 0).
 		infra.Fakes.GceService.ClearCreateInstanceForMigError("pool-stockout")
 		infra.Fakes.GceService.ClearCreateInstanceForMigError("pool-fa")
@@ -245,10 +251,10 @@ func TestFlexAdvisorRecommendationsBypass_MigsBlockedNotByFa(t *testing.T) {
 			fake.NewGuidance(AvailableMachineType).WithCapacity(0),
 		)
 
-		// Wait 35 minutes so backoffs expire and FA polls the new Capacity: 0 guidance.
+		// Wait 6 minutes so backoffs expire and FA polls the new Capacity: 0 guidance.
 		// If the 3 non-FA ScaleUpNoOptionsAvailable loops in Phase 1 had counted toward the bypass tracker,
 		// this very next loop would immediately trigger bypass and schedule pod-1!
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 35*time.Minute)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 6*time.Minute)
 		infra.Fakes.RunScheduler(ctx, t)
 
 		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "pod-1", metav1.GetOptions{})
