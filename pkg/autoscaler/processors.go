@@ -57,7 +57,6 @@ import (
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
-	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/binpacking"
@@ -326,7 +325,7 @@ func buildScaleDownSetProcessors(
 	return scaleDownSetProcessors
 }
 
-func setUpProcessors(
+func (b *Builder) setUpProcessors(
 	context ctx.Context,
 	manager ctrl.Manager,
 	caVersion version.Version,
@@ -395,16 +394,18 @@ func setUpProcessors(
 
 	scaleUpProcessorChain := utils_processors.NewScaleUpStatusChainProcessor()
 
-	var capacitybufferClient *cbclient.CapacityBufferClient
+	capacitybufferClient := b.capacityBufferClient
 	var cbFakePodStateObserver *cbmetrics.FakePodStateObserver
 
 	cbEnabled := options.CapacitybufferControllerEnabled || options.CapacitybufferPodInjectionEnabled
-	cbReady := false
-	if cbEnabled {
+	if cbEnabled && capacitybufferClient == nil {
 		var err error
 		capacitybufferClient, err = capacitybuffers.NewCapacityBufferClientIfCRDPresent(kubeClient, manager)
-		cbReady = err == nil && capacitybufferClient != nil
+		if err != nil {
+			capacitybufferClient = nil
+		}
 	}
+	cbReady := cbEnabled && capacitybufferClient != nil
 
 	if options.CapacitybufferControllerEnabled && cbReady {
 		var fakePodsResolver fakepods.Resolver

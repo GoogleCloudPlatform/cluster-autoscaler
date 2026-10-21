@@ -49,6 +49,7 @@ import (
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/builder"
+	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate/scaleupfailures"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -183,7 +184,8 @@ type Builder struct {
 	eventLogger visibility.EventLogger
 	ctrClient   client.Client
 
-	networkMatcher networking.Matcher
+	networkMatcher       networking.Matcher
+	capacityBufferClient *cbclient.CapacityBufferClient
 }
 
 // This helper struct is a way to deal with mutual dependency between
@@ -490,6 +492,12 @@ func (b *Builder) WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory node
 
 func (b *Builder) WithNetworkMatcher(matcher networking.Matcher) *Builder {
 	b.networkMatcher = matcher
+	return b
+}
+
+// WithCapacityBufferClient allows injecting a CapacityBufferClient.
+func (b *Builder) WithCapacityBufferClient(client *cbclient.CapacityBufferClient) *Builder {
+	b.capacityBufferClient = client
 	return b
 }
 
@@ -963,7 +971,7 @@ func (b *Builder) Build(
 		}),
 	}
 
-	autoscalingProcessors, err := setUpProcessors(
+	autoscalingProcessors, err := b.setUpProcessors(
 		bgContext,
 		b.manager,
 		caVersion,
