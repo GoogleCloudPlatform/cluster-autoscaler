@@ -187,7 +187,8 @@ func (o *PodStateObserver) shouldIgnorePod(pod *v1.Pod) bool {
 		// Covers pods injected by CA processors as well as real pods consuming a
 		// ProvisioningRequest, which CA ignores in the regular scale-up loop.
 		podkind.IsSynthetic(pod) ||
-		(len(o.allowedSchedulers) > 0 && !o.allowedSchedulers[pod.Spec.SchedulerName])
+		(len(o.allowedSchedulers) > 0 && !o.allowedSchedulers[pod.Spec.SchedulerName]) ||
+		hasSchedulingGates(pod)
 }
 
 // isPodAlreadyTrackedNoLock checks if the pod is present in either the unreported or reported map.
@@ -206,15 +207,22 @@ func (o *PodStateObserver) getPodStateDataNoLock(pod *v1.Pod) *podStateData {
 	return nil
 }
 
-func (o *PodStateObserver) updatePodUnschedulableTime(pod *v1.Pod) {
-	transitionTime := o.getPodUnschedulableTime(pod)
+func (o *PodStateObserver) updatePodUnschedulableTime(oldPod, newPod *v1.Pod) {
+	transitionTime := o.getPodUnschedulableTime(newPod)
 	if transitionTime == nil {
 		return
+	}
+	if isSchedulingGated(oldPod) {
+		// The condition status stays False on SchedulingGated -> Unschedulable, so
+		// LastTransitionTime is still from when the pod was gated. The same holds
+		// if the informer coalesced the SchedulingGated update with the ungating.
+		now := o.clock.Now()
+		transitionTime = &now
 	}
 	o.mux.Lock()
 	defer o.mux.Unlock()
 	// set unschedulableSince time only if it was not set before
-	if unscheduledPodStateData := o.getPodStateDataNoLock(pod); unscheduledPodStateData != nil && unscheduledPodStateData.unschedulableSince == nil {
+	if unscheduledPodStateData := o.getPodStateDataNoLock(newPod); unscheduledPodStateData != nil && unscheduledPodStateData.unschedulableSince == nil {
 		unscheduledPodStateData.unschedulableSince = transitionTime
 	}
 }
@@ -225,6 +233,12 @@ func (o *PodStateObserver) onAdd(obj interface{}) {
 		klog.Warningf("Informer has incorrect object type: %v", obj)
 		return
 	}
+	o.track(pod, o.getPodUnschedulableTime(pod))
+}
+
+// track starts tracking the pod if it is pending and in scope for the reaction
+// time SLO.
+func (o *PodStateObserver) track(pod *v1.Pod, unschedulableSince *time.Time) {
 	if pod.Spec.NodeName != "" {
 		return
 	}
@@ -240,18 +254,17 @@ func (o *PodStateObserver) onAdd(obj interface{}) {
 	defer o.mux.Unlock()
 
 	if o.isPodAlreadyTrackedNoLock(pod) {
-		klog.Warningf("PodStateObserver.OnAdd: %v (UID=%v) unscheduled already existing", pod.Name, pod.UID)
+		klog.Warningf("PodStateObserver.track: %v (UID=%v) unscheduled already existing", pod.Name, pod.UID)
 		return
 	}
-	o.logLimiter.Logf(5, "PodStateObserver.OnAdd: %v (UID=%v) unscheduled", pod.Name, pod.UID)
+	o.logLimiter.Logf(5, "PodStateObserver.track: %v (UID=%v) unscheduled", pod.Name, pod.UID)
 
-	// if pod is marked as unscheduled we want to store the last transition timestamp
 	o.unreportedPodStates[pod.UID] = &podStateData{
 		systemPod:          o.systemPodsClassifier.IsSystemPod(pod),
 		hasPVC:             HasPVC(pod),
 		hasCSI:             HasCSI(pod),
 		reactionType:       metrics.NoReaction,
-		unschedulableSince: o.getPodUnschedulableTime(pod),
+		unschedulableSince: unschedulableSince,
 		cccName:            o.getPodCccName(pod),
 		allocationMode:     podutils.DeviceAllocationModeForPod(pod),
 	}
@@ -276,8 +289,12 @@ func (o *PodStateObserver) onUpdate(oldObj, newObj interface{}) {
 		klog.Warningf("Informer has incorrect object type: %v", newObj)
 		return
 	}
+	if hasSchedulingGates(oldPod) && !hasSchedulingGates(newPod) {
+		// Gated pods are ignored. CA can act on the pod only once its gates are removed.
+		o.track(newPod, nil)
+	}
 	// if pod is marked as unscheduled we want to store the last transition timestamp
-	o.updatePodUnschedulableTime(newPod)
+	o.updatePodUnschedulableTime(oldPod, newPod)
 	switch {
 	case oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "":
 		// Pods are only scheduled once in their lifetime, so we can safely delete it now.
@@ -477,6 +494,20 @@ func (o *PodStateObserver) getPodUnschedulableTime(pod *v1.Pod) *time.Time {
 		return &res
 	}
 	return nil
+}
+
+func hasSchedulingGates(pod *v1.Pod) bool {
+	return len(pod.Spec.SchedulingGates) > 0
+}
+
+// isSchedulingGated reports whether the pod is gated, or was gated the last
+// time kube-scheduler set its PodScheduled condition.
+func isSchedulingGated(pod *v1.Pod) bool {
+	if hasSchedulingGates(pod) {
+		return true
+	}
+	_, condition := podv1.GetPodCondition(&pod.Status, v1.PodScheduled)
+	return condition != nil && condition.Reason == v1.PodReasonSchedulingGated
 }
 
 type pendingPodCounts struct {

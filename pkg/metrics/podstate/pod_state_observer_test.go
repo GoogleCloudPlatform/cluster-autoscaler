@@ -231,6 +231,14 @@ func TestPodStateObserver(t *testing.T) {
 		p.DeletionTimestamp = &metav1.Time{Time: st.Add(20 * time.Second)}
 		p.Finalizers = []string{"example.com/finalizer"}
 	})
+	// A pod gated at st, as created by e.g. Kueue, and its states after the gate is removed.
+	// kube-scheduler keeps LastTransitionTime at st, as the condition status stays False.
+	var pGated = test.BuildTestPod("gated", 100, 1, withSchedulingGate("kueue"), withPodScheduledCondition(v1.PodReasonSchedulingGated, st))
+	var pUngated = test.BuildTestPod("gated", 100, 1, withPodScheduledCondition(v1.PodReasonSchedulingGated, st))
+	var pUngatedUnschedulable = test.BuildTestPod("gated", 100, 1, withPodScheduledCondition(v1.PodReasonUnschedulable, st))
+	// The same pod before kube-scheduler has set any PodScheduled condition.
+	var pGatedNoCondition = test.BuildTestPod("gated", 100, 1, withSchedulingGate("kueue"))
+	const gatedFor = 90 * time.Minute
 
 	const periodicCheckFrequency = time.Minute * 90
 	testCases := []struct {
@@ -321,6 +329,52 @@ func TestPodStateObserver(t *testing.T) {
 			observedReactionType:   metrics.Deleted,
 			observedAllocationType: podutils.AllocationModeNone.String(),
 			observedReactionTimes:  []time.Duration{time.Second * 20},
+		},
+		{
+			desc: "Ignores pod while it is gated (SchedulingGated)",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGated},
+				{t: st.Add(time.Second * 15), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pGated}}},
+				{t: st.Add(gatedFor), et: timeoutEvent},
+				{t: st.Add(gatedFor), et: deletePodEvent, pod: pGated},
+			},
+			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc: "Gated (SchedulingGated) -> gates removed and Unschedulable in one update: measures reaction time from the update, not from stale LastTransitionTime",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGated},
+				{t: st.Add(gatedFor), et: updatePodEvent, pod: pUngatedUnschedulable},
+				{t: st.Add(gatedFor + 10*time.Second), et: timeoutEvent},
+				{t: st.Add(gatedFor + 15*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pUngatedUnschedulable}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 15},
+		},
+		{
+			desc: "Gated (SchedulingGated) -> gates removed (SchedulingGated) -> Unschedulable: measures reaction time from the Unschedulable update, not from stale LastTransitionTime",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGated},
+				{t: st.Add(gatedFor), et: updatePodEvent, pod: pUngated},
+				{t: st.Add(gatedFor + 5*time.Second), et: updatePodEvent, pod: pUngatedUnschedulable},
+				{t: st.Add(gatedFor + 20*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pUngatedUnschedulable}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 15},
+		},
+		{
+			// E.g. the informer coalesced the SchedulingGated update with the ungating.
+			desc: "Gated (no PodScheduled condition yet) -> gates removed and Unschedulable in one update: measures reaction time from the update, not from stale LastTransitionTime",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGatedNoCondition},
+				{t: st.Add(gatedFor), et: updatePodEvent, pod: pUngatedUnschedulable},
+				{t: st.Add(gatedFor + 15*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pUngatedUnschedulable}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 15},
 		},
 		{
 			desc: "Reports scale up",
@@ -1263,6 +1317,25 @@ func markPodUnschedulableWithTime(ts time.Time) func(*v1.Pod) {
 		test.MarkUnschedulable()(pod)
 		_, condition := podv1.GetPodCondition(&pod.Status, v1.PodScheduled)
 		condition.LastTransitionTime.Time = ts
+	}
+}
+
+// withPodScheduledCondition sets a False PodScheduled condition with the given
+// reason, as kube-scheduler does for gated and unschedulable pods.
+func withPodScheduledCondition(reason string, lastTransitionTime time.Time) func(*v1.Pod) {
+	return func(pod *v1.Pod) {
+		pod.Status.Conditions = []v1.PodCondition{{
+			Type:               v1.PodScheduled,
+			Status:             v1.ConditionFalse,
+			Reason:             reason,
+			LastTransitionTime: metav1.Time{Time: lastTransitionTime},
+		}}
+	}
+}
+
+func withSchedulingGate(name string) func(*v1.Pod) {
+	return func(pod *v1.Pod) {
+		pod.Spec.SchedulingGates = append(pod.Spec.SchedulingGates, v1.PodSchedulingGate{Name: name})
 	}
 }
 
