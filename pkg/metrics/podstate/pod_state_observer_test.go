@@ -25,8 +25,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	provreqv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -81,6 +83,9 @@ const (
 	timeoutEvent            eventType = iota
 	cleanUpEvent            eventType = iota
 	classifiedAsSchedulable eventType = iota
+	// tombstoneDeleteEvent delivers a cache.DeletedFinalStateUnknown, which the
+	// fake clientset never emits on its own.
+	tombstoneDeleteEvent eventType = iota
 )
 
 type event struct {
@@ -216,10 +221,21 @@ func TestPodStateObserver(t *testing.T) {
 		})
 		p.Spec.NodeName = "node"
 	})
+	var provReqConsumerPod = test.BuildTestPod("provReqConsumerPod", 100, 1, markPodUnschedulableWithTime(st), func(p *v1.Pod) {
+		p.Annotations = map[string]string{provreqv1.ProvisioningRequestPodAnnotationKey: "provreq"}
+	})
+	var customSchedulerPod = test.BuildTestPod("customSchedulerPod", 100, 1, markPodUnschedulableWithTime(st), func(p *v1.Pod) {
+		p.Spec.SchedulerName = "custom-scheduler"
+	})
+	var puTerminating = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st), func(p *v1.Pod) {
+		p.DeletionTimestamp = &metav1.Time{Time: st.Add(20 * time.Second)}
+		p.Finalizers = []string{"example.com/finalizer"}
+	})
 
 	const periodicCheckFrequency = time.Minute * 90
 	testCases := []struct {
 		desc                      string
+		allowedSchedulers         map[string]bool
 		events                    []event
 		observedReactionType      metrics.ReactionType
 		observedSystemPod         bool
@@ -244,6 +260,67 @@ func TestPodStateObserver(t *testing.T) {
 				{t: st.Add(time.Second * 15), et: scaleUpEvent, pod: nil, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{lowPriorityPod}}},
 			},
 			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc: "Ignores pod consuming a ProvisioningRequest",
+			events: []event{
+				{t: st, et: newPodEvent, pod: provReqConsumerPod},
+				{t: st.Add(time.Second * 15), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{provReqConsumerPod}}},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc:              "Ignores pod targeting a disallowed scheduler",
+			allowedSchedulers: map[string]bool{"default-scheduler": true},
+			events: []event{
+				{t: st, et: newPodEvent, pod: customSchedulerPod},
+				{t: st.Add(time.Second * 15), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{customSchedulerPod}}},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc:              "Reports scale up for pod targeting an allowed scheduler",
+			allowedSchedulers: map[string]bool{"custom-scheduler": true},
+			events: []event{
+				{t: st, et: newPodEvent, pod: customSchedulerPod},
+				{t: st.Add(time.Second * 15), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{customSchedulerPod}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 15},
+		},
+		{
+			desc: "Reports deleted when unscheduled pod starts terminating",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(time.Second * 20), et: updatePodEvent, pod: puTerminating},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType:   metrics.Deleted,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 20},
+		},
+		{
+			// E.g. CA restarts while the pod is waiting on finalizers.
+			desc: "Ignores unscheduled pod that is already terminating when added",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puTerminating},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType: metrics.NoReaction,
+		},
+		{
+			desc: "Reports deleted on tombstone delete",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(time.Second * 20), et: tombstoneDeleteEvent, pod: pu},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType:   metrics.Deleted,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 20},
 		},
 		{
 			desc: "Reports scale up",
@@ -553,7 +630,7 @@ func TestPodStateObserver(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, periodicCheckFrequency, fakeClock, false, false, -10)
+				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
 				informerFactory.Start(stopCh)
@@ -576,6 +653,8 @@ func TestPodStateObserver(t *testing.T) {
 						psObserver.CleanUp()
 					case classifiedAsSchedulable:
 						psObserver.ObserveReaction([]*v1.Pod{e.pod}, metrics.NoActionNeeded)
+					case tombstoneDeleteEvent:
+						psObserver.onDelete(cache.DeletedFinalStateUnknown{Key: e.pod.Namespace + "/" + e.pod.Name, Obj: e.pod})
 					}
 					assert.NoError(t, err)
 					synctest.Wait()
@@ -822,7 +901,7 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, false, false, -10)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, false, false, -10, nil)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1129,7 +1208,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds}, time.Minute, fakeClock, false, false, -10)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds}, time.Minute, fakeClock, false, false, -10, nil)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
