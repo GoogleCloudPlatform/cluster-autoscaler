@@ -168,6 +168,8 @@ config:
     enable-user-any-zone-selection: "true"
     enable-compute-class-min-capacity: "true"
     enable-zone-types: "true"
+    allowlisted-system-labels: "cloud.google.com/gke-boot-disk,cloud.google.com/gke-boot-disk-size,cloud.google.com/gke-gpu-driver-version,cloud.google.com/gke-nccl-fastsocket,cloud.google.com/pods-per-node,cloud.google.com/gke-location-hint,cloud.google.com/gke-workload-type,cloud.google.com/gke-nodepool-group-name,cloud.google.com/gke-tpu-ici-resiliency,cloud.google.com/gke-host-maintenance-interval,cloud.google.com/gke-tpu-auto-restart"
+    allowlisted-system-label-patterns: '^cloud\.google\.com\.node-restriction\.kubernetes\.io/gke-secondary-boot-disk-[a-zA-Z0-9-]+$,^cloud\.google\.com\/rm-tags-billing_[0-9]+$'
 
     # ==========================================================================
     # Scheduling
@@ -272,7 +274,9 @@ dnsPolicy: ClusterFirst
 
 # This is for setting Kubernetes Annotations to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
-podAnnotations: {}
+podAnnotations:
+  # Keeps the autoscaler from removing the node it runs on, which would evict itself.
+  cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
 # This is for setting Kubernetes Labels to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}

@@ -25,7 +25,7 @@ import (
 	"google.golang.org/api/googleapi"
 
 	machinerynet "k8s.io/apimachinery/pkg/util/net"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 

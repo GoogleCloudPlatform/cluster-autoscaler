@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apilabels "k8s.io/apimachinery/pkg/labels"
 	quota "k8s.io/apiserver/pkg/quota/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"

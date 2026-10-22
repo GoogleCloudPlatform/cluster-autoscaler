@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -27,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	provreqclientset "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/clientset/versioned"
 	provreqinformers "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/client/informers/externalversions"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	mccclient "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned"
 	mccinformers "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/informers/externalversions"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
@@ -184,7 +185,7 @@ func MustCreateGCEConfig(ctx context.Context, opts internalopts.AutoscalingOptio
 		klog.Fatalf("error getting oauth2 token source: %v", err)
 	}
 
-	projectID, location, err := gcecfg.GetProjectAndLocation(opts.Regional, gceProviderConfig, ctx)
+	projectID, location, err := gcecfg.GetProjectAndLocation(ctx, metadata.NewClient(nil), opts.Regional, gceProviderConfig, opts.Location)
 	if err != nil {
 		klog.Fatalf("error getting project ID and location: %v", err)
 	}

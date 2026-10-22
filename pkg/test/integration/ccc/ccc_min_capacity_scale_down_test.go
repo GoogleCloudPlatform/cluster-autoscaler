@@ -569,7 +569,16 @@ func TestCCCMinCapacityDefragCreateBeforeDelete(t *testing.T) {
 						infra.Fakes.K8s.AddNode(&replacement[i])
 					}
 					for i := 0; i < 10; i++ {
-						integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+						// Defrag and the main scale-down can both release the recycled
+						// node in the loop the replacement registers: defrag starts its
+						// deletion first, and the main scale-down, which filters ongoing
+						// deletions with the actuation status taken at the start of the
+						// loop, picks the same node and fails to taint it. CA logs the
+						// error and retries on the next loop, so the test tolerates it
+						// and checks the outcome instead. See b/573569100.
+						if err := integration_synctest.RunOnceAfter(ctx, t, autoscaler, 30*time.Second); err != nil {
+							assert.ErrorContains(t, err, "couldn't taint", "unexpected error in loop %d after the replacement registered", i)
+						}
 						nodes = listNodes()
 						assert.GreaterOrEqual(t, len(nodes), tc.minCapacity, "ComputeClass below its min capacity in loop %d after the replacement registered", i)
 						if !slices.ContainsFunc(nodes, func(node apiv1.Node) bool { return recycled[node.Name] }) {

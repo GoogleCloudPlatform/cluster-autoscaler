@@ -23,7 +23,7 @@ import (
 	gce_api_beta "google.golang.org/api/compute/v0.beta"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	rrclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	gke_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/metrics"
 	klog "k8s.io/klog/v2"

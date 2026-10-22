@@ -21,9 +21,9 @@ import (
 	"strconv"
 	"strings"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	mcv1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
 	v1 "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/cloud.google.com/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/utils/ptr"
 )
 

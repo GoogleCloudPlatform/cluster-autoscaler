@@ -1,0 +1,822 @@
+/*
+Copyright 2016 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package gce
+
+import (
+	"context"
+	"fmt"
+	"math"
+	"math/rand"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	gce "google.golang.org/api/compute/v1"
+	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
+)
+
+// GceTemplateBuilder builds templates for GCE nodes.
+type GceTemplateBuilder struct{}
+
+// These annotations are used internally only to store information in node temlate and use it later in CA, the actuall nodes won't have these annotations.
+const (
+	// LocalSsdCountAnnotation is the annotation for number of attached local SSDs to the node.
+	LocalSsdCountAnnotation = "cluster-autoscaler/gce/local-ssd-count"
+	// BootDiskTypeAnnotation is the annotation for boot disk type of the node.
+	BootDiskTypeAnnotation = "cluster-autoscaler/gce/boot-disk-type"
+	// BootDiskSizeAnnotation is the annotation for boot disk sise of the node/
+	BootDiskSizeAnnotation = "cluster-autoscaler/gce/boot-disk-size"
+	// EphemeralStorageLocalSsdAnnotation is the annotation for nodes where ephemeral storage is backed up by local SSDs.
+	EphemeralStorageLocalSsdAnnotation = "cluster-autoscaler/gce/ephemeral-storage-local-ssd"
+)
+
+// TODO: This should be imported from sigs.k8s.io/gcp-compute-persistent-disk-csi-driver/pkg/common/constants.go
+// This key is applicable to both GCE and GKE
+const gceCSITopologyKeyZone = "topology.gke.io/zone"
+
+func (t *GceTemplateBuilder) getAcceleratorCount(accelerators []*gce.AcceleratorConfig) int64 {
+	count := int64(0)
+	for _, accelerator := range accelerators {
+		if strings.HasPrefix(accelerator.AcceleratorType, "nvidia-") {
+			count += accelerator.AcceleratorCount
+		}
+	}
+	return count
+}
+
+// BuildCapacity builds a list of resource capacities given list of hardware.
+func (t *GceTemplateBuilder) BuildCapacity(ctx context.Context, m MigOsInfo, cpu int64, mem int64, accelerators []*gce.AcceleratorConfig,
+	ephemeralStorage int64, ephemeralStorageLocalSSDCount int64, pods *int64, r OsReservedCalculator, extendedResources apiv1.ResourceList) (apiv1.ResourceList, error) {
+	capacity := apiv1.ResourceList{}
+	if pods == nil {
+		capacity[apiv1.ResourcePods] = *resource.NewQuantity(110, resource.DecimalSI)
+	} else {
+		capacity[apiv1.ResourcePods] = *resource.NewQuantity(*pods, resource.DecimalSI)
+	}
+
+	capacity[apiv1.ResourceCPU] = *resource.NewQuantity(cpu, resource.DecimalSI)
+	memTotal := mem - r.CalculateKernelReserved(ctx, m, mem)
+	capacity[apiv1.ResourceMemory] = *resource.NewQuantity(memTotal, resource.DecimalSI)
+
+	if accelerators != nil && len(accelerators) > 0 {
+		capacity[gpu.ResourceNvidiaGPU] = *resource.NewQuantity(t.getAcceleratorCount(accelerators), resource.DecimalSI)
+	}
+
+	if ephemeralStorage > 0 {
+		var storageTotal int64
+		if ephemeralStorageLocalSSDCount > 0 {
+			storageTotal = ephemeralStorage - EphemeralStorageOnLocalSSDFilesystemOverheadInBytes(ctx, ephemeralStorageLocalSSDCount, m.OsDistribution())
+		} else {
+			storageTotal = ephemeralStorage - r.CalculateOSReservedEphemeralStorage(ctx, m, ephemeralStorage)
+		}
+		capacity[apiv1.ResourceEphemeralStorage] = *resource.NewQuantity(int64(math.Max(float64(storageTotal), 0)), resource.DecimalSI)
+	}
+
+	for resourceName, quantity := range extendedResources {
+		capacity[resourceName] = quantity
+	}
+
+	return capacity, nil
+}
+
+// BuildAllocatableFromKubeEnv builds node allocatable based on capacity of the node and
+// value of kubeEnv.
+func (t *GceTemplateBuilder) BuildAllocatableFromKubeEnv(ctx context.Context, capacity apiv1.ResourceList, kubeEnv KubeEnv, evictionHard *EvictionHard) (apiv1.ResourceList, error) {
+	kubeReserved, err := extractKubeReservedFromKubeEnv(ctx, kubeEnv)
+	if err != nil {
+		return nil, err
+	}
+	reserved, err := parseKubeReserved(ctx, kubeReserved)
+	if err != nil {
+		return nil, err
+	}
+	return t.CalculateAllocatable(capacity, reserved, evictionHard), nil
+}
+
+// CalculateAllocatable computes allocatable resources subtracting kube reserved values
+// and kubelet eviction memory buffer from corresponding capacity.
+func (t *GceTemplateBuilder) CalculateAllocatable(capacity apiv1.ResourceList, kubeReserved apiv1.ResourceList, evictionHard *EvictionHard) apiv1.ResourceList {
+	allocatable := apiv1.ResourceList{}
+	for key, value := range capacity {
+		quantity := value.DeepCopy()
+		if reservedQuantity, found := kubeReserved[key]; found {
+			quantity.Sub(reservedQuantity)
+		}
+		if key == apiv1.ResourceMemory {
+			quantity = *resource.NewQuantity(quantity.Value()-GetKubeletEvictionHardForMemory(evictionHard), resource.BinarySI)
+		}
+		if key == apiv1.ResourceEphemeralStorage {
+			quantity = *resource.NewQuantity(quantity.Value()-int64(GetKubeletEvictionHardForEphemeralStorage(value.Value(), evictionHard)), resource.BinarySI)
+		}
+		allocatable[key] = quantity
+	}
+	return allocatable
+}
+
+// MigOsInfo return os detailes information that stored in template.
+func (t *GceTemplateBuilder) MigOsInfo(ctx context.Context, migId string, kubeEnv KubeEnv) (MigOsInfo, error) {
+	logger := klog.FromContext(ctx)
+	os := extractOperatingSystemFromKubeEnv(ctx, kubeEnv)
+	if os == OperatingSystemUnknown {
+		return nil, fmt.Errorf("could not obtain os from kube-env from template metadata")
+	}
+
+	osDistribution := extractOperatingSystemDistributionFromKubeEnv(ctx, kubeEnv)
+	if osDistribution == OperatingSystemDistributionUnknown {
+		osDistribution = OperatingSystemDistributionDefault
+		logger.V(5).Info("Could not obtain os-distribution from kube-env from template metadata, falling back", "osDistribution", osDistribution)
+	}
+
+	arch, err := extractSystemArchitectureFromKubeEnv(ctx, kubeEnv)
+	if err != nil {
+		arch = DefaultArch
+		logger.V(5).Info("Couldn't extract architecture from kube-env for MIG. Falling back.", "migId", migId, "fallbackArch", arch, "err", err)
+	}
+	return NewMigOsInfo(os, osDistribution, arch), nil
+}
+
+// BuildNodeFromTemplate builds node from provided GCE template.
+func (t *GceTemplateBuilder) BuildNodeFromTemplate(ctx context.Context, mig Mig, migOsInfo MigOsInfo, template *gce.InstanceTemplate, kubeEnv KubeEnv, cpu int64, mem int64, pods *int64, reserved OsReservedCalculator, localSSDSizeProvider localssdsize.LocalSSDSizeProvider) (*apiv1.Node, error) {
+	logger := klog.FromContext(ctx)
+
+	if template.Properties == nil {
+		return nil, fmt.Errorf("instance template %s has no properties", template.Name)
+	}
+
+	node := apiv1.Node{}
+	nodeName := fmt.Sprintf("%s-template-%d", template.Name, rand.Int63())
+
+	node.ObjectMeta = metav1.ObjectMeta{
+		Name:     nodeName,
+		SelfLink: fmt.Sprintf("/api/v1/nodes/%s", nodeName),
+		Labels:   map[string]string{},
+	}
+
+	addBootDiskAnnotations(&node, template.Properties)
+	var ephemeralStorage int64 = -1
+	var err error
+	if !isBootDiskEphemeralStorageWithInstanceTemplateDisabled(ctx, kubeEnv) {
+		// ephemeral storage is backed up by boot disk
+		ephemeralStorage, err = getBootDiskEphemeralStorageFromInstanceTemplateProperties(template.Properties)
+	} else {
+		// ephemeral storage is backed up by local ssd
+		addAnnotation(&node, EphemeralStorageLocalSsdAnnotation, strconv.FormatBool(true))
+	}
+
+	localSsdCount, err := getLocalSsdCount(template.Properties)
+	if localSsdCount > 0 {
+		addAnnotation(&node, LocalSsdCountAnnotation, strconv.FormatInt(localSsdCount, 10))
+	}
+	ephemeralStorageLocalSsdCount := ephemeralStorageLocalSSDCount(ctx, kubeEnv)
+	if err == nil && ephemeralStorageLocalSsdCount > 0 {
+		localSSDDiskSize := localSSDSizeProvider.SSDSizeInGiB(template.Properties.MachineType)
+		ephemeralStorage, err = getEphemeralStorageOnLocalSsd(localSsdCount, ephemeralStorageLocalSsdCount, int64(localSSDDiskSize))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("could not fetch ephemeral storage from instance template: %v", err)
+	}
+
+	extendedResources, err := extractExtendedResourcesFromKubeEnv(ctx, kubeEnv)
+	if err != nil {
+		logger.
+			// External Resources are optional and should not break the template creation
+			Error(err, "Could not fetch extended resources from instance template")
+	}
+
+	capacity, err := t.BuildCapacity(ctx, migOsInfo, cpu, mem, template.Properties.GuestAccelerators, ephemeralStorage, ephemeralStorageLocalSsdCount, pods, reserved, extendedResources)
+	if err != nil {
+		return nil, err
+	}
+
+	node.Status = apiv1.NodeStatus{
+		Capacity: capacity,
+	}
+	var nodeAllocatable apiv1.ResourceList
+
+	if kubeEnv.env != nil {
+		// Extract labels
+		kubeEnvLabels, err := extractLabelsFromKubeEnv(ctx, kubeEnv)
+		if err != nil {
+			return nil, err
+		}
+		node.Labels = cloudprovider.JoinStringMaps(node.Labels, kubeEnvLabels)
+
+		// Extract taints
+		kubeEnvTaints, err := extractTaintsFromKubeEnv(ctx, kubeEnv)
+		if err != nil {
+			return nil, err
+		}
+		node.Spec.Taints = append(node.Spec.Taints, kubeEnvTaints...)
+
+		// Extract Eviction Hard
+		evictionHardFromKubeEnv, err := extractEvictionHardFromKubeEnv(ctx, kubeEnv)
+		if err != nil || len(evictionHardFromKubeEnv) == 0 {
+			logger.Info("Unable to get evictionHardFromKubeEnv values, continuing without it.")
+		}
+		evictionHard := ParseEvictionHardOrGetDefault(ctx, evictionHardFromKubeEnv)
+
+		if allocatable, err := t.BuildAllocatableFromKubeEnv(ctx, node.Status.Capacity, kubeEnv, evictionHard); err == nil {
+			nodeAllocatable = allocatable
+		}
+	}
+
+	if nodeAllocatable == nil {
+		logger.Info("Could not extract kube-reserved from kubeEnv for mig. Setting allocable capacity.", "mig", mig.GceRef())
+		node.Status.Allocatable = node.Status.Capacity
+	} else {
+		node.Status.Allocatable = nodeAllocatable
+	}
+	// GenericLabels
+	labels, err := BuildGenericLabels(mig.GceRef(), template.Properties.MachineType, nodeName, migOsInfo.Os(), migOsInfo.Arch())
+	if err != nil {
+		return nil, err
+	}
+	node.Labels = cloudprovider.JoinStringMaps(node.Labels, labels)
+
+	// Ready status
+	node.Status.Conditions = cloudprovider.BuildReadyConditions()
+	return &node, nil
+}
+
+func ephemeralStorageLocalSSDCount(ctx context.Context, kubeEnv KubeEnv) int64 {
+	logger := klog.FromContext(ctx)
+	v, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "ephemeral_storage_local_ssd_count")
+	if err != nil {
+		logger.Info("Cannot extract ephemeral_storage_local_ssd_count from kube-env, default to 0", "err", err)
+		return 0
+	}
+
+	if !found {
+		return 0
+	}
+
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		logger.Info("Cannot parse ephemeral_storage_local_ssd_count value, default to 0", "err", err)
+		return 0
+	}
+
+	return int64(n)
+}
+
+func getLocalSsdCount(instanceProperties *gce.InstanceProperties) (int64, error) {
+	if instanceProperties.Disks == nil {
+		return 0, fmt.Errorf("instance properties disks is nil")
+	}
+	var count int64
+	for _, disk := range instanceProperties.Disks {
+		if disk != nil && disk.InitializeParams != nil {
+			if disk.Type == "SCRATCH" && disk.InitializeParams.DiskType == "local-ssd" {
+				count++
+			}
+		}
+	}
+	return count, nil
+}
+
+func getEphemeralStorageOnLocalSsd(localSsdCount, ephemeralStorageLocalSsdCount, localSSDDiskSizeInGiB int64) (int64, error) {
+	if localSsdCount < ephemeralStorageLocalSsdCount {
+		return 0, fmt.Errorf("actual local SSD count is lower than ephemeral_storage_local_ssd_count")
+	}
+	return ephemeralStorageLocalSsdCount * localSSDDiskSizeInGiB * units.GiB, nil
+}
+
+// isBootDiskEphemeralStorageWithInstanceTemplateDisabled will allow bypassing Disk Size of Boot Disk from being
+// picked up from Instance Template and used as Ephemeral Storage, in case other type of storage are used
+// as ephemeral storage
+func isBootDiskEphemeralStorageWithInstanceTemplateDisabled(ctx context.Context, kubeEnv KubeEnv) bool {
+	v, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "BLOCK_EPH_STORAGE_BOOT_DISK")
+	if err == nil && found && v == "true" {
+		return true
+	}
+	return false
+}
+
+func getBootDiskEphemeralStorageFromInstanceTemplateProperties(instanceProperties *gce.InstanceProperties) (ephemeralStorage int64, err error) {
+	if instanceProperties.Disks == nil {
+		return 0, fmt.Errorf("unable to get ephemeral storage because instance properties disks is nil")
+	}
+
+	for _, disk := range instanceProperties.Disks {
+		if disk != nil && disk.InitializeParams != nil {
+			if disk.Boot {
+				return disk.InitializeParams.DiskSizeGb * units.GiB, nil
+			}
+		}
+	}
+
+	return 0, fmt.Errorf("unable to get ephemeral storage, either no attached disks or no disk with boot=true")
+}
+
+// BuildGenericLabels builds basic labels that should be present on every GCE node,
+// including hostname, zone etc.
+func BuildGenericLabels(ref GceRef, machineType string, nodeName string, os OperatingSystem, arch SystemArchitecture) (map[string]string, error) {
+	result := make(map[string]string)
+
+	if os == OperatingSystemUnknown {
+		return nil, fmt.Errorf("unknown operating system passed")
+	}
+
+	// TODO: extract it somehow
+	result[apiv1.LabelArchStable] = arch.Name()
+	result[apiv1.LabelOSStable] = string(os)
+
+	result[apiv1.LabelInstanceTypeStable] = machineType
+	ix := strings.LastIndex(ref.Zone, "-")
+	if ix == -1 {
+		return nil, fmt.Errorf("unexpected zone: %s", ref.Zone)
+	}
+	result[apiv1.LabelTopologyRegion] = ref.Zone[:ix]
+	result[apiv1.LabelTopologyZone] = ref.Zone
+	result[gceCSITopologyKeyZone] = ref.Zone
+	result[apiv1.LabelHostname] = nodeName
+	return result, nil
+}
+
+func parseKubeReserved(ctx context.Context, kubeReserved string) (apiv1.ResourceList, error) {
+	logger := klog.FromContext(ctx)
+	resourcesMap, err := parseKeyValueListToMap(kubeReserved)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract kube-reserved from kube-env: %q", err)
+	}
+	reservedResources := apiv1.ResourceList{}
+	for name, quantity := range resourcesMap {
+		switch apiv1.ResourceName(name) {
+		case apiv1.ResourceCPU, apiv1.ResourceMemory, apiv1.ResourceEphemeralStorage:
+			if q, err := resource.ParseQuantity(quantity); err == nil && q.Sign() >= 0 {
+				reservedResources[apiv1.ResourceName(name)] = q
+			}
+		default:
+			logger.Info("Ignoring resource from kube-reserved", "resourceName", name)
+		}
+	}
+	return reservedResources, nil
+}
+
+// GetLabelsFromKubeEnv returns labels from kube-env
+func GetLabelsFromKubeEnv(kubeEnv KubeEnv) (map[string]string, error) {
+	return extractLabelsFromKubeEnv(context.TODO(), kubeEnv)
+}
+
+func extractLabelsFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (map[string]string, error) {
+	logger := klog.FromContext(ctx)
+	// In v1.10+, labels are only exposed for the autoscaler via AUTOSCALER_ENV_VARS
+	// see kubernetes/kubernetes#61119. We try AUTOSCALER_ENV_VARS first, then
+	// fall back to the old way.
+	labels, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "node_labels")
+	if err != nil {
+		logger.Error(err, "Error while trying to extract node_labels from AUTOSCALER_ENV_VARS")
+	}
+	if !found {
+		labels, _ = kubeEnv.Var("NODE_LABELS")
+	}
+	return parseKeyValueListToMap(labels)
+}
+
+// GetTaintsFromKubeEnv returns labels from kube-env
+func GetTaintsFromKubeEnv(kubeEnv KubeEnv) ([]apiv1.Taint, error) {
+	return extractTaintsFromKubeEnv(context.TODO(), kubeEnv)
+}
+
+func extractTaintsFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) ([]apiv1.Taint, error) {
+	logger := klog.FromContext(ctx)
+	// In v1.10+, taints are only exposed for the autoscaler via AUTOSCALER_ENV_VARS
+	// see kubernetes/kubernetes#61119. We try AUTOSCALER_ENV_VARS first, then
+	// fall back to the old way.
+	taints, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "node_taints")
+	if err != nil {
+		logger.Error(err, "Error while trying to extract node_taints from AUTOSCALER_ENV_VARS")
+	}
+	if !found {
+		taints, _ = kubeEnv.Var("NODE_TAINTS")
+	}
+	taintMap, err := parseKeyValueListToMap(taints)
+	if err != nil {
+		return nil, err
+	}
+	return buildTaints(taintMap)
+}
+
+func extractKubeReservedFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (string, error) {
+	logger := klog.FromContext(ctx)
+	// In v1.10+, kube-reserved is only exposed for the autoscaler via AUTOSCALER_ENV_VARS
+	// see kubernetes/kubernetes#61119. We try AUTOSCALER_ENV_VARS first, then
+	// fall back to the old way.
+	kubeReserved, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "kube_reserved")
+	if err != nil {
+		logger.Error(err, "Error while trying to extract kube_reserved from AUTOSCALER_ENV_VARS")
+	}
+	if !found {
+		kubeletArgs, _ := kubeEnv.Var("KUBELET_TEST_ARGS")
+		resourcesRegexp := regexp.MustCompile(`--kube-reserved=([^ ]+)`)
+
+		matches := resourcesRegexp.FindStringSubmatch(kubeletArgs)
+		if len(matches) > 1 {
+			return matches[1], nil
+		}
+		return "", fmt.Errorf("kube-reserved not in kubelet args in kube-env: %q", kubeletArgs)
+	}
+	return kubeReserved, nil
+}
+
+func extractExtendedResourcesFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (apiv1.ResourceList, error) {
+	logger := klog.FromContext(ctx)
+	extendedResourcesAsString, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "extended_resources")
+	if err != nil {
+		logger.Info("Error while obtaining extended_resources from AUTOSCALER_ENV_VARS", "err", err)
+		return nil, err
+	}
+	var extendedResourcesMap map[string]string
+	if found {
+		extendedResourcesMap, err = parseKeyValueListToMap(extendedResourcesAsString)
+		if err != nil {
+			return apiv1.ResourceList{}, err
+		}
+	} else {
+		extendedResourcesMap = make(map[string]string)
+	}
+	nodeLabelsAsString, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "node_labels")
+	if err != nil {
+		logger.Info("Error while obtaining node_labels from AUTOSCALER_ENV_VARS", "err", err)
+		return nil, err
+	}
+	if found {
+		nodeLabelsMap, err := parseKeyValueListToMap(nodeLabelsAsString)
+		if err != nil {
+			return apiv1.ResourceList{}, err
+		}
+		const extendedResourcesKeyPrefix = "clusterautoscaler-nodetemplate-resources."
+		for key, value := range nodeLabelsMap {
+			if strings.HasPrefix(key, extendedResourcesKeyPrefix) {
+				key = strings.TrimPrefix(key, extendedResourcesKeyPrefix)
+				if _, existsBefore := extendedResourcesMap[key]; existsBefore {
+					logger.Info("Extended resource defined twice in template.", "resourceKey", key)
+				}
+				extendedResourcesMap[key] = value
+			}
+		}
+	}
+
+	if len(extendedResourcesMap) == 0 {
+		return apiv1.ResourceList{}, nil
+	}
+
+	extendedResources := apiv1.ResourceList{}
+	for name, quantity := range extendedResourcesMap {
+		if q, err := resource.ParseQuantity(quantity); err == nil && q.Sign() >= 0 {
+			extendedResources[apiv1.ResourceName(name)] = q
+		} else if err != nil {
+			logger.Info("Ignoring invalid value in extended_resources or node_labels defined in AUTOSCALER_ENV_VARS", "err", err)
+		}
+	}
+	return extendedResources, nil
+}
+
+// OperatingSystem denotes operating system used by nodes coming from node group
+type OperatingSystem string
+
+const (
+	// OperatingSystemUnknown is used if operating system is unknown
+	OperatingSystemUnknown OperatingSystem = ""
+	// OperatingSystemLinux is used if operating system is Linux
+	OperatingSystemLinux OperatingSystem = "linux"
+	// OperatingSystemWindows is used if operating system is Windows
+	OperatingSystemWindows OperatingSystem = "windows"
+
+	// OperatingSystemDefault defines which operating system will be assumed if not explicitly passed via AUTOSCALER_ENV_VARS
+	OperatingSystemDefault = OperatingSystemLinux
+)
+
+func extractOperatingSystemFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) OperatingSystem {
+	logger := klog.FromContext(ctx)
+	osValue, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "os")
+	if err != nil {
+		logger.Error(err, "error while obtaining os from AUTOSCALER_ENV_VARS")
+		return OperatingSystemUnknown
+	}
+
+	if !found {
+		logger.Info("No os defined in AUTOSCALER_ENV_VARS; using default", "defaultOs", OperatingSystemDefault)
+		return OperatingSystemDefault
+	}
+
+	switch osValue {
+	case string(OperatingSystemLinux):
+		return OperatingSystemLinux
+	case string(OperatingSystemWindows):
+		return OperatingSystemWindows
+	default:
+		logger.Error(nil, "Unexpected os passed via AUTOSCALER_ENV_VARS", "os", osValue)
+		return OperatingSystemUnknown
+	}
+}
+
+// OperatingSystemImage denotes  image of the operating system used by nodes coming from node group
+type OperatingSystemImage string
+
+const (
+	// OperatingSystemImageUnknown is used if operating distribution system is unknown
+	OperatingSystemImageUnknown OperatingSystemImage = ""
+	// OperatingSystemImageUbuntu is used if operating distribution system is Ubuntu
+	OperatingSystemImageUbuntu OperatingSystemImage = "ubuntu"
+	// OperatingSystemImageWindowsLTSC is used if operating distribution system is Windows LTSC
+	OperatingSystemImageWindowsLTSC OperatingSystemImage = "windows_ltsc"
+	// OperatingSystemImageWindowsSAC is used if operating distribution system is Windows SAC
+	OperatingSystemImageWindowsSAC OperatingSystemImage = "windows_sac"
+	// OperatingSystemImageCOS is used if operating distribution system is COS
+	OperatingSystemImageCOS OperatingSystemImage = "cos"
+	// OperatingSystemImageCOSContainerd is used if operating distribution system is COS Containerd
+	OperatingSystemImageCOSContainerd OperatingSystemImage = "cos_containerd"
+	// OperatingSystemImageUbuntuContainerd is used if operating distribution system is Ubuntu Containerd
+	OperatingSystemImageUbuntuContainerd OperatingSystemImage = "ubuntu_containerd"
+	// OperatingSystemImageWindowsLTSCContainerd is used if operating distribution system is Windows LTSC Containerd
+	OperatingSystemImageWindowsLTSCContainerd OperatingSystemImage = "windows_ltsc_containerd"
+	// OperatingSystemImageWindowsSACContainerd is used if operating distribution system is Windows SAC Containerd
+	OperatingSystemImageWindowsSACContainerd OperatingSystemImage = "windows_sac_containerd"
+
+	// OperatingSystemImageDefault defines which operating system will be assumed as default.
+	OperatingSystemImageDefault = OperatingSystemImageCOSContainerd
+)
+
+// OperatingSystemDistribution denotes  distribution of the operating system used by nodes coming from node group
+type OperatingSystemDistribution string
+
+const (
+	// OperatingSystemDistributionUnknown is used if operating distribution system is unknown
+	OperatingSystemDistributionUnknown OperatingSystemDistribution = ""
+	// OperatingSystemDistributionUbuntu is used if operating distribution system is Ubuntu
+	OperatingSystemDistributionUbuntu OperatingSystemDistribution = "ubuntu"
+	// OperatingSystemDistributionWindowsLTSC is used if operating distribution system is Windows LTSC
+	OperatingSystemDistributionWindowsLTSC OperatingSystemDistribution = "windows_ltsc"
+	// OperatingSystemDistributionWindowsSAC is used if operating distribution system is Windows SAC
+	OperatingSystemDistributionWindowsSAC OperatingSystemDistribution = "windows_sac"
+	// OperatingSystemDistributionCOS is used if operating distribution system is COS
+	OperatingSystemDistributionCOS OperatingSystemDistribution = "cos"
+
+	// OperatingSystemDistributionDefault defines which operating system will be assumed if not explicitly passed via AUTOSCALER_ENV_VARS
+	OperatingSystemDistributionDefault = OperatingSystemDistributionCOS
+)
+
+func extractOperatingSystemDistributionFromImageType(imageType string) OperatingSystemDistribution {
+	switch imageType {
+	case string(OperatingSystemImageUbuntu), string(OperatingSystemImageUbuntuContainerd):
+		return OperatingSystemDistributionUbuntu
+	case string(OperatingSystemImageWindowsLTSC), string(OperatingSystemImageWindowsLTSCContainerd):
+		return OperatingSystemDistributionWindowsLTSC
+	case string(OperatingSystemImageWindowsSAC), string(OperatingSystemImageWindowsSACContainerd):
+		return OperatingSystemDistributionWindowsSAC
+	case string(OperatingSystemImageCOS), string(OperatingSystemImageCOSContainerd):
+		return OperatingSystemDistributionCOS
+	default:
+		return OperatingSystemDistributionUnknown
+	}
+}
+
+// SystemArchitecture denotes distribution of the System Architecture used by nodes coming from node group
+type SystemArchitecture string
+
+const (
+	// UnknownArch is used if the Architecture is Unknown
+	UnknownArch SystemArchitecture = ""
+	// Amd64 is used if the Architecture is x86_64
+	Amd64 SystemArchitecture = "amd64"
+	// Arm64 is used if the Architecture is ARM
+	Arm64 SystemArchitecture = "arm64"
+	// DefaultArch is used if the Architecture is used as a fallback if not passed by AUTOSCALER_ENV_VARS
+	DefaultArch SystemArchitecture = Amd64
+)
+
+// Name returns the string value for SystemArchitecture
+func (s SystemArchitecture) Name() string {
+	return string(s)
+}
+
+func extractSystemArchitectureFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (SystemArchitecture, error) {
+	archName, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "arch")
+	if err != nil {
+		return UnknownArch, fmt.Errorf("error while obtaining arch from AUTOSCALER_ENV_VARS: %v", err)
+	}
+	if !found {
+		return UnknownArch, fmt.Errorf("no arch defined in AUTOSCALER_ENV_VARS")
+	}
+	arch := ToSystemArchitecture(archName)
+	if arch == UnknownArch {
+		return UnknownArch, fmt.Errorf("unknown arch %q defined in AUTOSCALER_ENV_VARS", archName)
+	}
+	return arch, nil
+}
+
+// ToSystemArchitecture parses a string to SystemArchitecture. Returns UnknownArch if the string doesn't represent a
+// valid architecture.
+func ToSystemArchitecture(arch string) SystemArchitecture {
+	switch arch {
+	case string(Arm64):
+		return Arm64
+	case string(Amd64):
+		return Amd64
+	default:
+		return UnknownArch
+	}
+}
+
+func extractOperatingSystemDistributionFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) OperatingSystemDistribution {
+	logger := klog.FromContext(ctx)
+	osDistributionValue, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "os_distribution")
+	if err != nil {
+		logger.Error(err, "Error while obtaining os from AUTOSCALER_ENV_VARS")
+		return OperatingSystemDistributionUnknown
+	}
+
+	if !found {
+		logger.Info("No os-distribution defined in AUTOSCALER_ENV_VARS; using default", "defaultOsDistribution", OperatingSystemDistributionDefault)
+		return OperatingSystemDistributionDefault
+	}
+
+	switch osDistributionValue {
+
+	case string(OperatingSystemDistributionUbuntu):
+		return OperatingSystemDistributionUbuntu
+	case string(OperatingSystemDistributionWindowsLTSC):
+		return OperatingSystemDistributionWindowsLTSC
+	case string(OperatingSystemDistributionWindowsSAC):
+		return OperatingSystemDistributionWindowsSAC
+	case string(OperatingSystemDistributionCOS):
+		return OperatingSystemDistributionCOS
+	// Deprecated
+	case "cos_containerd":
+		logger.Info("cos_containerd os distribution is deprecated")
+		return OperatingSystemDistributionCOS
+	// Deprecated
+	case "ubuntu_containerd":
+		logger.Info("ubuntu_containerd os distribution is deprecated")
+		return OperatingSystemDistributionUbuntu
+	default:
+		logger.Error(nil, "Unexpected os-distribution", "osDistribution", osDistributionValue)
+		return OperatingSystemDistributionUnknown
+	}
+}
+
+func getFloat64Option(ctx context.Context, options map[string]string, templateName, name string) (float64, bool) {
+	logger := klog.FromContext(ctx)
+	raw, ok := options[name]
+	if !ok {
+		return 0, false
+	}
+
+	option, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		logger.Info("Failed to convert autoscaling_options option for MIG template to float", "optionName", name, "optionValue", raw, "templateName", templateName, "err", err)
+		return 0, false
+	}
+
+	return option, true
+}
+
+func getDurationOption(ctx context.Context, options map[string]string, templateName, name string) (time.Duration, bool) {
+	logger := klog.FromContext(ctx)
+	raw, ok := options[name]
+	if !ok {
+		return 0, false
+	}
+
+	option, err := time.ParseDuration(raw)
+	if err != nil {
+		logger.Info("Failed to convert autoscaling_options option for MIG template to duration", "optionName", name, "optionValue", raw, "templateName", templateName, "err", err)
+		return 0, false
+	}
+
+	return option, true
+}
+
+func extractAutoscalingOptionsFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (map[string]string, error) {
+	logger := klog.FromContext(ctx)
+	optionsAsString, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "autoscaling_options")
+	if err != nil {
+		logger.Info("Error while obtaining autoscaling_options from AUTOSCALER_ENV_VARS", "err", err)
+		return nil, err
+	}
+
+	if !found {
+		logger.V(5).Info("No autoscaling_options defined in AUTOSCALER_ENV_VARS")
+		return make(map[string]string), nil
+	}
+
+	return parseKeyValueListToMap(optionsAsString)
+}
+
+func extractEvictionHardFromKubeEnv(ctx context.Context, kubeEnv KubeEnv) (map[string]string, error) {
+	logger := klog.FromContext(ctx)
+	evictionHardAsString, found, err := extractAutoscalerVarFromKubeEnv(ctx, kubeEnv, "evictionHard")
+	if err != nil {
+		logger.Info("Error while obtaining eviction-hard from AUTOSCALER_ENV_VARS", "err", err)
+		return nil, err
+	}
+
+	if !found {
+		logger.Info("No evictionHard defined in AUTOSCALER_ENV_VARS")
+		return make(map[string]string), nil
+	}
+
+	return parseKeyValueListToMap(evictionHardAsString)
+}
+
+func extractAutoscalerVarFromKubeEnv(ctx context.Context, kubeEnv KubeEnv, name string) (value string, found bool, err error) {
+	logger := klog.FromContext(ctx)
+	const autoscalerVars = "AUTOSCALER_ENV_VARS"
+	autoscalerVals, found := kubeEnv.Var(autoscalerVars)
+	if !found {
+		return "", false, nil
+	}
+
+	if strings.Trim(autoscalerVals, " ") == "" {
+		// empty or not present AUTOSCALER_ENV_VARS
+		return "", false, nil
+	}
+
+	for _, val := range strings.Split(autoscalerVals, ";") {
+		val = strings.Trim(val, " ")
+		items := strings.SplitN(val, "=", 2)
+		if len(items) != 2 {
+			return "", false, fmt.Errorf("malformed autoscaler var: %s", val)
+		}
+		if strings.Trim(items[0], " ") == name {
+			return strings.Trim(items[1], " \"'"), true, nil
+		}
+	}
+	logger.V(5).Info("Var not found in AUTOSCALER_ENV_VARS", "varName", name, "autoscalerVals", autoscalerVals)
+	return "", false, nil
+}
+
+func parseKeyValueListToMap(kvList string) (map[string]string, error) {
+	result := make(map[string]string)
+	if len(kvList) == 0 {
+		return result, nil
+	}
+	for _, keyValue := range strings.Split(kvList, ",") {
+		kvItems := strings.SplitN(keyValue, "=", 2)
+		if len(kvItems) != 2 {
+			return nil, fmt.Errorf("error while parsing key-value list, val: %s", keyValue)
+		}
+		result[kvItems[0]] = kvItems[1]
+	}
+	return result, nil
+}
+
+func buildTaints(kubeEnvTaints map[string]string) ([]apiv1.Taint, error) {
+	taints := make([]apiv1.Taint, 0)
+	for key, value := range kubeEnvTaints {
+		values := strings.SplitN(value, ":", 2)
+		if len(values) != 2 {
+			return nil, fmt.Errorf("error while parsing node taint value and effect: %s", value)
+		}
+		taints = append(taints, apiv1.Taint{
+			Key:    key,
+			Value:  values[0],
+			Effect: apiv1.TaintEffect(values[1]),
+		})
+	}
+	return taints, nil
+}
+
+func addAnnotation(node *apiv1.Node, key, value string) {
+	if node.Annotations == nil {
+		node.Annotations = make(map[string]string)
+	}
+	node.Annotations[key] = value
+}
+
+func addBootDiskAnnotations(node *apiv1.Node, instanceProperties *gce.InstanceProperties) {
+	if instanceProperties.Disks == nil {
+		return
+	}
+	for _, disk := range instanceProperties.Disks {
+		if disk != nil && disk.InitializeParams != nil {
+			if disk.Boot {
+				addAnnotation(node, BootDiskSizeAnnotation, strconv.FormatInt(disk.InitializeParams.DiskSizeGb, 10))
+				addAnnotation(node, BootDiskTypeAnnotation, disk.InitializeParams.DiskType)
+			}
+		}
+	}
+}

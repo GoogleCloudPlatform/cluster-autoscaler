@@ -20,17 +20,19 @@ COPY . .
 
 ARG TARGETARCH
 ARG VERSION
+# Optional Go build tags, e.g. no_internal_clients (see GO_BUILD_TAGS in the Makefile).
+ARG GO_BUILD_TAGS
 
 # Stage for release build
 FROM builder AS builder-release
 RUN ./hack/update-version-go.sh ${VERSION} && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -ldflags "-s -w" -v -o cluster-autoscaler && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -tags="${GO_BUILD_TAGS}" -ldflags "-s -w" -v -o cluster-autoscaler && \
     ./hack/update-version-go.sh reset
 
 # Stage for debug build
 FROM builder AS builder-debug
 RUN ./hack/update-version-go.sh ${VERSION} && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -gcflags=all="-N -l" -v -o cluster-autoscaler && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -mod=vendor -tags="${GO_BUILD_TAGS}" -gcflags=all="-N -l" -v -o cluster-autoscaler && \
     ./hack/update-version-go.sh reset
 
 # Delve installation stage

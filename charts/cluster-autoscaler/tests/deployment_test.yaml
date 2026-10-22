@@ -40,6 +40,9 @@ tests:
           path: spec.template.spec.serviceAccountName
           value: RELEASE-NAME-cluster-autoscaler
       - equal:
+          path: spec.template.metadata.annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"]
+          value: "false"
+      - equal:
           path: spec.template.spec.containers[0].image
           value: :0.0.0
       - equal:
@@ -265,6 +268,9 @@ tests:
       - equal:
           path: spec.template.metadata.annotations["pod.annotation"]
           value: test-pod-val
+      - equal:
+          path: spec.template.metadata.annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"]
+          value: "false"
       - equal:
           path: spec.template.metadata.labels["pod.label"]
           value: test-pod-label

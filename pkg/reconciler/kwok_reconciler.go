@@ -26,7 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	gce_api "google.golang.org/api/compute/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	gke_util "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 )
 

@@ -34,7 +34,6 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	cbv1beta1 "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -47,6 +46,7 @@ import (
 	cr_v1alpha1 "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1alpha1"
 	cr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/processors"
 	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -612,11 +612,15 @@ func (b *Builder) setUpProcessors(
 	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
 	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
 	var csnNodeController *nodecontroller.CSNNodeController
+	// Only set when the controller is created. A nil *CSNNodeController in the
+	// interface is not == nil, so the defrag plugins would call methods on it.
+	var csnFailedNodeProvider defrag_plugins_config.CSNFailedNodeProvider
 	if options.CSNEnabled && cbReady {
 		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
 		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		csnNodeController = nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
+		csnFailedNodeProvider = csnNodeController
 		go csnNodeController.Run(context)
 		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager, unhelpablePodTracker)
@@ -648,7 +652,7 @@ func (b *Builder) setUpProcessors(
 			Provider:              provider,
 			Autopilot:             options.AutopilotEnabled,
 			ResizableVmManager:    resizableVmManager,
-			CSNFailedNodeProvider: csnNodeController,
+			CSNFailedNodeProvider: csnFailedNodeProvider,
 			ExperimentsManager:    experimentsManager,
 		})
 		plugins, err := defrag_plugins.BuildPlugins(strings.Split(options.DefragPlugins, ","), pluginsConfig)
