@@ -29,11 +29,18 @@ excluded_paths=(
   "test/frankenstein"
   # This folder is auto-generated from google3 files and is not exported to OSS (reference: go/releasing).
   "pkg/internalclients/uas/client/proto/google/cloud/autoscaling/v1alpha1"
+)
+
+# Files and directories (e.g. copied from upstream sigs.k8s.io/cluster-autoscaler) whose copyright
+# headers must be attributed to "The Kubernetes Authors" instead of "Google LLC".
+kubernetes_authors_paths=(
   # TODO(b/571005331): Temporary copies from upstream sigs.k8s.io/cluster-autoscaler retaining "Copyright The Kubernetes Authors."
   "pkg/processors/capacitybuffers/autoscaling_status_processor.go"
   "pkg/processors/capacitybuffers/autoscaling_status_processor_test.go"
   "pkg/processors/capacitybuffers/ready_replicas_controller.go"
   "pkg/processors/capacitybuffers/ready_replicas_controller_test.go"
+  # GCE cloud provider synced from upstream sigs.k8s.io/cluster-autoscaler.
+  "pkg/cloudprovider/gce"
 )
 
 file_patterns=(
@@ -46,64 +53,106 @@ file_patterns=(
   'Dockerfile'
 )
 
-pathspec=(".")
-for exclude in "${excluded_paths[@]}"; do
-  pathspec+=(":(exclude)${exclude}")
-done
-
 printf -v regex_pattern "%s|" "${file_patterns[@]}"
 regex_pattern="${regex_pattern%|}"
 
-echo ">>> Validating Apache 2.0 and Google LLC copyright headers..."
-
-failed_files=0
-
-mapfile -t files < <(git ls-files -- "${pathspec[@]}" | grep -E "${regex_pattern}" || true)
-
-target_files=()
-for f in "${files[@]}"; do
-  if [ -f "$f" ]; then
-    target_files+=("$f")
+# Prints the tracked files matching the given pathspecs and file_patterns (except excluded_paths)
+# that lack the Apache 2.0 license or the given copyright holder within their first 30 lines.
+# Arguments: <copyright holder> [<pathspec>...]
+find_files_missing_header() {
+  local holder="$1"
+  shift
+  # Without any pathspec git ls-files would list all files.
+  if [ $# -eq 0 ]; then
+    return 0
   fi
-done
 
+  local pathspec=("$@")
+  local exclude
+  for exclude in "${excluded_paths[@]}"; do
+    pathspec+=(":(exclude)${exclude}")
+  done
 
-if [ ${#target_files[@]} -gt 0 ]; then
-  failed_files_list=$(awk '
+  local files
+  mapfile -t files < <(git ls-files -- "${pathspec[@]}" | grep -E "${regex_pattern}" || true)
+
+  local target_files=()
+  local f
+  for f in "${files[@]}"; do
+    if [ -f "$f" ]; then
+      target_files+=("$f")
+    fi
+  done
+
+  if [ ${#target_files[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  awk -v holder="${holder}" '
     FNR == 1 {
-      if (NR > 1 && (apache==0 || copy==0 || google==0)) {
+      if (NR > 1 && (apache==0 || copy==0 || attributed==0)) {
         print prev_file
       }
-      apache=0; copy=0; google=0; prev_file=FILENAME
+      apache=0; copy=0; attributed=0; prev_file=FILENAME
     }
     FNR <= 30 {
       if (/Licensed under the Apache License, Version 2.0/) apache=1
       if (/Copyright/) copy=1
-      if (/Google LLC/) google=1
-      if (apache && copy && google) nextfile
+      if (index($0, holder)) attributed=1
+      if (apache && copy && attributed) nextfile
     }
     FNR == 30 { nextfile }
     END {
-      if (NR > 0 && (apache==0 || copy==0 || google==0)) {
+      if (NR > 0 && (apache==0 || copy==0 || attributed==0)) {
         print prev_file
       }
     }
-  ' "${target_files[@]}")
+  ' "${target_files[@]}"
+}
 
-  if [[ -n "$failed_files_list" ]]; then
-    while IFS= read -r file; do
-      echo "Missing required license or Google LLC attribution: ${file}" >&2
-    done <<< "$failed_files_list"
-    failed_files=$(echo "$failed_files_list" | wc -l)
-  fi
-fi
+# Reports each of the given newline-separated files as missing the license or the given copyright
+# holder and increments failed_files accordingly.
+# Arguments: <copyright holder> <files>
+report_failed_files() {
+  local holder="$1"
+  local file
+  while IFS= read -r file; do
+    if [[ -n "$file" ]]; then
+      echo "Missing required license or ${holder} attribution: ${file}" >&2
+      failed_files=$((failed_files + 1))
+    fi
+  done <<< "$2"
+}
+
+echo ">>> Validating Apache 2.0 and Google LLC / The Kubernetes Authors copyright headers..."
+
+google_llc_pathspec=(".")
+for path in "${kubernetes_authors_paths[@]}"; do
+  google_llc_pathspec+=(":(exclude)${path}")
+done
+
+google_llc_failed_list=$(find_files_missing_header "Google LLC" "${google_llc_pathspec[@]}")
+kubernetes_authors_failed_list=$(find_files_missing_header "The Kubernetes Authors" "${kubernetes_authors_paths[@]}")
+
+failed_files=0
+report_failed_files "Google LLC" "${google_llc_failed_list}"
+report_failed_files "The Kubernetes Authors" "${kubernetes_authors_failed_list}"
 
 if [ "$failed_files" -gt 0 ]; then
-  echo ">>> Validation failed: ${failed_files} file(s) lack the correct Google LLC Apache 2.0 license header." >&2
-  echo ">>> License headers may be added using command:"
-  echo "addlicense -c \"Google LLC\" -l apache -ignore \"\$(git rev-parse --show-toplevel)/vendor/**\" -ignore \"\$(git rev-parse --show-toplevel)/cluster-autoscaler/vendor/**\" \$(git rev-parse --show-toplevel)/."
+  echo ">>> Validation failed: ${failed_files} file(s) lack the correct Apache 2.0 license header." >&2
+  echo ">>> License headers may be added using command(s):"
+  # Printed first, as the Google LLC command below would also add headers to the files listed here.
+  if [[ -n "${kubernetes_authors_failed_list}" ]]; then
+    mapfile -t kubernetes_authors_failed_files <<< "${kubernetes_authors_failed_list}"
+    printf "addlicense -c \"The Kubernetes Authors\" -l apache"
+    printf " \$(git rev-parse --show-toplevel)/%s" "${kubernetes_authors_failed_files[@]}"
+    echo
+  fi
+  if [[ -n "${google_llc_failed_list}" ]]; then
+    echo "addlicense -c \"Google LLC\" -l apache -ignore \"\$(git rev-parse --show-toplevel)/vendor/**\" -ignore \"\$(git rev-parse --show-toplevel)/cluster-autoscaler/vendor/**\" \$(git rev-parse --show-toplevel)/."
+  fi
   echo ">>> Tool reference: https://github.com/google/addlicense"
   exit 1
 else
-  echo ">>> All files contain the required Google LLC Apache 2.0 header."
+  echo ">>> All files contain the required Apache 2.0 license header."
 fi

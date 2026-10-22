@@ -24,7 +24,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	gce_cloudprovider "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	gce_cloudprovider "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"

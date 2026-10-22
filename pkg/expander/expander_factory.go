@@ -20,7 +20,7 @@ import (
 	kube_client "k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/localssdsize"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	cccLister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"

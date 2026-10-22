@@ -35,11 +35,11 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	cbv1beta1listers "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/client/listers/autoscaling.x-k8s.io/v1beta1"
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/kubernetes/pkg/features"
 
 	mccfake "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned/fake"

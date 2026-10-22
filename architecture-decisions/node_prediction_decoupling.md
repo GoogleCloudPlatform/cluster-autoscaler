@@ -26,7 +26,7 @@ Date: 2026-05-06
 
 Cluster Autoscaler already makes similar predictions, needed for NAP and scale-up from zero simulations. But this logic is scattered across the codebase, for example:
 
-* BuildNodeFromTemplate in OSS: cluster-autoscaler/vendor/k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce/templates.go
+* BuildNodeFromTemplate in OSS: cluster-autoscaler/vendor/k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/templates.go
 * BuildNodeFromMigSpec in GKE Cloud Provider: cluster-autoscaler/pkg/cloudprovider/gke/templates.go
 * DRA prediction in GKE Cloud Provider: cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources/predictor.go
 * ...

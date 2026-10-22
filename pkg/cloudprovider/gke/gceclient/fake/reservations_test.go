@@ -19,7 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	gcev1 "google.golang.org/api/compute/v1"
-	gceinternal "k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	gceinternal "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 

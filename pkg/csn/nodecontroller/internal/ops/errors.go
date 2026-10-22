@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 // Error codes for csn_processed_operations metric.

@@ -26,7 +26,7 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/api/googleapi"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	klog "k8s.io/klog/v2"
 )
 

@@ -23,7 +23,7 @@ import (
 	gcev1 "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/resource/v1"
-	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/dynamicresources"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	fakenodeprediction "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodeprediction/fake"
