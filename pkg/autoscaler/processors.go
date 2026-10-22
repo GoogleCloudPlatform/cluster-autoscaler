@@ -612,11 +612,15 @@ func (b *Builder) setUpProcessors(
 	var csnBufferConsumptionProcessor *csn_processors.BufferConsumptionProcessor
 	var csnCSNPodsLifecycleProcessor *csn_processors.CSNPodsLifecycleProcessor
 	var csnNodeController *nodecontroller.CSNNodeController
+	// Only set when the controller is created. A nil *CSNNodeController in the
+	// interface is not == nil, so the defrag plugins would call methods on it.
+	var csnFailedNodeProvider defrag_plugins_config.CSNFailedNodeProvider
 	if options.CSNEnabled && cbReady {
 		nodeBasedBackoff := csn_backoff.NewNodeBasedExponentialBackoff(options.CSNInitialNodeBackoffDuration, options.CSNMaxNodeBackoffDuration, options.CSNNodeBackoffResetTimeout, options.CSNNodeBackoffUseJitter)
 		csnBackoff := csn_backoff.NewCSNCompositeBackoff(backoff, nodeBasedBackoff)
 		csnPodsInjectionProcessor = cbprocessors.NewCapacityBufferPodListProcessor(capacitybufferClient, []string{capacitybuffers.ColdProvisioningStrategy}, capacitybufferPodsRegistry, true)
 		csnNodeController = nodecontroller.NewCSNNodeController(informerFactory, kubeClient, provider, experimentsManager, csnBackoff, autoscalingKubeClients.Recorder)
+		csnFailedNodeProvider = csnNodeController
 		go csnNodeController.Run(context)
 		csnNodeReconciliationProcessor = csn_processors.NewNodeReconciliationProcessor(csnNodeController, provider, experimentsManager)
 		csnBufferConsumptionProcessor = csn_processors.NewBufferConsumptionProcessor(csnNodeController, experimentsManager, unhelpablePodTracker)
@@ -648,7 +652,7 @@ func (b *Builder) setUpProcessors(
 			Provider:              provider,
 			Autopilot:             options.AutopilotEnabled,
 			ResizableVmManager:    resizableVmManager,
-			CSNFailedNodeProvider: csnNodeController,
+			CSNFailedNodeProvider: csnFailedNodeProvider,
 			ExperimentsManager:    experimentsManager,
 		})
 		plugins, err := defrag_plugins.BuildPlugins(strings.Split(options.DefragPlugins, ","), pluginsConfig)
