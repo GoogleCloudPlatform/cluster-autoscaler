@@ -32,7 +32,6 @@ type e4aAutoprovisioningProvider struct {
 	enabledOnManagedNodes       bool
 	enabledOnManagedNodesCAFlag bool
 	metrics                     resizableVmMetrics
-	countProvider               nodesCountProvider
 }
 
 // parseE4aAutoprovisioningMode parses E4aAutoprovisioning Mode
@@ -143,12 +142,4 @@ func (p *e4aAutoprovisioningProvider) isEnabledInAutopilot() bool {
 
 func (p *e4aAutoprovisioningProvider) resizingEnabled() bool {
 	return (p.autopilotEnabled || p.enabledOnManagedNodes) && p.status.phase == launchCoarseGrainedResize
-}
-
-func (p *e4aAutoprovisioningProvider) registerNodesCountProvider(countProvider nodesCountProvider) {
-	p.countProvider = countProvider
-}
-
-func (p *e4aAutoprovisioningProvider) nodesCount() int {
-	return getNodesCount(p.countProvider, machinetypes.E4A.Name())
 }

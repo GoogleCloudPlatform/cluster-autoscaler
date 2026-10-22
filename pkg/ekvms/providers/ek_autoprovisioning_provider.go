@@ -32,7 +32,6 @@ type ekAutoprovisioningProvider struct {
 	bpChecker                   *balloonPodChecker
 	autopilotEnabled            bool
 	metrics                     resizableVmMetrics
-	countProvider               nodesCountProvider
 }
 
 // parseEkAutoprovisioningMode parses EkAutoprovisioning Mode
@@ -123,12 +122,4 @@ func (p *ekAutoprovisioningProvider) isEnabledInAutopilot() bool {
 
 func (p *ekAutoprovisioningProvider) resizingEnabled() bool {
 	return (p.autopilotEnabled || p.enabledOnManagedNodes) && p.status.phase == launchCoarseGrainedResize
-}
-
-func (p *ekAutoprovisioningProvider) registerNodesCountProvider(countProvider nodesCountProvider) {
-	p.countProvider = countProvider
-}
-
-func (p *ekAutoprovisioningProvider) nodesCount() int {
-	return getNodesCount(p.countProvider, machinetypes.EK.Name())
 }
