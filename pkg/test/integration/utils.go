@@ -33,11 +33,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	cbv1beta1listers "k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/client/listers/autoscaling.x-k8s.io/v1beta1"
 	prv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/autoscaler/cluster-autoscaler/cloudprovider/gce"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/pkg/features"
 
 	mccfake "k8s.io/gke-autoscaling/cluster-autoscaler/apis/machineconfig/client/clientset/versioned/fake"
@@ -45,6 +47,7 @@ import (
 	osconfig "k8s.io/gke-autoscaling/cluster-autoscaler/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoscaler"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/bulkmig"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
 	fakegce "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
@@ -57,6 +60,7 @@ import (
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	fakeflexadvisor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
@@ -68,6 +72,7 @@ import (
 	integration_ccc "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	provreqtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/provreq"
 	visibilityfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/fake"
+	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/provreq"
@@ -148,6 +153,9 @@ type FakeSet struct {
 	ResizeRequestClient      *resizerequest.ResizeRequestClient
 	MccClient                *mccfake.Clientset
 	RecommendLocationsClient *fakegce.RecommendLocationsClient
+	ResizableVmClient        resizablevms.Client
+	CapacityBufferIndexer    cache.Indexer
+	CapacityBufferClient     *cbclient.CapacityBufferClient
 }
 
 // NewFakeSet initializes a coordinated set of fakes.
@@ -162,6 +170,10 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	mccClient := setupFakeMachineConfigClient()
 	eventLogger := visibilityfake.NewEventLogger()
 	rlClient := fakegce.NewRecommendLocationsClient()
+	cbIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	cbLister := cbv1beta1listers.NewCapacityBufferLister(cbIndexer)
+	cbClient, err := cbclient.NewCapacityBufferClient(nil, kubeClient, cbLister, nil, nil, nil, nil, nil, nil, nil, nil)
+	assert.NoError(t, err)
 
 	return &FakeSet{
 		KubeClient:               kubeClient,
@@ -176,6 +188,9 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		ResizeRequestClient:      rrClient,
 		MccClient:                mccClient,
 		RecommendLocationsClient: rlClient,
+		ResizableVmClient:        resizablevms.NewNoOpClient(),
+		CapacityBufferIndexer:    cbIndexer,
+		CapacityBufferClient:     cbClient,
 	}
 }
 
@@ -301,6 +316,23 @@ func DefaultAutoscalingBuilder(
 		networkMatcher = networking.GetMatcher(&mockNetworkParamSetLister{paramSets: config.GkeNetworkParamSets})
 	}
 
+	if config.ResizableVmClient != nil {
+		infra.Fakes.ResizableVmClient = config.ResizableVmClient
+	}
+	if infra.Fakes.ResizableVmClient == nil {
+		infra.Fakes.ResizableVmClient = resizablevms.NewNoOpClient()
+	}
+
+	var gceClientToUse gceclient.AutoscalingInternalGceClient = fakeGceClient
+	if config.GceClient != nil {
+		gceClientToUse = config.GceClient
+	}
+
+	nodeSizeRecommenderFactory := config.NodeSizeRecommenderFactory
+	if nodeSizeRecommenderFactory == nil {
+		nodeSizeRecommenderFactory = nodesizerecommender.DefaultFactory
+	}
+
 	return autoscaler.NewBuilder(tracker).
 		WithCAVersion(fakeCAVersion).
 		WithKubeConfig(kubeConfig).
@@ -320,9 +352,9 @@ func DefaultAutoscalingBuilder(
 		WithProvReqClient(fakePrClient).
 		WithProvReqInjector(fakePrInjector).
 		WithHttpClient(httpClient).
-		WithGCEClient(fakeGceClient).
+		WithGCEClient(gceClientToUse).
 		WithGkeClient(gkeClient).
-		WithResizableVmClient(resizablevms.NewNoOpClient()).
+		WithResizableVmClient(infra.Fakes.ResizableVmClient).
 		WithConsumableReservationsClient(consumablereservations.NewNoOpClient()).
 		WithProvReqCache(fakePrCache).
 		WithRecommendLocationsClient(infra.Fakes.RecommendLocationsClient).
@@ -333,6 +365,8 @@ func DefaultAutoscalingBuilder(
 		WithProvReqManager(prManager).
 		WithMachineConfigProvider(machineConfigProvider).
 		WithProviderConfigInformer(provConfigInformer).
+		WithNodeSizeRecommenderFactory(nodeSizeRecommenderFactory).
+		WithCapacityBufferClient(infra.Fakes.CapacityBufferClient).
 		// TODO(b/457181524): Refactor NodeSnowflakeWatcher to accept an injectable HTTP client.
 		// Currently, it creates a real REST client, preventing the use of fake clients in tests.
 		WithSnowflakeWatcher(nodesnowflake.NewNoOpWatcher()).

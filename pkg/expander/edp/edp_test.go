@@ -24,6 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	. "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -37,6 +38,8 @@ func TestEdpExpander(t *testing.T) {
 	n4 := BuildTestNode("n4", 4000, 1000)
 	np1 := BuildTestNode("np1", 4000, 1000)
 	np2 := BuildTestNode("np2", 4000, 1000)
+	nx1 := BuildTestNode("nx1", 8000, 1000)
+	nx2 := BuildTestNode("nx2", 32000, 1000)
 
 	n2.Labels = map[string]string{
 		gkelabels.ExtendedDurationPodsLabel: "1000m",
@@ -52,6 +55,12 @@ func TestEdpExpander(t *testing.T) {
 	}
 	np2.Labels = map[string]string{
 		gkelabels.ExtendedDurationPodsLabel: gkelabels.ExtendedDurationPackedPodsValue,
+	}
+	nx1.Labels = map[string]string{
+		gkelabels.ExtendedDurationPodsLabel: ekvmtypes.ExtendedDurationLabelX,
+	}
+	nx2.Labels = map[string]string{
+		gkelabels.ExtendedDurationPodsLabel: ekvmtypes.ExtendedDurationLabelX,
 	}
 
 	regularPod1 := BuildTestPod("regularPod1", 1000, 0)
@@ -91,18 +100,24 @@ func TestEdpExpander(t *testing.T) {
 	testMig4 := gke.NewTestGkeMigBuilder().SetGceRefName("ng4").SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-4"}).Build()
 	testMigP1 := gke.NewTestGkeMigBuilder().SetGceRefName("ngp1").SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-8"}).Build()
 	testMigP2 := gke.NewTestGkeMigBuilder().SetGceRefName("ngp2").SetSpec(&gkeclient.NodePoolSpec{MachineType: "n1-standard-32"}).Build()
+	testMigX1 := gke.NewTestGkeMigBuilder().SetGceRefName("ngx1").SetSpec(&gkeclient.NodePoolSpec{MachineType: "ek-standard-8"}).Build()
+	testMigX2 := gke.NewTestGkeMigBuilder().SetGceRefName("ngx2").SetSpec(&gkeclient.NodePoolSpec{MachineType: "ek-standard-32"}).Build()
 	provider.InsertNodeGroup(testMig1)
 	provider.InsertNodeGroup(testMig2)
 	provider.InsertNodeGroup(testMig3)
 	provider.InsertNodeGroup(testMig4)
 	provider.InsertNodeGroup(testMigP1)
 	provider.InsertNodeGroup(testMigP2)
+	provider.InsertNodeGroup(testMigX1)
+	provider.InsertNodeGroup(testMigX2)
 	provider.AddNode(testMig1.Id(), n1)
 	provider.AddNode(testMig2.Id(), n2)
 	provider.AddNode(testMig3.Id(), n3)
 	provider.AddNode(testMig4.Id(), n4)
 	provider.AddNode(testMigP1.Id(), np1)
 	provider.AddNode(testMigP2.Id(), np2)
+	provider.AddNode(testMigX1.Id(), nx1)
+	provider.AddNode(testMigX2.Id(), nx2)
 
 	ng1, _ := provider.NodeGroupForNode(context.TODO(), n1)
 	ng2, _ := provider.NodeGroupForNode(context.TODO(), n2)
@@ -110,6 +125,8 @@ func TestEdpExpander(t *testing.T) {
 	ng4, _ := provider.NodeGroupForNode(context.TODO(), n4)
 	ngp1, _ := provider.NodeGroupForNode(context.TODO(), np1)
 	ngp2, _ := provider.NodeGroupForNode(context.TODO(), np2)
+	ngx1, _ := provider.NodeGroupForNode(context.TODO(), nx1)
+	ngx2, _ := provider.NodeGroupForNode(context.TODO(), nx2)
 
 	ni1 := framework.NewTestNodeInfo(n1)
 	ni2 := framework.NewTestNodeInfo(n2)
@@ -117,6 +134,8 @@ func TestEdpExpander(t *testing.T) {
 	ni4 := framework.NewTestNodeInfo(n4)
 	nip1 := framework.NewTestNodeInfo(np1)
 	nip2 := framework.NewTestNodeInfo(np2)
+	nix1 := framework.NewTestNodeInfo(nx1)
+	nix2 := framework.NewTestNodeInfo(nx2)
 	nodeInfosForGroups := map[string]*framework.NodeInfo{
 		testMig1.Id():  ni1,
 		testMig2.Id():  ni2,
@@ -124,6 +143,8 @@ func TestEdpExpander(t *testing.T) {
 		testMig4.Id():  ni4,
 		testMigP1.Id(): nip1,
 		testMigP2.Id(): nip2,
+		testMigX1.Id(): nix1,
+		testMigX2.Id(): nix2,
 	}
 
 	testCases := map[string]struct {
@@ -289,6 +310,64 @@ func TestEdpExpander(t *testing.T) {
 				{
 					NodeGroup: ngp2,
 					Pods:      []*apiv1.Pod{edpPodPacked_1, edpPodPacked_2},
+				},
+			},
+			wantIndexes: []int{0, 1, 4, 5, 6},
+		},
+		"Resizable EDPs (X)": {
+			inputOptions: []expander.Option{
+				{
+					NodeGroup: ng1,
+					Pods:      []*apiv1.Pod{regularPod1, regularPod2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{regularPod1, regularPod2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{edpPod1000_1, regularPod1},
+				},
+				{
+					NodeGroup: ngx2,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
+				},
+			},
+			wantIndexes: []int{0, 2, 3, 4},
+		},
+		"Resizable EDPs (X) mixed with normal EDPs": {
+			inputOptions: []expander.Option{
+				{
+					NodeGroup: ng1,
+					Pods:      []*apiv1.Pod{regularPod1, regularPod2},
+				},
+				{
+					NodeGroup: ng2,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
+				},
+				{
+					NodeGroup: ng3,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{regularPod1, regularPod2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
+				},
+				{
+					NodeGroup: ngx1,
+					Pods:      []*apiv1.Pod{edpPod1000_1, regularPod1},
+				},
+				{
+					NodeGroup: ngx2,
+					Pods:      []*apiv1.Pod{edpPod1000_1, edpPod1000_2},
 				},
 			},
 			wantIndexes: []int{0, 1, 4, 5, 6},

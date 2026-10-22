@@ -594,6 +594,15 @@ func IsFlexAdvisorNapZoneSetExpansionEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorNapZoneSetExpansionMinCAVersionFlag, false)
 }
 
+// isFlexAdvisorPodFamilySequentialOrderEnabled returns whether podFamily machine families get sequential sub-ranks (kill-switch, default on).
+func isFlexAdvisorPodFamilySequentialOrderEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorPodFamilySequentialOrderEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag, true)
+}
+
 // isFlexAdvisorRecommendationsBypassEnabled returns whether recommendations bypass is enabled.
 func isFlexAdvisorRecommendationsBypassEnabled(manager experiments.Manager) bool {
 	if manager == nil {

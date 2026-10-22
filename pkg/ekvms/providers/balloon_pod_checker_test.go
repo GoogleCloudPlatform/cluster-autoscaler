@@ -15,9 +15,14 @@
 package providers
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -66,7 +71,7 @@ func TestDryRunCreateBalloonPod(t *testing.T) {
 				})
 			}
 
-			err := provider.balloonPodChecker.dryRunCreateBalloonPod()
+			err := provider.balloonPodChecker.dryRunCreateBalloonPod(t.Context())
 
 			if tc.expectedError {
 				assert.Error(t, err)
@@ -76,4 +81,49 @@ func TestDryRunCreateBalloonPod(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBalloonPodCheckerConcurrentRunAndIsCreatable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		fakeClient := fake.NewSimpleClientset()
+		checker := &balloonPodChecker{
+			clientSet:             fakeClient,
+			runInterval:           time.Millisecond,
+			isBalloonPodCreatable: true,
+		}
+
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		const totalCalls = 10
+		const failingCalls = 3
+		var callCount atomic.Int32
+		fakeClient.PrependReactor("create", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+			n := int(callCount.Add(1))
+			if n >= totalCalls {
+				cancel()
+			}
+			if n <= failingCalls {
+				return true, nil, errors.New("dry-run failure")
+			}
+			return true, nil, nil
+		})
+
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			checker.Run(ctx)
+		})
+		wg.Go(func() {
+			for ctx.Err() == nil {
+				_ = checker.isCreatable()
+				_ = checker.currentSize()
+				time.Sleep(500 * time.Microsecond)
+			}
+		})
+		wg.Wait()
+		synctest.Wait()
+
+		assert.True(t, checker.isCreatable())
+		assert.Equal(t, balloonPodTestSizes[(totalCalls-failingCalls)%len(balloonPodTestSizes)], checker.currentSize())
+	})
 }

@@ -321,7 +321,7 @@ func TestFlexAdvisorSpotVsOnDemand(t *testing.T) {
 
 // TestFlexAdvisorPodFamily_ExtendedFallbacks verifies that when extended fallbacks are enabled
 // for general-purpose pod family, Flex Advisor generates instance configuration keys for extended fallback
-// machine families (such as C4, C4D) and Cluster Autoscaler successfully falls back between extended fallback tiers
+// machine families (such as N4, N4D) and Cluster Autoscaler successfully falls back between extended fallback tiers
 // according to Flex Advisor capacity guidance.
 // Covers b/544485965.
 func TestFlexAdvisorPodFamily_ExtendedFallbacks(t *testing.T) {
@@ -330,27 +330,27 @@ func TestFlexAdvisorPodFamily_ExtendedFallbacks(t *testing.T) {
 		guidances                []fake.CapacityGuidance
 		wantScheduledOn          string
 	}{
-		"prefer_higher_tier_c4_when_available": {
+		"prefer_higher_tier_n4_when_available": {
 			extendedFallbacksEnabled: true,
 			guidances: []fake.CapacityGuidance{
-				fake.NewGuidance("c4-standard-4").WithCapacity(10),
-				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+				fake.NewGuidance("n4-standard-4").WithCapacity(10),
+				fake.NewGuidance("n4d-standard-4").WithCapacity(10),
 			},
-			wantScheduledOn: "pool-c4",
+			wantScheduledOn: "pool-n4",
 		},
-		"fallback_to_c4d_when_c4_exhausted": {
+		"fallback_to_n4d_when_n4_exhausted": {
 			extendedFallbacksEnabled: true,
 			guidances: []fake.CapacityGuidance{
-				fake.NewGuidance("c4-standard-4").WithCapacity(0),
-				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+				fake.NewGuidance("n4-standard-4").WithCapacity(0),
+				fake.NewGuidance("n4d-standard-4").WithCapacity(10),
 			},
-			wantScheduledOn: "pool-c4d",
+			wantScheduledOn: "pool-n4d",
 		},
 		"no_fallback_when_extended_fallbacks_disabled": {
 			extendedFallbacksEnabled: false,
 			guidances: []fake.CapacityGuidance{
-				fake.NewGuidance("c4-standard-4").WithCapacity(10),
-				fake.NewGuidance("c4d-standard-4").WithCapacity(10),
+				fake.NewGuidance("n4-standard-4").WithCapacity(10),
+				fake.NewGuidance("n4d-standard-4").WithCapacity(10),
 			},
 			wantScheduledOn: "",
 		},
@@ -363,9 +363,11 @@ func TestFlexAdvisorPodFamily_ExtendedFallbacks(t *testing.T) {
 				}).
 				Build()
 
+			// Use n4/n4d (rather than c4/c4d) because with sequential podFamily ranking, only
+			// families early in rules.ExtendedFallbacks survive the maxInstanceConfigs (200) cap.
 			nodePools := []*gke_api_beta.NodePool{
-				integration.EmptyNodePool("pool-c4").WithMachineType("c4-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
-				integration.EmptyNodePool("pool-c4d").WithMachineType("c4d-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
+				integration.EmptyNodePool("pool-n4").WithMachineType("n4-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
+				integration.EmptyNodePool("pool-n4d").WithMachineType("n4d-standard-4").WithCCCLabel(ccc.Name).WithLabel(gkelabels.ManagedNodeLabel, "true").Build(),
 			}
 
 			testConfig := integration.NewTestConfig().

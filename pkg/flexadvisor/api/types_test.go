@@ -103,3 +103,17 @@ func TestInstanceConfig_Signature(t *testing.T) {
 		})
 	}
 }
+
+func TestInstanceConfig_SubRankAndDeepCopy(t *testing.T) {
+	defaultCfg := NewInstanceConfig("e2-standard-4", "", 0, 1, instanceavailability.Standard, EmptyMaxRunDuration)
+	assert.Equal(t, 1, defaultCfg.Rank())
+	assert.Equal(t, 0, defaultCfg.SubRank())
+
+	cfgWithSubRank := NewInstanceConfig("e2-standard-4", "", 0, 2, instanceavailability.Spot, EmptyMaxRunDuration, WithSubRank(5))
+	assert.Equal(t, 2, cfgWithSubRank.Rank())
+	assert.Equal(t, 5, cfgWithSubRank.SubRank())
+
+	copied := DeepCopyInstanceConfig(cfgWithSubRank)
+	assert.Equal(t, 2, copied.Rank())
+	assert.Equal(t, 5, copied.SubRank())
+}

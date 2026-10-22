@@ -52,6 +52,13 @@ func WithWorkloadPolicies(workloadPolicies WorkloadPolicies) InstanceOption {
 	}
 }
 
+// WithSubRank sets the intra-rule sub-rank (e.g. sequential machine family index within a podFamily rule) for sorting priorities.
+func WithSubRank(subRank int) InstanceOption {
+	return func(instanceConfig *InstanceConfig) {
+		instanceConfig.subRank = subRank
+	}
+}
+
 // InstanceConfig represents a specific desired machine configuration, including
 // machine type, GPU, provisioning mode, and applicable zones among other fields
 type InstanceConfig struct {
@@ -60,6 +67,7 @@ type InstanceConfig struct {
 	gpuType                 string
 	gpuCount                int
 	rank                    int
+	subRank                 int
 	zones                   set.Set[string]
 	maxRunDurationInSeconds string
 	workloadPolicies        WorkloadPolicies
@@ -67,8 +75,8 @@ type InstanceConfig struct {
 
 // NewInstanceConfig creates a new InstanceConfig with an empty set of zones.
 // TODO(b/491088027): move non-required fields(gpuType, gpuCount, MRD) to options builder architecture
-func NewInstanceConfig(machineType, gpuType string, gpuCount, rank int, mode instanceavailability.ProvisioningMode, maxRunDurationInSeconds string) *InstanceConfig {
-	return NewInstanceConfigWithZones(machineType, gpuType, gpuCount, rank, mode, maxRunDurationInSeconds, set.New[string]())
+func NewInstanceConfig(machineType, gpuType string, gpuCount, rank int, mode instanceavailability.ProvisioningMode, maxRunDurationInSeconds string, opts ...InstanceOption) *InstanceConfig {
+	return NewInstanceConfigWithZones(machineType, gpuType, gpuCount, rank, mode, maxRunDurationInSeconds, set.New[string](), opts...)
 }
 
 // NewInstanceConfigWithZones creates a new InstanceConfig with a pre-populated set of zones.
@@ -99,6 +107,7 @@ func DeepCopyInstanceConfig(config *InstanceConfig) *InstanceConfig {
 		config.maxRunDurationInSeconds,
 		config.zones.Clone(),
 		WithWorkloadPolicies(config.workloadPolicies),
+		WithSubRank(config.subRank),
 	)
 }
 
@@ -130,6 +139,11 @@ func (i *InstanceConfig) Zones() set.Set[string] {
 // Rank returns the rank.
 func (i *InstanceConfig) Rank() int {
 	return i.rank
+}
+
+// SubRank returns the intra-rule sub-rank used for sorting priorities within the same rank.
+func (i *InstanceConfig) SubRank() int {
+	return i.subRank
 }
 
 // MaxRunDurationInSeconds returns the maximum run duration in seconds

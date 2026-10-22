@@ -37,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/klog/v2"
 
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
@@ -1336,7 +1337,7 @@ func TestInstanceConfigForMachineTypeFromN1Family(t *testing.T) {
 		t.Run(des, func(t *testing.T) {
 			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
-			configs := g.instanceConfigsForMachineTypeFromN1Family(tc.rule, tc.machineType, machinetypes.N1, rank)
+			configs := g.instanceConfigsForMachineTypeFromN1Family(tc.rule, tc.machineType, machinetypes.N1, rank, 0)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
 		})
 	}
@@ -1557,10 +1558,12 @@ func TestMachineFamilies(t *testing.T) {
 		resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
 	}
 	testCases := map[string]struct {
-		rule                rules.Rule
-		provider            instanceConfigCloudProvider
-		wantMachineFamilies []machinetypes.MachineFamily
-		wantErr             error
+		rule                      rules.Rule
+		provider                  instanceConfigCloudProvider
+		boolFlags                 map[string]bool
+		wantMachineFamilies       []machinetypes.MachineFamily
+		wantAreFamiliesSequential bool
+		wantErr                   error
 	}{
 		"machine family is specified in the rule": {
 			rule:                rules.NewRule(rules.WithMachineFamilyRule(ptr.To("a2"))),
@@ -1574,8 +1577,9 @@ func TestMachineFamilies(t *testing.T) {
 				extendedFallbacksEnabled:          false,
 				resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
 			},
-			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK, machinetypes.E4},
-			wantErr:             nil,
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2, machinetypes.E4},
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
 		},
 		"machine families are specified as pod families in the rule with extended fallbacks enabled": {
 			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
@@ -1585,19 +1589,21 @@ func TestMachineFamilies(t *testing.T) {
 				resizableVmWithinPodFamilyEnabled: map[string]bool{"e4": true, "ek": true},
 			},
 			wantMachineFamilies: []machinetypes.MachineFamily{
-				machinetypes.E2, machinetypes.EK, machinetypes.E4,
+				machinetypes.EK, machinetypes.E2, machinetypes.E4,
 				machinetypes.N4, machinetypes.N4D,
 				machinetypes.N2, machinetypes.N2D,
 				machinetypes.N1,
 				machinetypes.C4, machinetypes.C4D,
 			},
-			wantErr: nil,
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
 		},
 		"machine families are specified as pod families with custom families and extended fallbacks enabled": {
-			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"), machinetypes.N2, machinetypes.E4)),
-			provider:            &mockInstanceConfigCloudProvider{defaultMachineFamily: machinetypes.E2, extendedFallbacksEnabled: true},
-			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.N2, machinetypes.E4},
-			wantErr:             nil,
+			rule:                      rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"), machinetypes.N2, machinetypes.E4)),
+			provider:                  &mockInstanceConfigCloudProvider{defaultMachineFamily: machinetypes.E2, extendedFallbacksEnabled: true},
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.N2, machinetypes.E4},
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
 		},
 		"machine families are specified as pod families with E4 disabled in provider": {
 			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
@@ -1606,8 +1612,9 @@ func TestMachineFamilies(t *testing.T) {
 				extendedFallbacksEnabled:          false,
 				resizableVmWithinPodFamilyEnabled: map[string]bool{"ek": true},
 			},
-			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E2, machinetypes.EK},
-			wantErr:             nil,
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.EK, machinetypes.E2},
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
 		},
 		"machine families are specified as pod families with E4 prioritization in provider": {
 			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose"))),
@@ -1617,13 +1624,24 @@ func TestMachineFamilies(t *testing.T) {
 				resizableVmWithinPodFamilyEnabled:  map[string]bool{"e4": true, "ek": true},
 				e4PrioritizationEnabledInAutopilot: true,
 			},
-			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
-			wantErr:             nil,
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.E4, machinetypes.EK, machinetypes.E2},
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
 		},
 		"machine families are specified as arm pod families in the rule": {
-			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
-			wantMachineFamilies: []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
-			wantErr:             nil,
+			rule:                      rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+			wantAreFamiliesSequential: true,
+			wantErr:                   nil,
+		},
+		"machine families are specified as pod families with sequential order experiment disabled": {
+			rule: rules.NewRule(rules.WithPodFamilyRule(ptr.To("general-purpose-arm"))),
+			boolFlags: map[string]bool{
+				experiments.FlexAdvisorPodFamilySequentialOrderEnabledFlag: false,
+			},
+			wantMachineFamilies:       []machinetypes.MachineFamily{machinetypes.E4A, machinetypes.N4A, machinetypes.C4A},
+			wantAreFamiliesSequential: false,
+			wantErr:                   nil,
 		},
 		"unknown pod family": {
 			rule:                rules.NewRule(rules.WithPodFamilyRule(ptr.To("unknown-pod-family"))),
@@ -1652,9 +1670,10 @@ func TestMachineFamilies(t *testing.T) {
 			if provider == nil {
 				provider = defaultMockProvider
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{})
+			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
-			machineFamilies, err := g.machineFamiliesForRule(tc.rule)
+			machineFamilies, areFamiliesSequential, err := g.machineFamiliesForRule(tc.rule)
 			gotNames := []string{}
 			for _, mf := range machineFamilies {
 				gotNames = append(gotNames, mf.Name())
@@ -1663,7 +1682,12 @@ func TestMachineFamilies(t *testing.T) {
 			for _, mf := range tc.wantMachineFamilies {
 				wantNames = append(wantNames, mf.Name())
 			}
-			assert.ElementsMatch(t, wantNames, gotNames)
+			assert.Equal(t, tc.wantAreFamiliesSequential, areFamiliesSequential)
+			if tc.wantAreFamiliesSequential {
+				assert.Equal(t, wantNames, gotNames)
+			} else {
+				assert.ElementsMatch(t, wantNames, gotNames)
+			}
 			assert.Equal(t, tc.wantErr, err)
 		})
 	}
@@ -2310,10 +2334,301 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			assert.Empty(t, genErrs)
 			assert.NotNil(t, artifacts)
 			assert.NotEmpty(t, artifacts.Configs)
-			for _, cfg := range artifacts.Configs {
-				if tc.wantGroupedRulesCount == 1 {
-					assert.Equal(t, 1, cfg.Rank())
+			if tc.wantPodFamily != "" {
+				prioritizedFamilies := computeclass.PrioritizedFamiliesForRule(matchedCrd.Rules()[0], provider)
+				wantRanks := make(map[string]familyRankExpectation, len(prioritizedFamilies))
+				for idx, fam := range prioritizedFamilies {
+					wantRanks[fam.Name()] = familyRankExpectation{rank: 1, subRank: idx}
 				}
+				assertConfigFamilyRanks(t, provider, artifacts.Configs, wantRanks)
+			} else {
+				for _, cfg := range artifacts.Configs {
+					if tc.wantGroupedRulesCount == 1 {
+						assert.Equal(t, 1, cfg.Rank())
+					}
+					assert.Equal(t, 0, cfg.SubRank())
+				}
+			}
+		})
+	}
+}
+
+type familyRankExpectation struct {
+	rank    int
+	subRank int
+	zones   set.Set[string]
+}
+
+func assertConfigFamilyRanks(t *testing.T, provider instanceConfigCloudProvider, configs map[string]*api.InstanceConfig, want map[string]familyRankExpectation) {
+	t.Helper()
+	seenFamilies := make(map[string]bool, len(want))
+	for _, cfg := range configs {
+		fam, err := provider.MachineConfigProvider().GetMachineFamilyFromMachineName(cfg.MachineType())
+		if !assert.NoError(t, err) {
+			continue
+		}
+		seenFamilies[fam.Name()] = true
+		exp, ok := want[fam.Name()]
+		if !assert.True(t, ok, "unexpected family %s for %s", fam.Name(), cfg.MachineType()) {
+			continue
+		}
+		assert.Equal(t, exp.rank, cfg.Rank(), "unexpected rank for %s (family %s)", cfg.MachineType(), fam.Name())
+		assert.Equal(t, exp.subRank, cfg.SubRank(), "unexpected subRank for %s (family %s)", cfg.MachineType(), fam.Name())
+		if exp.zones.Len() > 0 {
+			assert.Equal(t, exp.zones, cfg.Zones(), "unexpected zones for %s (family %s)", cfg.MachineType(), fam.Name())
+		}
+	}
+	for famName := range want {
+		assert.True(t, seenFamilies[famName], "expected family %s to be present", famName)
+	}
+}
+
+func TestGenerateInstanceConfigs_PodFamily_SequentialOrder(t *testing.T) {
+	newCcc := func(name string, priorities ...v1.Priority) crd.CRD {
+		return ccc.NewCccCrd(&v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec:       v1.ComputeClassSpec{Priorities: priorities},
+		}, "", false, crd.TestDefaultDataProvider(), optstracking.EmptyFakeOptionsTracker())
+	}
+	armCcc := newCcc("arm-ccc",
+		v1.Priority{
+			PodFamily: ptr.To(rules.GeneralPurposeArmPodFamily),
+			Spot:      ptr.To(true),
+		},
+		v1.Priority{
+			MachineType: ptr.To("g2-standard-12"),
+			Spot:        ptr.To(true),
+		},
+	)
+	defaultProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+	defaultOptionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+
+	t.Run("sequential order assigns per-family subRanks without modifying rank and preserves earlier families when capped", func(t *testing.T) {
+		e4aCount := len(machinetypes.E4A.AllMachineTypes(machinetypes.NoConstraints))
+		// Cap to just e4aCount so only the first prioritized family (e4a) fits.
+		g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{armCcc}), defaultProvider, defaultOptionsTracker, WithMaxInstanceConfigs(e4aCount))
+		generated, errs := g.generateInstanceConfigs("arm-ccc")
+		assert.Empty(t, errs)
+		assert.NotNil(t, generated)
+		assert.Len(t, generated.Configs, e4aCount)
+		assertConfigFamilyRanks(t, defaultProvider, generated.Configs, map[string]familyRankExpectation{
+			machinetypes.E4A.Name(): {rank: 1, subRank: 0},
+		})
+
+		// Without capping, verify (rank, subRank) across all families in general-purpose-arm (e4a=(1,0), n4a=(1,1), c4a=(1,2))
+		// and the subsequent priority rule (g2-standard-12 -> (2,0)).
+		gUncapped := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{armCcc}), defaultProvider, defaultOptionsTracker, WithMaxInstanceConfigs(1000))
+		uncapped, errs := gUncapped.generateInstanceConfigs("arm-ccc")
+		assert.Empty(t, errs)
+		assert.NotNil(t, uncapped)
+		assertConfigFamilyRanks(t, defaultProvider, uncapped.Configs, map[string]familyRankExpectation{
+			machinetypes.E4A.Name(): {rank: 1, subRank: 0},
+			machinetypes.N4A.Name(): {rank: 1, subRank: 1},
+			machinetypes.C4A.Name(): {rank: 1, subRank: 2},
+			machinetypes.G2.Name():  {rank: 2, subRank: 0},
+		})
+	})
+
+	t.Run("two sequential podFamily priorities keep distinct ranks 1 and 2 without overlap", func(t *testing.T) {
+		twoPodFamiliesCcc := newCcc("two-pod-families-ccc",
+			v1.Priority{
+				PodFamily: ptr.To(rules.GeneralPurposeArmPodFamily),
+				Spot:      ptr.To(true),
+			},
+			v1.Priority{
+				PodFamily: ptr.To(rules.GeneralPurposePodFamily),
+				Spot:      ptr.To(true),
+			},
+		)
+
+		g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{twoPodFamiliesCcc}), defaultProvider, defaultOptionsTracker, WithMaxInstanceConfigs(1000))
+		generated, errs := g.generateInstanceConfigs("two-pod-families-ccc")
+		assert.Empty(t, errs)
+		assert.NotNil(t, generated)
+		assertConfigFamilyRanks(t, defaultProvider, generated.Configs, map[string]familyRankExpectation{
+			machinetypes.E4A.Name(): {rank: 1, subRank: 0},
+			machinetypes.N4A.Name(): {rank: 1, subRank: 1},
+			machinetypes.C4A.Name(): {rank: 1, subRank: 2},
+			machinetypes.EK.Name():  {rank: 2, subRank: 0},
+			machinetypes.E2.Name():  {rank: 2, subRank: 1},
+			machinetypes.E4.Name():  {rank: 2, subRank: 2},
+		})
+	})
+
+	t.Run("experiment disabled falls back to zero subRank and alphabetical capping", func(t *testing.T) {
+		for _, disableFlag := range []string{
+			experiments.FlexAdvisorPodFamilySequentialOrderEnabledFlag,
+			experiments.FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag,
+		} {
+			t.Run(disableFlag, func(t *testing.T) {
+				optionsTracker := optstracking.FakeOptionsTracker(
+					options.AutoscalingOptions{},
+					gkeclient.Cluster{},
+					experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{disableFlag: false}, map[string]string{}),
+				)
+
+				gUncapped := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{armCcc}), defaultProvider, optionsTracker, WithMaxInstanceConfigs(1000))
+				uncapped, errs := gUncapped.generateInstanceConfigs("arm-ccc")
+				assert.Empty(t, errs)
+				assert.NotNil(t, uncapped)
+				assertConfigFamilyRanks(t, defaultProvider, uncapped.Configs, map[string]familyRankExpectation{
+					machinetypes.E4A.Name(): {rank: 1, subRank: 0},
+					machinetypes.N4A.Name(): {rank: 1, subRank: 0},
+					machinetypes.C4A.Name(): {rank: 1, subRank: 0},
+					machinetypes.G2.Name():  {rank: 2, subRank: 0},
+				})
+
+				// When capped to 5 configs with experiment disabled, c4a (alphabetically first) wins over e4a.
+				gCapped := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{armCcc}), defaultProvider, optionsTracker, WithMaxInstanceConfigs(5))
+				capped, errs := gCapped.generateInstanceConfigs("arm-ccc")
+				assert.Empty(t, errs)
+				assert.NotNil(t, capped)
+				assertConfigFamilyRanks(t, defaultProvider, capped.Configs, map[string]familyRankExpectation{
+					machinetypes.C4A.Name(): {rank: 1, subRank: 0},
+				})
+			})
+		}
+	})
+
+	t.Run("same ruleGroup with podFamily and explicit rule preserves lowest subRank and merges zones", func(t *testing.T) {
+		sameScoreCcc := newCcc("same-score-ccc",
+			v1.Priority{
+				PodFamily:     ptr.To(rules.GeneralPurposeArmPodFamily),
+				PriorityScore: ptr.To(100),
+				Spot:          ptr.To(true),
+				Location:      &v1.Location{Zones: []string{"us-west1-a"}},
+			},
+			v1.Priority{
+				MachineFamily: ptr.To(machinetypes.C4A.Name()),
+				PriorityScore: ptr.To(100),
+				Spot:          ptr.To(true),
+				Location:      &v1.Location{Zones: []string{"us-west1-b"}},
+			},
+			v1.Priority{
+				MachineType:   ptr.To("g2-standard-12"),
+				PriorityScore: ptr.To(50),
+				Spot:          ptr.To(true),
+				Location:      &v1.Location{Zones: []string{"us-west1-a"}},
+			},
+		)
+
+		provider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b"}, nil, machinetypes.E2, true, nil)
+		g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{sameScoreCcc}), provider, defaultOptionsTracker, WithMaxInstanceConfigs(1000))
+		generated, errs := g.generateInstanceConfigs("same-score-ccc")
+		assert.Empty(t, errs)
+		assert.NotNil(t, generated)
+		// C4A is subRank 2 in the podFamily rule (us-west1-a), but subRank 0 in the explicit machineFamily rule (us-west1-b);
+		// next priorityScore group (G2) gets rank 2 and subRank 0.
+		assertConfigFamilyRanks(t, provider, generated.Configs, map[string]familyRankExpectation{
+			machinetypes.C4A.Name(): {rank: 1, subRank: 0, zones: set.New("us-west1-a", "us-west1-b")},
+			machinetypes.E4A.Name(): {rank: 1, subRank: 0, zones: set.New("us-west1-a")},
+			machinetypes.N4A.Name(): {rank: 1, subRank: 1, zones: set.New("us-west1-a")},
+			machinetypes.G2.Name():  {rank: 2, subRank: 0, zones: set.New("us-west1-a")},
+		})
+	})
+
+	t.Run("general-purpose with extended fallbacks keeps e2 and e4 when capped at defaultMaxInstanceConfigs", func(t *testing.T) {
+		gpCcc := newCcc("gp-ccc", v1.Priority{
+			PodFamily: ptr.To(rules.GeneralPurposePodFamily),
+		})
+		provider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil, withExtendedFallbacksEnabled(true))
+		g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{gpCcc}), provider, defaultOptionsTracker)
+		generated, errs := g.generateInstanceConfigs("gp-ccc")
+		assert.Empty(t, errs)
+		assert.NotNil(t, generated)
+		assert.Len(t, generated.Configs, defaultMaxInstanceConfigs)
+
+		familiesFound := make(map[string]bool)
+		for _, cfg := range generated.Configs {
+			assert.Equal(t, 1, cfg.Rank())
+			fam, err := provider.MachineConfigProvider().GetMachineFamilyFromMachineName(cfg.MachineType())
+			if assert.NoError(t, err) {
+				familiesFound[fam.Name()] = true
+			}
+		}
+		assert.True(t, familiesFound[machinetypes.EK.Name()], "expected ek (subRank 0) to be present after capping")
+		assert.True(t, familiesFound[machinetypes.E2.Name()], "expected e2 (subRank 1) to be present after capping")
+		assert.True(t, familiesFound[machinetypes.E4.Name()], "expected e4 (subRank 2) to be present after capping")
+		assert.False(t, familiesFound[machinetypes.C4D.Name()], "expected c4d (last fallback family, subRank 9) to be capped out")
+	})
+}
+
+func TestMergeNewInstanceConfigs(t *testing.T) {
+	newCfg := func(rank, subRank int, zones ...string) *api.InstanceConfig {
+		cfg := api.NewInstanceConfig("n4-standard-4", "", 0, rank, instanceavailability.Standard, api.EmptyMaxRunDuration, api.WithSubRank(subRank))
+		for _, z := range zones {
+			cfg.InsertZone(z)
+		}
+		return cfg
+	}
+
+	for _, tc := range []struct {
+		name            string
+		existingRank    int
+		existingSubRank int
+		newRank         int
+		newSubRank      int
+		wantRank        int
+		wantSubRank     int
+	}{
+		{
+			name:            "new config has lower rank",
+			existingRank:    3,
+			existingSubRank: 0,
+			newRank:         1,
+			newSubRank:      2,
+			wantRank:        1,
+			wantSubRank:     2,
+		},
+		{
+			name:            "existing config has lower rank",
+			existingRank:    1,
+			existingSubRank: 2,
+			newRank:         3,
+			newSubRank:      0,
+			wantRank:        1,
+			wantSubRank:     2,
+		},
+		{
+			name:            "equal rank and new config has lower subRank",
+			existingRank:    1,
+			existingSubRank: 2,
+			newRank:         1,
+			newSubRank:      0,
+			wantRank:        1,
+			wantSubRank:     0,
+		},
+		{
+			name:            "equal rank and existing config has lower subRank",
+			existingRank:    1,
+			existingSubRank: 0,
+			newRank:         1,
+			newSubRank:      2,
+			wantRank:        1,
+			wantSubRank:     0,
+		},
+		{
+			name:            "equal rank and subRank",
+			existingRank:    2,
+			existingSubRank: 1,
+			newRank:         2,
+			newSubRank:      1,
+			wantRank:        2,
+			wantSubRank:     1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			existing := newCfg(tc.existingRank, tc.existingSubRank, "us-west1-a")
+			incoming := newCfg(tc.newRank, tc.newSubRank, "us-west1-b")
+			merged := mergeNewInstanceConfigs(
+				map[string]*api.InstanceConfig{existing.Signature(): existing},
+				[]*api.InstanceConfig{incoming},
+			)
+			got := merged[existing.Signature()]
+			if assert.NotNil(t, got) {
+				assert.Equal(t, tc.wantRank, got.Rank())
+				assert.Equal(t, tc.wantSubRank, got.SubRank())
+				assert.Equal(t, set.New("us-west1-a", "us-west1-b"), got.Zones())
 			}
 		})
 	}

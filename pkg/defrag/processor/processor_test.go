@@ -2075,9 +2075,10 @@ func TestProcessCandidate(t *testing.T) {
 		scaledDownNodes []string
 		candidateInfo   *candidateInfo
 
-		wantStartDeletionCall  bool
-		wantStartDeletionNodes []*apiv1.Node
-		wantStartDeletionError error
+		wantStartDeletionCall       bool
+		wantStartDeletionEmptyNodes []*apiv1.Node
+		wantStartDeletionDrainNodes []*apiv1.Node
+		wantStartDeletionError      error
 
 		wantCandidatePods []*apiv1.Pod
 		wantCandidateInfo *candidateInfo
@@ -2187,7 +2188,7 @@ func TestProcessCandidate(t *testing.T) {
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1500, 10),
 			},
 			wantCandidatePods: []*apiv1.Pod{},
@@ -2244,7 +2245,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(2)))},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true),
 			},
 			wantCandidatePods: []*apiv1.Pod{},
@@ -2270,7 +2271,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(1)))},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				withComputeClass(buildReadyNode("n1", 1500, 10), testCC, true),
 			},
 			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
@@ -2359,7 +2360,7 @@ func TestProcessCandidate(t *testing.T) {
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1500, 10),
 			},
 			wantCandidatePods: []*apiv1.Pod{pod1, pod2, pod3},
@@ -2407,7 +2408,7 @@ func TestProcessCandidate(t *testing.T) {
 				defragPossibleTime: timeNow.Add(-1 * time.Minute),
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1500, 10),
 			},
 			wantStartDeletionError: caerrors.NewAutoscalerError("type", "msg"),
@@ -2442,7 +2443,7 @@ func TestProcessCandidate(t *testing.T) {
 				},
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 10),
 			},
 			wantCandidateInfo: &candidateInfo{
@@ -2483,7 +2484,7 @@ func TestProcessCandidate(t *testing.T) {
 			},
 			minCapacityCrds:       []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(2)))},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionEmptyNodes: []*apiv1.Node{
 				withComputeClass(buildReadyNode("n1", 1000, 10), "other-ccc", true),
 			},
 			wantCandidateInfo: &candidateInfo{
@@ -2553,7 +2554,7 @@ func TestProcessCandidate(t *testing.T) {
 				},
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n2", 1000, 10),
 			},
 			wantCandidateInfo: &candidateInfo{
@@ -2593,7 +2594,7 @@ func TestProcessCandidate(t *testing.T) {
 				},
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 10),
 				buildReadyNode("n2", 1000, 10),
 			},
@@ -2694,7 +2695,7 @@ func TestProcessCandidate(t *testing.T) {
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 10),
 				buildReadyNode("n2", 1000, 10),
 			},
@@ -2732,7 +2733,7 @@ func TestProcessCandidate(t *testing.T) {
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 10),
 				buildReadyNode("n2", 1000, 10),
 			},
@@ -2767,7 +2768,7 @@ func TestProcessCandidate(t *testing.T) {
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n2", 1000, 10),
 			},
 			wantCandidateInfo: &candidateInfo{
@@ -2803,7 +2804,7 @@ func TestProcessCandidate(t *testing.T) {
 				creationTime: timeNow,
 			},
 			wantStartDeletionCall: true,
-			wantStartDeletionNodes: []*apiv1.Node{
+			wantStartDeletionDrainNodes: []*apiv1.Node{
 				buildReadyNode("n1", 1000, 10),
 				buildReadyNode("n2", 1000, 10),
 			},
@@ -2837,12 +2838,15 @@ func TestProcessCandidate(t *testing.T) {
 			scaleDownActuator := &mockScaleDownActuator{}
 			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
 			if tc.wantStartDeletionCall {
-				scaledDownNodes := make([]*status.ScaleDownNode, len(tc.wantStartDeletionNodes))
-				for i, node := range tc.wantStartDeletionNodes {
-					scaledDownNodes[i] = &status.ScaleDownNode{Node: node}
+				var scaledDownNodes []*status.ScaleDownNode
+				for _, node := range tc.wantStartDeletionEmptyNodes {
+					scaledDownNodes = append(scaledDownNodes, &status.ScaleDownNode{Node: node})
+				}
+				for _, node := range tc.wantStartDeletionDrainNodes {
+					scaledDownNodes = append(scaledDownNodes, &status.ScaleDownNode{Node: node})
 				}
 				scaleDownActuator.
-					On("StartDeletion", []*apiv1.Node(nil), tc.wantStartDeletionNodes).
+					On("StartDeletion", tc.wantStartDeletionEmptyNodes, tc.wantStartDeletionDrainNodes).
 					Return(status.ScaleDownNodeDeleteStarted, scaledDownNodes, tc.wantStartDeletionError).
 					Once()
 				plugin := mockPluginBuilder{}.build()

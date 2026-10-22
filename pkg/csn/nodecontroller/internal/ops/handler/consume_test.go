@@ -585,6 +585,34 @@ func TestReadinessWatcher_GivesUpWhenTheContextIsCancelled(t *testing.T) {
 	})
 }
 
+func TestReadinessWatcher_GivesUpOnNodeWatchedAfterContextIsCancelled(t *testing.T) {
+	const nodeName = "suspended-node"
+
+	synctest.Test(t, func(t *testing.T) {
+		h := NewConsumeHandler(&statetest.MockStateManager{}, &test.MockCloudProvider{}, &test.MockK8sClient{}, neverReadyLister(), &mockCSNCompositeBackoff{}, readinessWaitExperiment(true))
+		deltas := readinessWaitDeltas(t, map[string]time.Duration{readinessAborted: 0})
+
+		ctx, cancel := context.WithCancel(t.Context())
+		watchReadiness, waitForReadiness := h.startReadinessWatcher(ctx, 1)
+		cancel()
+		// Wait for the watcher goroutine to observe ctx.Done, give up, and
+		// exit before the node is handed over.
+		synctest.Wait()
+		watchReadiness(nodeName)
+
+		result := ops.NewResult()
+		result.Success.Insert(nodeName)
+		waitForReadiness(&result, set.New(nodeName))
+
+		assert.Empty(t, result.Success.UnsortedList(), "a node handed over after the watcher gave up is not consumed")
+		assert.ErrorIs(t, result.Errs[nodeName], context.Canceled)
+		assert.ErrorContains(t, result.Errs[nodeName], "gave up waiting for node")
+		for status, d := range deltas {
+			assert.NoError(t, d.Verify(t), "unexpected wait recorded for status %q", status)
+		}
+	})
+}
+
 func TestReadinessWatcher_LogPrefix(t *testing.T) {
 	tests := []struct {
 		name           string

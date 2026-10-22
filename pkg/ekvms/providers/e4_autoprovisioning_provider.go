@@ -32,7 +32,6 @@ type e4AutoprovisioningProvider struct {
 	enabledOnManagedNodes       bool
 	enabledOnManagedNodesCAFlag bool
 	metrics                     resizableVmMetrics
-	countProvider               nodesCountProvider
 	isExtendedFallbacksEnabled  bool
 	isStatefulEnabled           bool
 	isPrioritizationEnabled     bool
@@ -110,7 +109,7 @@ func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
 		p.status = LaunchStatus{phase: launchDisabled, source: launchUndefined}
 		return
 	case resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize:
-		if !p.bpChecker.isBalloonPodCreatable {
+		if !p.bpChecker.isCreatable() {
 			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 			return
 		}
@@ -127,7 +126,7 @@ func (p *e4AutoprovisioningProvider) refreshLaunchStatus() {
 	}
 
 	if isE4EnabledWithExperiment := p.experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.AutopilotE4WithResizeMinVersionFlag, false) && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.AutopilotE4WithResizeEnabledFlag, true); isE4EnabledWithExperiment {
-		if !p.bpChecker.isBalloonPodCreatable {
+		if !p.bpChecker.isCreatable() {
 			p.status = LaunchStatus{phase: launchDisabledBalloonPodError, source: launchUndefined}
 			return
 		}
@@ -180,12 +179,4 @@ func (p *e4AutoprovisioningProvider) isEnabledInAutopilot() bool {
 
 func (p *e4AutoprovisioningProvider) resizingEnabled() bool {
 	return (p.autopilotEnabled || p.enabledOnManagedNodes) && p.status.phase == launchCoarseGrainedResize
-}
-
-func (p *e4AutoprovisioningProvider) registerNodesCountProvider(countProvider nodesCountProvider) {
-	p.countProvider = countProvider
-}
-
-func (p *e4AutoprovisioningProvider) nodesCount() int {
-	return getNodesCount(p.countProvider, machinetypes.E4.Name())
 }

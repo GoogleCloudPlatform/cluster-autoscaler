@@ -118,6 +118,133 @@ func TestCCCDomainDiscovery(t *testing.T) {
 	})
 }
 
+// TestCCCDomainDiscovery_MultipleTopologySpreadConstraints verifies ComputeClass domain discovery
+// when a pending pod defines a ComputeClass topology spread constraint before another topology
+// spread constraint:
+//   - Desired behavior: Cluster Autoscaler spreads pending ComputeClass pods across matched
+//     topology domains when a pod defines a ComputeClass spread constraint before another topology
+//     spread constraint.
+//   - Observed behavior: Cluster Autoscaler overwrites the matched constraint's domains with the
+//     subsequent constraint's domains.
+//   - Consequences (P1): Cluster Autoscaler panics on empty domains or assigns wrong node
+//     selectors, blocking scale-up.
+func TestCCCDomainDiscovery_MultipleTopologySpreadConstraints(t *testing.T) {
+	cccName := "my-ccc-multi-pts"
+	cccDomainKey := "my-ccc-domain-key"
+	secondaryDomainKey := "my-secondary-ccc-key"
+
+	testCases := []struct {
+		name             string
+		secondConstraint apiv1.TopologySpreadConstraint
+	}{
+		{
+			name: "DoNotScheduleCCCConstraintFollowedByHostnameConstraint",
+			secondConstraint: apiv1.TopologySpreadConstraint{
+				MaxSkew:           1,
+				TopologyKey:       apiv1.LabelHostname,
+				WhenUnsatisfiable: apiv1.ScheduleAnyway,
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "pts-app"},
+				},
+			},
+		},
+		{
+			name: "DoNotScheduleCCCConstraintFollowedByScheduleAnywayCCCConstraint",
+			secondConstraint: apiv1.TopologySpreadConstraint{
+				MaxSkew:           1,
+				TopologyKey:       secondaryDomainKey,
+				WhenUnsatisfiable: apiv1.ScheduleAnyway,
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "pts-app"},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ccc1 := ccc_builder.NewComputeClassBuilder(cccName).
+				WithNapEnabled().
+				WithPriorities(
+					v1.Priority{
+						NodeLabels: map[string]string{
+							cccDomainKey:       "domain-a",
+							secondaryDomainKey: "tier-1",
+						},
+					},
+					v1.Priority{
+						NodeLabels: map[string]string{
+							cccDomainKey:       "domain-b",
+							secondaryDomainKey: "tier-2",
+						},
+					},
+				).
+				Build()
+
+			primaryPTS := apiv1.TopologySpreadConstraint{
+				MaxSkew:           1,
+				TopologyKey:       cccDomainKey,
+				WhenUnsatisfiable: apiv1.DoNotSchedule,
+				LabelSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "pts-app"},
+				},
+			}
+
+			appendSecondConstraint := func(p *apiv1.Pod) {
+				p.Spec.TopologySpreadConstraints = append(p.Spec.TopologySpreadConstraints, tc.secondConstraint)
+			}
+			pod1 := buildTestPTSPod("ccc-multi-pod-1", primaryPTS, pod.WithCCC(cccName), appendSecondConstraint)
+			pod2 := buildTestPTSPod("ccc-multi-pod-2", primaryPTS, pod.WithCCC(cccName), appendSecondConstraint)
+
+			testConfig := integration.NewTestConfig().
+				WithCaVersion("35.140.0").
+				WithOverrides(
+					integration.WithAutoProvisioningEnabled(),
+					func(o *options.AutoscalingOptions) *options.AutoscalingOptions {
+						o.AllowlistedSystemLabels = cccDomainKey + "," + secondaryDomainKey
+						return o
+					},
+				).
+				WithClusterOverrides(
+					integration.WithClusterAutoProvisioningEnabled(),
+					integration.WithAutoprovisioningLocations("us-central1-a"),
+				).
+				WithExperiments("PodTopologySpreadCCC::MinCAVersion").
+				WithCccCrds(ccc1)
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
+
+				infra := integration.SetupInfrastructure(ctx, t)
+				infra.Fakes.K8s.AddPod(pod1)
+				infra.Fakes.K8s.AddPod(pod2)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				assert.NoError(t, err)
+
+				if !assert.NotPanics(t, func() {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				}) {
+					return
+				}
+
+				cluster := integration.GetTestCluster(t, infra, testConfig)
+				assert.Len(t, cluster.NodePools, 2, "Expected NAP to create two new node pools across matched ComputeClass domains")
+				assertNodePoolWithLabels(t, cluster, map[string]string{
+					gkelabels.ComputeClassLabel: cccName,
+					cccDomainKey:                "domain-a",
+				})
+				assertNodePoolWithLabels(t, cluster, map[string]string{
+					gkelabels.ComputeClassLabel: cccName,
+					cccDomainKey:                "domain-b",
+				})
+			})
+		})
+	}
+}
+
 // TestZonalDomainDiscovery verifies that the Zonal Domain Discovery processor
 // correctly discovers zone domains, applies zone node selectors to the pods,
 // and triggers NAP to provision nodes in the assigned zones.

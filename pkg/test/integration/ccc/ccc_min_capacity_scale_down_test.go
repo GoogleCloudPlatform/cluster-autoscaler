@@ -18,7 +18,6 @@ package ccc_test
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"slices"
 	"sort"
@@ -31,7 +30,6 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -44,11 +42,6 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
-
-func init() {
-	klog.InitFlags(nil)
-	_ = flag.Set("v", "5")
-}
 
 func TestCCCScaleDown(t *testing.T) {
 	testCases := []struct {

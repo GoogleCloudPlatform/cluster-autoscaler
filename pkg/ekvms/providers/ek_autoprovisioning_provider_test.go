@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	resizable_vm_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
@@ -272,43 +271,6 @@ func TestEkManagedNodesEnabled(t *testing.T) {
 			}
 
 			assert.Equal(t, tc.want, p.resizingEnabled())
-		})
-	}
-}
-
-func TestEkNodesCount(t *testing.T) {
-	for _, tc := range []struct {
-		description        string
-		nodesCountProvider nodesCountProvider
-		expectedNodesCount int
-	}{
-		{
-			description:        "EK nodesCountProvider is nil, should return 0",
-			nodesCountProvider: nil,
-			expectedNodesCount: 0,
-		},
-		{
-			description:        "EK nodesCountProvider is nil 2nd case, should return 0",
-			nodesCountProvider: (*mockNodesCountProvider)(nil),
-			expectedNodesCount: 0,
-		},
-		{
-			description: "EK nodesCountProvider returns 5, should return 5",
-			nodesCountProvider: func() nodesCountProvider {
-				m := &mockNodesCountProvider{}
-				m.On("NodesCount", machinetypes.EK.Name()).Return(5)
-				return m
-			}(),
-			expectedNodesCount: 5,
-		},
-	} {
-		t.Run(tc.description, func(t *testing.T) {
-
-			p := &ekAutoprovisioningProvider{}
-
-			p.registerNodesCountProvider(tc.nodesCountProvider)
-			assert.Equal(t, tc.expectedNodesCount, p.nodesCount())
-
 		})
 	}
 }

@@ -25,12 +25,15 @@ import (
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments/fake"
 	ossconfig "sigs.k8s.io/cluster-autoscaler/pkg/config"
@@ -85,6 +88,7 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 	ScaleDownDelayAfterFailure: 0,
 	ScaleDownDelayTypeLocal:    true,
 	MaxScaleDownParallelism:    10,
+	MaxConcurrentNodesTainting: 5,
 	MaxNodesTotal:              100,
 	MaxCoresTotal:              1000,
 	MaxMemoryTotal:             1000 * 1024 * 1024 * 1024, // 1 TB
@@ -154,6 +158,12 @@ type TestConfig struct {
 	ProvisioningRequests []*provreqwrapper.ProvisioningRequest
 	// GkeNetworkParamSets are populated into the networking matcher during test initialization.
 	GkeNetworkParamSets []*netapi.GKENetworkParamSet
+	// ResizableVmClient allows overriding the default NoOp ResizableVmClient.
+	ResizableVmClient resizablevms.Client
+	// NodeSizeRecommenderFactory allows injecting a NodeSizeRecommenderFactory into the builder.
+	NodeSizeRecommenderFactory nodesizerecommender.RecommenderFactory
+	// GceClient allows overriding the default fake GCE client.
+	GceClient gceclient.AutoscalingInternalGceClient
 }
 
 // ConfigBuilder uses the Builder Pattern to create a test Config.
@@ -473,6 +483,14 @@ func WithMaxNodesPerScaleUp(max int) Option[*config.AutoscalingOptions] {
 func WithMaxScaleDownParallelism(max int) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.MaxScaleDownParallelism = max
+		return o
+	}
+}
+
+// WithMaxConcurrentNodesTainting overrides the MaxConcurrentNodesTainting setting.
+func WithMaxConcurrentNodesTainting(max int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.MaxConcurrentNodesTainting = max
 		return o
 	}
 }
@@ -1320,6 +1338,54 @@ func WithProvisioningErrorDetailsEnabled(enabled bool) Option[*config.Autoscalin
 func WithReservationSubBlockDeduplicationEnabled(enabled bool) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.InternalOptions.ReservationSubBlockDeduplicationEnabled = enabled
+		return o
+	}
+}
+
+// WithResizableVmClient sets a custom ResizableVmClient on TestConfig.
+func (c *TestConfig) WithResizableVmClient(client resizablevms.Client) *TestConfig {
+	c.ResizableVmClient = client
+	return c
+}
+
+// WithNodeSizeRecommenderFactory sets a custom NodeSizeRecommenderFactory on TestConfig.
+func (c *TestConfig) WithNodeSizeRecommenderFactory(factory nodesizerecommender.RecommenderFactory) *TestConfig {
+	c.NodeSizeRecommenderFactory = factory
+	return c
+}
+
+// WithGceClient sets a custom AutoscalingInternalGceClient on TestConfig.
+func (c *TestConfig) WithGceClient(client gceclient.AutoscalingInternalGceClient) *TestConfig {
+	c.GceClient = client
+	return c
+}
+
+// WithCSNEnabled enables or disables Cold Standby Nodes (CSN) in the autoscaler options.
+func WithCSNEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.CSNEnabled = enabled
+		o.CapacitybufferPodInjectionEnabled = enabled
+		if enabled {
+			o.CSNCAFlag = config.CSNEnabled
+		} else {
+			o.CSNCAFlag = config.CSNDisabled
+		}
+		return o
+	}
+}
+
+// WithEkvmsEnabled enables or disables EK VMs in the autoscaler options.
+func WithEkvmsEnabled(enabled bool) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.EkvmsFixerEnabled = enabled
+		o.EkOnManagedNodesEnabled = enabled
+		if enabled {
+			o.EkvmsFixerInterval = 15 * time.Second
+			o.EkvmsConcurrentResizeWorkers = 5
+			o.EkAutoprovisioning = "EK_AUTOPROVISIONING_ENABLED_COARSE_GRAINED_RESIZE"
+		} else {
+			o.EkAutoprovisioning = "EK_AUTOPROVISIONING_UNSPECIFIED"
+		}
 		return o
 	}
 }

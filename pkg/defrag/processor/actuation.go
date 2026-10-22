@@ -73,7 +73,7 @@ func (a *defragActuator) startScaleDownNodes(
 	candidateCreationTime time.Time,
 	nodeNames []string,
 ) ([]string, error) {
-	var nodes []*apiv1.Node
+	var emptyNodes, drainNodes []*apiv1.Node
 	for _, nodeName := range nodeNames {
 		if _, found := a.scaledDownNodes[nodeName]; found {
 			continue
@@ -82,14 +82,22 @@ func (a *defragActuator) startScaleDownNodes(
 		if err != nil {
 			return []string{}, err
 		}
-		nodes = append(nodes, nodeInfo.Node())
+		pods, err := recreatablePods(ctx.ClusterSnapshot, []string{nodeName})
+		if err != nil {
+			return []string{}, err
+		}
+		if len(pods) == 0 {
+			emptyNodes = append(emptyNodes, nodeInfo.Node())
+		} else {
+			drainNodes = append(drainNodes, nodeInfo.Node())
+		}
 	}
 
 	var scaleDownResult scaledownstatus.ScaleDownResult
 	var scaledDownNodes []*scaledownstatus.ScaleDownNode
 	var typedErr errors.AutoscalerError
 
-	scaleDownResult, scaledDownNodes, typedErr = ctx.ScaleDownActuator.StartDeletion(context.TODO(), nil, nodes)
+	scaleDownResult, scaledDownNodes, typedErr = ctx.ScaleDownActuator.StartDeletion(context.TODO(), emptyNodes, drainNodes)
 
 	if typedErr != nil {
 		return []string{}, typedErr

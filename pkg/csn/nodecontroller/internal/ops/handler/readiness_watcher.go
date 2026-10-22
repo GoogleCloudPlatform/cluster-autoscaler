@@ -52,7 +52,7 @@ type readinessWatcher struct {
 	pollInterval time.Duration
 	logPrefix    string
 
-	// mu guards the maps below, which the polling goroutine and the goroutine
+	// mu guards the fields below, which the polling goroutine and the goroutine
 	// handing over nodes both touch.
 	mu sync.Mutex
 	// waitingSince maps each node still being waited for to the moment its wait
@@ -62,6 +62,9 @@ type readinessWatcher struct {
 	// notReady maps each node given up on to the reason. It holds the outcome of
 	// the watch, and is only read once the watcher has stopped.
 	notReady map[string]error
+	// stopCause is set once run has given up, after which nothing polls
+	// waitingSince, so a node handed over later is given up on right away.
+	stopCause error
 }
 
 func newReadinessWatcher(nodeLister NodeLister, maxNodes int, logPrefix string) *readinessWatcher {
@@ -90,6 +93,11 @@ func (w *readinessWatcher) watch(nodeName string) {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.stopCause != nil {
+		w.notReady[nodeName] = w.notReadyError(nodeName, w.stopCause)
+		observeReadinessWait(readinessAborted, 0)
+		return
+	}
 	w.waitingSince[nodeName] = time.Now()
 }
 
@@ -127,11 +135,12 @@ func (w *readinessWatcher) poll(now time.Time) (left int) {
 	return len(w.waitingSince)
 }
 
-// giveUpOnRemaining gives up on every node still being waited for, recording
-// cause as the reason.
-func (w *readinessWatcher) giveUpOnRemaining(cause error) {
+// giveUp gives up on every node still being waited for and on any node handed
+// over from then on, recording cause as the reason.
+func (w *readinessWatcher) giveUp(cause error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.stopCause = cause
 	now := time.Now()
 	for nodeName, startedAt := range w.waitingSince {
 		w.notReady[nodeName] = w.notReadyError(nodeName, cause)
@@ -163,7 +172,7 @@ func (w *readinessWatcher) run(ctx context.Context, noMoreNodes <-chan struct{})
 		case <-ctx.Done():
 			// Nothing showed that the nodes still being waited for came back, so they
 			// are given up on rather than passed off as consumed.
-			w.giveUpOnRemaining(ctx.Err())
+			w.giveUp(ctx.Err())
 			return
 		case <-noMoreNodes:
 			// From here an empty watcher is a finished one. Nilling the channel stops

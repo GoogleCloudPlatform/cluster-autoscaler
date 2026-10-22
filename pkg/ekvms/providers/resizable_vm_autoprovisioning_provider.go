@@ -17,6 +17,7 @@ package providers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"time"
 
 	clientset "k8s.io/client-go/kubernetes"
@@ -34,11 +35,19 @@ type resizableVmMetrics interface {
 	UpdateResizableVmAutopilotComputeClassStatus(machineFamily string, enabled bool)
 }
 
+type autoprovisioningProvider interface {
+	refresh()
+	isEnabledInAutopilot() bool
+	managedNodesEnabled() bool
+	resizingEnabled() bool
+}
+
 type ResizableVmAutoprovisioningProvider struct {
 	machineConfigProvider     *machinetypes.MachineConfigProvider
 	clientSet                 clientset.Interface
 	autoprovisioningProviders map[string]autoprovisioningProvider
 	balloonPodChecker         *balloonPodChecker
+	countProvider             nodesCountProvider
 }
 
 // ResizableVmAutoprovisioningFlags groups the CLI flags configuring autoprovisioning of resizable VMs per machine family.
@@ -161,17 +170,20 @@ func (p *ResizableVmAutoprovisioningProvider) MachineConfigProvider() *machinety
 }
 
 func (p *ResizableVmAutoprovisioningProvider) RegisterNodesCountProvider(countProvider nodesCountProvider) {
-	for _, provider := range p.autoprovisioningProviders {
-		provider.registerNodesCountProvider(countProvider)
-	}
+	p.countProvider = countProvider
 }
 
 func (p *ResizableVmAutoprovisioningProvider) NodesCount(machineFamily string) int {
-	provider, found := p.autoprovisioningProviders[machineFamily]
-	if !found {
+	if _, found := p.autoprovisioningProviders[machineFamily]; !found {
 		return 0
 	}
-	return provider.nodesCount()
+	if p.countProvider == nil {
+		return 0
+	}
+	if v := reflect.ValueOf(p.countProvider); v.Kind() == reflect.Pointer && v.IsNil() {
+		return 0
+	}
+	return p.countProvider.NodesCount(machineFamily)
 }
 
 // HasActiveResizableNodes returns true if resizing is enabled and nodes count > 0 for any supported resizable VM family.

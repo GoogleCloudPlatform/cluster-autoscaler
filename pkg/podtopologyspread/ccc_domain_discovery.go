@@ -75,15 +75,16 @@ func (dd *cccDomainDiscovery) EligiblePTSPods(pods []*apiv1.Pod) []PTSConfig {
 		var matchingConstraint *apiv1.TopologySpreadConstraint
 		var domains []string
 		for _, constraint := range pod.Spec.TopologySpreadConstraints {
-			domains = availableDomainsWithCache(domainsCache, cccCrd, constraint.TopologyKey)
-			if len(domains) == 0 {
+			availDomains := availableDomainsWithCache(domainsCache, cccCrd, constraint.TopologyKey)
+			if len(availDomains) == 0 {
 				continue
 			}
-			if constraint.MinDomains != nil && len(domains) < int(*constraint.MinDomains) {
+			if constraint.MinDomains != nil && len(availDomains) < int(*constraint.MinDomains) {
 				continue
 			}
 			if matchingConstraint == nil || matchingConstraint.WhenUnsatisfiable == apiv1.ScheduleAnyway {
 				matchingConstraint = &constraint
+				domains = availDomains
 			}
 		}
 		if matchingConstraint == nil {

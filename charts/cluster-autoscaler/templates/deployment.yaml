@@ -82,7 +82,7 @@ spec:
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (include "cluster-autoscaler.appVersion" .) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - /cluster-autoscaler
@@ -143,7 +143,7 @@ spec:
           {{- end }}
           env:
             - name: CLUSTERAUTOSCALER_VERSION
-              value: {{ .Chart.AppVersion | quote }}
+              value: {{ include "cluster-autoscaler.appVersion" . | quote }}
             {{- range $key, $val := .Values.config.extraEnv }}
             - name: {{ $key }}
               value: {{ $val | quote }}

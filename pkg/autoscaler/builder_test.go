@@ -35,6 +35,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	nsf "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodesnowflake"
 	fakeclock "k8s.io/utils/clock/testing"
+	cbclient "sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/client"
 )
 
 const (
@@ -72,6 +73,8 @@ func TestBuilder_Overrides(t *testing.T) {
 
 	gkeClient := MustCreateGKEClient(fakeGkeApiClient, nil, project, location, fakeOptions, provConfigInformer, machineConfigProvider, fakeExperimentManager)
 	fakeInformerFactory := informers.NewSharedInformerFactory(nil, 0)
+	fakeCbClient, err := cbclient.NewCapacityBufferClient(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	assert.NoError(t, err)
 
 	// TODO(b/450181314): Refactor this test passing fake clients once are available.
 	b := NewBuilder(tracker).
@@ -90,7 +93,8 @@ func TestBuilder_Overrides(t *testing.T) {
 		WithGkeClient(gkeClient).
 		WithPodObserver(&loop.UnschedulablePodObserver{}).
 		WithSnowflakeWatcher(nsf.NewNoOpWatcher()).
-		WithInformerFactory(fakeInformerFactory)
+		WithInformerFactory(fakeInformerFactory).
+		WithCapacityBufferClient(fakeCbClient)
 
 	assert.Equal(t, fakeExperimentManager, b.optsTracker.ExperimentsManager())
 	assert.Equal(t, &fakeCAVersion, b.caVersion)
@@ -105,6 +109,7 @@ func TestBuilder_Overrides(t *testing.T) {
 	assert.Equal(t, provConfigInformer, b.provConfigInformer, "ProvConfigInformer client should match the injected pointer")
 	assert.Equal(t, gkeClient, b.gkeClient, "GKE client should match the injected pointer")
 	assert.Equal(t, fakeInformerFactory, b.informerFactory, "InformerFactory should match the injected pointer")
+	assert.Equal(t, fakeCbClient, b.capacityBufferClient, "CapacityBufferClient should match the injected pointer")
 
 	assert.NotNil(t, b.podObserver, "PodObserver should be strictly injected")
 

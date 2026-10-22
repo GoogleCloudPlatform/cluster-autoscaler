@@ -15,6 +15,7 @@
 package flexadvisor
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -218,17 +219,11 @@ func (g *instanceConfigGenerator) capGeneratedInstanceConfigs(allInstanceConfigs
 		instanceConfigSlice = append(instanceConfigSlice, config)
 	}
 	slices.SortFunc(instanceConfigSlice, func(a, b *api.InstanceConfig) int {
-		if a.Rank() != b.Rank() {
-			return a.Rank() - b.Rank()
-		}
-		// If rank is equal to make capping deterministic we sort by these as well, besides that there's no use is sorting by signature
-		if a.Signature() < b.Signature() {
-			return -1
-		}
-		if a.Signature() > b.Signature() {
-			return 1
-		}
-		return 0
+		// If rank and subRank are equal, sort by signature as a deterministic tie-breaker.
+		return cmp.Or(
+			comparePriority(a, b),
+			cmp.Compare(a.Signature(), b.Signature()),
+		)
 	})
 
 	finalInstanceConfigs := make(map[string]*api.InstanceConfig)
@@ -248,13 +243,26 @@ func (g *instanceConfigGenerator) capGeneratedInstanceConfigs(allInstanceConfigs
 	return finalInstanceConfigs, cappedKeysMap
 }
 
-// Since we are merging new instanceConfigs to existing instanceConfig with higher ranks (rank 1 > rank 2 ...)
-// we are preserving the rank of the highest priority as the rank of the instanceConfig
+func comparePriority(a, b *api.InstanceConfig) int {
+	return cmp.Or(
+		cmp.Compare(a.Rank(), b.Rank()),
+		cmp.Compare(a.SubRank(), b.SubRank()),
+	)
+}
+
+// On a signature collision (e.g. when a podFamily rule expanding to subRank = idx
+// and an explicit rule at subRank = 0 share the same ruleGroup), the config with the
+// lowest (rank, subRank) pair wins and the zones of both are unioned.
 func mergeNewInstanceConfigs(allInstanceConfigs map[string]*api.InstanceConfig, newInstanceConfigs []*api.InstanceConfig) map[string]*api.InstanceConfig {
 	for _, instanceConfig := range newInstanceConfigs {
 		signature := instanceConfig.Signature()
 		if existingConfig, found := allInstanceConfigs[signature]; found {
-			existingConfig.MergeZones(instanceConfig.Zones())
+			if comparePriority(instanceConfig, existingConfig) < 0 {
+				instanceConfig.MergeZones(existingConfig.Zones())
+				allInstanceConfigs[signature] = instanceConfig
+			} else {
+				existingConfig.MergeZones(instanceConfig.Zones())
+			}
 			continue
 		}
 		allInstanceConfigs[signature] = instanceConfig
@@ -314,11 +322,15 @@ func (g *instanceConfigGenerator) deriveMachineConfigsFromRule(rule rules.Rule, 
 	if err != nil {
 		return nil, err
 	}
-	machineFamilies, err := g.machineFamiliesForRule(rule)
+	machineFamilies, areFamiliesSequential, err := g.machineFamiliesForRule(rule)
 	if err != nil {
 		return nil, fmt.Errorf("machine family not found %v", err)
 	}
-	for _, machineFamily := range machineFamilies {
+	for idx, machineFamily := range machineFamilies {
+		subRank := 0
+		if areFamiliesSequential {
+			subRank = idx
+		}
 		for _, machineTypeInfo := range filterByCoresAndMemoryRequirements(machineFamily.AllMachineTypes(*constraint), rule) {
 			// Note: requestedTpuCount can only be non-zero when the TPU experiment is enabled
 			// (otherwise getRuleConstraintsForMachineDerivation would return an error).
@@ -330,9 +342,9 @@ func (g *instanceConfigGenerator) deriveMachineConfigsFromRule(rule rules.Rule, 
 				}
 			}
 			if machineFamily.Name() == "n1" {
-				instanceConfigs = append(instanceConfigs, g.instanceConfigsForMachineTypeFromN1Family(rule, machineTypeInfo, machineFamily, rank)...)
+				instanceConfigs = append(instanceConfigs, g.instanceConfigsForMachineTypeFromN1Family(rule, machineTypeInfo, machineFamily, rank, subRank)...)
 			} else {
-				instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, nil, nil))
+				instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, subRank, nil, nil))
 			}
 		}
 	}
@@ -469,7 +481,7 @@ func (g *instanceConfigGenerator) instanceConfigsForNodePools(rule rules.Rule, r
 	return allInstanceConfigs, errors
 }
 
-func (g *instanceConfigGenerator) instanceConfigsForMachineTypeFromN1Family(rule rules.Rule, machineTypeInfo machinetypes.MachineType, machineFamily machinetypes.MachineFamily, rank int) []*api.InstanceConfig {
+func (g *instanceConfigGenerator) instanceConfigsForMachineTypeFromN1Family(rule rules.Rule, machineTypeInfo machinetypes.MachineType, machineFamily machinetypes.MachineFamily, rank, subRank int) []*api.InstanceConfig {
 	var instanceConfigs []*api.InstanceConfig
 	// Pod family rules (e.g. general-purpose) are strictly CPU workloads and should not
 	// generate GPU configurations when falling back to N1 machine types.
@@ -485,18 +497,18 @@ func (g *instanceConfigGenerator) instanceConfigsForMachineTypeFromN1Family(rule
 				if machineTypeInfo.CPU > int64(maxCpuCount) {
 					continue
 				}
-				instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, ptr.To(gpuType.Name()), ptr.To(int(gpuCount))))
+				instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, subRank, ptr.To(gpuType.Name()), ptr.To(int(gpuCount))))
 			}
 		}
 	}
 	if rule.GpuRequest().Config.GpuType == "" {
-		instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, nil, nil))
+		instanceConfigs = append(instanceConfigs, g.buildInstanceConfig(rule, machineTypeInfo, rank, subRank, nil, nil))
 	}
 	return instanceConfigs
 }
 
 // buildInstanceConfig builds InstanceConfig from passed machineType and rule. GpuType & count is taken from rule unless overriden with overrideGpuType and overrideGpuCount
-func (g *instanceConfigGenerator) buildInstanceConfig(rule rules.Rule, machineType machinetypes.MachineType, rank int, overrideGpuType *string, overrideGpuCount *int) *api.InstanceConfig {
+func (g *instanceConfigGenerator) buildInstanceConfig(rule rules.Rule, machineType machinetypes.MachineType, rank, subRank int, overrideGpuType *string, overrideGpuCount *int) *api.InstanceConfig {
 	gpuType := machineType.GpuType()
 	gpuCount := int(machineType.FixedGpuCount())
 	if overrideGpuType != nil {
@@ -512,6 +524,7 @@ func (g *instanceConfigGenerator) buildInstanceConfig(rule rules.Rule, machineTy
 		rank,
 		instanceavailability.Standard,
 		api.EmptyMaxRunDuration,
+		api.WithSubRank(subRank),
 	)
 
 	if rule.TpuTopology() != "" && isFlexAdvisorTPUEnabled(g.optionsTracker.ExperimentsManager()) {
@@ -557,30 +570,33 @@ func (g *instanceConfigGenerator) matchingCrd(flexibilityScopeKey string) (crd.C
 	return crd, nil
 }
 
-func (g *instanceConfigGenerator) machineFamiliesForRule(rule rules.Rule) ([]machinetypes.MachineFamily, error) {
+// machineFamiliesForRule returns the machine families applicable to a given rule,
+// a boolean indicating whether the returned families are ordered by sequential priority
+// (meaning their slice index should be used as subRank), and any resolution error.
+func (g *instanceConfigGenerator) machineFamiliesForRule(rule rules.Rule) ([]machinetypes.MachineFamily, bool, error) {
 	// TODO(b/491088027): consider whether this is the best order of ifs
 	if rule.MachineFamily() != "" {
 		machineFamily, err := g.provider.MachineConfigProvider().ToMachineFamily(rule.MachineFamily())
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		return []machinetypes.MachineFamily{machineFamily}, nil
+		return []machinetypes.MachineFamily{machineFamily}, false, nil
 	} else if rule.PodFamilyName() != "" {
 		podFamilyMachineFamilies := computeclass.PrioritizedFamiliesForRule(rule, g.provider)
 		if len(podFamilyMachineFamilies) == 0 {
-			return nil, fmt.Errorf("pod family %q does not map to any machine families", rule.PodFamilyName())
+			return nil, false, fmt.Errorf("pod family %q does not map to any machine families", rule.PodFamilyName())
 		}
-		return podFamilyMachineFamilies, nil
+		return podFamilyMachineFamilies, isFlexAdvisorPodFamilySequentialOrderEnabled(g.optionsTracker.ExperimentsManager()), nil
 	} else if rule.MachineType() != "" {
 		machineFamily, err := g.provider.MachineConfigProvider().GetMachineFamilyFromMachineName(rule.MachineType())
 		if err != nil {
-			return nil, fmt.Errorf("machine type not found for %s", rule.MachineType())
+			return nil, false, fmt.Errorf("machine type not found for %s", rule.MachineType())
 		}
-		return []machinetypes.MachineFamily{machineFamily}, nil
+		return []machinetypes.MachineFamily{machineFamily}, false, nil
 	} else if rule.GpuRequest().Config.GpuType != "" || rule.TpuType() != "" {
-		return g.provider.MachineConfigProvider().AllMachineFamilies(), nil
+		return g.provider.MachineConfigProvider().AllMachineFamilies(), false, nil
 	}
-	return []machinetypes.MachineFamily{g.provider.GetAutoprovisioningDefaultFamily()}, nil
+	return []machinetypes.MachineFamily{g.provider.GetAutoprovisioningDefaultFamily()}, false, nil
 }
 
 func filterByCoresAndMemoryRequirements(machineTypes map[string]machinetypes.MachineType, rule rules.Rule) map[string]machinetypes.MachineType {

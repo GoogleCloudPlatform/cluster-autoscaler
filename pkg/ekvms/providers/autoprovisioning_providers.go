@@ -14,10 +14,6 @@
 
 package providers
 
-import (
-	"reflect"
-)
-
 type launchPhase string
 
 const (
@@ -40,20 +36,4 @@ const (
 type LaunchStatus struct {
 	phase  launchPhase
 	source launchSource
-}
-
-type autoprovisioningProvider interface {
-	refresh()
-	isEnabledInAutopilot() bool
-	managedNodesEnabled() bool
-	resizingEnabled() bool
-	registerNodesCountProvider(nodesCountProvider)
-	nodesCount() int
-}
-
-func getNodesCount(countProvider nodesCountProvider, machineFamily string) int {
-	if countProvider == nil || reflect.ValueOf(countProvider).IsNil() {
-		return 0
-	}
-	return countProvider.NodesCount(machineFamily)
 }

@@ -128,24 +128,73 @@ func TestNodesCount(t *testing.T) {
 	e4Provider, _ := newE4AutoprovisioningProvider(string(resizable_vm_types.E4AutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 	e4aProvider, _ := newE4aAutoprovisioningProvider(string(resizable_vm_types.E4aAutoprovisioningEnabledCoarseGrainedResize), em, bpChecker, true, true, mockMetrics)
 
-	provider := &ResizableVmAutoprovisioningProvider{
-		machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
-		autoprovisioningProviders: map[string]autoprovisioningProvider{
-			machinetypes.EK.Name():  ekProvider,
-			machinetypes.E4.Name():  e4Provider,
-			machinetypes.E4A.Name(): e4aProvider,
+	for _, tc := range []struct {
+		description        string
+		nodesCountProvider nodesCountProvider
+		expectedEkCount    int
+		expectedE4Count    int
+		expectedE4aCount   int
+	}{
+		{
+			description:        "nodesCountProvider is nil, should return 0",
+			nodesCountProvider: nil,
+			expectedEkCount:    0,
+			expectedE4Count:    0,
+			expectedE4aCount:   0,
 		},
+		{
+			description:        "nodesCountProvider is nil 2nd case, should return 0",
+			nodesCountProvider: (*mockNodesCountProvider)(nil),
+			expectedEkCount:    0,
+			expectedE4Count:    0,
+			expectedE4aCount:   0,
+		},
+		{
+			description: "nodesCountProvider returns valid counts",
+			nodesCountProvider: func() nodesCountProvider {
+				m := &mockNodesCountProvider{}
+				m.On("NodesCount", machinetypes.EK.Name()).Return(5)
+				m.On("NodesCount", machinetypes.E4.Name()).Return(4)
+				m.On("NodesCount", machinetypes.E4A.Name()).Return(3)
+				m.On("NodesCount", machinetypes.E2.Name()).Return(2) // resizable vm provider shouldn't provide non-resizable machine family node count
+				return m
+			}(),
+			expectedEkCount:  5,
+			expectedE4Count:  4,
+			expectedE4aCount: 3,
+		},
+		{
+			description: "nodesCountProvider is a non-pointer struct value, should return valid counts",
+			nodesCountProvider: fakeStructNodesCountProvider{
+				counts: map[string]int{
+					machinetypes.EK.Name():  5,
+					machinetypes.E4.Name():  4,
+					machinetypes.E4A.Name(): 3,
+				},
+			},
+			expectedEkCount:  5,
+			expectedE4Count:  4,
+			expectedE4aCount: 3,
+		},
+	} {
+		t.Run(tc.description, func(t *testing.T) {
+			provider := &ResizableVmAutoprovisioningProvider{
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+				autoprovisioningProviders: map[string]autoprovisioningProvider{
+					machinetypes.EK.Name():  ekProvider,
+					machinetypes.E4.Name():  e4Provider,
+					machinetypes.E4A.Name(): e4aProvider,
+				},
+			}
+			provider.RegisterNodesCountProvider(tc.nodesCountProvider)
+
+			assert.Equal(t, tc.expectedEkCount, provider.NodesCount(machinetypes.EK.Name()))
+			assert.Equal(t, tc.expectedE4Count, provider.NodesCount(machinetypes.E4.Name()))
+			assert.Equal(t, tc.expectedE4aCount, provider.NodesCount(machinetypes.E4A.Name()))
+			assert.Equal(t, 0, provider.NodesCount("unknown"))
+			assert.Equal(t, 0, provider.NodesCount(machinetypes.E2.Name()))
+		})
 	}
-
-	countProvider := &mockNodesCountProvider{}
-	countProvider.On("NodesCount", machinetypes.EK.Name()).Return(5)
-	countProvider.On("NodesCount", machinetypes.E4.Name()).Return(4)
-	countProvider.On("NodesCount", machinetypes.E4A.Name()).Return(3)
-	provider.RegisterNodesCountProvider(countProvider)
-
-	assert.Equal(t, 5, provider.NodesCount(machinetypes.EK.Name()))
-	assert.Equal(t, 4, provider.NodesCount(machinetypes.E4.Name()))
-	assert.Equal(t, 3, provider.NodesCount(machinetypes.E4A.Name()))
 }
 
 func TestHasActiveResizableNodes(t *testing.T) {
@@ -502,4 +551,12 @@ type mockNodesCountProvider struct {
 func (mecp *mockNodesCountProvider) NodesCount(machineFamily string) int {
 	args := mecp.Called(machineFamily)
 	return args.Int(0)
+}
+
+type fakeStructNodesCountProvider struct {
+	counts map[string]int
+}
+
+func (f fakeStructNodesCountProvider) NodesCount(machineFamily string) int {
+	return f.counts[machineFamily]
 }

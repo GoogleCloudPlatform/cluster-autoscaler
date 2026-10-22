@@ -15,10 +15,19 @@
 # This is the chart version, this version number should be equal to appVersion
 # despite the best practices, we are breaking helm conventions here in order for us to
 # have an easier mapping between the two and we assume that most of the chart users are
-# power users who need to customize the binary and not deploy it as-is. Version is only
-# updated when autoscaler release is being made and shouldn't be updated otherwise
-version: "1.37.0"
-appVersion: "1.37.0"
+# power users who need to customize the binary and not deploy it as-is.
+#
+# The value checked into the repository is a placeholder which is intentionally NOT
+# renderable: the chart templates fail with an explicit error if it is used. The real
+# version is stamped by the CD pipeline when the chart is packaged, e.g.:
+#
+#   helm package --version 37.234.0 --app-version 37.234.0
+#
+# Using correct version is important for cluster autoscaler experiment evaluation.
+# Using invalid version would likely trigger fallbacks which may
+# not work on the installed version of binary
+version: "0.0.0-placeholder"
+appVersion: "0.0.0-placeholder"
 apiVersion: v2
 description: Scales Kubernetes worker nodes within autoscaling pools in GKE.
 home: https://github.com/GoogleCloudPlatform/cluster-autoscaler

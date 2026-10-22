@@ -16,18 +16,21 @@ Cluster autoscaler integrates with multiple custom resource definitions both GKE
 
 ## Installing
 
-⚠️ OCI repository pending, only local installation supported right now
-
-To install the chart with default values:
+> [!WARNING]
+> * OCI repository pending, only local installation supported right now
+> * The chart checked into this repository carries the placeholder version `0.0.0-placeholder`
+>   in [Chart.yaml](./Chart.yaml) and **cannot be rendered or installed as-is**. To install from a local checkout,
+>   package the chart with a version first and install it as separate commands. See snippet below:
 
 ```bash
-helm install selfhosted-ca .
+helm package --version <VERSION> --app-version <VERSION> .
+helm install selfhosted-ca cluster-autoscaler-<VERSION>.tgz
 ```
 
 To customize the installation, provide a custom `values` file:
 
 ```bash
-helm install -f myvalues.yaml selfhosted-ca .
+helm install -f myvalues.yaml selfhosted-ca cluster-autoscaler-37.234.0.tgz
 ```
 
 ## Customization
@@ -74,6 +77,11 @@ serviceAccount:
 ## Testing
 
 Static unit tests are implemented using the [`helm-unittest`](https://github.com/helm-unittest/helm-unittest) plugin to validate chart rendering and configuration options without requiring a live cluster.
+
+The test suites override the placeholder chart version with a real one (`chart.version` / `chart.appVersion`
+in each suite), except for [version_placeholder_test.yaml](./tests/version_placeholder_test.yaml), which
+verifies that the placeholder itself is rejected. `helm lint .` keeps working on the checkout since Helm's
+lint mode does not abort on `fail`.
 
 Run the test suite locally:
 
