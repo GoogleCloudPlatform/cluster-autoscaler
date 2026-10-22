@@ -347,6 +347,7 @@ func (f *defragNodeFilter) isCandidateNodeValid(ctx *ca_context.AutoscalingConte
 // hasBlockingPods reports whether the node hosts pods that prevent it from
 // being drained, along with the reason to report it under.
 func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker) (bool, observability.BlockReason) {
+	nodeInfo = nodeInfo.DeepCopy()
 	// nodeInfo is tainted here to distinguish the interaction of defrag from scale down
 	// when considering for the BspDrainability rule which drains Blocking System Pods
 	taint := apiv1.Taint{
@@ -355,7 +356,6 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca
 		Effect: apiv1.TaintEffectNoSchedule,
 	}
 	addTaint(nodeInfo, taint)
-	defer removeTaint(nodeInfo, taint)
 	podMoveInfo, err := simulator.GetPodsToMove(context.TODO(), nodeInfo, f.deleteOptions, f.drainabilityRules, ctx.ListerRegistry, pdbTracker, f.clock.Now())
 	// A blocked drain reports the offending pod and, for some rules, an error
 	// describing the same thing. The pod carries the specific reason, so it is
@@ -482,17 +482,6 @@ func (f *defragNodeFilter) reserveMaxDisruptionBudget(ctx *ca_context.Autoscalin
 
 func addTaint(nodeInfo *framework.NodeInfo, taint apiv1.Taint) {
 	nodeInfo.Node().Spec.Taints = append(nodeInfo.Node().Spec.Taints, taint)
-}
-
-func removeTaint(nodeInfo *framework.NodeInfo, taint apiv1.Taint) {
-	var newTaints []apiv1.Taint
-	for _, eachTaint := range nodeInfo.Node().Spec.Taints {
-		if eachTaint.Key == taint.Key && eachTaint.Value == taint.Value {
-			continue
-		}
-		newTaints = append(newTaints, eachTaint)
-	}
-	nodeInfo.Node().Spec.Taints = newTaints
 }
 
 func podNames(pods []*apiv1.Pod) []string {

@@ -88,6 +88,7 @@ var DefaultAutoscalingOptions = ossconfig.AutoscalingOptions{
 	ScaleDownDelayAfterFailure: 0,
 	ScaleDownDelayTypeLocal:    true,
 	MaxScaleDownParallelism:    10,
+	MaxConcurrentNodesTainting: 5,
 	MaxNodesTotal:              100,
 	MaxCoresTotal:              1000,
 	MaxMemoryTotal:             1000 * 1024 * 1024 * 1024, // 1 TB
@@ -482,6 +483,14 @@ func WithMaxNodesPerScaleUp(max int) Option[*config.AutoscalingOptions] {
 func WithMaxScaleDownParallelism(max int) Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.MaxScaleDownParallelism = max
+		return o
+	}
+}
+
+// WithMaxConcurrentNodesTainting overrides the MaxConcurrentNodesTainting setting.
+func WithMaxConcurrentNodesTainting(max int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.MaxConcurrentNodesTainting = max
 		return o
 	}
 }
