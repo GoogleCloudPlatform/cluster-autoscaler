@@ -13,6 +13,9 @@
 # limitations under the License.
 
 suite: Test ClusterRole template
+chart:
+  version: 0.0.0
+  appVersion: 0.0.0
 templates:
   - clusterrole.yaml
 tests:

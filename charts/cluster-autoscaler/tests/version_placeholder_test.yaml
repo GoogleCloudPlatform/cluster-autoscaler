@@ -1,0 +1,103 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+suite: Test placeholder chart version guard
+# Intentionally no suite-level `chart:` override: these tests exercise the
+# 0.0.0-placeholder version that is checked into Chart.yaml.
+#
+# Helm aborts the render at the first template that fails and helm-unittest
+# attributes the error to that template only. With default values that is
+# serviceaccount.yaml (Helm renders templates in reverse lexical order and
+# servicemonitor.yaml is disabled by default), so the failure assertions are
+# made against it even though the guard is hit by every resource.
+templates:
+  - deployment.yaml
+  - serviceaccount.yaml
+tests:
+  - it: should fail rendering with the checked-in placeholder version
+    templates:
+      - serviceaccount.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Chart.yaml version is the placeholder "0.0.0-placeholder" and must be replaced with a real version'
+
+  - it: should fail with the placeholder version even when image.tag is overridden
+    templates:
+      - serviceaccount.yaml
+    set:
+      image:
+        tag: custom-tag
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is the placeholder "0.0.0-placeholder"'
+
+  - it: should fail with an explanation on how to stamp a real version
+    templates:
+      - serviceaccount.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: 'helm package --version 37.234.0 --app-version 37.234.0'
+
+  - it: should fail when only appVersion is still the placeholder
+    templates:
+      - serviceaccount.yaml
+    chart:
+      version: 0.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Chart.yaml appVersion is the placeholder "0.0.0-placeholder"'
+
+  - it: should fail when only version is still the placeholder
+    templates:
+      - serviceaccount.yaml
+    chart:
+      appVersion: 0.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Chart.yaml version is the placeholder "0.0.0-placeholder"'
+
+  - it: should render and plumb the version everywhere once a real version is stamped
+    templates:
+      - deployment.yaml
+    chart:
+      version: 0.0.0
+      appVersion: 0.0.0
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: cluster-autoscaler-0.0.0
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: "0.0.0"
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: :0.0.0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTERAUTOSCALER_VERSION
+            value: "0.0.0"
+
+  - it: should not treat other pre-release versions as the placeholder
+    templates:
+      - deployment.yaml
+    chart:
+      version: 0.0.0-dev
+      appVersion: 0.0.0-dev
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: metadata.labels["helm.sh/chart"]
+          value: cluster-autoscaler-0.0.0-dev

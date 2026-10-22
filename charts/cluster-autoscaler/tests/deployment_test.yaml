@@ -13,6 +13,9 @@
 # limitations under the License.
 
 suite: Test Deployment template
+chart:
+  version: 0.0.0
+  appVersion: 0.0.0
 templates:
   - deployment.yaml
 tests:
@@ -38,7 +41,7 @@ tests:
           value: RELEASE-NAME-cluster-autoscaler
       - equal:
           path: spec.template.spec.containers[0].image
-          value: :1.37.0
+          value: :0.0.0
       - equal:
           path: spec.template.spec.containers[0].imagePullPolicy
           value: IfNotPresent
@@ -126,7 +129,7 @@ tests:
           path: spec.template.spec.containers[0].env
           content:
             name: CLUSTERAUTOSCALER_VERSION
-            value: "1.37.0"
+            value: "0.0.0"
       - contains:
           path: spec.template.spec.containers[0].env
           content:

@@ -13,6 +13,9 @@
 # limitations under the License.
 
 suite: Test Helper Templates and Common Labels
+chart:
+  version: 0.0.0
+  appVersion: 0.0.0
 templates:
   - deployment.yaml
   - serviceaccount.yaml
@@ -26,7 +29,7 @@ tests:
           value: RELEASE-NAME-cluster-autoscaler
       - equal:
           path: metadata.labels["helm.sh/chart"]
-          value: cluster-autoscaler-1.37.0
+          value: cluster-autoscaler-0.0.0
       - equal:
           path: metadata.labels["app.kubernetes.io/name"]
           value: cluster-autoscaler
@@ -35,7 +38,7 @@ tests:
           value: RELEASE-NAME
       - equal:
           path: metadata.labels["app.kubernetes.io/version"]
-          value: "1.37.0"
+          value: "0.0.0"
       - equal:
           path: metadata.labels["app.kubernetes.io/managed-by"]
           value: Helm

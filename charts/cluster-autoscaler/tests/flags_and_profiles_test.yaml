@@ -13,6 +13,9 @@
 # limitations under the License.
 
 suite: Test Autoscaler Flags and Profiles Generation
+chart:
+  version: 0.0.0
+  appVersion: 0.0.0
 templates:
   - deployment.yaml
 tests:
