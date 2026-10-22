@@ -20,6 +20,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -46,8 +47,8 @@ func (edp *EdpFilter) BestOptions(ctx context.Context, options []expander.Option
 	edpOptionsByEdpNodeSelector := groupOptsByLabelValue(edpOptionsWithEdps, nodeInfos, gkelabels.ExtendedDurationPodsLabel)
 	smallestEdpOptions := []expander.Option{}
 	for nodeSelector, opts := range edpOptionsByEdpNodeSelector {
-		if nodeSelector == gkelabels.ExtendedDurationPackedPodsValue {
-			// If packed, don't limit to the smallest machine type.
+		if nodeSelector == gkelabels.ExtendedDurationPackedPodsValue || nodeSelector == ekvmtypes.ExtendedDurationLabelX {
+			// If packed or resizable (X), don't limit to the smallest machine type.
 			smallestEdpOptions = append(smallestEdpOptions, opts...)
 		} else {
 			smallestEdpOptions = append(smallestEdpOptions, edp.smallestMachineTypeOptionsOnly(opts)...)
