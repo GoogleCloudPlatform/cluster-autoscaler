@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
@@ -267,127 +268,129 @@ func (r *resourceSlicesForNodeResult) getResult() (map[string]int, error) {
 func waitForExpectedResourceSlicesForNodeResults(t *testing.T, callResults []*resourceSlicesForNodeResult, wantSlicesByDriver map[string]int, timeout time.Duration) {
 	timeoutChan := time.After(timeout)
 	for {
+		expectedResultsFound := 0
+		for _, result := range callResults {
+			slicesByDriver, err := result.getResult()
+			if err != nil {
+				t.Fatalf("got unexpected error from ResourceSlicesForNode(): %v", err)
+			}
+			if diff := cmp.Diff(wantSlicesByDriver, slicesByDriver); diff == "" {
+				expectedResultsFound++
+			}
+		}
+		if expectedResultsFound == len(callResults) {
+			return
+		}
 		select {
 		case <-timeoutChan:
 			t.Fatalf("timed out while waiting for the expected slices for %v: %v", timeout, wantSlicesByDriver)
-		default:
-			expectedResultsFound := 0
-			for _, result := range callResults {
-				slicesByDriver, err := result.getResult()
-				if err != nil {
-					t.Fatalf("got unexpected error from ResourceSlicesForNode(): %v", err)
-				}
-				if diff := cmp.Diff(wantSlicesByDriver, slicesByDriver); diff == "" {
-					expectedResultsFound++
-				}
-			}
-			if expectedResultsFound == len(callResults) {
-				return
-			}
+		case <-time.After(time.Millisecond):
 		}
 	}
 }
 
 func TestResourcePredictorConcurrency(t *testing.T) {
-	readGoroutineCount := 10
-	multipleConsecutiveWritesToTest := 100
-	waitingForNewResultsTimeout := 1 * time.Second
+	synctest.Test(t, func(t *testing.T) {
+		readGoroutineCount := 10
+		multipleConsecutiveWritesToTest := 100
+		waitingForNewResultsTimeout := 1 * time.Second
 
-	// ResourcePredictor should predict ComputeDomain slices for this Node if and only if it can find the
-	// ComputeDomain DeviceClasses in the cluster. GPU slices should always be predicted.
-	a4xGpuTemplateNode := test.BuildTestNode("node1", 1, 1)
-	a4xGpuTemplateNode.Labels[labels.GPULabel] = "exists"
-	a4xGpuTemplateNode.Labels[gkelabels.DraGpuNodeLabel] = "true"
-	a4xGpuTemplateNode.Labels[gkelabels.MachineFamilyLabel] = machinetypes.A4X.Name()
-	nodePoolSpec := &gkeclient.NodePoolSpec{
-		Accelerators: []*gke_api_beta.AcceleratorConfig{
-			{
-				AcceleratorCount: int64(1),
-				AcceleratorType:  "nvidia-tesla-t4",
+		// ResourcePredictor should predict ComputeDomain slices for this Node if and only if it can find the
+		// ComputeDomain DeviceClasses in the cluster. GPU slices should always be predicted.
+		a4xGpuTemplateNode := test.BuildTestNode("node1", 1, 1)
+		a4xGpuTemplateNode.Labels[labels.GPULabel] = "exists"
+		a4xGpuTemplateNode.Labels[gkelabels.DraGpuNodeLabel] = "true"
+		a4xGpuTemplateNode.Labels[gkelabels.MachineFamilyLabel] = machinetypes.A4X.Name()
+		nodePoolSpec := &gkeclient.NodePoolSpec{
+			Accelerators: []*gke_api_beta.AcceleratorConfig{
+				{
+					AcceleratorCount: int64(1),
+					AcceleratorType:  "nvidia-tesla-t4",
+				},
 			},
-		},
-	}
-	computeDomainDeviceClasses := map[string]*resourceapi.DeviceClass{
-		ComputeDomainChannelDeviceClassName: {
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ComputeDomainChannelDeviceClassName,
-			},
-		},
-		ComputeDomainDaemonDeviceClassName: {
-			ObjectMeta: metav1.ObjectMeta{
-				Name: ComputeDomainDaemonDeviceClassName,
-			},
-		},
-	}
-	otherDeviceClasses := map[string]*resourceapi.DeviceClass{
-		"abc": {
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "abc",
-			},
-		},
-	}
-
-	// Create a single ResourcePredictor shared between multiple read goroutines and a single main write goroutine.
-	// This mimics the production setup where the write happens in the main goroutine, while reads can happen
-	// concurrently from other goroutines, through mig.TemplateNodeInfo().
-	predictor := NewResourcePredictor()
-	predictor.SetCloudProvider(&fakeProvider{})
-
-	// Each resourceSlicesForNodeResult is safe to read (from the main test goroutine) and write (from the goroutines fired below) concurrently via its methods.
-	var lastCallResults []*resourceSlicesForNodeResult
-	// stopChannels are used to stop the goroutines fired below.
-	var stopChannels []chan bool
-
-	// Simulate predictor.ResourceSlicesForNode() being called concurrently from separate goroutines.
-	// Each goroutine should keep making calls repeatedly, recording the last result in its entry in lastCallResults.
-	t.Cleanup(func() {
-		for _, stopChannel := range stopChannels {
-			stopChannel <- true
 		}
-	})
-	for range readGoroutineCount {
-		stopChannel := make(chan bool)
-		stopChannels = append(stopChannels, stopChannel)
+		computeDomainDeviceClasses := map[string]*resourceapi.DeviceClass{
+			ComputeDomainChannelDeviceClassName: {
+				ObjectMeta: metav1.ObjectMeta{
+					Name: ComputeDomainChannelDeviceClassName,
+				},
+			},
+			ComputeDomainDaemonDeviceClassName: {
+				ObjectMeta: metav1.ObjectMeta{
+					Name: ComputeDomainDaemonDeviceClassName,
+				},
+			},
+		}
+		otherDeviceClasses := map[string]*resourceapi.DeviceClass{
+			"abc": {
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "abc",
+				},
+			},
+		}
 
-		lastResult := &resourceSlicesForNodeResult{}
-		lastCallResults = append(lastCallResults, lastResult)
+		// Create a single ResourcePredictor shared between multiple read goroutines and a single main write goroutine.
+		// This mimics the production setup where the write happens in the main goroutine, while reads can happen
+		// concurrently from other goroutines, through mig.TemplateNodeInfo().
+		predictor := NewResourcePredictor()
+		predictor.SetCloudProvider(&fakeProvider{})
 
-		go func() {
-			for {
-				select {
-				case <-stopChannel:
-					return
-				default:
-					slices, err := predictor.ResourceSlicesForNode(nodePoolSpec, a4xGpuTemplateNode)
-					lastResult.updateResult(slices, err)
-				}
+		// Each resourceSlicesForNodeResult is safe to read (from the main test goroutine) and write (from the goroutines fired below) concurrently via its methods.
+		var lastCallResults []*resourceSlicesForNodeResult
+		// stopChannels are used to stop the goroutines fired below.
+		var stopChannels []chan bool
+
+		// Simulate predictor.ResourceSlicesForNode() being called concurrently from separate goroutines.
+		// Each goroutine should keep making calls repeatedly, recording the last result in its entry in lastCallResults.
+		defer func() {
+			for _, stopChannel := range stopChannels {
+				close(stopChannel)
 			}
 		}()
-	}
+		for range readGoroutineCount {
+			stopChannel := make(chan bool)
+			stopChannels = append(stopChannels, stopChannel)
 
-	// Before predictor.FilterOutNodesWithUnreadyResources() is called, the predictor doesn't know about any DeviceClasses
-	// so it should only return the GPU slices.
-	// waitForExpectedResourceSlicesForNodeResults waits until all the goroutines fired above see the expected result,
-	// and fails the test if that doesn't happen within the timeout.
-	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
+			lastResult := &resourceSlicesForNodeResult{}
+			lastCallResults = append(lastCallResults, lastResult)
 
-	// This predictor.FilterOutNodesWithUnreadyResources(...) call should update the DeviceClasses, and predictor should
-	// start returning both the GPU and the ComputeDomain slices.
-	predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
-	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)
+			go func() {
+				for {
+					slices, err := predictor.ResourceSlicesForNode(nodePoolSpec, a4xGpuTemplateNode)
+					lastResult.updateResult(slices, err)
+					select {
+					case <-stopChannel:
+						return
+					case <-time.After(time.Millisecond):
+					}
+				}
+			}()
+		}
 
-	// Update the device classes, the new ones don't have the ComputeDomain ones - predictor should stop predicting ComputeDomain again.
-	predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, otherDeviceClasses))
-	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
+		// Before predictor.FilterOutNodesWithUnreadyResources() is called, the predictor doesn't know about any DeviceClasses
+		// so it should only return the GPU slices.
+		// waitForExpectedResourceSlicesForNodeResults waits until all the goroutines fired above see the expected result,
+		// and fails the test if that doesn't happen within the timeout.
+		waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
 
-	// Simulate calling FilterOutNodesWithUnreadyResources() repeatedly to triple-check there aren't any race conditions between
-	// reading and writing (a single write could technically align between reads and not break, this should be much less
-	// probable with both sides being repeated).
-	for range multipleConsecutiveWritesToTest {
+		// This predictor.FilterOutNodesWithUnreadyResources(...) call should update the DeviceClasses, and predictor should
+		// start returning both the GPU and the ComputeDomain slices.
 		predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
-	}
-	// ComputeDomain devices should be predicted again after the previous FilterOutNodesWithUnreadyResources() call.
-	waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)
+		waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)
+
+		// Update the device classes, the new ones don't have the ComputeDomain ones - predictor should stop predicting ComputeDomain again.
+		predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, otherDeviceClasses))
+		waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1}, waitingForNewResultsTimeout)
+
+		// Simulate calling FilterOutNodesWithUnreadyResources() repeatedly to triple-check there aren't any race conditions between
+		// reading and writing (a single write could technically align between reads and not break, this should be much less
+		// probable with both sides being repeated).
+		for range multipleConsecutiveWritesToTest {
+			predictor.FilterOutNodesWithUnreadyResources(context.TODO(), nil, nil, nil, drasnapshot.NewSnapshot(nil, nil, nil, computeDomainDeviceClasses))
+		}
+		// ComputeDomain devices should be predicted again after the previous FilterOutNodesWithUnreadyResources() call.
+		waitForExpectedResourceSlicesForNodeResults(t, lastCallResults, map[string]int{GpuDriver: 1, ComputeDomainDriver: 1}, waitingForNewResultsTimeout)
+	})
 }
 
 func TestAssignDevicesIntoResourceSlices(t *testing.T) {
