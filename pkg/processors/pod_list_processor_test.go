@@ -27,17 +27,22 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
+	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/drainability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -548,4 +553,98 @@ func TestGracefulDegradationObservesPodState(t *testing.T) {
 			})
 		})
 	}
+}
+
+// mockBufferPodsInjector reports the pods it gets to the capacity buffer
+// observer as injected, as the capacity buffer pod injection processor does.
+type mockBufferPodsInjector struct {
+	observer *cb_metrics.FakePodStateObserver
+}
+
+func (m *mockBufferPodsInjector) Process(_ context.Context, _ *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+	m.observer.ObserveInjectedPods(unschedulablePods)
+	return unschedulablePods, nil
+}
+
+func (m *mockBufferPodsInjector) CleanUp() {}
+
+type mockBufferReactionTimeObserver struct {
+	reactions []metrics.ReactionType
+}
+
+func (m *mockBufferReactionTimeObserver) ObserveCapacityBufferFakePodReactionTime(_ time.Duration, _, _, _ bool, reactionType metrics.ReactionType, _, _ string) {
+	m.reactions = append(m.reactions, reactionType)
+}
+
+func TestCSNBufferConsumptionObservesPodState(t *testing.T) {
+	pod := buildTestPod(namespaceDefault, "pod", func(p *v1.Pod) {
+		p.UID = "pod-uid"
+	})
+	bufferPod := buildTestPod(namespaceDefault, "buffer-pod", func(p *v1.Pod) {
+		p.UID = "buffer-pod-uid"
+		p.Annotations = map[string]string{cbprocessors.CapacityBufferFakePodAnnotationKey: cbprocessors.CapacityBufferFakePodAnnotationValue}
+	})
+	buffer := &v1beta1.CapacityBuffer{ObjectMeta: metav1.ObjectMeta{Name: "buffer", UID: "buffer-uid"}}
+
+	testCases := []struct {
+		name                  string
+		consumedPod           *v1.Pod
+		defragPickedCandidate bool
+		wantReactions         []observedReaction
+		wantBufferReactions   []metrics.ReactionType
+	}{
+		{
+			name:          "pod scheduled on a standby node observes NoActionNeeded",
+			consumedPod:   pod,
+			wantReactions: []observedReaction{{systemPod: false, reactionType: metrics.NoActionNeeded}},
+		},
+		{
+			name:                "capacity buffer whose pods are scheduled on a standby node observes NoActionNeeded",
+			consumedPod:         bufferPod,
+			wantBufferReactions: []metrics.ReactionType{metrics.NoActionNeeded},
+		},
+		{
+			name:                  "defrag picked a candidate: pods are not considered for standby nodes, nothing observed",
+			consumedPod:           pod,
+			defragPickedCandidate: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				unschedulablePods := []*v1.Pod{pod, bufferPod}
+				observer, reactionMetrics := newTestPodStateObserver(t, pod)
+				bufferMetrics := &mockBufferReactionTimeObserver{}
+				registry := fakepods.NewRegistry(map[types.UID]*v1beta1.CapacityBuffer{bufferPod.UID: buffer})
+				cbObserver := cb_metrics.NewFakePodStateObserver(systempods.NewClassifier([]string{metav1.NamespaceSystem}), bufferMetrics, registry, clock.RealClock{}, false)
+
+				processor := &GkeInternalPodListProcessor{
+					defaultPodListerProcessor:     &mockBufferPodsInjector{observer: cbObserver},
+					defragProcessor:               &mockDefragProcessor{pickedCandidate: tc.defragPickedCandidate},
+					csnBufferConsumptionProcessor: &mockCSNBufferConsumptionProcessor{podsToReturn: withoutPod(unschedulablePods, tc.consumedPod)},
+					podStateObserver:              observer,
+					cbFakePodStateObserver:        cbObserver,
+					podStatusAggregator:           metrics_processors.NewPodStatusAggregator(),
+					experimentsManager:            experiments.NewMockManager(),
+				}
+
+				if _, err := processor.Process(context.Background(), &ca_context.AutoscalingContext{}, unschedulablePods); err != nil {
+					t.Fatalf("processor.Process() unexpected error: %v", err)
+				}
+
+				if diff := cmp.Diff(tc.wantReactions, reactionMetrics.reactions, cmp.AllowUnexported(observedReaction{})); diff != "" {
+					t.Errorf("observed reactions diff (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantBufferReactions, bufferMetrics.reactions); diff != "" {
+					t.Errorf("observed capacity buffer reactions diff (-want +got):\n%s", diff)
+				}
+			})
+		})
+	}
+}
+
+// withoutPod returns a copy of pods without the given pod.
+func withoutPod(pods []*v1.Pod, pod *v1.Pod) []*v1.Pod {
+	return slices.DeleteFunc(slices.Clone(pods), func(p *v1.Pod) bool { return p == pod })
 }
