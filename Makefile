@@ -8,6 +8,8 @@ GOARCH?=amd64
 GOOS?=linux
 BUILD_DEBUG_VERSION?=false
 DOCKERFILE=Dockerfile
+# Go build tags for image builds, e.g. GO_BUILD_TAGS=no_internal_clients for the self-hosted (OSS-wired) build.
+GO_BUILD_TAGS?=
 
 GOBUILDFLAGS=-ldflags "-s -w" -v
 DOCKER_TARGET=release
@@ -168,7 +170,7 @@ build-image: compute-tag compute-version check-registry-defined
 build-image-in-docker: compute-tag compute-version check-registry-defined
 
 build-image build-image-in-docker:
-	docker build --platform linux/${GOARCH} --pull -f ${DOCKERFILE} --target ${DOCKER_TARGET} --build-arg VERSION=${VERSION} -t ${REGISTRY}/cluster-autoscaler:${TAG} .
+	docker build --platform linux/${GOARCH} --pull -f ${DOCKERFILE} --target ${DOCKER_TARGET} --build-arg VERSION=${VERSION} --build-arg GO_BUILD_TAGS=${GO_BUILD_TAGS} -t ${REGISTRY}/cluster-autoscaler:${TAG} .
 
 .PHONY: release
 release: build-image-in-docker compute-tag check-registry-defined
@@ -188,7 +190,7 @@ setup-multiarch-builder:
 .PHONY: release-multiarch
 release-multiarch: compute-tag compute-version check-registry-defined setup-multiarch-builder
 	./push_image.sh ${REGISTRY}/cluster-autoscaler:${TAG} --check-only ${QUIET_FLAG} --force && \
-	docker buildx build --platform linux/amd64,linux/arm64 --push -f ${DOCKERFILE} --target ${DOCKER_TARGET} --build-arg VERSION=${VERSION} -t ${REGISTRY}/cluster-autoscaler:${TAG} . && \
+	docker buildx build --platform linux/amd64,linux/arm64 --push -f ${DOCKERFILE} --target ${DOCKER_TARGET} --build-arg VERSION=${VERSION} --build-arg GO_BUILD_TAGS=${GO_BUILD_TAGS} -t ${REGISTRY}/cluster-autoscaler:${TAG} . && \
 	echo "Full in-docker multi-arch release ${TAG} completed"
 
 .PHONY: dev-release

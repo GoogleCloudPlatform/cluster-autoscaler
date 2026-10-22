@@ -19,15 +19,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	gce_api "google.golang.org/api/compute/v1"
 	"gopkg.in/gcfg.v1"
 
 	provider_gce "k8s.io/cloud-provider-gcp/providers/gce"
+	gkeutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 	"k8s.io/klog/v2"
 )
 
@@ -76,56 +75,64 @@ func GetTokenSource(cfg *provider_gce.ConfigFile, ctx context.Context) (oauth2.T
 	return tokenSource, nil
 }
 
-// GetProjectAndLocation lookups GCE project and locationm, if the function fails
-// to discover project and/or location from the provider, it uses default values from
-// the config file.
-func GetProjectAndLocation(regional bool, cfg *provider_gce.ConfigFile, ctx context.Context) (string, string, error) {
-	var projectId, location string
-	if cfg != nil {
-		projectId = cfg.Global.ProjectID
-		location = cfg.Global.LocalZone
-	}
+type metadataClient interface {
+	ProjectIDWithContext(ctx context.Context) (string, error)
+	ZoneWithContext(ctx context.Context) (string, error)
+}
 
-	if len(projectId) == 0 || len(location) == 0 {
-		// XXX: On GKE discoveredProjectId is hosted master project and
-		// not the project we want to use, however, zone seems to not
-		// be specified in config. For now we can just assume that hosted
-		// master project is in the same zone as cluster and only use
-		// discoveredZone.
-		discoveredProjectId, discoveredLocation, err := discoverGceProviderProjectAndLocation(regional, ctx)
-		if err != nil {
-			return "", "", err
-		}
-		if len(projectId) == 0 {
-			projectId = discoveredProjectId
-		}
-		if len(location) == 0 {
-			location = discoveredLocation
-		}
+// GetProjectAndLocation returns the GCP project and the cluster location, a zone
+// for zonal clusters or a region for regional ones.
+func GetProjectAndLocation(ctx context.Context, md metadataClient, regional bool, cfg *provider_gce.ConfigFile, explicitLocation string) (string, string, error) {
+	projectId, err := getProject(ctx, md, cfg)
+	if err != nil {
+		return "", "", err
+	}
+	location, err := getLocation(ctx, md, regional, cfg, explicitLocation)
+	if err != nil {
+		return "", "", err
 	}
 	return projectId, location, nil
 }
 
-// Code borrowed from gce cloud provider. Reuse the original as soon as it becomes public.
-func discoverGceProviderProjectAndLocation(regional bool, ctx context.Context) (string, string, error) {
-	result, err := metadata.GetWithContext(ctx, "instance/zone")
-	if err != nil {
-		return "", "", err
+// On the GKE control plane the metadata server returns the hosted master project
+// rather than the cluster project, so the GKE-managed CA sets project-id in the
+// config file to the cluster project.
+func getProject(ctx context.Context, md metadataClient, cfg *provider_gce.ConfigFile) (string, error) {
+	if cfg != nil && cfg.Global.ProjectID != "" {
+		return cfg.Global.ProjectID, nil
 	}
-	parts := strings.Split(result, "/")
-	if len(parts) != 4 {
-		return "", "", fmt.Errorf("unexpected response: %s", result)
+	return md.ProjectIDWithContext(ctx)
+}
+
+// getLocation returns the cluster location from the first of these that is set:
+//   - the explicit cluster location (the --location flag)
+//   - local-zone from the cloud config file
+//   - the zone reported by the metadata server
+//
+// For regional clusters, the region is returned. Correctness of the last two
+// options in isolation relies on the CA running in a KCP zone. That is true for the
+// regular GKE CA, but a self-hosted CA may run in a non-KCP zone of a multi-zonal
+// cluster. For self-hosted we assume that the explicit location is always provided.
+func getLocation(ctx context.Context, md metadataClient, regional bool, cfg *provider_gce.ConfigFile, explicitLocation string) (string, error) {
+	if explicitLocation != "" {
+		return explicitLocation, nil
 	}
-	location := parts[3]
-	if regional {
-		location, err = provider_gce.GetGCERegion(location)
-		if err != nil {
-			return "", "", err
+
+	// TODO: Drop the local-zone and metadata server fallbacks. The regular GKE CA always
+	// passes --location and a self-hosted CA is only supported with it.
+	var zone string
+	if cfg != nil {
+		zone = cfg.Global.LocalZone
+	}
+	if zone == "" {
+		var err error
+		if zone, err = md.ZoneWithContext(ctx); err != nil {
+			return "", err
 		}
 	}
-	projectID, err := metadata.ProjectIDWithContext(ctx)
-	if err != nil {
-		return "", "", err
+
+	if !regional {
+		return zone, nil
 	}
-	return projectID, location, nil
+	return gkeutil.GetRegionFromLocation(zone)
 }

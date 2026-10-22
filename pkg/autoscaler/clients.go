@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"cloud.google.com/go/compute/metadata"
 	"golang.org/x/oauth2"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -184,7 +185,7 @@ func MustCreateGCEConfig(ctx context.Context, opts internalopts.AutoscalingOptio
 		klog.Fatalf("error getting oauth2 token source: %v", err)
 	}
 
-	projectID, location, err := gcecfg.GetProjectAndLocation(opts.Regional, gceProviderConfig, ctx)
+	projectID, location, err := gcecfg.GetProjectAndLocation(ctx, metadata.NewClient(nil), opts.Regional, gceProviderConfig, opts.Location)
 	if err != nil {
 		klog.Fatalf("error getting project ID and location: %v", err)
 	}
