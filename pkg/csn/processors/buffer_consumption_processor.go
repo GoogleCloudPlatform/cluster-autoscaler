@@ -121,7 +121,7 @@ func (p *BufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx
 	}
 
 	// Remove scheduled pods.
-	unschedulablePods = slices.DeleteFunc(unschedulablePods, func(pod *apiv1.Pod) bool {
+	unschedulablePods = slices.DeleteFunc(slices.Clone(unschedulablePods), func(pod *apiv1.Pod) bool {
 		return nodesOfScheduledPods[pod] != ""
 	})
 

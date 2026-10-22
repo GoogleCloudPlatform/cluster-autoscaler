@@ -394,7 +394,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 			// We still run the processor (but without any unschedulable pods) to trigger consumption of chilling CSN nodes where Kubernetes Scheduler scheduled pods on.
 			_, err = p.csnBufferConsumptionProcessor.Process(context.TODO(), autoscalingCtx, nil)
 		} else {
-			unschedulablePods, err = p.csnBufferConsumptionProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
+			unschedulablePods, err = p.processAndObserve(p.csnBufferConsumptionProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 		}
 		if err != nil {
 			return []*apiv1.Pod{}, err

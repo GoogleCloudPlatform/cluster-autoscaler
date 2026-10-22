@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"slices"
 	"testing"
 
 	"time"
@@ -732,6 +733,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			processor := NewBufferConsumptionProcessor(mockController, experimentsManager, fakeUnhelpableTracker{})
 			processor.metrics = mockMetrics
 
+			unschedulablePodsBefore := slices.Clone(tc.unschedulablePods)
 			remainingPods, err := processor.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
 
 			if tc.expectErr {
@@ -739,6 +741,7 @@ func TestBufferConsumptionProcess(t *testing.T) {
 			} else {
 				assert.NoError(t, err)
 			}
+			assert.Equal(t, unschedulablePodsBefore, tc.unschedulablePods, "Process modified its input slice")
 
 			assert.ElementsMatch(t, tc.expectedAllConsumedNodes, mockController.NodesWithState(csn.NodeStateConsumed), "Unexpected consumed nodes")
 			assert.ElementsMatch(t, tc.expectedMetrics, mockMetrics.invalidConditions, "Unexpected metrics")
