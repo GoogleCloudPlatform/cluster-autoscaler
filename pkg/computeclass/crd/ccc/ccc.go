@@ -1037,6 +1037,17 @@ func canonicalizePriority(p *v1.Priority) *v1.Priority {
 	copied.AllocationStrategy = nil
 	copied.MinimumCapacity = nil
 
+	if s := copied.Storage; s != nil {
+		// CRD guarantees config blocks are non-empty and enabled is unset or true.
+		// Normalize enabled so enabled: true doesn't change the hash.
+		if s.EphemeralStorageLocalSsdConfig != nil {
+			s.EphemeralStorageLocalSsdConfig.Enabled = nil
+		}
+		if s.LocalNvmeSsdBlockConfig != nil {
+			s.LocalNvmeSsdBlockConfig.Enabled = nil
+		}
+	}
+
 	canonicalizeTaints(copied.Taints)
 	if copied.Location != nil {
 		slices.Sort(copied.Location.Zones)

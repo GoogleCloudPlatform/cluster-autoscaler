@@ -3558,6 +3558,33 @@ func TestConfigHash(t *testing.T) {
 	assert.Equal(t, "pk2", cccOrderA.Spec.Priorities[0].Taints[0].Key)
 	assert.Equal(t, "us-central1-b", cccOrderA.Spec.Priorities[0].Location.Zones[0])
 	assert.Equal(t, "us-central1-b", cccOrderA.Spec.Priorities[0].Reservations.Specific[0].Zones[0])
+
+	// 9. The CRD only allows Local SSD config `enabled` to be unset or true, so it must not affect the hash.
+	lssdHash := func(storage *v1.Storage) string {
+		c := NewCccCrd(&v1.ComputeClass{
+			Spec: v1.ComputeClassSpec{
+				Priorities: []v1.Priority{{MachineType: &mt1, Storage: storage}},
+			},
+		}, "proj1", false, provider, nil)
+		return c.ConfigHash(c.Rules()[0])
+	}
+	ephemeralEnabledOnly := lssdHash(&v1.Storage{EphemeralStorageLocalSsdConfig: &v1.EphemeralStorageLocalSsdConfig{Enabled: ptr.To(true)}})
+	blockEnabledOnly := lssdHash(&v1.Storage{LocalNvmeSsdBlockConfig: &v1.LocalNvmeSsdBlockConfig{Enabled: ptr.To(true)}})
+	ephemeralCount := lssdHash(&v1.Storage{EphemeralStorageLocalSsdConfig: &v1.EphemeralStorageLocalSsdConfig{LocalSSDCount: ptr.To(4)}})
+	blockCount := lssdHash(&v1.Storage{LocalNvmeSsdBlockConfig: &v1.LocalNvmeSsdBlockConfig{LocalSSDCount: ptr.To(4)}})
+	noLssd := lssdHash(&v1.Storage{})
+
+	// enabled: true next to a count doesn't change the hash.
+	assert.Equal(t, ephemeralCount, lssdHash(&v1.Storage{EphemeralStorageLocalSsdConfig: &v1.EphemeralStorageLocalSsdConfig{Enabled: ptr.To(true), LocalSSDCount: ptr.To(4)}}))
+	assert.Equal(t, blockCount, lssdHash(&v1.Storage{LocalNvmeSsdBlockConfig: &v1.LocalNvmeSsdBlockConfig{Enabled: ptr.To(true), LocalSSDCount: ptr.To(4)}}))
+	// A block with only enabled: true still differs from no block.
+	assert.NotEqual(t, noLssd, ephemeralEnabledOnly)
+	assert.NotEqual(t, noLssd, blockEnabledOnly)
+	// The two modes differ from each other.
+	assert.NotEqual(t, ephemeralEnabledOnly, blockEnabledOnly)
+	// A defaulted count differs from an explicit count.
+	assert.NotEqual(t, ephemeralEnabledOnly, ephemeralCount)
+	assert.NotEqual(t, blockEnabledOnly, blockCount)
 }
 
 func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
