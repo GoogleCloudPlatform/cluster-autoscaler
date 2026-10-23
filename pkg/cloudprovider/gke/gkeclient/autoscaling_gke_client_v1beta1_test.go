@@ -39,6 +39,8 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -87,7 +89,7 @@ func newTestAutoscalingGkeClientV1beta1(t *testing.T, project, location, cluster
 		t.Fatalf("fatal error: %v", err)
 	}
 
-	gkeClient, err := NewAutoscalingGkeClientV1beta1(service, nil, project, location, clusterName, machineConfigProvider, napMaxNodes)
+	gkeClient, err := NewAutoscalingGkeClientV1beta1(service, nil, project, location, clusterName, machineConfigProvider, napMaxNodes, experiments.NewMockManager())
 	if !assert.NoError(t, err) {
 		t.Fatalf("fatal error: %v", err)
 	}
@@ -102,12 +104,29 @@ func TestCreateNodePoolRequest(t *testing.T) {
 	nodePoolName := "test-nodepool"
 
 	arm64 := gce.Arm64
+	// NAP default upgrade settings that Autopilot-managed node pools must not use.
+	napDefaultUpgradeSettings := func() *gke_api_beta.UpgradeSettings {
+		return &gke_api_beta.UpgradeSettings{
+			Strategy:       "BLUE_GREEN",
+			MaxSurge:       0,
+			MaxUnavailable: 1,
+			BlueGreenSettings: &gke_api_beta.BlueGreenSettings{
+				NodePoolSoakDuration: "3600s",
+				StandardRolloutPolicy: &gke_api_beta.StandardRolloutPolicy{
+					BatchNodeCount: 1,
+				},
+			},
+		}
+	}
 
 	testCases := []struct {
-		name        string
-		spec        *NodePoolSpec
-		wantRequest gke_api_beta.CreateNodePoolRequest
-		wantError   bool
+		name               string
+		spec               *NodePoolSpec
+		experimentsManager experiments.Manager
+		wantRequest        gke_api_beta.CreateNodePoolRequest
+		wantError          bool
+		// wantDefaults, if set, is the expected spec.Defaults after the request is created.
+		wantDefaults *gke_api_beta.AutoprovisioningNodePoolDefaults
 	}{
 		{
 			name:      "nil NodePoolSpec results in error",
@@ -955,6 +974,7 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					},
 					UpgradeSettings: &gke_api_beta.UpgradeSettings{
 						Strategy: "SURGE",
+						MaxSurge: 1,
 					},
 					Name:          nodePoolName,
 					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
@@ -965,6 +985,264 @@ func TestCreateNodePoolRequest(t *testing.T) {
 						Enabled: true,
 					},
 				},
+			},
+		},
+		{
+			name: "NAP default upgrade settings specified, but Autopilot managed specified",
+			spec: &NodePoolSpec{
+				AutopilotManaged: true,
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: napDefaultUpgradeSettings(),
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ShieldedInstanceConfig: &gke_api_beta.ShieldedInstanceConfig{
+							EnableIntegrityMonitoring: true,
+							EnableSecureBoot:          true,
+						},
+						ImageType: string(gce.OperatingSystemImageCOSContainerd),
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy: "SURGE",
+						MaxSurge: 1,
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					AutopilotConfig: &gke_api_beta.AutopilotConfig{
+						Enabled: true,
+					},
+				},
+			},
+			wantDefaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+				UpgradeSettings: napDefaultUpgradeSettings(),
+			},
+		},
+		{
+			name: "Autopilot managed preserves AcceleratorSliceGenerator upgrade settings",
+			spec: &NodePoolSpec{
+				AutopilotManaged: true,
+				UpgradeSettings: &gke_api_beta.UpgradeSettings{
+					Strategy:       "SURGE",
+					MaxSurge:       0,
+					MaxUnavailable: 16,
+				},
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: napDefaultUpgradeSettings(),
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ShieldedInstanceConfig: &gke_api_beta.ShieldedInstanceConfig{
+							EnableIntegrityMonitoring: true,
+							EnableSecureBoot:          true,
+						},
+						ImageType: string(gce.OperatingSystemImageCOSContainerd),
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy:       "SURGE",
+						MaxSurge:       0,
+						MaxUnavailable: 16,
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					AutopilotConfig: &gke_api_beta.AutopilotConfig{
+						Enabled: true,
+					},
+				},
+			},
+			wantDefaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+				UpgradeSettings: napDefaultUpgradeSettings(),
+			},
+		},
+		{
+			name: "Autopilot managed preserves SHORT_LIVED upgrade settings for FlexStart and QueuedProvisioning",
+			spec: &NodePoolSpec{
+				AutopilotManaged:   true,
+				FlexStart:          true,
+				QueuedProvisioning: true,
+				UpgradeSettings: &gke_api_beta.UpgradeSettings{
+					Strategy: "SHORT_LIVED",
+				},
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: napDefaultUpgradeSettings(),
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						FlexStart: true,
+						ShieldedInstanceConfig: &gke_api_beta.ShieldedInstanceConfig{
+							EnableIntegrityMonitoring: true,
+							EnableSecureBoot:          true,
+						},
+						ImageType: string(gce.OperatingSystemImageCOSContainerd),
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					QueuedProvisioning: &gke_api_beta.QueuedProvisioning{Enabled: true},
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy: "SHORT_LIVED",
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					AutopilotConfig: &gke_api_beta.AutopilotConfig{
+						Enabled: true,
+					},
+				},
+			},
+			wantDefaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+				UpgradeSettings: napDefaultUpgradeSettings(),
+			},
+		},
+		{
+			name: "Autopilot managed falls back to NAP defaults when direct-launch flag is disabled",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.AutopilotManagedNodePoolDefaultSurgeSettingsFlag: false},
+				nil,
+			),
+			spec: &NodePoolSpec{
+				AutopilotManaged: true,
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy:       "SURGE",
+						MaxSurge:       0,
+						MaxUnavailable: 1,
+					},
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ShieldedInstanceConfig: &gke_api_beta.ShieldedInstanceConfig{
+							EnableIntegrityMonitoring: true,
+							EnableSecureBoot:          true,
+						},
+						ImageType: string(gce.OperatingSystemImageCOSContainerd),
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy:       "SURGE",
+						MaxSurge:       0,
+						MaxUnavailable: 1,
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					AutopilotConfig: &gke_api_beta.AutopilotConfig{
+						Enabled: true,
+					},
+				},
+			},
+			wantDefaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+				UpgradeSettings: &gke_api_beta.UpgradeSettings{
+					Strategy:       "SURGE",
+					MaxSurge:       0,
+					MaxUnavailable: 1,
+				},
+			},
+		},
+		{
+			name: "Autopilot managed forces SURGE without mutating BLUE_GREEN NAP defaults when direct-launch flag is disabled",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.AutopilotManagedNodePoolDefaultSurgeSettingsFlag: false},
+				nil,
+			),
+			spec: &NodePoolSpec{
+				AutopilotManaged: true,
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: napDefaultUpgradeSettings(),
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						ShieldedInstanceConfig: &gke_api_beta.ShieldedInstanceConfig{
+							EnableIntegrityMonitoring: true,
+							EnableSecureBoot:          true,
+						},
+						ImageType: string(gce.OperatingSystemImageCOSContainerd),
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						Strategy:       "SURGE",
+						MaxSurge:       0,
+						MaxUnavailable: 1,
+						BlueGreenSettings: &gke_api_beta.BlueGreenSettings{
+							NodePoolSoakDuration: "3600s",
+							StandardRolloutPolicy: &gke_api_beta.StandardRolloutPolicy{
+								BatchNodeCount: 1,
+							},
+						},
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					AutopilotConfig: &gke_api_beta.AutopilotConfig{
+						Enabled: true,
+					},
+				},
+			},
+			wantDefaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+				UpgradeSettings: napDefaultUpgradeSettings(),
 			},
 		},
 		{
@@ -1049,6 +1327,7 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					},
 					UpgradeSettings: &gke_api_beta.UpgradeSettings{
 						Strategy: "SURGE",
+						MaxSurge: 1,
 					},
 					Name:          nodePoolName,
 					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
@@ -1143,6 +1422,7 @@ func TestCreateNodePoolRequest(t *testing.T) {
 					},
 					UpgradeSettings: &gke_api_beta.UpgradeSettings{
 						Strategy: "SURGE",
+						MaxSurge: 1,
 					},
 					Name:          nodePoolName,
 					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
@@ -2507,12 +2787,18 @@ func TestCreateNodePoolRequest(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newTestAutoscalingGkeClientV1beta1(t, projectName, location, clusterName, serverUrl)
+			if tc.experimentsManager != nil {
+				g.experimentsManager = tc.experimentsManager
+			}
 			request, err := g.createNodePoolRequest(nodePoolName, tc.spec)
 			if tc.wantError {
 				assert.Error(t, err)
 			} else {
 				assert.NoError(t, err)
 				assert.Equal(t, tc.wantRequest, request)
+				if tc.wantDefaults != nil {
+					assert.Equal(t, tc.wantDefaults, tc.spec.Defaults)
+				}
 			}
 		})
 	}
@@ -2522,10 +2808,11 @@ func TestCreateNodePoolRequest_MaxNodeCount(t *testing.T) {
 	defaultMaxSurge := int64(1)
 
 	testCases := []struct {
-		name             string
-		spec             *NodePoolSpec
-		wantMaxNodeCount int64
-		wantError        string
+		name               string
+		spec               *NodePoolSpec
+		experimentsManager experiments.Manager
+		wantMaxNodeCount   int64
+		wantError          string
 	}{
 		{
 			name:      "nil_NodePoolSpec_results_in_error",
@@ -2669,6 +2956,48 @@ func TestCreateNodePoolRequest_MaxNodeCount(t *testing.T) {
 			wantMaxNodeCount: maxCPNodesForMachineType(t, "n2d-standard-4") - defaultMaxSurge,
 		},
 		{
+			// Autopilot-managed node pools use Autopilot's maxSurge of 1, not the NAP defaults.
+			name: "n2d-_machine_type_with_compact_placement_and_Autopilot_managed_-_subtracts_Autopilot_maxSurge_from_maxSize",
+			spec: &NodePoolSpec{
+				MachineType: "n2d-standard-4",
+				PlacementGroup: placement.Spec{
+					Policy: "test-policy",
+				},
+				AutopilotManaged: true,
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						MaxSurge:       0,
+						MaxUnavailable: 1,
+					},
+				},
+			},
+			// 150-1= 149
+			wantMaxNodeCount: maxCPNodesForMachineType(t, "n2d-standard-4") - 1,
+		},
+		{
+			// When the direct-launch flag is disabled, Autopilot-managed node pools fall back to NAP defaults maxSurge=0.
+			name: "n2d-_machine_type_with_compact_placement_and_Autopilot_managed_flag_disabled_-_uses_NAP_default_maxSurge",
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.AutopilotManagedNodePoolDefaultSurgeSettingsFlag: false},
+				nil,
+			),
+			spec: &NodePoolSpec{
+				MachineType: "n2d-standard-4",
+				PlacementGroup: placement.Spec{
+					Policy: "test-policy",
+				},
+				AutopilotManaged: true,
+				Defaults: &gke_api_beta.AutoprovisioningNodePoolDefaults{
+					UpgradeSettings: &gke_api_beta.UpgradeSettings{
+						MaxSurge:       0,
+						MaxUnavailable: 1,
+					},
+				},
+			},
+			wantMaxNodeCount: maxCPNodesForMachineType(t, "n2d-standard-4"),
+		},
+		{
 			name: "ct3_with_ReservationBlockCount_-_returns_ReservationBlockCount",
 			spec: &NodePoolSpec{
 				MachineType:           "ct3-hightpu-4t",
@@ -2696,6 +3025,9 @@ func TestCreateNodePoolRequest_MaxNodeCount(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			g := newTestAutoscalingGkeClientV1beta1(t, "project-name", "us-central1", "cluster-1", "server-test")
+			if tc.experimentsManager != nil {
+				g.experimentsManager = tc.experimentsManager
+			}
 			request, err := g.createNodePoolRequest("pool-1", tc.spec)
 			if tc.wantError != "" {
 				assert.Error(t, err)

@@ -849,7 +849,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		// TODO(b/485133862): refactor this package to use fake service instead of mocks.
 		service, err := gkeapi.NewClient(client, "", *gkeclient.GkeAPIEndpoint)
 		assert.NoError(t, err)
-		gkeService, err := gkeclient.NewAutoscalingGkeClientV1beta1(service, nil, projectId, manager.location, clusterName, machineConfigProvider, napMaxNodes)
+		gkeService, err := gkeclient.NewAutoscalingGkeClientV1beta1(service, nil, projectId, manager.location, clusterName, machineConfigProvider, napMaxNodes, experiments.NewMockManager())
 		assert.NoError(t, err)
 		manager.gkeService = gkeService
 	}
