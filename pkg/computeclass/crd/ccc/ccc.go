@@ -365,7 +365,7 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 	}
 
 	if p.Storage != nil {
-		// TODO(go/ccc-static-local-ssd): Add data cache and NVME block count.
+		// TODO(go/ccc-static-local-ssd): Add data cache count.
 		storageOpt := rules.WithStorageRule(
 			p.Storage.BootDiskType,
 			p.Storage.BootDiskSize,
@@ -373,6 +373,18 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 			p.Storage.LocalSSDCount,
 		)
 		ruleOpts = append(ruleOpts, storageOpt)
+		// The CRD guarantees config blocks are non-empty and enabled is unset or true.
+		if p.Storage.EphemeralStorageLocalSsdConfig != nil {
+			ruleOpts = append(ruleOpts, rules.WithEphemeralStorageLocalSsdConfigRule(
+				p.Storage.EphemeralStorageLocalSsdConfig.LocalSSDCount,
+				p.Storage.EphemeralStorageLocalSsdConfig.EphemeralCapacityGb,
+			))
+		}
+		if p.Storage.LocalNvmeSsdBlockConfig != nil {
+			ruleOpts = append(ruleOpts, rules.WithLocalNvmeSsdBlockConfigRule(
+				p.Storage.LocalNvmeSsdBlockConfig.LocalSSDCount,
+			))
+		}
 		if p.Storage.BootDiskProvisionedIops != nil {
 			ruleOpts = append(ruleOpts, rules.WithBootDiskProvisionedIopsRule(*p.Storage.BootDiskProvisionedIops))
 		}
