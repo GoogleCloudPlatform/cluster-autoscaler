@@ -46,6 +46,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/sandbox"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 )
 
@@ -100,6 +101,7 @@ type autoscalingGkeClientV1beta1 struct {
 	operationPollInterval time.Duration
 
 	machineConfigProvider *machinetypes.MachineConfigProvider
+	experimentsManager    experiments.Manager
 
 	napMaxNodes int
 }
@@ -112,7 +114,7 @@ type NodePoolTranslator interface {
 }
 
 // NewAutoscalingGkeClientV1beta1 creates a new client for communicating with GKE v1beta1 API.
-func NewAutoscalingGkeClientV1beta1(apiClient gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, provider *machinetypes.MachineConfigProvider, napMaxNodes int) (*autoscalingGkeClientV1beta1, error) {
+func NewAutoscalingGkeClientV1beta1(apiClient gkeapi.Client, nodePoolTranslator NodePoolTranslator, projectId, location, clusterName string, provider *machinetypes.MachineConfigProvider, napMaxNodes int, experimentsManager experiments.Manager) (*autoscalingGkeClientV1beta1, error) {
 	autoscalingGkeClient := &autoscalingGkeClientV1beta1{
 		apiClient:             apiClient,
 		nodePoolTranslator:    nodePoolTranslator,
@@ -122,6 +124,7 @@ func NewAutoscalingGkeClientV1beta1(apiClient gkeapi.Client, nodePoolTranslator 
 		operationWaitTimeout:  defaultOperationWaitTimeout,
 		operationPollInterval: defaultOperationPollInterval,
 		machineConfigProvider: provider,
+		experimentsManager:    experimentsManager,
 		napMaxNodes:           napMaxNodes,
 	}
 
@@ -886,10 +889,19 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		PolicyName: spec.PlacementGroup.Policy,
 	}
 
-	// TODO(b/468235302): investigate whether UpgradeSettings should be set from Defaults for all machines
-	if spec.UpgradeSettings == nil && spec.Defaults != nil {
-		// use defaults if not specified
-		spec.UpgradeSettings = spec.Defaults.UpgradeSettings
+	useAutopilotSurgeSettings := m.experimentsManager != nil && m.experimentsManager.DirectLaunchBoolFlag(experiments.AutopilotManagedNodePoolDefaultSurgeSettingsFlag)
+	// Standard clusters can set NAP default upgrade settings, but
+	// Autopilot-managed node pools default to Autopilot's surge settings
+	// unless a generator (e.g. AcceleratorSliceGenerator or
+	// FlexStartGenerator) already configured UpgradeSettings on the spec.
+	if spec.UpgradeSettings == nil {
+		if spec.AutopilotManaged && useAutopilotSurgeSettings {
+			spec.UpgradeSettings = autopilotManagedUpgradeSettings()
+		} else if spec.Defaults != nil {
+			// TODO(b/468235302): check whether UpgradeSettings
+			// should be set from Defaults for all machines.
+			spec.UpgradeSettings = spec.Defaults.UpgradeSettings
+		}
 	}
 
 	if spec.TpuMultiHost {
@@ -1001,11 +1013,17 @@ func (m *autoscalingGkeClientV1beta1) createNodePoolRequest(name string, spec *N
 		}
 		createRequest.NodePool.Management.AutoRepair = true
 		createRequest.NodePool.Management.AutoUpgrade = true
-		// Force surge upgrade strategy.
-		if createRequest.NodePool.UpgradeSettings == nil {
-			createRequest.NodePool.UpgradeSettings = &gke_api_beta.UpgradeSettings{}
+		if !useAutopilotSurgeSettings {
+			// Legacy fallback when the direct-launch flag is turned off:
+			// force surge upgrade strategy without mutating shared defaults.
+			if createRequest.NodePool.UpgradeSettings == nil {
+				createRequest.NodePool.UpgradeSettings = &gke_api_beta.UpgradeSettings{}
+			} else {
+				copied := *createRequest.NodePool.UpgradeSettings
+				createRequest.NodePool.UpgradeSettings = &copied
+			}
+			createRequest.NodePool.UpgradeSettings.Strategy = strategySurge
 		}
-		createRequest.NodePool.UpgradeSettings.Strategy = strategySurge
 		// Force cos_containerd image type on Autopilot nodes.
 		createRequest.NodePool.Config.ImageType = string(gce.OperatingSystemImageCOSContainerd)
 	}
@@ -1340,4 +1358,13 @@ func maxSurgeFromUpgradeSettings(spec *NodePoolSpec) int64 {
 		return spec.UpgradeSettings.MaxSurge
 	}
 	return defaultMaxSurge
+}
+
+// autopilotManagedUpgradeSettings returns new upgrade settings for Autopilot-managed
+// node pools: surge upgrades with max surge 1 and max unavailable 0.
+func autopilotManagedUpgradeSettings() *gke_api_beta.UpgradeSettings {
+	return &gke_api_beta.UpgradeSettings{
+		Strategy: strategySurge,
+		MaxSurge: 1,
+	}
 }

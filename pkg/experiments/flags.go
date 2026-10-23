@@ -390,3 +390,5 @@ const ScaleDownPriorityMinCAVersionFlag = "ScaleDownPriority::MinCAVersion"
 
 const LockWaitWatchdogEnabledFlag = "LockWaitWatchdog::Enabled"
 const LockWaitWatchdogMinCAVersionFlag = "LockWaitWatchdog::MinCAVersion"
+
+const AutopilotManagedNodePoolDefaultSurgeSettingsFlag = "Autopilot::ManagedNodePoolDefaultSurgeSettings" // Direct launch.

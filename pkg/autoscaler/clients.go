@@ -342,7 +342,7 @@ func MustCreateGKEClient(apiClient gkeapi.Client, nodePoolTranslator gkeclient.N
 		}
 		client = mtClient
 	} else {
-		client, err = gkeclient.NewAutoscalingGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes)
+		client, err = gkeclient.NewAutoscalingGkeClientV1beta1(apiClient, nodePoolTranslator, projectID, location, opts.ClusterName, machineConfigProvider, opts.NapMaxNodes, experimentsManager)
 		if err != nil {
 			klog.Fatalf("Failed to create GKE Client: %v", err)
 		}
