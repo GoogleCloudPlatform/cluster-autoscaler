@@ -23,6 +23,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/backoff"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
@@ -197,6 +198,7 @@ func (a *TestAutoscaler) ScaleUpOptions(pods []*apiv1.Pod) ([]expander.Option, m
 	em := experiments.NewMockManager()
 	opts := autoprovisioning.AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    a.provider,
+		LocalSSDSizeProvider:             localssdsize.NewSimpleLocalSSDProvider(),
 		Backoff:                          backoff.NewCompositeBackoff([]base_backoff.Backoff{resourceBackoff}, nil),
 		Lister:                           npc_lister.NewMockCrdLister([]npc_crd.CRD{}),
 		PodLister:                        kubeutil.NewTestPodLister(pods),
@@ -226,6 +228,7 @@ func (a *TestAutoscaler) GetNodeGroupsForScaleUp(pods []*apiv1.Pod) ([]cloudprov
 	resourceBackoff := backoff.NewResourceBackoff(processor, time.Second, time.Second, time.Second)
 	opts := autoprovisioning.AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    a.provider,
+		LocalSSDSizeProvider:             localssdsize.NewSimpleLocalSSDProvider(),
 		Backoff:                          backoff.NewCompositeBackoff([]base_backoff.Backoff{resourceBackoff}, nil),
 		MaxAutoprovisionedNodeGroupCount: 50,
 		OptionsTracker:                   tracking.TestOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),

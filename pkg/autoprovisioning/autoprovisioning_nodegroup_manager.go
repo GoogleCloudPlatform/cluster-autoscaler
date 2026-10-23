@@ -25,6 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	gce_cloudprovider "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	klog "k8s.io/klog/v2"
 	"k8s.io/utils/set"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -125,6 +126,7 @@ type AutoprovisioningNodeGroupManagerOptions struct {
 	Flags                            AutoprovisioningNodeGroupManagerFlags
 	OptionsTracker                   *optstracking.OptionsTracker
 	MutationInjector                 *daemonsetmutation.Injector
+	LocalSSDSizeProvider             localssdsize.LocalSSDSizeProvider
 }
 
 // AutoprovisioningNodeGroupManagerFlags defines flags responsible for enablement of autoprovisioning features.
@@ -209,7 +211,7 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 	podCapacityLabelGenerator := NewPodCapacityLabelGenerator(opts.CloudProvider)
 	specGenerators = append(specGenerators, podIsolationCPULabelGenerator, podCapacityLabelGenerator)
 	nodeGroupOptionsGenerators = append(nodeGroupOptionsGenerators, podIsolationCPULabelGenerator, podCapacityLabelGenerator)
-	localSSDConfigGenerator := NewLocalSSDConfigGenerator(opts.CloudProvider)
+	localSSDConfigGenerator := NewLocalSSDConfigGenerator(opts.CloudProvider, opts.LocalSSDSizeProvider)
 	specGenerators = append(specGenerators, localSSDConfigGenerator)
 	if opts.Flags.MultiNetworkingEnabled {
 		generator := NewMultiNetworkingGenerator(opts.Matcher)

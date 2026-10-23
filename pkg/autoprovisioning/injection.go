@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning/selfservice"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
@@ -87,6 +88,17 @@ const (
 	// labelEphemeralLocalSsdDisksCount is an internal only system label used to pass information how many ssd disks should be attached.
 	// TODO(go/ccc-static-local-ssd): Add data cache and NVME block count.
 	labelEphemeralLocalSsdDisksCount = "cloud.google.com/gke-ephemeral-storage-local-ssd-count"
+	// labelEphemeralLocalSsdCapacityGb is an internal only system label
+	// used to pass the ephemeral storage capacity in GB for mixed local
+	// SSD mode.
+	labelEphemeralLocalSsdCapacityGb = "cloud.google.com/gke-ephemeral-storage-local-ssd-capacity-gb"
+	// labelEphemeralStorageLocalSsdConfig is an internal only system label
+	// used to indicate whether EphemeralStorageLocalSsdConfig (new-mode)
+	// should be populated instead of EphemeralStorageConfig.
+	labelEphemeralStorageLocalSsdConfig = "cloud.google.com/gke-ephemeral-storage-local-ssd-config"
+	// labelLocalNvmeSsdBlockCount is an internal only system label used to
+	// pass the number of raw block local NVMe SSD disks to attach.
+	labelLocalNvmeSsdBlockCount = "cloud.google.com/gke-local-nvme-ssd-block-count"
 	// labelComputeClassRequired is an internal only system label used to pass information if Compute Class is required.
 	labelComputeClassRequired = "cloud.google.com/gke-compute-class-required"
 	// labelLinuxNodeConfig is an internal only system label used to pass information about linux node config.
@@ -245,20 +257,23 @@ type nodeGroupRequirements struct {
 	// Sum of all local SSDs to provision for the node, including ephemeral
 	// storage, data cache, NVME block, and swap dedicated local SSDs.
 	// Swap dedicated local SSD count is inside linuxNodeConfig.
-	// TODO(go/ccc-static-local-ssd): Add data cache and NVME block count.
-	totalLSSDCount              int
-	maxRunDurationInSeconds     string
-	flexStartReq                flexStartRequirements
-	secondaryBootDisks          []*gke_api_beta.SecondaryBootDisk
-	bootDiskStoragePools        []string
-	linuxNodeConfig             *gkeclient.LinuxNodeConfig
-	kubeletConfig               *gkeclient.NodeKubeletConfig
-	maxPodsPerNode              int
-	specifiedZones              []string
-	confidentialNodeType        string
-	selfServiceMetadata         selfservice.Metadata
-	consolidationDelayInSeconds string
-	usesZoneTypes               bool
+	// TODO(go/ccc-static-local-ssd): Add data cache count.
+	totalLSSDCount                  int
+	ephemeralCapacityGb             int64
+	localNvmeSsdBlockEnabled        bool
+	ephemeralStorageLocalSsdEnabled bool
+	maxRunDurationInSeconds         string
+	flexStartReq                    flexStartRequirements
+	secondaryBootDisks              []*gke_api_beta.SecondaryBootDisk
+	bootDiskStoragePools            []string
+	linuxNodeConfig                 *gkeclient.LinuxNodeConfig
+	kubeletConfig                   *gkeclient.NodeKubeletConfig
+	maxPodsPerNode                  int
+	specifiedZones                  []string
+	confidentialNodeType            string
+	selfServiceMetadata             selfservice.Metadata
+	consolidationDelayInSeconds     string
+	usesZoneTypes                   bool
 }
 
 // RequiresComputeClass checks if node group requirements contain Compute Class
@@ -356,6 +371,9 @@ func (r nodeGroupRequirements) String() string {
 	buffer.WriteString(fmt.Sprintf("pod-capacity: <%v>, ", r.podCapacity))
 	buffer.WriteString(fmt.Sprintf("requires-localssd: <%t>, ", r.explicitlyRequiresLocalSSD))
 	buffer.WriteString(fmt.Sprintf("total lssd count: <%d>, ", r.totalLSSDCount))
+	buffer.WriteString(fmt.Sprintf("ephemeral capacity gb: <%d>, ", r.ephemeralCapacityGb))
+	buffer.WriteString(fmt.Sprintf("local nvme ssd block enabled: <%t>, ", r.localNvmeSsdBlockEnabled))
+	buffer.WriteString(fmt.Sprintf("ephemeral storage local ssd enabled: <%t>, ", r.ephemeralStorageLocalSsdEnabled))
 	buffer.WriteString(fmt.Sprintf("network-req: <%s>, ", strings.Join(r.networkReq.AdditionalNetworkResources, ",")))
 	buffer.WriteString(fmt.Sprintf("network-interface-annotation: <%s>, ", r.networkAnnotation))
 	buffer.WriteString(fmt.Sprintf("system labels: <%v>, ", r.systemLabels))
@@ -415,6 +433,9 @@ func (r nodeGroupRequirements) signature() string {
 	buffer.WriteString(fmt.Sprintf("%q\n", r.reservation.Signature()))
 	buffer.WriteString(fmt.Sprintf("%t\n", r.explicitlyRequiresLocalSSD))
 	buffer.WriteString(fmt.Sprintf("%d\n", r.totalLSSDCount))
+	buffer.WriteString(fmt.Sprintf("%d\n", r.ephemeralCapacityGb))
+	buffer.WriteString(fmt.Sprintf("%t\n", r.localNvmeSsdBlockEnabled))
+	buffer.WriteString(fmt.Sprintf("%t\n", r.ephemeralStorageLocalSsdEnabled))
 	buffer.WriteString(fmt.Sprintf("%s\n", strings.Join(r.networkReq.AdditionalNetworkResources, ",")))
 	buffer.WriteString(fmt.Sprintf("%s\n", r.networkAnnotation))
 	buffer.WriteString(fmt.Sprintf("%s\n", utils.LabelsToCanonicalString(r.systemLabels)))
@@ -1941,6 +1962,11 @@ func (ng ComputeClassGenerator) generateRuleRequirements(requirements nodeGroupR
 	requirements.bootDiskSize = int(rule.BootDiskSize())
 	requirements.ephemeralStorageLocalSSDCount = rule.EphemerslStorageLSSDCount()
 	requirements.totalLSSDCount = int(rule.TotalLSSDCount())
+	if rule.EphemeralCapacityGb() != nil {
+		requirements.ephemeralCapacityGb = *rule.EphemeralCapacityGb()
+	}
+	requirements.localNvmeSsdBlockEnabled = rule.LocalNvmeSsdBlockEnabled()
+	requirements.ephemeralStorageLocalSsdEnabled = rule.EphemeralStorageLocalSsdEnabled()
 	requirements.bootDiskEncryptionKey = rule.BootDiskKMSKey()
 	requirements.secondaryBootDisks = rule.SecondaryBootDisks()
 	requirements.bootDiskStoragePools = rule.BootDiskStoragePools()
@@ -3155,12 +3181,14 @@ func canUseAggregateReservation(pReq *podrequirements.Requirements, tpuReq TpuRe
 // LocalSSDConfigGenerator enables Local SSD support in NAP.
 // go/ap-localssd and go/ap-sohw-localssd-selection.
 type LocalSSDConfigGenerator struct {
-	cloudProvider napcloudprovider.AutoprovisioningCloudProvider
+	cloudProvider        napcloudprovider.AutoprovisioningCloudProvider
+	localSSDSizeProvider localssdsize.LocalSSDSizeProvider
 }
 
-func NewLocalSSDConfigGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider) *LocalSSDConfigGenerator {
+func NewLocalSSDConfigGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, localSSDSizeProvider localssdsize.LocalSSDSizeProvider) *LocalSSDConfigGenerator {
 	return &LocalSSDConfigGenerator{
-		cloudProvider: cloudProvider,
+		cloudProvider:        cloudProvider,
+		localSSDSizeProvider: localSSDSizeProvider,
 	}
 }
 
@@ -3169,19 +3197,138 @@ func (g LocalSSDConfigGenerator) UpdateRequirements(ngReq *nodeGroupRequirements
 		ngReq.explicitlyRequiresLocalSSD = true
 	}
 	if ngReq.reservation.totalLSSDCount > 0 {
+		ephemeralOrBlockMode := ngReq.localNvmeSsdBlockEnabled || ngReq.ephemeralStorageLocalSsdEnabled
+		hasModeCount := ngReq.totalLSSDCount > dedicatedSwapLSSDCount(*ngReq)
+		if ephemeralOrBlockMode && hasModeCount && ngReq.reservation.totalLSSDCount != ngReq.totalLSSDCount {
+			return NewLocalSSDCountMismatchWithReservationError(ngReq.reservation.name, ngReq.reservation.totalLSSDCount, ngReq.totalLSSDCount)
+		}
 		if ngReq.reservation.totalLSSDCount < ngReq.totalLSSDCount {
 			return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "reservation only have %d local SSDs and node group requested %d local SSDs", ngReq.reservation.totalLSSDCount, ngReq.totalLSSDCount)
 		}
-		ngReq.totalLSSDCount = ngReq.reservation.totalLSSDCount
-		ngReq.ephemeralStorageLocalSSDCount = defaultEphemeralStorageLSSDCount(*ngReq, ngReq.totalLSSDCount)
+		if !ephemeralOrBlockMode {
+			ngReq.totalLSSDCount = ngReq.reservation.totalLSSDCount
+			ngReq.ephemeralStorageLocalSSDCount = defaultEphemeralStorageLSSDCount(*ngReq, ngReq.totalLSSDCount)
+		}
 	}
 
 	return nil
 }
 
+func hasDedicatedLocalSsdSwap(cfg *gkeclient.LinuxNodeConfig) bool {
+	return cfg != nil && cfg.SwapConfig != nil && cfg.SwapConfig.DedicatedLocalSsdProfile != nil
+}
+
+func hasEphemeralLocalSsdSwap(cfg *gkeclient.LinuxNodeConfig) bool {
+	return cfg != nil && cfg.SwapConfig != nil && cfg.SwapConfig.EphemeralLocalSsdProfile != nil
+}
+
+func dedicatedSwapLSSDCount(ngReq nodeGroupRequirements) int {
+	if !hasDedicatedLocalSsdSwap(ngReq.linuxNodeConfig) {
+		return 0
+	}
+	return int(ngReq.linuxNodeConfig.SwapConfig.DedicatedLocalSsdProfile.DiskCount)
+}
+
+func (g LocalSSDConfigGenerator) resolveNewModeLSSDCount(ngReq nodeGroupRequirements, machineType string) (int, error) {
+	mcp := g.cloudProvider.MachineConfigProvider()
+	swap := dedicatedSwapLSSDCount(ngReq)
+	// totalLSSDCount includes swap disks; a total of only swap disks means
+	// the mode count was omitted.
+	requestedTotal := 0
+	if ngReq.totalLSSDCount > swap {
+		requestedTotal = ngReq.totalLSSDCount
+	}
+	if rsvCount := ngReq.reservation.totalLSSDCount; rsvCount > 0 && requestedTotal > 0 && rsvCount != requestedTotal {
+		// An explicit count must match the reservation exactly, as the CCC
+		// status validator requires.
+		return 0, NewLocalSSDCountMismatchWithReservationError(ngReq.reservation.name, rsvCount, requestedTotal)
+	}
+	fixedCount, isFixed, err := mcp.AutomaticEphemeralLocalSsdCountByMachineType(machineType)
+	if err != nil {
+		return 0, caerrors.NewAutoscalerErrorf(caerrors.InternalError, "error checking fixed local SSD count for machine type %s: %v", machineType, err)
+	}
+	effectiveTotal := requestedTotal
+	if isFixed {
+		if rsvCount := ngReq.reservation.totalLSSDCount; rsvCount > 0 && effectiveTotal == 0 {
+			effectiveTotal = rsvCount
+		}
+		if effectiveTotal == 0 {
+			effectiveTotal = int(fixedCount)
+		} else if effectiveTotal != int(fixedCount) {
+			return 0, NewInvalidLocalSSDCountForMachineTypeError(machineType, effectiveTotal, []int{int(fixedCount)})
+		}
+	} else {
+		isValid, allowedCounts, err := g.validLocalSSDCount(effectiveTotal, machineType)
+		if err != nil {
+			return 0, caerrors.NewAutoscalerErrorf(caerrors.InternalError, "error validating local SSD count: %d for machine type: %s, err: %s", effectiveTotal, machineType, err.Error())
+		}
+		if len(allowedCounts) == 0 {
+			return 0, NewLocalSSDNotSupportedForMachineTypeError(machineType)
+		}
+		if !isValid {
+			return 0, NewInvalidLocalSSDCountForMachineTypeError(machineType, effectiveTotal, allowedCounts)
+		}
+	}
+	mode := effectiveTotal - swap
+	if mode <= 0 {
+		return 0, caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "dedicated Local SSD swap disks (%d) consume all %d Local SSDs for machine type %s", swap, effectiveTotal, machineType)
+	}
+	return mode, nil
+}
+
 func (g LocalSSDConfigGenerator) UpdateParameters(params *nodeGroupParameters, ngReq nodeGroupRequirements, opt NodeGroupOptions) error {
+	// Handle new modes (Block mode, Mixed mode, or EphemeralStorageLocalSsdConfig).
+	if ngReq.localNvmeSsdBlockEnabled || ngReq.ephemeralStorageLocalSsdEnabled {
+		if hasDedicatedLocalSsdSwap(ngReq.linuxNodeConfig) {
+			if ngReq.localNvmeSsdBlockEnabled {
+				return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "dedicated Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)")
+			}
+			if ngReq.ephemeralCapacityGb > 0 {
+				return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "dedicated Local SSD swap profile cannot be used with ephemeralStorageLocalSsdConfig.ephemeralCapacityGb (mixed Local SSD mode)")
+			}
+		}
+		if hasEphemeralLocalSsdSwap(ngReq.linuxNodeConfig) {
+			if ngReq.localNvmeSsdBlockEnabled {
+				return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "ephemeral Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)")
+			}
+		}
+
+		modeCount, err := g.resolveNewModeLSSDCount(ngReq, opt.MachineType)
+		if err != nil {
+			return err
+		}
+
+		if ngReq.localNvmeSsdBlockEnabled {
+			if ngReq.explicitlyRequiresLocalSSD {
+				return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "pod explicitly requires ephemeral local SSD, which is incompatible with pure block mode")
+			}
+			params.systemLabels[labelLocalNvmeSsdBlockCount] = fmt.Sprintf("%d", modeCount)
+			return nil
+		}
+
+		if ngReq.explicitlyRequiresLocalSSD {
+			params.systemLabels[gkelabels.EphemeralLocalSsdLabel] = gkelabels.EphemeralLocalSsdEnabledValue
+		}
+		if ngReq.ephemeralCapacityGb > 0 {
+			totalCapacityGb := int64(g.localSSDSizeProvider.SSDSizeInGiB(opt.MachineType)) * int64(modeCount)
+			if ngReq.ephemeralCapacityGb >= totalCapacityGb {
+				return caerrors.NewAutoscalerErrorf(caerrors.ConfigurationError, "ephemeralCapacityGb (%d) must be less than total Local SSD capacity (%d GB) for machine type %s", ngReq.ephemeralCapacityGb, totalCapacityGb, opt.MachineType)
+			}
+			params.systemLabels[labelEphemeralLocalSsdCapacityGb] = fmt.Sprintf("%d", ngReq.ephemeralCapacityGb)
+		}
+		params.systemLabels[labelEphemeralLocalSsdDisksCount] = fmt.Sprintf("%d", modeCount)
+		params.systemLabels[labelEphemeralStorageLocalSsdConfig] = "true"
+		return nil
+	}
+
 	// Handle automatically attached Local SSD disks (for eligible supported machine types).
-	if allowedLSSDCount, found, err := g.cloudProvider.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(opt.MachineType); found && err == nil {
+	allowedLSSDCount, foundAutoLSSD, err := g.cloudProvider.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(opt.MachineType)
+	if err != nil {
+		return err
+	}
+
+	if foundAutoLSSD {
+		// Default legacy handling for automatically attached LSSD.
 		if int64(ngReq.totalLSSDCount) > allowedLSSDCount {
 			return NewInvalidLocalSSDCountForMachineTypeError(opt.MachineType, ngReq.totalLSSDCount, []int{int(allowedLSSDCount)})
 		}
@@ -3189,9 +3336,8 @@ func (g LocalSSDConfigGenerator) UpdateParameters(params *nodeGroupParameters, n
 		if ephemeralStorageLocalSSDCount > 0 {
 			params.systemLabels[labelEphemeralLocalSsdDisksCount] = fmt.Sprintf("%d", ephemeralStorageLocalSSDCount)
 		}
-	} else if err != nil {
-		return err
 	}
+
 	// Add Local SSD count requirement from reservation config to systemLabels so it will propagate to NPSpec.
 	// Assign to ngReq for disk count validation below.
 	if count := ngReq.reservation.totalLSSDCount; count > 0 {
@@ -3250,6 +3396,23 @@ func (g LocalSSDConfigGenerator) UpdateParameters(params *nodeGroupParameters, n
 }
 
 func (g LocalSSDConfigGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec, systemLabels map[string]string, _ map[string]resource.Quantity) error {
+	if val, ok := systemLabels[labelLocalNvmeSsdBlockCount]; ok {
+		count, err := strconv.Atoi(val)
+		if err != nil {
+			return caerrors.NewAutoscalerErrorf(caerrors.InternalError, "invalid Local SSD block count passed: %s", val)
+		}
+		if count > 0 {
+			if spec.LocalSSDConfig == nil {
+				spec.LocalSSDConfig = &gkeclient.LocalSSDConfig{}
+			}
+			if spec.LocalSSDConfig.LocalNvmeSsdBlockConfig == nil {
+				spec.LocalSSDConfig.LocalNvmeSsdBlockConfig = &gke_api_beta.LocalNvmeSsdBlockConfig{}
+			}
+			spec.LocalSSDConfig.LocalNvmeSsdBlockConfig.LocalSsdCount = int64(count)
+			return nil
+		}
+	}
+
 	if val, ok := systemLabels[labelEphemeralLocalSsdDisksCount]; ok {
 		count, err := strconv.Atoi(val)
 		if err != nil {
@@ -3261,10 +3424,30 @@ func (g LocalSSDConfigGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec
 		if spec.LocalSSDConfig == nil {
 			spec.LocalSSDConfig = &gkeclient.LocalSSDConfig{}
 		}
-		if spec.LocalSSDConfig.EphemeralStorageConfig == nil {
-			spec.LocalSSDConfig.EphemeralStorageConfig = &gke_api_beta.EphemeralStorageConfig{}
+		_, useNewModeConfig := systemLabels[labelEphemeralStorageLocalSsdConfig]
+		var capGb int64
+		if capVal, hasCap := systemLabels[labelEphemeralLocalSsdCapacityGb]; hasCap {
+			capGb, err = strconv.ParseInt(capVal, 10, 64)
+			if err != nil {
+				return caerrors.NewAutoscalerErrorf(caerrors.InternalError, "invalid Local SSD ephemeral capacity passed: %s", capVal)
+			}
 		}
-		spec.LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount = int64(count)
+
+		if useNewModeConfig {
+			if spec.LocalSSDConfig.EphemeralStorageLocalSsdConfig == nil {
+				spec.LocalSSDConfig.EphemeralStorageLocalSsdConfig = &gke_api_beta.EphemeralStorageLocalSsdConfig{}
+			}
+			spec.LocalSSDConfig.EphemeralStorageLocalSsdConfig.LocalSsdCount = int64(count)
+			if capGb > 0 {
+				spec.LocalSSDConfig.EphemeralCapacityGb = capGb
+			}
+		} else {
+			if spec.LocalSSDConfig.EphemeralStorageConfig == nil {
+				spec.LocalSSDConfig.EphemeralStorageConfig = &gke_api_beta.EphemeralStorageConfig{}
+			}
+			spec.LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount = int64(count)
+		}
+
 		// Only add taints for Autopilot if ComputeClass is not enabled.
 		if _, exists := systemLabels[labelComputeClassRequired]; !exists && g.cloudProvider.IsAutopilotEnabled() {
 			if spec.Labels == nil {

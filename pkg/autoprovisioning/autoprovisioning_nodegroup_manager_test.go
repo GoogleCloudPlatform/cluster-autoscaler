@@ -56,6 +56,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	gkelocalssdsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/nodetemplate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
@@ -1574,7 +1575,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewSelfServiceGenerator(),
 		NewPodIsolationLabelGenerator(provider),
 		NewPodCapacityLabelGenerator(provider),
-		NewLocalSSDConfigGenerator(provider),
+		NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes)),
 		NewMultiNetworkingGenerator(nil),
 		NewSystemLabelsGenerator(slMatcher),
 		NewFlexStartGenerator(nil),

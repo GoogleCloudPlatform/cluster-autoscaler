@@ -74,6 +74,10 @@ const (
 	// InvalidLocalSSDCountForMachineTypeError means the local ssd count for the reservation is invalid.
 	InvalidLocalSSDCountForReservationError errors.AutoscalerErrorType = "invalidLocalSSDCountForReservationError"
 
+	// LocalSSDCountMismatchWithReservationError means an explicit local SSD
+	// count differs from the reservation's.
+	LocalSSDCountMismatchWithReservationError errors.AutoscalerErrorType = "localSSDCountMismatchWithReservationError"
+
 	// FlexStartMisconfiguredError means there were incompatible/missing node selectors present in pod requesting Flex Start provisioning model.
 	FlexStartMisconfiguredError errors.AutoscalerErrorType = "FlexStartMisconfiguredError"
 
@@ -168,6 +172,8 @@ func (e *Error) Error() string {
 		msg = fmt.Sprintf("Invalid localSSD count: %d for given machineType: %s, possible local ssd counts: %v", e.LocalSSDCount, e.MachineType, e.AllowedLocalSSDCounts)
 	case InvalidLocalSSDCountForReservationError:
 		msg = fmt.Sprintf("Reservation %s does not have enough local SSDs, reservation has %d, need %d", e.ReservationName, e.ReservationLocalSSDCount, e.LocalSSDCount)
+	case LocalSSDCountMismatchWithReservationError:
+		msg = fmt.Sprintf("Reservation %s local SSD count does not match requested count, reservation has %d, requested %d", e.ReservationName, e.ReservationLocalSSDCount, e.LocalSSDCount)
 	case FlexStartMisconfiguredError:
 		msg = fmt.Sprintf("pod has misconfigured Flex Start selectors: %s", e.FlexStartMisconfiguredReason)
 	case InvalidConfidentialNodeTypeError:
@@ -306,6 +312,13 @@ func NewInvalidLocalSSDCountForMachineTypeError(machineType string, localSSDCoun
 // caused by pod requesting local SSDs and reservation, but the reservation does not have sufficient number of local SSDs.
 func NewInvalidLocalSSDCountForReservationError(reservationName string, reservationLocalSSDCount int, localSSDCount int) errors.AutoscalerError {
 	return &Error{ErrType: InvalidLocalSSDCountForReservationError, ReservationName: reservationName, ReservationLocalSSDCount: reservationLocalSSDCount, LocalSSDCount: localSSDCount}
+}
+
+// NewLocalSSDCountMismatchWithReservationError is an instance of
+// AutoscalerError with LocalSSDCountMismatchWithReservationError caused by an
+// explicit local SSD count that differs from the reservation's local SSD count.
+func NewLocalSSDCountMismatchWithReservationError(reservationName string, reservationLocalSSDCount int, localSSDCount int) errors.AutoscalerError {
+	return &Error{ErrType: LocalSSDCountMismatchWithReservationError, ReservationName: reservationName, ReservationLocalSSDCount: reservationLocalSSDCount, LocalSSDCount: localSSDCount}
 }
 
 // NewFlexStartMisconfiguredError is an instance of AutoscalerError with FlexStartMisconfiguredError
