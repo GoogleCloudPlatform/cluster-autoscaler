@@ -50,6 +50,17 @@ type ruleConditionCheck interface {
 	conditionType() string
 }
 
+type nodeVersionRuleConditionCheck interface {
+	checkRuleWithNodeVersion(rule rules.Rule, nodeVersion string) *metav1.Condition
+}
+
+func runRuleCheck(ch ruleConditionCheck, rule rules.Rule, nodeVersion string) *metav1.Condition {
+	if nvCh, ok := ch.(nodeVersionRuleConditionCheck); ok {
+		return nvCh.checkRuleWithNodeVersion(rule, nodeVersion)
+	}
+	return ch.checkRule(rule)
+}
+
 const resourceManagerEndpoint = "cloudresourcemanager.googleapis.com:443"
 
 type CloudProvider interface {
@@ -134,7 +145,7 @@ func (e *Evaluator) setUpConditionCheckers() {
 		&machineTypeExistenceChecker{provider: e.provider},
 		&machineTypeConfigChecker{provider: e.provider},
 		&gpuConfigChecker{provider: e.provider},
-		&storageConfigChecker{provider: e.provider},
+		&storageConfigChecker{provider: e.provider, localSsdProvider: e.localSsdProvider},
 		&reservationConfigChecker{
 			rsvCache:                e.rsvCache,
 			localSsdProvider:        e.localSsdProvider,
@@ -190,7 +201,7 @@ func (e *Evaluator) validateNodeConfigRule(c crd.CRD) *metav1.Condition {
 			continue
 		}
 		for _, check := range e.ruleChecks {
-			if condition := check.checkRule(rule); condition != nil {
+			if condition := runRuleCheck(check, rule, c.NodeVersion()); condition != nil {
 				condition.Type = CrdMisconfiguredCondition
 				return condition
 			}
@@ -199,12 +210,12 @@ func (e *Evaluator) validateNodeConfigRule(c crd.CRD) *metav1.Condition {
 	return nil
 }
 
-// GetRuleConditions  returns conditions evaluated for provided CRD.
-func (e *Evaluator) GetRuleConditions(rule rules.Rule) []metav1.Condition {
+// GetRuleConditions returns conditions evaluated for a rule, using the parent CRD's nodeVersion.
+func (e *Evaluator) GetRuleConditions(rule rules.Rule, nodeVersion string) []metav1.Condition {
 	var result []metav1.Condition
 	seenTypes := make(map[string]bool)
 	for _, ch := range e.ruleChecks {
-		if ruleCondition := ch.checkRule(rule); ruleCondition != nil && !seenTypes[ruleCondition.Type] {
+		if ruleCondition := runRuleCheck(ch, rule, nodeVersion); ruleCondition != nil && !seenTypes[ruleCondition.Type] {
 			result = append(result, *ruleCondition)
 			seenTypes[ruleCondition.Type] = true
 		}

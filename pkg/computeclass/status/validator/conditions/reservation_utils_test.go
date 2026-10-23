@@ -29,6 +29,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"k8s.io/utils/ptr"
 )
 
 func TestReservationsCacheAddProject(t *testing.T) {
@@ -220,6 +221,10 @@ func TestMatchSpecificReservation(t *testing.T) {
 	defaultLocalSsdCount := 1
 	nonDefaultMachineType := "n2-standard-2"
 	nonDefaultMachineFamily := "n2"
+	z3HighMem88 := "z3-highmem-88"
+	z3Family := "z3"
+	z3FixedLocalSsdCount := 12
+	g2Standard4 := "g2-standard-4"
 
 	tests := map[string]struct {
 		reservation *gcereservation.Reservation
@@ -542,6 +547,125 @@ func TestMatchSpecificReservation(t *testing.T) {
 
 			wantError: nil,
 		},
+		"BlockModeOmittedCount_FixedLSSDMachine_Match": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				z3HighMem88,
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				reservations.BuildReservationLocalSSDs(defaultLocalSsdType, z3FixedLocalSsdCount*defaultLocalSsdSize),
+			),
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(&z3HighMem88),
+				rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+
+			wantError: nil,
+		},
+		"MixedModeOmittedCountWithMachineFamily_FixedLSSDMachine_Match": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				z3HighMem88,
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				reservations.BuildReservationLocalSSDs(defaultLocalSsdType, z3FixedLocalSsdCount*defaultLocalSsdSize),
+			),
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(&z3Family),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, ptr.To[int64](500)),
+			),
+
+			wantError: nil,
+		},
+		"BlockModeOmittedCount_ReservationWithoutLSSD_NoMatch": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				z3HighMem88,
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				/*localSsds=*/ nil,
+			),
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(&z3HighMem88),
+				rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+
+			wantError: fmt.Errorf("local SSD mismatch, requested %d GB NVME SSD, but it's missing from reservation", z3FixedLocalSsdCount*defaultLocalSsdSize),
+		},
+		"BlockModeOmittedCount_SingleAllowedMachineWithoutLSSD_NoMatch": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				g2Standard4,
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				/*localSsds=*/ nil,
+			),
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(&g2Standard4),
+				rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+
+			wantError: fmt.Errorf("local SSD mismatch: an explicit localSSDCount is required for %s", g2Standard4),
+		},
+		"EphemeralModeOmittedCount_SingleAllowedMachineWithoutLSSD_NoMatch": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				g2Standard4,
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				/*localSsds=*/ nil,
+			),
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(&g2Standard4),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+
+			wantError: fmt.Errorf("local SSD mismatch: an explicit localSSDCount is required for %s", g2Standard4),
+		},
+		"BlockModeOmittedCountWithMachineFamily_ConfigurableMachineWithoutLSSD_NoMatch": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				"c3-standard-4",
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				/*localSsds=*/ nil,
+			),
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(ptr.To("c3")),
+				rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+
+			wantError: errors.New("local SSD mismatch: an explicit localSSDCount is required for c3-standard-4"),
+		},
+		"EphemeralModeOmittedCountWithMachineFamily_ConfigurableMachineWithoutLSSD_NoMatch": {
+			reservation: reservations.BuildReservation(
+				"READY",
+				/*specificReservationRequired=*/ true,
+				defaultZone,
+				"c3-standard-4",
+				defaultMinCpuPlatform,
+				/*accelerators=*/ nil,
+				/*localSsds=*/ nil,
+			),
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(ptr.To("c3")),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+
+			wantError: errors.New("local SSD mismatch: an explicit localSSDCount is required for c3-standard-4"),
+		},
 	}
 
 	for testName, test := range tests {
@@ -557,6 +681,29 @@ func TestMatchSpecificReservation(t *testing.T) {
 			assert.Equal(t, test.wantError, gotError)
 		})
 	}
+}
+
+func TestMatchSpecificReservation_OmittedCountUnknownMachineType(t *testing.T) {
+	unknownMachineType := "unknown-standard-4"
+	reservation := reservations.BuildReservation(
+		"READY",
+		/*specificReservationRequired=*/ true,
+		"reservationZone",
+		unknownMachineType,
+		"reservationMinCpuPlatform",
+		/*accelerators=*/ nil,
+		/*localSsds=*/ nil,
+	)
+	rule := rules.NewRule(
+		rules.WithMachineTypeRule(&unknownMachineType),
+		rules.WithLocalNvmeSsdBlockConfigRule(nil),
+	)
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+
+	gotError := matchSpecificReservationOrError(provider, reservation, rule, localssdsize.NewSimpleLocalSSDProvider())
+	assert.ErrorContains(t, gotError, "unable to determine local SSD count for machine type unknown-standard-4")
 }
 
 func TestMatchAggregateReservation(t *testing.T) {

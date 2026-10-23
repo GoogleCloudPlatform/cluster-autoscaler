@@ -192,9 +192,9 @@ func (v *validator) validateRules(c crd.CRD) {
 		return
 	}
 	for idx, rule := range c.Rules() {
-		conditions := v.evaluator.GetRuleConditions(rule)
+		ruleConditions := v.evaluator.GetRuleConditions(rule, c.NodeVersion())
 		ruleIdx := fmt.Sprintf("%d", idx)
-		if v.updatesCh != nil && crd.AnyConditionsChanged(c.GetRuleCondition(ruleIdx), conditions, nil) {
+		if v.updatesCh != nil && crd.AnyConditionsChanged(c.GetRuleCondition(ruleIdx), ruleConditions, nil) {
 			status.TrySendRuleUpdate(v.updatesCh, status.UpdateMessage{
 				Id: status.CRDId{
 					CRDName:  c.Name(),
@@ -202,7 +202,7 @@ func (v *validator) validateRules(c crd.CRD) {
 				},
 				Mutate: func(s crd.CRDStatus) {
 					otherRuleConditions := v.getRuleConditionsAddedByOtherComponent(s.GetRuleConditions(ruleIdx))
-					newRuleConditions := append(otherRuleConditions, conditions...)
+					newRuleConditions := append(otherRuleConditions, ruleConditions...)
 					s.UpdateRuleConditions(ruleIdx, newRuleConditions)
 				},
 			}, ruleIdx)

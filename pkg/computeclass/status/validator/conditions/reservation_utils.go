@@ -156,10 +156,23 @@ func matchSpecificReservationOrError(
 	}
 
 	// Setup local SSDs mapping based on priority rule
+	lssdCount := rule.TotalLSSDCount()
+	ephemeralOrBlockMode := rule.EphemeralStorageLocalSsdEnabled() || rule.LocalNvmeSsdBlockEnabled()
+	if ephemeralOrBlockMode && rule.LocalSSDCountOmitted() {
+		fixedCount, isFixed, err := provider.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(machineType)
+		if err != nil {
+			return fmt.Errorf("unable to determine local SSD count for machine type %s: %v", machineType, err)
+		}
+		if !isFixed {
+			return fmt.Errorf("local SSD mismatch: an explicit localSSDCount is required for %s", machineType)
+		}
+		// Fixed count covers all attached disks, including dedicated swap.
+		lssdCount = fixedCount
+	}
 	localSSDSizes := map[string]int64{}
-	if rule.TotalLSSDCount() != 0 {
+	if lssdCount > 0 {
 		// Only NVME local ssds are supported to be configured for CCCs
-		localSSDSizes["NVME"] = int64(localSSDSizeProvider.SSDSizeInGiB(machineType)) * rule.TotalLSSDCount()
+		localSSDSizes["NVME"] = int64(localSSDSizeProvider.SSDSizeInGiB(machineType)) * lssdCount
 	}
 
 	// Setup accelerators mapping based on priority rule
