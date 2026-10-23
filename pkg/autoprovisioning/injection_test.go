@@ -58,6 +58,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	gkelocalssdsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/placement"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/preemption"
@@ -11781,11 +11782,48 @@ func TestNewLocalSSDCountGenerator_UpdateNodePoolSpec(t *testing.T) {
 			expectError:  nil,
 			expectConfig: &gkeclient.LocalSSDConfig{EphemeralStorageConfig: &gke_api_beta.EphemeralStorageConfig{LocalSsdCount: 2}},
 		},
+		{
+			name:   "Pure Block Mode Local SSD",
+			labels: map[string]string{labelLocalNvmeSsdBlockCount: "4"},
+			expectConfig: &gkeclient.LocalSSDConfig{
+				LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+					LocalSsdCount: 4,
+				},
+			},
+		},
+		{
+			name: "Mixed Mode Local SSD with Ephemeral Capacity",
+			labels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+			expectConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+				EphemeralCapacityGb: 200,
+			},
+			expectLabels: map[string]string{gkelabels.EphemeralLocalSsdLabel: gkelabels.EphemeralLocalSsdEnabledValue},
+		},
+		{
+			name: "Plain Ephemeral New-Mode Local SSD with Marker Label",
+			labels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+			expectConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+			},
+			expectLabels: map[string]string{gkelabels.EphemeralLocalSsdLabel: gkelabels.EphemeralLocalSsdEnabledValue},
+		},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes("g2-standard-2").WithAutopilotEnabled(true).Build()
-			generator := NewLocalSSDConfigGenerator(provider)
+			generator := NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes))
 			spec := &gkeclient.NodePoolSpec{}
 
 			err := generator.UpdateNodePoolSpec(spec, tc.labels, nil)
@@ -11802,6 +11840,1348 @@ func TestNewLocalSSDCountGenerator_UpdateNodePoolSpec(t *testing.T) {
 				if got, want := spec.Labels, tc.expectLabels; cmp.Diff(got, want) != "" {
 					t.Errorf("labels differ: %s", cmp.Diff(got, want))
 				}
+			}
+		})
+	}
+}
+
+func TestLocalSSDConfigGenerator_UpdateParameters(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	generator := NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes))
+
+	tests := []struct {
+		name        string
+		req         nodeGroupRequirements
+		machineType string
+		wantLabels  map[string]string
+		wantErrType caerrors.AutoscalerErrorType
+		wantErrMsg  string
+	}{
+		{
+			name: "block mode with omitted count on automatic machine type c3-standard-8-lssd",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "2",
+			},
+		},
+		{
+			name: "block mode with explicit count on configurable machine type n2-standard-4",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           4,
+			},
+			machineType: "n2-standard-4",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "4",
+			},
+		},
+		{
+			name: "block mode with omitted count on configurable machine type n2-standard-4 errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           0,
+			},
+			machineType: "n2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "mixed mode with omitted count on automatic machine type c3-standard-8-lssd",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "mixed mode with capacity exceeding total local SSD capacity errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             800, // 2 * 375 = 750
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "must be less than total Local SSD capacity",
+		},
+		{
+			name: "mixed mode with explicit count on configurable machine type n2-standard-4",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  4,
+				ephemeralStorageLocalSSDCount:   4,
+				ephemeralCapacityGb:             500, // 4 * 375 = 1500
+			},
+			machineType: "n2-standard-4",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralLocalSsdCapacityGb:    "500",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "mixed mode with omitted count on configurable machine type n2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  0,
+				ephemeralCapacityGb:             200,
+			},
+			machineType: "n2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "block mode with explicit count matching automatic count on c3-standard-8-lssd",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           2,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "2",
+			},
+		},
+		{
+			name: "block mode with explicit count mismatching automatic count on c3-standard-8-lssd errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           1, // c3-standard-8-lssd has 2
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "mixed mode with explicit count mismatching automatic count on c3-standard-8-lssd errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1,
+				ephemeralCapacityGb:             100,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with explicit count mismatching automatic count on c3-standard-8-lssd errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with omitted count on automatic machine type c3-standard-8-lssd",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with explicit count matching automatic count on c3-standard-8-lssd",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with omitted count on configurable machine type n2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  0,
+			},
+			machineType: "n2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		// Boundary tests on c3-standard-8-lssd (2 disks x 375 = 750 GB).
+		{
+			name: "mixed mode boundary check: capacity 750 on c3-standard-8-lssd errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             750,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "must be less than total Local SSD capacity",
+		},
+		{
+			name: "mixed mode boundary check: capacity 749 on c3-standard-8-lssd is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             749,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "749",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		// A4X partition-size tests (partition size is 3000, 4 disks = 12000 GB).
+		{
+			name: "mixed mode on a4x-highgpu-4g with 2000GiB capacity is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             2000,
+			},
+			machineType: "a4x-highgpu-4g",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralLocalSsdCapacityGb:    "2000",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "mixed mode on a4x-highgpu-4g with capacity equal to total capacity errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             12000,
+			},
+			machineType: "a4x-highgpu-4g",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "must be less than total Local SSD capacity",
+		},
+		// Single-allowed configurable machine type (g2-standard-4) requires
+		// explicit count (cannot adopt reservation count when omitted).
+		{
+			name: "mixed mode with omitted count on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "block mode with omitted count on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with omitted count on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "mixed mode with explicit count 1 on g2-standard-4 succeeds",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1,
+				ephemeralStorageLocalSSDCount:   1,
+				ephemeralCapacityGb:             200,
+			},
+			machineType: "g2-standard-4",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "1",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "block mode with explicit count 1 on g2-standard-4 succeeds",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           1,
+			},
+			machineType: "g2-standard-4",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "1",
+			},
+		},
+		{
+			name: "ephemeral storage config with explicit count 1 on g2-standard-4 succeeds",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1,
+			},
+			machineType: "g2-standard-4",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "1",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "block mode with omitted count and reservation with 1 LSSD on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				reservation: reservationRequirements{
+					name:           "test-rsv-g2",
+					totalLSSDCount: 1,
+				},
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "mixed mode with omitted count and reservation with 1 LSSD on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				reservation: reservationRequirements{
+					name:           "test-rsv-g2",
+					totalLSSDCount: 1,
+				},
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "block mode with omitted count and reservation with 2 LSSDs on c3-standard-8-lssd succeeds",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				reservation: reservationRequirements{
+					name:           "test-rsv-c3",
+					totalLSSDCount: 2,
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "2",
+			},
+		},
+		{
+			name: "mixed mode with omitted count and reservation with 2 LSSDs on c3-standard-8-lssd succeeds",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				reservation: reservationRequirements{
+					name:           "test-rsv-c3",
+					totalLSSDCount: 2,
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		// Reservation count handling and explicitlyRequiresLocalSSD.
+		{
+			name: "block mode with reservation count less than requested count errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           4,
+				reservation: reservationRequirements{
+					name:           "test-rsv",
+					totalLSSDCount: 2,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: LocalSSDCountMismatchWithReservationError,
+		},
+		{
+			name: "mixed mode with reservation count greater than explicit count errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				ephemeralCapacityGb:             500,
+				reservation: reservationRequirements{
+					name:           "test-rsv",
+					totalLSSDCount: 4,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: LocalSSDCountMismatchWithReservationError,
+		},
+		{
+			name: "block mode with explicitlyRequiresLocalSSD errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled:   true,
+				explicitlyRequiresLocalSSD: true,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "pod explicitly requires ephemeral local SSD, which is incompatible with pure block mode",
+		},
+		{
+			name: "mixed mode with explicitlyRequiresLocalSSD sets EphemeralLocalSsdLabel",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				explicitlyRequiresLocalSSD:      true,
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				gkelabels.EphemeralLocalSsdLabel:    gkelabels.EphemeralLocalSsdEnabledValue,
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		// Mixed mode: GKE sizes kube-reserved from the partition, so small
+		// capacities are valid.
+		{
+			name: "mixed mode with 4 disks and small capacity is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  4,
+				ephemeralStorageLocalSSDCount:   4,
+				ephemeralCapacityGb:             50,
+			},
+			machineType: "n2-standard-4",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralLocalSsdCapacityGb:    "50",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		// Swap profile tests in mixed mode and ephemeral mode.
+		{
+			name: "mixed mode with dedicated local SSD swap profile errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "dedicated Local SSD swap profile cannot be used with ephemeralStorageLocalSsdConfig.ephemeralCapacityGb (mixed Local SSD mode)",
+		},
+		{
+			name: "mixed mode with boot-disk swap profile is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						BootDiskProfile: &gkeclient.BootDiskProfile{
+							SwapSizeGib: 10,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "mixed mode with ephemeral-local-ssd swap profile is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				ephemeralCapacityGb:             200,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						EphemeralLocalSsdProfile: &gkeclient.EphemeralLocalSsdProfile{
+							SwapSizeGib: 10,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralLocalSsdCapacityGb:    "200",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config without capacity with dedicated local SSD swap profile is not rejected by mixed mode check",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "1",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with omitted count and dedicated swap 2 on a3-highgpu-8g resolves to 14",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			machineType: "a3-highgpu-8g",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "14",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with omitted count and dedicated swap 1 on c3-standard-8-lssd resolves to 1",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "1",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with explicit 14 and dedicated swap 2 on a3-highgpu-8g resolves to 14",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  16,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			machineType: "a3-highgpu-8g",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "14",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with explicit 16 and dedicated swap 2 on a3-highgpu-8g exceeds total 16 and errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  18,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			machineType: "a3-highgpu-8g",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with explicit 2 and dedicated swap 2 on configurable machine type n2-standard-8 is valid",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  4,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			machineType: "n2-standard-8",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with explicit count and swap yielding disallowed total on n2-standard-8 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  3,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "n2-standard-8",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config on c3-standard-8-lssd with omitted count and dedicated swap 2 errors (mode 0)",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "dedicated Local SSD swap disks",
+		},
+		{
+			name: "block mode with dedicated local SSD swap profile errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "dedicated Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)",
+		},
+		{
+			name: "block mode with ephemeral local SSD swap profile errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						EphemeralLocalSsdProfile: &gkeclient.EphemeralLocalSsdProfile{
+							SwapSizeGib: 10,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantErrType: caerrors.ConfigurationError,
+			wantErrMsg:  "ephemeral Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)",
+		},
+		{
+			name: "block mode with boot-disk swap profile is valid",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						BootDiskProfile: &gkeclient.BootDiskProfile{
+							SwapSizeGib: 10,
+						},
+					},
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "2",
+			},
+		},
+		{
+			name: "ephemeral storage config with omitted count, reservation total 4 and swap 1 on n2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  1, // swap disks only
+				reservation: reservationRequirements{
+					name:           "test-rsv",
+					totalLSSDCount: 4,
+				},
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "plain ephemeralStorageLocalSsdConfig with dedicated swap on configurable machine",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  4,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			machineType: "n2-standard-4",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "3",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "reservation with more LSSDs than explicit count in block mode errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           2,
+				reservation: reservationRequirements{
+					name:           "test-rsv-block",
+					totalLSSDCount: 4,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: LocalSSDCountMismatchWithReservationError,
+		},
+		{
+			name: "reservation with LSSD count equal to explicit count in block mode",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           4,
+				reservation: reservationRequirements{
+					name:           "test-rsv-block",
+					totalLSSDCount: 4,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "4",
+			},
+		},
+		{
+			name: "reservation with LSSDs and omitted count in block mode on configurable machine errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				reservation: reservationRequirements{
+					name:           "test-rsv-block",
+					totalLSSDCount: 4,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "reservation with more LSSDs than explicit count in mixed mode errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				ephemeralCapacityGb:             150,
+				reservation: reservationRequirements{
+					name:           "test-rsv-mixed",
+					totalLSSDCount: 4,
+				},
+			},
+			machineType: "n2-standard-4",
+			wantErrType: LocalSSDCountMismatchWithReservationError,
+		},
+		{
+			name: "ephemeral storage config with omitted count and reservation with 1 LSSD on g2-standard-4 errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				reservation: reservationRequirements{
+					name:           "test-rsv-g2",
+					totalLSSDCount: 1,
+				},
+			},
+			machineType: "g2-standard-4",
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with omitted count and reservation with 2 LSSDs on c3-standard-8-lssd succeeds",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				reservation: reservationRequirements{
+					name:           "test-rsv-c3",
+					totalLSSDCount: 2,
+				},
+			},
+			machineType: "c3-standard-8-lssd",
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "2",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params := &nodeGroupParameters{
+				systemLabels: make(map[string]string),
+			}
+			err := generator.UpdateParameters(params, tc.req, NodeGroupOptions{MachineType: tc.machineType})
+			if tc.wantErrType != "" || tc.wantErrMsg != "" {
+				if err == nil {
+					t.Fatalf("UpdateParameters() expected error, got nil")
+				}
+				if tc.wantErrType != "" {
+					asErr, ok := err.(caerrors.AutoscalerError)
+					if !ok {
+						t.Fatalf("UpdateParameters() error is not AutoscalerError: %v", err)
+					}
+					if asErr.Type() != tc.wantErrType {
+						t.Errorf("UpdateParameters() error type = %v, want %v", asErr.Type(), tc.wantErrType)
+					}
+				}
+				if tc.wantErrMsg != "" {
+					if !strings.Contains(err.Error(), tc.wantErrMsg) {
+						t.Errorf("UpdateParameters() error = %q, want substring %q", err.Error(), tc.wantErrMsg)
+					}
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("UpdateParameters() unexpected error: %v", err)
+				}
+				if diff := cmp.Diff(tc.wantLabels, params.systemLabels, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("UpdateParameters() systemLabels diff (-want +got):\n%s", diff)
+				}
+			}
+		})
+	}
+}
+
+func TestLocalSSDConfigGenerator_ReservationMismatch(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	generator := NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes))
+	pReq := &podrequirements.Requirements{
+		LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{}),
+	}
+	opt := NodeGroupOptions{
+		MachineType: "n2-standard-4",
+	}
+
+	testCases := []struct {
+		name                        string
+		req                         nodeGroupRequirements
+		wantErrFromUpdateReq        caerrors.AutoscalerError
+		wantErrFromUpdateParamsType caerrors.AutoscalerErrorType
+		wantLabels                  map[string]string
+		wantTotalLSSDCount          int
+	}{
+		{
+			name: "block mode with explicit count 2 and reservation 4 returns mismatch error",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           2,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateReq: NewLocalSSDCountMismatchWithReservationError("res-1", 4, 2),
+		},
+		{
+			name: "block mode with explicit count 8 and reservation 4 returns mismatch error",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           8,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateReq: NewLocalSSDCountMismatchWithReservationError("res-1", 4, 8),
+		},
+		{
+			name: "block mode with explicit count 4 and reservation 4 succeeds",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           4,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "4",
+			},
+		},
+		{
+			name: "block mode with omitted count and reservation 4 on configurable machine errors",
+			req: nodeGroupRequirements{
+				localNvmeSsdBlockEnabled: true,
+				totalLSSDCount:           0,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateParamsType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "ephemeral storage config with explicit count 2 and reservation 4 returns mismatch error",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  2,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateReq: NewLocalSSDCountMismatchWithReservationError("res-1", 4, 2),
+		},
+		{
+			name: "ephemeral storage config with explicit count 8 and reservation 4 returns mismatch error",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  8,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateReq: NewLocalSSDCountMismatchWithReservationError("res-1", 4, 8),
+		},
+		{
+			name: "ephemeral storage config with explicit count 4 and reservation 4 succeeds",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  4,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name: "ephemeral storage config with omitted count and reservation 4 on configurable machine errors",
+			req: nodeGroupRequirements{
+				ephemeralStorageLocalSsdEnabled: true,
+				totalLSSDCount:                  0,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantErrFromUpdateParamsType: InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name: "legacy path with explicit count 2 and reservation 4 still upsizes to 4",
+			req: nodeGroupRequirements{
+				totalLSSDCount: 2,
+				reservation: reservationRequirements{
+					name:           "res-1",
+					totalLSSDCount: 4,
+				},
+			},
+			wantTotalLSSDCount: 4,
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount: "4",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			reqCopy := tc.req
+			reqErr := generator.UpdateRequirements(&reqCopy, pReq, machinetypes.GpuRequest{}, TpuRequest{})
+			if tc.wantErrFromUpdateReq != nil {
+				if reqErr == nil {
+					t.Fatalf("UpdateRequirements() expected error %v, got nil", tc.wantErrFromUpdateReq)
+				}
+				if diff := cmp.Diff(tc.wantErrFromUpdateReq.Error(), reqErr.Error()); diff != "" {
+					t.Errorf("UpdateRequirements() error mismatch (-want +got):\n%s", diff)
+				}
+				return
+			}
+			if reqErr != nil {
+				t.Fatalf("UpdateRequirements() unexpected error: %v", reqErr)
+			}
+			if tc.wantTotalLSSDCount > 0 && reqCopy.totalLSSDCount != tc.wantTotalLSSDCount {
+				t.Errorf("UpdateRequirements() set totalLSSDCount = %d, want %d", reqCopy.totalLSSDCount, tc.wantTotalLSSDCount)
+			}
+
+			params := &nodeGroupParameters{
+				systemLabels: make(map[string]string),
+			}
+			paramErr := generator.UpdateParameters(params, reqCopy, opt)
+			if tc.wantErrFromUpdateParamsType != "" {
+				if paramErr == nil {
+					t.Fatalf("UpdateParameters() expected error type %s, got nil", tc.wantErrFromUpdateParamsType)
+				}
+				asErr, ok := paramErr.(caerrors.AutoscalerError)
+				if !ok {
+					t.Fatalf("UpdateParameters() error is not AutoscalerError: %v", paramErr)
+				}
+				if asErr.Type() != tc.wantErrFromUpdateParamsType {
+					t.Fatalf("UpdateParameters() error type = %s, want %s (err: %v)", asErr.Type(), tc.wantErrFromUpdateParamsType, paramErr)
+				}
+				return
+			}
+			if paramErr != nil {
+				t.Fatalf("UpdateParameters() unexpected error: %v", paramErr)
+			}
+			if diff := cmp.Diff(tc.wantLabels, params.systemLabels, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("UpdateParameters() systemLabels diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestNodeGroupRequirements_Signature_DiffersOnLocalNvmeSsdBlockEnabled(t *testing.T) {
+	req1 := nodeGroupRequirements{
+		localNvmeSsdBlockEnabled: true,
+	}
+	req2 := nodeGroupRequirements{
+		localNvmeSsdBlockEnabled: false,
+	}
+	assert.NotEqual(t, req1.signature(), req2.signature())
+}
+
+func TestLocalSSDConfigGenerator_ResolveNewModeLSSDCount(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	generator := NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes))
+
+	testCases := []struct {
+		name               string
+		machineType        string
+		req                nodeGroupRequirements
+		wantErrType        caerrors.AutoscalerErrorType
+		wantEphemeralDisks int
+	}{
+		{
+			name:        "explicit ephemeral count excludes dedicated swap disks",
+			machineType: "n2-standard-4",
+			req: nodeGroupRequirements{
+				totalLSSDCount:                4,
+				ephemeralStorageLocalSSDCount: 2,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			wantEphemeralDisks: 2,
+		},
+		{
+			name:        "omitted ephemeral count on fixed machine type subtracts dedicated swap disks from effective count",
+			machineType: "a2-ultragpu-8g",
+			req: nodeGroupRequirements{
+				totalLSSDCount:                2,
+				ephemeralStorageLocalSSDCount: 0,
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			wantEphemeralDisks: 6, // 8 - 2
+		},
+		{
+			name:        "fixed machine reservation total count with omitted count subtracts dedicated swap disks",
+			machineType: "a2-ultragpu-8g",
+			req: nodeGroupRequirements{
+				totalLSSDCount:                2, // swap disks only
+				ephemeralStorageLocalSSDCount: 0,
+				reservation: reservationRequirements{
+					name:           "test-rsv",
+					totalLSSDCount: 8,
+				},
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 2,
+						},
+					},
+				},
+			},
+			wantEphemeralDisks: 6, // 8 - 2
+		},
+		{
+			name:        "configurable machine with omitted count and reservation errors",
+			machineType: "n2-standard-4",
+			req: nodeGroupRequirements{
+				totalLSSDCount:                1, // swap disks only
+				ephemeralStorageLocalSSDCount: 0,
+				reservation: reservationRequirements{
+					name:           "test-rsv",
+					totalLSSDCount: 4,
+				},
+				linuxNodeConfig: &gkeclient.LinuxNodeConfig{
+					SwapConfig: &gkeclient.SwapConfig{
+						Enabled: true,
+						DedicatedLocalSsdProfile: &gkeclient.DedicatedLocalSsdProfile{
+							DiskCount: 1,
+						},
+					},
+				},
+			},
+			wantErrType: InvalidLocalSSDCountForMachineTypeError,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := generator.resolveNewModeLSSDCount(tc.req, tc.machineType)
+			if tc.wantErrType != "" {
+				if err == nil {
+					t.Fatalf("resolveNewModeLSSDCount() expected error type %s, got nil", tc.wantErrType)
+				}
+				asErr, ok := err.(caerrors.AutoscalerError)
+				if !ok {
+					t.Fatalf("resolveNewModeLSSDCount() error is not AutoscalerError: %v", err)
+				}
+				if asErr.Type() != tc.wantErrType {
+					t.Fatalf("resolveNewModeLSSDCount() error type = %s, want %s (err: %v)", asErr.Type(), tc.wantErrType, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveNewModeLSSDCount() unexpected error: %v", err)
+			}
+			if got != tc.wantEphemeralDisks {
+				t.Errorf("resolveNewModeLSSDCount() = %v, want %v", got, tc.wantEphemeralDisks)
+			}
+		})
+	}
+}
+
+func TestLocalSSDConfigGenerator_OmittedCountWithSteeredReservation(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithAutoprovisioningEnabled(true).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+
+	localSSDs4 := append(
+		append(reservations.BuildReservationLocalSSDs("NVME", 375), reservations.BuildReservationLocalSSDs("NVME", 375)...),
+		append(reservations.BuildReservationLocalSSDs("NVME", 375), reservations.BuildReservationLocalSSDs("NVME", 375)...)...,
+	)
+	resWith4LSSDs := reservations.BuildReservation(
+		"READY",
+		/*specificReservationRequired=*/ true,
+		"https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a",
+		"n2-standard-4",
+		"",
+		nil,
+		localSSDs4,
+	)
+	resWith4LSSDs.ID = 1
+	resWith4LSSDs.Name = "res-lssd-4"
+	resWith4LSSDs.SelfLink = "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a/reservations/res-lssd-4"
+
+	localSSDs2 := append(reservations.BuildReservationLocalSSDs("NVME", 375), reservations.BuildReservationLocalSSDs("NVME", 375)...)
+	resWith2LSSDC3 := reservations.BuildReservation(
+		"READY",
+		/*specificReservationRequired=*/ true,
+		"https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a",
+		"c3-standard-8-lssd",
+		"",
+		nil,
+		localSSDs2,
+	)
+	resWith2LSSDC3.ID = 2
+	resWith2LSSDC3.Name = "res-lssd-c3"
+	resWith2LSSDC3.SelfLink = "https://www.googleapis.com/compute/v1/projects/12345/zones/us-central1-a/reservations/res-lssd-c3"
+
+	reservationsPuller := reservations.NewTestingReservationsPuller("12345", nil, []*reservation.Reservation{resWith4LSSDs, resWith2LSSDC3})
+	em := experiments.NewMockManager(experiments.SliceOfHardwareReservationSteerLocalSSDFlag)
+
+	optsTracker := tracking.TestOptionsTracker(options.AutoscalingOptions{
+		InternalOptions: internalopts.InternalOptions{
+			SpecificTypeReservationMatchEnabled:        true,
+			SpecificTypeReservationWithoutMatchEnabled: true,
+		},
+	}, gkeclient.Cluster{}, em)
+	resGen := NewReservationGenerator(reservationsPuller, ReservationFlags{
+		SpecificTypeReservationsEnabled:     true,
+		SpecificTypeReservationMatchEnabled: true,
+	}, "12345", em, nil, optsTracker)
+	lssdGen := NewLocalSSDConfigGenerator(provider, gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes))
+
+	basePod := testPodCPUMem("test-pod", 100, 100)
+	basePod.UID = "pod-uid"
+	basePod.Spec.NodeSelector = map[string]string{
+		gkelabels.ComputeClassLabel: "test-cc",
+	}
+
+	testCases := []struct {
+		name            string
+		reservationName string
+		machineFamily   machinetypes.MachineFamily
+		machineType     string
+		ruleOption      rules.RuleOption
+		wantUpdateErr   caerrors.AutoscalerErrorType
+		wantParamErr    caerrors.AutoscalerErrorType
+		wantLabels      map[string]string
+	}{
+		{
+			name:            "configurable machine with omitted block count and steered 4-LSSD reservation errors",
+			reservationName: "res-lssd-4",
+			machineFamily:   machinetypes.N2,
+			machineType:     "n2-standard-4",
+			ruleOption:      rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			wantParamErr:    InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name:            "configurable machine with omitted ephemeral count and steered 4-LSSD reservation errors",
+			reservationName: "res-lssd-4",
+			machineFamily:   machinetypes.N2,
+			machineType:     "n2-standard-4",
+			ruleOption:      rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			wantParamErr:    InvalidLocalSSDCountForMachineTypeError,
+		},
+		{
+			name:            "configurable machine with explicit block count 2 != steered 4-LSSD reservation errors",
+			reservationName: "res-lssd-4",
+			machineFamily:   machinetypes.N2,
+			machineType:     "n2-standard-4",
+			ruleOption:      rules.WithLocalNvmeSsdBlockConfigRule(ptr.To(2)),
+			wantUpdateErr:   LocalSSDCountMismatchWithReservationError,
+		},
+		{
+			name:            "configurable machine with explicit block count 4 matching steered reservation succeeds",
+			reservationName: "res-lssd-4",
+			machineFamily:   machinetypes.N2,
+			machineType:     "n2-standard-4",
+			ruleOption:      rules.WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "4",
+			},
+		},
+		{
+			name:            "configurable machine with explicit ephemeral count 4 matching steered reservation succeeds",
+			reservationName: "res-lssd-4",
+			machineFamily:   machinetypes.N2,
+			machineType:     "n2-standard-4",
+			ruleOption:      rules.WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), nil),
+			wantLabels: map[string]string{
+				labelEphemeralLocalSsdDisksCount:    "4",
+				labelEphemeralStorageLocalSsdConfig: "true",
+			},
+		},
+		{
+			name:            "fixed machine with omitted block count and steered 2-LSSD reservation succeeds",
+			reservationName: "res-lssd-c3",
+			machineFamily:   machinetypes.C3,
+			machineType:     "c3-standard-8-lssd",
+			ruleOption:      rules.WithLocalNvmeSsdBlockConfigRule(nil),
+			wantLabels: map[string]string{
+				labelLocalNvmeSsdBlockCount: "2",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ccRule := rules.NewRule(
+				rules.WithReservationsRule(rules.NewReservation().WithReservationName(tc.reservationName).WithReservationProject("12345").WithReservationPath(tc.reservationName)),
+				tc.ruleOption,
+			)
+			cc := computeclass.NewTestCrd(
+				computeclass.WithName("test-cc"),
+				computeclass.WithRules([]rules.Rule{ccRule}),
+				computeclass.WithAutoprovisioningEnabled(),
+				computeclass.WithLabel(gkelabels.ComputeClassLabel),
+			)
+
+			ccGen := NewComputeClassGenerator(provider, nil, false, false, em)
+
+			pReq := &podrequirements.Requirements{
+				LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{}),
+			}
+
+			baseReq := nodeGroupRequirements{
+				pods:                     []*apiv1.Pod{basePod},
+				machineSpec:              machinetypes.NewMachineSpecSingleFamily(tc.machineFamily, machinetypes.AnyPlatform, "", ""),
+				machineSelectionType:     machinetypes.SelectionTypeSpecified,
+				workloadSeparationTaints: []apiv1.Taint{},
+				workloadSeparationLabels: map[string]string{},
+				systemLabels:             map[string]string{},
+			}
+
+			reqs := ccGen.generateRuleRequirements(baseReq, cc, ccRule)
+			reqs, resErr := resGen.GenerateNodeGroupRequirements(reqs, pReq)
+			if resErr != nil {
+				t.Fatalf("ReservationGenerator.GenerateNodeGroupRequirements() unexpected error: %v", resErr)
+			}
+			if len(reqs) != 1 {
+				t.Fatalf("GenerateNodeGroupRequirements() returned %d requirements, want 1", len(reqs))
+			}
+
+			updateErr := lssdGen.UpdateRequirements(&reqs[0], pReq, machinetypes.GpuRequest{}, TpuRequest{})
+			if tc.wantUpdateErr != "" {
+				if updateErr == nil {
+					t.Fatalf("UpdateRequirements() expected error type %s, got nil", tc.wantUpdateErr)
+				}
+				if updateErr.Type() != tc.wantUpdateErr {
+					t.Fatalf("UpdateRequirements() error type = %s, want %s (err: %v)", updateErr.Type(), tc.wantUpdateErr, updateErr)
+				}
+				return
+			}
+			if updateErr != nil {
+				t.Fatalf("UpdateRequirements() unexpected error: %v", updateErr)
+			}
+
+			params := &nodeGroupParameters{
+				systemLabels: make(map[string]string),
+			}
+			opt := NodeGroupOptions{MachineType: tc.machineType}
+			paramErr := lssdGen.UpdateParameters(params, reqs[0], opt)
+			if tc.wantParamErr != "" {
+				if paramErr == nil {
+					t.Fatalf("UpdateParameters() expected error type %s, got nil", tc.wantParamErr)
+				}
+				asErr, ok := paramErr.(caerrors.AutoscalerError)
+				if !ok {
+					t.Fatalf("UpdateParameters() error is not AutoscalerError: %v", paramErr)
+				}
+				if asErr.Type() != tc.wantParamErr {
+					t.Fatalf("UpdateParameters() error type = %s, want %s (err: %v)", asErr.Type(), tc.wantParamErr, paramErr)
+				}
+				return
+			}
+			if paramErr != nil {
+				t.Fatalf("UpdateParameters() unexpected error: %v", paramErr)
+			}
+			if diff := cmp.Diff(tc.wantLabels, params.systemLabels, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("UpdateParameters() systemLabels diff (-want +got):\n%s", diff)
 			}
 		})
 	}

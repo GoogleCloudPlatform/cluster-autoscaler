@@ -234,6 +234,7 @@ func initAutoprovisioningProcessors(
 		ResizableMachineTypesProvider:    resizableMachineTypesProvider,
 		MaxAutoprovisionedNodeGroupCount: options.MaxAutoprovisionedNodeGroupCount,
 		MutationInjector:                 mutationInjector,
+		LocalSSDSizeProvider:             options.GCEOptions.LocalSSDDiskSizeProvider,
 		Flags: autoprovisioning.AutoprovisioningNodeGroupManagerFlags{
 			ProvisioningLabelEnabled:   options.ProvisioningLabelEnabled,
 			TpuAutoprovisioningEnabled: options.TpuAutoprovisioningEnabled,
