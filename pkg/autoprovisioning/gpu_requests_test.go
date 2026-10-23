@@ -816,7 +816,7 @@ func TestGpuPodsRequirements(t *testing.T) {
 			lister := computeclass_lister.NewMockCrdLister(tc.computeClasses)
 			lister.SetCrdLabel(labels.ComputeClassLabel)
 			em := experiments.NewMockManager()
-			opts := AutoprovisioningNodeGroupManagerOptions{CloudProvider: provider, Lister: lister, Flags: AutoprovisioningNodeGroupManagerFlags{}, ExperimentsManager: em, OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em), ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{}}
+			opts := AutoprovisioningNodeGroupManagerOptions{CloudProvider: provider, Lister: lister, Flags: AutoprovisioningNodeGroupManagerFlags{}, ExperimentsManager: em, OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em), ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{}}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
 			ctx := &injectionContext{
 				status:          NewProcessingStatus(),
@@ -931,7 +931,7 @@ func TestAutoprovisioningNodeGroupManager_maxCpuMachineForGpuRequest(t *testing.
 			opts := AutoprovisioningNodeGroupManagerOptions{
 				CloudProvider:        provider,
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ExperimentsManager:   em,
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -1382,7 +1382,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 				PodLister:          kubernetes.NewTestPodLister([]*apiv1.Pod{tc.pod}),
 				Lister:             computeClassLister,
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationMatchEnabled:        tc.reservationEnabled,
 						SpecificTypeReservationWithoutMatchEnabled: tc.reservationEnabled,

@@ -838,7 +838,7 @@ func TestTpuPodsRequirements(t *testing.T) {
 					TpuAutoprovisioningEnabled: true,
 				},
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 			ctx := &injectionContext{

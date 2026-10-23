@@ -2008,7 +2008,7 @@ func TestOrchestrator_ScaleUp(t *testing.T) {
 				em := experiments.NewMockManager()
 				processors.NodeGroupManager = autoprovisioning.NewAutoprovisioningNodeGroupManager(autoprovisioning.AutoprovisioningNodeGroupManagerOptions{
 					CloudProvider:      gke.NewTestAutoprovisioningCloudProviderBuilder().WithMachineTypes(defaultMachineTypes...).WithAutoprovisioningEnabled(true).Build(),
-					OptionsTracker:     tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+					OptionsTracker:     tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 					ExperimentsManager: em,
 				})
 			}

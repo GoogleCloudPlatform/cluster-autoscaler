@@ -818,7 +818,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		machineConfigProvider:    machinetypes.NewMachineConfigProvider(nil),
 		localSSDDiskSizeProvider: gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 		gkeMetrics:               internalmetrics.Metrics,
-		optsTracker:              optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
+		optsTracker:              optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	if regional {
 		manager.location = region
@@ -2603,7 +2603,7 @@ func TestCreateInstances_WithRecommendation(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -2633,7 +2633,7 @@ func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -2662,7 +2662,7 @@ func TestCreateInstances_WithRecommendation_ZeroValueStruct(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -5317,7 +5317,7 @@ func TestScaleDownUnreadyTimeOverride(t *testing.T) {
 
 	for tcName, tc := range tests {
 		t.Run(tcName, func(t *testing.T) {
-			manager := gkeManagerImpl{optsTracker: optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, tc.experimentsManager)}
+			manager := gkeManagerImpl{optsTracker: optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, tc.experimentsManager)}
 
 			gotUnreadyTime, found := manager.ScaleDownUnreadyTimeOverride(tc.mig)
 			if tc.wantScaleDownUnreadyTime == nil {
@@ -5890,7 +5890,7 @@ func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 					experiments.CapacityCheckWaitTimeSecondsFlexValueMultiHostTpuFlag:    tc.flexTpuValueOverrideExp,
 					experiments.CapacityCheckWaitTimeSecondsNonFlexValueMultiHostTpuFlag: tc.nonFlexTpuValueOverrideExp,
 				})
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+			g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 			tc.mig.gceRef = gce.GceRef{Name: fmt.Sprintf("mig-%d", i)}
 
@@ -6686,7 +6686,7 @@ func TestGetMaxNodeProvisioningTimeOverride(t *testing.T) {
 
 			addDefaultListMigsMocks(server, g.cache)
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, tc.experimentFlags)
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+			g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 			mig := NewTestGkeMigBuilder().SetSpec(tc.spec).SetQueuedProvisioning(tc.queued).Build()
 			overrideValue, hasOverride := g.GetMaxNodeProvisioningTimeOverride(mig)

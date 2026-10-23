@@ -3311,7 +3311,7 @@ func testOptionsTracker(modifier func(opts *internalopts.InternalOptions)) *opts
 		modifier(&opts)
 	}
 
-	return optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{
+	return optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{
 		InternalOptions: opts,
 	}, gkeclient.Cluster{}, experiments.NewMockManager())
 }
@@ -3569,12 +3569,12 @@ func TestNewPccCrd(t *testing.T) {
 	performancePcc, err := machinetypes.ToPredefinedComputeClass("Performance")
 	assert.NoError(t, err)
 
-	enabledTracker := optstracking.FakeOptionsTracker(
+	enabledTracker := optstracking.TestOptionsTracker(
 		internalopts.AutoscalingOptions{},
 		gkeclient.Cluster{},
 		experiments.NewMockManager(experiments.PayPerPodFleetEfficiencyMinCAVersionFlag),
 	)
-	disabledTracker := optstracking.FakeOptionsTracker(
+	disabledTracker := optstracking.TestOptionsTracker(
 		internalopts.AutoscalingOptions{},
 		gkeclient.Cluster{},
 		experiments.NewMockManager(),
@@ -3629,12 +3629,12 @@ func TestNewPccCrd(t *testing.T) {
 }
 
 func TestPodFamilyAllocationStrategyDefaulting(t *testing.T) {
-	enabledTracker := optstracking.FakeOptionsTracker(
+	enabledTracker := optstracking.TestOptionsTracker(
 		internalopts.AutoscalingOptions{},
 		gkeclient.Cluster{},
 		experiments.NewMockManager(experiments.PayPerPodFleetEfficiencyMinCAVersionFlag),
 	)
-	disabledTracker := optstracking.FakeOptionsTracker(
+	disabledTracker := optstracking.TestOptionsTracker(
 		internalopts.AutoscalingOptions{},
 		gkeclient.Cluster{},
 		experiments.NewMockManager(),

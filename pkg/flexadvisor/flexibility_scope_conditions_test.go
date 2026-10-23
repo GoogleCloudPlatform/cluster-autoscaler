@@ -265,7 +265,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				}
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider(allZones, []*gke.GkeMig{mig1}, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 				mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, labels.ComputeClassLabel)
 				updatesCh := make(chan status.UpdateMessage, 10)
 

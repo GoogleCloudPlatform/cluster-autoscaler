@@ -1513,7 +1513,7 @@ func TestNodeGroupParameters(t *testing.T) {
 					EnableComputeClassMinCapacity: !tc.disableComputeClassMinCapacity,
 				},
 				ExperimentsManager: em,
-				OptionsTracker:     tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:     tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 			}
 			m := NewAutoprovisioningNodeGroupManager(opts)
 			gotParams, err := m.getNodeGroupParameters(tc.requirements, tc.options)
@@ -1678,7 +1678,7 @@ func TestNonGpuPodsRequirements(t *testing.T) {
 				CloudProvider:        provider,
 				Lister:               lister,
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 			ctx := &injectionContext{status: NewProcessingStatus()}
@@ -2708,7 +2708,7 @@ func TestComputePossibleRequirements(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -6293,7 +6293,7 @@ func TestExtendedDurationPodGeneratorDynamicOptionsUpdate(t *testing.T) {
 		WithAutopilotEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
-	optionsTracker := optstracking.FakeOptionsTracker(
+	optionsTracker := optstracking.TestOptionsTracker(
 		internalopts.AutoscalingOptions{},
 		gkeclient.Cluster{ClusterVersion: "1.30.0-gke.100"},
 		experiments.NewMockManager(),
@@ -7408,7 +7408,7 @@ func TestValidateRequirements(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -8079,7 +8079,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 				CloudProvider:      provider,
 				ReservationsPuller: reservationsPuller,
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationMatchEnabled:        tc.enableReservationMatch,
 						SpecificTypeReservationWithoutMatchEnabled: !tc.disableSpecificTypeReservations,
@@ -10284,7 +10284,7 @@ func TestComputePossibleRequirementsWithSecondaryBootDisksCC(t *testing.T) {
 					TpuAutoprovisioningEnabled: true,
 				},
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 
@@ -11528,7 +11528,7 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -13161,7 +13161,7 @@ func TestInjectNodeGroups(t *testing.T) {
 				CloudProvider:        provider,
 				Lister:               computeClassLister,
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				Backoff:              &MockCompositeBackoff{},
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 				Flags: AutoprovisioningNodeGroupManagerFlags{
