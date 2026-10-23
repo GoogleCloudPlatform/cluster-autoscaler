@@ -35,8 +35,9 @@ const (
 	evictionHardForKubelet    = "memory<100Mi,ephemeral-storage<10%"
 	defaultOS                 = "linux"
 	defaultOSDistribution     = "cos"
-	defaultArch               = "amd64"
 )
+
+var defaultMachineConfigProvider = machinetypes.NewMachineConfigProvider(nil)
 
 // buildInstanceTemplateFromRequest constructs a GCE InstanceTemplate from a GKE NodePool request.
 // It maps the GKE NodePool configuration (e.g., machine type, disk size, labels, taints, accelerators)
@@ -65,7 +66,7 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 	commonEnvVars := []string{
 		fmt.Sprintf("os=%s", defaultOS),
 		fmt.Sprintf("os_distribution=%s", defaultOSDistribution),
-		fmt.Sprintf("arch=%s", defaultArch),
+		fmt.Sprintf("arch=%s", systemArchitecture(machineType)),
 		fmt.Sprintf("node_labels=%s", kubeLabelsStr),
 		fmt.Sprintf("node_taints=%s", taintsStr),
 		fmt.Sprintf("kube_reserved=%s", defaultKubeReserved),
@@ -155,6 +156,19 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 	}, nil
 }
 
+// systemArchitecture returns the system architecture (e.g. amd64, arm64) of the machine type's family, as
+// advertised in the AUTOSCALER_ENV_VARS of the kube-env. Unknown machine types default to amd64.
+func systemArchitecture(machineType string) string {
+	family, err := defaultMachineConfigProvider.GetMachineFamilyFromMachineName(machineType)
+	if err != nil {
+		return gceinternal.DefaultArch.Name()
+	}
+	if arch := family.SystemArchitecture(); arch != gceinternal.UnknownArch {
+		return arch.Name()
+	}
+	return gceinternal.DefaultArch.Name()
+}
+
 func buildKubeLabels(np *gkeapibeta.NodePool, zone string, accelerators []*gcev1.AcceleratorConfig) map[string]string {
 	config := np.Config
 	kubeLabels := map[string]string{
@@ -198,8 +212,7 @@ func buildAccelerators(config *gkeapibeta.NodeConfig) ([]*gcev1.AcceleratorConfi
 		})
 	}
 	if len(accelerators) == 0 {
-		mcp := machinetypes.NewMachineConfigProvider(nil)
-		mtInfo, err := mcp.ToMachineType(config.MachineType)
+		mtInfo, err := defaultMachineConfigProvider.ToMachineType(config.MachineType)
 		if err == nil {
 			if mtInfo.HasFixedGPU() {
 				accelerators = append(accelerators, &gcev1.AcceleratorConfig{

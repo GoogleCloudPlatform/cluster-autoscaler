@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	apiv1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
@@ -52,9 +53,20 @@ func stockOutError() cloudprovider.InstanceErrorInfo {
 // PrimeFlexAdvisorCache primes FlexAdvisor cache by adding a temporary pod that triggers registration but cannot schedule.
 func PrimeFlexAdvisorCache(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, infra *integration.TestInfrastructure, cccName string) {
 	t.Helper()
-	tmpPod := tu.BuildTestPod("temporary-pod", 100, 100, tu.MarkUnschedulable())
+	var podOptions []func(*apiv1.Pod)
 	if cccName != "" {
-		pod.WithCCC(cccName)(tmpPod)
+		podOptions = append(podOptions, pod.WithCCC(cccName))
+	}
+	PrimeFlexAdvisorCacheForPod(ctx, t, autoscaler, infra, podOptions...)
+}
+
+// PrimeFlexAdvisorCacheForPod primes FlexAdvisor cache by adding a temporary pod, customized with the given options
+// (e.g. compute class selector, architecture selector), that triggers flexibility scope registration but cannot schedule.
+func PrimeFlexAdvisorCacheForPod(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, infra *integration.TestInfrastructure, podOptions ...func(*apiv1.Pod)) {
+	t.Helper()
+	tmpPod := tu.BuildTestPod("temporary-pod", 100, 100, tu.MarkUnschedulable())
+	for _, option := range podOptions {
+		option(tmpPod)
 	}
 	// Add an invalid node selector to ensure it doesn't match any node group.
 	pod.WithNodeSelectorEntry("invalid-selector", "true")(tmpPod)
