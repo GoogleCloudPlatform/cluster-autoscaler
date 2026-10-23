@@ -38,21 +38,30 @@ type StorageRule interface {
 	BootDiskKMSKey() string
 	EphemerslStorageLSSDCount() int
 	TotalLSSDCount() int64
+	LocalSSDCountOmitted() bool
 	SecondaryBootDisks() []*gke_api_beta.SecondaryBootDisk
 	BootDiskStoragePools() []string
 	BootDiskProvisionedIops() int64
 	BootDiskProvisionedThroughput() int64
+	EphemeralCapacityGb() *int64
+	LocalNvmeSsdBlockEnabled() bool
+	EphemeralStorageLocalSsdEnabled() bool
+	SwapDedicatedLSSDCount() int64
 }
 
 type storageRule struct {
-	bootDiskType                  *string
-	bootDiskSize                  *int
-	bootDiskKMSKey                *string
-	ephemeralStorageLSSDCount     *int
-	secondaryBootDisks            []*gke_api_beta.SecondaryBootDisk
-	bootDiskStoragePools          []string
-	bootDiskProvisionedIops       *int64
-	bootDiskProvisionedThroughput *int64
+	bootDiskType                    *string
+	bootDiskSize                    *int
+	bootDiskKMSKey                  *string
+	ephemeralStorageLSSDCount       *int
+	secondaryBootDisks              []*gke_api_beta.SecondaryBootDisk
+	bootDiskStoragePools            []string
+	bootDiskProvisionedIops         *int64
+	bootDiskProvisionedThroughput   *int64
+	ephemeralCapacityGb             *int64
+	localNvmeSsdBlockCount          *int
+	localNvmeSsdBlockEnabled        bool
+	ephemeralStorageLocalSsdEnabled bool
 }
 
 // Matches returns true if the nodegroup is within one of the nodepools.
@@ -67,6 +76,8 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 		r.bootDiskSize == nil &&
 		r.bootDiskKMSKey == nil &&
 		r.ephemeralStorageLSSDCount == nil &&
+		!r.localNvmeSsdBlockEnabled &&
+		!r.ephemeralStorageLocalSsdEnabled &&
 		len(r.secondaryBootDisks) == 0 &&
 		len(r.bootDiskStoragePools) == 0 &&
 		r.bootDiskProvisionedIops == nil &&
@@ -88,6 +99,37 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 	if r.bootDiskKMSKey != nil && mig.Spec().DiskEncryptionKey != *r.bootDiskKMSKey {
 		return false
 	}
+
+	// Pure Block Mode matching.
+	if r.localNvmeSsdBlockEnabled {
+		if !mig.Spec().LocalSSDConfig.IsBlockMode() {
+			return false
+		}
+		if migLocalNvmeSsdBlockCount(mig) == 0 {
+			return false
+		}
+		if r.localNvmeSsdBlockCount != nil && migLocalNvmeSsdBlockCount(mig) != int64(*r.localNvmeSsdBlockCount) {
+			return false
+		}
+	} else if mig.Spec().LocalSSDConfig.IsBlockMode() && (r.ephemeralStorageLSSDCount != nil || r.ephemeralCapacityGb != nil || r.ephemeralStorageLocalSsdEnabled) {
+		// A non-block mode rule requiring local SSD should not match a block mode node group.
+		return false
+	}
+
+	// Mixed Mode / Ephemeral Capacity matching.
+	if r.ephemeralCapacityGb != nil {
+		if mig.Spec().LocalSSDConfig.GetEphemeralCapacityGb() != *r.ephemeralCapacityGb {
+			return false
+		}
+	} else if mig.Spec().LocalSSDConfig.GetEphemeralCapacityGb() > 0 && (r.ephemeralStorageLSSDCount != nil || r.ephemeralStorageLocalSsdEnabled) {
+		// A non-partitioned rule requiring local SSD should not match a mixed-mode partitioned node group.
+		return false
+	}
+
+	if r.ephemeralStorageLocalSsdEnabled && migEphemeralStorageLSSDCount(mig) == 0 {
+		return false
+	}
+
 	if r.ephemeralStorageLSSDCount != nil && migEphemeralStorageLSSDCount(mig) != int64(*r.ephemeralStorageLSSDCount) {
 		return false
 	}
@@ -114,14 +156,38 @@ func (r *storageRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 	return true
 }
 
-func migEphemeralStorageLSSDCount(nodeGroup gkeNodeGroup) int64 {
-	var count int64 = 0
-	if nodeGroup.Spec().LocalSSDConfig != nil {
-		if nodeGroup.Spec().LocalSSDConfig.EphemeralStorageLocalSsdConfig != nil {
-			count += nodeGroup.Spec().LocalSSDConfig.EphemeralStorageLocalSsdConfig.LocalSsdCount
+func migLocalNvmeSsdBlockCount(nodeGroup gkeNodeGroup) int64 {
+	cfg := nodeGroup.Spec().LocalSSDConfig
+	if cfg == nil {
+		return 0
+	}
+	var count int64
+	if cfg.LocalNvmeSsdBlockConfig != nil {
+		count = cfg.LocalNvmeSsdBlockConfig.LocalSsdCount
+	}
+	if count == 0 && cfg.IsBlockMode() {
+		if c, found, err := nodeGroup.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(nodeGroup.Spec().MachineType); found && err == nil {
+			count = c
 		}
-		if nodeGroup.Spec().LocalSSDConfig.EphemeralStorageConfig != nil {
-			count += nodeGroup.Spec().LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount
+	}
+	return count
+}
+
+func migEphemeralStorageLSSDCount(nodeGroup gkeNodeGroup) int64 {
+	cfg := nodeGroup.Spec().LocalSSDConfig
+	if cfg == nil || cfg.IsBlockMode() {
+		return 0
+	}
+	var count int64
+	if cfg.EphemeralStorageLocalSsdConfig != nil {
+		count += cfg.EphemeralStorageLocalSsdConfig.LocalSsdCount
+	}
+	if cfg.EphemeralStorageConfig != nil {
+		count += cfg.EphemeralStorageConfig.LocalSsdCount
+	}
+	if count == 0 && cfg.EphemeralStorageLocalSsdConfig != nil {
+		if c, found, err := nodeGroup.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(nodeGroup.Spec().MachineType); found && err == nil {
+			count = c
 		}
 	}
 	return count
@@ -158,13 +224,41 @@ func (r *storageRule) EphemerslStorageLSSDCount() int {
 	return *r.ephemeralStorageLSSDCount
 }
 
+// TotalLSSDCount returns the total local SSD count across ephemeral, block, and dedicated swap disks.
 func (r *rule) TotalLSSDCount() int64 {
 	var count int64
 	if r.storageRule.ephemeralStorageLSSDCount != nil {
 		count += int64(*r.storageRule.ephemeralStorageLSSDCount)
 	}
+	if r.storageRule.localNvmeSsdBlockCount != nil {
+		count += int64(*r.storageRule.localNvmeSsdBlockCount)
+	}
 	count += r.nodeSystemConfigRule.SwapDedicatedLSSDCount()
 	return count
+}
+
+// LocalSSDCountOmitted reports whether no Local SSD count was specified, so it must be derived
+// from the machine type. Dedicated swap disks alone don't count as specifying one.
+func (r *rule) LocalSSDCountOmitted() bool {
+	total := r.TotalLSSDCount()
+	newMode := r.storageRule.ephemeralStorageLocalSsdEnabled || r.storageRule.localNvmeSsdBlockEnabled
+	return total == 0 || (newMode && total == r.nodeSystemConfigRule.SwapDedicatedLSSDCount())
+}
+
+func (r *storageRule) EphemeralCapacityGb() *int64 {
+	return r.ephemeralCapacityGb
+}
+
+// LocalNvmeSsdBlockEnabled reports whether raw block local SSD mode is on:
+// enabled is true, or localSSDCount is set.
+func (r *storageRule) LocalNvmeSsdBlockEnabled() bool {
+	return r.localNvmeSsdBlockEnabled
+}
+
+// EphemeralStorageLocalSsdEnabled reports whether ephemeral local SSD mode is
+// on: enabled is true, or localSSDCount or ephemeralCapacityGb is set.
+func (r *storageRule) EphemeralStorageLocalSsdEnabled() bool {
+	return r.ephemeralStorageLocalSsdEnabled
 }
 
 // SecondaryBootDisks returns secondary disks slice collection
@@ -200,6 +294,23 @@ func WithStorageRule(bootDiskType *string, bootDiskSize *int, bootDiskKMSKey *st
 		r.storageRule.bootDiskSize = bootDiskSize
 		r.storageRule.bootDiskKMSKey = bootDiskKMSKey
 		r.storageRule.ephemeralStorageLSSDCount = ephemeralStorageLSSDCount
+	}
+}
+
+// WithEphemeralStorageLocalSsdConfigRule returns RuleOption setting EphemeralStorageLocalSsdConfig.
+func WithEphemeralStorageLocalSsdConfigRule(count *int, capacityGb *int64) RuleOption {
+	return func(r *rule) {
+		r.storageRule.ephemeralStorageLSSDCount = count
+		r.storageRule.ephemeralCapacityGb = capacityGb
+		r.storageRule.ephemeralStorageLocalSsdEnabled = true
+	}
+}
+
+// WithLocalNvmeSsdBlockConfigRule returns RuleOption setting LocalNvmeSsdBlockConfig.
+func WithLocalNvmeSsdBlockConfigRule(count *int) RuleOption {
+	return func(r *rule) {
+		r.storageRule.localNvmeSsdBlockCount = count
+		r.storageRule.localNvmeSsdBlockEnabled = true
 	}
 }
 

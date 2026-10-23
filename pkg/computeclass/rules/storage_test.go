@@ -24,6 +24,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 )
 
@@ -539,6 +540,363 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 			),
 			expected: false,
 		},
+		{
+			name: "block mode rule matching block mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+			),
+			expected: true,
+		},
+		{
+			name: "block mode rule with omitted count matching block mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 8,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: true,
+		},
+		{
+			name: "block mode rule with omitted count not matching node group with 0 block SSDs",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 0,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: false,
+		},
+		{
+			name: "block mode rule with omitted count not matching mixed mode partitioned node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: false,
+		},
+		{
+			name: "block mode rule with omitted count not matching ephemeral local SSD node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalSsdCount: 4,
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: false,
+		},
+		{
+			name: "ephemeralStorageLocalSsdConfig rule with omitted count (Enabled-only) matching ephemeral local SSD node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalSsdCount: 8,
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 8,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: true,
+		},
+		{
+			name: "ephemeralStorageLocalSsdConfig rule with omitted count (Enabled-only) not matching node group with 0 local SSDs",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:    nonDefaultMachineType,
+				LocalSSDConfig: nil,
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: false,
+		},
+		{
+			name: "ephemeralStorageLocalSsdConfig rule with omitted count (Enabled-only) not matching block mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: false,
+		},
+		{
+			name: "ephemeralStorageLocalSsdConfig rule with omitted count (Enabled-only) not matching mixed mode partitioned node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: false,
+		},
+		{
+			name: "block mode rule not matching non-block mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageConfig: &gke_api_beta.EphemeralStorageConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+			),
+			expected: false,
+		},
+		{
+			name: "ephemeral storage rule not matching block mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), nil),
+			),
+			expected: false,
+		},
+		{
+			name: "mixed mode rule matching mixed mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), ptr.To[int64](200)),
+			),
+			expected: true,
+		},
+		{
+			name: "mixed mode rule not matching different capacity",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 100,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), ptr.To[int64](200)),
+			),
+			expected: false,
+		},
+		{
+			name: "unpartitioned ephemeral rule must not match mixed mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithStorageRule(nil, nil, nil, ptr.To(4)),
+			),
+			expected: false,
+		},
+		{
+			name: "unpartitioned ephemeralStorageLocalSsdConfig rule must not match mixed mode node group",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), nil),
+			),
+			expected: false,
+		},
+		{
+			name: "legacy localSSDCount rule vs block mig",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithStorageRule(nil, nil, nil, ptr.To(4)),
+			),
+			expected: false,
+		},
+		{
+			name: "legacy localSSDCount rule vs mixed mig",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithStorageRule(nil, nil, nil, ptr.To(4)),
+			),
+			expected: false,
+		},
+		{
+			name: "mixed rule vs legacy EphemeralStorageConfig mig",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: nonDefaultMachineType,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageConfig: &gke_api_beta.EphemeralStorageConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineFamilyRule(&nonDefaultMachineFamilyName),
+				WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), ptr.To[int64](200)),
+			),
+			expected: false,
+		},
+		{
+			name: "fixed-count fallback on automatic machine type for a block rule with omitted count",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "c3-standard-8-lssd",
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 0,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineTypeRule(ptr.To("c3-standard-8-lssd")),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: true,
+		},
+		{
+			name: "fixed-count fallback on automatic machine type for an ephemeralStorageLocalSsdConfig rule with omitted count",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "c3-standard-8-lssd",
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 0,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineTypeRule(ptr.To("c3-standard-8-lssd")),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: true,
+		},
+		{
+			name: "block mode rule with omitted count not matching single-allowed machine type node group with 0 block SSDs",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "g2-standard-4",
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 0,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineTypeRule(ptr.To("g2-standard-4")),
+				WithLocalNvmeSsdBlockConfigRule(nil),
+			),
+			expected: false,
+		},
+		{
+			name: "ephemeralStorageLocalSsdConfig rule with omitted count not matching single-allowed machine type node group with 0 local SSDs",
+			nodegroup: gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: "g2-standard-4",
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 0,
+					},
+				},
+			}).Build(),
+			rule: NewRule(
+				WithMachineTypeRule(ptr.To("g2-standard-4")),
+				WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+			),
+			expected: false,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -553,9 +911,86 @@ func TestStorageRuleMatchesNodeGroup(t *testing.T) {
 
 func TestStorageRuleGetters(t *testing.T) {
 	pools := []string{"projects/p/zones/us-central1-a/storagePools/sp1"}
-	r := NewRule(WithBootDiskStoragePoolsRule(pools))
+	capGb := int64(250)
+	count := 4
+	r := NewRule(
+		WithBootDiskStoragePoolsRule(pools),
+		WithEphemeralStorageLocalSsdConfigRule(&count, &capGb),
+	)
 	if diff := cmp.Diff(pools, r.BootDiskStoragePools()); diff != "" {
 		t.Errorf("BootDiskStoragePools() mismatch (-want +got):\n%s", diff)
+	}
+	if r.EphemeralCapacityGb() == nil || *r.EphemeralCapacityGb() != capGb {
+		t.Errorf("EphemeralCapacityGb() = %v, want %v", r.EphemeralCapacityGb(), capGb)
+	}
+	if r.TotalLSSDCount() != int64(count) {
+		t.Errorf("TotalLSSDCount() = %v, want %v", r.TotalLSSDCount(), count)
+	}
+	if !r.EphemeralStorageLocalSsdEnabled() {
+		t.Errorf("EphemeralStorageLocalSsdEnabled() = false, want true")
+	}
+
+	blockCount := 8
+	blockRule := NewRule(WithLocalNvmeSsdBlockConfigRule(&blockCount))
+	if !blockRule.LocalNvmeSsdBlockEnabled() {
+		t.Errorf("LocalNvmeSsdBlockEnabled() = false, want true")
+	}
+	if blockRule.TotalLSSDCount() != int64(blockCount) {
+		t.Errorf("TotalLSSDCount() = %v, want %v", blockRule.TotalLSSDCount(), blockCount)
+	}
+}
+
+func TestRule_LocalSSDCountOmitted(t *testing.T) {
+	swapRule := WithSwapConfigRule(ccc_api.SwapConfig{
+		DedicatedLocalSsdProfile: &ccc_api.SwapConfigDedicatedLocalSsdProfile{
+			DiskCount: 2,
+		},
+	})
+
+	testCases := []struct {
+		name string
+		rule Rule
+		want bool
+	}{
+		{
+			name: "legacy none",
+			rule: NewRule(WithStorageRule(nil, nil, nil, nil)),
+			want: true,
+		},
+		{
+			name: "legacy count",
+			rule: NewRule(WithStorageRule(nil, nil, nil, ptr.To(4))),
+			want: false,
+		},
+		{
+			name: "new mode omitted",
+			rule: NewRule(WithLocalNvmeSsdBlockConfigRule(nil)),
+			want: true,
+		},
+		{
+			name: "new mode omitted + swap",
+			rule: NewRule(
+				WithLocalNvmeSsdBlockConfigRule(nil),
+				swapRule,
+			),
+			want: true,
+		},
+		{
+			name: "new mode explicit + swap",
+			rule: NewRule(
+				WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+				swapRule,
+			),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.rule.LocalSSDCountOmitted(); got != tc.want {
+				t.Errorf("LocalSSDCountOmitted() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
