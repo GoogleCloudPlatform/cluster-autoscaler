@@ -105,14 +105,37 @@ type LocalSSDConfig struct {
 	LocalSsdCount                  int64
 	EphemeralStorageConfig         *gke_api_beta.EphemeralStorageConfig
 	EphemeralStorageLocalSsdConfig *gke_api_beta.EphemeralStorageLocalSsdConfig
-	LocalNvmeSsdBlockConfig        *gke_api_beta.LocalNvmeSsdBlockConfig
+	// EphemeralCapacityGb is translated by the internal NodePoolTranslator until it propagates to the public API client.
+	EphemeralCapacityGb     int64
+	LocalNvmeSsdBlockConfig *gke_api_beta.LocalNvmeSsdBlockConfig
+}
+
+// IsBlockMode returns true if the Local SSD config specifies pure block mode.
+func (c *LocalSSDConfig) IsBlockMode() bool {
+	return c != nil && c.LocalNvmeSsdBlockConfig != nil
+}
+
+// IsMixedMode returns true if the Local SSD config specifies mixed mode with ephemeral capacity.
+func (c *LocalSSDConfig) IsMixedMode() bool {
+	return c != nil && c.EphemeralStorageLocalSsdConfig != nil && c.EphemeralCapacityGb > 0
+}
+
+// GetEphemeralCapacityGb returns the configured ephemeral storage capacity in GB, or 0 if not set.
+func (c *LocalSSDConfig) GetEphemeralCapacityGb() int64 {
+	if c == nil {
+		return 0
+	}
+	return c.EphemeralCapacityGb
 }
 
 // EphemeralStorageOnLocalSsd returns whether this Local SSD config means that Ephemeral storage will be based on
 // Local SSDs.
 func (c *LocalSSDConfig) EphemeralStorageOnLocalSsd(machineType string) bool {
-	if c == nil {
+	if c == nil || c.IsBlockMode() {
 		return false
+	}
+	if c.IsMixedMode() {
+		return true
 	}
 	if c.EphemeralStorageConfig != nil && c.EphemeralStorageConfig.LocalSsdCount > 0 {
 		return true

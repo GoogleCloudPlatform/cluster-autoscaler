@@ -65,6 +65,35 @@ func TestEphemeralStorageOnLocalSsd(t *testing.T) {
 			},
 			want: true,
 		},
+		{
+			desc: "pure block mode via LocalNvmeSsdBlockConfig is not ephemeral storage on local ssd",
+			cfg: &LocalSSDConfig{
+				LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+					LocalSsdCount: 4,
+				},
+			},
+			want: false,
+		},
+		{
+			desc: "mixed mode via EphemeralStorageLocalSsdConfig with EphemeralCapacityGb and 0 count is ephemeral storage on local ssd",
+			cfg: &LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 0,
+				},
+				EphemeralCapacityGb: 200,
+			},
+			want: true,
+		},
+		{
+			desc: "mixed mode via EphemeralStorageLocalSsdConfig with count and capacity is ephemeral storage on local ssd",
+			cfg: &LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+				EphemeralCapacityGb: 200,
+			},
+			want: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {

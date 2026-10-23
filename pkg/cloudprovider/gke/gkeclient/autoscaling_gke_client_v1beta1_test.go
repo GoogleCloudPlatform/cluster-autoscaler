@@ -2401,6 +2401,77 @@ func TestCreateNodePoolRequest(t *testing.T) {
 			},
 		},
 		{
+			name: "CCC self service local SSD encryption mode with block mode",
+			spec: &NodePoolSpec{
+				LocalSSDConfig: &LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{LocalSsdCount: 4},
+				},
+				SelfServiceMetadata: selfservice.Metadata{
+					selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{LocalSsdCount: 4},
+						LocalSsdEncryptionMode:  "EPHEMERAL_KEY_ENCRYPTION",
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
+			name: "CCC self service local SSD encryption mode with mixed mode",
+			spec: &NodePoolSpec{
+				LocalSSDConfig: &LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 250,
+				},
+				SelfServiceMetadata: selfservice.Metadata{
+					selfservice.LocalSSDEncryptionModeMetadataKey: "EPHEMERAL_KEY_ENCRYPTION",
+				},
+			},
+			wantRequest: gke_api_beta.CreateNodePoolRequest{
+				NodePool: &gke_api_beta.NodePool{
+					Autoscaling: &gke_api_beta.NodePoolAutoscaling{
+						Autoprovisioned: true,
+						Enabled:         true,
+						MaxNodeCount:    napMaxNodes,
+					},
+					Config: &gke_api_beta.NodeConfig{
+						EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+							LocalSsdCount: 4,
+						},
+						LocalSsdEncryptionMode: "EPHEMERAL_KEY_ENCRYPTION",
+					},
+					Name:          nodePoolName,
+					NetworkConfig: &gke_api_beta.NodeNetworkConfig{},
+					PlacementPolicy: &gke_api_beta.PlacementPolicy{
+						Type: "TYPE_UNSPECIFIED",
+					},
+					Management: &gke_api_beta.NodeManagement{
+						AutoRepair:  true,
+						AutoUpgrade: true,
+					},
+				},
+			},
+		},
+		{
 			name: "CCC self service performance monitoring unit specified",
 			spec: &NodePoolSpec{
 				SelfServiceMetadata: selfservice.Metadata{
@@ -3196,6 +3267,88 @@ func TestLocalSSDConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLocalSSDConfig_BlockMode(t *testing.T) {
+	spec := NodePoolSpec{
+		MachineType: "a2-ultragpu-2g",
+		LocalSSDConfig: &LocalSSDConfig{
+			LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+				LocalSsdCount: 4,
+			},
+		},
+	}
+	config := gke_api_beta.NodeConfig{}
+	setLocalSSDConfig(&spec, &config)
+	assert.Nil(t, config.EphemeralStorageConfig)
+	assert.Nil(t, config.EphemeralStorageLocalSsdConfig)
+	assert.NotNil(t, config.LocalNvmeSsdBlockConfig)
+	assert.Equal(t, int64(4), config.LocalNvmeSsdBlockConfig.LocalSsdCount)
+}
+
+func TestLocalSSDConfig_MixedMode(t *testing.T) {
+	origCfg := &gke_api_beta.EphemeralStorageLocalSsdConfig{
+		LocalSsdCount: 4,
+	}
+	spec := NodePoolSpec{
+		MachineType: "a2-ultragpu-2g",
+		LocalSSDConfig: &LocalSSDConfig{
+			EphemeralStorageLocalSsdConfig: origCfg,
+			EphemeralCapacityGb:            250,
+		},
+	}
+	config := gke_api_beta.NodeConfig{}
+	setLocalSSDConfig(&spec, &config)
+	assert.Nil(t, config.EphemeralStorageConfig)
+	assert.Nil(t, config.LocalNvmeSsdBlockConfig)
+	assert.NotNil(t, config.EphemeralStorageLocalSsdConfig)
+	assert.NotSame(t, origCfg, config.EphemeralStorageLocalSsdConfig)
+	assert.Equal(t, int64(4), config.EphemeralStorageLocalSsdConfig.LocalSsdCount)
+}
+
+func TestSetLocalSSDConfig_BareLocalSsdCountProducesNoEphemeralStorageConfig(t *testing.T) {
+	spec := NodePoolSpec{
+		MachineType: "n2-standard-4",
+		LocalSSDConfig: &LocalSSDConfig{
+			LocalSsdCount: 4,
+		},
+	}
+	config := gke_api_beta.NodeConfig{}
+	setLocalSSDConfig(&spec, &config)
+	assert.Nil(t, config.EphemeralStorageConfig)
+	assert.Nil(t, config.EphemeralStorageLocalSsdConfig)
+	assert.Nil(t, config.LocalNvmeSsdBlockConfig)
+}
+
+func TestBuildLocalSSDConfigFromNodeConfig(t *testing.T) {
+	// Block mode node config
+	blockNodeConfig := &gke_api_beta.NodeConfig{
+		LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+			LocalSsdCount: 4,
+		},
+	}
+	blockCfg := buildLocalSSDConfigFromNodeConfig(blockNodeConfig)
+	assert.NotNil(t, blockCfg)
+	assert.True(t, blockCfg.IsBlockMode())
+	assert.False(t, blockCfg.IsMixedMode())
+	assert.Equal(t, int64(0), blockCfg.LocalSsdCount)
+	assert.NotNil(t, blockCfg.LocalNvmeSsdBlockConfig)
+	assert.Equal(t, int64(4), blockCfg.LocalNvmeSsdBlockConfig.LocalSsdCount)
+
+	// EphemeralStorageLocalSsdConfig node config (EphemeralCapacityGb is populated by NodePoolTranslator)
+	ephemeralLssdNodeConfig := &gke_api_beta.NodeConfig{
+		EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+			LocalSsdCount: 4,
+		},
+	}
+	ephemeralLssdCfg := buildLocalSSDConfigFromNodeConfig(ephemeralLssdNodeConfig)
+	assert.NotNil(t, ephemeralLssdCfg)
+	assert.False(t, ephemeralLssdCfg.IsBlockMode())
+	assert.False(t, ephemeralLssdCfg.IsMixedMode())
+	assert.Equal(t, int64(0), ephemeralLssdCfg.LocalSsdCount)
+	assert.NotNil(t, ephemeralLssdCfg.EphemeralStorageLocalSsdConfig)
+	assert.Equal(t, int64(4), ephemeralLssdCfg.EphemeralStorageLocalSsdConfig.LocalSsdCount)
+	assert.Equal(t, int64(0), ephemeralLssdCfg.GetEphemeralCapacityGb())
 }
 
 func TestMaxPodsPerNodeConstraintToMppn(t *testing.T) {

@@ -230,13 +230,8 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 			BlueGreenInfo:            bgi,
 			ConfidentialNodesEnabled: IsConfidentialNodesEnabled(pool.Config.ConfidentialNodes),
 			Spec: &NodePoolSpec{
-				Accelerators: pool.Config.Accelerators,
-				LocalSSDConfig: &LocalSSDConfig{
-					LocalSsdCount:                  pool.Config.LocalSsdCount,
-					EphemeralStorageConfig:         pool.Config.EphemeralStorageConfig,
-					EphemeralStorageLocalSsdConfig: pool.Config.EphemeralStorageLocalSsdConfig,
-					LocalNvmeSsdBlockConfig:        pool.Config.LocalNvmeSsdBlockConfig,
-				},
+				Accelerators:                  pool.Config.Accelerators,
+				LocalSSDConfig:                buildLocalSSDConfigFromNodeConfig(pool.Config),
 				Labels:                        pool.Config.Labels,
 				Taints:                        convertGkeApiTaintsToApiV1Taints(pool.Config.Taints),
 				Locations:                     pool.Locations,
@@ -1144,13 +1139,34 @@ func elementInList(code int64, list []int) bool {
 	return false
 }
 
+func buildLocalSSDConfigFromNodeConfig(config *gke_api_beta.NodeConfig) *LocalSSDConfig {
+	if config == nil {
+		return nil
+	}
+	return &LocalSSDConfig{
+		LocalSsdCount:                  config.LocalSsdCount,
+		EphemeralStorageConfig:         config.EphemeralStorageConfig,
+		EphemeralStorageLocalSsdConfig: config.EphemeralStorageLocalSsdConfig,
+		LocalNvmeSsdBlockConfig:        config.LocalNvmeSsdBlockConfig,
+	}
+}
+
 func setLocalSSDConfig(spec *NodePoolSpec, config *gke_api_beta.NodeConfig) {
-	if spec.LocalSSDConfig == nil || spec.LocalSSDConfig.EphemeralStorageConfig == nil {
+	if spec.LocalSSDConfig == nil {
 		return
 	}
-	if count := spec.LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount; count > 0 {
+	if spec.LocalSSDConfig.IsBlockMode() {
+		config.LocalNvmeSsdBlockConfig = spec.LocalSSDConfig.LocalNvmeSsdBlockConfig
+		return
+	}
+	if spec.LocalSSDConfig.EphemeralStorageLocalSsdConfig != nil {
+		cfg := *spec.LocalSSDConfig.EphemeralStorageLocalSsdConfig
+		config.EphemeralStorageLocalSsdConfig = &cfg
+		return
+	}
+	if spec.LocalSSDConfig.EphemeralStorageConfig != nil && spec.LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount > 0 {
 		config.EphemeralStorageConfig = &gke_api_beta.EphemeralStorageConfig{
-			LocalSsdCount: count,
+			LocalSsdCount: spec.LocalSSDConfig.EphemeralStorageConfig.LocalSsdCount,
 		}
 		// TODO(b/317509315): if we enable local SSD, we can probably shrink the boot disk.
 		// I don't know if that will mess up a fixed size boot image though.
