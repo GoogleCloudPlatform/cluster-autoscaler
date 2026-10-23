@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
@@ -60,6 +61,10 @@ import (
 )
 
 var registerMetricsOnce sync.Once
+
+// ambiguousComputeClassLog is the prefix of the warning resolveOptionsCrd logs when the pods
+// resolve to conflicting CRDs or sources, or mix pods with and without a CRD.
+const ambiguousComputeClassLog = "ambiguous ComputeClass across expansion options"
 
 type testFixture struct {
 	pod          *v1.Pod
@@ -173,6 +178,9 @@ type fleetEfficiencyTestCase struct {
 	// expectedPlannedLocationsCalls, if set, is the expected number of PlannedNodePoolLocations calls.
 	expectedPlannedLocationsCalls *int
 	autopilotEnabled              bool
+	// noDefaultCrd leaves the lister without a default ComputeClass, so unlabelled pods resolve to
+	// their virtual pod-family CRD instead of crds[0].
+	noDefaultCrd bool
 }
 
 // countingPlannedLocationsCloudProvider wraps a test cloud provider and counts PlannedNodePoolLocations calls.
@@ -234,7 +242,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 		}
 
 		lister := listerutils.NewMockCrdListerWithLabel(tc.crds, gkelabels.ComputeClassLabel)
-		if len(tc.crds) > 0 {
+		if len(tc.crds) > 0 && !tc.noDefaultCrd {
 			lister.SetDefaultCrdName(tc.crds[0].Name())
 		}
 
@@ -294,6 +302,9 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 
 		if tc.expectedErrorLog != "" {
 			assert.Contains(t, logBuf.String(), tc.expectedErrorLog)
+		}
+		if tc.expectedErrorLog != ambiguousComputeClassLog {
+			assert.NotContains(t, logBuf.String(), ambiguousComputeClassLog)
 		}
 		if tc.expectedPlannedLocationsCalls != nil {
 			assert.Equal(t, *tc.expectedPlannedLocationsCalls, countingProvider.calls, "unexpected number of PlannedNodePoolLocations calls")
@@ -1670,6 +1681,19 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 
 func TestFleetEfficiencyFilter_Errors(t *testing.T) {
 	f := newTestFixture()
+	missingCccPod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "missing-ccc-pod"},
+		Spec: v1.PodSpec{
+			NodeSelector: map[string]string{
+				gkelabels.ComputeClassLabel: "missing-ccc",
+			},
+		},
+	}
+	podWithoutCcc := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pod-without-ccc"},
+	}
+	// failedCrdLookupLog is the prefix of the error BestOptions logs when the lister fails.
+	const failedCrdLookupLog = "failed to get the CRD for pod"
 
 	tests := []fleetEfficiencyTestCase{
 		{
@@ -1677,7 +1701,35 @@ func TestFleetEfficiencyFilter_Errors(t *testing.T) {
 			crds:                nil,
 			options:             []expander.Option{f.optFleet1, f.optFleet2},
 			expectedBestOptions: []expander.Option{f.optFleet1, f.optFleet2},
-			expectedErrorLog:    "failed to get the CRD for pod: crd doesnt exist",
+			expectedErrorLog:    failedCrdLookupLog,
+		},
+		{
+			name: "Lister error on pod in second option",
+			crds: []crd.CRD{f.crdRuleFleet},
+			options: []expander.Option{
+				f.optFleet1,
+				{NodeGroup: f.optFleet2.NodeGroup, Pods: []*v1.Pod{missingCccPod}},
+			},
+			expectedBestOptions: []expander.Option{
+				f.optFleet1,
+				{NodeGroup: f.optFleet2.NodeGroup, Pods: []*v1.Pod{missingCccPod}},
+			},
+			expectedErrorLog: failedCrdLookupLog,
+		},
+		{
+			// Without CRDs the lister has no default, so podWithoutCcc resolves to a nil CRD while
+			// missingCccPod still fails the lookup.
+			name: "Lister error on pod in second option is not masked by pod without CRD in first option",
+			crds: nil,
+			options: []expander.Option{
+				{NodeGroup: f.optFleet1.NodeGroup, Pods: []*v1.Pod{podWithoutCcc}},
+				{NodeGroup: f.optFleet2.NodeGroup, Pods: []*v1.Pod{missingCccPod}},
+			},
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: f.optFleet1.NodeGroup, Pods: []*v1.Pod{podWithoutCcc}},
+				{NodeGroup: f.optFleet2.NodeGroup, Pods: []*v1.Pod{missingCccPod}},
+			},
+			expectedErrorLog: failedCrdLookupLog,
 		},
 	}
 
@@ -2173,6 +2225,35 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			},
 		},
 	}
+	// generalPurposeCccPod selects a Custom ComputeClass that shares its name with the virtual CRD
+	// of unlabelled x86 Autopilot pods, so the two resolve to the same CRD name from different sources.
+	generalPurposeCccPod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "general-purpose-ccc-pod"},
+		Spec: v1.PodSpec{
+			NodeSelector: map[string]string{
+				gkelabels.ComputeClassLabel: crdRules.GeneralPurposePodFamily,
+			},
+		},
+	}
+	generalPurposeCcc := crdutils.NewTestCrd(
+		crdutils.WithName(crdRules.GeneralPurposePodFamily),
+		crdutils.WithLabel(gkelabels.ComputeClassLabel),
+	)
+	// asReplicaOf returns a copy of pod owned by the given controller. Controllers such as a
+	// StatefulSet mid-rollout or a ProvisioningRequest with several PodSets own pods of different
+	// templates under one UID, so resolveOptionsCrd inspects every distinct pod regardless of its
+	// owner; the cases below pin that sharing a controller grants no shortcut.
+	asReplicaOf := func(pod *v1.Pod, controller types.UID) *v1.Pod {
+		replica := pod.DeepCopy()
+		replica.Name = pod.Name + "-" + string(controller)
+		replica.OwnerReferences = []metav1.OwnerReference{{Kind: "ReplicaSet", Name: string(controller), UID: controller, Controller: ptr.To(true)}}
+		return replica
+	}
+	x86ReplicaOfRsA := asReplicaOf(defaultX86Pod, "rs-a")
+	armReplicaOfRsA := asReplicaOf(defaultArmPod, "rs-a")
+	armReplicaOfRsB := asReplicaOf(defaultArmPod, "rs-b")
+	payPerPodReplicaOfProvReqA := asReplicaOf(defaultX86Pod, "provreq-a")
+	vmBilledReplicaOfProvReqA := asReplicaOf(excludedMachineFamilyPod, "provreq-a")
 
 	ng1 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-1").SetGceRefZone("us-central1-a").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build()
 	ng2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-2").SetGceRefZone("us-central1-a").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-8"}).Build()
@@ -2199,6 +2280,7 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 	exclOpt1, exclOpt2 := makeOptions(excludedMachineFamilyPod)
 	exclBalOpt1, exclBalOpt2 := makeOptions(excludedBalancedPod)
 	cccOpt1, cccOpt2 := makeOptions(cccPod)
+	generalPurposeCccOpt1, _ := makeOptions(generalPurposeCccPod)
 
 	enabledExps := map[string]bool{
 		experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
@@ -2374,6 +2456,167 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			options:                []expander.Option{cccOpt1, cccOpt2},
 			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
 			expectedBestOptions:    []expander.Option{cccOpt1, cccOpt2},
+		},
+		{
+			name:                   "Ambiguous architecture across expansion options (ARM first, x86 second) falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{armOpt1, x86Opt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{armOpt1, x86Opt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous architecture across expansion options (x86 first, ARM second) falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{x86Opt1, armOpt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{x86Opt1, armOpt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous pay-per-pod and VM-billed pods across expansion options (pay-per-pod first) falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{x86Opt1, exclOpt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{x86Opt1, exclOpt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous pay-per-pod and VM-billed pods across expansion options (VM-billed first) falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{exclOpt1, x86Opt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{exclOpt1, x86Opt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous pay-per-pod and VM-billed pods within a single expansion option falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{defaultX86Pod, excludedMachineFamilyPod}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{defaultX86Pod, excludedMachineFamilyPod}},
+			},
+			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{defaultX86Pod, excludedMachineFamilyPod}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{defaultX86Pod, excludedMachineFamilyPod}},
+			},
+			expectedErrorLog: ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous Balanced PCC pay-per-pod and VM-billed pods across expansion options falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{balOpt1, exclBalOpt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{balOpt1, exclBalOpt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Multiple distinct Autopilot x86 pods with same virtual CRD are not ambiguous and score options",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{
+					NodeGroup: ng1,
+					Pods: []*v1.Pod{
+						defaultX86Pod,
+						{ObjectMeta: metav1.ObjectMeta{Name: "default-x86-pod-2"}},
+					},
+				},
+				{
+					NodeGroup: ng2,
+					Pods: []*v1.Pod{
+						defaultX86Pod,
+						{ObjectMeta: metav1.ObjectMeta{Name: "default-x86-pod-2"}},
+					},
+				},
+			},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, crdRules.GeneralPurposePodFamily, "e2-standard-4", map[string]float64{"us-central1-a": 0.3})
+				setupMockSnapshotForScope(m, crdRules.GeneralPurposePodFamily, "e2-standard-8", map[string]float64{"us-central1-a": 0.8})
+			},
+			expectedBestOptions: []expander.Option{
+				{
+					NodeGroup: ng2,
+					Pods: []*v1.Pod{
+						defaultX86Pod,
+						{ObjectMeta: metav1.ObjectMeta{Name: "default-x86-pod-2"}},
+					},
+				},
+			},
+		},
+		{
+			name:                   "Ambiguous architecture across replicas of the same controller falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
+			},
+			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
+			},
+			expectedErrorLog: ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous pay-per-pod and VM-billed pods owned by the same multi-template controller fall back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{payPerPodReplicaOfProvReqA, vmBilledReplicaOfProvReqA}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{payPerPodReplicaOfProvReqA, vmBilledReplicaOfProvReqA}},
+			},
+			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{payPerPodReplicaOfProvReqA, vmBilledReplicaOfProvReqA}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{payPerPodReplicaOfProvReqA, vmBilledReplicaOfProvReqA}},
+			},
+			expectedErrorLog: ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous architecture across replicas of different controllers within a single expansion option falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
+			},
+			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
+				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
+			},
+			expectedErrorLog: ambiguousComputeClassLog,
+		},
+		{
+			name:                   "Ambiguous ComputeClass source across expansion options (Custom ComputeClass and virtual CRD of the same name) falls back to lowest-cost",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			crds:                   []crd.CRD{generalPurposeCcc},
+			noDefaultCrd:           true,
+			options:                []expander.Option{generalPurposeCccOpt1, x86Opt1},
+			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
+			expectedBestOptions:    []expander.Option{generalPurposeCccOpt1, x86Opt1},
+			expectedErrorLog:       ambiguousComputeClassLog,
 		},
 	}
 

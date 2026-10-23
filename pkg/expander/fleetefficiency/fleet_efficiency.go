@@ -38,6 +38,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
@@ -101,14 +102,8 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 		return expansionOptions
 	}
 
-	if len(expansionOptions) == 0 || len(expansionOptions[0].Pods) == 0 {
-		klog.V(4).Infof("FleetEfficiencyFilter: no expansion options or no pods in the first option, skipping")
-		return expansionOptions
-	}
-
 	// Verify the allocation strategy.
-	samplePod := expansionOptions[0].Pods[0]
-	crd, source, err := f.getPodCrd(samplePod)
+	crd, source, err := f.resolveOptionsCrd(expansionOptions)
 	if err != nil {
 		klog.Errorf("FleetEfficiencyFilter: failed to get the CRD for pod: %v", err)
 		// We don't know the allocation strategy, do not record any metrics at this point.
@@ -116,7 +111,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	}
 	if crd == nil {
 		// Allocation strategy is only supported for CCC or pay-per-pod autopilot workloads, do not record metrics.
-		klog.V(4).Infof("FleetEfficiencyFilter: pod %s/%s does not use a ComputeClass, skipping", samplePod.Namespace, samplePod.Name)
+		klog.V(4).Infof("FleetEfficiencyFilter: pods do not use a ComputeClass or ComputeClass is ambiguous, skipping")
 		return expansionOptions
 	}
 	isFleetEfficiency, effectiveSource := f.isFleetEfficiencyStrategySelected(crd, source, expansionOptions)
@@ -311,11 +306,70 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 	return totalScore / float64(len(targetZones)), nil
 }
 
+// resolveOptionsCrd returns the ComputeClass CRD shared by every pod across expansionOptions, or
+// nil when no pod uses a ComputeClass or when the pods disagree (different CRDs or sources, or a
+// mix of pods with and without one). Option.Pods flattens every pod equivalence group that fits
+// the candidate node group and sharding does not guarantee a uniform CRD per shard, so every
+// distinct pod is inspected; pods shared between options are inspected once. The result therefore
+// does not depend on the order of options or pods: a lister error anywhere is returned, otherwise
+// a conflict anywhere is logged once and yields a nil CRD so the caller skips fleet-efficiency.
+func (f *fleetEfficiencyFilter) resolveOptionsCrd(expansionOptions []expander.Option) (crd.CRD, metrics.AllocationStrategySource, error) {
+	var first, conflict *apiv1.Pod
+	var firstCrd, conflictCrd crd.CRD
+	var firstSource, conflictSource metrics.AllocationStrategySource
+	visited := make(map[*apiv1.Pod]bool)
+
+	for _, opt := range expansionOptions {
+		for _, pod := range opt.Pods {
+			if pod == nil || visited[pod] {
+				continue
+			}
+			visited[pod] = true
+			podCrd, podSource, err := f.getPodCrd(pod)
+			if err != nil {
+				return nil, metrics.AllocationStrategySourceUnknown, err
+			}
+			if first == nil {
+				first, firstCrd, firstSource = pod, podCrd, podSource
+			} else if conflict == nil && (crdName(firstCrd) != crdName(podCrd) || firstSource != podSource) {
+				conflict, conflictCrd, conflictSource = pod, podCrd, podSource
+			}
+		}
+	}
+
+	if conflict != nil {
+		klog.Warningf("FleetEfficiencyFilter: ambiguous ComputeClass across expansion options: pod %s/%s %s but pod %s/%s %s, falling back to lowest-cost",
+			first.Namespace, first.Name, describePodCrd(firstCrd, firstSource),
+			conflict.Namespace, conflict.Name, describePodCrd(conflictCrd, conflictSource))
+		return nil, metrics.AllocationStrategySourceUnknown, nil
+	}
+	return firstCrd, firstSource, nil
+}
+
+// crdName returns the name of c, or "" for a nil CRD, so that a pod without a ComputeClass compares
+// unequal to any pod with one.
+func crdName(c crd.CRD) string {
+	if c == nil {
+		return ""
+	}
+	return c.Name()
+}
+
+// describePodCrd renders a pod's resolution for the ambiguity warning.
+func describePodCrd(c crd.CRD, source metrics.AllocationStrategySource) string {
+	if c == nil {
+		return "does not use a ComputeClass"
+	}
+	return fmt.Sprintf("resolves to ComputeClass %s (source %q)", c.Name(), source)
+}
+
 func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.AllocationStrategySource, error) {
 	if pod == nil {
 		return nil, metrics.AllocationStrategySourceUnknown, nil
 	}
-	crd, name, err := f.cccLister.PodCrd(pod)
+	// The requirements are extracted once and shared by the CRD lookup and the pod-family classification.
+	req := podrequirements.GetRequirements(pod)
+	crd, name, err := f.cccLister.PodReqCrd(req)
 	if err != nil {
 		return nil, metrics.AllocationStrategySourceUnknown, err
 	}
@@ -337,7 +391,7 @@ func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.Allo
 			}
 			return nil, metrics.AllocationStrategySourceUnknown, nil
 		}
-		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod); ok {
+		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements(pod, req); ok {
 			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourceAutopilotWorkload, nil
 		}
 	}
