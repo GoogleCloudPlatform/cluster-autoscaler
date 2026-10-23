@@ -17,9 +17,12 @@ package gke
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"strconv"
+	"strings"
 
+	gce_api "google.golang.org/api/compute/v1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
@@ -43,9 +46,56 @@ import (
 )
 
 const (
-	HugepageSize1gResourceName apiv1.ResourceName = "hugepages-1Gi"
-	HugepageSize2mResourceName apiv1.ResourceName = "hugepages-2Mi"
+	HugepageSize1gResourceName            apiv1.ResourceName = "hugepages-1Gi"
+	HugepageSize2mResourceName            apiv1.ResourceName = "hugepages-2Mi"
+	ephemeralLocalSsdCapacityGbKubeEnvVar                    = "EPHEMERAL_LOCAL_SSD_CAPACITY_GB"
 )
+
+// lssdOverheadUnitGiB is the 375 GiB unit size used to index EphemeralStorageOnLocalSSDFilesystemOverheadInBytes.
+const lssdOverheadUnitGiB = 375
+
+func mixedModeEphemeralStorageCapacityBytes(ctx context.Context, ephemeralCapacityGiB int64, osDistribution gce.OperatingSystemDistribution) int64 {
+	if ephemeralCapacityGiB <= 0 {
+		return 0
+	}
+	unitCount := int64(math.Ceil(float64(ephemeralCapacityGiB) / float64(lssdOverheadUnitGiB)))
+	fullOverhead := gce.EphemeralStorageOnLocalSSDFilesystemOverheadInBytes(ctx, unitCount, osDistribution)
+	partitionOverhead := fullOverhead
+	if unitCount <= 8 {
+		partitionOverhead = int64(math.Ceil(float64(fullOverhead) * float64(ephemeralCapacityGiB) / float64(unitCount*lssdOverheadUnitGiB)))
+	}
+	return max(ephemeralCapacityGiB*GiB-partitionOverhead, 0)
+}
+
+func extractEvictionHardFromKubeEnv(kubeEnv gce.KubeEnv) map[string]string {
+	autoscalerVals, found := kubeEnv.Var("AUTOSCALER_ENV_VARS")
+	if !found || strings.TrimSpace(autoscalerVals) == "" {
+		return nil
+	}
+	for _, entry := range strings.Split(autoscalerVals, ";") {
+		entry = strings.TrimSpace(entry)
+		items := strings.SplitN(entry, "=", 2)
+		if len(items) != 2 {
+			return nil
+		}
+		if strings.TrimSpace(items[0]) == "evictionHard" {
+			evictionHardStr := strings.Trim(items[1], " \"'")
+			if evictionHardStr == "" {
+				return make(map[string]string)
+			}
+			result := make(map[string]string)
+			for _, keyValue := range strings.Split(evictionHardStr, ",") {
+				parts := strings.SplitN(keyValue, "=", 2)
+				if len(parts) != 2 {
+					return nil
+				}
+				result[parts[0]] = parts[1]
+			}
+			return result
+		}
+	}
+	return nil
+}
 
 // GkeTemplateBuilder builds templates for GKE cloud provider.
 type GkeTemplateBuilder struct {
@@ -78,13 +128,26 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		Labels:   map[string]string{},
 	}
 
+	localSSDCfg := mig.Spec().LocalSSDConfig
 	var ephemeralLocalSsdCount int64
-	var err error
 	ephemeralStorageGiB := mig.Spec().DiskSize
-	if localSSDCfg := mig.Spec().LocalSSDConfig; localSSDCfg != nil && localSSDCfg.EphemeralStorageConfig != nil {
+	switch {
+	case localSSDCfg.IsBlockMode():
+		// Ephemeral storage stays on the boot disk.
+	case localSSDCfg != nil && localSSDCfg.EphemeralStorageLocalSsdConfig != nil:
+		ephemeralLocalSsdCount = localSSDCfg.EphemeralStorageLocalSsdConfig.LocalSsdCount
+		if ephemeralLocalSsdCount == 0 {
+			if c, found, err := mig.MachineConfigProvider().AutomaticEphemeralLocalSsdCountByMachineType(mig.Spec().MachineType); found && err == nil {
+				ephemeralLocalSsdCount = c
+			}
+		}
+	case localSSDCfg != nil && localSSDCfg.EphemeralStorageConfig != nil:
 		ephemeralLocalSsdCount = localSSDCfg.EphemeralStorageConfig.LocalSsdCount
 	}
-	if ephemeralLocalSsdCount > 0 {
+	if localSSDCfg.IsMixedMode() {
+		// The node sizes the ephemeral partition in GiB from ephemeralCapacityGb.
+		ephemeralStorageGiB = localSSDCfg.GetEphemeralCapacityGb()
+	} else if ephemeralLocalSsdCount > 0 {
 		ssdSize := ssdSizeProvider.SSDSizeInGiB(mig.Spec().MachineType)
 		ephemeralStorageGiB = ephemeralLocalSsdCount * int64(ssdSize)
 	}
@@ -114,9 +177,26 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		extendedResources[HugepageSize2mResourceName] = *resource.NewQuantity(hugepage2m, resource.DecimalSI)
 	}
 
-	capacity, err := t.BuildCapacity(context.TODO(), migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, ephemeralLocalSsdCount, pods, reserved, extendedResources)
+	var version string
+	var osDistribution gce.OperatingSystemDistribution
+	if migOsInfo != nil {
+		version = migOsInfo.NodeVersion()
+		osDistribution = migOsInfo.OsDistribution()
+	}
+
+	capacityLocalSsdCount := ephemeralLocalSsdCount
+	if localSSDCfg.IsMixedMode() {
+		capacityLocalSsdCount = 0
+	}
+	capacity, err := t.BuildCapacity(context.TODO(), migOsInfo, cpu, mem, nil, ephemeralStorageGiB*GiB, capacityLocalSsdCount, pods, reserved, extendedResources)
 	if err != nil {
 		return nil, err
+	}
+	if localSSDCfg.IsMixedMode() {
+		capacity[apiv1.ResourceEphemeralStorage] = *resource.NewQuantity(
+			mixedModeEphemeralStorageCapacityBytes(context.TODO(), ephemeralStorageGiB, osDistribution),
+			resource.DecimalSI,
+		)
 	}
 
 	if !dynamicresources.GpuDraDriverEnabled(&node) {
@@ -141,12 +221,6 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 		}
 	}
 
-	var version string
-	var osDistribution gce.OperatingSystemDistribution
-	if migOsInfo != nil {
-		version = migOsInfo.NodeVersion()
-		osDistribution = migOsInfo.OsDistribution()
-	}
 	var effectiveCpu, effectiveMemory int64
 	if kc := mig.Spec().KubeletConfig; kc != nil {
 		if rrc := kc.ReservedResourcesConfig; rrc != nil {
@@ -168,7 +242,12 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 			}
 		}
 	}
-	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, riptideEnabled, ephemeralLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)
+	// In mixed mode, GKE sizes kube-reserved from the ephemeral partition, not the disk count.
+	kubeReservedLocalSsdCount := ephemeralLocalSsdCount
+	if localSSDCfg.IsMixedMode() {
+		kubeReservedLocalSsdCount = 0
+	}
+	kubeReserved := t.BuildKubeReserved(cpu, mem, mig.Spec().MachineType, ephemeralStorageGiB, riptideEnabled, kubeReservedLocalSsdCount, maxPodsPerNode, effectiveCpu, effectiveMemory, version, osDistribution)
 	evictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), nil)
 
 	node.Status = apiv1.NodeStatus{
@@ -189,6 +268,44 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 	// Ready status
 	node.Status.Conditions = cloudprovider.BuildReadyConditions()
 	return &node, nil
+}
+
+// BuildNodeFromTemplate builds node based on GCE instance template and kube-env.
+func (t *GkeTemplateBuilder) BuildNodeFromTemplate(ctx context.Context, mig gce.Mig, migOsInfo gce.MigOsInfo, template *gce_api.InstanceTemplate, kubeEnv gce.KubeEnv, cpu int64, mem int64, pods *int64, reserved gce.OsReservedCalculator, localSSDSizeProvider localssdsize.LocalSSDSizeProvider) (*apiv1.Node, error) {
+	node, err := t.GceTemplateBuilder.BuildNodeFromTemplate(ctx, mig, migOsInfo, template, kubeEnv, cpu, mem, pods, reserved, localSSDSizeProvider)
+	if err != nil {
+		return nil, err
+	}
+	rawCapGb, found := kubeEnv.Var(ephemeralLocalSsdCapacityGbKubeEnvVar)
+	if !found || strings.TrimSpace(rawCapGb) == "" {
+		return node, nil
+	}
+	ephemeralCapacityGb, err := strconv.ParseInt(strings.TrimSpace(rawCapGb), 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse %s=%q: %w", ephemeralLocalSsdCapacityGbKubeEnvVar, rawCapGb, err)
+	}
+	if ephemeralCapacityGb < 0 {
+		return nil, fmt.Errorf("%s must be non-negative, got %d", ephemeralLocalSsdCapacityGbKubeEnvVar, ephemeralCapacityGb)
+	}
+	if ephemeralCapacityGb == 0 {
+		return node, nil
+	}
+
+	var osDist gce.OperatingSystemDistribution
+	if migOsInfo != nil {
+		osDist = migOsInfo.OsDistribution()
+	}
+	ephemeralCapBytes := mixedModeEphemeralStorageCapacityBytes(ctx, ephemeralCapacityGb, osDist)
+	node.Status.Capacity[apiv1.ResourceEphemeralStorage] = *resource.NewQuantity(ephemeralCapBytes, resource.DecimalSI)
+
+	evictionHardMap := extractEvictionHardFromKubeEnv(kubeEnv)
+	evictionHard := gce.ParseEvictionHardOrGetDefault(ctx, evictionHardMap)
+	if allocatable, err := t.BuildAllocatableFromKubeEnv(ctx, node.Status.Capacity, kubeEnv, evictionHard); err == nil {
+		node.Status.Allocatable = allocatable
+	} else {
+		node.Status.Allocatable = node.Status.Capacity.DeepCopy()
+	}
+	return node, nil
 }
 
 // BuildKubeReserved builds kube reserved resources based on node physical resources.
@@ -253,7 +370,20 @@ func buildLabelsForAutoprovisionedMig(mig *GkeMig, nodeName string, os gce.Opera
 		}
 	}
 
+	localSSDCfg := mig.Spec().LocalSSDConfig
+	if localSSDCfg.IsBlockMode() {
+		labels[gkelabels.LocalNvmeSsdBlockLabel] = gkelabels.LocalNvmeSsdBlockValue
+	} else if localSSDCfg.IsMixedMode() && ephemeralLocalSsdCount > 0 {
+		labels[gkelabels.EphemeralLocalSsdLabel] = gkelabels.EphemeralLocalSsdEnabledValue
+		labels[gkelabels.LocalNvmeSsdPartitionLabel] = gkelabels.LocalNvmeSsdPartitionValue
+	} else if ephemeralLocalSsdCount > 0 {
+		labels[gkelabels.EphemeralLocalSsdLabel] = gkelabels.EphemeralLocalSsdEnabledValue
+	}
+
 	for k, v := range mig.Spec().Labels {
+		if localSSDCfg.IsBlockMode() && k == gkelabels.EphemeralLocalSsdLabel {
+			return map[string]string{}, fmt.Errorf("conflict in labels requested: %s=%s cannot be set in block mode", k, v)
+		}
 		if existingValue, found := labels[k]; found {
 			if v != existingValue {
 				return map[string]string{}, fmt.Errorf("conflict in labels requested: %s=%s  present: %s=%s",
@@ -262,9 +392,6 @@ func buildLabelsForAutoprovisionedMig(mig *GkeMig, nodeName string, os gce.Opera
 		} else {
 			labels[k] = v
 		}
-	}
-	if ephemeralLocalSsdCount > 0 {
-		labels[gkelabels.EphemeralLocalSsdLabel] = gkelabels.EphemeralLocalSsdEnabledValue
 	}
 	labels[gkelabels.MaxPodsPerNodeLabel] = fmt.Sprintf("%d", maxPodsPerNode)
 	return labels, nil

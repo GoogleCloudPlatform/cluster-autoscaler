@@ -32,6 +32,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	gkelocalssdsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
@@ -202,6 +203,76 @@ func TestBuildLabelsForAutoprovisionedMigOK(t *testing.T) {
 	assert.Equal(t, cloudprovider.DefaultOS, labels[apiv1.LabelOSStable])
 	assert.Equal(t, "true", labels[gkelabels.EphemeralLocalSsdLabel])
 	assert.Equal(t, "110", labels[gkelabels.MaxPodsPerNodeLabel])
+}
+
+func TestBuildLabelsForAutoprovisionedMig_BlockMode(t *testing.T) {
+	arch := gce.DefaultArch
+	labels, err := buildLabelsForAutoprovisionedMig(
+		&GkeMig{
+			gceRef: gce.GceRef{
+				Name:    "kubernetes-minion-autoprovisioned-group",
+				Project: "mwielgus-proj",
+				Zone:    "us-central1-b",
+			},
+			autoprovisioned: true,
+			spec: &gkeclient.NodePoolSpec{
+				MachineType:        "n1-standard-8",
+				SystemArchitecture: &arch,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+			},
+			gkeManager: &gkeManagerImpl{
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+			},
+		},
+		"sillyname",
+		gce.OperatingSystemLinux,
+		0,
+		gkelabels.DefaultMaxPodsPerNode,
+		false)
+
+	assert.Nil(t, err)
+	assert.Equal(t, gkelabels.LocalNvmeSsdBlockValue, labels[gkelabels.LocalNvmeSsdBlockLabel])
+	_, hasEphemeral := labels[gkelabels.EphemeralLocalSsdLabel]
+	assert.False(t, hasEphemeral)
+}
+
+func TestBuildLabelsForAutoprovisionedMig_MixedMode(t *testing.T) {
+	arch := gce.DefaultArch
+	labels, err := buildLabelsForAutoprovisionedMig(
+		&GkeMig{
+			gceRef: gce.GceRef{
+				Name:    "kubernetes-minion-autoprovisioned-group",
+				Project: "mwielgus-proj",
+				Zone:    "us-central1-b",
+			},
+			autoprovisioned: true,
+			spec: &gkeclient.NodePoolSpec{
+				MachineType:        "n1-standard-8",
+				SystemArchitecture: &arch,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+						LocalSsdCount: 4,
+					},
+					EphemeralCapacityGb: 200,
+				},
+			},
+			gkeManager: &gkeManagerImpl{
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+			},
+		},
+		"sillyname",
+		gce.OperatingSystemLinux,
+		4,
+		gkelabels.DefaultMaxPodsPerNode,
+		false)
+
+	assert.Nil(t, err)
+	assert.Equal(t, gkelabels.EphemeralLocalSsdEnabledValue, labels[gkelabels.EphemeralLocalSsdLabel])
+	assert.Equal(t, gkelabels.LocalNvmeSsdPartitionValue, labels[gkelabels.LocalNvmeSsdPartitionLabel])
 }
 
 func TestBuildLabelsForAutoprovisionedMigConflict(t *testing.T) {
@@ -710,6 +781,273 @@ func TestAllocatableResourceForBuildNodeFromMigSpec(t *testing.T) {
 			assert.NoError(t, err)
 			expectedAllocatable := tb.CalculateAllocatable(capacity, tb.BuildKubeReserved(tc.cpu, tc.memory, mig.Spec().MachineType, ephemeralGiB, false, localSsdCount, mig.spec.MaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution()), gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
 			assertEqualResourceLists(t, "Allocatable", expectedAllocatable, node.Status.Allocatable)
+		})
+	}
+}
+
+func TestBuildNodeFromMigSpec_PureBlockMode(t *testing.T) {
+	g := newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil)
+	arch := gce.Amd64
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: projectId,
+			Zone:    zoneB,
+			Name:    "nodeautoprovisioning-blockmode",
+		},
+		gkeManager: g,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "n2-standard-4",
+			SystemArchitecture: &arch,
+			DiskSize:           100,
+			LocalSSDConfig: &gkeclient.LocalSSDConfig{
+				LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+					LocalSsdCount: 4,
+				},
+			},
+		},
+	}
+	AddMigsToNodePool("nodeautoprovisioning-blockmode", mig)
+	tb := &GkeTemplateBuilder{}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, arch), mig.Version(), mig.IsConfidentialNode())
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 16*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+
+	// Pure block mode must have ephemeral storage equal to boot disk size (100 GiB), not 4 * 375 GiB.
+	expectedCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 100*GiB, 0, nil, &GkeReserved{}, nil)
+	assert.NoError(t, err)
+	expectedCap := expectedCapacity[apiv1.ResourceEphemeralStorage]
+	actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedCap.Value(), actualCap.Value())
+	assert.Equal(t, gkelabels.LocalNvmeSsdBlockValue, node.Labels[gkelabels.LocalNvmeSsdBlockLabel])
+	_, hasEphemeral := node.Labels[gkelabels.EphemeralLocalSsdLabel]
+	assert.False(t, hasEphemeral)
+}
+
+func TestBuildNodeFromMigSpec_MixedMode(t *testing.T) {
+	g := newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil)
+	arch := gce.Amd64
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: projectId,
+			Zone:    zoneB,
+			Name:    "nodeautoprovisioning-mixedmode",
+		},
+		gkeManager: g,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "n2-standard-4",
+			SystemArchitecture: &arch,
+			DiskSize:           100,
+			LocalSSDConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+				EphemeralCapacityGb: 250,
+			},
+		},
+	}
+	AddMigsToNodePool("nodeautoprovisioning-mixedmode", mig)
+	tb := &GkeTemplateBuilder{}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, arch), mig.Version(), mig.IsConfidentialNode())
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 16*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+
+	expectedCapBytes := mixedModeEphemeralStorageCapacityBytes(context.TODO(), 250, gkeMigOsInfo.OsDistribution())
+	actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedCapBytes, actualCap.Value())
+
+	fullOverheadCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 250*GiB, 4, nil, &GkeReserved{}, nil)
+	assert.NoError(t, err)
+	fullCap := fullOverheadCapacity[apiv1.ResourceEphemeralStorage]
+	assert.Greater(t, actualCap.Value(), fullCap.Value())
+
+	assert.Equal(t, gkelabels.EphemeralLocalSsdEnabledValue, node.Labels[gkelabels.EphemeralLocalSsdLabel])
+	assert.Equal(t, gkelabels.LocalNvmeSsdPartitionValue, node.Labels[gkelabels.LocalNvmeSsdPartitionLabel])
+
+	// Verify mixed mode capacity calculation with custom disk size provider.
+	customSsdProvider := gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(map[string]uint64{"c4d-standard-8-lssd": 3000})
+	c4dMig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: projectId,
+			Zone:    zoneB,
+			Name:    "nodeautoprovisioning-mixedmode-c4d",
+		},
+		gkeManager: g,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "c4d-standard-8-lssd",
+			SystemArchitecture: &arch,
+			DiskSize:           100,
+			LocalSSDConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 1,
+				},
+				EphemeralCapacityGb: 1500,
+			},
+		},
+	}
+	AddMigsToNodePool("nodeautoprovisioning-mixedmode-c4d", c4dMig)
+	c4dNode, err := tb.BuildNodeFromMigSpec(c4dMig, gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, customSsdProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+	expectedC4dCap := 1500*GiB - gce.EphemeralStorageOnLocalSSDFilesystemOverheadInBytes(context.TODO(), 4, gce.OperatingSystemDistributionCOS)
+	actualC4dCap := c4dNode.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedC4dCap, actualC4dCap.Value())
+
+	// Verify 3375 GiB (unitCount = 9 > 8) deducts 16-unit step overhead monotonically above 3000 GiB.
+	cap3000 := mixedModeEphemeralStorageCapacityBytes(context.TODO(), 3000, gce.OperatingSystemDistributionCOS)
+	cap3375 := mixedModeEphemeralStorageCapacityBytes(context.TODO(), 3375, gce.OperatingSystemDistributionCOS)
+	expectedCap3375 := 3375*GiB - gce.EphemeralStorageOnLocalSSDFilesystemOverheadInBytes(context.TODO(), 9, gce.OperatingSystemDistributionCOS)
+	assert.Equal(t, expectedCap3375, cap3375)
+	assert.Greater(t, cap3375, cap3000)
+}
+
+func TestBuildNodeFromMigSpec_MixedMode_SmallCapacityKubeReserved(t *testing.T) {
+	g := newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil)
+	arch := gce.Amd64
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: projectId,
+			Zone:    zoneB,
+			Name:    "nodeautoprovisioning-mixedmode-small",
+		},
+		gkeManager: g,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "n2-standard-4",
+			SystemArchitecture: &arch,
+			DiskSize:           100,
+			LocalSSDConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+				EphemeralCapacityGb: 60,
+			},
+		},
+	}
+	AddMigsToNodePool("nodeautoprovisioning-mixedmode-small", mig)
+	tb := &GkeTemplateBuilder{}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, arch), mig.Version(), mig.IsConfidentialNode())
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, 4, 16*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+
+	// Kube-reserved is based on ephemeralCapacityGb, not the physical disk count.
+	assert.Equal(t, int64(27*GiB), PredictKubeReservedEphemeralStorage(60))
+	expectedCapBytes := mixedModeEphemeralStorageCapacityBytes(context.TODO(), 60, gkeMigOsInfo.OsDistribution())
+	actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedCapBytes, actualCap.Value())
+
+	fullOverheadCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 60*GiB, 4, nil, &GkeReserved{}, nil)
+	assert.NoError(t, err)
+	fullCap := fullOverheadCapacity[apiv1.ResourceEphemeralStorage]
+	assert.Greater(t, actualCap.Value(), fullCap.Value())
+
+	capacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 60*GiB, 0, nil, &GkeReserved{}, nil)
+	assert.NoError(t, err)
+	capacity[apiv1.ResourceEphemeralStorage] = *resource.NewQuantity(expectedCapBytes, resource.DecimalSI)
+	kubeReserved := tb.BuildKubeReserved(4, 16*GiB, "n2-standard-4", 60, false, 0, gkelabels.DefaultMaxPodsPerNode, 0, 0, mig.Version(), gkeMigOsInfo.OsDistribution())
+	expected := tb.CalculateAllocatable(capacity, kubeReserved, gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
+	expectedAllocatable := expected[apiv1.ResourceEphemeralStorage]
+	actualAllocatable := node.Status.Allocatable[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedAllocatable.Value(), actualAllocatable.Value())
+	assert.Positive(t, actualAllocatable.Value())
+
+	// Verify a small 15 GiB mixed-mode partition yields positive Allocatable.
+	mig15 := &GkeMig{
+		gceRef: gce.GceRef{
+			Project: projectId,
+			Zone:    zoneB,
+			Name:    "nodeautoprovisioning-mixedmode-15",
+		},
+		gkeManager: g,
+		spec: &gkeclient.NodePoolSpec{
+			MachineType:        "n2-standard-4",
+			SystemArchitecture: &arch,
+			DiskSize:           100,
+			LocalSSDConfig: &gkeclient.LocalSSDConfig{
+				EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+					LocalSsdCount: 4,
+				},
+				EphemeralCapacityGb: 15,
+			},
+		},
+	}
+	AddMigsToNodePool("nodeautoprovisioning-mixedmode-15", mig15)
+	node15, err := tb.BuildNodeFromMigSpec(mig15, gkeMigOsInfo, 4, 16*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+	allocatable15 := node15.Status.Allocatable[apiv1.ResourceEphemeralStorage]
+	assert.Positive(t, allocatable15.Value())
+}
+
+func TestBuildNodeFromMigSpec_EphemeralStorageLocalSsdConfig_AutomaticCount(t *testing.T) {
+	testCases := []struct {
+		name               string
+		machineType        string
+		cpu                int64
+		mem                int64
+		wantStorageGiB     int64
+		wantLocalSsdCount  int64
+		wantEphemeralLabel bool
+	}{
+		{
+			name:               "automatic count machine type resolves omitted count to fixed count",
+			machineType:        "c3-standard-8-lssd",
+			cpu:                8,
+			mem:                32 * GiB,
+			wantStorageGiB:     2 * 375,
+			wantLocalSsdCount:  2,
+			wantEphemeralLabel: true,
+		},
+		{
+			name:               "single-allowed configurable machine type keeps ephemeral storage on boot disk when count is 0",
+			machineType:        "g2-standard-4",
+			cpu:                4,
+			mem:                16 * GiB,
+			wantStorageGiB:     100,
+			wantLocalSsdCount:  0,
+			wantEphemeralLabel: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := newTestGkeManager(t, "", napEnabled, false, false, nil, false, nil)
+			arch := gce.Amd64
+			mig := &GkeMig{
+				gceRef: gce.GceRef{
+					Project: projectId,
+					Zone:    zoneB,
+					Name:    "nodeautoprovisioning-autocount",
+				},
+				gkeManager: g,
+				spec: &gkeclient.NodePoolSpec{
+					MachineType:        tc.machineType,
+					SystemArchitecture: &arch,
+					DiskSize:           100,
+					LocalSSDConfig: &gkeclient.LocalSSDConfig{
+						EphemeralStorageLocalSsdConfig: &gke_api_beta.EphemeralStorageLocalSsdConfig{
+							LocalSsdCount: 0,
+						},
+					},
+				},
+			}
+			AddMigsToNodePool("nodeautoprovisioning-autocount", mig)
+			tb := &GkeTemplateBuilder{}
+			gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, arch), mig.Version(), mig.IsConfidentialNode())
+			ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+			node, err := tb.BuildNodeFromMigSpec(mig, gkeMigOsInfo, tc.cpu, tc.mem, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+			assert.NoError(t, err)
+
+			expectedCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, tc.cpu, tc.mem, nil, tc.wantStorageGiB*GiB, tc.wantLocalSsdCount, nil, &GkeReserved{}, nil)
+			assert.NoError(t, err)
+			expectedCap := expectedCapacity[apiv1.ResourceEphemeralStorage]
+			actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+			assert.Equal(t, expectedCap.Value(), actualCap.Value())
+			if tc.wantEphemeralLabel {
+				assert.Equal(t, gkelabels.EphemeralLocalSsdEnabledValue, node.Labels[gkelabels.EphemeralLocalSsdLabel])
+			} else {
+				_, hasEphemeral := node.Labels[gkelabels.EphemeralLocalSsdLabel]
+				assert.False(t, hasEphemeral)
+			}
 		})
 	}
 }
@@ -1309,4 +1647,263 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 			assert.Equal(t, want, node.Status.Allocatable.Memory().Value())
 		})
 	}
+}
+
+func TestBuildLabelsForAutoprovisionedMig_BlockModeRejectsEphemeralLabel(t *testing.T) {
+	arch := gce.DefaultArch
+	_, err := buildLabelsForAutoprovisionedMig(
+		&GkeMig{
+			gceRef: gce.GceRef{
+				Name:    "kubernetes-minion-autoprovisioned-group",
+				Project: "mwielgus-proj",
+				Zone:    "us-central1-b",
+			},
+			autoprovisioned: true,
+			spec: &gkeclient.NodePoolSpec{
+				MachineType:        "n1-standard-8",
+				SystemArchitecture: &arch,
+				LocalSSDConfig: &gkeclient.LocalSSDConfig{
+					LocalNvmeSsdBlockConfig: &gke_api_beta.LocalNvmeSsdBlockConfig{
+						LocalSsdCount: 4,
+					},
+				},
+				Labels: map[string]string{
+					gkelabels.EphemeralLocalSsdLabel: gkelabels.EphemeralLocalSsdEnabledValue,
+				},
+			},
+			gkeManager: &gkeManagerImpl{
+				machineConfigProvider: machinetypes.NewMachineConfigProvider(nil),
+			},
+		},
+		"sillyname",
+		gce.OperatingSystemLinux,
+		0,
+		gkelabels.DefaultMaxPodsPerNode,
+		false)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be set in block mode")
+}
+
+func TestBuildNodeFromTemplate_MixedMode(t *testing.T) {
+	tb := &GkeTemplateBuilder{}
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Name:    "mixed-pool",
+			Project: "my-project",
+			Zone:    "us-central1-b",
+		},
+	}
+	kubeEnvContent := "AUTOSCALER_ENV_VARS: 'BLOCK_EPH_STORAGE_BOOT_DISK=true;ephemeral_storage_local_ssd_count=4;node_labels=cloud.google.com/gke-ephemeral-storage-local-ssd=true,cloud.google.com/gke-local-nvme-ssd-partition=true'\n" +
+		"EPHEMERAL_LOCAL_SSD_CAPACITY_GB: '60'\n" +
+		"KUBELET_TEST_ARGS: --kube-reserved=cpu=1000m,memory=1024Mi,ephemeral-storage=27Gi\n"
+	template := &gce_api.InstanceTemplate{
+		Name: "mixed-template",
+		Properties: &gce_api.InstanceProperties{
+			MachineType: "n2-standard-4",
+			Metadata: &gce_api.Metadata{
+				Items: []*gce_api.MetadataItems{
+					{Key: "kube-env", Value: &kubeEnvContent},
+				},
+			},
+			Disks: []*gce_api.AttachedDisk{
+				{
+					Boot: true,
+					InitializeParams: &gce_api.AttachedDiskInitializeParams{
+						DiskSizeGb: 100,
+					},
+				},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+			},
+		},
+	}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), "", false)
+	kubeEnv, err := gce.ExtractKubeEnv(template)
+	assert.NoError(t, err)
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, 4, 16*GiB, nil, &gce.GceReserved{}, ssdDiskSizeProvider)
+	assert.NoError(t, err)
+
+	expectedCapBytes := mixedModeEphemeralStorageCapacityBytes(context.TODO(), 60, gkeMigOsInfo.OsDistribution())
+	actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedCapBytes, actualCap.Value())
+
+	expectedKubeReserved := tb.BuildKubeReserved(4, 16*GiB, "n2-standard-4", 60, false, 0, gkelabels.DefaultMaxPodsPerNode, 0, 0, "", gkeMigOsInfo.OsDistribution())
+	expectedAllocatable := tb.CalculateAllocatable(node.Status.Capacity, expectedKubeReserved, gce.ParseEvictionHardOrGetDefault(context.TODO(), nil))
+	expectedEph := expectedAllocatable[apiv1.ResourceEphemeralStorage]
+	actualAllocatable := node.Status.Allocatable[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedEph.Value(), actualAllocatable.Value())
+	assert.Positive(t, actualAllocatable.Value())
+	assert.Equal(t, gkelabels.EphemeralLocalSsdEnabledValue, node.Labels[gkelabels.EphemeralLocalSsdLabel])
+	assert.Equal(t, gkelabels.LocalNvmeSsdPartitionValue, node.Labels[gkelabels.LocalNvmeSsdPartitionLabel])
+
+	// Subtest with evictionHard nodefs.available threshold.
+	kubeEnvContentWithEviction := "AUTOSCALER_ENV_VARS: BLOCK_EPH_STORAGE_BOOT_DISK=true;ephemeral_storage_local_ssd_count=4;node_labels=cloud.google.com/gke-ephemeral-storage-local-ssd=true,cloud.google.com/gke-local-nvme-ssd-partition=true;evictionHard=memory.available=200Mi,nodefs.available=15%\n" +
+		"EPHEMERAL_LOCAL_SSD_CAPACITY_GB: '60'\n" +
+		"KUBELET_TEST_ARGS: --kube-reserved=cpu=1000m,memory=1024Mi,ephemeral-storage=27Gi\n"
+	templateWithEviction := &gce_api.InstanceTemplate{
+		Name: "mixed-template-eviction",
+		Properties: &gce_api.InstanceProperties{
+			MachineType: "n2-standard-4",
+			Metadata: &gce_api.Metadata{
+				Items: []*gce_api.MetadataItems{
+					{Key: "kube-env", Value: &kubeEnvContentWithEviction},
+				},
+			},
+			Disks: []*gce_api.AttachedDisk{
+				{
+					Boot: true,
+					InitializeParams: &gce_api.AttachedDiskInitializeParams{
+						DiskSizeGb: 100,
+					},
+				},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+			},
+		},
+	}
+	kubeEnvWithEviction, err := gce.ExtractKubeEnv(templateWithEviction)
+	assert.NoError(t, err)
+	nodeWithEviction, err := tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, templateWithEviction, kubeEnvWithEviction, 4, 16*GiB, nil, &gce.GceReserved{}, ssdDiskSizeProvider)
+	assert.NoError(t, err)
+
+	expectedEvictionHard := gce.ParseEvictionHardOrGetDefault(context.TODO(), map[string]string{
+		"memory.available": "200Mi",
+		"nodefs.available": "15%",
+	})
+	expectedAllocatableWithEviction := tb.CalculateAllocatable(nodeWithEviction.Status.Capacity, expectedKubeReserved, expectedEvictionHard)
+	expectedEphWithEviction := expectedAllocatableWithEviction[apiv1.ResourceEphemeralStorage]
+	actualAllocatableWithEviction := nodeWithEviction.Status.Allocatable[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedEphWithEviction.Value(), actualAllocatableWithEviction.Value())
+}
+
+func TestBuildNodeFromTemplate_InvalidEphemeralCapacity(t *testing.T) {
+	testCases := []struct {
+		name              string
+		rawCapacity       string
+		expectErr         bool
+		expectSameStorage bool
+	}{
+		{
+			name:        "not a number",
+			rawCapacity: "not-a-number",
+			expectErr:   true,
+		},
+		{
+			name:        "negative value",
+			rawCapacity: "-10",
+			expectErr:   true,
+		},
+		{
+			name:              "zero capacity leaves unchanged",
+			rawCapacity:       "0",
+			expectErr:         false,
+			expectSameStorage: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tb := &GkeTemplateBuilder{}
+			mig := &GkeMig{
+				gceRef: gce.GceRef{
+					Name:    "invalid-pool",
+					Project: "my-project",
+					Zone:    "us-central1-b",
+				},
+			}
+			kubeEnvContent := fmt.Sprintf("EPHEMERAL_LOCAL_SSD_CAPACITY_GB: %q\n", tc.rawCapacity)
+			template := &gce_api.InstanceTemplate{
+				Name: "invalid-template",
+				Properties: &gce_api.InstanceProperties{
+					MachineType: "n2-standard-4",
+					Metadata: &gce_api.Metadata{
+						Items: []*gce_api.MetadataItems{
+							{Key: "kube-env", Value: &kubeEnvContent},
+						},
+					},
+					Disks: []*gce_api.AttachedDisk{
+						{
+							Boot: true,
+							InitializeParams: &gce_api.AttachedDiskInitializeParams{
+								DiskSizeGb: 100,
+							},
+						},
+					},
+				},
+			}
+			gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), "", false)
+			kubeEnv, err := gce.ExtractKubeEnv(template)
+			assert.NoError(t, err)
+			ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+			node, err := tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, 4, 16*GiB, nil, &gce.GceReserved{}, ssdDiskSizeProvider)
+			if tc.expectErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				if tc.expectSameStorage {
+					expectedCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 100*GiB, 0, nil, &gce.GceReserved{}, nil)
+					assert.NoError(t, err)
+					expectedCap := expectedCapacity[apiv1.ResourceEphemeralStorage]
+					actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+					assert.Equal(t, expectedCap.Value(), actualCap.Value())
+				}
+			}
+		})
+	}
+}
+
+func TestBuildNodeFromTemplate_PureBlockMode(t *testing.T) {
+	tb := &GkeTemplateBuilder{}
+	mig := &GkeMig{
+		gceRef: gce.GceRef{
+			Name:    "block-pool",
+			Project: "my-project",
+			Zone:    "us-central1-b",
+		},
+	}
+	kubeEnvContent := "AUTOSCALER_ENV_VARS: 'node_labels=cloud.google.com/gke-local-nvme-ssd=true'\n" +
+		"NODE_LOCAL_NVME_SSD_BLOCK_EXT: 'true'\n"
+	template := &gce_api.InstanceTemplate{
+		Name: "block-template",
+		Properties: &gce_api.InstanceProperties{
+			MachineType: "n2-standard-4",
+			Metadata: &gce_api.Metadata{
+				Items: []*gce_api.MetadataItems{
+					{Key: "kube-env", Value: &kubeEnvContent},
+				},
+			},
+			Disks: []*gce_api.AttachedDisk{
+				{
+					Boot: true,
+					InitializeParams: &gce_api.AttachedDiskInitializeParams{
+						DiskSizeGb: 100,
+					},
+				},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+				{Type: "SCRATCH", InitializeParams: &gce_api.AttachedDiskInitializeParams{DiskType: "local-ssd"}},
+			},
+		},
+	}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), "", false)
+	kubeEnv, err := gce.ExtractKubeEnv(template)
+	assert.NoError(t, err)
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+	node, err := tb.BuildNodeFromTemplate(context.TODO(), mig, gkeMigOsInfo, template, kubeEnv, 4, 16*GiB, nil, &gce.GceReserved{}, ssdDiskSizeProvider)
+	assert.NoError(t, err)
+
+	expectedCapacity, err := tb.BuildCapacity(context.TODO(), gkeMigOsInfo, 4, 16*GiB, nil, 100*GiB, 0, nil, &gce.GceReserved{}, nil)
+	assert.NoError(t, err)
+	expectedCap := expectedCapacity[apiv1.ResourceEphemeralStorage]
+	actualCap := node.Status.Capacity[apiv1.ResourceEphemeralStorage]
+	assert.Equal(t, expectedCap.Value(), actualCap.Value())
+	assert.Equal(t, "true", node.Labels[gkelabels.LocalNvmeSsdBlockLabel])
+	_, hasEphemeral := node.Labels[gkelabels.EphemeralLocalSsdLabel]
+	assert.False(t, hasEphemeral)
 }
