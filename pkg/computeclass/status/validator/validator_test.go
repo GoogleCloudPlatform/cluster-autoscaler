@@ -24,8 +24,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
@@ -35,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status/validator/conditions"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
@@ -711,4 +714,65 @@ func TestRuleConditionsEmittedCorrectly(t *testing.T) {
 
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && s[0:len(substr)] == substr || (len(s) > len(substr) && contains(s[1:], substr))
+}
+
+func TestRuleConditionsEmittedCorrectly_MixedModeNodeVersion(t *testing.T) {
+	testCrdLabel := "test-crd"
+	c3Standard8Lssd := "c3-standard-8-lssd"
+	nodeVersion := "1.36.5-gke.100"
+
+	testCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName("crd-object-1"),
+		crd.WithNodeVersion(nodeVersion),
+		crd.WithRules([]rules.Rule{
+			rules.NewRule(
+				rules.WithMachineTypeRule(&c3Standard8Lssd),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, ptr.To[int64](200)),
+			),
+		}),
+		crd.WithScaleUpAnyway(),
+		crd.WithAutoprovisioningEnabled(),
+	)
+
+	mockCrdLister := lister.NewMockCrdLister([]crd.CRD{testCrd})
+	mockCrdLister.SetCrdLabel(testCrdLabel)
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithAutoprovisioningDefaultFamily(machinetypes.E2).
+		WithAutoprovisioningLocations("zone-a").
+		WithValidMachineTypes([]gce.MachineTypeKey{{MachineTypeName: c3Standard8Lssd, Zone: "zone-a"}}).
+		WithAutoprovisioningEnabled(true).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+
+	updatesCh := make(chan status.UpdateMessage, 10)
+	mockManager := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+		map[string]string{},
+	)
+	ssdProvider := localssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes)
+	v, _ := NewValidator(nil, mockCrdLister, provider, computeclass.NewMockMetrics(), nil, ssdProvider, nil, emptyConfig, updatesCh, true, mockManager)
+
+	v.loop()
+	close(updatesCh)
+
+	wantMsg := fmt.Sprintf(conditions.MixedModeLocalSSDUnsupportedNodeVersionMessage, "1.37.0-gke.3509000", nodeVersion)
+	foundRuleCond := false
+	for msg := range updatesCh {
+		mockStatus := crd.NewMockCRDStatus(nil)
+		msg.Mutate(mockStatus)
+		if mockStatus.UpdateRuleConditionsCalled && mockStatus.RuleIdx == "0" {
+			for _, cond := range mockStatus.Conditions {
+				isExpectedType := cond.Type == conditions.RuleMisconfiguredCondition
+				isExpectedReason := cond.Reason == conditions.NoSuitableMachineExistsReason
+				if isExpectedType && isExpectedReason && cond.Message == wantMsg {
+					foundRuleCond = true
+				}
+			}
+		}
+	}
+	if !foundRuleCond {
+		t.Fatalf("v.loop() did not emit rule 0 condition for nodeVersion %q, want (type=%q, reason=%q, message=%q)", nodeVersion, conditions.RuleMisconfiguredCondition, conditions.NoSuitableMachineExistsReason, wantMsg)
+	}
 }

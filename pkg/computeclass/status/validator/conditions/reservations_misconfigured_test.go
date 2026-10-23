@@ -30,6 +30,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"k8s.io/utils/ptr"
 )
 
 func TestValidateReservationsConfig(t *testing.T) {
@@ -1211,6 +1212,44 @@ func TestValidateReservationsConfig(t *testing.T) {
 			wantCondition: true,
 			wantReason:    ReservationUnusableReason,
 			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", fmt.Sprintf("in zone zone2: machine type mismatch, requested %v, reservation has %v", existingMachineType, "n2-standard-2")),
+		},
+		{
+			name: "Ephemeral mode omitted count with machineFamily c3 and c3-standard-4 reservation without LSSD, unusable",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity)),
+						rules.WithMachineFamilyRule(ptr.To("c3")),
+						rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+					),
+				}),
+			),
+			reservations: []*gcereservation.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "zone-a", "c3-standard-4", "minCpuPlatform", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: true,
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: local SSD mismatch: an explicit localSSDCount is required for c3-standard-4"),
+		},
+		{
+			name: "Block mode omitted count with machineFamily c3 and c3-standard-4 reservation without LSSD, unusable",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithReservationsRule(rules.NewReservation().WithReservationName("reservation1").WithReservationAffinity(reservations.SpecificAffinity)),
+						rules.WithMachineFamilyRule(ptr.To("c3")),
+						rules.WithLocalNvmeSsdBlockConfigRule(nil),
+					),
+				}),
+			),
+			reservations: []*gcereservation.Reservation{
+				reservations.BuildReservationWithId(1, "READY", true, "zone-a", "c3-standard-4", "minCpuPlatform", nil, nil, localReservationProject, "reservation1"),
+			},
+			wantCondition: true,
+			wantReason:    ReservationUnusableReason,
+			wantMessage:   fmt.Sprintf(ReservationUnusableMessageWithReason, "reservation1", "in zone zone-a: local SSD mismatch: an explicit localSSDCount is required for c3-standard-4"),
 		},
 	}
 

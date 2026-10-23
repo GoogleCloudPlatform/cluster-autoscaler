@@ -97,7 +97,19 @@ const (
 	DiskTypeNotSupportedWithMachineFamilyMessage         = "Disk type %s is not supported with machine family %s."
 	LocalSSDNotSupportedWithMachineTypeMessage           = "Local SSD count %d is not supported with machine type %s."
 	LocalSSDNotSupportedWithMachineFamilyMessage         = "Local SSD count %d is not supported with machine family %s."
+	LocalSSDCountRequiredForMachineFamilyMessage         = "Local SSD count is required for machine family %s."
+	LocalSSDCountRequiredForMachineTypeMessage           = "Local SSD count is required for machine type %s."
+	LocalSSDCapacityExceedsMachineFamilyLimitMessage     = "Ephemeral storage Local SSD capacity %dGB must be less than the total Local SSD capacity %dGB for machine family %s. To use all of the Local SSDs for ephemeral storage, omit ephemeralCapacityGb."
+	LocalSSDCapacityExceedsMachineTypeLimitMessage       = "Ephemeral storage Local SSD capacity %dGB must be less than the total Local SSD capacity %dGB for machine type %s. To use all of the Local SSDs for ephemeral storage, omit ephemeralCapacityGb."
 	LocalSSDIncompatibleWithCpuMessage                   = "No machine exists in machine family %s with Local SSD count %d and min CPU cores of %d."
+	LocalSSDCountOmittedIncompatibleWithCpuMessage       = "No machine exists in machine family %s with a fixed Local SSD count and min CPU cores of %d."
+	DedicatedLocalSsdSwapWithMixedModeMessage            = "Dedicated Local SSD swap profile cannot be used with ephemeralStorageLocalSsdConfig.ephemeralCapacityGb (mixed Local SSD mode)."
+	DedicatedLocalSsdSwapWithBlockModeMessage            = "Dedicated Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)."
+	EphemeralLocalSsdSwapWithBlockModeMessage            = "Ephemeral Local SSD swap profile cannot be used with localNvmeSsdBlockConfig (raw block mode)."
+	LocalSSDNotSupportedByMachineTypeMessage             = "Machine type %s does not support Local SSDs."
+	LocalSSDNotSupportedByMachineFamilyMessage           = "Machine family %s does not support Local SSDs."
+	DedicatedLocalSsdSwapConsumesAllLocalSSDsMessage     = "Dedicated Local SSD swap disk count %d leaves no Local SSDs for storage on machine type %s, which has %d Local SSDs."
+	MixedModeLocalSSDUnsupportedNodeVersionMessage       = "ephemeralCapacityGb requires node version %s or later, but nodePoolConfig.nodeVersion is %s."
 	LocalSSDAllowedCountsMessage                         = "Allowed counts are - [%v]."
 	ReservationNotFoundMessage                           = "Reservation %q either does not exist or not accessible."
 	ReservationUnusableMessageWithReason                 = "Reservation %q is incompatible with priority rule configuration (%v)."
@@ -404,6 +416,46 @@ func LocalSSDNotSupportedWithMachineFamilyCondition(localSSDCount int, machineFa
 	}
 }
 
+func LocalSSDCountRequiredForMachineFamilyCondition(machineFamily string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDCountRequiredForMachineFamilyMessage, machineFamily),
+	}
+}
+
+func LocalSSDCountRequiredForMachineTypeCondition(machineType string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDCountRequiredForMachineTypeMessage, machineType),
+	}
+}
+
+func LocalSSDCapacityExceedsMachineFamilyLimitCondition(capacityGb, maxCapacityGb int64, machineFamily string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDCapacityExceedsMachineFamilyLimitMessage, capacityGb, maxCapacityGb, machineFamily),
+	}
+}
+
+func LocalSSDCapacityExceedsMachineTypeLimitCondition(capacityGb, maxCapacityGb int64, machineType string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDCapacityExceedsMachineTypeLimitMessage, capacityGb, maxCapacityGb, machineType),
+	}
+}
+
 func LocalSSDIncompatibleWithCpuCondition(machineFamily string, localSSDCount int, minCpu int) *metav1.Condition {
 	return &metav1.Condition{
 		Type:               RuleMisconfiguredCondition,
@@ -411,6 +463,86 @@ func LocalSSDIncompatibleWithCpuCondition(machineFamily string, localSSDCount in
 		LastTransitionTime: metav1.Now(),
 		Reason:             NoSuitableMachineExistsReason,
 		Message:            fmt.Sprintf(LocalSSDIncompatibleWithCpuMessage, machineFamily, localSSDCount, minCpu),
+	}
+}
+
+func LocalSSDCountOmittedIncompatibleWithCpuCondition(machineFamily string, minCpu int) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDCountOmittedIncompatibleWithCpuMessage, machineFamily, minCpu),
+	}
+}
+
+func DedicatedLocalSsdSwapWithMixedModeCondition() *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            DedicatedLocalSsdSwapWithMixedModeMessage,
+	}
+}
+
+func DedicatedLocalSsdSwapWithBlockModeCondition() *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            DedicatedLocalSsdSwapWithBlockModeMessage,
+	}
+}
+
+func EphemeralLocalSsdSwapWithBlockModeCondition() *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            EphemeralLocalSsdSwapWithBlockModeMessage,
+	}
+}
+
+func LocalSSDNotSupportedByMachineTypeCondition(machineType string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDNotSupportedByMachineTypeMessage, machineType),
+	}
+}
+
+func LocalSSDNotSupportedByMachineFamilyCondition(machineFamily string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(LocalSSDNotSupportedByMachineFamilyMessage, machineFamily),
+	}
+}
+
+func DedicatedLocalSsdSwapConsumesAllLocalSSDsCondition(swapCount int64, machineType string, totalCount int64) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(DedicatedLocalSsdSwapConsumesAllLocalSSDsMessage, swapCount, machineType, totalCount),
+	}
+}
+
+func MixedModeLocalSSDUnsupportedNodeVersionCondition(minVersion, nodeVersion string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               RuleMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             NoSuitableMachineExistsReason,
+		Message:            fmt.Sprintf(MixedModeLocalSSDUnsupportedNodeVersionMessage, minVersion, nodeVersion),
 	}
 }
 

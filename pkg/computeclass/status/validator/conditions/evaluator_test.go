@@ -23,10 +23,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	gkelocalssdsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/utils/ptr"
 )
 
 func TestEvaluator_GetCRDConditions_CrdMisconfigured(t *testing.T) {
@@ -309,4 +311,70 @@ func TestEvaluator_GetCRDConditions_InvalidNameTakesPrecedence(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{InvalidComputeClassNameReason}, misconfigured)
+}
+
+func TestEvaluator_MixedModeNodeVersion(t *testing.T) {
+	c3Standard8Lssd := "c3-standard-8-lssd"
+	ssdProvider := gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes)
+	provider := newTestProvider().
+		WithAutoprovisioningLocations("zone-a").
+		WithValidMachineTypes([]gce.MachineTypeKey{{MachineTypeName: c3Standard8Lssd, Zone: "zone-a"}}).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	evaluator := newTestEvaluator(provider,
+		withSsdProvider(ssdProvider),
+		withLister(lister.NewMockCrdLister(nil)))
+
+	mixedModeRule := rules.NewRule(
+		rules.WithMachineTypeRule(&c3Standard8Lssd),
+		rules.WithEphemeralStorageLocalSsdConfigRule(nil, ptr.To[int64](200)),
+	)
+
+	testCases := []struct {
+		name        string
+		nodeVersion string
+		wantFlagged bool
+	}{
+		{
+			name:        "old nodeVersion flags both CRD and rule",
+			nodeVersion: "1.36.5-gke.100",
+			wantFlagged: true,
+		},
+		{
+			name:        "supported nodeVersion passes both CRD and rule",
+			nodeVersion: "1.37.0-gke.3509000",
+			wantFlagged: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			testCrd := crd.NewTestCrd(
+				crd.WithLabel("crd-1"),
+				crd.WithName("crd-object-1"),
+				crd.WithNodeVersion(tc.nodeVersion),
+				crd.WithRules([]rules.Rule{mixedModeRule}),
+				crd.WithAutoprovisioningEnabled(),
+			)
+
+			crdConds := evaluator.GetCRDConditions(testCrd, make(map[string]*gke.GkeMig))
+			ruleConds := evaluator.GetRuleConditions(mixedModeRule, testCrd.NodeVersion())
+
+			if tc.wantFlagged {
+				wantMsg := fmt.Sprintf(MixedModeLocalSSDUnsupportedNodeVersionMessage, mixedModeLocalSSDMinNodeVersion, tc.nodeVersion)
+				assert.Len(t, crdConds, 1)
+				assert.Equal(t, CrdMisconfiguredCondition, crdConds[0].Type)
+				assert.Equal(t, NoSuitableMachineExistsReason, crdConds[0].Reason)
+				assert.Equal(t, wantMsg, crdConds[0].Message)
+
+				assert.Len(t, ruleConds, 1)
+				assert.Equal(t, RuleMisconfiguredCondition, ruleConds[0].Type)
+				assert.Equal(t, NoSuitableMachineExistsReason, ruleConds[0].Reason)
+				assert.Equal(t, wantMsg, ruleConds[0].Message)
+			} else {
+				assert.Empty(t, crdConds)
+				assert.Empty(t, ruleConds)
+			}
+		})
+	}
 }
