@@ -232,6 +232,16 @@ const (
 	// EphemeralLocalSsdEnabledValue is the value for an enabled ephemeral local SSD feature.
 	EphemeralLocalSsdEnabledValue = "true"
 
+	// LocalNvmeSsdPartitionLabel is the label added to nodes when local NVMe SSD mixed mode partitioning is enabled.
+	LocalNvmeSsdPartitionLabel = "cloud.google.com/gke-local-nvme-ssd-partition"
+	// LocalNvmeSsdPartitionValue is the value for enabled local NVMe SSD mixed mode partitioning.
+	LocalNvmeSsdPartitionValue = "true"
+
+	// LocalNvmeSsdBlockLabel is the label added to nodes when local NVMe SSD pure block mode is enabled.
+	LocalNvmeSsdBlockLabel = "cloud.google.com/gke-local-nvme-ssd"
+	// LocalNvmeSsdBlockValue is the value for enabled local NVMe SSD pure block mode.
+	LocalNvmeSsdBlockValue = "true"
+
 	// HighPerformanceNetworkLabel is the label added to nodes when high performance
 	// network is attached for multi-network pods.
 	HighPerformanceNetworkLabel = "cloud.google.com/run-high-perf-daemons"
