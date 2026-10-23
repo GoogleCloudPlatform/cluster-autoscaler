@@ -2069,6 +2069,119 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
+			name: "CCC with EphemeralStorageLocalSsdConfig Enabled only",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineType: stringPtr("c4-standard-32-lssd"),
+							Storage: &v1.Storage{
+								EphemeralStorageLocalSsdConfig: &v1.EphemeralStorageLocalSsdConfig{
+									Enabled: ptr.To(true),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithMachineTypeRule(stringPtr("c4-standard-32-lssd")),
+						rules.WithStorageRule(nil, nil, nil, nil),
+						rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+					),
+				}),
+			),
+		},
+		{
+			name: "CCC with EphemeralStorageLocalSsdConfig Enabled with counts",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineType: stringPtr("n2-standard-4"),
+							Storage: &v1.Storage{
+								EphemeralStorageLocalSsdConfig: &v1.EphemeralStorageLocalSsdConfig{
+									Enabled:             ptr.To(true),
+									LocalSSDCount:       ptr.To(4),
+									EphemeralCapacityGb: ptr.To[int64](200),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithMachineTypeRule(stringPtr("n2-standard-4")),
+						rules.WithStorageRule(nil, nil, nil, nil),
+						rules.WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), ptr.To[int64](200)),
+					),
+				}),
+			),
+		},
+
+		{
+			name: "CCC with LocalNvmeSsdBlockConfig Enabled only",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineType: stringPtr("c4-standard-32-lssd"),
+							Storage: &v1.Storage{
+								LocalNvmeSsdBlockConfig: &v1.LocalNvmeSsdBlockConfig{
+									Enabled: ptr.To(true),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithMachineTypeRule(stringPtr("c4-standard-32-lssd")),
+						rules.WithStorageRule(nil, nil, nil, nil),
+						rules.WithLocalNvmeSsdBlockConfigRule(nil),
+					),
+				}),
+			),
+		},
+		{
+			name: "CCC with LocalNvmeSsdBlockConfig Enabled with counts",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							MachineType: stringPtr("n2-standard-4"),
+							Storage: &v1.Storage{
+								LocalNvmeSsdBlockConfig: &v1.LocalNvmeSsdBlockConfig{
+									Enabled:       ptr.To(true),
+									LocalSSDCount: ptr.To(4),
+								},
+							},
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithMachineTypeRule(stringPtr("n2-standard-4")),
+						rules.WithStorageRule(nil, nil, nil, nil),
+						rules.WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+					),
+				}),
+			),
+		},
+
+		{
 			name: "CCC with BootDiskStoragePools",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
