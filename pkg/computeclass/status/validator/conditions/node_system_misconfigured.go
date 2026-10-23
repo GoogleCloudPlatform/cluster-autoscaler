@@ -136,7 +136,22 @@ func (ch *nodeSystemConfigChecker) checkRule(rule rules.Rule) *metav1.Condition 
 		if rule.ContainerLogMaxFiles() != nil {
 			maxFiles = *rule.ContainerLogMaxFiles()
 		}
-		totalStorageGb := getTotalStorageGb(rule.BootDiskSize(), rule.TotalLSSDCount(), ch.localSsdProvider)
+		var totalStorageGb int64
+		if rule.EphemeralCapacityGb() != nil && *rule.EphemeralCapacityGb() > 0 {
+			totalStorageGb = *rule.EphemeralCapacityGb()
+		} else {
+			var lssdCount int64
+			// Like GKE, count only ephemeral Local SSDs toward log storage, not raw block or dedicated swap disks.
+			if !rule.LocalNvmeSsdBlockEnabled() {
+				if rule.EphemeralStorageLocalSsdEnabled() && rule.LocalSSDCountOmitted() {
+					// GKE defaults an omitted count to the machine type's automatic count minus dedicated swap disks.
+					lssdCount = max(0, ch.minAutomaticEphemeralLocalSsdCount(rule)-rule.SwapDedicatedLSSDCount())
+				} else {
+					lssdCount = rule.TotalLSSDCount() - rule.SwapDedicatedLSSDCount()
+				}
+			}
+			totalStorageGb = getTotalStorageGb(rule.BootDiskSize(), lssdCount, ch.localSsdProvider)
+		}
 		if totalLogSize := float64(maxFiles) * maxSize.AsApproximateFloat64() / units.GiB; totalLogSize > float64(totalStorageGb)/100 {
 			return InvalidContainerTotalLogSizeCondition(totalLogSize, totalStorageGb, rules.DefaultBootDiskSizeGb)
 		}
@@ -564,6 +579,36 @@ func validateDurationsWithReflection(st interface{}, maxVal time.Duration) *meta
 }
 
 // Get the total requested storage containing boot disk and local SSD.
+// minAutomaticEphemeralLocalSsdCount returns the smallest automatic ephemeral Local SSD count
+// among the machines the rule may use, or 0 if none has one. Machine families skip machines
+// below minCores.
+func (ch *nodeSystemConfigChecker) minAutomaticEphemeralLocalSsdCount(rule rules.Rule) int64 {
+	mcp := ch.provider.MachineConfigProvider()
+	if rule.MachineType() != "" {
+		if count, found, err := mcp.AutomaticEphemeralLocalSsdCountByMachineType(rule.MachineType()); found && err == nil {
+			return count
+		}
+		return 0
+	}
+	if rule.MachineFamily() == "" {
+		return 0
+	}
+	mf, err := mcp.ToMachineFamily(rule.MachineFamily())
+	if err != nil {
+		return 0
+	}
+	var minCount int64
+	for _, machine := range mf.AllMachineTypes(machinetypes.NoConstraints) {
+		if machine.CPU < rule.MinCores() {
+			continue
+		}
+		if count, found := machine.AutomaticEphemeralLocalSsdCount(); found && (minCount == 0 || count < minCount) {
+			minCount = count
+		}
+	}
+	return minCount
+}
+
 func getTotalStorageGb(bootDiskSize, localSSDCount int64, ssdProvider localssdsize.LocalSSDSizeProvider) int64 {
 	var totalStorage int64 = rules.DefaultBootDiskSizeGb
 	if bootDiskSize != 0 {

@@ -18,11 +18,13 @@ import (
 	"fmt"
 	"testing"
 
+	ccc_api "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/utils/ptr"
 )
 
 func TestValidateNodeSystemConfig(t *testing.T) {
@@ -442,6 +444,106 @@ func TestValidateNodeSystemConfig(t *testing.T) {
 			),
 			wantReason:  UnsupportedNodeSystemConfigFormatReason,
 			wantMessage: fmt.Sprintf(UnsupportedDefaultMachineFamilyForNumaAlignment, machinetypes.E2.Name()),
+		},
+		{
+			name: "block mode does not count toward total storage for container log size limit",
+			rule: rules.NewRule(
+				rules.WithLocalNvmeSsdBlockConfigRule(ptr.To(4)),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(InvalidContainerTotalLogSizeMessage, float64(30)*52428800.0/(1024*1024*1024), int64(rules.DefaultBootDiskSizeGb), rules.DefaultBootDiskSizeGb),
+		},
+		{
+			name: "ephemeral storage local ssd mode counts toward total storage for container log size limit",
+			rule: rules.NewRule(
+				rules.WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), nil),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+		},
+		{
+			name: "omitted count on fixed Local SSD machine type counts the fixed count toward total storage",
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(ptr.To("c3-standard-4-lssd")),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+		},
+		{
+			name: "mixed mode uses ephemeralCapacityGb as total storage for container log size limit",
+			rule: rules.NewRule(
+				rules.WithEphemeralStorageLocalSsdConfigRule(ptr.To(4), ptr.To[int64](200)),
+				rules.WithContainerLogMaxSizeRule("500Mi"),
+				rules.WithContainerLogMaxFilesRule(5),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(InvalidContainerTotalLogSizeMessage, float64(5)*524288000.0/(1024*1024*1024), int64(200), rules.DefaultBootDiskSizeGb),
+		},
+		{
+			name: "mixed mode with valid container log size within ephemeralCapacityGb limit",
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(ptr.To("c3-standard-4-lssd")),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, ptr.To[int64](200)),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+		},
+		{
+			name: "omitted count on machine family counts the smallest automatic count toward total storage",
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(ptr.To("c3")),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+		},
+		{
+			name: "omitted count on machine family with minCores above all automatic-count machines counts only the boot disk",
+			rule: rules.NewRule(
+				rules.WithMachineFamilyRule(ptr.To("c3")),
+				rules.WithMinCoresRule(ptr.To(180)),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+				rules.WithContainerLogMaxSizeRule("50Mi"),
+				rules.WithContainerLogMaxFilesRule(30),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(InvalidContainerTotalLogSizeMessage, float64(30)*52428800.0/(1024*1024*1024), int64(rules.DefaultBootDiskSizeGb), rules.DefaultBootDiskSizeGb),
+		},
+		{
+			name: "dedicated swap Local SSDs do not count toward total storage for container log size limit",
+			rule: rules.NewRule(
+				rules.WithEphemeralStorageLocalSsdConfigRule(ptr.To(1), nil),
+				rules.WithSwapConfigRule(ccc_api.SwapConfig{
+					Enabled: true,
+					DedicatedLocalSsdProfile: &ccc_api.SwapConfigDedicatedLocalSsdProfile{
+						DiskCount: 2,
+					},
+				}),
+				rules.WithContainerLogMaxSizeRule("500Mi"),
+				rules.WithContainerLogMaxFilesRule(10),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(InvalidContainerTotalLogSizeMessage, 4.88, 475, 100),
+		},
+		{
+			name: "omitted count on fixed machine type subtracts dedicated swap disks from total storage for container log size limit",
+			rule: rules.NewRule(
+				rules.WithMachineTypeRule(ptr.To("c3-standard-8-lssd")),
+				rules.WithEphemeralStorageLocalSsdConfigRule(nil, nil),
+				rules.WithSwapConfigRule(ccc_api.SwapConfig{
+					Enabled: true,
+					DedicatedLocalSsdProfile: &ccc_api.SwapConfigDedicatedLocalSsdProfile{
+						DiskCount: 1,
+					},
+				}),
+				rules.WithContainerLogMaxSizeRule("500Mi"),
+				rules.WithContainerLogMaxFilesRule(10),
+			),
+			wantReason:  UnsupportedNodeSystemConfigFormatReason,
+			wantMessage: fmt.Sprintf(InvalidContainerTotalLogSizeMessage, 4.88, 475, 100),
 		},
 	}
 
