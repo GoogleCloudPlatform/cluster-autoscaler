@@ -611,7 +611,7 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			for _, f := range tc.disabledFeatures {
 				boolFlags[f] = false
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(
+			optionsTracker := optstracking.TestOptionsTracker(
 				options.AutoscalingOptions{},
 				gkeclient.Cluster{},
 				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
@@ -645,7 +645,7 @@ func testInstanceConfigMap(configs []*api.InstanceConfig) map[string]*api.Instan
 }
 
 func TestGenerateInstanceConfigs_PodFamily_ExtendedFallbacks(t *testing.T) {
-	optionsTracker := optstracking.EmptyFakeOptionsTracker()
+	optionsTracker := optstracking.EmptyTestOptionsTracker()
 	gpCcc := ccc.NewCccCrd(&v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "gp-ccc",
@@ -678,7 +678,7 @@ func TestGenerateInstanceConfigs_PodFamily_ExtendedFallbacks(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(
+			optionsTracker := optstracking.TestOptionsTracker(
 				options.AutoscalingOptions{},
 				gkeclient.Cluster{},
 				experiments.NewMockManager(),
@@ -763,7 +763,7 @@ func TestDeriveMachineConfigsFromRule(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -829,7 +829,7 @@ func TestDeriveMachineConfigsFromRule_MinCpuPlatform(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{})
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 
@@ -902,7 +902,7 @@ func TestExpandConfigsByProvisioningMode(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
 			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.expandConfigsByProvisioningMode(tc.rule, tc.instanceConfigs)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -959,7 +959,7 @@ func TestExpandConfigsByMaxRunDuration(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
 			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.expandConfigsByMaxRunDuration(tc.rule, tc.instanceConfigs)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -1152,7 +1152,7 @@ func TestAssignZonesToConfigs(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{})
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{
 				InternalOptions: options.InternalOptions{
 					ZoneTypesEnabled: tc.zoneTypesEnabled,
 				},
@@ -1231,7 +1231,7 @@ func TestInstanceConfigsForNodePools(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager(tc.enabledFeatures...))
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, errors := g.instanceConfigsForNodePools(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -1291,7 +1291,7 @@ func TestInstanceConfigForMachineType(t *testing.T) {
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
 			provider := newMockInstanceConfigCloudProvider(nil, nil, machinetypes.A4X, true, nil)
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -1335,7 +1335,7 @@ func TestInstanceConfigForMachineTypeFromN1Family(t *testing.T) {
 	}
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs := g.instanceConfigsForMachineTypeFromN1Family(tc.rule, tc.machineType, machinetypes.N1, rank, 0)
 			compareInstanceConfigMaps(t, toInstanceConfigMap(tc.wantInstanceConfigs), toInstanceConfigMap(configs))
@@ -1392,7 +1392,7 @@ func TestInstanceConfigsForGpuTypes(t *testing.T) {
 	}
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, &mockInstanceConfigCloudProvider{}, optionsTracker)
 			configs, err := g.deriveMachineConfigsFromRule(tc.rule, rank)
 			assert.NoError(t, err)
@@ -1535,7 +1535,7 @@ func TestMatchingCrd(t *testing.T) {
 					experiments.FlexAdvisorPCCSupportMinCAVersionFlag: true,
 				}
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(
+			optionsTracker := optstracking.TestOptionsTracker(
 				options.AutoscalingOptions{},
 				gkeclient.Cluster{},
 				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
@@ -1671,7 +1671,7 @@ func TestMachineFamilies(t *testing.T) {
 				provider = defaultMockProvider
 			}
 			manager := experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{})
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			g := NewInstanceConfigGenerator(context.Background(), nil, provider, optionsTracker)
 			machineFamilies, areFamiliesSequential, err := g.machineFamiliesForRule(tc.rule)
 			gotNames := []string{}
@@ -1828,7 +1828,7 @@ func TestCapGeneratedInstanceConfigs(t *testing.T) {
 
 	for des, tc := range testCases {
 		t.Run(des, func(t *testing.T) {
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			g := NewInstanceConfigGenerator(context.Background(), nil, nil, optionsTracker, WithMaxInstanceConfigs(tc.maxInstanceConfigs))
 			got, gotCappedKeysMap := g.capGeneratedInstanceConfigs(tc.instanceConfigs, "")
 			assert.Equal(t, len(tc.wantInstanceConfigs), len(got))
@@ -1894,7 +1894,7 @@ func TestCapGeneratedInstanceConfigs_Experiment(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			manager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.experiments)
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			g := NewInstanceConfigGenerator(context.Background(), nil, nil, optionsTracker, WithMaxInstanceConfigs(3))
 			got, _ := g.capGeneratedInstanceConfigs(allConfigs, "")
 			assert.Equal(t, tc.wantConfigCount, len(got))
@@ -1955,7 +1955,7 @@ func TestGenerationValidation_Metrics(t *testing.T) {
 		map[string]set.Set[string]{},
 	)
 
-	optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+	optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 	g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister(availableCrds), provider, optionsTracker)
 
 	// 1. Test general generation error (unknown machine type)
@@ -2094,7 +2094,7 @@ func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
 					nil,
 				)
 
-				optionsTracker := optstracking.FakeOptionsTracker(
+				optionsTracker := optstracking.TestOptionsTracker(
 					options.AutoscalingOptions{},
 					gkeclient.Cluster{},
 					experiments.NewMockManagerWithOptions(version.Version{}, tc.boolFlags, map[string]string{}),
@@ -2184,7 +2184,7 @@ func TestNewPredefinedComputeClassCrd(t *testing.T) {
 			for _, f := range tc.disabledFeatures {
 				boolFlags[f] = false
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(
+			optionsTracker := optstracking.TestOptionsTracker(
 				options.AutoscalingOptions{},
 				gkeclient.Cluster{},
 				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
@@ -2299,7 +2299,7 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			if tc.payPerPodEnabled {
 				boolFlags[experiments.PayPerPodFleetEfficiencyMinCAVersionFlag] = true
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(
+			optionsTracker := optstracking.TestOptionsTracker(
 				options.AutoscalingOptions{},
 				gkeclient.Cluster{},
 				experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, map[string]string{}),
@@ -2388,7 +2388,7 @@ func TestGenerateInstanceConfigs_PodFamily_SequentialOrder(t *testing.T) {
 		return ccc.NewCccCrd(&v1.ComputeClass{
 			ObjectMeta: metav1.ObjectMeta{Name: name},
 			Spec:       v1.ComputeClassSpec{Priorities: priorities},
-		}, "", false, crd.TestDefaultDataProvider(), optstracking.EmptyFakeOptionsTracker())
+		}, "", false, crd.TestDefaultDataProvider(), optstracking.EmptyTestOptionsTracker())
 	}
 	armCcc := newCcc("arm-ccc",
 		v1.Priority{
@@ -2401,7 +2401,7 @@ func TestGenerateInstanceConfigs_PodFamily_SequentialOrder(t *testing.T) {
 		},
 	)
 	defaultProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
-	defaultOptionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+	defaultOptionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 
 	t.Run("sequential order assigns per-family subRanks without modifying rank and preserves earlier families when capped", func(t *testing.T) {
 		e4aCount := len(machinetypes.E4A.AllMachineTypes(machinetypes.NoConstraints))
@@ -2461,7 +2461,7 @@ func TestGenerateInstanceConfigs_PodFamily_SequentialOrder(t *testing.T) {
 			experiments.FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag,
 		} {
 			t.Run(disableFlag, func(t *testing.T) {
-				optionsTracker := optstracking.FakeOptionsTracker(
+				optionsTracker := optstracking.TestOptionsTracker(
 					options.AutoscalingOptions{},
 					gkeclient.Cluster{},
 					experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{disableFlag: false}, map[string]string{}),

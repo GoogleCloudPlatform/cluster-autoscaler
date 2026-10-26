@@ -412,7 +412,6 @@ type TestAutoprovisioningCloudProvider struct {
 	autoprovisioningSecondaryFamily       *machinetypes.MachineFamily
 	autoprovisioningEligibility           AutoprovisioningEligibility
 	validMachineTypes                     map[gce.MachineTypeKey]bool
-	isResizableVmEdpEnabled               bool
 	extendedFallbacksEnabled              bool
 	isArmMachineFallbacksEnabled          bool
 	isAutopilotNapDefaultFallbackEnabled  bool
@@ -555,14 +554,6 @@ func (b *TestAutoprovisioningCloudProviderBuilder) WithUsingPSCInfrastructure(en
 func (b *TestAutoprovisioningCloudProviderBuilder) WithAutopilotEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
 	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
 		p.isAutopilotEnabled = enabled
-	})
-	return b
-}
-
-// WithResizableVmEdpEnabled enables new resizable vm edp logic in provider
-func (b *TestAutoprovisioningCloudProviderBuilder) WithResizableVmEdpEnabled(enabled bool) *TestAutoprovisioningCloudProviderBuilder {
-	b.builders = append(b.builders, func(p *TestAutoprovisioningCloudProvider) {
-		p.isResizableVmEdpEnabled = enabled
 	})
 	return b
 }
@@ -828,10 +819,6 @@ func (cp *TestAutoprovisioningCloudProvider) IsE4StatefulEnabledInAutopilot() bo
 
 func (cp *TestAutoprovisioningCloudProvider) IsE4PrioritizationEnabledInAutopilot() bool {
 	return true
-}
-
-func (cp *TestAutoprovisioningCloudProvider) IsResizableVmEdpEnabled() bool {
-	return cp.isResizableVmEdpEnabled
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
@@ -2051,10 +2038,6 @@ func (fake *FakeGkeManager) IsE4PrioritizationEnabledInAutopilot() bool {
 	return true
 }
 
-func (fake *FakeGkeManager) IsResizableVmEdpEnabled() bool {
-	panic("not implemented")
-}
-
 func (fake *FakeGkeManager) IsResizableVmWithinPodFamilyEnabled(machineFamily string) bool {
 	return fake.resizableVmWithinPodFamilyEnabled[machineFamily]
 }
@@ -3040,11 +3023,6 @@ func (m *GkeManagerMock) ValidateLocationForDiskType(location string, requestedD
 
 func (m *GkeManagerMock) ResizingEnabled(machineFamily string) bool {
 	args := m.Called(machineFamily)
-	return args.Get(0).(bool)
-}
-
-func (m *GkeManagerMock) IsResizableVmEdpEnabled() bool {
-	args := m.Called()
 	return args.Get(0).(bool)
 }
 

@@ -328,7 +328,7 @@ func TestFlexAdvisor_GetInstanceAvailability(t *testing.T) {
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, []*gke.GkeMig{}, machinetypes.E2, true, nil)
 				experimentsManager := experiments.NewMockManager()
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 				bypassTracker := NewRecommendationsBypassTracker(experimentsManager)
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, bypassTracker)
 				assert.NoError(t, err)
@@ -411,7 +411,7 @@ func TestFlexAdvisor_RegisterFlexibilityScope(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1, crd2}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 				tc.initialSetup(fa, mockProvider)
@@ -488,7 +488,7 @@ func TestFlexAdvisor_RegisterFlexibilityScopeLimits(t *testing.T) {
 				} else {
 					optionsManager = experiments.NewMockManager()
 				}
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, optionsManager)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, optionsManager)
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
@@ -747,7 +747,7 @@ func TestFlexAdvisor_AwaitInstanceAvailability(t *testing.T) {
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				mockManager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.enabledFeatures)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, mockManager)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, mockManager)
 				bypassTracker := NewRecommendationsBypassTracker(mockManager)
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, bypassTracker)
 				assert.NoError(t, err)
@@ -817,7 +817,7 @@ func TestFlexAdvisor_RemoveExpiredFlexibilityScopes(t *testing.T) {
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
@@ -943,7 +943,7 @@ func TestFlexAdvisor_MarkUsed(t *testing.T) {
 				defer cancel()
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 				fa, err := NewFlexAdvisor(ctx, provider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 
 				assert.NoError(t, err)
@@ -1060,7 +1060,7 @@ func TestFlexAdvisor_IncrementFlexAdvisorCacheQueryCount(t *testing.T) {
 				crd.NewTestCrd(crd.WithName("scope-1")),
 				crd.NewTestCrd(crd.WithScaleUpAnyway(), crd.WithName("ccc-scale-up-anyway")),
 			})
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 			fa, err := NewFlexAdvisor(ctx, mockProvider, crdLister, newMockInstanceConfigCloudProvider(nil, nil, machinetypes.E2, true, nil), optionsTracker, nil, nil)
 			assert.NoError(t, err)
 
@@ -1571,7 +1571,7 @@ func TestFlexAdvisor_IsStale(t *testing.T) {
 
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
 				manager := experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 
@@ -1716,7 +1716,7 @@ func TestFlexAdvisor_PodFamilyScope_CccStateAndScaleUpAnyway(t *testing.T) {
 			if tc.payPerPodEnabled {
 				boolFlags[experiments.PayPerPodFleetEfficiencyMinCAVersionFlag] = true
 			}
-			optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil))
+			optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil))
 			fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{updatedGeneralPurposeCrd}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 			assert.NoError(t, err)
 
@@ -1869,7 +1869,7 @@ func TestFlexAdvisorScopeStalenessThreshold(t *testing.T) {
 				if !tc.nilManager {
 					manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
 				}
-				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+				optionsTracker = optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			}
 			fa := &flexAdvisor{
 				optionsTracker: optionsTracker,
@@ -1940,7 +1940,7 @@ func TestFlexAdvisorScopeTtl(t *testing.T) {
 				if !tc.nilManager {
 					manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
 				}
-				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+				optionsTracker = optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			}
 			fa := &flexAdvisor{
 				optionsTracker: optionsTracker,
@@ -2110,7 +2110,7 @@ func TestFlexAdvisor_BumpScopeTtl_AndReadMethodsDoNotUpdateKeepAlive(t *testing.
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a", "us-west1-b", "us-west1-c"}, nil, machinetypes.E2, true, nil)
-				optionsTracker := optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
 				fa, err := NewFlexAdvisor(ctx, mockProvider, lister.NewMockCrdLister([]crd.CRD{crd1}), instanceConfigCloudProvider, optionsTracker, nil, nil)
 				assert.NoError(t, err)
 

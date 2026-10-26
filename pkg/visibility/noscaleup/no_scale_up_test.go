@@ -692,7 +692,7 @@ func performNapScaleUp(t *testing.T, unschedulablePod *apiv1.Pod, autoprovisioni
 		Lister:                           npcLister,
 		ExperimentsManager:               em,
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 	}
 	proc.NodeGroupListProcessor = autoprovisioning.NewAutoprovisioningNodeGroupManager(options)
 

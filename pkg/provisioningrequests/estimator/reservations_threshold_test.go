@@ -219,7 +219,7 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 				if !*tt.experimentEnabled {
 					manager.DisableAllExperiments()
 				}
-				optionsTracker = optstracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+				optionsTracker = optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
 			}
 
 			t := &reservationsThreshold{

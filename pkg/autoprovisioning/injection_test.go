@@ -1513,7 +1513,7 @@ func TestNodeGroupParameters(t *testing.T) {
 					EnableComputeClassMinCapacity: !tc.disableComputeClassMinCapacity,
 				},
 				ExperimentsManager: em,
-				OptionsTracker:     tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:     tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 			}
 			m := NewAutoprovisioningNodeGroupManager(opts)
 			gotParams, err := m.getNodeGroupParameters(tc.requirements, tc.options)
@@ -1678,7 +1678,7 @@ func TestNonGpuPodsRequirements(t *testing.T) {
 				CloudProvider:        provider,
 				Lister:               lister,
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 			ctx := &injectionContext{status: NewProcessingStatus()}
@@ -2708,7 +2708,7 @@ func TestComputePossibleRequirements(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -6199,14 +6199,60 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			cpuReq:                   []string{"X"},
 			expectNoNodeGroupOptions: true,
 		},
+		"resizable vm edp disabled with ek machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: false,
+			machineType:           "ek-standard-2",
+			cpuReq:                []string{"100m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ExtendedDurationPodsLabel: "100m",
+				},
+				ExtendedDurationPods: "100m",
+				MachineType:          "ek-standard-2",
+			},
+		},
+		"resizable vm edp disabled with e4a machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: false,
+			machineType:           "e4a-standard-2",
+			cpuReq:                []string{"100m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ExtendedDurationPodsLabel: "100m",
+				},
+				ExtendedDurationPods: "100m",
+				MachineType:          "e4a-standard-2",
+			},
+		},
+		"resizable vm edp disabled - numeric is used for EK machine type when numeric and X pod requirements are present": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: false,
+			machineType:           "ek-standard-4",
+			cpuReq:                []string{"X", "200m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "200m"},
+				ExtendedDurationPods: "200m",
+				MachineType:          "ek-standard-4",
+			},
+		},
+		"resizable vm edp disabled - no options for EK machine type when only X pod requirement is present": {
+			autopilotEnabled:         true,
+			resizableVmEdpEnabled:    false,
+			machineType:              "ek-standard-4",
+			cpuReq:                   []string{"X"},
+			expectNoNodeGroupOptions: true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithAutopilotEnabled(tc.autopilotEnabled).
-				WithResizableVmEdpEnabled(tc.resizableVmEdpEnabled).
 				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 				Build()
-			edpg := NewExtendedDurationPodGenerator(provider)
+			optionsTracker := testOptionsTracker(func(io *internalopts.InternalOptions) {
+				io.ResizableVmEdpEnabled = tc.resizableVmEdpEnabled
+			})
+			edpg := NewExtendedDurationPodGenerator(provider, optionsTracker)
 			podReq := &podrequirements.Requirements{
 				LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
 					gkelabels.ExtendedDurationPodsLabel: podrequirements.NewValues(tc.cpuReq...),
@@ -6239,6 +6285,39 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 			assert.NoError(t, err2)
 			assert.Equal(t, tc.expectedSpec, spec)
 		})
+	}
+}
+
+func TestExtendedDurationPodGeneratorDynamicOptionsUpdate(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithAutopilotEnabled(true).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	optionsTracker := optstracking.TestOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{ClusterVersion: "1.30.0-gke.100"},
+		experiments.NewMockManager(),
+	)
+	edpg := NewExtendedDurationPodGenerator(provider, optionsTracker)
+	ngReq := nodeGroupRequirements{extendedDurationPodCPUReq: "100m"}
+	inputOpts := []NodeGroupOptions{{MachineType: "ek-standard-2"}}
+
+	opts := edpg.GenerateNodeGroupOptionsForRequirements(inputOpts, ngReq)
+	if assert.Len(t, opts, 2) {
+		assert.Equal(t, "100m", opts[1].ExtendedDurationPodCPUReq)
+	}
+
+	optstracking.ChangeTestExperimentsManager(
+		optionsTracker,
+		experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+			experiments.EnableResizableVmEdpMinGKEVersionFlag: "1.29.0-gke.100",
+		}),
+	)
+	assert.NoError(t, optionsTracker.RecomputeOptions())
+
+	opts = edpg.GenerateNodeGroupOptionsForRequirements(inputOpts, ngReq)
+	if assert.Len(t, opts, 2) {
+		assert.Equal(t, "X", opts[1].ExtendedDurationPodCPUReq)
 	}
 }
 
@@ -6828,7 +6907,6 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 			}
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 				WithAutopilotEnabled(true).
-				WithResizableVmEdpEnabled(tc.resizableVmEdpEnabled).
 				WithAllZones(tc.zones...).
 				WithAutoprovisioningLocations(tc.autoprovisioningLocations...).
 				WithMachineTypesPerZone(machineTypesPerZone).
@@ -6842,11 +6920,10 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 					},
 					EnableUserAnyZoneSelection: true,
 				},
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
-					InternalOptions: internalopts.InternalOptions{
-						SpecificTypeReservationMatchEnabled: true,
-					},
-				}, gkeclient.Cluster{}, experiments.NewMockManager()),
+				OptionsTracker: testOptionsTracker(func(io *internalopts.InternalOptions) {
+					io.ResizableVmEdpEnabled = tc.resizableVmEdpEnabled
+					io.SpecificTypeReservationMatchEnabled = true
+				}),
 				PodLister:                     kube_util.NewTestPodLister(tc.req.pods),
 				ResizableMachineTypesProvider: config.NewSimpleStringSetProvider(allMachineTypes),
 				ResourcePolicyPuller:          &placement.FakeResourcePolicyPullerProvider{},
@@ -7331,7 +7408,7 @@ func TestValidateRequirements(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -8002,7 +8079,7 @@ func TestReservations_ExtractRequirements(t *testing.T) {
 				CloudProvider:      provider,
 				ReservationsPuller: reservationsPuller,
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationMatchEnabled:        tc.enableReservationMatch,
 						SpecificTypeReservationWithoutMatchEnabled: !tc.disableSpecificTypeReservations,
@@ -10207,7 +10284,7 @@ func TestComputePossibleRequirementsWithSecondaryBootDisksCC(t *testing.T) {
 					TpuAutoprovisioningEnabled: true,
 				},
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			})
 
@@ -11451,7 +11528,7 @@ func TestComputePossibleRequirementsWithComputeClass(t *testing.T) {
 					},
 				},
 				ExperimentsManager: em,
-				OptionsTracker: tracking.FakeOptionsTracker(options.AutoscalingOptions{
+				OptionsTracker: tracking.TestOptionsTracker(options.AutoscalingOptions{
 					InternalOptions: internalopts.InternalOptions{
 						SpecificTypeReservationWithoutMatchEnabled: true,
 					},
@@ -13084,7 +13161,7 @@ func TestInjectNodeGroups(t *testing.T) {
 				CloudProvider:        provider,
 				Lister:               computeClassLister,
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				Backoff:              &MockCompositeBackoff{},
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 				Flags: AutoprovisioningNodeGroupManagerFlags{
@@ -13717,9 +13794,9 @@ func testOptionsTracker(modifier func(opts *internalopts.InternalOptions)) *opts
 		modifier(&opts)
 	}
 
-	return optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{
+	return optstracking.StaticOptionsTracker(internalopts.AutoscalingOptions{
 		InternalOptions: opts,
-	}, gkeclient.Cluster{}, experiments.NewMockManager())
+	})
 }
 
 func TestReservationSubBlockAlreadyTaken(t *testing.T) {

@@ -818,7 +818,7 @@ func newTestGkeManager(t *testing.T, testServerURL string,
 		machineConfigProvider:    machinetypes.NewMachineConfigProvider(nil),
 		localSSDDiskSizeProvider: gkelocalssdsize.NewDynamicLocalSSDDiskSizeProvider(machinetypes.LocalSSDDiskSizes),
 		gkeMetrics:               internalmetrics.Metrics,
-		optsTracker:              optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
+		optsTracker:              optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	if regional {
 		manager.location = region
@@ -2603,7 +2603,7 @@ func TestCreateInstances_WithRecommendation(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -2633,7 +2633,7 @@ func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -2662,7 +2662,7 @@ func TestCreateInstances_WithRecommendation_ZeroValueStruct(t *testing.T) {
 	addDefaultListMigsMocks(server, g.cache)
 
 	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
-	g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 	mig := testZonalNodePool().configure(g).migs[0]
 
@@ -3895,11 +3895,6 @@ func (mekp *mockResizableVmAutoprovisioningProvider) IsE4StatefulEnabledInAutopi
 }
 
 func (mekp *mockResizableVmAutoprovisioningProvider) IsE4PrioritizationEnabledInAutopilot() bool {
-	args := mekp.Called()
-	return args.Get(0).(bool)
-}
-
-func (mekp *mockResizableVmAutoprovisioningProvider) IsResizableVmEdpEnabled() bool {
 	args := mekp.Called()
 	return args.Get(0).(bool)
 }
@@ -5322,7 +5317,7 @@ func TestScaleDownUnreadyTimeOverride(t *testing.T) {
 
 	for tcName, tc := range tests {
 		t.Run(tcName, func(t *testing.T) {
-			manager := gkeManagerImpl{optsTracker: optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, tc.experimentsManager)}
+			manager := gkeManagerImpl{optsTracker: optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, tc.experimentsManager)}
 
 			gotUnreadyTime, found := manager.ScaleDownUnreadyTimeOverride(tc.mig)
 			if tc.wantScaleDownUnreadyTime == nil {
@@ -5895,7 +5890,7 @@ func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 					experiments.CapacityCheckWaitTimeSecondsFlexValueMultiHostTpuFlag:    tc.flexTpuValueOverrideExp,
 					experiments.CapacityCheckWaitTimeSecondsNonFlexValueMultiHostTpuFlag: tc.nonFlexTpuValueOverrideExp,
 				})
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+			g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 			tc.mig.gceRef = gce.GceRef{Name: fmt.Sprintf("mig-%d", i)}
 
@@ -5907,82 +5902,6 @@ func TestEvaluateCapacityCheckWaitTimeSeconds(t *testing.T) {
 			}
 			assert.Equal(t, wantErr, gotErr)
 			assert.Equal(t, tc.wantCapacityCheckWaitTimeSeconds, got)
-		})
-	}
-}
-
-func TestIsResizableVmEdpEnabled(t *testing.T) {
-	testCases := []struct {
-		name           string
-		clusterVersion string
-		minVersion     string
-		want           bool
-	}{
-		{
-			name:           "Cluster version less than min version - Disabled",
-			clusterVersion: "1.25.10-gke.1000",
-			minVersion:     "1.26.1-gke.0",
-			want:           false, // 1.25.x < 1.26.x
-		},
-		{
-			name:           "Cluster version equals min version - Enabled",
-			clusterVersion: "1.26.5-gke.100",
-			minVersion:     "1.26.5-gke.100",
-			want:           true, // Equal versions: !v.LessThan(vMin) is true
-		},
-		{
-			name:           "Cluster version greater than min version - Enabled",
-			clusterVersion: "1.27.1-gke.500",
-			minVersion:     "1.26.10-gke.0",
-			want:           true, // 1.27.x > 1.26.x
-		},
-		{
-			name:           "Patch version greater - Enabled",
-			clusterVersion: "1.26.10-gke.10",
-			minVersion:     "1.26.10-gke.5",
-			want:           true, // 10 > 5
-		},
-		{
-			name:           "Different version formats (semantic vs GKE) - Enabled",
-			clusterVersion: "1.27.0",
-			minVersion:     "1.26.0-gke.10",
-			want:           true, // 1.27.0 > 1.26.x
-		},
-		{
-			name:           "Invalid clusterVersion string - Disabled",
-			clusterVersion: "invalid_version_string",
-			minVersion:     "1.26.1-gke.0",
-			want:           false, // Fails version.FromString(m.clusterVersion)
-		},
-		{
-			name:           "Invalid minVersion string - Disabled",
-			clusterVersion: "1.27.1-gke.500",
-			minVersion:     "invalid_min_version",
-			want:           false, // Fails version.FromString(minGkeVersion)
-		},
-		{
-			name:           "Both invalid - Disabled",
-			clusterVersion: "a.b.c",
-			minVersion:     "x.y.z",
-			want:           false, // Fails version.FromString(m.clusterVersion) first
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			server := NewHttpServerMock()
-			g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil, tc.clusterVersion)
-
-			addDefaultListMigsMocks(server, g.cache)
-			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{},
-				map[string]bool{},
-				map[string]string{
-					experiments.EnableResizableVmEdpMinGKEVersionFlag: tc.minVersion,
-				})
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
-			g.refreshResizableVmEdpEnabled()
-			got := g.IsResizableVmEdpEnabled()
-
-			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -6767,7 +6686,7 @@ func TestGetMaxNodeProvisioningTimeOverride(t *testing.T) {
 
 			addDefaultListMigsMocks(server, g.cache)
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, tc.experimentFlags)
-			g.optsTracker = optstracking.FakeOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+			g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
 
 			mig := NewTestGkeMigBuilder().SetSpec(tc.spec).SetQueuedProvisioning(tc.queued).Build()
 			overrideValue, hasOverride := g.GetMaxNodeProvisioningTimeOverride(mig)

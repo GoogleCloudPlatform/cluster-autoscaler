@@ -16,13 +16,13 @@ package tracking
 
 import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
-// FakeOptionsTracker returns an instance of OptionsTracker to be used in tests.
-func FakeOptionsTracker(flagOpts internalopts.AutoscalingOptions, cluster gkeclient.Cluster, fakeexperimentsManager experiments.Manager) *OptionsTracker {
+// TestOptionsTracker returns an initialized OptionsTracker that computes options from flagOpts, cluster,
+// and experiments via RecomputeOptions() logic. Prefer this over StaticOptionsTracker in tests.
+func TestOptionsTracker(flagOpts internalopts.AutoscalingOptions, cluster gkeclient.Cluster, fakeexperimentsManager experiments.Manager) *OptionsTracker {
 	experimentsManager := fakeexperimentsManager
 	if experimentsManager == nil {
 		experimentsManager = experiments.NewMockManager()
@@ -35,9 +35,23 @@ func FakeOptionsTracker(flagOpts internalopts.AutoscalingOptions, cluster gkecli
 	return tracker
 }
 
-// EmptyFakeOptionsTracker returns an instance of OptionsTracker to be used in tests.
-func EmptyFakeOptionsTracker() *OptionsTracker {
-	return FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+// EmptyTestOptionsTracker returns an instance of OptionsTracker to be used in tests.
+func EmptyTestOptionsTracker() *OptionsTracker {
+	return TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+}
+
+// StaticOptionsTracker returns an OptionsTracker that returns the provided AutoscalingOptions from Options() as-is,
+// bypassing RecomputeOptions() (which shouldn't be called on the result).
+// Prefer TestOptionsTracker as it accurately reflects prod logic; use StaticOptionsTracker only when testing
+// components that read Options() without wanting to set up the flags, Cluster proto, and experiments required to compute them.
+func StaticOptionsTracker(opts internalopts.AutoscalingOptions) *OptionsTracker {
+	return &OptionsTracker{
+		optsFromFlags:        opts,
+		startupOpts:          opts,
+		startupOptsFinalized: true,
+		lastOpts:             opts,
+		experimentsManager:   experiments.NewMockManager(),
+	}
 }
 
 // ChangeTestExperimentsManager allows changing the OptionsTracker internal experiments manager in order to simulate experiments

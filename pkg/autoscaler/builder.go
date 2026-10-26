@@ -708,6 +708,12 @@ func (b *Builder) Build(
 	}
 
 	selfservice.SetCloudProvider(cloudProvider)
+	// The custom resources processor is created before the cloud provider but
+	// needs it for machine config and available resources. Set it here, before
+	// the informers start and before any goroutine (e.g. the CCC validator)
+	// builds template nodes: until then the DRA resource predictor refuses to
+	// predict resource slices and every template node build fails.
+	customResourcesProcessor.SetCloudProvider(cloudProvider)
 
 	// Some autoscalingOptions fields depend on the Cluster proto, and are only properly initialized after it's obtained from the API for the first time
 	// as part of the BuildGKE() call above. Refresh the variable to pick up the newest state. Alternatively we could just inline optsTracker.Options()
@@ -1119,9 +1125,6 @@ func (b *Builder) Build(
 	// If they pass nil we use the context set here as a backup.
 	staticAutoscaler := autoscaler.(*core.StaticAutoscaler)
 	customResourcesProcessor.SetContext(staticAutoscaler.AutoscalingContext)
-	// And we need this because custom resource processor needs information
-	// about machine config and available resources, but also is created before cloud provider.
-	customResourcesProcessor.SetCloudProvider(cloudProvider)
 
 	cloudProvider.RegisterInitializationFunc(initialization.RecoverPendingScaleUps(staticAutoscaler.AutoscalingContext, cloudProvider))
 	rrer.Init(staticAutoscaler.AutoscalingContext, cloudProvider, autoscalingProcessors.ScaleStateNotifier)

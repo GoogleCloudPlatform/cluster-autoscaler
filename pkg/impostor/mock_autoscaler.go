@@ -203,7 +203,7 @@ func (a *TestAutoscaler) ScaleUpOptions(pods []*apiv1.Pod) ([]expander.Option, m
 		MaxAutoprovisionedNodeGroupCount: 50,
 		ExperimentsManager:               em,
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
-		OptionsTracker:                   tracking.FakeOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 	}
 	manager := autoprovisioning.NewAutoprovisioningNodeGroupManager(opts)
 	nodeGroups, nodeInfosForGroups, err := manager.Process(context.TODO(),
@@ -228,7 +228,7 @@ func (a *TestAutoscaler) GetNodeGroupsForScaleUp(pods []*apiv1.Pod) ([]cloudprov
 		CloudProvider:                    a.provider,
 		Backoff:                          backoff.NewCompositeBackoff([]base_backoff.Backoff{resourceBackoff}, nil),
 		MaxAutoprovisionedNodeGroupCount: 50,
-		OptionsTracker:                   tracking.FakeOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
+		OptionsTracker:                   tracking.TestOptionsTracker(gkeoptions.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager()),
 	}
 	manager := autoprovisioning.NewAutoprovisioningNodeGroupManager(opts)
 	nodeGroups, nodeInfosForGroups, err := manager.Process(context.TODO(),

@@ -149,6 +149,7 @@ type InternalOptions struct {
 	ClusterDefaultAllocationStrategy             ClusterDefaultAllocationStrategy
 	ExperimentsConfigMap                         string
 	FilterMigsByClusterNameEnabled               bool
+	ResizableVmEdpEnabled                        bool
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.

@@ -109,7 +109,7 @@ func TestProcessNodeGroupList(t *testing.T) {
 				MaxAutoprovisionedNodeGroupCount: 1,
 				Lister:                           computeClassLister,
 				ExperimentsManager:               em,
-				OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -168,7 +168,7 @@ func TestProcessNodeGroupListTooMany(t *testing.T) {
 		MaxAutoprovisionedNodeGroupCount: 1,
 		Lister:                           computeClassLister,
 		ExperimentsManager:               em,
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
 
@@ -243,7 +243,7 @@ func TestProcessNodeGroupListWithDaemonSetMutation(t *testing.T) {
 		MaxAutoprovisionedNodeGroupCount: 1,
 		Lister:                           computeClassLister,
 		ExperimentsManager:               em,
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 		MutationInjector:                 injector,
 	}
@@ -383,7 +383,7 @@ func createNodeGroupTestContext(createNodeGroupErr error) (*AutoprovisioningNode
 		Backoff:            gke_backoff.NewGkeBackoff(gke_backoff.Config{CustomResourceProcessor: processor, NpcLister: computeClassLister}),
 		Lister:             computeClassLister,
 		ExperimentsManager: em,
-		OptionsTracker:     tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:     tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
 
@@ -428,7 +428,7 @@ func TestBackoffNodeGroup(t *testing.T) {
 		MaxAutoprovisionedNodeGroupCount: 10,
 		Lister:                           computeclass_lister.NewMockCrdLister([]computeclass.CRD{}),
 		ExperimentsManager:               em,
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -486,7 +486,7 @@ func TestAddDeletedNodeGroup(t *testing.T) {
 		MaxAutoprovisionedNodeGroupCount: 10,
 		Lister:                           computeClassLister,
 		ExperimentsManager:               em,
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -557,7 +557,7 @@ func TestA100GPU(t *testing.T) {
 				Lister:                           computeClassLister,
 				MaxAutoprovisionedNodeGroupCount: 10,
 				ExperimentsManager:               em,
-				OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -650,7 +650,7 @@ func TestGpuPartitioning(t *testing.T) {
 				Lister:                           computeClassLister,
 				MaxAutoprovisionedNodeGroupCount: 10,
 				ExperimentsManager:               em,
-				OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -733,7 +733,7 @@ func TestTPUv4(t *testing.T) {
 				Flags:                            AutoprovisioningNodeGroupManagerFlags{TpuAutoprovisioningEnabled: true},
 				Lister:                           computeClassLister,
 				ExperimentsManager:               em,
-				OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -806,7 +806,7 @@ func TestConfidentialNodesEnabled(t *testing.T) {
 		MaxAutoprovisionedNodeGroupCount: 10,
 		Lister:                           computeClassLister,
 		ExperimentsManager:               em,
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -858,13 +858,11 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutopilotEnabled(true).
 		WithAutoprovisioningEnabled(true).
-		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
 	processor.SetContext(&ca_context.AutoscalingContext{CloudProvider: provider})
 	computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
-	em := experiments.NewMockManager()
 	opts := AutoprovisioningNodeGroupManagerOptions{
 		CloudProvider:                    provider,
 		Backoff:                          gke_backoff.NewGkeBackoff(gke_backoff.Config{CustomResourceProcessor: processor, NpcLister: computeClassLister}),
@@ -872,10 +870,14 @@ func TestExtendedDurationPodAndPPVM(t *testing.T) {
 		Flags:                            AutoprovisioningNodeGroupManagerFlags{},
 		PodLister:                        kube_util.NewTestPodLister([]*apiv1.Pod{}),
 		Lister:                           computeClassLister,
-		ExperimentsManager:               em,
+		ExperimentsManager:               experiments.NewMockManager(),
 		ResizableMachineTypesProvider:    config.NewSimpleStringSetProvider(allResizableMachineTypes),
-		OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
-		ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
+		OptionsTracker: tracking.StaticOptionsTracker(options.AutoscalingOptions{
+			InternalOptions: options.InternalOptions{
+				ResizableVmEdpEnabled: true,
+			},
+		}),
+		ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 	}
 	manager := NewAutoprovisioningNodeGroupManager(opts)
 	debuggingSnapshotter, _ := gkedebuggingsnapshot.NewGkeDebuggingSnapshotter(true)
@@ -998,7 +1000,6 @@ func TestCSNPod(t *testing.T) {
 		}).
 		WithAllZones("us-central1-a", "us-central1-b", "us-central1-c").
 		WithAutoprovisioningEnabled(true).
-		WithResizableVmEdpEnabled(true).
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
 	processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
@@ -1039,7 +1040,7 @@ func TestCSNPod(t *testing.T) {
 				Lister:                           computeClassLister,
 				ExperimentsManager:               gm,
 				ResizableMachineTypesProvider:    config.NewSimpleStringSetProvider(nil),
-				OptionsTracker:                   tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, gm),
+				OptionsTracker:                   tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, gm),
 				ResourcePolicyPuller:             &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -1178,7 +1179,7 @@ func TestInjectedLocations(t *testing.T) {
 				Lister:               computeClassLister,
 				ExperimentsManager:   em,
 				ReservationsPuller:   fakeRP,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -1427,7 +1428,7 @@ func TestRemoveUnneededNodeGroups(t *testing.T) {
 				Backoff:              gke_backoff.NewGkeBackoff(gke_backoff.Config{CustomResourceProcessor: processor, NpcLister: computeClassLister}),
 				Lister:               computeClassLister,
 				ExperimentsManager:   em,
-				OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+				OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 				ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 			}
 			manager := NewAutoprovisioningNodeGroupManager(opts)
@@ -1534,7 +1535,7 @@ func TestNodeGroupManagerResourceLabels(t *testing.T) {
 			Flags:                AutoprovisioningNodeGroupManagerFlags{},
 			Lister:               computeclass_lister.NewMockCrdLister([]computeclass.CRD{}),
 			ExperimentsManager:   em,
-			OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+			OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 			ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 		})
 
@@ -1571,7 +1572,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 		NewSandboxTypeGenerator(),
 		NewPreemeptionOptionGenerator(true),
 		NewConsolidationDelayGenerator(nil),
-		NewExtendedDurationPodGenerator(provider),
+		NewExtendedDurationPodGenerator(provider, nil),
 		NewComputeClassGenerator(provider, computeclass_lister.NewMockCrdListerWithLabel(nil, ""), true, true, nil),
 		NewSelfServiceGenerator(),
 		NewPodIsolationLabelGenerator(provider),
@@ -1609,7 +1610,7 @@ func TestNewAutoprovisioningNodeGroupManagerGeneratorsOrder(t *testing.T) {
 			AllowlistedSystemLabelsMatcher: slMatcher,
 			Lister:                         computeclass_lister.NewMockCrdListerWithLabel(nil, ""),
 			ExperimentsManager:             em,
-			OptionsTracker:                 tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+			OptionsTracker:                 tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 			ResourcePolicyPuller:           &placement.FakeResourcePolicyPullerProvider{},
 		})
 		assert.Equal(t, len(expectedSpecGenerators), len(manager.specGenerators))
@@ -1651,7 +1652,7 @@ func TestIsDraTpuPod(t *testing.T) {
 		Lister:               lister,
 		CloudProvider:        provider,
 		ExperimentsManager:   em,
-		OptionsTracker:       tracking.FakeOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
+		OptionsTracker:       tracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em),
 		ResourcePolicyPuller: &placement.FakeResourcePolicyPullerProvider{},
 	})
 

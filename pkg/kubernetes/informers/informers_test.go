@@ -171,7 +171,7 @@ func TestWaitForInformerSyncWithClusterRefresh(t *testing.T) {
 		t.Run(tc.testName, func(t *testing.T) {
 			t.Parallel()
 
-			optsTracker := optstracking.FakeOptionsTracker(tc.flagOpts, tc.clusterRefreshResults[0].cluster, experiments.NewMockManagerWithOptions(version.Version{}, tc.clusterRefreshResults[0].experiments, nil))
+			optsTracker := optstracking.TestOptionsTracker(tc.flagOpts, tc.clusterRefreshResults[0].cluster, experiments.NewMockManagerWithOptions(version.Version{}, tc.clusterRefreshResults[0].experiments, nil))
 			cloudProvider := &fakeCloudProvider{
 				optsTracker:           optsTracker,
 				clusterRefreshResults: tc.clusterRefreshResults,

@@ -2437,12 +2437,14 @@ func (pog PreemeptionOptionGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoo
 // ExtendedDurationGenerator is a extended duration option spec Generator.
 // Details in go/extended-duration-pod-design.
 type ExtendedDurationGenerator struct {
-	cloudProvider napcloudprovider.AutoprovisioningCloudProvider
+	cloudProvider  napcloudprovider.AutoprovisioningCloudProvider
+	optionsTracker *optstracking.OptionsTracker
 }
 
-func NewExtendedDurationPodGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider) *ExtendedDurationGenerator {
+func NewExtendedDurationPodGenerator(cloudProvider napcloudprovider.AutoprovisioningCloudProvider, optionsTracker *optstracking.OptionsTracker) *ExtendedDurationGenerator {
 	return &ExtendedDurationGenerator{
-		cloudProvider: cloudProvider,
+		cloudProvider:  cloudProvider,
+		optionsTracker: optionsTracker,
 	}
 }
 
@@ -2507,7 +2509,7 @@ func (ExtendedDurationGenerator) UpdateNodePoolSpec(spec *gkeclient.NodePoolSpec
 func (edpg ExtendedDurationGenerator) resolveExtendedDurationValue(machineType, value string) (string, bool) {
 	isResizable, err := ekvms_utils.IsResizableMachineType(edpg.cloudProvider.MachineConfigProvider(), machineType)
 
-	if err == nil && isResizable && edpg.cloudProvider.IsResizableVmEdpEnabled() {
+	if err == nil && isResizable && edpg.optionsTracker.Options().ResizableVmEdpEnabled {
 		// The machine is a resizable VM and the feature is on. Always use "X".
 		return ekvmtypes.ExtendedDurationLabelX, true
 	}
