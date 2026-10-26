@@ -1389,3 +1389,13 @@ func WithEkvmsEnabled(enabled bool) Option[*config.AutoscalingOptions] {
 		return o
 	}
 }
+
+// WithClusterScaleToZeroEnabled enables cluster scale-to-zero with the given delay and kube-system as a system namespace.
+func WithClusterScaleToZeroEnabled(delay time.Duration) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ClusterScaleToZeroEnabled = true
+		o.ClusterScaleToZeroDelay = delay
+		o.SystemNamespaces = []string{"kube-system"}
+		return o
+	}
+}

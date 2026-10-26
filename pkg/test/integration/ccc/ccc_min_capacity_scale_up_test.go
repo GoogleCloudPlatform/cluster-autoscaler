@@ -35,14 +35,21 @@ import (
 
 func TestCCCScaleUpToMinCapacity(t *testing.T) {
 	testCases := []struct {
-		name              string
-		experimentEnabled bool
-		expectedNodeCount int
+		name                      string
+		experimentEnabled         bool
+		clusterScaleToZeroEnabled bool
+		expectedNodeCount         int
 	}{
 		{
 			name:              "scales up to min capacity when experiment is enabled",
 			experimentEnabled: true,
 			expectedNodeCount: 2,
+		},
+		{
+			name:                      "scales up from zero to min capacity when cluster scale-to-zero is enabled",
+			experimentEnabled:         true,
+			clusterScaleToZeroEnabled: true,
+			expectedNodeCount:         2,
 		},
 		{
 			name:              "does not scale up when experiment is disabled",
@@ -70,6 +77,12 @@ func TestCCCScaleUpToMinCapacity(t *testing.T) {
 					integration.WithClusterAutoProvisioningEnabled(),
 				).
 				WithCccCrds(cc)
+
+			if tc.clusterScaleToZeroEnabled {
+				testConfig.WithOverrides(
+					integration.WithClusterScaleToZeroEnabled(0),
+				)
+			}
 
 			if !tc.experimentEnabled {
 				testConfig.WithExperimentOverrides(

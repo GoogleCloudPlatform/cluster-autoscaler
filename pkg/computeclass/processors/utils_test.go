@@ -20,8 +20,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
@@ -174,4 +176,25 @@ func buildMigWithDefaultCrd() *gke.GkeMig {
 	node := v1.Node{}
 	gkeManager.On("GetMigTemplateNodeInfo", mig).Return(framework.NewTestNodeInfo(&node), nil)
 	return mig
+}
+
+func TestBuildFakePod(t *testing.T) {
+	t.Run("top-level CCC fake pod uses default namespace", func(t *testing.T) {
+		pod := buildFakePod("my-ccc", nil, 0)
+		assert.Equal(t, metav1.NamespaceDefault, pod.Namespace)
+		assert.Equal(t, "min-nodes-fake-ccc-pod-my-ccc-0", pod.Name)
+		assert.True(t, IsMinCapacityFakePod(pod))
+		assert.Equal(t, "my-ccc", pod.Spec.NodeSelector[labels.ComputeClassLabel])
+		assert.NotContains(t, pod.Spec.NodeSelector, labels.ComputeClassPriorityIdxLabel)
+	})
+
+	t.Run("priority rule fake pod uses default namespace", func(t *testing.T) {
+		priorityIdx := 1
+		pod := buildFakePod("my-ccc", &priorityIdx, 2)
+		assert.Equal(t, metav1.NamespaceDefault, pod.Namespace)
+		assert.Equal(t, "min-nodes-fake-priority-pod-my-ccc-1-2", pod.Name)
+		assert.True(t, IsMinCapacityFakePod(pod))
+		assert.Equal(t, "my-ccc", pod.Spec.NodeSelector[labels.ComputeClassLabel])
+		assert.Equal(t, "1", pod.Spec.NodeSelector[labels.ComputeClassPriorityIdxLabel])
+	})
 }
