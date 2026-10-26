@@ -41,236 +41,308 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 	for _, tc := range []struct {
 		testName string
 
-		flagValues             internalopts.AutoscalingOptions
+		setFlagValue           func(*internalopts.AutoscalingOptions)
 		experimentValues       map[string]bool
 		stringExperimentValues map[string]string
 		clusterProto           gkeclient.Cluster
 
-		wantOptionsAfterExperiments internalopts.AutoscalingOptions
-		wantRestart                 bool
+		setExpectedValue func(*internalopts.AutoscalingOptions)
+		wantRestart      bool
 	}{
 		{
-			testName:                    "untracked_fields_are_properly_initialized_with_CLI_Values",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{EstimatorName: "xyz"}}, // Arbitrary field that isn't tracked by OptionsTracker, and is unlikely to be in the future.
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{EstimatorName: "xyz"}}, // Assert that fields that aren't tracked by OptionsTracker are correctly initialized to their CLI-based values.
-			wantRestart:                 false,
-		},
-		{
-			testName:                    "DynamicResourceAllocationEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{DynamicResourceAllocationEnabled: true}},
-			experimentValues:            map[string]bool{"DRA::Enabled": false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{DynamicResourceAllocationEnabled: false}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "AsyncNodeGroupsEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{AsyncNodeGroupsEnabled: true}},
-			experimentValues:            map[string]bool{experiments.HtnapEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{AsyncNodeGroupsEnabled: false}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "CapacityBuffersControllerPrivatePreviewEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{CapacitybufferControllerEnabled: false}},
-			experimentValues:            map[string]bool{experiments.CapacityBuffersPrivatePreviewMinCAVersion: true},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{CapacitybufferPodInjectionEnabled: true, CapacitybufferControllerEnabled: true}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "CapacityBuffersPodInjectionPrivatePreviewEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{CapacitybufferPodInjectionEnabled: false}},
-			experimentValues:            map[string]bool{experiments.CapacityBuffersPrivatePreviewMinCAVersion: true},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{CapacitybufferPodInjectionEnabled: true, CapacitybufferControllerEnabled: true}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "FastpathBinpackingEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{FastpathBinpackingEnabled: true}},
-			experimentValues:            map[string]bool{experiments.FastpathBinpackingEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{FastpathBinpackingEnabled: false}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "MaxNodesPerScaleUp_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{MaxNodesPerScaleUp: 1000}},
-			experimentValues:            map[string]bool{experiments.IncreasedMaxNodesPerScaleUpEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{MaxNodesPerScaleUp: 500}},
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "NapMaxNodes_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{NapMaxNodes: 2000}},
-			experimentValues:            map[string]bool{experiments.IncreasedNapMaxNodesEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{NapMaxNodes: 1000}},
-			wantRestart:                 true,
-		},
-		{
-			testName:   "CSNEnabled_field_is_tracked",
-			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{AutopilotEnabled: false, CSNCAFlag: internalopts.CSNUnspecified}},
-			experimentValues: map[string]bool{
-				experiments.ColdStandbyNodesMinCAVersionFlag: true,
+			testName: "untracked_fields_are_properly_initialized_with_CLI_Values",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.EstimatorName = "xyz" // Arbitrary field that isn't tracked by OptionsTracker, and is unlikely to be in the future.
 			},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{AutopilotEnabled: false, CSNEnabled: true, CSNCAFlag: internalopts.CSNUnspecified}},
-			wantRestart:                 true,
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.EstimatorName = "xyz" // Assert that fields that aren't tracked by OptionsTracker are correctly initialized to their CLI-based values.
+			},
+			wantRestart: false,
 		},
 		{
-			testName:                    "SalvoScaleUp_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{SalvoScaleUp: true}},
-			experimentValues:            map[string]bool{experiments.SalvoScaleUpEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{SalvoScaleUp: false}},
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "SalvoScaleUpBudget_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{SalvoScaleUpBudget: 5 * time.Minute}},
-			stringExperimentValues:      map[string]string{experiments.SalvoScaleUpBudgetSecondsFlag: "600"},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{SalvoScaleUpBudget: 10 * time.Minute}},
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "ScaleUpSimulationForSkippedNodeGroupsEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{ScaleUpSimulationForSkippedNodeGroupsEnabled: false}},
-			experimentValues:            map[string]bool{experiments.ScaleUpSimulationForSkippedNodeGroupsMinCAVersionFlag: true},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{ScaleUpSimulationForSkippedNodeGroupsEnabled: true}},
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "GracefulDegradationEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{GracefulDegradationEnabled: true}},
-			experimentValues:            map[string]bool{experiments.GracefulDegradationEnabledFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{AutoscalingOptions: config.AutoscalingOptions{GracefulDegradationEnabled: false}}, // Assert that the field value is modified.
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "DefaultReservedResourcesV2Enabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{DefaultReservedResourcesV2Enabled: false}},
-			experimentValues:            map[string]bool{experiments.DefaultReservedResourcesMinCAVersionFlag: true},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{DefaultReservedResourcesV2Enabled: true}},
-			wantRestart:                 true,
-		},
-		{
-			testName:                    "BalloonPodIpprResizeEnabled_defaults_to_enabled_when_no_experiment_is_defined",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: true}},
-			wantRestart:                 false,
-		},
-		{
-			testName:                    "BalloonPodIpprResizeEnabled_is_tracked_when_experiment_disables_it",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: true}},
-			experimentValues:            map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{BalloonPodIpprResizeEnabled: false}},
-			wantRestart:                 false,
-		},
-		{
-			testName:                    "CapacityBuffersMetricsEndpointEnabled_defaults_to_enabled_when_no_experiment_is_defined",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: false}},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: true}},
-			wantRestart:                 false,
-		},
-		{
-			testName:                    "CapacityBuffersMetricsEndpointEnabled_is_tracked_when_experiment_disables_it",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: true}},
-			experimentValues:            map[string]bool{experiments.CapacityBuffersMetricsEndpoint: false},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{CapacityBuffersMetricsEndpointEnabled: false}},
-			wantRestart:                 true,
-		},
-		{
-			testName: "EkvmsIncrementStep_field_is_tracked",
-			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{
-				EkvmsIncrementStep: apiv1.ResourceList{
-					apiv1.ResourceCPU:    resource.MustParse("2"),
-					apiv1.ResourceMemory: resource.MustParse("1Mi"),
-				},
-			}},
-			experimentValues:       map[string]bool{experiments.EkFineGrainedResizeMinCAVersionFlag: true},
-			stringExperimentValues: map[string]string{experiments.EkFineGrainedResizeIncrementStepFlag: "1"},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{
-				EkvmsIncrementStep: apiv1.ResourceList{
-					apiv1.ResourceCPU:    resource.MustParse("1"),
-					apiv1.ResourceMemory: resource.MustParse("1Mi"),
-				},
-			}},
+			testName: "DynamicResourceAllocationEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.DynamicResourceAllocationEnabled = true
+			},
+			experimentValues: map[string]bool{"DRA::Enabled": false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.DynamicResourceAllocationEnabled = false // Assert that the field value is modified.
+			},
 			wantRestart: true,
 		},
 		{
-			testName:   "SpecificTypeReservationMatchEnabled_field_is_tracked",
-			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationMatchEnabled: false}},
+			testName: "AsyncNodeGroupsEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AsyncNodeGroupsEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.HtnapEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AsyncNodeGroupsEnabled = false // Assert that the field value is modified.
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "CapacityBuffersControllerPrivatePreviewEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacitybufferControllerEnabled = false
+			},
+			experimentValues: map[string]bool{experiments.CapacityBuffersPrivatePreviewMinCAVersion: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacitybufferPodInjectionEnabled = true
+				opts.CapacitybufferControllerEnabled = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "CapacityBuffersPodInjectionPrivatePreviewEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacitybufferPodInjectionEnabled = false
+			},
+			experimentValues: map[string]bool{experiments.CapacityBuffersPrivatePreviewMinCAVersion: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacitybufferPodInjectionEnabled = true
+				opts.CapacitybufferControllerEnabled = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "FastpathBinpackingEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.FastpathBinpackingEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.FastpathBinpackingEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.FastpathBinpackingEnabled = false // Assert that the field value is modified.
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "MaxNodesPerScaleUp_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxNodesPerScaleUp = 1000
+			},
+			experimentValues: map[string]bool{experiments.IncreasedMaxNodesPerScaleUpEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxNodesPerScaleUp = 500
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "NapMaxNodes_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.NapMaxNodes = 2000
+			},
+			experimentValues: map[string]bool{experiments.IncreasedNapMaxNodesEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.NapMaxNodes = 1000
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "CSNEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AutopilotEnabled = false
+				opts.CSNCAFlag = internalopts.CSNUnspecified
+			},
+			experimentValues: map[string]bool{
+				experiments.ColdStandbyNodesMinCAVersionFlag: true,
+			},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.AutopilotEnabled = false
+				opts.CSNEnabled = true
+				opts.CSNCAFlag = internalopts.CSNUnspecified
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "SalvoScaleUp_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SalvoScaleUp = true
+			},
+			experimentValues: map[string]bool{experiments.SalvoScaleUpEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SalvoScaleUp = false
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "SalvoScaleUpBudget_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SalvoScaleUpBudget = 5 * time.Minute
+			},
+			stringExperimentValues: map[string]string{experiments.SalvoScaleUpBudgetSecondsFlag: "600"},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SalvoScaleUpBudget = 10 * time.Minute
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "ScaleUpSimulationForSkippedNodeGroupsEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ScaleUpSimulationForSkippedNodeGroupsEnabled = false
+			},
+			experimentValues: map[string]bool{experiments.ScaleUpSimulationForSkippedNodeGroupsMinCAVersionFlag: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ScaleUpSimulationForSkippedNodeGroupsEnabled = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "GracefulDegradationEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.GracefulDegradationEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.GracefulDegradationEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.GracefulDegradationEnabled = false // Assert that the field value is modified.
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "DefaultReservedResourcesV2Enabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.DefaultReservedResourcesV2Enabled = false
+			},
+			experimentValues: map[string]bool{experiments.DefaultReservedResourcesMinCAVersionFlag: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.DefaultReservedResourcesV2Enabled = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "BalloonPodIpprResizeEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.BalloonPodIpprResizeEnabled = true
+			},
+			wantRestart: false,
+		},
+		{
+			testName: "BalloonPodIpprResizeEnabled_is_tracked_when_experiment_disables_it",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.BalloonPodIpprResizeEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.BalloonPodIpprResizeEnabled = false
+			},
+			wantRestart: false,
+		},
+		{
+			testName: "CapacityBuffersMetricsEndpointEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacityBuffersMetricsEndpointEnabled = true
+			},
+			wantRestart: false,
+		},
+		{
+			testName: "CapacityBuffersMetricsEndpointEnabled_is_tracked_when_experiment_disables_it",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacityBuffersMetricsEndpointEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.CapacityBuffersMetricsEndpoint: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.CapacityBuffersMetricsEndpointEnabled = false
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "EkvmsIncrementStep_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.EkvmsIncrementStep = apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("2"),
+					apiv1.ResourceMemory: resource.MustParse("1Mi"),
+				}
+			},
+			experimentValues:       map[string]bool{experiments.EkFineGrainedResizeMinCAVersionFlag: true},
+			stringExperimentValues: map[string]string{experiments.EkFineGrainedResizeIncrementStepFlag: "1"},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.EkvmsIncrementStep = apiv1.ResourceList{
+					apiv1.ResourceCPU:    resource.MustParse("1"),
+					apiv1.ResourceMemory: resource.MustParse("1Mi"),
+				}
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "SpecificTypeReservationMatchEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SpecificTypeReservationMatchEnabled = false
+			},
 			experimentValues: map[string]bool{
 				experiments.SpecificTypeReservationMatchEnabledFlag:      true,
 				experiments.SpecificTypeReservationMatchMinCAVersionFlag: true,
 			},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationMatchEnabled: true}},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SpecificTypeReservationMatchEnabled = true
+			},
 		},
 		{
-			testName:   "SpecificTypeReservationWithoutMatchEnabled_field_is_tracked",
-			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationWithoutMatchEnabled: false}},
+			testName: "SpecificTypeReservationWithoutMatchEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SpecificTypeReservationWithoutMatchEnabled = false
+			},
 			experimentValues: map[string]bool{
 				experiments.SpecificTypeReservationWithoutMatchEnabledFlag:      true,
 				experiments.SpecificTypeReservationWithoutMatchMinCAVersionFlag: true,
 			},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{SpecificTypeReservationWithoutMatchEnabled: true}},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.SpecificTypeReservationWithoutMatchEnabled = true
+			},
 		},
 		{
-			testName:   "ReservationsAnyLocationPolicyOverride_field_is_tracked",
-			flagValues: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ReservationsAnyLocationPolicyOverride: false}},
+			testName: "ReservationsAnyLocationPolicyOverride_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ReservationsAnyLocationPolicyOverride = false
+			},
 			experimentValues: map[string]bool{
 				experiments.ReservationsAnyLocationPolicyOverrideEnabledFlag:      true,
 				experiments.ReservationsAnyLocationPolicyOverrideMinCAVersionFlag: true,
 			},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ReservationsAnyLocationPolicyOverride: true}},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ReservationsAnyLocationPolicyOverride = true
+			},
 		},
 		{
-			testName:                    "ResizableVmEdpEnabled_field_is_tracked",
-			flagValues:                  internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ResizableVmEdpEnabled: false}},
-			stringExperimentValues:      map[string]string{experiments.EnableResizableVmEdpMinGKEVersionFlag: "1.26.0-gke.0"},
-			clusterProto:                gkeclient.Cluster{ClusterVersion: "1.30.0-gke.0"},
-			wantOptionsAfterExperiments: internalopts.AutoscalingOptions{InternalOptions: internalopts.InternalOptions{ResizableVmEdpEnabled: true}},
-			wantRestart:                 false,
+			testName: "ResizableVmEdpEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ResizableVmEdpEnabled = false
+			},
+			stringExperimentValues: map[string]string{experiments.EnableResizableVmEdpMinGKEVersionFlag: "1.26.0-gke.0"},
+			clusterProto:           gkeclient.Cluster{ClusterVersion: "1.30.0-gke.0"},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ResizableVmEdpEnabled = true
+			},
+			wantRestart: false,
 		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
-			noExperiments := experiments.NewMockManager()
-			withExperiments := experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentValues, tc.stringExperimentValues)
+			wantOpts := EmptyTestOptionsTracker().Options()
+			if tc.setFlagValue != nil {
+				tc.setFlagValue(&wantOpts)
+			}
+
 			// Make sure the same init logic used by the public NewOptionsTracker constructor gets tested here - it's crucial for OptionsTracker correctly
 			// handling the fields that aren't tracked.
-			tracker := NewOptionsTracker(tc.flagValues, noExperiments)
+			tracker := NewOptionsTracker(wantOpts, experiments.NewMockManager())
 			tracker.StoreCluster(tc.clusterProto)
 
-			// Compute the options for the first time with no experiments defined - all field values should stay the same as the flag ones.
+			// Compute the options for the first time with no experiments defined.
 			// Since this is the first call to RecomputeOptions(), the resulting values should be saved as the startup options.
-			err := tracker.RecomputeOptions()
-			assert.NoError(t, err)
-			assert.Equal(t, withDirectLaunchDefaults(tc.flagValues), tracker.Options())
+			assert.NoError(t, tracker.RecomputeOptions())
+			assert.Equal(t, wantOpts, tracker.Options())
 			// Last computed options are trivially the same as startup options, so no need for restart.
 			assert.False(t, tracker.OptionChangesRequireRestart())
 
 			// Simulate experiments being defined over time by swapping the experiment manager to one which has them defined. If the tested field should
 			// change value based on the experiments, the new value should be reflected after the next RecomputeOptions() call.
-			tracker.experimentsManager = withExperiments
-			err = tracker.RecomputeOptions()
-			assert.NoError(t, err)
+			tracker.experimentsManager = experiments.NewMockManagerWithOptions(version.Version{}, tc.experimentValues, tc.stringExperimentValues)
+			assert.NoError(t, tracker.RecomputeOptions())
 
-			wantOpts := withDirectLaunchDefaults(tc.wantOptionsAfterExperiments)
-			if val, isDefined := tc.experimentValues[experiments.BalloonPodIpprResizeFlag]; isDefined && !val {
-				wantOpts.BalloonPodIpprResizeEnabled = false
-			}
-			if val, isDefined := tc.experimentValues[experiments.CapacityBuffersMetricsEndpoint]; isDefined && !val {
-				wantOpts.CapacityBuffersMetricsEndpointEnabled = false
-			}
+			tc.setExpectedValue(&wantOpts)
 			assert.Equal(t, wantOpts, tracker.Options())
 			assert.Equal(t, tc.wantRestart, tracker.OptionChangesRequireRestart())
 		})
 	}
-}
-
-// withDirectLaunchDefaults returns opts with the fields backed by direct-launch experiment flags set to their default value. Direct-launch flags are
-// enabled unless an experiment explicitly disables them, so RecomputeOptions() always applies them regardless of the CLI flag values. Applying them to
-// the expected options here lets the assertions keep comparing the whole options struct, which is what guarantees that a tracked field doesn't
-// accidentally mutate any other field.
-func withDirectLaunchDefaults(opts internalopts.AutoscalingOptions) internalopts.AutoscalingOptions {
-	opts.BalloonPodIpprResizeEnabled = true
-	opts.CapacityBuffersMetricsEndpointEnabled = true
-	return opts
 }
 
 func TestOptionsTrackerRequireRestart(t *testing.T) {
