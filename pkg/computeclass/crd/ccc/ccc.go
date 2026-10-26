@@ -178,6 +178,14 @@ func (ccc *cccCrd) Name() string {
 	return ccc.ComputeClass.Name
 }
 
+// Annotations returns the metadata annotations of the CCC.
+func (ccc *cccCrd) Annotations() map[string]string {
+	if ccc == nil || ccc.ComputeClass == nil {
+		return nil
+	}
+	return ccc.ComputeClass.Annotations
+}
+
 // Rules returns list of CCC rules, computed lazily.
 func (ccc *cccCrd) Rules() []rules.Rule {
 	ccc.rulesOnce.Do(func() {

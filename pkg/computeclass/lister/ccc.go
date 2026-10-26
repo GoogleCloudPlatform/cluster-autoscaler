@@ -139,6 +139,18 @@ func (l *cccLister) NodeCrd(node *corev1.Node) (crd.CRD, string, error) {
 	return c, name, err
 }
 
+// CrdAnnotations returns the annotations of a CCC crd for a specific name without constructing a full CRD wrapper.
+func (l *cccLister) CrdAnnotations(name string) (map[string]string, error) {
+	if machinetypes.IsPredefinedComputeClass(name) {
+		return nil, nil
+	}
+	cc, err := l.ComputeClassLister.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	return cc.Annotations, nil
+}
+
 // GetCrd retrieves a CCC crd for a specific name.
 func (l *cccLister) GetCrd(name string) (crd.CRD, error) {
 	if machinetypes.IsPredefinedComputeClass(name) {
@@ -195,7 +207,7 @@ func (l *cccLister) Labels() []string {
 
 // Default returns the default CCC name
 func (l *cccLister) Default() (string, string, bool) {
-	if l.provider.IsDefaultCCCEnabled() {
+	if l.provider != nil && l.provider.IsDefaultCCCEnabled() {
 		return gkelabels.DefaultCCCName, gkelabels.ComputeClassLabel, true
 	}
 	return "", gkelabels.ComputeClassLabel, false

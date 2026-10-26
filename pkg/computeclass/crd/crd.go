@@ -46,6 +46,7 @@ type CRD interface {
 	CrdType() string
 
 	Name() string
+	Annotations() map[string]string
 	Rules() []rules.Rule
 	GroupedRules() [][]rules.Rule
 	AutoprovisioningEnabled() bool

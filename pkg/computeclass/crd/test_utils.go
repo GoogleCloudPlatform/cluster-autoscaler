@@ -35,6 +35,7 @@ type testCrd struct {
 	label                         string
 	crdType                       string
 	name                          string
+	annotations                   map[string]string
 	groupedRules                  [][]crdRules.Rule
 	autoprovisioningEnabled       bool
 	autopilotManaged              bool
@@ -85,6 +86,10 @@ func (t *testCrd) CrdType() string {
 
 func (t *testCrd) Name() string {
 	return t.name
+}
+
+func (t *testCrd) Annotations() map[string]string {
+	return t.annotations
 }
 
 func (t *testCrd) Rules() []crdRules.Rule {
@@ -239,6 +244,12 @@ func WithName(name string) TestCrdOption {
 func WithConfigHash(hash string) TestCrdOption {
 	return func(crd *testCrd) {
 		crd.configHash = hash
+	}
+}
+
+func WithAnnotations(annotations map[string]string) TestCrdOption {
+	return func(crd *testCrd) {
+		crd.annotations = annotations
 	}
 }
 
