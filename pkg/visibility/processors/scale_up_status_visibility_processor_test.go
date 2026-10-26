@@ -258,7 +258,7 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			napStatus := autoprovisioning.NewProcessingStatus()
-			napStatus.Result = autoprovisioning.ProcessingResult(1337)
+			napStatus.SetResult(autoprovisioning.ProcessingResult(1337))
 			vizNapStatus := &vistypes.NapStatus{
 				Result:          1337,
 				DisregardedMigs: map[autoprovisioning.NodeGroupOptions]autoprovisioning.NodeGroupDisregardedReason{},
@@ -266,8 +266,14 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 			}
 			vizNapStatus.Result = autoprovisioning.ProcessingResult(1337)
 
-			scaleUpStatus := &status.ScaleUpStatus{Result: 1337}
-			vizScaleUpStatus := &vistypes.ScaleUpStatus{Result: 1337}
+			scaleUpStatus := &status.ScaleUpStatus{
+				Result: 1337,
+				PodsRemainUnschedulable: []status.NoScaleUpInfo{
+					{Pod: &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod1"}}},
+				},
+			}
+			vizScaleUpStatus, err := vistypes.ConvertScaleUpStatus(scaleUpStatus)
+			assert.NoError(t, err)
 
 			ctx := &ca_context.AutoscalingContext{
 				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
@@ -352,6 +358,38 @@ func TestProcessNoScaleUpEvent(t *testing.T) {
 			noScaleUpMock.AssertExpectations(t)
 		})
 	}
+}
+
+func TestEmitNoScaleUpEvent_SkipsWhenNoUnschedulablePods(t *testing.T) {
+	napStatus := autoprovisioning.NewProcessingStatus()
+	napStatus.SetResult(autoprovisioning.ProcessingResult(1337))
+
+	ctx := &ca_context.AutoscalingContext{
+		ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
+	}
+	ctx.ProcessorCallbacks.SetExtraValue(autoprovisioning.ProcessingStatusContextKey, napStatus)
+
+	noScaleUpMock := noscaleup.NewNoScaleUpMock()
+	loggerMock := new(visibility.MockEventLogger)
+	processor := ScaleUpStatusVisibilityProcessor{
+		logger:    loggerMock,
+		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
+		data:      NewSharedData(),
+		idGen:     new(visibility.MockEventIDGenerator),
+		noScaleUp: noScaleUpMock,
+	}
+
+	// When there are no unschedulable pods (e.g., successful scale-up or async NAP
+	// InitializeNodeGroup callback), emitNoScaleUpEvent returns early without
+	// reading ProcessorCallbacks or invoking NoScaleUp.GetNewReasons.
+	scaleUpStatus := &status.ScaleUpStatus{
+		Result:                  status.ScaleUpSuccessful,
+		PodsRemainUnschedulable: []status.NoScaleUpInfo{},
+	}
+	processor.Process(context.TODO(), ctx, scaleUpStatus)
+
+	noScaleUpMock.AssertNotCalled(t, "GetNewReasons", mock.Anything, mock.Anything, mock.Anything)
+	loggerMock.AssertNotCalled(t, "LogEvent", mock.Anything)
 }
 
 func TestNoScaleUpNegativeEventsFlag(t *testing.T) {

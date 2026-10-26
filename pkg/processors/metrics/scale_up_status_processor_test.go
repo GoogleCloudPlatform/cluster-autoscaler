@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -1499,4 +1500,52 @@ func TestPodScheduled_NegativeDurationCappedAtZero(t *testing.T) {
 
 	assert.Len(t, observer.schedulingDurations["false"], 1)
 	assert.Equal(t, 0*time.Second, observer.schedulingDurations["false"][0])
+}
+
+func TestScaleUpStatusMetricsProcessorConcurrentProcess(t *testing.T) {
+	now := time.Now()
+	autoscalerStart := now.Add(-10 * longUnschedulableThreshold)
+	pod1 := makePendingPod("pod-1", now.Add(-2*longUnschedulableThreshold))
+	pod2 := makePendingPod("pod-2", now.Add(-5*time.Minute))
+	scheduledPod := makePendingPod("pod-3", now.Add(-10*time.Minute))
+	schedulePod(scheduledPod, now)
+
+	aggregator, _, processor, _ := setUpProcessor(autoscalerStart)
+	aggregator.SetUnschedulable([]*apiv1.Pod{pod1, pod2, scheduledPod})
+	autoscalingCtx := setUpContext([]*apiv1.Pod{scheduledPod})
+
+	mainLoopStatus := &status.ScaleUpStatus{
+		Result: status.ScaleUpNotNeeded,
+		PodsRemainUnschedulable: []status.NoScaleUpInfo{
+			{Pod: pod2},
+		},
+	}
+	asyncInitStatus := &status.ScaleUpStatus{
+		Result:               status.ScaleUpSuccessful,
+		PodsTriggeredScaleUp: []*apiv1.Pod{scheduledPod},
+		ScaleUpInfos: []nodegroupset.ScaleUpInfo{
+			{
+				Group: test.NewTestNodeGroup("ng1", 0, 10, 3, true, false, "a", nil, nil),
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				aggregator.SetUnschedulable([]*apiv1.Pod{pod1, pod2, scheduledPod})
+				processor.Process(context.Background(), autoscalingCtx, mainLoopStatus)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				processor.Process(context.Background(), autoscalingCtx, asyncInitStatus)
+			}
+		}()
+	}
+	wg.Wait()
 }

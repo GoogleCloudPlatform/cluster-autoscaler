@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"slices"
+	"sync"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -73,7 +74,11 @@ type unschedulablePodInfo struct {
 }
 
 // ScaleUpStatusMetricsProcessor gathers gke specific metrics.
+// With asynchronous node group provisioning (e.g. NAP), the scale-up status
+// processors can run on a separate goroutine concurrently with the main loop,
+// so access to internal state (podInfos and labelCounter) is synchronized.
 type ScaleUpStatusMetricsProcessor struct {
+	mu                  sync.Mutex
 	autoscalerStartTime time.Time
 	podInfos            map[types.UID]unschedulablePodInfo
 	labelCounter        labelCounter
@@ -163,6 +168,9 @@ func (p *ScaleUpStatusMetricsProcessor) Process(ctx context.Context, autoscaling
 
 // This version allows passing timestamp for easier testing.
 func (p *ScaleUpStatusMetricsProcessor) processImpl(context *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	seen := make(map[types.UID]bool)
 
 	// Inform Metrics Filter of the scale up
