@@ -23,6 +23,13 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 )
 
+const (
+	AutoscalerNameAnnotation  = "autoscaling.gke.io/autoscaler-name"
+	UnannotatedAutoscalerName = "*"
+	StandardAutoscalerName    = "autoscaling.gke.io/standard"
+	SolverAutoscalerName      = "autoscaling.gke.io/solver"
+)
+
 type AutoscalingOptions struct {
 	config.AutoscalingOptions // OSS options
 	InternalOptions
@@ -31,6 +38,7 @@ type AutoscalingOptions struct {
 type InternalOptions struct {
 	ProjectNumber                                int
 	Location                                     string
+	AutoscalerNames                              []string
 	CccNodeAutoprovisioningEnabled               bool
 	MaxAutoprovisionedNodeGroupCount             int
 	UseCapacityRequests                          bool

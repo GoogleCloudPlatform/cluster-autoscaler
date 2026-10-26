@@ -58,6 +58,7 @@ var (
 var (
 	projectNumber                                = flag.Int("project-number", 0, "Project number")
 	location                                     = flag.String("location", "", "Cluster location")
+	autoscalerNames                              = flag.String("autoscaler-names", "", "Comma-separated list of exact autoscaler annotation values owned by this instance. If empty, ComputeClass autoscaler partitioning is disabled.")
 	cccNodeAutoprovisioningEnabled               = flag.Bool("ccc-node-autoprovisioning-enabled", false, "Should CA enable autoprovisioning for CCC node groups")
 	maxAutoprovisionedNodeGroupCount             = flag.Int("max-autoprovisioned-node-group-count", 15, "The maximum number of autoprovisioned groups in the cluster.")
 	useCapacityRequests                          = flag.Bool("use-capacity-requests", false, "Should CA use Capacity Requests information when running simulations for the cluster.")
@@ -302,6 +303,17 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		}
 	}
 
+	autoscalerNameStr := *autoscalerNames
+	var parsedAutoscalerNames []string
+	if autoscalerNameStr != "" {
+		for _, name := range strings.Split(autoscalerNameStr, ",") {
+			trimmed := strings.TrimSpace(name)
+			if trimmed != "" {
+				parsedAutoscalerNames = append(parsedAutoscalerNames, trimmed)
+			}
+		}
+	}
+
 	switch options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy) {
 	// Empty string allowed because the flag is optional (in which case defaults are derived from experiment flag ClusterDefaultAllocationStrategyFlag).
 	case options.ClusterDefaultAllocationStrategyLowestCost, options.ClusterDefaultAllocationStrategyFleetEfficiency, "":
@@ -313,6 +325,7 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 	return internalopts.InternalOptions{
 		ProjectNumber:                                *projectNumber,
 		Location:                                     *location,
+		AutoscalerNames:                              parsedAutoscalerNames,
 		CccNodeAutoprovisioningEnabled:               *cccNodeAutoprovisioningEnabled,
 		MaxAutoprovisionedNodeGroupCount:             *maxAutoprovisionedNodeGroupCount,
 		UseCapacityRequests:                          *useCapacityRequests,
