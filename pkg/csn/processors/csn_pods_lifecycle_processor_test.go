@@ -100,6 +100,12 @@ func withSuspendedSinceMutator(t time.Time) nodeMutator {
 	}
 }
 
+func withPriority(priority int32) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.Spec.Priority = ptr.To(priority)
+	}
+}
+
 func TestCSNPodsLifecycleProcess(t *testing.T) {
 	testCases := []struct {
 		name                      string
@@ -620,6 +626,48 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "Expendable CSN pods are filtered out and neither scheduled nor returned as unschedulable",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer")),
+			},
+			csnPods: []*apiv1.Pod{
+				test.BuildTestPod("csn-p1", 1000, 1000, withPriority(-11)), // Below -10 threshold.
+				test.BuildTestPod("csn-p2", 9000, 1000, withPriority(-15)), // Below -10 threshold.
+			},
+			csnPodsBuffersNames: map[string]string{
+				"csn-p1": "buffer",
+				"csn-p2": "buffer",
+			},
+			unschedulablePods:         []*apiv1.Pod{test.BuildTestPod("p1", 1000, 1000)},
+			expectedUnschedulablePods: []string{"p1"},
+			expectedAllSuspendedNodes: []string{},
+			expectErr:                 false,
+			expectedBufferAssignments: nil,
+		},
+		{
+			name: "Mix of expendable and non-expendable CSN pods only processes non-expendable CSN pods",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling, withBufferAssignmentMutator("ns/buffer")),
+			},
+			csnPods: []*apiv1.Pod{
+				test.BuildTestPod("csn-expendable", 6000, 1000, withPriority(-11)), // Below -10 threshold.
+				test.BuildTestPod("csn-at-cutoff", 6000, 1000, withPriority(-10)),
+				test.BuildTestPod("csn-above-cutoff", 9000, 1000, withPriority(0)),
+			},
+			csnPodsBuffersNames: map[string]string{
+				"csn-expendable":   "buffer",
+				"csn-at-cutoff":    "buffer",
+				"csn-above-cutoff": "buffer",
+			},
+			unschedulablePods:         []*apiv1.Pod{test.BuildTestPod("p1", 1000, 1000)},
+			expectedUnschedulablePods: []string{"p1", "csn-above-cutoff"},
+			expectedAllSuspendedNodes: []string{"node-1"},
+			expectErr:                 false,
+			expectedBufferAssignments: map[string]string{
+				"node-1": "buffer",
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -673,6 +721,7 @@ func TestCSNPodsLifecycleProcess(t *testing.T) {
 				ClusterSnapshot:      clusterSnapshot,
 				ClusterStateRegistry: clusterstate.NewClusterStateRegistry(nil, nil, nil, nil, nil),
 			}
+			autoscalingContext.AutoscalingOptions.ExpendablePodsPriorityCutoff = -10
 			remainingPods, err := processor.Process(context.TODO(), autoscalingContext, tc.unschedulablePods)
 
 			if tc.expectErr {
