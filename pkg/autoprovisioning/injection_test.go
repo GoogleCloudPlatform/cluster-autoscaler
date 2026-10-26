@@ -13144,12 +13144,16 @@ func TestConfidentialNodeGenerator_GenerateNodeGroupOptionsForRequirements(t *te
 			options: []NodeGroupOptions{
 				{MachineType: "c3-standard-4"},
 				{MachineType: "c3-highcpu-4"},
+				{MachineType: "c3-highmem-4"},
+				{MachineType: "c3-highcpu-192-metal"},
 			},
 			requirements: nodeGroupRequirements{
 				confidentialNodeType: gkelabels.TDXConfidentialNodeTypeValue,
 			},
 			wantOptions: []NodeGroupOptions{
 				{MachineType: "c3-standard-4"},
+				{MachineType: "c3-highcpu-4"},
+				{MachineType: "c3-highmem-4"},
 			},
 		},
 	} {
