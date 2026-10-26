@@ -29,6 +29,7 @@ import (
 	scaledown_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/actuation"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
@@ -193,18 +194,37 @@ func (f *defragNodeFilter) newValidCandidateNodes(ctx *ca_context.AutoscalingCon
 		if allCandidateNodes[nodeName] {
 			continue
 		}
-		if valid, reason := f.isCandidateNodeValid(ctx, nodeInfo); !valid {
-			f.reasons.Record(nodeName, reason)
-			continue
-		}
-		if blocked, reason := f.hasBlockingPods(nodeInfo, ctx, pdbTracker); blocked {
-			klog.V(4).Infof("Defrag: node %s has blocking pods", nodeName)
-			f.reasons.Record(nodeName, reason)
+		if !f.isValidCandidateNode(ctx, pdbTracker, nodeInfo) {
 			continue
 		}
 		nodeNames = append(nodeNames, nodeName)
 	}
 	return nodeNames, nil
+}
+
+func (f *defragNodeFilter) isValidCandidateNode(ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, nodeInfo *framework.NodeInfo) bool {
+	nodeName := nodeInfo.Node().Name
+	if valid, reason := f.isCandidateNodeValid(ctx, nodeInfo); !valid {
+		f.reasons.Record(nodeName, reason)
+		return false
+	}
+	if blocked, reason := f.hasBlockingPods(nodeInfo, ctx, pdbTracker); blocked {
+		klog.V(4).Infof("Defrag: node %s has blocking pods", nodeName)
+		f.reasons.Record(nodeName, reason)
+		return false
+	}
+	return true
+}
+
+func getNodeInfoFromSnapshot(ctx *ca_context.AutoscalingContext, nodeName string) *framework.NodeInfo {
+	nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
+	if err != nil {
+		if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
+			klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
+		}
+		return nil
+	}
+	return nodeInfo
 }
 
 // isNodeOngoingDeletion returns true if the node is in the process of deletion.
@@ -240,11 +260,8 @@ func (f *defragNodeFilter) isNodeOngoingDeletion(ctx *ca_context.AutoscalingCont
 func (f *defragNodeFilter) filterDeletedCandidateNodes(ctx *ca_context.AutoscalingContext, candidate *defrag.Candidate) {
 	var nodeNames []string
 	for _, nodeName := range candidate.Nodes {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
-				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
-			}
+		nodeInfo := getNodeInfoFromSnapshot(ctx, nodeName)
+		if nodeInfo == nil {
 			continue
 		}
 		if ongoing, reason := f.isNodeOngoingDeletion(ctx, nodeInfo.Node()); ongoing {
@@ -266,20 +283,8 @@ func (f *defragNodeFilter) filterDeletedCandidateNodes(ctx *ca_context.Autoscali
 func (f *defragNodeFilter) filterInvalidCandidateNodes(ctx *ca_context.AutoscalingContext, pdbTracker pdb.RemainingPdbTracker, candidate *defrag.Candidate) {
 	var nodeNames []string
 	for _, nodeName := range candidate.Nodes {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
-				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
-			}
-			continue
-		}
-		if valid, reason := f.isCandidateNodeValid(ctx, nodeInfo); !valid {
-			f.reasons.Record(nodeName, reason)
-			continue
-		}
-		if blocked, reason := f.hasBlockingPods(nodeInfo, ctx, pdbTracker); blocked {
-			klog.V(4).Infof("Defrag: node %s has blocking pods", nodeName)
-			f.reasons.Record(nodeName, reason)
+		nodeInfo := getNodeInfoFromSnapshot(ctx, nodeName)
+		if nodeInfo == nil || !f.isValidCandidateNode(ctx, pdbTracker, nodeInfo) {
 			continue
 		}
 		nodeNames = append(nodeNames, nodeName)
@@ -376,28 +381,33 @@ func (f *defragNodeFilter) hasBlockingPods(nodeInfo *framework.NodeInfo, ctx *ca
 	return false, ""
 }
 
+func getNodeAndNodeGroup(ctx *ca_context.AutoscalingContext, nodeName string) (*apiv1.Node, cloudprovider.NodeGroup) {
+	nodeInfo := getNodeInfoFromSnapshot(ctx, nodeName)
+	if nodeInfo == nil {
+		return nil, nil
+	}
+	node := nodeInfo.Node()
+
+	nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
+	if err != nil {
+		klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
+		return nil, nil
+	}
+	if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
+		klog.V(5).Infof("Node %s should not be processed by cluster autoscaler (no node group config)", node.Name)
+		return nil, nil
+	}
+	return node, nodeGroup
+}
+
 // filterNodesViolatingMinQuotas filters scale-down candidates that would violate
 // resource quotas (including node group min size and ComputeClass target node count).
 // It tracks the cumulative effect of removals using the shared minQuotasTracker.
 func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *ca_context.AutoscalingContext, nodes []string) ([]string, error) {
 	var result []string
 	for _, nodeName := range nodes {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
-				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
-			}
-			continue
-		}
-		node := nodeInfo.Node()
-
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
-		if err != nil {
-			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
-			continue
-		}
-		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
-			klog.V(5).Infof("Node %s should not be processed by cluster autoscaler (no node group config)", node.Name)
+		node, nodeGroup := getNodeAndNodeGroup(ctx, nodeName)
+		if node == nil || nodeGroup == nil {
 			continue
 		}
 
@@ -425,22 +435,8 @@ func (f *defragNodeFilter) filterNodesViolatingMinQuotas(ctx *ca_context.Autosca
 func (f *defragNodeFilter) filterNodesViolatingMinSize(ctx *ca_context.AutoscalingContext, nodes []string) []string {
 	var result []string
 	for _, nodeName := range nodes {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			if !errors.Is(err, clustersnapshot.ErrNodeNotFound) {
-				klog.Errorf("Defrag: failed to get NodeInfo for node %s: %v", nodeName, err)
-			}
-			continue
-		}
-		node := nodeInfo.Node()
-
-		nodeGroup, err := ctx.CloudProvider.NodeGroupForNode(context.TODO(), node)
-		if err != nil {
-			klog.Warningf("Error while checking node group for %s: %v", node.Name, err)
-			continue
-		}
-		if nodeGroup == nil || reflect.ValueOf(nodeGroup).IsNil() {
-			klog.V(5).Infof("Node %s should not be processed by cluster autoscaler (no node group config)", node.Name)
+		node, nodeGroup := getNodeAndNodeGroup(ctx, nodeName)
+		if node == nil || nodeGroup == nil {
 			continue
 		}
 
