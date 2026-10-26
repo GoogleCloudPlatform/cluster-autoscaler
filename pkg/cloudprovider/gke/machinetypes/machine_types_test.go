@@ -2847,9 +2847,14 @@ func TestIsConfidentialNodeTypeSupported(t *testing.T) {
 			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
 			expected:             false,
 		},
-		{name: "c3-highcpu-4 does not support tdx",
+		{name: "c3-highcpu-4_supports_tdx",
 			machineType:          c3Highcpu4,
 			confidentialNodeType: labels.TDXConfidentialNodeTypeValue,
+			expected:             true,
+		},
+		{name: "c3-highcpu-4_does_not_support_sev",
+			machineType:          c3Highcpu4,
+			confidentialNodeType: labels.SEVConfidentialNodeTypeValue,
 			expected:             false,
 		},
 		{name: "c4-standard-4 support tdx",
@@ -2979,7 +2984,10 @@ func TestIsConfidentialNodesSupported(t *testing.T) {
 		expected    bool
 	}{
 		{"c3-standard-4 supports CVM", "c3-standard-4", true},
-		{"c3-highcpu-4 does not support CVM", "c3-highcpu-4", false},
+		{"c3-highcpu-4_supports_CVM", "c3-highcpu-4", true},
+		{"c3-highmem-4_supports_CVM", "c3-highmem-4", true},
+		{"c3-highcpu-192-metal_does_not_support_CVM", "c3-highcpu-192-metal", false},
+		{"c4-highcpu-4_does_not_support_CVM", "c4-highcpu-4", false},
 		{"e2-standard-2 does not support CVM", "e2-standard-2", false},
 	}
 
@@ -2994,36 +3002,78 @@ func TestIsConfidentialNodesSupported(t *testing.T) {
 
 func TestConfidentialNodesConstraintsMatching(t *testing.T) {
 	mcp := NewMachineConfigProvider(nil)
-	c3Family, err := mcp.ToMachineFamily("c3")
-	assert.NoError(t, err)
 
-	// When ConfidentialNodesRequired is true, c3-highcpu-4 should be filtered out.
-	constraints := Constraints{
+	constraintsTDX := Constraints{
 		CpuPlatform:               AnyPlatform,
 		ConfidentialNodesRequired: true,
 		ConfidentialNodeType:      labels.TDXConfidentialNodeTypeValue,
 	}
-
-	c3Types := c3Family.AutoprovisionedMachineTypes(constraints)
-
-	// In GKE Autoscaler registries, c3-highcpu-4 explicitly disables CVM support.
-	// When pod constraints request CVM, c3-highcpu-4 must be filtered out.
-	_, foundHighCpu := c3Types["c3-highcpu-4"]
-	assert.False(t, foundHighCpu, "c3-highcpu-4 should be filtered out when ConfidentialNodesRequired is true")
-
-	// Conversely, c3-standard-4 supports TDX CVM and must NOT be filtered out.
-	_, foundStandard := c3Types["c3-standard-4"]
-	assert.True(t, foundStandard, "c3-standard-4 should remain available when ConfidentialNodesRequired is true")
-
-	// When ConfidentialNodesRequired is false, c3-highcpu-4 should NOT be filtered out.
-	constraintsFalse := Constraints{
+	constraintsNonConfidential := Constraints{
 		CpuPlatform:               AnyPlatform,
 		ConfidentialNodesRequired: false,
 	}
 
-	c3TypesFalse := c3Family.AutoprovisionedMachineTypes(constraintsFalse)
-	_, foundFalse := c3TypesFalse["c3-highcpu-4"]
-	assert.True(t, foundFalse, "c3-highcpu-4 should NOT be filtered out when ConfidentialNodesRequired is false")
+	for _, tc := range []struct {
+		name        string
+		family      string
+		constraints Constraints
+		machineType string
+		wantPresent bool
+	}{
+		{
+			name:        "c3-standard-4_included_when_TDX_required",
+			family:      "c3",
+			constraints: constraintsTDX,
+			machineType: "c3-standard-4",
+			wantPresent: true,
+		},
+		{
+			name:        "c3-highcpu-4_included_when_TDX_required",
+			family:      "c3",
+			constraints: constraintsTDX,
+			machineType: "c3-highcpu-4",
+			wantPresent: true,
+		},
+		{
+			name:        "c3-highmem-4_included_when_TDX_required",
+			family:      "c3",
+			constraints: constraintsTDX,
+			machineType: "c3-highmem-4",
+			wantPresent: true,
+		},
+		{
+			name:        "c4-highcpu-4_filtered_out_when_TDX_required",
+			family:      "c4",
+			constraints: constraintsTDX,
+			machineType: "c4-highcpu-4",
+			wantPresent: false,
+		},
+		{
+			name:        "c4-standard-4_included_when_TDX_required",
+			family:      "c4",
+			constraints: constraintsTDX,
+			machineType: "c4-standard-4",
+			wantPresent: true,
+		},
+		{
+			name:        "c4-highcpu-4_included_when_confidential_nodes_not_required",
+			family:      "c4",
+			constraints: constraintsNonConfidential,
+			machineType: "c4-highcpu-4",
+			wantPresent: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mf, err := mcp.ToMachineFamily(tc.family)
+			if err != nil {
+				t.Fatalf("ToMachineFamily(%q) returned unexpected error: %v", tc.family, err)
+			}
+			types := mf.AutoprovisionedMachineTypes(tc.constraints)
+			if _, gotPresent := types[tc.machineType]; gotPresent != tc.wantPresent {
+				t.Errorf("AutoprovisionedMachineTypes(%+v) contains %q = %v, want %v", tc.constraints, tc.machineType, gotPresent, tc.wantPresent)
+			}
+		})
+	}
 }
 
 func TestToCustomMachineType_FamilyBackfill(t *testing.T) {

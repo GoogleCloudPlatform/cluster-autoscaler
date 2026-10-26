@@ -457,18 +457,30 @@ var (
 				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
 			NewMachineTypeInfo("c3-standard-176", 176, 704).
 				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
-			NewMachineTypeInfo("c3-highcpu-4", 4, 8),
-			NewMachineTypeInfo("c3-highcpu-8", 8, 16),
-			NewMachineTypeInfo("c3-highcpu-22", 22, 44),
-			NewMachineTypeInfo("c3-highcpu-44", 44, 88),
-			NewMachineTypeInfo("c3-highcpu-88", 88, 176),
-			NewMachineTypeInfo("c3-highcpu-176", 176, 352),
-			NewMachineTypeInfo("c3-highmem-4", 4, 32),
-			NewMachineTypeInfo("c3-highmem-8", 8, 64),
-			NewMachineTypeInfo("c3-highmem-22", 22, 176),
-			NewMachineTypeInfo("c3-highmem-44", 44, 352),
-			NewMachineTypeInfo("c3-highmem-88", 88, 704),
-			NewMachineTypeInfo("c3-highmem-176", 176, 1408),
+			NewMachineTypeInfo("c3-highcpu-4", 4, 8).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highcpu-8", 8, 16).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highcpu-22", 22, 44).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highcpu-44", 44, 88).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highcpu-88", 88, 176).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highcpu-176", 176, 352).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-4", 4, 32).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-8", 8, 64).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-22", 22, 176).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-44", 44, 352).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-88", 88, 704).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
+			NewMachineTypeInfo("c3-highmem-176", 176, 1408).
+				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}),
 			// Local SSD bundled c3 machine types
 			NewMachineTypeInfo("c3-standard-4-lssd", 4, 16).
 				withSupportedConfidentialNodeTypes([]string{labels.TDXConfidentialNodeTypeValue}).
