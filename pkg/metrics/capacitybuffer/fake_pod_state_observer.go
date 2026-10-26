@@ -115,10 +115,12 @@ func NewFakePodStateObserver(systemPodsClassifier systempods.Classifier, observe
 	}
 }
 
-// Reset clears the loop-specific state. It should be called at the beginning of each CA loop.
+// Reset clears the loop-specific state and removes buffers that did not inject pods in the previous loop.
+// It should be called at the beginning of each CA loop.
 func (f *FakePodStateObserver) Reset() {
 	f.lock.Lock()
 	defer f.lock.Unlock()
+	f.removeDeletedBuffers()
 	clear(f.podsSnapshotByBuffer)
 }
 
@@ -130,9 +132,8 @@ func (f *FakePodStateObserver) ObserveInjectedPods(allPods []*v1.Pod) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
-	f.updateSnapshots(allPods)
-	f.processInjectedPods()
-	f.removeDeletedBuffers()
+	updatedSnapshots := f.updateSnapshots(allPods)
+	f.processInjectedPods(updatedSnapshots)
 }
 
 // ObserveSchedulablePods is called each time pods are marked as schedulable.
@@ -205,7 +206,8 @@ func (f *FakePodStateObserver) Process(ctx context.Context, autoscalingCtx *ca_c
 // CleanUp is called when CA is shutting down (implementation of ScaleUpStatusProcessor).
 func (f *FakePodStateObserver) CleanUp() {}
 
-func (f *FakePodStateObserver) updateSnapshots(allPods []*v1.Pod) {
+func (f *FakePodStateObserver) updateSnapshots(allPods []*v1.Pod) map[types.UID]*bufferPodsSnapshot {
+	updatedSnapshots := make(map[types.UID]*bufferPodsSnapshot)
 	// populate podsSnapshotByBuffer for all capacity buffer fake pods
 	for _, pod := range allPods {
 		buffer := f.bufferPodsRegistry.GetCapacityBuffer(pod.UID)
@@ -225,13 +227,15 @@ func (f *FakePodStateObserver) updateSnapshots(allPods []*v1.Pod) {
 		if _, ok := snapshot.pods[pod.UID]; !ok {
 			snapshot.pods[pod.UID] = unevaluated
 		}
+		updatedSnapshots[buffer.UID] = snapshot
 	}
+	return updatedSnapshots
 }
 
-func (f *FakePodStateObserver) processInjectedPods() {
+func (f *FakePodStateObserver) processInjectedPods(snapshots map[types.UID]*bufferPodsSnapshot) {
 	now := f.clock.Now()
 
-	for _, snapshot := range f.podsSnapshotByBuffer {
+	for _, snapshot := range snapshots {
 		state := f.getOrCreateBufferState(snapshot.buffer.UID)
 		report := state.ProcessInjectedPods(len(snapshot.pods), now, metrics.MaxReactionTime)
 		f.observeReactions(report, now, snapshot.buffer, snapshot.samplePod)
