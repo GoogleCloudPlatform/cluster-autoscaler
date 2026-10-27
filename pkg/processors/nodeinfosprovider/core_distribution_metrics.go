@@ -95,7 +95,7 @@ func (m *coreDistributionMetrics) updateCoreDistribution(ctx *ca_context.Autosca
 			return
 		}
 		nodeInfo, found := nodeInfos[mig.Id()]
-		if !found || nodeInfo.Node() == nil || nodeInfo.Node().Status.Capacity.Cpu() == nil {
+		if !found || nodeInfo == nil || nodeInfo.Node() == nil || nodeInfo.Node().Status.Capacity.Cpu() == nil {
 			klog.Errorf("skipping update, cannot retrieve core capacity for mig: %s", mig.Id())
 			return
 		}

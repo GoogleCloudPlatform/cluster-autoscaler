@@ -172,6 +172,13 @@ func createTestAugmentedTemplateNodeInfo(name, zone string) *framework.NodeInfo 
 
 // assertNodeInfosRelevantPartsEqual asserts if two nodeInfos have identical Node and Pods.
 func assertNodeInfosRelevantPartsEqual(t *testing.T, expected, actual *framework.NodeInfo) {
+	if expected == nil && actual == nil {
+		return
+	}
+	if !assert.NotNil(t, expected) || !assert.NotNil(t, actual) {
+		return
+	}
+
 	expectedCopy := expected.Snapshot()
 	actualCopy := actual.Snapshot()
 
@@ -191,21 +198,47 @@ func assertNodeInfosRelevantPartsEqual(t *testing.T, expected, actual *framework
 	assert.Equal(t, expectedCopy.Node(), actualCopy.Node())
 }
 
+func linkMigsToNodePools(migs []cloudprovider.NodeGroup) {
+	poolMigs := make(map[string][]*gke.GkeMig)
+	for _, m := range migs {
+		if m == nil {
+			continue
+		}
+		gm, ok := m.(*gke.GkeMig)
+		if !ok || gm == nil {
+			continue
+		}
+		poolMigs[gm.NodePoolName()] = append(poolMigs[gm.NodePoolName()], gm)
+	}
+	for name, ms := range poolMigs {
+		gke.AddMigsToNodePool(name, ms...)
+	}
+}
+
 func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 	migs := []cloudprovider.NodeGroup{
 		createSimpleMig("pool-1-zone-a", "pool-1"),
 		createSimpleMig("pool-1-zone-b", "pool-1"),
 		createSimpleMig("pool-2-zone-a", "pool-2"),
 	}
+	linkMigsToNodePools(migs)
 
-	// Link MIGs to the same GkeNodePool object if they share the same node pool name.
-	poolMigs := make(map[string][]*gke.GkeMig)
-	for _, m := range migs {
-		gm := m.(*gke.GkeMig)
-		poolMigs[gm.NodePoolName()] = append(poolMigs[gm.NodePoolName()], gm)
+	threeZoneMigs := []cloudprovider.NodeGroup{
+		createSimpleMig("pool-1-zone-a", "pool-1"),
+		createSimpleMig("pool-1-zone-b", "pool-1"),
+		createSimpleMig("pool-1-zone-c", "pool-1"),
+		createSimpleMig("pool-2-zone-a", "pool-2"),
 	}
-	for name, ms := range poolMigs {
-		gke.AddMigsToNodePool(name, ms...)
+	linkMigsToNodePools(threeZoneMigs)
+
+	var typedNilMig *gke.GkeMig
+	migsWithNils := []cloudprovider.NodeGroup{
+		nil,
+		typedNilMig,
+		threeZoneMigs[0],
+		threeZoneMigs[1],
+		threeZoneMigs[2],
+		threeZoneMigs[3],
 	}
 
 	testTemplateLabels := map[string]string{
@@ -234,6 +267,7 @@ func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name              string
+		migs              []cloudprovider.NodeGroup
 		templateLabels    map[string]map[string]string
 		templateTaints    map[string][]apiv1.Taint
 		nodeInfos         map[string]*framework.NodeInfo
@@ -331,11 +365,117 @@ func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 				migs[2].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
 			},
 		},
+		{
+			name: "multi-MIG node pool where one MIG is missing from nodeInfos while sibling MIGs have real and template nodeInfos",
+			migs: threeZoneMigs,
+			templateLabels: map[string]map[string]string{
+				threeZoneMigs[0].Id(): testTemplateLabels,
+				threeZoneMigs[1].Id(): testTemplateLabels,
+				threeZoneMigs[2].Id(): testTemplateLabels,
+				threeZoneMigs[3].Id(): testTemplateLabels,
+			},
+			templateTaints: map[string][]apiv1.Taint{
+				threeZoneMigs[0].Id(): testTemplateTaints,
+				threeZoneMigs[1].Id(): testTemplateTaints,
+				threeZoneMigs[2].Id(): testTemplateTaints,
+				threeZoneMigs[3].Id(): testTemplateTaints,
+			},
+			nodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				// threeZoneMigs[2] ("pool-1-zone-c") is missing from nodeInfos
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+			expectedNodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestAugmentedTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+		},
+		{
+			name: "nodeGroups slice containing nil and typed-nil GkeMig entries",
+			migs: migsWithNils,
+			templateLabels: map[string]map[string]string{
+				threeZoneMigs[0].Id(): testTemplateLabels,
+				threeZoneMigs[1].Id(): testTemplateLabels,
+				threeZoneMigs[2].Id(): testTemplateLabels,
+				threeZoneMigs[3].Id(): testTemplateLabels,
+			},
+			templateTaints: map[string][]apiv1.Taint{
+				threeZoneMigs[0].Id(): testTemplateTaints,
+				threeZoneMigs[1].Id(): testTemplateTaints,
+				threeZoneMigs[2].Id(): testTemplateTaints,
+				threeZoneMigs[3].Id(): testTemplateTaints,
+			},
+			nodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+			expectedNodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestAugmentedTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+		},
+		{
+			name: "multi-MIG node pool where one MIG maps to nil in nodeInfos while sibling MIGs have real and template nodeInfos",
+			migs: threeZoneMigs,
+			templateLabels: map[string]map[string]string{
+				threeZoneMigs[0].Id(): testTemplateLabels,
+				threeZoneMigs[1].Id(): testTemplateLabels,
+				threeZoneMigs[2].Id(): testTemplateLabels,
+				threeZoneMigs[3].Id(): testTemplateLabels,
+			},
+			templateTaints: map[string][]apiv1.Taint{
+				threeZoneMigs[0].Id(): testTemplateTaints,
+				threeZoneMigs[1].Id(): testTemplateTaints,
+				threeZoneMigs[2].Id(): testTemplateTaints,
+				threeZoneMigs[3].Id(): testTemplateTaints,
+			},
+			nodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				threeZoneMigs[2].Id(): nil,
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+			expectedNodeInfos: map[string]*framework.NodeInfo{
+				threeZoneMigs[0].Id(): createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a"),
+				threeZoneMigs[1].Id(): createTestAugmentedTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+				threeZoneMigs[2].Id(): nil,
+				threeZoneMigs[3].Id(): createTestCorrectNodeInfo("pool-2-zone-a-node-789", "zone-a"),
+			},
+		},
+		{
+			name: "node pool where all MIGs are missing from nodeInfos",
+			templateLabels: map[string]map[string]string{
+				migs[0].Id(): testTemplateLabels,
+				migs[1].Id(): testTemplateLabels,
+				migs[2].Id(): testTemplateLabels,
+			},
+			templateTaints: map[string][]apiv1.Taint{
+				migs[0].Id(): testTemplateTaints,
+				migs[1].Id(): testTemplateTaints,
+				migs[2].Id(): testTemplateTaints,
+			},
+			nodeInfos:         map[string]*framework.NodeInfo{},
+			expectedNodeInfos: map[string]*framework.NodeInfo{},
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			activeMigs := testCase.migs
+			if activeMigs == nil {
+				activeMigs = migs
+			}
 			cloudProvider := &gke.GkeCloudProviderMock{}
-			cloudProvider.On("NodeGroups").Return(migs)
-			for _, mig := range migs {
+			cloudProvider.On("NodeGroups").Return(activeMigs)
+			for _, mig := range activeMigs {
+				if mig == nil {
+					continue
+				}
+				if gm, ok := mig.(*gke.GkeMig); !ok || gm == nil {
+					continue
+				}
 				cloudProvider.On("GetMigInstanceTemplateLabels", mig).Return(testCase.templateLabels[mig.Id()], nil)
 				cloudProvider.On("GetMigInstanceTemplateTaints", mig).Return(testCase.templateTaints[mig.Id()], nil)
 			}
@@ -349,6 +489,60 @@ func TestUpdateNodeInfosWithinNodePools(t *testing.T) {
 				expectedNodeInfo := testCase.expectedNodeInfos[migId]
 				assertNodeInfosRelevantPartsEqual(t, expectedNodeInfo, nodeInfo)
 			}
+		})
+	}
+}
+
+func TestCreateAugmentedTemplateNodeInfo(t *testing.T) {
+	validTemplate := createTestTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b")
+	validReal := createTestCorrectNodeInfo("pool-1-zone-a-node-123", "zone-a")
+
+	for _, tc := range []struct {
+		name             string
+		templateNodeInfo *framework.NodeInfo
+		realNodeInfo     *framework.NodeInfo
+		wantNodeInfo     *framework.NodeInfo
+		wantErr          bool
+	}{
+		{
+			name:             "nil templateNodeInfo returns error without panicking",
+			templateNodeInfo: nil,
+			realNodeInfo:     validReal,
+			wantErr:          true,
+		},
+		{
+			name:             "empty templateNodeInfo with nil Node() returns error without panicking",
+			templateNodeInfo: framework.NewNodeInfo(nil, nil),
+			realNodeInfo:     validReal,
+			wantErr:          true,
+		},
+		{
+			name:             "nil realNodeInfo returns error without panicking",
+			templateNodeInfo: validTemplate,
+			realNodeInfo:     nil,
+			wantErr:          true,
+		},
+		{
+			name:             "empty realNodeInfo with nil Node() returns error without panicking",
+			templateNodeInfo: validTemplate,
+			realNodeInfo:     framework.NewNodeInfo(nil, nil),
+			wantErr:          true,
+		},
+		{
+			name:             "valid templateNodeInfo and realNodeInfo succeeds",
+			templateNodeInfo: validTemplate,
+			realNodeInfo:     validReal,
+			wantNodeInfo:     createTestAugmentedTemplateNodeInfo("pool-1-zone-b-node-456", "zone-b"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := createAugmentedTemplateNodeInfo(tc.templateNodeInfo, tc.realNodeInfo)
+			if tc.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+			assertNodeInfosRelevantPartsEqual(t, tc.wantNodeInfo, got)
 		})
 	}
 }

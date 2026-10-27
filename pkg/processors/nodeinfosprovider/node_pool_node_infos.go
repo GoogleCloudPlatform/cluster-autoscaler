@@ -42,11 +42,7 @@ func UpdateNodeInfosWithinNodePools(ctx *ca_context.AutoscalingContext, nodeInfo
 
 	nodeGroups := gkeCloudProvider.NodeGroups(context.TODO())
 	for _, nodeGroup := range nodeGroups {
-		if !nodeGroup.Exist(context.TODO()) {
-			continue
-		}
-
-		if nodeInfo, found := nodeInfos[nodeGroup.Id()]; found && isNodeInfoReal(nodeInfo) {
+		if nodeGroup == nil {
 			continue
 		}
 
@@ -54,18 +50,26 @@ func UpdateNodeInfosWithinNodePools(ctx *ca_context.AutoscalingContext, nodeInfo
 		if !ok {
 			return nil, errors.NewAutoscalerErrorf(errors.InternalError, "unexpected cloudprovider.NodeGroup type, got: %s, want: *gke.GkeMig", reflect.TypeOf(nodeGroup))
 		}
+		if mig == nil || !mig.Exist(context.TODO()) {
+			continue
+		}
+
+		nodeInfo, found := nodeInfos[mig.Id()]
+		if found && isNodeInfoReal(nodeInfo) {
+			continue
+		}
 
 		candidateNodeInfo, err := getCandidateNodeInfoForNodePool(gkeCloudProvider, nodeGroups, nodeInfos, mig)
 		if err != nil {
-			return nil, errors.NewAutoscalerErrorf(errors.InternalError, "error occureced while getting the candidate node info for node group %v: %v", nodeGroup.Id(), err)
+			return nil, errors.NewAutoscalerErrorf(errors.InternalError, "error occurred while getting the candidate node info for node group %v: %v", mig.Id(), err)
 		}
 
-		if candidateNodeInfo != nil {
-			augmentedNodeInfo, err := createAugmentedTemplateNodeInfo(nodeInfos[nodeGroup.Id()], candidateNodeInfo)
+		if candidateNodeInfo != nil && nodeInfo != nil && nodeInfo.Node() != nil {
+			augmentedNodeInfo, err := createAugmentedTemplateNodeInfo(nodeInfo, candidateNodeInfo)
 			if err != nil {
 				return nil, err
 			}
-			nodeInfos[nodeGroup.Id()] = augmentedNodeInfo
+			nodeInfos[mig.Id()] = augmentedNodeInfo
 		}
 	}
 
@@ -73,6 +77,9 @@ func UpdateNodeInfosWithinNodePools(ctx *ca_context.AutoscalingContext, nodeInfo
 }
 
 func isNodeInfoReal(nodeInfo *framework.NodeInfo) bool {
+	if nodeInfo == nil || nodeInfo.Node() == nil {
+		return false
+	}
 	_, found := nodeInfo.Node().Annotations[labels.NodeGeneratedFromTemplateAnnotation]
 	return !found
 }
@@ -81,13 +88,16 @@ func getNodePoolNodeGroups(nodePoolName string, nodeGroups []cloudprovider.NodeG
 	var result []*gke.GkeMig
 
 	for _, nodeGroup := range nodeGroups {
-		if !nodeGroup.Exist(context.TODO()) {
+		if nodeGroup == nil {
 			continue
 		}
 
 		mig, ok := nodeGroup.(*gke.GkeMig)
 		if !ok {
 			return nil, errors.NewAutoscalerErrorf(errors.InternalError, "unexpected cloudprovider.NodeGroup type, got: %s, want: *gke.GkeMig", reflect.TypeOf(nodeGroup))
+		}
+		if mig == nil || !mig.Exist(context.TODO()) {
+			continue
 		}
 
 		if mig.NodePoolName() == nodePoolName {
@@ -113,7 +123,7 @@ func getCandidateNodeInfoForNodePool(provider processors.ProcessorsCloudProvider
 	}
 
 	for _, otherMig := range candidateMigs {
-		if !otherMig.Exist(context.TODO()) || !areTemplatesSimilar(provider, mig, otherMig) {
+		if otherMig == nil || !otherMig.Exist(context.TODO()) || !areTemplatesSimilar(provider, mig, otherMig) {
 			continue
 		}
 
@@ -145,6 +155,13 @@ func areTemplatesSimilar(provider processors.ProcessorsCloudProvider, mig *gke.G
 }
 
 func createAugmentedTemplateNodeInfo(templateNodeInfo *framework.NodeInfo, realNodeInfo *framework.NodeInfo) (*framework.NodeInfo, errors.AutoscalerError) {
+	if templateNodeInfo == nil || templateNodeInfo.Node() == nil {
+		return nil, errors.NewAutoscalerError(errors.InternalError, "templateNodeInfo or its underlying node is nil")
+	}
+	if realNodeInfo == nil || realNodeInfo.Node() == nil {
+		return nil, errors.NewAutoscalerError(errors.InternalError, "realNodeInfo or its underlying node is nil")
+	}
+
 	resultNode := realNodeInfo.Node().DeepCopy()
 
 	// Overwrite the name, UID, annotations and labels (including e.g. the zone label) with values from the template.
