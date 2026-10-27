@@ -23,3 +23,14 @@ func IsFlexAdvisorSendRankEnabled(manager Manager) bool {
 	return manager.EvaluateMinimumVersionFlagOrFailsafe(FlexAdvisorSendRankMinCAVersionFlag, true) &&
 		manager.EvaluateBoolFlagOrFailsafe(FlexAdvisorSendRankEnabledFlag, true)
 }
+
+// IsFlexAdvisorSkipUnneededSpotConfigsEnabled returns whether skipping unneeded Spot instance configs
+// in FlexAdvisor when rule.Spot() is false is dynamically enabled (kill-switch, default on).
+func IsFlexAdvisorSkipUnneededSpotConfigsEnabled(manager Manager) bool {
+	if manager == nil {
+		return true
+	}
+
+	return manager.EvaluateMinimumVersionFlagOrFailsafe(FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag, true) &&
+		manager.EvaluateBoolFlagOrFailsafe(FlexAdvisorSkipUnneededSpotConfigsEnabledFlag, true)
+}

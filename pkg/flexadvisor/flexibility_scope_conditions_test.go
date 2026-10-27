@@ -72,7 +72,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				"0": {
 					cType:    ConditionTypeRuleFilteredOut,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
+					cMessage: "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
 				},
 			},
 		},
@@ -93,7 +93,7 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				"0": {
 					cType:    ConditionTypeRulePartiallyFiltered,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "A subset (2/4) of configurations are excluded due to active capacity cooldowns across requested zones.",
+					cMessage: "A subset (1/2) of configurations are excluded due to active capacity cooldowns across requested zones.",
 				},
 			},
 		},
@@ -128,12 +128,12 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				"0": {
 					cType:    ConditionTypeRuleFilteredOut,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
+					cMessage: "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
 				},
 				"1": {
 					cType:    ConditionTypeRuleFilteredOut,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
+					cMessage: "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
 				},
 			},
 		},
@@ -160,12 +160,12 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				"0": {
 					cType:    ConditionTypeRuleFilteredOut,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "No matching configuration is available (0/4 available) due to active capacity cooldowns across requested zones.",
+					cMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
 				},
 				"1": {
 					cType:    ConditionTypeRulePartiallyFiltered,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "A subset (2/4) of configurations are excluded due to active capacity cooldowns across requested zones.",
+					cMessage: "A subset (1/2) of configurations are excluded due to active capacity cooldowns across requested zones.",
 				},
 			},
 		},
@@ -192,12 +192,12 @@ func TestFlexibilityScope_EmitRuleFilteringConditions(t *testing.T) {
 				"0": {
 					cType:    ConditionTypeRuleFilteredOut,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "No matching configuration is available (0/4 available) due to active capacity cooldowns across requested zones.",
+					cMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
 				},
 				"1": {
 					cType:    ConditionTypeRulePartiallyFiltered,
 					cReason:  ConditionReasonFilteredOut,
-					cMessage: "A subset (2/4) of configurations are excluded due to active capacity cooldowns across requested zones.",
+					cMessage: "A subset (1/2) of configurations are excluded due to active capacity cooldowns across requested zones.",
 				},
 			},
 		},

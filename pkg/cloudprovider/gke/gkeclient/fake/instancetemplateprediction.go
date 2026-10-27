@@ -180,6 +180,13 @@ func buildKubeLabels(np *gkeapibeta.NodePool, zone string, accelerators []*gcev1
 	if mfName, err := gceinternal.GetMachineFamily(config.MachineType); err == nil && mfName != "" {
 		kubeLabels[gkelabels.MachineFamilyLabel] = mfName
 	}
+	// GKE labels the nodes of Spot and preemptible node pools with the corresponding preemption label.
+	if config.Spot {
+		kubeLabels[gkelabels.SpotLabel] = gkelabels.PreemptionValue
+	}
+	if config.Preemptible {
+		kubeLabels[gkelabels.PreemptibleLabel] = gkelabels.PreemptionValue
+	}
 	for k, v := range config.Labels {
 		kubeLabels[k] = v
 	}

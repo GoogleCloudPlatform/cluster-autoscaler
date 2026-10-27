@@ -31,6 +31,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
@@ -3345,6 +3346,16 @@ func testOptionsTracker(modifier func(opts *internalopts.InternalOptions)) *opts
 	}, gkeclient.Cluster{}, experiments.NewMockManager())
 }
 
+// testOptionsTrackerWithExperimentFlags returns an OptionsTracker whose experiments manager evaluates
+// the given bool flags; all other flags fall back to their failsafe values.
+func testOptionsTrackerWithExperimentFlags(boolFlags map[string]bool) *optstracking.OptionsTracker {
+	return optstracking.TestOptionsTracker(
+		internalopts.AutoscalingOptions{},
+		gkeclient.Cluster{},
+		experiments.NewMockManagerWithOptions(version.Version{}, boolFlags, nil),
+	)
+}
+
 func TestConfigHash(t *testing.T) {
 	sa1 := "sa1"
 	sa2 := "sa2"
@@ -3580,15 +3591,41 @@ func TestNewPodFamilyCrd(t *testing.T) {
 			assert.NotNil(t, c)
 			assert.Equal(t, podFamily, c.Name())
 			assert.Equal(t, CrdType, c.CrdType())
-			assert.Len(t, c.Rules(), 1)
+			assert.Len(t, c.Rules(), 2)
 			assert.Len(t, c.GroupedRules(), 1)
-			rule := c.Rules()[0]
-			assert.Equal(t, podFamily, rule.PodFamilyName())
-			if sr, ok := rule.(rules.AllocationStrategyRule); assert.True(t, ok) {
-				assert.NotNil(t, sr.AllocationStrategy())
-				assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
+			assert.False(t, c.Rules()[0].Spot())
+			assert.True(t, c.Rules()[1].Spot())
+			for _, rule := range c.Rules() {
+				assert.Equal(t, podFamily, rule.PodFamilyName())
+				if sr, ok := rule.(rules.AllocationStrategyRule); assert.True(t, ok) {
+					assert.NotNil(t, sr.AllocationStrategy())
+					assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
+				}
 			}
 		})
+
+		t.Run(podFamily+" with FlexAdvisorSkipUnneededSpotConfigs disabled", func(t *testing.T) {
+			tracker := testOptionsTrackerWithExperimentFlags(map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false})
+			c := NewPodFamilyCrd(podFamily, "test-project", true, crd.TestDefaultDataProvider(), tracker)
+			assert.NotNil(t, c)
+			assert.Len(t, c.Rules(), 1)
+			assert.False(t, c.Rules()[0].Spot())
+			assert.Equal(t, podFamily, c.Rules()[0].PodFamilyName())
+		})
+	}
+}
+
+// assertPccRulesSpotModes asserts that the PCC CRD has exactly one rule per (machine family, spot mode)
+// pair, for every machine family of the PCC and every spot mode in wantSpotModes, in that order.
+func assertPccRulesSpotModes(t *testing.T, c crd.CRD, pcc machinetypes.PredefinedComputeClass, wantSpotModes []bool) {
+	t.Helper()
+	assert.Len(t, c.Rules(), len(pcc.MachineFamilies())*len(wantSpotModes))
+	gotSpotModes := map[string][]bool{}
+	for _, r := range c.Rules() {
+		gotSpotModes[r.MachineFamily()] = append(gotSpotModes[r.MachineFamily()], r.Spot())
+	}
+	for _, family := range pcc.MachineFamilies() {
+		assert.Equal(t, wantSpotModes, gotSpotModes[family.Name()], "unexpected spot modes for machine family %q", family.Name())
 	}
 }
 
@@ -3614,6 +3651,7 @@ func TestNewPccCrd(t *testing.T) {
 		assert.Equal(t, "Balanced", c.Name())
 		assert.False(t, c.(*cccCrd).autopilotEnabled)
 		assert.Len(t, c.GroupedRules(), 1)
+		assertPccRulesSpotModes(t, c, balancedPcc, []bool{false, true})
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
@@ -3627,6 +3665,7 @@ func TestNewPccCrd(t *testing.T) {
 		assert.Equal(t, "Performance", c.Name())
 		assert.True(t, c.(*cccCrd).autopilotEnabled)
 		assert.Len(t, c.GroupedRules(), 1)
+		assertPccRulesSpotModes(t, c, performancePcc, []bool{false, true})
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
@@ -3638,6 +3677,7 @@ func TestNewPccCrd(t *testing.T) {
 		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), disabledTracker)
 		assert.Equal(t, "Balanced", c.Name())
 		assert.Len(t, c.GroupedRules(), 1)
+		assertPccRulesSpotModes(t, c, balancedPcc, []bool{false, true})
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
@@ -3649,11 +3689,20 @@ func TestNewPccCrd(t *testing.T) {
 		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), nil)
 		assert.Equal(t, "Balanced", c.Name())
 		assert.Len(t, c.GroupedRules(), 1)
+		assertPccRulesSpotModes(t, c, balancedPcc, []bool{false, true})
 		for _, r := range c.Rules() {
 			sr, ok := r.(rules.AllocationStrategyRule)
 			assert.True(t, ok)
 			assert.Nil(t, sr.AllocationStrategy())
 		}
+	})
+
+	t.Run("FlexAdvisorSkipUnneededSpotConfigs disabled generates a single rule per machine family", func(t *testing.T) {
+		tracker := testOptionsTrackerWithExperimentFlags(map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false})
+		c := NewPccCrd(balancedPcc, "test-project", true, crd.TestDefaultDataProvider(), tracker)
+		assert.Equal(t, "Balanced", c.Name())
+		assert.Len(t, c.GroupedRules(), 1)
+		assertPccRulesSpotModes(t, c, balancedPcc, []bool{false})
 	})
 }
 

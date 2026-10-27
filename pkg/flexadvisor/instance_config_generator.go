@@ -365,6 +365,28 @@ func (g *instanceConfigGenerator) expandConfigsByProvisioningMode(rule rules.Rul
 		}
 	}
 
+	if experiments.IsFlexAdvisorSkipUnneededSpotConfigsEnabled(g.optionsTracker.ExperimentsManager()) {
+		// Only generate instance configs for the provisioning mode requested by the rule:
+		// Spot for spot: true, Standard otherwise.
+		// Note: If a priority rule omits the spot property, we only generate Standard instance configs
+		// without iterating over existing MIGs to check whether a manually-created Spot node pool
+		// matches the rule. If such a Spot pool exists, missing Spot recommendations may cause traffic
+		// to be steered to the Spot pool instead of Standard (e.g., via lowest-cost fallback or
+		// unlimited binpacking threshold). Customers with existing Spot pools can specify rules with
+		// spot: true and spot: false (or nodepools:) to generate recommendations for both.
+		provisioningMode := instanceavailability.Standard
+		if rule.Spot() {
+			provisioningMode = instanceavailability.Spot
+		}
+		for _, config := range instanceConfigs {
+			config.SetProvisioningMode(provisioningMode)
+		}
+		return instanceConfigs
+	}
+
+	// Legacy behavior, intentionally left unchanged while the FlexAdvisorSkipUnneededSpotConfigs
+	// experiment can be disabled: generate Spot copies for every rule and, unless the rule requests
+	// Spot, Standard copies as well.
 	var allInstanceConfigs []*api.InstanceConfig
 	for _, baseConfig := range instanceConfigs {
 		configCopy := api.DeepCopyInstanceConfig(baseConfig)
