@@ -108,6 +108,35 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
+			name: "ccc rules with minEstimatedUptimeMinutes",
+			ccc: &v1.ComputeClass{
+				Spec: v1.ComputeClassSpec{
+					Priorities: []v1.Priority{
+						{
+							Spot:                      proto.Bool(true),
+							MinEstimatedUptimeMinutes: ptr.To(60),
+						},
+						{
+							Spot:                      proto.Bool(false),
+							MinEstimatedUptimeMinutes: ptr.To(60),
+						},
+					},
+				},
+			},
+			wantCrd: crd.NewTestCrd(
+				crd.WithLabel(labels.ComputeClassLabel),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(
+						rules.WithSpotRule(proto.Bool(true)),
+						rules.WithMinEstimatedUptimeRule(ptr.To(60)),
+					),
+					rules.NewRule(
+						rules.WithSpotRule(proto.Bool(false)),
+					),
+				}),
+			),
+		},
+		{
 			name: "ccc nap enabled",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
