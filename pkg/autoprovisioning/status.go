@@ -15,6 +15,8 @@
 package autoprovisioning
 
 import (
+	"sync"
+
 	"k8s.io/apimachinery/pkg/types"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
@@ -76,46 +78,74 @@ type PodProcessingStatus struct {
 }
 
 // ProcessingStatus contains information about an invocation of the NAP NodeGroupListProcessor's Process().
+// ProcessingStatus is thread-safe.
 type ProcessingStatus struct {
-	// Result contains the result code of the processing.
-	Result ProcessingResult
-	// DisregardedNodeGroups contains information about why NAP didn't add node groups with particular variable parameters (e.g. zone, machine type, preemption).
-	DisregardedNodeGroups map[NodeGroupOptions]NodeGroupDisregardedReason
-	// PodStatuses contains per-pod processing statuses. The default value is valid for pods which don't have
+	mu sync.RWMutex
+	// result contains the result code of the processing.
+	result ProcessingResult
+	// disregardedNodeGroups contains information about why NAP didn't add node groups with particular variable parameters (e.g. zone, machine type, preemption).
+	disregardedNodeGroups map[NodeGroupOptions]NodeGroupDisregardedReason
+	// podStatuses contains per-pod processing statuses. The default value is valid for pods which don't have
 	// an entry in the map (i.e. you don't have to check for presence, just assign while accessing this map).
 	// Keyed by pod UID.
-	PodStatuses map[types.UID]PodProcessingStatus
+	podStatuses map[types.UID]PodProcessingStatus
 }
 
 // SetResult sets the result of the processing.
 func (s *ProcessingStatus) SetResult(result ProcessingResult) {
-	s.Result = result
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.result = result
 }
 
 // AddDisregardedNodeGroup adds information about why NAP didn't add a node group with particular variable parameters.
 func (s *ProcessingStatus) AddDisregardedNodeGroup(key NodeGroupOptions, reason NodeGroupDisregardedReason) {
-	s.DisregardedNodeGroups[key] = reason
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.disregardedNodeGroups[key] = reason
 }
 
 // MarkPodPicked marks the given pod as one of the pods picked to be worked on by NAP in this loop.
 func (s *ProcessingStatus) MarkPodPicked(podUid types.UID) {
-	podStatus := s.PodStatuses[podUid]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	podStatus := s.podStatuses[podUid]
 	podStatus.Picked = true
-	s.PodStatuses[podUid] = podStatus
+	s.podStatuses[podUid] = podStatus
 }
 
 // SetPodError sets an error preventing NAP from injecting node groups for the given pod.
 func (s *ProcessingStatus) SetPodError(podUid types.UID, err errors.AutoscalerError) {
-	podStatus := s.PodStatuses[podUid]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	podStatus := s.podStatuses[podUid]
 	podStatus.Err = err
-	s.PodStatuses[podUid] = podStatus
+	s.podStatuses[podUid] = podStatus
+}
+
+// Snapshot returns a thread-safe copy of the processing result, disregarded node groups, and pod statuses.
+func (s *ProcessingStatus) Snapshot() (ProcessingResult, map[NodeGroupOptions]NodeGroupDisregardedReason, map[string]PodProcessingStatus) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	disregardedMigs := make(map[NodeGroupOptions]NodeGroupDisregardedReason, len(s.disregardedNodeGroups))
+	for key, reason := range s.disregardedNodeGroups {
+		disregardedMigs[key] = reason
+	}
+
+	podStatuses := make(map[string]PodProcessingStatus, len(s.podStatuses))
+	for podUid, podStatus := range s.podStatuses {
+		podStatuses[string(podUid)] = podStatus
+	}
+
+	return s.result, disregardedMigs, podStatuses
 }
 
 // NewProcessingStatus creates an empty instance of ProcessingStatus.
 func NewProcessingStatus() *ProcessingStatus {
 	return &ProcessingStatus{
-		Result:                ProcessingOk,
-		DisregardedNodeGroups: make(map[NodeGroupOptions]NodeGroupDisregardedReason),
-		PodStatuses:           make(map[types.UID]PodProcessingStatus),
+		result:                ProcessingOk,
+		disregardedNodeGroups: make(map[NodeGroupOptions]NodeGroupDisregardedReason),
+		podStatuses:           make(map[types.UID]PodProcessingStatus),
 	}
 }

@@ -15,10 +15,15 @@
 package types
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoprovisioning"
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 func TestPodGroupProto(t *testing.T) {
@@ -109,4 +114,42 @@ func TestPodGroupProto(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConvertNapStatusConcurrentReadAndWrite(t *testing.T) {
+	status := autoprovisioning.NewProcessingStatus()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			status.SetResult(autoprovisioning.ProcessingOk)
+			status.AddDisregardedNodeGroup(autoprovisioning.NodeGroupOptions{
+				MachineType: fmt.Sprintf("n1-standard-%d", i),
+				Zone:        "us-central1-a",
+			}, autoprovisioning.InStandardBackoff)
+			uid := types.UID(fmt.Sprintf("pod-%d", i))
+			status.MarkPodPicked(uid)
+			status.SetPodError(uid, errors.NewAutoscalerError(errors.InternalError, "err"))
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			napStatus, err := ConvertNapStatus(status)
+			assert.NoError(t, err)
+			assert.NotNil(t, napStatus)
+		}
+	}()
+
+	wg.Wait()
+
+	finalNapStatus, err := ConvertNapStatus(status)
+	assert.NoError(t, err)
+	assert.Equal(t, autoprovisioning.ProcessingOk, finalNapStatus.Result)
+	assert.Len(t, finalNapStatus.DisregardedMigs, 1000)
+	assert.Len(t, finalNapStatus.PodStatuses, 1000)
 }

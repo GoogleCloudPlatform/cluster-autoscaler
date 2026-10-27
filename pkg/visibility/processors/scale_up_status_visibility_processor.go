@@ -86,6 +86,15 @@ func (p *ScaleUpStatusVisibilityProcessor) emitNoScaleUpEvent(context *ca_contex
 	if !p.opts.EmitNoScaleUpEvents {
 		return
 	}
+	// emitNoScaleUpEvent is called on every scale-up pass, including successful
+	// scale-ups and async node pool initializations (which never populate
+	// PodsRemainUnschedulable). Returning early when NoScaleUpInfos is empty avoids
+	// unnecessary NAP status snapshots and prevents background async scale-up
+	// goroutines from touching the unsynchronized ProcessorCallbacks map and
+	// NoScaleUp reasons tracker.
+	if len(scaleUpStatus.NoScaleUpInfos) == 0 {
+		return
+	}
 
 	noScaleUpEvent, eventSentCallback := p.processNoScaleUpEvent(context, scaleUpStatus, time.Now())
 	if noScaleUpEvent == nil {

@@ -639,6 +639,146 @@ func TestFakePodStateObserver_EndToEnd(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Standby buffer injected in second call preserves multi-loop latency and unhelpable deduplication",
+			loops: []caLoop{
+				// Loop 1: First call has no active buffer pods; second call injects coldBuffer (awaiting evaluation)
+				{
+					t: 0,
+					injectedPods: []injectedPodsStep{
+						{
+							t:    0,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{},
+						},
+						{
+							t:    2 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod1: coldBuffer},
+						},
+					},
+					schedulableSteps: []schedulableStep{},
+					scaleUps: []scaleUpStep{{
+						t: 3 * time.Second,
+						scaleUp: &status.ScaleUpStatus{
+							PodsAwaitEvaluation: []*v1.Pod{pod1},
+						},
+					}},
+				},
+				// Loop 2: Cold buffer becomes Unhelpable -> duration measured from Loop 1 injection (2s)
+				{
+					t: 10 * time.Second,
+					injectedPods: []injectedPodsStep{
+						{
+							t:    10 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{},
+						},
+						{
+							t:    12 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod1: coldBuffer},
+						},
+					},
+					schedulableSteps: []schedulableStep{},
+					scaleUps: []scaleUpStep{{
+						t: 14 * time.Second,
+						scaleUp: &status.ScaleUpStatus{
+							PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod1}},
+						},
+					}},
+				},
+				// Loop 3: Cold buffer remains Unhelpable -> not reported again
+				{
+					t: 20 * time.Second,
+					injectedPods: []injectedPodsStep{
+						{
+							t:    20 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{},
+						},
+						{
+							t:    22 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod1: coldBuffer},
+						},
+					},
+					schedulableSteps: []schedulableStep{},
+					scaleUps: []scaleUpStep{{
+						t: 24 * time.Second,
+						scaleUp: &status.ScaleUpStatus{
+							PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: pod1}},
+						},
+					}},
+				},
+			},
+			expectedObservations: []expectedObservation{
+				{
+					duration:             12 * time.Second, // 14s - 2s
+					reactionType:         metrics.Unhelpable,
+					provisioningStrategy: capacitybuffers.ColdProvisioningStrategy,
+				},
+			},
+		},
+		{
+			name: "Second ObserveInjectedPods call preserves states and injection times across loops",
+			loops: []caLoop{
+				// Loop 1: Both buffers schedulable
+				{
+					t: 0,
+					injectedPods: []injectedPodsStep{
+						{
+							t:    0,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod1: buffer1},
+						},
+						{
+							t:    5 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod2: coldBuffer},
+						},
+					},
+					schedulableSteps: []schedulableStep{
+						{t: 6 * time.Second, pods: []*v1.Pod{pod1}},
+						{t: 7 * time.Second, pods: []*v1.Pod{pod2}},
+					},
+					scaleUps: []scaleUpStep{},
+				},
+				// Loop 2: buffer1 injected at 10s, coldBuffer injected at 15s (remains schedulable, not reported again),
+				// then buffer1 triggers ScaleUp at 18s (duration measured from 10s, not 15s)
+				{
+					t: 10 * time.Second,
+					injectedPods: []injectedPodsStep{
+						{
+							t:    10 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod1: buffer1},
+						},
+						{
+							t:    15 * time.Second,
+							pods: map[*v1.Pod]*v1beta1.CapacityBuffer{pod2: coldBuffer},
+						},
+					},
+					schedulableSteps: []schedulableStep{
+						{t: 16 * time.Second, pods: []*v1.Pod{pod2}},
+					},
+					scaleUps: []scaleUpStep{{
+						t: 18 * time.Second,
+						scaleUp: &status.ScaleUpStatus{
+							PodsTriggeredScaleUp: []*v1.Pod{pod1},
+						},
+					}},
+				},
+			},
+			expectedObservations: []expectedObservation{
+				{
+					duration:             6 * time.Second,
+					reactionType:         metrics.NoActionNeeded,
+					provisioningStrategy: capacitybuffer.ActiveProvisioningStrategy,
+				},
+				{
+					duration:             2 * time.Second,
+					reactionType:         metrics.NoActionNeeded,
+					provisioningStrategy: capacitybuffers.ColdProvisioningStrategy,
+				},
+				{
+					duration:             8 * time.Second, // 18s - 10s (not 18s - 15s)
+					reactionType:         metrics.ScaleUp,
+					provisioningStrategy: capacitybuffer.ActiveProvisioningStrategy,
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -651,7 +791,7 @@ func TestFakePodStateObserver_EndToEnd(t *testing.T) {
 			observer := NewFakePodStateObserver(classifier, mockObserver, registry, fakeClock, true)
 
 			for _, eo := range tc.expectedObservations {
-				mockObserver.On("ObserveCapacityBufferFakePodReactionTime", eo.duration, eo.systemPod, eo.hasPVC, eo.hasCSI, eo.reactionType, eo.provisioningStrategy, podutils.AllocationModeNone.String()).Return()
+				mockObserver.On("ObserveCapacityBufferFakePodReactionTime", eo.duration, eo.systemPod, eo.hasPVC, eo.hasCSI, eo.reactionType, eo.provisioningStrategy, podutils.AllocationModeNone.String()).Return().Once()
 			}
 
 			for _, loop := range tc.loops {

@@ -36,6 +36,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	core_utils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/pods"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
@@ -112,6 +113,8 @@ func (p *CSNPodsLifecycleProcessor) Process(ctx context.Context, autoscalingCtx 
 		return nil, nil
 	}
 	klog.V(4).Infof("%s created %v CSN pods", csnPodsLifecycleLogPrefix, len(csnPods))
+
+	csnPods = core_utils.FilterOutExpendablePods(csnPods, autoscalingCtx.AutoscalingOptions.ExpendablePodsPriorityCutoff)
 
 	if len(csnPods) == 0 {
 		return unschedulablePods, nil

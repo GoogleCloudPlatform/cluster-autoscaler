@@ -38,6 +38,8 @@ type listerCloudProvider interface {
 type Lister interface {
 	// GetCrd returns the CRD with the given name.
 	GetCrd(name string) (crd.CRD, error)
+	// CrdAnnotations returns the annotations of the CRD with the given name without constructing a full CRD wrapper.
+	CrdAnnotations(name string) (map[string]string, error)
 	// ListCrds return all CRDs in the cluster.
 	ListCrds() ([]crd.CRD, error)
 	// Crd returns the CRD associated with the given label and name.

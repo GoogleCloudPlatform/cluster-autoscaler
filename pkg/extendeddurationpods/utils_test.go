@@ -146,6 +146,20 @@ func TestEdpOnePodPerNode(t *testing.T) {
 			}),
 			expectedEdpOnePodPerNode: false,
 		},
+		"Non-packed EDP label, E4 machine family - return false": {
+			node: buildNodeWithLabels("node", 100, 500, map[string]string{
+				gkelabels.ExtendedDurationPodsLabel: "100m",
+				apiv1.LabelInstanceTypeStable:       "e4-standard-2",
+			}),
+			expectedEdpOnePodPerNode: false,
+		},
+		"Non-packed EDP label, non-resizable machine family - return true": {
+			node: buildNodeWithLabels("node", 100, 500, map[string]string{
+				gkelabels.ExtendedDurationPodsLabel: "100m",
+				apiv1.LabelInstanceTypeStable:       "e2-standard-2",
+			}),
+			expectedEdpOnePodPerNode: true,
+		},
 		"Non-packed EDP label, unknown machine family - return true": {
 			node: buildNodeWithLabels("node", 100, 500, map[string]string{
 				gkelabels.ExtendedDurationPodsLabel: "100m",

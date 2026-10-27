@@ -170,7 +170,7 @@ func MustCreateNpcCrdLister(ctx context.Context, optionsTracker *optstracking.Op
 	if err != nil {
 		klog.Fatalf("cannot create CCC Lister. Error: %v", err)
 	}
-	return npcCrdLister
+	return npc_lister.NewFilteredCccLister(npcCrdLister, optionsTracker.Options().AutoscalerNames)
 }
 
 // MustCreateGCEConfig returns the ProjectID, Location, and TokenSource.

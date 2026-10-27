@@ -847,7 +847,7 @@ func TestGpuPodsRequirements(t *testing.T) {
 				}
 				return e1 == e2 || cmp.Equal(e1, e2)
 			})
-			if diff := cmp.Diff(tc.expectedPodStatuses, ctx.status.PodStatuses, selErrCmp, napErrCmp, cmpopts.EquateEmpty()); diff != "" {
+			if diff := cmp.Diff(tc.expectedPodStatuses, ctx.status.podStatuses, selErrCmp, napErrCmp, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("expected pod statuses differ, diff (-want + got):\n%s", diff)
 			}
 		})

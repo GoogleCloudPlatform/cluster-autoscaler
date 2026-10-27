@@ -272,8 +272,12 @@ func NewAutoprovisioningNodeGroupManager(opts AutoprovisioningNodeGroupManagerOp
 // Process adds autoprovisioned node groups based on unschedulable pods.
 func (m *AutoprovisioningNodeGroupManager) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, nodeGroups []cloudprovider.NodeGroup, nodeInfos map[string]*framework.NodeInfo, unschedulablePods []*apiv1.Pod) ([]cloudprovider.NodeGroup, map[string]*framework.NodeInfo, error) {
 	// NAP reports its status via ProcessorCallbacks to e.g. the visibility processors.
+	// Defer publishing the status until Process completes so that it is fully populated
+	// before being exposed via ProcessorCallbacks.
 	status := NewProcessingStatus()
-	autoscalingCtx.ProcessorCallbacks.SetExtraValue(ProcessingStatusContextKey, status)
+	defer func() {
+		autoscalingCtx.ProcessorCallbacks.SetExtraValue(ProcessingStatusContextKey, status)
+	}()
 
 	// WATCH OUT: This is called and returned even if NAP is disabled.
 	if m.scaleBlockingProcessor != nil {

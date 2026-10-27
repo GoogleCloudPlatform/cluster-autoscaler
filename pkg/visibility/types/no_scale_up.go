@@ -165,18 +165,10 @@ func (pg *PodGroupExplanation) Signature() PodGroupExplanationSignature {
 
 // ConvertNapStatus converts a NAP processing status to its visibility-specific version.
 func ConvertNapStatus(originalStatus *autoprovisioning.ProcessingStatus) (*NapStatus, error) {
-	disregardedMigs := make(map[autoprovisioning.NodeGroupOptions]autoprovisioning.NodeGroupDisregardedReason)
-	for key, reason := range originalStatus.DisregardedNodeGroups {
-		disregardedMigs[key] = reason
-	}
-
-	podStatuses := make(map[string]autoprovisioning.PodProcessingStatus)
-	for podUid, podStatus := range originalStatus.PodStatuses {
-		podStatuses[string(podUid)] = podStatus
-	}
+	result, disregardedMigs, podStatuses := originalStatus.Snapshot()
 
 	return &NapStatus{
-		Result:          originalStatus.Result,
+		Result:          result,
 		DisregardedMigs: disregardedMigs,
 		PodStatuses:     podStatuses,
 	}, nil

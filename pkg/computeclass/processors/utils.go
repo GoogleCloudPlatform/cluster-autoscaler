@@ -97,7 +97,7 @@ func buildFakePod(cccName string, priorityIdx *int, index int) *apiv1.Pod {
 	return &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
-			Namespace: "kube-system",
+			Namespace: metav1.NamespaceDefault,
 			UID:       types.UID(name),
 			Annotations: map[string]string{
 				MinCapacityFakePodAnnotation: "true",

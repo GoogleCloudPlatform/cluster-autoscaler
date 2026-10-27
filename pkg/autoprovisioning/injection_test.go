@@ -1689,7 +1689,7 @@ func TestNonGpuPodsRequirements(t *testing.T) {
 			cmpErrorsByValue := cmp.Comparer(func(e1, e2 error) bool {
 				return e1 == e2 || cmp.Equal(e1, e2)
 			})
-			if diff := cmp.Diff(tc.wantPodStatuses, ctx.status.PodStatuses, cmpErrorsByValue, cmpopts.EquateEmpty()); diff != "" {
+			if diff := cmp.Diff(tc.wantPodStatuses, ctx.status.podStatuses, cmpErrorsByValue, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("expected pod statuses differ, diff (-want + got):\n%s", diff)
 			}
 		})
@@ -6146,6 +6146,19 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 				MachineType:          "e4a-standard-2",
 			},
 		},
+		"resizable vm edp enabled with e4 machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "e4-standard-8",
+			cpuReq:                []string{"100m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels: map[string]string{
+					gkelabels.ExtendedDurationPodsLabel: "X",
+				},
+				ExtendedDurationPods: "X",
+				MachineType:          "e4-standard-8",
+			},
+		},
 		"resizable vm edp enabled with non-resizable machine type": {
 			autopilotEnabled:      true,
 			resizableVmEdpEnabled: true,
@@ -6170,6 +6183,17 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 				MachineType:          "ek-standard-4",
 			},
 		},
+		"numeric and X pod requirements - X is used for E4 machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "e4-standard-8",
+			cpuReq:                []string{"X", "200m"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "X"},
+				ExtendedDurationPods: "X",
+				MachineType:          "e4-standard-8",
+			},
+		},
 		"numeric and X pod requirement pod requirements - numeric is used for non-EK machine type": {
 			autopilotEnabled:      true,
 			resizableVmEdpEnabled: true,
@@ -6190,6 +6214,17 @@ func TestExtendedDurationPodGenerator(t *testing.T) {
 				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "X"},
 				ExtendedDurationPods: "X",
 				MachineType:          "ek-standard-4",
+			},
+		},
+		"only X pod requirement - X is used for E4 machine type": {
+			autopilotEnabled:      true,
+			resizableVmEdpEnabled: true,
+			machineType:           "e4-standard-8",
+			cpuReq:                []string{"X"},
+			expectedSpec: &gkeclient.NodePoolSpec{
+				Labels:               map[string]string{gkelabels.ExtendedDurationPodsLabel: "X"},
+				ExtendedDurationPods: "X",
+				MachineType:          "e4-standard-8",
 			},
 		},
 		"only X pod requirement - no options for non-EK machine type": {
@@ -6888,6 +6923,36 @@ func TestGenerateNodeGroupOptionsWithAdditionalConfig(t *testing.T) {
 			extendedDuration:      true,
 			resizableVmEdpEnabled: true,
 			expectedCount:         4 * len(machinetypes.EK.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+		},
+		"generate options with extended duration pods on E4s": {
+			req: nodeGroupRequirements{
+				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
+				extendedDurationPodCPUReq: "100m",
+			},
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.E4.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+		},
+		"generate options with extended duration pods on E4s with X extendedDurationPodCPUReq": {
+			req: nodeGroupRequirements{
+				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
+				extendedDurationPodCPUReq: "X",
+			},
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.E4.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
+		},
+		"generate options with extended duration pods on E2s and E4s with X extendedDurationPodCPUReq": {
+			req: nodeGroupRequirements{
+				machineSpec:               machinetypes.NewMachineSpec([]machinetypes.MachineFamily{machinetypes.E2, machinetypes.E4}, machinetypes.AnyPlatform, "", ""),
+				extendedDurationPodCPUReq: "X",
+			},
+			zones:                 []string{"us-central1-a", "us-central1-c"},
+			extendedDuration:      true,
+			resizableVmEdpEnabled: true,
+			expectedCount:         4 * len(machinetypes.E4.AutoprovisionedMachineTypes(machinetypes.NoConstraints)),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

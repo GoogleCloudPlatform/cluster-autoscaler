@@ -216,6 +216,14 @@ func (l *MockCrdLister) crdByName(crdName string) (crd.CRD, bool) {
 // SetCloudProvider sets cloud provider
 func (l *MockCrdLister) SetCloudProvider(provider listerCloudProvider) {}
 
+func (l *MockCrdLister) CrdAnnotations(name string) (map[string]string, error) {
+	c, err := l.GetCrd(name)
+	if err != nil || c == nil {
+		return nil, err
+	}
+	return c.Annotations(), nil
+}
+
 // GetCrd returns CRD for given name.
 func (l *MockCrdLister) GetCrd(name string) (crd.CRD, error) {
 	l.mu.RLock()
