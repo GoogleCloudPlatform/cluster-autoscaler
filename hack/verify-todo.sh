@@ -23,6 +23,7 @@ cd "${SCRIPT_ROOT}"
 
 bad_todos=$(git grep -n "//.*TODO" . \
   | grep -v "^vendor/" \
+  | grep -v "^modreplaces/" \
   | grep -v "^apis/machineconfig/client/" \
   | grep -v "^hack/verify-todo.sh" \
   | grep -v -E "//.*TODO\((b|go)/[^)]+\):|//.*TODO:" || true)

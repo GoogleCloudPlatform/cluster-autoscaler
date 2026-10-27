@@ -22,3 +22,5 @@ Session.vim
 # Ignore untracked OWNERS files in vendor directories
 **/vendor/**/OWNERS
 **/vendor/**/OWNERS_ALIASES
+/modreplaces/**/OWNERS
+/modreplaces/**/OWNERS_ALIASES

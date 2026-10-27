@@ -24,7 +24,7 @@ PROJECT_ROOT="$(readlink -f "${SCRIPT_DIR}/..")"
 
 cd "${PROJECT_ROOT}"
 
-mapfile -t PROTO_FILES < <(find . -name "*.proto" -not -path "*/vendor/*")
+mapfile -t PROTO_FILES < <(find . -name "*.proto" -not -path "*/vendor/*" -not -path "./modreplaces/*")
 
 if [[ ${#PROTO_FILES[@]} -eq 0 ]]; then
   echo ">>> No .proto files found."
