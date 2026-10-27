@@ -1237,3 +1237,76 @@ func TestBuildNodeFromMigSpec_ReservedSystemCpus(t *testing.T) {
 	// CPU allocatable should be 4000m - 2000m (2 cores from "0-1") = 2000m
 	assert.Equal(t, int64(2000), node.Status.Allocatable.Cpu().MilliValue())
 }
+
+func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
+	const version = "1.35.8-gke.1036000"
+	newMigWithSelfServiceMetadata := func(selfServiceMetadata map[string]string) *GkeMig {
+		arch := gce.DefaultArch
+		return NewTestGkeMigBuilder().
+			SetGceRef(gce.GceRef{Project: "project1", Zone: "us-central1-b", Name: "nodeautoprovisioning-323233232"}).
+			SetAutoprovisioned(true).
+			SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:         "e2-standard-8",
+				NodeVersion:         version,
+				SystemArchitecture:  &arch,
+				SelfServiceMetadata: selfServiceMetadata,
+			}).
+			Build()
+	}
+	tb := &GkeTemplateBuilder{}
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, gce.OperatingSystemDistributionCOS, gce.Amd64), version, false)
+	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
+
+	// Golden values: two node pools differing only by cluster default image streaming configuration, without CCC self-service metadata.
+	goldenNodeWithoutStreaming, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(nil), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+	goldenNodeWithStreaming, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(nil), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, true, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	assert.NoError(t, err)
+	allocatableWithoutStreaming := goldenNodeWithoutStreaming.Status.Allocatable.Memory().Value()
+	allocatableWithStreaming := goldenNodeWithStreaming.Status.Allocatable.Memory().Value()
+	// Image streaming reserves additional memory for gcfsd, so the node allocatable memory must differ.
+	assert.Less(t, allocatableWithStreaming, allocatableWithoutStreaming)
+
+	testCases := []struct {
+		scenario            string
+		clusterGcfsEnabled  bool
+		selfServiceMetadata map[string]string
+		wantImageStreaming  bool
+	}{
+		{
+			scenario:            "cluster-default image streaming OFF, CCC per-pool image streaming ON",
+			clusterGcfsEnabled:  false,
+			selfServiceMetadata: map[string]string{gkelabels.ImageStreamingLabelKey: "true"},
+			wantImageStreaming:  true,
+		},
+		{
+			scenario:            "cluster-default image streaming ON, CCC per-pool image streaming ON",
+			clusterGcfsEnabled:  true,
+			selfServiceMetadata: map[string]string{gkelabels.ImageStreamingLabelKey: "true"},
+			wantImageStreaming:  true,
+		},
+		{
+			scenario:            "cluster-default image streaming OFF, CCC explicitly disables image streaming",
+			clusterGcfsEnabled:  false,
+			selfServiceMetadata: map[string]string{gkelabels.ImageStreamingLabelKey: "false"},
+			wantImageStreaming:  false,
+		},
+		{
+			scenario:            "cluster-default image streaming ON, CCC explicitly disables image streaming",
+			clusterGcfsEnabled:  true,
+			selfServiceMetadata: map[string]string{gkelabels.ImageStreamingLabelKey: "false"},
+			wantImageStreaming:  false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.scenario, func(t *testing.T) {
+			want := allocatableWithoutStreaming
+			if tc.wantImageStreaming {
+				want = allocatableWithStreaming
+			}
+			node, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(tc.selfServiceMetadata), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, tc.clusterGcfsEnabled, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+			assert.NoError(t, err)
+			assert.Equal(t, want, node.Status.Allocatable.Memory().Value())
+		})
+	}
+}
