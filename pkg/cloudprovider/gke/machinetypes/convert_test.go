@@ -1581,6 +1581,46 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 			},
 		},
 		{
+			name: "Machine types with LocalSSDConfig extracted without per-type properties",
+			input: &mcv1.MachineFamily{
+				Name: "c3d",
+				MachineTypes: []mcv1.MachineType{
+					{
+						Name: "c3d-standard-8",
+						Resources: mcv1.MachineResources{
+							CPUs:   8,
+							Memory: 32,
+						},
+					},
+					{
+						Name: "c3d-standard-8-lssd",
+						Resources: mcv1.MachineResources{
+							CPUs:   8,
+							Memory: 32,
+							LocalSSDConfig: &mcv1.LocalSSDConfig{
+								DefaultCount:    1,
+								AvailableCounts: []int64{1},
+								DiskSize:        375,
+							},
+						},
+					},
+				},
+			},
+			want: MachineFamily{
+				name: "c3d",
+				autoprovisionedMachineTypes: map[string]MachineType{
+					"c3d-standard-8": newTestMachineTypeInfo("c3d-standard-8", 8, 32),
+					"c3d-standard-8-lssd": func() MachineType {
+						mt := newTestMachineTypeInfo("c3d-standard-8-lssd", 8, 32).
+							withAutomaticEphemeralLocalSsdCount(1)
+						mt.ephemeralLocalSsdCfg.diskSize = 375
+						return mt
+					}(),
+				},
+				supportedCpuPlatforms: noPlatformSupported,
+			},
+		},
+		{
 			name: "Machine types with properties assigned to other types due to NAP disabled",
 			input: &mcv1.MachineFamily{
 				Name: "c3",
@@ -1703,7 +1743,7 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 
 			backfillAndPrecomputeIfRequired(&tc.want, got.usagePolicy)
 			// Use cmp.AllowUnexported to compare private fields in the structs.
-			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachineType{})); diff != "" {
+			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachineType{}, ephemeralLocalSsdConfig{})); diff != "" {
 				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
 			}
 		})
@@ -1734,6 +1774,27 @@ func TestToMachineTypeObject(t *testing.T) {
 				},
 			},
 			want: newTestMachineTypeInfo("mt-1", 4, 16),
+		},
+		{
+			name: "Machine type with no properties and LocalSSDConfig",
+			input: &mcv1.MachineType{
+				Name: "mt-lssd",
+				Resources: mcv1.MachineResources{
+					CPUs:   8,
+					Memory: 32,
+					LocalSSDConfig: &mcv1.LocalSSDConfig{
+						DefaultCount:    1,
+						AvailableCounts: []int64{1},
+						DiskSize:        375,
+					},
+				},
+			},
+			want: func() MachineType {
+				mt := newTestMachineTypeInfo("mt-lssd", 8, 32).
+					withAutomaticEphemeralLocalSsdCount(1)
+				mt.ephemeralLocalSsdCfg.diskSize = 375
+				return mt
+			}(),
 		},
 		{
 			name: "Machine type with all properties",
@@ -1772,11 +1833,9 @@ func TestToMachineTypeObject(t *testing.T) {
 					withThreadsPerCoreOverride(1).
 					withExplicitReqOnly().
 					withSupportedDisksOverride([]string{"pd-standard", "pd-ssd"}).
-					withDefaultDiskOverride("pd-standard")
-				mt.ephemeralLocalSsdCfg = &ephemeralLocalSsdConfig{
-					allowedDiskCounts: map[int]bool{1: true, 2: true, 4: true},
-					diskSize:          375,
-				}
+					withDefaultDiskOverride("pd-standard").
+					withAllowedEphemeralLocalSsdCounts(1, 2, 4)
+				mt.ephemeralLocalSsdCfg.diskSize = 375
 				return mt
 			}(),
 		},

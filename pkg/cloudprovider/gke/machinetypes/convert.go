@@ -499,8 +499,9 @@ func ToMachineTypeObject(
 			CPU:    mt.Resources.CPUs,
 			Memory: mt.Resources.Memory * bytesPerMiB,
 		},
-		confidentialNodeCfg: confidentialNodeCfg,
-		explicitReqOnly:     explicitReqOnly,
+		confidentialNodeCfg:  confidentialNodeCfg,
+		explicitReqOnly:      explicitReqOnly,
+		ephemeralLocalSsdCfg: extractSsdConfig(mt.Resources.LocalSSDConfig),
 	}
 
 	if mt.Properties == nil {
@@ -520,10 +521,6 @@ func ToMachineTypeObject(
 	if mt.Properties.BootDiskConfig != nil {
 		newMt.supportedDisksOverride = extractBootDiskTypesOrNil(mt.Properties.BootDiskConfig)
 		newMt.defaultDiskOverride = ptr.Deref(mt.Properties.BootDiskConfig, mcv1.BootDiskConfig{}).DefaultType
-	}
-
-	if mt.Resources.LocalSSDConfig != nil {
-		newMt.ephemeralLocalSsdCfg = extractSsdConfig(mt.Resources.LocalSSDConfig)
 	}
 
 	return newMt, nil
