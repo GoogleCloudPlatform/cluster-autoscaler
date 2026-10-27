@@ -16,6 +16,8 @@ package processors
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +29,7 @@ import (
 	vispb "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/proto"
 	vistypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/types"
 	klog "k8s.io/klog/v2"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/noderesources"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
@@ -141,17 +144,16 @@ func (p *ScaleUpStatusVisibilityProcessor) processNoScaleUpEvent(context *ca_con
 			if i >= visibility.MaxPodsGroupsInEvent {
 				break
 			}
-			if len(podGroup.MigReasons) > visibility.MaxMIGsInPodGroup {
-				trimmedMigReasons := make(map[string]*vistypes.MigExplanation)
-				for key, migReason := range podGroup.MigReasons {
-					trimmedMigReasons[key] = migReason
-					if len(trimmedMigReasons) >= visibility.MaxMIGsInPodGroup {
-						break
-					}
+			podGroup.MigReasons = trimMigReasons(podGroup.MigReasons, visibility.MaxMIGsInPodGroup)
+			podGroupProto := podGroup.Proto()
+			// List NodeResourcesFit MIGs first so they are easy to find in the event.
+			if len(podGroup.MigReasons) > 0 {
+				podGroupProto.RejectedMigs = podGroupProto.RejectedMigs[:0]
+				for _, migReason := range sortedMigReasons(podGroup.MigReasons) {
+					podGroupProto.RejectedMigs = append(podGroupProto.RejectedMigs, migReason.Proto())
 				}
-				podGroup.MigReasons = trimmedMigReasons
 			}
-			data.UnhandledPodGroups = append(data.UnhandledPodGroups, podGroup.Proto())
+			data.UnhandledPodGroups = append(data.UnhandledPodGroups, podGroupProto)
 		}
 		data.UnhandledPodGroupsTotalCount = int32(len(unreportedReasons.PodGroups))
 
@@ -277,4 +279,38 @@ func getScaleUpMigIds(scaleUpStatus *vistypes.ScaleUpStatus) string {
 		ids = append(ids, mig.Mig.Id)
 	}
 	return strings.Join(ids, ",")
+}
+
+// isNodeResourcesFitReason reports whether the MIG was rejected by the NodeResourcesFit predicate.
+func isNodeResourcesFitReason(migExplanation *vistypes.MigExplanation) bool {
+	reason := migExplanation.Reason
+	return reason.Id == vistypes.NoScaleUpMigFailingPredicate && len(reason.Params) > 0 && reason.Params[0] == noderesources.Name
+}
+
+// sortedMigReasons returns the MIG explanations with NodeResourcesFit MIGs first, then ordered by MIG ID.
+func sortedMigReasons(migReasons map[string]*vistypes.MigExplanation) []*vistypes.MigExplanation {
+	sorted := slices.Collect(maps.Values(migReasons))
+	slices.SortFunc(sorted, func(a, b *vistypes.MigExplanation) int {
+		if fitA, fitB := isNodeResourcesFitReason(a), isNodeResourcesFitReason(b); fitA != fitB {
+			if fitA {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Mig.Id, b.Mig.Id)
+	})
+	return sorted
+}
+
+// trimMigReasons returns at most maxMigs MIG explanations, keeping NodeResourcesFit MIGs first and then
+// the lowest MIG IDs.
+func trimMigReasons(migReasons map[string]*vistypes.MigExplanation, maxMigs int) map[string]*vistypes.MigExplanation {
+	if len(migReasons) <= maxMigs {
+		return migReasons
+	}
+	trimmedMigReasons := make(map[string]*vistypes.MigExplanation, maxMigs)
+	for _, migReason := range sortedMigReasons(migReasons)[:maxMigs] {
+		trimmedMigReasons[migReason.Mig.Id] = migReason
+	}
+	return trimmedMigReasons
 }

@@ -17,6 +17,8 @@ package processors
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -783,4 +786,126 @@ func TestFailedScaleUpEventEmitted(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTrimMigReasons(t *testing.T) {
+	testCases := []struct {
+		name           string
+		migReasons     map[string]*vistypes.MigExplanation
+		maxMigs        int
+		expectedMigIds []string
+	}{
+		{
+			name:           "fewer MIGs than the limit are returned unchanged",
+			migReasons:     buildMigReasons(5),
+			maxMigs:        30,
+			expectedMigIds: buildMigIds(0, 5),
+		},
+		{
+			name:           "NodeResourcesFit MIG is kept even if it sorts last",
+			migReasons:     buildMigReasons(40, "mig-39"),
+			maxMigs:        30,
+			expectedMigIds: append(buildMigIds(0, 29), "mig-39"),
+		},
+		{
+			name:           "keeps all NodeResourcesFit MIGs",
+			migReasons:     buildMigReasons(40, "mig-35", "mig-36", "mig-37"),
+			maxMigs:        30,
+			expectedMigIds: append(buildMigIds(0, 27), "mig-35", "mig-36", "mig-37"),
+		},
+		{
+			name:           "keeps lowest IDs when all MIGs are NodeResourcesFit",
+			migReasons:     buildMigReasons(40, buildMigIds(0, 40)...),
+			maxMigs:        30,
+			expectedMigIds: buildMigIds(0, 30),
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			trimmed := trimMigReasons(tc.migReasons, tc.maxMigs)
+			assert.Equal(t, tc.expectedMigIds, slices.Sorted(maps.Keys(trimmed)))
+		})
+	}
+}
+
+func TestNoScaleUpEventKeepsNodeResourcesFitMigs(t *testing.T) {
+	loggerMock := new(visibility.MockEventLogger)
+	processor := ScaleUpStatusVisibilityProcessor{
+		logger:    loggerMock,
+		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
+		data:      NewSharedData(),
+		idGen:     new(visibility.MockEventIDGenerator),
+		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
+	}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	noScaleUpInfos, consideredMigs := createNoScaleUpInfos(3, 40, false, true)
+	// All pods share the same RejectedNodeGroups map, so overriding it once applies to every pod group.
+	noScaleUpInfos[0].RejectedNodeGroups["mig-39"] = clustersnapshot.NewFailingPredicateError(&apiv1.Pod{}, "NodeResourcesFit", []string{"Insufficient cpu"}, "", "")
+	s := vistypes.ScaleUpStatus{
+		ConsideredMigs: consideredMigs,
+		NoScaleUpInfos: noScaleUpInfos,
+	}
+
+	ev, _ := processor.processNoScaleUpEvent(ctx, &s, time.Now())
+
+	noScaleUp := ev.GetNoDecisionStatus().GetNoScaleUp()
+	require.NotEmpty(t, noScaleUp.GetUnhandledPodGroups())
+	for _, podGroup := range noScaleUp.GetUnhandledPodGroups() {
+		require.Len(t, podGroup.GetRejectedMigs(), visibility.MaxMIGsInPodGroup)
+		assert.Equal(t, "mig-39", podGroup.GetRejectedMigs()[0].GetMig().GetName())
+	}
+}
+
+func TestNoScaleUpEventListsNodeResourcesFitMigsFirstWithoutTrimming(t *testing.T) {
+	processor := ScaleUpStatusVisibilityProcessor{
+		logger:    new(visibility.MockEventLogger),
+		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
+		data:      NewSharedData(),
+		idGen:     new(visibility.MockEventIDGenerator),
+		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
+	}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	noScaleUpInfos, consideredMigs := createNoScaleUpInfos(1, 5, false, false)
+	noScaleUpInfos[0].RejectedNodeGroups["mig-4"] = clustersnapshot.NewFailingPredicateError(&apiv1.Pod{}, "NodeResourcesFit", []string{"Insufficient cpu"}, "", "")
+	s := vistypes.ScaleUpStatus{
+		ConsideredMigs: consideredMigs,
+		NoScaleUpInfos: noScaleUpInfos,
+	}
+
+	ev, _ := processor.processNoScaleUpEvent(ctx, &s, time.Now())
+
+	podGroups := ev.GetNoDecisionStatus().GetNoScaleUp().GetUnhandledPodGroups()
+	require.Len(t, podGroups, 1)
+	require.Len(t, podGroups[0].GetRejectedMigs(), 5)
+	assert.Equal(t, "mig-4", podGroups[0].GetRejectedMigs()[0].GetMig().GetName())
+}
+
+// buildMigReasons builds count rejected MIG explanations named mig-00, mig-01, ... MIGs listed in
+// nodeResourcesFitMigIds fail the NodeResourcesFit predicate, the rest fail NodeAffinity.
+func buildMigReasons(count int, nodeResourcesFitMigIds ...string) map[string]*vistypes.MigExplanation {
+	nodeResourcesFit := make(map[string]bool, len(nodeResourcesFitMigIds))
+	for _, migId := range nodeResourcesFitMigIds {
+		nodeResourcesFit[migId] = true
+	}
+	migReasons := make(map[string]*vistypes.MigExplanation, count)
+	for _, migId := range buildMigIds(0, count) {
+		reason := vistypes.NewNoScaleUpMigFailingPredicateMsg("NodeAffinity", []string{"node(s) didn't match Pod's node affinity/selector"})
+		if nodeResourcesFit[migId] {
+			reason = vistypes.NewNoScaleUpMigFailingPredicateMsg("NodeResourcesFit", []string{"Insufficient cpu"})
+		}
+		migReasons[migId] = &vistypes.MigExplanation{
+			Mig:    &vistypes.GkeMig{Id: migId, Name: migId, NodePoolName: migId, Exists: true},
+			Reason: reason,
+		}
+	}
+	return migReasons
+}
+
+// buildMigIds returns MIG IDs mig-<from> ... mig-<to-1>, zero-padded so that they sort lexicographically.
+func buildMigIds(from, to int) []string {
+	migIds := make([]string, 0, to-from)
+	for i := from; i < to; i++ {
+		migIds = append(migIds, fmt.Sprintf("mig-%02d", i))
+	}
+	return migIds
 }
