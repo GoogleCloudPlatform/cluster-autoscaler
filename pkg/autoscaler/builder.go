@@ -1268,6 +1268,14 @@ func recordFeaturesEnablementMetrics(options internalopts.AutoscalingOptions) {
 	logAndRecordFeatureMetric(internalmetrics.GracefulDegradationFeatureName, "Graceful Degradation", options.GracefulDegradationEnabled)
 	logAndRecordFeatureMetric(internalmetrics.BalloonPodIpprResizeFeatureName, "BalloonPodIpprResize", options.BalloonPodIpprResizeEnabled)
 	logAndRecordFeatureMetric(internalmetrics.FilterMigsByClusterNameFeatureName, "Filter migs by cluster name", options.FilterMigsByClusterNameEnabled)
+	logAndRecordFeatureMetric(
+		internalmetrics.HighThroughputScaledownFeatureName,
+		"HighThroughputScaledown",
+		options.KubeClientOpts.KubeClientQPS > optstracking.BaselineKubeClientQPS ||
+			options.KubeClientOpts.KubeClientBurst > optstracking.BaselineKubeClientBurst ||
+			options.MaxScaleDownParallelism > optstracking.BaselineMaxScaleDownParallelism ||
+			options.MaxConcurrentNodesTainting > optstracking.BaselineMaxConcurrentNodesTainting,
+	)
 }
 
 func logAndRecordFeatureMetric(feature internalmetrics.FeatureName, featureNameForLog string, enabled bool) {

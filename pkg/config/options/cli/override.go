@@ -22,6 +22,7 @@ import (
 	"strings"
 	"unicode"
 
+	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 
 	"github.com/spf13/pflag"
@@ -30,28 +31,11 @@ import (
 
 const overridePrefix = "override_"
 
-type flagOverrideResult struct {
-	args              []string
-	activeCount       int
-	unrecognizedCount int
-	redundantCount    int
-}
-
-var flagOverrideStats *metrics.FlagOverrideStats
-
-// GetFlagOverrideStats returns the stats collected during ProcessFlagOverrides,
-// or an error if ProcessFlagOverrides has not been executed yet.
-func GetFlagOverrideStats() (metrics.FlagOverrideStats, error) {
-	if flagOverrideStats == nil {
-		return metrics.FlagOverrideStats{}, fmt.Errorf("ProcessFlagOverrides was not called")
-	}
-	return *flagOverrideStats, nil
-}
-
 // ProcessFlagOverrides identifies any flags prefixed with --override_,
-// removes their standard counterparts from os.Args according to the rules, and appends the new flags.
+// removes their standard counterparts from os.Args according to the rules, appends the new flags,
+// and returns the resulting FlagOverrideResult.
 // All non-boolean CLI flags in os.Args[1:] must use the --flag=value (or -flag=value) format.
-func ProcessFlagOverrides() {
+func ProcessFlagOverrides() internalopts.FlagOverrideResult {
 	definedFlags := make(map[string]string)
 	pflag.CommandLine.VisitAll(func(f *pflag.Flag) {
 		definedFlags[f.Name] = f.DefValue
@@ -63,12 +47,8 @@ func ProcessFlagOverrides() {
 	if err != nil {
 		klog.Fatalf("[flag_override] Failed to process flag overrides: %v", err)
 	}
-	os.Args = result.args
-	flagOverrideStats = &metrics.FlagOverrideStats{
-		ActiveCount:       result.activeCount,
-		UnrecognizedCount: result.unrecognizedCount,
-		RedundantCount:    result.redundantCount,
-	}
+	os.Args = result.Args
+	return result
 }
 
 // mergeFlagOverrides merges CLI flags with --override_<flag>=<value> arguments.
@@ -76,22 +56,23 @@ func ProcessFlagOverrides() {
 // --override_<flag>=<value> arguments with --<flag>=<value>, drops redundant or
 // unrecognized overrides, and returns the resulting argument list along with
 // counts of active, unrecognized, and redundant overrides for metrics.
-func mergeFlagOverrides(args []string, definedFlags map[string]string) (flagOverrideResult, error) {
+func mergeFlagOverrides(args []string, definedFlags map[string]string) (internalopts.FlagOverrideResult, error) {
 	if len(args) == 0 {
-		return flagOverrideResult{}, nil
+		return internalopts.FlagOverrideResult{}, nil
 	}
 	if err := validateFlagsFormat(args); err != nil {
-		return flagOverrideResult{}, err
+		return internalopts.FlagOverrideResult{}, err
 	}
 
 	overrideVals, cliVals := collectFlagValues(args)
 	if len(overrideVals) == 0 {
-		return flagOverrideResult{args: args}, nil
+		return internalopts.FlagOverrideResult{Args: args}, nil
 	}
 	redundantFlags := findRedundantFlags(overrideVals, cliVals, definedFlags)
 
 	newArgs := []string{args[0]}
 	var activeCount, unrecognizedCount, redundantCount int
+	overridden := make(map[string]bool)
 
 	for _, arg := range args[1:] {
 		flagName, value, _ := parseFlag(arg)
@@ -104,6 +85,10 @@ func mergeFlagOverrides(args []string, definedFlags map[string]string) (flagOver
 				klog.Warningf("[flag_override] Skipping unrecognized flag override: --%s=%q", baseFlagName, value)
 				continue
 			}
+			// Mark the flag as overridden even when the override matches the manifest CLI value:
+			// an explicit --override_<flag>=<manifest_val> must still take precedence over any
+			// experiment that would otherwise clamp or change the manifest value for the cluster.
+			overridden[baseFlagName] = true
 			if redundantFlags[baseFlagName] {
 				redundantCount++
 				if len(cliVals[baseFlagName]) > 0 {
@@ -133,11 +118,14 @@ func mergeFlagOverrides(args []string, definedFlags map[string]string) (flagOver
 		klog.Infof("[flag_override] Processed flag overrides (active: %d, redundant: %d, unrecognized: %d)", activeCount, redundantCount, unrecognizedCount)
 	}
 
-	return flagOverrideResult{
-		args:              newArgs,
-		activeCount:       activeCount,
-		unrecognizedCount: unrecognizedCount,
-		redundantCount:    redundantCount,
+	return internalopts.FlagOverrideResult{
+		Args: newArgs,
+		Stats: metrics.FlagOverrideStats{
+			ActiveCount:       activeCount,
+			UnrecognizedCount: unrecognizedCount,
+			RedundantCount:    redundantCount,
+		},
+		OverriddenFlags: overridden,
 	}, nil
 }
 

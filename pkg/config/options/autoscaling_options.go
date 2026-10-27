@@ -20,6 +20,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
 )
 
@@ -160,6 +161,20 @@ type InternalOptions struct {
 	ExperimentsConfigMap                         string
 	FilterMigsByClusterNameEnabled               bool
 	ResizableVmEdpEnabled                        bool
+	FlagOverrideResult                           FlagOverrideResult
+}
+
+// FlagOverrideResult holds the output of processing --override_<flag> CLI arguments.
+type FlagOverrideResult struct {
+	Args            []string
+	Stats           metrics.FlagOverrideStats
+	OverriddenFlags map[string]bool
+}
+
+// HasFlagOverride reports whether the given defined CLI flag was explicitly specified
+// via --override_<flagName> during ProcessFlagOverrides (even if its value matches the manifest CLI value).
+func (r FlagOverrideResult) HasFlagOverride(flagName string) bool {
+	return r.OverriddenFlags[flagName]
 }
 
 // CSNStatus represents the status of Cold Standby Nodes feature in CA.
