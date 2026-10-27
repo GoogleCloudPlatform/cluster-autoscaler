@@ -90,13 +90,9 @@ func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *opt
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
-	if flagOverrideStats, err := cli.GetFlagOverrideStats(); err != nil {
-		klog.Errorf("[flag_override] Failed to get flag override stats: %v", err)
-	} else {
-		internalmetrics.UpdateComponentFlagOverrides(flagOverrideStats)
-	}
 
 	opts := optsTracker.Options()
+	internalmetrics.UpdateComponentFlagOverrides(opts.FlagOverrideResult.Stats)
 	restConfig := kube_util.GetKubeConfig(opts.KubeClientOpts)
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme: scheme,
@@ -225,7 +221,7 @@ func main() {
 	leaderElection.LeaderElect = true
 	componentopts.BindLeaderElectionFlags(&leaderElection, pflag.CommandLine)
 
-	cli.ProcessFlagOverrides()
+	flagOverrideResult := cli.ProcessFlagOverrides()
 	kube_flag.InitFlags()
 
 	ossOptions, err := ossFlags.Options()
@@ -236,7 +232,7 @@ func main() {
 
 	optionsFromFlags := internalopts.AutoscalingOptions{
 		AutoscalingOptions: ossOptions,
-		InternalOptions:    cli.InternalOptsFromFlags(),
+		InternalOptions:    cli.InternalOptsFromFlags(flagOverrideResult),
 	}
 	experimentsManager := optstracking.InitExperimentsManager(optionsFromFlags)
 	optsTracker := optstracking.NewOptionsTracker(optionsFromFlags, experimentsManager)

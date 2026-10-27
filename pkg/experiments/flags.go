@@ -323,3 +323,6 @@ const ReservationsAnyLocationPolicyOverrideEnabledFlag = "ReservationsAnyLocatio
 
 const FilterMigsByClusterNameEnabledFlag = "FilterMigsByClusterName::Enabled"
 const FilterMigsByClusterNameMinCAVersionFlag = "FilterMigsByClusterName::MinCAVersion"
+
+const HighThroughputScaledownEnabledFlag = "HighThroughputScaledown::Enabled"
+const HighThroughputScaledownMinCAVersionFlag = "HighThroughputScaledown::MinCAVersion"

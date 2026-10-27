@@ -40,6 +40,8 @@ const (
 	BalloonPodIpprResizeFeatureName = "balloon_pod_ippr_resize"
 	// FilterMigsByClusterNameFeatureName is the name of the mig filter by cluster name feature.
 	FilterMigsByClusterNameFeatureName = "filter_migs_by_cluster_name"
+	// HighThroughputScaledownFeatureName is the name of the HighThroughputScaledown feature.
+	HighThroughputScaledownFeatureName = "high_throughput_scaledown"
 )
 
 var featureEnabled = k8smetrics.NewGaugeVec(

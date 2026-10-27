@@ -246,7 +246,7 @@ func PostProcessOssOptions(ossOptions *config.AutoscalingOptions) {
 	ossOptions.ScaleDownEnabled = true
 }
 
-func InternalOptsFromFlags() internalopts.InternalOptions {
+func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) internalopts.InternalOptions {
 	// ref: go/ek-node-allocatable
 	ekMinVmSize, err := parsing.ParseResourceList(*ekvmsMinVmSize)
 	if err != nil {
@@ -440,5 +440,6 @@ func InternalOptsFromFlags() internalopts.InternalOptions {
 		ClusterDefaultAllocationStrategy:             options.ClusterDefaultAllocationStrategy(*clusterDefaultAllocationStrategy),
 		ExperimentsConfigMap:                         *experimentsConfigMap,
 		FilterMigsByClusterNameEnabled:               *filterMigsByClusterNameEnabled,
+		FlagOverrideResult:                           flagOverrideResult,
 	}
 }

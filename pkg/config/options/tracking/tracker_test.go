@@ -323,10 +323,49 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantRestart: true,
 		},
 		{
+			testName: "KubeClientOpts_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.KubeClientOpts = config.KubeClientOptions{
+					KubeClientQPS:   200,
+					KubeClientBurst: 400,
+				}
+			},
+			experimentValues: map[string]bool{experiments.HighThroughputScaledownEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.KubeClientOpts = config.KubeClientOptions{
+					KubeClientQPS:   BaselineKubeClientQPS,
+					KubeClientBurst: BaselineKubeClientBurst,
+				}
+			},
+			wantRestart: true,
+		},
+		{
 			testName:         "ComputeClassCapacityBuffersCleanup_field_is_tracked",
 			experimentValues: map[string]bool{experiments.ComputeClassCapacityBuffersCleanupFlag: true},
 			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
 				opts.ComputeClassCapacityBuffersCleanup = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "MaxScaleDownParallelism_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxScaleDownParallelism = 250
+			},
+			experimentValues: map[string]bool{experiments.HighThroughputScaledownEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxScaleDownParallelism = BaselineMaxScaleDownParallelism
+			},
+			wantRestart: true,
+		},
+		{
+			testName: "MaxConcurrentNodesTainting_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxConcurrentNodesTainting = 50
+			},
+			experimentValues: map[string]bool{experiments.HighThroughputScaledownEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.MaxConcurrentNodesTainting = BaselineMaxConcurrentNodesTainting
 			},
 			wantRestart: true,
 		},

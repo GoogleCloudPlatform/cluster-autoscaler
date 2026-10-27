@@ -229,42 +229,69 @@ func TestProcessFlagOverrides(t *testing.T) {
 			if tc.wantErr {
 				return
 			}
-			if !slices.Equal(actual.args, tc.want) {
-				t.Errorf("Want %v, got %v", tc.want, actual.args)
+			if !slices.Equal(actual.Args, tc.want) {
+				t.Errorf("Want %v, got %v", tc.want, actual.Args)
 			}
-			if actual.activeCount != tc.wantActive {
-				t.Errorf("Want active count %d, got %d", tc.wantActive, actual.activeCount)
+			if actual.Stats.ActiveCount != tc.wantActive {
+				t.Errorf("Want active count %d, got %d", tc.wantActive, actual.Stats.ActiveCount)
 			}
-			if actual.unrecognizedCount != tc.wantUnrecognized {
-				t.Errorf("Want unrecognized count %d, got %d", tc.wantUnrecognized, actual.unrecognizedCount)
+			if actual.Stats.UnrecognizedCount != tc.wantUnrecognized {
+				t.Errorf("Want unrecognized count %d, got %d", tc.wantUnrecognized, actual.Stats.UnrecognizedCount)
 			}
-			if actual.redundantCount != tc.wantRedundant {
-				t.Errorf("Want redundant count %d, got %d", tc.wantRedundant, actual.redundantCount)
+			if actual.Stats.RedundantCount != tc.wantRedundant {
+				t.Errorf("Want redundant count %d, got %d", tc.wantRedundant, actual.Stats.RedundantCount)
 			}
 		})
 	}
 }
 
-func TestGetFlagOverrideStats(t *testing.T) {
-	flagOverrideStats = nil
-	if _, err := GetFlagOverrideStats(); err == nil {
-		t.Fatalf("Expected error when ProcessFlagOverrides was not called, got nil")
-	}
-
+func TestProcessFlagOverridesGlobalArgs(t *testing.T) {
 	origArgs := os.Args
 	defer func() {
 		os.Args = origArgs
-		flagOverrideStats = nil
 	}()
 
 	os.Args = []string{"app", "--override_unknown=val"}
-	ProcessFlagOverrides()
+	result := ProcessFlagOverrides()
 
-	stats, err := GetFlagOverrideStats()
-	if err != nil {
-		t.Fatalf("Unexpected error after ProcessFlagOverrides: %v", err)
+	if result.Stats.UnrecognizedCount != 1 {
+		t.Errorf("Want unrecognized count 1, got %d", result.Stats.UnrecognizedCount)
 	}
-	if stats.UnrecognizedCount != 1 {
-		t.Errorf("Want unrecognized count 1, got %d", stats.UnrecognizedCount)
+	if result.HasFlagOverride("unknown") {
+		t.Errorf("Want result.HasFlagOverride(\"unknown\") = false, got true")
+	}
+}
+
+func TestHasFlagOverride(t *testing.T) {
+	defined := map[string]string{
+		"kube-client-qps":            "5",
+		"max-scale-down-parallelism": "10",
+		"untouched":                  "1",
+	}
+	args := []string{
+		"app",
+		"--kube-client-qps=200",
+		"--override_kube-client-qps=150", // active override
+		"--max-scale-down-parallelism=250",
+		"--override_max-scale-down-parallelism=250", // redundant override (matches CLI)
+		"--override_unrecognized=10",                // unrecognized override
+	}
+
+	result, err := mergeFlagOverrides(args, defined)
+	if err != nil {
+		t.Fatalf("mergeFlagOverrides() unexpected error: %v", err)
+	}
+
+	if !result.HasFlagOverride("kube-client-qps") {
+		t.Errorf("Expected result.HasFlagOverride(\"kube-client-qps\") = true for active override")
+	}
+	if !result.HasFlagOverride("max-scale-down-parallelism") {
+		t.Errorf("Expected result.HasFlagOverride(\"max-scale-down-parallelism\") = true for redundant override")
+	}
+	if result.HasFlagOverride("unrecognized") {
+		t.Errorf("Expected result.HasFlagOverride(\"unrecognized\") = false for unrecognized override")
+	}
+	if result.HasFlagOverride("untouched") {
+		t.Errorf("Expected result.HasFlagOverride(\"untouched\") = false for untouched flag")
 	}
 }
