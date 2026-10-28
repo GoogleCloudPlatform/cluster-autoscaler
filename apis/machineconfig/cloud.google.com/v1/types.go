@@ -173,6 +173,11 @@ type MachineProperties struct {
 	//
 	// +optional
 	NumaAlignmentUnsupported bool `json:"numaAlignmentUnsupported"`
+
+	// SupportsNestedVirtualization specifies whether nested virtualization is supported for this machine configuration.
+	//
+	// +optional
+	SupportsNestedVirtualization *bool `json:"supportsNestedVirtualization,omitempty"`
 }
 
 // MachineType defines a machine type.

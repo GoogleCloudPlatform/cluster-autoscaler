@@ -267,6 +267,10 @@ spec:
                           SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
                           configuration.
                         type: boolean
+                      supportsNestedVirtualization:
+                        description: SupportsNestedVirtualization specifies whether
+                          nested virtualization is supported for this machine configuration.
+                        type: boolean
                       systemArchitecture:
                         description: System architecture available for this machine
                           configuration.
@@ -408,6 +412,11 @@ spec:
                               description: |-
                                 SupportsConfidentialNodes specifies whether confidential nodes are supported for this machine
                                 configuration.
+                              type: boolean
+                            supportsNestedVirtualization:
+                              description: SupportsNestedVirtualization specifies
+                                whether nested virtualization is supported for this
+                                machine configuration.
                               type: boolean
                             systemArchitecture:
                               description: System architecture available for this
