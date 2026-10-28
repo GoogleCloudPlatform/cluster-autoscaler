@@ -115,7 +115,8 @@ func TestToMachineFamilyObject_AllProperties(t *testing.T) {
 					ConfidentialMode: ptr.To("CONFIDENTIAL_MODE_UNSPECIFIED"),
 				},
 			},
-			NumaAlignmentUnsupported: true,
+			NumaAlignmentUnsupported:     true,
+			SupportsNestedVirtualization: ptr.To(true),
 		},
 		Weights: &mcv1.MachineFamilyWeights{
 			Predefined: mcv1.ResourceWeights{
@@ -149,7 +150,8 @@ func TestToMachineFamilyObject_AllProperties(t *testing.T) {
 			"hyperdisk-balanced": ConfidentialOnlyMode,
 			"pd-balanced":        UnspecifiedMode,
 		},
-		numaAlignmentUnsupported: true,
+		numaAlignmentUnsupported:    true,
+		supportNestedVirtualization: true,
 	}
 
 	got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
@@ -343,31 +345,34 @@ func TestToMachineFamilyObject_PageType(t *testing.T) {
 
 func TestToMachineFamilyObject_NestedVirtualization(t *testing.T) {
 	testCases := []struct {
-		name              string
-		familyName        string
-		expectedSupported bool
+		name                         string
+		supportsNestedVirtualization *bool
+		expectedSupported            bool
 	}{
 		{
-			name:              "c3 supports nested virtualization",
-			familyName:        "c3",
-			expectedSupported: true,
+			name:                         "supports nested virtualization",
+			supportsNestedVirtualization: ptr.To(true),
+			expectedSupported:            true,
 		},
 		{
-			name:              "e2 does not support nested virtualization",
-			familyName:        "e2",
-			expectedSupported: false,
+			name:                         "does not support nested virtualization",
+			supportsNestedVirtualization: ptr.To(false),
+			expectedSupported:            false,
 		},
 		{
-			name:              "unknown family does not support nested virtualization",
-			familyName:        "unknown-family",
-			expectedSupported: false,
+			name:                         "nil defaults to false",
+			supportsNestedVirtualization: nil,
+			expectedSupported:            false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			input := &mcv1.MachineFamily{
-				Name: tc.familyName,
+				Name: "test-family",
+				DefaultProperties: mcv1.MachineProperties{
+					SupportsNestedVirtualization: tc.supportsNestedVirtualization,
+				},
 			}
 			got, gradedErr := ToMachineFamilyObject(input, cpSource, false)
 			if gradedErr.Err != nil {
@@ -1734,8 +1739,7 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 						return mt
 					}(),
 				},
-				supportedCpuPlatforms:       noPlatformSupported,
-				supportNestedVirtualization: true,
+				supportedCpuPlatforms: noPlatformSupported,
 			},
 		},
 		{
@@ -1769,7 +1773,6 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 					lowerBound: AmdGenoa,
 					upperBound: AmdGenoa,
 				},
-				supportNestedVirtualization: true,
 			},
 		},
 		{
@@ -1839,8 +1842,7 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 				autoprovisionedMachineTypes: map[string]MachineType{
 					"c3-standard-4": newTestMachineTypeInfo("c3-standard-4", 4, 16),
 				},
-				supportedCpuPlatforms:       noPlatformSupported,
-				supportNestedVirtualization: true,
+				supportedCpuPlatforms: noPlatformSupported,
 			},
 		},
 	}
