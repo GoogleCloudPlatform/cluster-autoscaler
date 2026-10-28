@@ -27,6 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	ctrl_client "sigs.k8s.io/controller-runtime/pkg/client"
@@ -518,6 +519,72 @@ func TestAggregator_ProcessMessage_ConfigHash(t *testing.T) {
 			})
 
 			assert.Equal(t, tc.wantDirty, aggregator.dirtySet[msgId])
+		})
+	}
+}
+
+func TestAggregator_CrdNoLongerOwned(t *testing.T) {
+	testCrdLabel := "ComputeClass"
+	crdName := "test-ccc"
+	crdId := CRDId{CRDLabel: testCrdLabel, CRDName: crdName}
+	ownedCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName(crdName),
+		crd.WithAnnotations(map[string]string{options.AutoscalerNameAnnotation: options.StandardAutoscalerName}),
+	)
+	unownedCrd := crd.NewTestCrd(
+		crd.WithLabel(testCrdLabel),
+		crd.WithName(crdName),
+		crd.WithAnnotations(map[string]string{options.AutoscalerNameAnnotation: options.SolverAutoscalerName}),
+	)
+	mgr := experiments.NewMockManagerWithOptions(
+		version.Version{2, 0, 0, 0},
+		map[string]bool{experiments.ComputeClassEnhancedObservabilityEnabledFlag: true},
+		map[string]string{experiments.ComputeClassEnhancedObservabilityMinCAVersionFlag: "1.0.0"},
+	)
+	markReady := UpdateMessage{
+		Id: crdId,
+		Mutate: func(status crd.CRDStatus) {
+			status.UpdateConditions([]metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue}})
+		},
+	}
+
+	testCases := []struct {
+		name string
+		// act runs after the CRD has been marked dirty while owned and then
+		// handed over to another autoscaler.
+		act func(a *Aggregator)
+	}{
+		{
+			name: "makeUpdates drops the pending update",
+			act:  func(a *Aggregator) { a.makeUpdates(context.Background()) },
+		},
+		{
+			name: "processMessage drops tracked state",
+			act:  func(a *Aggregator) { a.processMessage(markReady) },
+		},
+		{
+			name: "cleanup drops tracked state",
+			act:  func(a *Aggregator) { a.cleanup() },
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			baseLister := lister.NewMockCrdListerWithLabel([]crd.CRD{ownedCrd}, testCrdLabel)
+			filteredLister := lister.NewFilteredCccLister(baseLister, []string{options.StandardAutoscalerName})
+			client := newFakeStatusClient()
+			aggregator := NewAggregator(nil, filteredLister, make(chan UpdateMessage), client, mgr, false)
+
+			aggregator.processMessage(markReady)
+			assert.True(t, aggregator.dirtySet[crdId])
+			assert.Contains(t, aggregator.statusMap, crdId)
+
+			baseLister.SetCrds([]crd.CRD{unownedCrd})
+			assert.NotPanics(t, func() { tc.act(aggregator) })
+
+			assert.Empty(t, client.writer.patches)
+			assert.Empty(t, aggregator.dirtySet)
+			assert.Empty(t, aggregator.statusMap)
 		})
 	}
 }

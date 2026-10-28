@@ -101,7 +101,12 @@ func (a *Aggregator) processMessage(msg UpdateMessage) {
 		return
 	}
 	if crd == nil {
-		klog.Warningf("CRD %s/%s not found, skipping status update", msg.Id.CRDLabel, msg.Id.CRDName)
+		// No CRD means it's not owned by this autoscaler instance (or is a
+		// predefined compute class). Drop any state tracked from when it was
+		// owned, so potential regaining of ownership starts from a fresh
+		// status.
+		klog.V(4).Infof("CRD %s/%s is predefined or not owned by this autoscaler instance, skipping status update", msg.Id.CRDLabel, msg.Id.CRDName)
+		a.forget(msg.Id)
 		return
 	}
 	if _, tracked := a.statusMap[statusKey(crd)]; msg.OnlyIfTracked && !tracked {
@@ -132,9 +137,8 @@ func (a *Aggregator) processMessage(msg UpdateMessage) {
 func (a *Aggregator) cleanup() {
 	count := 0
 	for id := range a.statusMap {
-		if _, err := a.lister.Crd(id.CRDLabel, id.CRDName); err != nil {
-			delete(a.statusMap, id)
-			delete(a.dirtySet, id)
+		if crdObj, err := a.lister.Crd(id.CRDLabel, id.CRDName); err != nil || crdObj == nil {
+			a.forget(id)
 			count++
 		}
 	}
@@ -150,6 +154,14 @@ func (a *Aggregator) makeUpdates(ctx context.Context) {
 		crd, err := a.lister.Crd(crdId.CRDLabel, crdId.CRDName)
 		if err != nil {
 			klog.Errorf("Failed to fetch CRD %s/%s for update: %v", crdId.CRDLabel, crdId.CRDName, err)
+			continue
+		}
+		if crd == nil {
+			// Ownership moved to another autoscaler instance after the CRD was
+			// marked dirty. Drop the pending update and the tracked status; the
+			// current owner is responsible for the status now.
+			klog.V(4).Infof("CRD %s/%s no longer owned by this autoscaler instance, dropping pending status update", crdId.CRDLabel, crdId.CRDName)
+			a.forget(crdId)
 			continue
 		}
 		status := a.getOrCreateStatus(crd)
@@ -177,6 +189,12 @@ func (a *Aggregator) getOrCreateStatus(crdObj crd.CRD) crd.CRDStatus {
 
 	a.statusMap[id] = status
 	return status
+}
+
+// forget drops all state tracked for the CRD with the given id.
+func (a *Aggregator) forget(id CRDId) {
+	delete(a.statusMap, id)
+	delete(a.dirtySet, id)
 }
 
 // statusKey returns the key under which the status of a CRD is tracked.
