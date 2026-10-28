@@ -486,6 +486,11 @@ func (in *MachineProperties) DeepCopyInto(out *MachineProperties) {
 		*out = new(ConfidentialNodeConfig)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.SupportsNestedVirtualization != nil {
+		in, out := &in.SupportsNestedVirtualization, &out.SupportsNestedVirtualization
+		*out = new(bool)
+		**out = **in
+	}
 	return
 }
 
