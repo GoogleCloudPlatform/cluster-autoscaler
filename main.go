@@ -15,7 +15,7 @@
 package main
 
 import (
-	ctx "context"
+	"context"
 	"flag"
 	"math/rand"
 	"net/http"
@@ -86,9 +86,7 @@ func init() {
 	utilruntime.Must(ccc_api.AddToScheme(scheme))
 }
 
-func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter) {
-	context := ctrl.SetupSignalHandler()
-
+func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter) {
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
@@ -132,8 +130,8 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 		klog.Fatalf("Failed to add experiments manager to manager: %v", err)
 	}
 
-	builder := initBuilder(context, optsTracker, mgr)
-	autoscaler, trigger, err := builder.Build(context, gkeDebuggingSnapshotter, config.OsReservedContent)
+	builder := initBuilder(ctx, optsTracker, mgr)
+	autoscaler, trigger, err := builder.Build(ctx, gkeDebuggingSnapshotter, config.OsReservedContent)
 
 	if err != nil {
 		klog.Fatalf("Failed to create autoscaler: %v", err)
@@ -148,7 +146,7 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 	}
 
 	// Autoscale ad infinitum.
-	err = mgr.Add(manager.RunnableFunc(func(ctx ctx.Context) error {
+	err = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		loopStart := time.Now()
 		lastRun := time.Now()
 		iteration := 0
@@ -186,7 +184,7 @@ func run(healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTrac
 		klog.Fatalf("Failed to add runnable to manager: %v", err)
 	}
 
-	if err := mgr.Start(context); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		klog.Fatalf("Manager exited with error: %v", err)
 	}
 	klog.V(1).Info("Cleaned up, exiting...")
@@ -214,6 +212,8 @@ func defaultLeaderElectionConfiguration() componentbaseconfig.LeaderElectionConf
 }
 
 func main() {
+	rootCtx := ctrl.SetupSignalHandler()
+
 	rand.Seed(time.Now().UnixNano())
 	klog.InitFlags(nil)
 	ctrl.SetLogger(klog.NewKlogr())
@@ -305,18 +305,21 @@ func main() {
 	}()
 
 	if !leaderElection.LeaderElect {
-		run(healthCheck, optsTracker, gkeDebuggingSnapshotter)
+		run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter)
 	} else {
 		id, err := os.Hostname()
 		if err != nil {
 			klog.Fatalf("Unable to get hostname: %v", err)
 		}
 
+		electionCtx, stopElection := context.WithCancel(context.Background())
+		defer stopElection()
+
 		kubeconfig := kube_util.GetKubeConfig(options.KubeClientOpts)
 		kubeClient := kube_client.NewForConfigOrDie(kubeconfig)
 
 		// Validate that the client is ok.
-		_, err = kubeClient.CoreV1().Nodes().List(ctx.TODO(), metav1.ListOptions{})
+		_, err = kubeClient.CoreV1().Nodes().List(rootCtx, metav1.ListOptions{})
 		if err != nil {
 			klog.Fatalf("Failed to get nodes from apiserver: %v", err)
 		}
@@ -326,8 +329,9 @@ func main() {
 			options.ConfigNamespace,
 			leaderElection.ResourceName,
 			resourcelock.ResourceLockConfig{
-				Identity:      id,
-				EventRecorder: kube_util.CreateEventRecorder(ctx.TODO(), kubeClient, options.RecordDuplicatedEvents),
+				Identity: id,
+				// using background context here, so the event can be recorded after receiving the termination signal
+				EventRecorder: kube_util.CreateEventRecorder(context.Background(), kubeClient, options.RecordDuplicatedEvents),
 			},
 			kubeconfig,
 			leaderElection.RenewDeadline.Duration,
@@ -336,22 +340,43 @@ func main() {
 			klog.Fatalf("Unable to create leader election lock: %v", err)
 		}
 
-		leaderelection.RunOrDie(ctx.TODO(), leaderelection.LeaderElectionConfig{
-			Lock:          lock,
-			LeaseDuration: leaderElection.LeaseDuration.Duration,
-			RenewDeadline: leaderElection.RenewDeadline.Duration,
-			RetryPeriod:   leaderElection.RetryPeriod.Duration,
+		le, err := leaderelection.NewLeaderElector(leaderelection.LeaderElectionConfig{
+			Lock:            lock,
+			LeaseDuration:   leaderElection.LeaseDuration.Duration,
+			RenewDeadline:   leaderElection.RenewDeadline.Duration,
+			RetryPeriod:     leaderElection.RetryPeriod.Duration,
+			ReleaseOnCancel: true,
 			Callbacks: leaderelection.LeaderCallbacks{
-				OnStartedLeading: func(_ ctx.Context) {
-					// Since we are committing a suicide after losing
-					// mastership, we can safely ignore the argument.
-					run(healthCheck, optsTracker, gkeDebuggingSnapshotter)
+				OnStartedLeading: func(context.Context) {
+					defer stopElection()
+					if rootCtx.Err() != nil {
+						// Termination was requested while acquiring the lease: don't start, just release it.
+						return
+					}
+					run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter)
 				},
 				OnStoppedLeading: func() {
+					if electionCtx.Err() != nil {
+						klog.Info("Shut down gracefully")
+						klog.FlushAndExit(10*time.Second, 0)
+					}
 					klog.Fatalf("lost master")
 				},
 			},
 		})
+		if err != nil {
+			klog.Fatalf("Unable to create leader elector: %v", err)
+		}
+
+		// if we're not leading, make sure that the leader elector context is canceled on termination signal
+		go func() {
+			<-rootCtx.Done()
+			if !le.IsLeader() {
+				stopElection()
+			}
+		}()
+
+		le.Run(electionCtx)
 	}
 }
 
