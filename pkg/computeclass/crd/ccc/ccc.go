@@ -97,15 +97,22 @@ func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopi
 			strategy = ptr.To(v1.AllocationStrategyFleetEfficiency)
 		}
 	}
+	// Predefined Compute Classes can be used by both On-Demand and Spot pods (via
+	// cloud.google.com/gke-spot: "true"), so include priorities for both provisioning modes
+	// when FlexAdvisorSkipUnneededSpotConfigs is enabled.
 	var priorities []v1.Priority
+	spotModes := provisioningModesForSyntheticCrd(optionsTracker)
 	for _, family := range pcc.MachineFamilies() {
 		familyRef := family.Name()
-		priority := v1.Priority{
-			MachineFamily:      &familyRef,
-			PriorityScore:      ptr.To(100),
-			AllocationStrategy: strategy,
+		for _, spot := range spotModes {
+			priority := v1.Priority{
+				MachineFamily:      &familyRef,
+				Spot:               spot,
+				PriorityScore:      ptr.To(100),
+				AllocationStrategy: strategy,
+			}
+			priorities = append(priorities, priority)
 		}
-		priorities = append(priorities, priority)
 	}
 
 	var allocDefaults *v1.AllocationStrategyDefaults
@@ -133,10 +140,17 @@ func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopi
 func NewPodFamilyCrd(podFamily string, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
 	priorityScore := 100
 	strategy := v1.AllocationStrategyFleetEfficiency
-	priority := v1.Priority{
-		PodFamily:          &podFamily,
-		PriorityScore:      &priorityScore,
-		AllocationStrategy: &strategy,
+	// Pay-per-pod Autopilot workloads can request either On-Demand or Spot (via
+	// cloud.google.com/gke-spot: "true"), so include priorities for both provisioning modes
+	// when FlexAdvisorSkipUnneededSpotConfigs is enabled.
+	var priorities []v1.Priority
+	for _, spot := range provisioningModesForSyntheticCrd(optionsTracker) {
+		priorities = append(priorities, v1.Priority{
+			PodFamily:          &podFamily,
+			Spot:               spot,
+			PriorityScore:      &priorityScore,
+			AllocationStrategy: &strategy,
+		})
 	}
 
 	cc := &v1.ComputeClass{
@@ -144,7 +158,7 @@ func NewPodFamilyCrd(podFamily string, projectId string, autopilotEnabled bool, 
 			Name: podFamily,
 		},
 		Spec: v1.ComputeClassSpec{
-			Priorities: []v1.Priority{priority},
+			Priorities: priorities,
 			AllocationStrategyDefaults: &v1.AllocationStrategyDefaults{
 				OnDemand: &strategy,
 				Spot:     &strategy,
@@ -153,6 +167,17 @@ func NewPodFamilyCrd(podFamily string, projectId string, autopilotEnabled bool, 
 	}
 
 	return NewCccCrd(cc, projectId, autopilotEnabled, provider, optionsTracker)
+}
+
+func provisioningModesForSyntheticCrd(optionsTracker *optstracking.OptionsTracker) []*bool {
+	var expManager experiments.Manager
+	if optionsTracker != nil {
+		expManager = optionsTracker.ExperimentsManager()
+	}
+	if experiments.IsFlexAdvisorSkipUnneededSpotConfigsEnabled(expManager) {
+		return []*bool{ptr.To(false), ptr.To(true)}
+	}
+	return []*bool{nil}
 }
 
 // ResourceVersion returns resource version
@@ -316,6 +341,10 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 	}
 	if p.Tpu != nil {
 		ruleOpts = append(ruleOpts, rules.WithTpuRule(p.Tpu.Type, p.Tpu.Count, p.Tpu.Topology))
+	}
+
+	if p.Spot != nil && *p.Spot && p.MinEstimatedUptimeMinutes != nil {
+		ruleOpts = append(ruleOpts, rules.WithMinEstimatedUptimeRule(p.MinEstimatedUptimeMinutes))
 	}
 
 	if p.MaxRunDurationSeconds != nil {
@@ -1007,6 +1036,17 @@ func canonicalizePriority(p *v1.Priority) *v1.Priority {
 	copied.PriorityScore = nil
 	copied.AllocationStrategy = nil
 	copied.MinimumCapacity = nil
+
+	if s := copied.Storage; s != nil {
+		// CRD guarantees config blocks are non-empty and enabled is unset or true.
+		// Normalize enabled so enabled: true doesn't change the hash.
+		if s.EphemeralStorageLocalSsdConfig != nil {
+			s.EphemeralStorageLocalSsdConfig.Enabled = nil
+		}
+		if s.LocalNvmeSsdBlockConfig != nil {
+			s.LocalNvmeSsdBlockConfig.Enabled = nil
+		}
+	}
 
 	canonicalizeTaints(copied.Taints)
 	if copied.Location != nil {

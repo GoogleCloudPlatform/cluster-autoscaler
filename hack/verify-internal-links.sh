@@ -24,6 +24,7 @@ cd "${SCRIPT_ROOT}"
 
 excluded_paths=(
   "vendor"
+  "modreplaces"
   "hack/verify-internal-links.sh"
   "hack/internal"
   "proto"

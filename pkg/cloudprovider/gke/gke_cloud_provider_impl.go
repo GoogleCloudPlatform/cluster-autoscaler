@@ -729,7 +729,7 @@ func (p *gkeCloudProviderImpl) NewNodeGroup(ctx context.Context, machineType str
 
 	// CCC self-service features don't have a chance to set nodePoolSpec until the call to GKE is made.
 	// This allows them to apply mutations if needed: b/407954225.
-	selfservice.UpdateMig(mig, nodePoolSpec.SelfServiceMetadata)
+	selfservice.UpdateMig(mig, nodePoolSpec.SelfServiceMetadata, nodePoolSpec.AutopilotManaged)
 
 	// Try to build a NodeInfo from autoprovisioning spec. We don't need one right now,
 	// but if it fails later, we'd end up with a node group we can't scale anyway,

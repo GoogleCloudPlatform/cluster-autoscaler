@@ -330,8 +330,7 @@ func TestCappedKeysMap_ScopeIsUpdatedWhenCrdChanges(t *testing.T) {
 			assert.Equal(t, map[string]bool{
 				api.NewInstanceConfig("e2-standard-2", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():     false,
 				api.NewInstanceConfig("e2-standard-4", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():     false,
-				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():     false,
-				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature(): true,
+				api.NewInstanceConfig("e2-standard-8", "", 0, 0, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature(): false,
 				api.NewInstanceConfig("e2-standard-16", "", 0, 0, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature():    true,
 			}, getCappedKeysMapCopy(scope))
 		})
@@ -356,7 +355,6 @@ func TestResponseValidation_Metrics(t *testing.T) {
 	}, "", false, crd.TestDefaultDataProvider(), nil)
 
 	configKeyStandard := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration).Signature()
-	configKeySpot := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration).Signature()
 
 	testCases := []struct {
 		name                 string
@@ -368,15 +366,12 @@ func TestResponseValidation_Metrics(t *testing.T) {
 			name:                 "Backend response missing requested instance configuration",
 			mockCapacityGuidance: map[string]*api.InstanceAvailability{},
 			reason:               metrics.ResponseMissingInstanceConfig,
-			expectedInc:          2,
+			expectedInc:          1,
 		},
 		{
 			name: "Backend response missing requested zone",
 			mockCapacityGuidance: map[string]*api.InstanceAvailability{
 				configKeyStandard: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeyStandard).
-					WithZonalInstanceCount(map[string]int{"us-west1-b": 10}).
-					Build(),
-				configKeySpot: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeySpot).
 					WithZonalInstanceCount(map[string]int{"us-west1-b": 10}).
 					Build(),
 			},
@@ -389,9 +384,6 @@ func TestResponseValidation_Metrics(t *testing.T) {
 				configKeyStandard: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeyStandard).
 					WithZonalInstanceCount(map[string]int{"us-west1-a": -5, "us-west1-b": 10, "us-west1-c": 10}).
 					Build(),
-				configKeySpot: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeySpot).
-					WithZonalInstanceCount(map[string]int{"us-west1-a": -5, "us-west1-b": 10, "us-west1-c": 10}).
-					Build(),
 			},
 			reason:      metrics.InvalidInstanceCount,
 			expectedInc: 1,
@@ -400,10 +392,6 @@ func TestResponseValidation_Metrics(t *testing.T) {
 			name: "Backend response invalid preference score",
 			mockCapacityGuidance: map[string]*api.InstanceAvailability{
 				configKeyStandard: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeyStandard).
-					WithZonalInstanceCount(map[string]int{"us-west1-a": 10, "us-west1-b": 10, "us-west1-c": 10}).
-					WithZonalGcePreferenceScore(map[string]float64{"us-west1-a": 1.5}).
-					Build(),
-				configKeySpot: api.NewTestInstanceAvailabilityBuilder("scope-1", configKeySpot).
 					WithZonalInstanceCount(map[string]int{"us-west1-a": 10, "us-west1-b": 10, "us-west1-c": 10}).
 					WithZonalGcePreferenceScore(map[string]float64{"us-west1-a": 1.5}).
 					Build(),

@@ -127,8 +127,8 @@ clean-binary:
 
 .PHONY: format
 format:
-	test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -d {} + | tee /dev/stderr)" || \
-    test -z "$$(find . -path ./vendor -prune -type f -o -name '*.go' -exec gofmt -s -w {} + | tee /dev/stderr)"
+	test -z "$$(find . \( -path ./vendor -o -path ./modreplaces \) -prune -type f -o -name '*.go' -exec gofmt -s -d {} + | tee /dev/stderr)" || \
+    test -z "$$(find . \( -path ./vendor -o -path ./modreplaces \) -prune -type f -o -name '*.go' -exec gofmt -s -w {} + | tee /dev/stderr)"
 
 .PHONY: docker-builder
 docker-builder:
@@ -224,7 +224,7 @@ test-in-docker-oss: clean-binary docker-builder
 
 .PHONY: compile-proto
 compile-proto:
-	for protofile in $$(find . -name "*.proto" -not -path "**/vendor/**"); do protoc $$protofile --go_out=.; done
+	for protofile in $$(find . -name "*.proto" -not -path "**/vendor/**" -not -path "./modreplaces/*"); do protoc $$protofile --go_out=.; done
 
 .PHONY: test-scaledown
 test-scaledown: clean-binary docker-builder

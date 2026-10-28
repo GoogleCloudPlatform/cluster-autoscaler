@@ -52,6 +52,7 @@ type Rule interface {
 	NodeSystemConfigRule
 	MaxPodsPerNodeRule
 	MaxRunDurationRule
+	MinEstimatedUptimeRule
 	FlexStartRule
 	SelfServiceRule
 	PodFamilyRule
@@ -81,6 +82,7 @@ type rule struct {
 	nodeSystemConfigRule
 	maxPodsPerNodeRule
 	maxRunDurationRule
+	minEstimatedUptimeRule
 	flexStartRule
 	selfServiceRule
 	podFamilyRule
@@ -107,6 +109,7 @@ func (r *rule) initBaseRules() {
 		{"flexStartRule", &r.flexStartRule},
 		{"maxPodsPerNodeRule", &r.maxPodsPerNodeRule},
 		{"maxRunDurationRule", &r.maxRunDurationRule},
+		{"minEstimatedUptimeRule", &r.minEstimatedUptimeRule},
 		{"labelsRule", &r.labelsRule},
 		{"taintsRule", &r.taintsRule},
 		{"placementPolicyRule", &r.placementPolicyRule},

@@ -43,6 +43,7 @@ func TestUpdateCoreDistribution(t *testing.T) {
 		oldCoreDistribution       map[distributionConfig]distribution
 		getTargetSizeErr          bool
 		nodeInfoMissing           bool
+		nodeInfoNil               bool
 		migConfigs                []testMigConfig
 		wantUpdateMetricCalls     []updateMetricsCall
 		wantUnregisterMetricCalls []unregisterMetricsCall
@@ -229,6 +230,22 @@ func TestUpdateCoreDistribution(t *testing.T) {
 				{machineType: "n1-standard-8", locationPolicy: "ANY"}:      newTestDistribution(allZones, []int64{0, 0, 0}),
 			},
 		},
+		{
+			name: "node info nil, node distribution not updated",
+			oldCoreDistribution: map[distributionConfig]distribution{
+				{machineType: "n1-standard-4", locationPolicy: "BALANCED"}: newTestDistribution(allZones, []int64{40, 0, 0}),
+				{machineType: "n1-standard-8", locationPolicy: "ANY"}:      newTestDistribution(allZones, []int64{0, 0, 0}),
+			},
+			nodeInfoNil: true,
+			migConfigs: []testMigConfig{
+				{zone: "us-central1-b", machineType: "n1-standard-8", locationPolicy: gke.LocationPolicyAny, targetSize: 4},
+				{zone: "us-central1-c", machineType: "n1-standard-16", locationPolicy: gke.LocationPolicyUnspecified, targetSize: 3},
+			},
+			wantCoreDistribution: map[distributionConfig]distribution{
+				{machineType: "n1-standard-4", locationPolicy: "BALANCED"}: newTestDistribution(allZones, []int64{40, 0, 0}),
+				{machineType: "n1-standard-8", locationPolicy: "ANY"}:      newTestDistribution(allZones, []int64{0, 0, 0}),
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -248,7 +265,9 @@ func TestUpdateCoreDistribution(t *testing.T) {
 				mig := newTestMig(manager, config, tc.getTargetSizeErr)
 				migs = append(migs, mig)
 
-				if !tc.nodeInfoMissing {
+				if tc.nodeInfoNil {
+					nodeInfos[mig.Id()] = nil
+				} else if !tc.nodeInfoMissing {
 					nodeInfos[mig.Id()] = getNodeInfo(t, config)
 				}
 			}

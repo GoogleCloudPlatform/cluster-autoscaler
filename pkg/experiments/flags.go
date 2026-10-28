@@ -254,6 +254,9 @@ const FlexAdvisorSendRankMinCAVersionFlag = "FlexAdvisorSendRank::MinCAVersion"
 const FlexAdvisorPodFamilySequentialOrderEnabledFlag = "FlexAdvisorPodFamilySequentialOrder::Enabled"
 const FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag = "FlexAdvisorPodFamilySequentialOrder::MinCAVersion"
 
+const FlexAdvisorSkipUnneededSpotConfigsEnabledFlag = "FlexAdvisorSkipUnneededSpotConfigs::Enabled"
+const FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag = "FlexAdvisorSkipUnneededSpotConfigs::MinCAVersion"
+
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
 const SalvoScaleUpBudgetSecondsFlag = "SalvoScaleUp::BudgetSeconds"

@@ -135,12 +135,15 @@ type feature interface {
 type internalFeature interface {
 	// UpdateMig allows setting mig and its nodepool spec directly before
 	// it is injected for simulation. Used in limited cases related to HT NAP.
-	UpdateMig(GkeMigSetter, Metadata)
+	// autopilotManaged is true iff the node pool will be created with
+	// autopilotConfig.enabled on a Standard cluster. It is always false on
+	// Autopilot clusters; use CloudProvider.IsAutopilotEnabled() for those.
+	UpdateMig(mig GkeMigSetter, metadata Metadata, autopilotManaged bool)
 }
 
 type internalFeatureDefaultImplementation struct{}
 
-func (ds *internalFeatureDefaultImplementation) UpdateMig(mig GkeMigSetter, metadata Metadata) {
+func (ds *internalFeatureDefaultImplementation) UpdateMig(mig GkeMigSetter, metadata Metadata, autopilotManaged bool) {
 }
 
 var (
@@ -224,8 +227,8 @@ func UpdateNodepool(np *container.NodePool, m Metadata) {
 }
 
 // UpdateMig is called by cloud provider as the final step before NAP creates a mig for simulation.
-func UpdateMig(mig GkeMigSetter, m Metadata) {
+func UpdateMig(mig GkeMigSetter, m Metadata, autopilotManaged bool) {
 	for _, f := range supportedFeatures {
-		f.UpdateMig(mig, m)
+		f.UpdateMig(mig, m, autopilotManaged)
 	}
 }

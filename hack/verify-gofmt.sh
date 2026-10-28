@@ -21,7 +21,7 @@ SCRIPT_ROOT=$(dirname "${BASH_SOURCE}")
 cd "${SCRIPT_ROOT}"/..
 
 filter_format_issues() {
-  grep --invert-match "^vendor" || true
+  grep --invert-match --extended-regexp "^(vendor|modreplaces)/" || true
 }
 
 bad_files=$(gofmt -l -s . | filter_format_issues)

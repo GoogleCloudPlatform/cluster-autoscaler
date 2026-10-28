@@ -76,7 +76,7 @@ func (w *locationPolicy) FromLabelRequirements(_ podrequirements.LabelRequiremen
 	return nil
 }
 
-func (w *locationPolicy) UpdateMig(mig GkeMigSetter, metadata Metadata) {
+func (w *locationPolicy) UpdateMig(mig GkeMigSetter, metadata Metadata, _ bool) {
 	if locationPolicy, exist := metadata[gkelabels.LocationPolicyLabelKey]; exist {
 		mig.SetLocationPolicy(locationPolicy)
 	}

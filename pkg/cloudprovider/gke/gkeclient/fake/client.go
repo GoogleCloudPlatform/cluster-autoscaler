@@ -254,7 +254,7 @@ func (f *Client) CreateNodePool(clusterPath string, req *gkeapibeta.CreateNodePo
 
 	for _, zone := range req.NodePool.Locations {
 		templateName := fmt.Sprintf("%s-%s-tmpl", npName, zone)
-		newTemplate, err := buildInstanceTemplateFromRequest(f.project, templateName, req.NodePool, zone)
+		newTemplate, err := buildInstanceTemplateFromRequest(f.project, templateName, req.NodePool)
 		if err != nil {
 			return nil, fmt.Errorf("template creation failed for zone %s: %v", zone, err)
 		}
@@ -420,7 +420,7 @@ func (f *Client) newNodePool(np *gkeapibeta.NodePool, clusterPath string) *gkeap
 
 func (f *Client) initializeNodePoolInZone(np *gkeapibeta.NodePool, zone string) error {
 	templateName := fmt.Sprintf("%s-%s-tmpl", np.Name, zone)
-	newTemplate, err := buildInstanceTemplateFromRequest(f.project, templateName, np, zone)
+	newTemplate, err := buildInstanceTemplateFromRequest(f.project, templateName, np)
 	if err != nil {
 		return fmt.Errorf("failed to build template for node pool %s in zone %s: %v", np.Name, zone, err)
 	}

@@ -42,7 +42,7 @@ var defaultMachineConfigProvider = machinetypes.NewMachineConfigProvider(nil)
 // buildInstanceTemplateFromRequest constructs a GCE InstanceTemplate from a GKE NodePool request.
 // It maps the GKE NodePool configuration (e.g., machine type, disk size, labels, taints, accelerators)
 // into the corresponding GCE InstanceTemplate properties.
-func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibeta.NodePool, zone string) (*gcev1.InstanceTemplate, error) {
+func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibeta.NodePool) (*gcev1.InstanceTemplate, error) {
 	config := np.Config
 	if config == nil {
 		return nil, fmt.Errorf("no config available in node pool %s", np.Name)
@@ -57,7 +57,7 @@ func buildInstanceTemplateFromRequest(project, templateName string, np *gkeapibe
 	machineType := config.MachineType
 	diskSize := config.DiskSizeGb
 
-	kubeLabels := buildKubeLabels(np, zone, accelerators)
+	kubeLabels := buildKubeLabels(np, accelerators)
 	kubeLabelsStr := toKubeLabelString(kubeLabels)
 	taintsStr := toKubeTaintString(config.Taints)
 
@@ -169,16 +169,21 @@ func systemArchitecture(machineType string) string {
 	return gceinternal.DefaultArch.Name()
 }
 
-func buildKubeLabels(np *gkeapibeta.NodePool, zone string, accelerators []*gcev1.AcceleratorConfig) map[string]string {
+func buildKubeLabels(np *gkeapibeta.NodePool, accelerators []*gcev1.AcceleratorConfig) map[string]string {
 	config := np.Config
 	kubeLabels := map[string]string{
 		"cloud.google.com/gke-nodepool":        np.Name,
 		"cloud.google.com/gke-os-distribution": strings.ToLower(config.ImageType),
-		"topology.gke.io/zone":                 zone,
-		"topology.kubernetes.io/zone":          zone,
 	}
 	if mfName, err := gceinternal.GetMachineFamily(config.MachineType); err == nil && mfName != "" {
 		kubeLabels[gkelabels.MachineFamilyLabel] = mfName
+	}
+	// GKE labels the nodes of Spot and preemptible node pools with the corresponding preemption label.
+	if config.Spot {
+		kubeLabels[gkelabels.SpotLabel] = gkelabels.PreemptionValue
+	}
+	if config.Preemptible {
+		kubeLabels[gkelabels.PreemptibleLabel] = gkelabels.PreemptionValue
 	}
 	for k, v := range config.Labels {
 		kubeLabels[k] = v

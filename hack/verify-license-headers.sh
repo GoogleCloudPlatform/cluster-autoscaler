@@ -24,6 +24,7 @@ cd "${KUBE_ROOT}"
 
 excluded_paths=(
   "vendor"
+  "modreplaces"
   "kokoro"
   "proto"
   "test/frankenstein"

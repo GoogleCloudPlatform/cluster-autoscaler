@@ -65,18 +65,7 @@ func (p *plugin) String() string {
 }
 
 func (p *plugin) NewCandidate(ctx *context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
-	var annotatedNodes []string
-	for _, nodeName := range nodeNames {
-		nodeInfo, err := ctx.ClusterSnapshot.GetNodeInfo(nodeName)
-		if err != nil {
-			continue
-		}
-
-		if m := nodeInfo.Node().Annotations[annotationKey]; m == p.name {
-			annotatedNodes = append(annotatedNodes, nodeName)
-		}
-	}
-
+	annotatedNodes := p.ValidCandidateNodes(ctx, nodeNames)
 	if len(annotatedNodes) == 0 {
 		return nil
 	}

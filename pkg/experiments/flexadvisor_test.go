@@ -98,3 +98,82 @@ func TestIsFlexAdvisorSendRankEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFlexAdvisorSkipUnneededSpotConfigsEnabled(t *testing.T) {
+	testCases := []struct {
+		name     string
+		manager  Manager
+		expected bool
+	}{
+		{
+			name:     "nil manager defaults to true",
+			manager:  nil,
+			expected: true,
+		},
+		{
+			name:     "flags not configured defaults to true",
+			manager:  NewMockManager(),
+			expected: true,
+		},
+		{
+			name: "disabled via enabled flag killswitch",
+			manager: NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{
+					FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false,
+				},
+				map[string]string{},
+			),
+			expected: false,
+		},
+		{
+			name: "min version not met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 20, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			expected: false,
+		},
+		{
+			name: "min version met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 26, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			expected: true,
+		},
+		{
+			name: "min version met, but disabled via killswitch",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 26, 0, 0},
+				map[string]bool{
+					FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false,
+				},
+				map[string]string{
+					FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			expected: false,
+		},
+		{
+			name:     "mock manager with min version flag enabled",
+			manager:  NewMockManager(FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag),
+			expected: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := IsFlexAdvisorSkipUnneededSpotConfigsEnabled(tc.manager)
+			if result != tc.expected {
+				t.Errorf("expected %v, got %v", tc.expected, result)
+			}
+		})
+	}
+}

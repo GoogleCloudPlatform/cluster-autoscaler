@@ -408,6 +408,7 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 		metadata           Metadata
 		defaultPrivateNode bool
 		isAutopilot        bool
+		isAutopilotManaged bool
 		expectTaints       []apiv1.Taint
 	}{
 		{
@@ -438,11 +439,26 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 			},
 		},
 		{
-			name:               "different from default, autopilot disabled",
+			name:               "different from default, autopilot disabled, standard node pool",
 			metadata:           Metadata{privateNodeFromLabel: "true"},
 			defaultPrivateNode: false,
 			isAutopilot:        false,
+			isAutopilotManaged: false,
 			expectTaints:       nil,
+		},
+		{
+			name:               "different from default, autopilot disabled, autopilot managed",
+			metadata:           Metadata{privateNodeFromLabel: "true"},
+			defaultPrivateNode: false,
+			isAutopilot:        false,
+			isAutopilotManaged: true,
+			expectTaints: []apiv1.Taint{
+				{
+					Key:    gkelabels.PrivateNodeLabel,
+					Value:  "true",
+					Effect: apiv1.TaintEffectNoSchedule,
+				},
+			},
 		},
 		{
 			name:               "different from default, true to false, autopilot enabled",
@@ -458,6 +474,28 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 			},
 		},
 		{
+			name:               "different from default, true to false, autopilot disabled, autopilot managed",
+			metadata:           Metadata{privateNodeFromLabel: "false"},
+			defaultPrivateNode: true,
+			isAutopilot:        false,
+			isAutopilotManaged: true,
+			expectTaints: []apiv1.Taint{
+				{
+					Key:    gkelabels.PrivateNodeLabel,
+					Value:  "false",
+					Effect: apiv1.TaintEffectNoSchedule,
+				},
+			},
+		},
+		{
+			name:               "same as default, autopilot disabled, autopilot managed",
+			metadata:           Metadata{privateNodeFromLabel: "false"},
+			defaultPrivateNode: false,
+			isAutopilot:        false,
+			isAutopilotManaged: true,
+			expectTaints:       nil,
+		},
+		{
 			name:               "from ccc, autopilot enabled",
 			metadata:           Metadata{privateNodeFromCcc: "true"},
 			defaultPrivateNode: false,
@@ -469,6 +507,14 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 			metadata:           Metadata{privateNodeFromCcc: "true"},
 			defaultPrivateNode: false,
 			isAutopilot:        false,
+			expectTaints:       nil,
+		},
+		{
+			name:               "from ccc, autopilot disabled, autopilot managed",
+			metadata:           Metadata{privateNodeFromCcc: "true"},
+			defaultPrivateNode: false,
+			isAutopilot:        false,
+			isAutopilotManaged: true,
 			expectTaints:       nil,
 		},
 		{
@@ -492,7 +538,7 @@ func TestPrivateNodeUpdateMig(t *testing.T) {
 			f := newPrivateNode(cp)
 			mig := &mockGkeMigSetter{}
 
-			f.UpdateMig(mig, tc.metadata)
+			f.UpdateMig(mig, tc.metadata, tc.isAutopilotManaged)
 
 			assert.Equal(t, tc.expectTaints, mig.taints)
 		})

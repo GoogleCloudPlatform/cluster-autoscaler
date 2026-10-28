@@ -26,7 +26,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -53,8 +52,8 @@ const (
 //  2. NodePools priority (Total Stockout): A priority defined by an explicit node pool list where the
 //     node pool's configuration has 0 capacity. Expects "ProvisioningSuspended".
 //  3. Partially filtered priority (Partial Stockout): A priority where only a subset of candidate
-//     instance configurations are filtered out by active cooldowns (e.g., Spot is out of stock, but
-//     Standard/On-Demand remains available). Expects a "ProvisioningConstrained" condition explaining
+//     instance configurations are filtered out by active cooldowns (e.g., one zone is out of stock,
+//     but another zone remains available). Expects a "ProvisioningConstrained" condition explaining
 //     that a subset (1/2) of configurations are excluded.
 //
 // Test Workflow:
@@ -69,12 +68,13 @@ const (
 //     ComputeClass status in the API server matches the expected condition.
 func TestStockOutConditionsEmitted(t *testing.T) {
 	testCases := []struct {
-		name            string
-		cccName         string
-		priority        ccc_api.Priority
-		guidance        fake.CapacityGuidance
-		expectedType    string
-		expectedMessage string
+		name                      string
+		cccName                   string
+		priority                  ccc_api.Priority
+		autoprovisioningLocations []string
+		guidance                  fake.CapacityGuidance
+		expectedType              string
+		expectedMessage           string
 	}{
 		{
 			name:    "MachineType priority",
@@ -82,9 +82,10 @@ func TestStockOutConditionsEmitted(t *testing.T) {
 			priority: ccc_api.Priority{
 				MachineType: ptr.To("n2-standard-4"),
 			},
-			guidance:        fake.NewGuidance("n2-standard-4").WithCapacity(0),
-			expectedType:    "ProvisioningSuspended",
-			expectedMessage: "No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.",
+			autoprovisioningLocations: []string{"us-central1-b"},
+			guidance:                  fake.NewGuidance("n2-standard-4").WithCapacity(0),
+			expectedType:              "ProvisioningSuspended",
+			expectedMessage:           "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
 		},
 		{
 			name:    "NodePools priority",
@@ -92,9 +93,10 @@ func TestStockOutConditionsEmitted(t *testing.T) {
 			priority: ccc_api.Priority{
 				Nodepools: []string{"pool-1"},
 			},
-			guidance:        fake.NewGuidance("n2-standard-4").WithCapacity(0),
-			expectedType:    "ProvisioningSuspended",
-			expectedMessage: "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
+			autoprovisioningLocations: []string{"us-central1-b"},
+			guidance:                  fake.NewGuidance("n2-standard-4").WithCapacity(0),
+			expectedType:              "ProvisioningSuspended",
+			expectedMessage:           "No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.",
 		},
 		{
 			name:    "Partially filtered priority",
@@ -102,14 +104,10 @@ func TestStockOutConditionsEmitted(t *testing.T) {
 			priority: ccc_api.Priority{
 				MachineType: ptr.To("n2-standard-4"),
 			},
-			guidance: fake.CapacityGuidance{
-				MachineType:        ptr.To("n2-standard-4"),
-				ProvisioningMode:   ptr.To(instanceavailability.Spot),
-				InstanceCount:      0,
-				GcePreferenceScore: 0.5,
-			},
-			expectedType:    "ProvisioningConstrained",
-			expectedMessage: "A subset (1/2) of configurations are excluded due to active capacity cooldowns across requested zones.",
+			autoprovisioningLocations: []string{"us-central1-b", "us-central1-c"},
+			guidance:                  fake.NewGuidance("n2-standard-4").WithZone("us-central1-b").WithCapacity(0),
+			expectedType:              "ProvisioningConstrained",
+			expectedMessage:           "A subset (1/2) of configurations are excluded due to active capacity cooldowns across requested zones.",
 		},
 	}
 
@@ -133,7 +131,7 @@ func TestStockOutConditionsEmitted(t *testing.T) {
 				WithClusterOverrides(
 					// AutoprovisioningLocations are required so that rules specifying MachineType without
 					// explicit node pools can discover available zones from the cluster configuration.
-					integration.WithAutoprovisioningLocations("us-central1-b"),
+					integration.WithAutoprovisioningLocations(tc.autoprovisioningLocations...),
 					integration.WithClusterAutoProvisioningEnabled(),
 				).
 				WithOverrides(
@@ -286,7 +284,7 @@ func TestStockOutConditionsClearedWhenHealthy(t *testing.T) {
 					WithConditions(
 						ccc.NewConditionBuilder("ProvisioningSuspended").
 							WithReason("CapacityConstrained").
-							WithMessage("No matching configuration is available (0/2 available) due to active capacity cooldowns across requested zones.").
+							WithMessage("No matching configuration is available (0/1 available) due to active capacity cooldowns across requested zones.").
 							Build(),
 					).
 					Build(),

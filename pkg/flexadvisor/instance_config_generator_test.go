@@ -357,11 +357,8 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 		"machine type rules": {
 			flexibilityScopeKey: "crd1",
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("e2-standard-4", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("e2-standard-4", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("e4a-standard-8", "", 0, 2, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("e4a-standard-8", "", 0, 2, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("g2-standard-12", "nvidia-l4", 1, 3, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("g2-standard-12", "nvidia-l4", 1, 3, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 			wantErrs: []error{},
@@ -384,7 +381,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 		"1st rule: specifies an invalid machine type, 2nd rule: specifies a valid machine type": {
 			flexibilityScopeKey: "crd3",
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("g2-standard-12", "nvidia-l4", 1, 2, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("g2-standard-12", "nvidia-l4", 1, 2, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 			wantErrs: []error{fmt.Errorf("error when generating instance configs: machine type not found for machine-type-unknown")},
@@ -392,9 +388,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 		"DWS - FlexAdvisorDWS disabled - non-DWS MRD rules - generates configs without MRD": {
 			flexibilityScopeKey: "ccc-mrd-1",
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 			wantErrs: []error{},
@@ -408,9 +401,7 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			flexibilityScopeKey: "ccc-mrd-1",
 			enabledFeatures:     []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Spot, "", set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Standard, "", set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Spot, "3600", set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("e2-standard-2", "", 0, 1, instanceavailability.Standard, "3600", set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 			wantErrs: []error{},
@@ -439,7 +430,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			flexibilityScopeKey: "ccc-tpu-2",
 			enabledFeatures:     []string{experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 			}),
 		},
@@ -447,7 +437,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			flexibilityScopeKey: "ccc-tpu-2",
 			enabledFeatures:     []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 6, instanceavailability.FlexStart, "604800", set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 			}),
@@ -485,17 +474,12 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			}, "", false, crd.TestDefaultDataProvider(), nil),
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("ct5lp-hightpu-1t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("ct5lp-hightpu-1t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("ct5lp-hightpu-4t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("ct5lp-hightpu-4t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
-				api.NewInstanceConfigWithZones("ct5lp-hightpu-8t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("ct5lp-hightpu-8t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 
-				api.NewInstanceConfigWithZones("ct5lp-hightpu-4t", "", 0, 2, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("ct5lp-hightpu-4t", "", 0, 2, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 
-				api.NewInstanceConfigWithZones("ct5lp-hightpu-8t", "", 0, 3, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("ct5lp-hightpu-8t", "", 0, 3, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 			}),
 		},
@@ -518,7 +502,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			}, "", false, crd.TestDefaultDataProvider(), nil),
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("ct4l-hightpu-4t", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 			}),
 		},
@@ -542,7 +525,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			}, "", false, crd.TestDefaultDataProvider(), nil),
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 3, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 3, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c"), api.WithWorkloadPolicies(api.WorkloadPolicies{AcceleratorTopology: "2x2x2"})),
 			}),
 		},
@@ -562,7 +544,6 @@ func TestGenerateInstanceConfigs(t *testing.T) {
 			}, "", false, crd.TestDefaultDataProvider(), nil),
 			enabledFeatures: []string{experiments.FlexAdvisorDWSEnabledFlag, experiments.FlexAdvisorDWSMinCAVersionFlag, experiments.FlexAdvisorTPUEnabledFlag, experiments.FlexAdvisorTPUMinCAVersionFlag},
 			wantInstanceConfigs: testInstanceConfigMap([]*api.InstanceConfig{
-				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 3, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 				api.NewInstanceConfigWithZones("tpu7x-standard-1t", "", 0, 3, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New[string]("us-west1-a", "us-west1-b", "us-west1-c")),
 			}),
 		},
@@ -871,8 +852,17 @@ func TestExpandConfigsByProvisioningMode(t *testing.T) {
 				api.NewInstanceConfig("n2-standard-4", "", 0, 2, instanceavailability.Standard, api.EmptyMaxRunDuration),
 			},
 			wantInstanceConfigs: []*api.InstanceConfig{
+				api.NewInstanceConfig("n2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration),
+				api.NewInstanceConfig("n2-standard-4", "", 0, 2, instanceavailability.Standard, api.EmptyMaxRunDuration),
+			},
+		},
+		"rule specifies spot false": {
+			rule: rules.NewRule(rules.WithSpotRule(ptr.To(false))),
+			instanceConfigs: []*api.InstanceConfig{
 				api.NewInstanceConfig("n2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration),
 				api.NewInstanceConfig("n2-standard-4", "", 0, 2, instanceavailability.Spot, api.EmptyMaxRunDuration),
+			},
+			wantInstanceConfigs: []*api.InstanceConfig{
 				api.NewInstanceConfig("n2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration),
 				api.NewInstanceConfig("n2-standard-4", "", 0, 2, instanceavailability.Standard, api.EmptyMaxRunDuration),
 			},
@@ -2024,11 +2014,11 @@ func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
 
 				baseline := 0
 				g.generateInstanceConfigs("crd1")
+				assert.Equal(t, baseline+1, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd1")
 				assert.Equal(t, baseline+2, provider.getMachineTypeCallsQty)
 				g.generateInstanceConfigs("crd1")
-				assert.Equal(t, baseline+4, provider.getMachineTypeCallsQty)
-				g.generateInstanceConfigs("crd1")
-				assert.Equal(t, baseline+6, provider.getMachineTypeCallsQty)
+				assert.Equal(t, baseline+3, provider.getMachineTypeCallsQty)
 			},
 		},
 		"GCE returns errors - doesnt call GCE if cached": {
@@ -2059,12 +2049,12 @@ func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
 				// after GCE stops returning error, cache is not used
 				baseline := 3
 				g.generateInstanceConfigs("crd2")
-				// for each machineType SPOT and STANDARD are generated
+				// for each machineType only STANDARD is generated when spot is omitted
+				assert.Equal(t, baseline+1, provider.getMachineTypeCallsQty)
+				g.generateInstanceConfigs("crd2")
 				assert.Equal(t, baseline+2, provider.getMachineTypeCallsQty)
 				g.generateInstanceConfigs("crd2")
-				assert.Equal(t, baseline+4, provider.getMachineTypeCallsQty)
-				g.generateInstanceConfigs("crd2")
-				assert.Equal(t, baseline+6, provider.getMachineTypeCallsQty)
+				assert.Equal(t, baseline+3, provider.getMachineTypeCallsQty)
 			},
 		},
 		"FlexAdvisorMachineErrorCache disabled - doesnt use cache": {
@@ -2075,8 +2065,8 @@ func TestInstanceConfigGenerator_MachineErrorCache(t *testing.T) {
 				for i := 0; i < 100; i++ {
 					g.generateInstanceConfigs("crd1")
 
-					// for each machine type SPOT and STANDARD are generated
-					assert.Equal(t, (i+1)*2, provider.getMachineTypeCallsQty)
+					// for each machine type only STANDARD is generated when spot is omitted
+					assert.Equal(t, i+1, provider.getMachineTypeCallsQty)
 					time.Sleep(1 * time.Minute)
 				}
 			},
@@ -2201,13 +2191,18 @@ func TestNewPredefinedComputeClassCrd(t *testing.T) {
 			assert.Equal(t, tc.wantName, crd.Name())
 			assert.False(t, crd.AutopilotManaged())
 
-			var families []string
+			var nonSpotFamilies, spotFamilies []string
 			for _, rule := range crd.Rules() {
 				if rule.MachineFamily() != "" {
-					families = append(families, rule.MachineFamily())
+					if rule.Spot() {
+						spotFamilies = append(spotFamilies, rule.MachineFamily())
+					} else {
+						nonSpotFamilies = append(nonSpotFamilies, rule.MachineFamily())
+					}
 				}
 			}
-			assert.ElementsMatch(t, tc.wantFamilies, families)
+			assert.ElementsMatch(t, tc.wantFamilies, nonSpotFamilies)
+			assert.ElementsMatch(t, tc.wantFamilies, spotFamilies)
 		})
 	}
 }
@@ -2334,6 +2329,9 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			assert.Empty(t, genErrs)
 			assert.NotNil(t, artifacts)
 			assert.NotEmpty(t, artifacts.Configs)
+			// Synthetic podFamily and PCC CRDs include priorities for both provisioning modes, so both
+			// Standard and Spot instance configs must be generated.
+			assert.ElementsMatch(t, []instanceavailability.ProvisioningMode{instanceavailability.Standard, instanceavailability.Spot}, provisioningModesOf(artifacts.Configs))
 			if tc.wantPodFamily != "" {
 				prioritizedFamilies := computeclass.PrioritizedFamiliesForRule(matchedCrd.Rules()[0], provider)
 				wantRanks := make(map[string]familyRankExpectation, len(prioritizedFamilies))
@@ -2357,6 +2355,15 @@ type familyRankExpectation struct {
 	rank    int
 	subRank int
 	zones   set.Set[string]
+}
+
+// provisioningModesOf returns the distinct provisioning modes of the given instance configs.
+func provisioningModesOf(configs map[string]*api.InstanceConfig) []instanceavailability.ProvisioningMode {
+	modes := set.New[instanceavailability.ProvisioningMode]()
+	for _, cfg := range configs {
+		modes.Insert(cfg.ProvisioningMode())
+	}
+	return modes.UnsortedList()
 }
 
 func assertConfigFamilyRanks(t *testing.T, provider instanceConfigCloudProvider, configs map[string]*api.InstanceConfig, want map[string]familyRankExpectation) {
@@ -2629,6 +2636,96 @@ func TestMergeNewInstanceConfigs(t *testing.T) {
 				assert.Equal(t, tc.wantRank, got.Rank())
 				assert.Equal(t, tc.wantSubRank, got.SubRank())
 				assert.Equal(t, set.New("us-west1-a", "us-west1-b"), got.Zones())
+			}
+		})
+	}
+}
+
+func TestSkipUnneededSpotConfigs_Experiment(t *testing.T) {
+	onDemandCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "ondemand-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{MachineType: ptr.To("e2-standard-2")},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{MachineType: ptr.To("e2-standard-2"), Spot: ptr.To(true)},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	standardCfg := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+	standardCfg.InsertZone("us-west1-a")
+	spotCfg := api.NewInstanceConfig("e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration)
+	spotCfg.InsertZone("us-west1-a")
+
+	for _, tc := range []struct {
+		name        string
+		scope       string
+		manager     experiments.Manager
+		wantConfigs map[string]*api.InstanceConfig
+	}{
+		{
+			name:    "experiment enabled by default - omits Spot when spot is not set",
+			scope:   "ondemand-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature(): standardCfg,
+			},
+		},
+		{
+			name:  "experiment disabled via Enabled flag - generates both Standard and Spot when spot is not set",
+			scope: "ondemand-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false},
+				nil,
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature(): standardCfg,
+				spotCfg.Signature():     spotCfg,
+			},
+		},
+		{
+			name:  "experiment disabled via MinCAVersion flag - generates both Standard and Spot when spot is not set",
+			scope: "ondemand-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 35, 0, 0},
+				nil,
+				map[string]string{experiments.FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag: "1.37.0-gke.100"},
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature(): standardCfg,
+				spotCfg.Signature():     spotCfg,
+			},
+		},
+		{
+			name:  "experiment disabled - still generates only Spot when spot is true",
+			scope: "spot-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false},
+				nil,
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotCfg.Signature(): spotCfg,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+			tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, tc.manager)
+			g := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{onDemandCrd, spotCrd}), provider, tracker)
+			generated, errs := g.generateInstanceConfigs(tc.scope)
+			assert.Empty(t, errs)
+			if assert.NotNil(t, generated) {
+				assert.Equal(t, tc.wantConfigs, generated.Configs)
 			}
 		})
 	}
