@@ -31,6 +31,7 @@ import (
 	cacontext "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/pdb"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
+	ossmetrics "sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
@@ -199,6 +200,9 @@ func NewProcessor(opts Options) *Processor {
 
 // Process returns pods that defrag would like to consider for scale-up
 func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	startTime := time.Now()
+	defer ossmetrics.UpdateDurationFromStart(ctx, DefragProcessorName, startTime)
+
 	p.ctx = autoscalingCtx
 	p.pickedCandidateInfo = nil
 	p.blockReasons = nil
