@@ -31,6 +31,7 @@ includedPermissions:
 - compute.regions.get
 - compute.regions.list
 - compute.reservations.list
+- compute.resourcePolicies.list
 - compute.zoneOperations.get
 - compute.zones.get
 - compute.zones.list
