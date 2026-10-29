@@ -1656,7 +1656,8 @@ func TestToMachineFamilyObject_MachineTypes(t *testing.T) {
 						return mt
 					}(),
 				},
-				supportedCpuPlatforms: noPlatformSupported,
+				supportedCpuPlatforms:       noPlatformSupported,
+				supportNestedVirtualization: true,
 			},
 		},
 		{
