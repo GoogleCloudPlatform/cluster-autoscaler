@@ -16,6 +16,7 @@ package processors
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -35,10 +36,13 @@ import (
 	gkeclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 )
 
@@ -576,4 +580,131 @@ func TestMinCapacityPodListProcessor_NodeIsBlockedFromScaleDown(t *testing.T) {
 		n := buildNodeWithLabel("n4", "")
 		assert.False(t, p.nodeIsBlockedFromScaleDown(n))
 	})
+}
+
+// newEnforcers returns the enforcer to pass to the processor under test, the
+// one of the next processor sharing the turns with it, and the function that
+// starts a fairness loop. The processor's enforcer is created first, so the
+// turn starts with it.
+func newEnforcers(maxLoopsBeforeAdmission int) (processor, next fairness.FairnessEnforcer, startLoop func()) {
+	manager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission, nil)
+	return manager.CreateEnforcer("min-capacity"), manager.CreateEnforcer("next"), manager.StartLoop
+}
+
+func TestMinCapacityPodListProcessor_Fairness(t *testing.T) {
+	pendingPods := []*apiv1.Pod{test.BuildTestPod("pending", 100, 100)}
+	testCases := []struct {
+		name                    string
+		existingNodes           []*apiv1.Node
+		maxLoopsBeforeAdmission int
+		wantInjectedPods        int
+		wantNextAdmitted        bool
+	}{
+		{
+			name:             "no shortfall passes the turn to the next processor",
+			existingNodes:    []*apiv1.Node{buildNodeWithLabel("n1", "my-ccc"), buildNodeWithLabel("n2", "my-ccc")},
+			wantInjectedPods: 0,
+			wantNextAdmitted: true,
+		},
+		{
+			name:             "shortfall admitted injects the pods and uses the loop",
+			existingNodes:    []*apiv1.Node{buildNodeWithLabel("n1", "my-ccc")},
+			wantInjectedPods: 1,
+			wantNextAdmitted: false,
+		},
+		{
+			name:                    "shortfall throttled injects nothing and keeps the turn",
+			existingNodes:           []*apiv1.Node{buildNodeWithLabel("n1", "my-ccc")},
+			maxLoopsBeforeAdmission: 2,
+			wantInjectedPods:        0,
+			wantNextAdmitted:        false,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			crds := []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(2)),
+				),
+			}
+			ccLister := lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel)
+			enforcer, next, startLoop := newEnforcers(tc.maxLoopsBeforeAdmission)
+			processor := NewMinCapacityPodListProcessor(ccLister, enforcer, nil, nil)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			for _, n := range tc.existingNodes {
+				if err := snapshot.AddNodeInfo(framework.NewNodeInfo(n, nil)); err != nil {
+					t.Fatalf("AddNodeInfo(%s) failed: %v", n.Name, err)
+				}
+			}
+			ctx := &ca_context.AutoscalingContext{ClusterSnapshot: snapshot, CloudProvider: &minCapacityMockCloudProvider{}}
+			startLoop()
+
+			pods, err := processor.Process(ctx, pendingPods)
+
+			assert.NoError(t, err)
+			assert.Len(t, pods, len(pendingPods)+tc.wantInjectedPods)
+			assert.Equal(t, tc.wantNextAdmitted, next.Admit(nil, true), "next processor admitted")
+		})
+	}
+}
+
+// failingCRDLister fails to list the ComputeClasses.
+type failingCRDLister struct {
+	*lister.MockCrdLister
+}
+
+func (failingCRDLister) ListCrds() ([]crd.CRD, error) {
+	return nil, errors.New("ComputeClass lister unavailable")
+}
+
+// TestMinCapacityPodListProcessor_PassesTurnWhenItCannotRun checks that the
+// processor passes the fairness turn when it cannot compute fake pods: holding
+// the turn would starve the other processors sharing the enforcer.
+func TestMinCapacityPodListProcessor_PassesTurnWhenItCannotRun(t *testing.T) {
+	crds := []crd.CRD{
+		crd.NewTestCrd(
+			crd.WithName("my-ccc"),
+			crd.WithLabel(labels.ComputeClassLabel),
+			crd.WithTargetNodeCount(intPtr(2)),
+		),
+	}
+	testCases := []struct {
+		name               string
+		ccLister           lister.Lister
+		experimentsManager experiments.Manager
+	}{
+		{
+			name:     "minimum capacity disabled",
+			ccLister: lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel),
+			experimentsManager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassMinCapacityEnabledFlag: false},
+				map[string]string{},
+			),
+		},
+		{
+			name:     "no ComputeClasses",
+			ccLister: lister.NewMockCrdListerWithLabel(nil, labels.ComputeClassLabel),
+		},
+		{
+			name:     "listing ComputeClasses fails",
+			ccLister: failingCRDLister{lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel)},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			enforcer, next, startLoop := newEnforcers(0)
+			processor := NewMinCapacityPodListProcessor(tc.ccLister, enforcer, tc.experimentsManager, nil)
+			ctx := &ca_context.AutoscalingContext{ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t), CloudProvider: &minCapacityMockCloudProvider{}}
+			startLoop()
+
+			pods, err := processor.Process(ctx, nil)
+
+			assert.NoError(t, err)
+			assert.Empty(t, pods)
+			assert.True(t, next.Admit(nil, true), "next processor admitted")
+		})
+	}
 }

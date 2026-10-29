@@ -94,7 +94,7 @@ func TestAdmit(t *testing.T) {
 			fe := newEnforcerWithClock("defrag", 5*time.Minute, clock, fakeUnhelpableTracker{})
 			for i, want := range tc.want {
 				clock.SetTime(clock.Now().Add(tc.timeStep))
-				got := fe.Admit(tc.unschedulable)
+				got := fe.Admit(tc.unschedulable, true)
 				klog.Infof("[%v] i = %d, got = %v", tc.name, i, got)
 				assert.Equal(t, want, got)
 			}
@@ -104,8 +104,30 @@ func TestAdmit(t *testing.T) {
 	t.Run("nil unhelpableTracker treats pods as helpable", func(t *testing.T) {
 		t.Parallel()
 		fe := NewFairnessEnforcer("defrag", 5*time.Minute, nil)
-		assert.False(t, fe.Admit([]*apiv1.Pod{unhelpablePod("p1")}))
+		assert.False(t, fe.Admit([]*apiv1.Pod{unhelpablePod("p1")}, true))
 	})
+}
+
+// TestAdmitWithoutWorkKeepsState checks that Admit(pods, false) leaves the
+// standalone enforcer's state unchanged. An unhelpable pending pod is admitted
+// unless the enforcer admitted in the previous loop, so the next Admit returns
+// true if Admit(pods, false) resets that state.
+func TestAdmitWithoutWorkKeepsState(t *testing.T) {
+	t.Parallel()
+	e := NewFairnessEnforcer("p1", 0, fakeUnhelpableTracker{})
+	if !e.Admit(nil, true) {
+		t.Fatal("Admit(nil, true) = false, want true")
+	}
+
+	gotWithoutWork := e.Admit(nil, false)
+	gotNext := e.Admit([]*apiv1.Pod{unhelpablePod("p1")}, true)
+
+	if gotWithoutWork {
+		t.Error("Admit(nil, false) = true, want false")
+	}
+	if gotNext {
+		t.Error("Admit(unhelpable pod, true) after Admit(nil, false) = true, want false")
+	}
 }
 
 func unhelpablePod(name string) *apiv1.Pod {

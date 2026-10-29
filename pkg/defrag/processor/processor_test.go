@@ -3524,14 +3524,16 @@ func TestCleanPickedCandidate(t *testing.T) {
 			maxLoopsBeforeAdmission := 5
 			sharedFairnessManager := fairness.NewSharedEnforcerManager(maxLoopsBeforeAdmission, nil)
 			processor.fairnessEnforcer = sharedFairnessManager.CreateEnforcer(DefragProcessorName)
-			processor.fairnessEnforcer.Admit(nil) // sets previously admitted.
+			sharedFairnessManager.StartLoop()
+			processor.fairnessEnforcer.Admit(nil, true) // sets previously admitted.
 
 			// Use empty/non-empty unschedulablePods to force admission
 			var unschedulablePods []*apiv1.Pod
 			if !tc.admit {
 				unschedulablePods = append(unschedulablePods, &apiv1.Pod{})
 			}
-			assert.Equal(t, tc.admit, processor.fairnessEnforcer.Admit(unschedulablePods))
+			sharedFairnessManager.StartLoop()
+			assert.Equal(t, tc.admit, processor.fairnessEnforcer.Admit(unschedulablePods, true))
 
 			ctx := &cacontext.AutoscalingContext{
 				ClusterSnapshot:     testsnapshot.NewTestSnapshotOrDie(t),
@@ -3539,6 +3541,7 @@ func TestCleanPickedCandidate(t *testing.T) {
 				CloudProvider:       provider,
 			}
 
+			sharedFairnessManager.StartLoop()
 			pods, err := processor.Process(context.TODO(), ctx, unschedulablePods)
 			assert.Equal(t, pods, unschedulablePods)
 			assert.NoError(t, err)
@@ -3579,7 +3582,7 @@ type fakeFairnessEnforcer struct {
 	admit bool
 }
 
-func (f fakeFairnessEnforcer) Admit(unschedulablePods []*apiv1.Pod) bool {
+func (f fakeFairnessEnforcer) Admit(unschedulablePods []*apiv1.Pod, wantsToRun bool) bool {
 	return f.admit
 }
 

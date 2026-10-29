@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// IMPORTANT: All registered processors are expected to call the `Admit` method of their
-// respective `sharedEnforcer` instance in every iteration of the fairness loop. Failure
-// to do so (e.g., by conditionally skipping the call) can lead to starvation for other
-// processors, as the round-robin turn will not advance.
+// IMPORTANT: The owner of the shared enforcer manager calls `StartLoop` once at the
+// start of every fairness loop, before any processor runs. Every registered processor
+// then calls the `Admit` method of its `sharedEnforcer` instance exactly once per loop,
+// passing wantsToRun=false when it has nothing to do. Failure to do so (e.g., by
+// conditionally skipping the call) can lead to starvation for other processors, as the
+// round-robin turn will not advance.
 package fairness
 
 import (
@@ -66,6 +68,14 @@ func (m *sharedEnforcerManager) CreateEnforcer(processorName string) FairnessEnf
 	return enforcer
 }
 
+// StartLoop starts a new fairness loop. Call it once per loop, before any
+// processor calls Admit, so that every processor sees the same loop
+// regardless of the order the processors run in.
+func (m *sharedEnforcerManager) StartLoop() {
+	m.admittedInThisLoop = false
+	m.currentLoop++
+}
+
 // sharedEnforcer is a lightweight wrapper around sharedEnforcerManager that implements
 // the FairnessEnforcer interface. This indirection allows individual processors to use
 // the standard FairnessEnforcer API without needing to know about the manager or pass
@@ -76,15 +86,8 @@ type sharedEnforcer struct {
 	index         int
 }
 
-func (e *sharedEnforcer) Admit(unschedulablePods []*apiv1.Pod) bool {
+func (e *sharedEnforcer) Admit(unschedulablePods []*apiv1.Pod, wantsToRun bool) bool {
 	m := e.manager
-
-	// Reset loop state when the first registered processor is called.
-	// We assume processors are called in the order they were created (by index).
-	if e.index == 0 {
-		m.admittedInThisLoop = false
-		m.currentLoop++
-	}
 
 	// Another processor was already admitted in this loop.
 	if m.admittedInThisLoop {
@@ -96,16 +99,29 @@ func (e *sharedEnforcer) Admit(unschedulablePods []*apiv1.Pod) bool {
 		return false
 	}
 
+	// A processor with nothing to do passes its turn, so that the next
+	// processor can be admitted in this loop.
+	if !wantsToRun {
+		m.passTurn()
+		klog.V(4).Infof("Shared Fairness Enforcer: %s processor passed its turn", e.processorName)
+		return false
+	}
+
 	// Run fairness logic.
 	admitted := m.admitInternal(unschedulablePods)
 
 	if admitted {
 		m.lastAdmittedLoop = m.currentLoop
 		m.admittedInThisLoop = true
-		m.currentTurn = (m.currentTurn + 1) % len(m.processors)
+		m.passTurn()
 		klog.Infof("Shared Fairness Enforcer: Admitting %s processor to run", e.processorName)
 	}
 	return admitted
+}
+
+// passTurn gives the turn to the next registered processor.
+func (m *sharedEnforcerManager) passTurn() {
+	m.currentTurn = (m.currentTurn + 1) % len(m.processors)
 }
 
 func (m *sharedEnforcerManager) admitInternal(unschedulablePods []*apiv1.Pod) bool {

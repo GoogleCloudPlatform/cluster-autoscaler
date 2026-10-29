@@ -214,7 +214,7 @@ func (m *mockCSNBufferConsumptionProcessor) CleanUp() {
 }
 
 func TestNewGkeInternalPodListProcessorNil(t *testing.T) {
-	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	processor := NewGkeInternalPodListProcessor(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	if processor.defragProcessor != nil {
 		t.Errorf("Expected defragProcessor to be strictly nil")
 	}
@@ -333,6 +333,48 @@ func TestGkeInternalPodListProcessorCleanUp(t *testing.T) {
 	}
 	if !csnMock.cleanedUp {
 		t.Errorf("Expected csnBufferConsumptionProcessor.CleanUp to be called")
+	}
+}
+
+// fakeFairnessLoop counts the fairness loops started.
+type fakeFairnessLoop struct {
+	started int
+}
+
+func (f *fakeFairnessLoop) StartLoop() {
+	f.started++
+}
+
+// loopRecordingDefragProcessor records how many fairness loops were started
+// when defrag ran.
+type loopRecordingDefragProcessor struct {
+	mockDefragProcessor
+	loop           *fakeFairnessLoop
+	loopsAtProcess int
+}
+
+func (p *loopRecordingDefragProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+	p.loopsAtProcess = p.loop.started
+	return p.mockDefragProcessor.Process(ctx, autoscalingCtx, unschedulablePods)
+}
+
+func TestGkeInternalPodListProcessorStartsFairnessLoopBeforeDefrag(t *testing.T) {
+	loop := &fakeFairnessLoop{}
+	defrag := &loopRecordingDefragProcessor{loop: loop}
+	processor := &GkeInternalPodListProcessor{
+		defaultPodListerProcessor: &mockDefaultPodListProcessor{},
+		defragProcessor:           defrag,
+		fairnessLoop:              loop,
+		podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+		experimentsManager:        experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{}),
+	}
+
+	if _, err := processor.Process(t.Context(), &ca_context.AutoscalingContext{}, nil); err != nil {
+		t.Fatalf("Process() failed: %v", err)
+	}
+
+	if defrag.loopsAtProcess != 1 {
+		t.Errorf("Process() started %d fairness loops before running defrag, want 1", defrag.loopsAtProcess)
 	}
 }
 

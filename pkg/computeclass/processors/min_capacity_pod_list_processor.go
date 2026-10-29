@@ -72,28 +72,39 @@ func (p *MinCapacityPodListProcessor) Process(
 	autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
-	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
+	fakePods := p.computeFakePods(autoscalingCtx)
+	// Without fake pods there is nothing to scale up: pass the fairness turn
+	// instead of consuming it.
+	if p.fairnessEnforcer != nil && !p.fairnessEnforcer.Admit(unschedulablePods, len(fakePods) > 0) {
 		return unschedulablePods, nil
 	}
+	return append(unschedulablePods, fakePods...), nil
+}
 
-	canBeAdmitted := true
-	if p.fairnessEnforcer != nil {
-		canBeAdmitted = p.fairnessEnforcer.Admit(unschedulablePods)
+// computeFakePods returns the fake pods needed to meet the minimum capacity of
+// the ComputeClasses.
+//
+// It returns nil when the processor has nothing to do in this loop: minimum
+// capacity is disabled, there are no ComputeClasses, listing fails, or every
+// ComputeClass already has its minimum capacity.
+func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context.AutoscalingContext) []*apiv1.Pod {
+	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
+		return nil
 	}
 
 	crds, err := p.ccLister.ListCrds()
 	if err != nil {
 		klog.Errorf("Failed to list CRDs for MinCapacity processor: %v", err)
-		return unschedulablePods, nil
+		return nil
 	}
 	if len(crds) == 0 {
-		return unschedulablePods, nil
+		return nil
 	}
 
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		klog.Errorf("Failed to list nodes for MinCapacity processor: %v", err)
-		return unschedulablePods, nil
+		return nil
 	}
 
 	existingByCCAndRule := p.countExistingNodes(autoscalingCtx, nodeInfos, crds)
@@ -165,11 +176,7 @@ func (p *MinCapacityPodListProcessor) Process(
 		finalFakePods = append(finalFakePods, priorityFakePods...)
 	}
 
-	if len(finalFakePods) > 0 && canBeAdmitted {
-		unschedulablePods = append(unschedulablePods, finalFakePods...)
-	}
-
-	return unschedulablePods, nil
+	return finalFakePods
 }
 
 // buildPriorityFakePods returns the list of fake pods needed to satisfy the priority rules of the ComputeClass.

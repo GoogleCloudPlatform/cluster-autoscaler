@@ -23,7 +23,12 @@ import (
 )
 
 type FairnessEnforcer interface {
-	Admit(unschedulablePods []*apiv1.Pod) bool
+	// Admit reports whether the processor may run in this loop. Each
+	// processor calls it exactly once per loop. wantsToRun tells whether the
+	// processor has work to do: a processor that has nothing to do passes
+	// false and is not admitted, and its turn goes to the next processor
+	// instead of being wasted.
+	Admit(unschedulablePods []*apiv1.Pod, wantsToRun bool) bool
 }
 
 // unhelpablePodTracker reports whether a pod is currently considered unhelpable by CA.
@@ -55,7 +60,14 @@ func newEnforcerWithClock(processorName string, maxDelay time.Duration, c clock.
 	}
 }
 
-func (f *enforcer) Admit(unschedulablePods []*apiv1.Pod) bool {
+// Admit reports whether the processor may run in this loop. When wantsToRun
+// is false, Admit returns false and leaves the enforcer's state unchanged, as
+// if it had not been called: a standalone enforcer has no other processor to
+// pass the turn to.
+func (f *enforcer) Admit(unschedulablePods []*apiv1.Pod, wantsToRun bool) bool {
+	if !wantsToRun {
+		return false
+	}
 	admitted := f.admitInternal(unschedulablePods)
 	if admitted {
 		f.lastAdmitted = f.clock.Now()

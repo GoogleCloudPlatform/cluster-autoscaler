@@ -780,7 +780,7 @@ func (b *Builder) setUpProcessors(
 	storageNodeAffinityProcessor := internal_processors.NewStorageNodeAffinityPodListProcessor(pvcLister, scLister, pvLister)
 
 	autoscalingProcessors.PodListProcessor =
-		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconciliationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, cccPodFilter, storageNodeAffinityProcessor, experimentsManager)
+		internal_processors.NewGkeInternalPodListProcessor(crPodListProcessor, prPodListProcessor, ekvmsProcessor, podStatusAggregator, podShardingProcessor, clusterScaleToZeroProcessor, *defragProcessor, podInjectionProcessor, provreqProcessor, enforceFakePodsLimitProcessor, lookaheadPodsInjectionProcessor, psObserver, podTopologySpreadProcessor, flexAdvisorPodListProcessor, cbPodInjectionProcessor, csnNodeReconciliationProcessor, csnBufferConsumptionProcessor, csnCSNPodsLifecycleProcessor, capacityBufferMetricsProcessor, cbFakePodStateObserver, cccMinCapacityProcessor, cccPodFilter, storageNodeAffinityProcessor, sharedFairnessManager, experimentsManager)
 
 	autoscalingProcessors.ScaleStateNotifier.Register(metrics_processors.NewMetricsFilterScaleUpProcessor(metricsFilter))
 
