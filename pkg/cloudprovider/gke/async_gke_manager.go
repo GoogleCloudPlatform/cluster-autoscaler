@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -222,7 +223,7 @@ func (m *asyncGkeManager) trySchedulingNodePoolCleanUps() {
 	}
 	for len(m.bufferedCleanUps) > 0 {
 		nodePool := m.bufferedCleanUps[0]
-		m.bufferedCleanUps = m.bufferedCleanUps[1:]
+		m.bufferedCleanUps = slices.Delete(m.bufferedCleanUps, 0, 1)
 		terminating := m.terminatingNodePools[nodePool]
 		if terminating == nil {
 			klog.Warningf("Could not find terminating node pool %s for a buffered clean-up. Skipping...", nodePool)
