@@ -67,14 +67,8 @@ func (p *plugin) String() string {
 }
 
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
-	// Checks if resizing is enabled
-	if p.resizableVmManager == nil {
-		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
-		return nil
-	}
-	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(false, operationtracker.ResizableOnly)
-	if len(resizableNodesSnapshot) == 0 {
-		klog.V(4).Infof("Defrag %s: No resizable nodes found", PluginName)
+	resizableNodesSnapshot := p.prepareResizableNodesSnapshot()
+	if resizableNodesSnapshot == nil {
 		return nil
 	}
 
@@ -103,18 +97,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 		potentialCandidates = append(potentialCandidates, nodeName)
 	}
 
-	if len(potentialCandidates) == 0 {
-		return nil
-	}
-
-	// Collect maxsizes of all resizable nodes
-	maxSizes := map[string]size.Allocatable{}
-	for nodeName, resizableNode := range resizableNodesSnapshot {
-		maxSizes[nodeName] = size.Max(resizableNode.DesiredSize, resizableNode.UpsizableMaxSize)
-	}
-
-	if err := processor.AdjustBalloonPodsSize(clusterSnapshot, maxSizes, nil); err != nil {
-		klog.Errorf("Defrag %s: failed to adjust balloon pods size: %v", PluginName, err)
+	if len(potentialCandidates) == 0 || !adjustBalloonPodsSize(clusterSnapshot, resizableNodesSnapshot) {
 		return nil
 	}
 
@@ -138,20 +121,9 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
-	if p.resizableVmManager == nil {
-		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
+	resizableNodesSnapshot := p.prepareResizableNodesSnapshot()
+	if resizableNodesSnapshot == nil {
 		return nil
-	}
-	// Collect maxsizes of all resizable nodes
-	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(false, operationtracker.ResizableOnly)
-	if len(resizableNodesSnapshot) == 0 {
-		klog.V(4).Infof("Defrag %s: No resizable nodes found", PluginName)
-		return nil
-	}
-
-	maxSizes := map[string]size.Allocatable{}
-	for nodeName, resizableNode := range resizableNodesSnapshot {
-		maxSizes[nodeName] = size.Max(resizableNode.DesiredSize, resizableNode.UpsizableMaxSize)
 	}
 
 	// Create cluster snapshot
@@ -159,8 +131,7 @@ func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNam
 	clusterSnapshot.Fork()
 	defer clusterSnapshot.Revert()
 
-	if err := processor.AdjustBalloonPodsSize(clusterSnapshot, maxSizes, nil); err != nil {
-		klog.Errorf("Defrag %s: failed to adjust balloon pods size: %v", PluginName, err)
+	if !adjustBalloonPodsSize(clusterSnapshot, resizableNodesSnapshot) {
 		return nil
 	}
 
@@ -190,6 +161,10 @@ func (p *plugin) BackoffDuration(*ca_context.AutoscalingContext, *defrag.Candida
 
 func (p *plugin) Type() defrag.PluginType {
 	return defrag.ResizesOnlyPluginType
+}
+
+func (p *plugin) LatestUnfitNodesCount() int {
+	return p.latestUnfitNodesCount
 }
 
 func (p *plugin) isSmallNode(node operationtracker.ResizableNode) bool {
@@ -278,6 +253,27 @@ func (p *plugin) trySchedulePods(clusterSnapshot clustersnapshot.ClusterSnapshot
 	return unschedulable, nil
 }
 
-func (p *plugin) LatestUnfitNodesCount() int {
-	return p.latestUnfitNodesCount
+func (p *plugin) prepareResizableNodesSnapshot() operationtracker.ResizableNodesSnapshot {
+	if p.resizableVmManager == nil {
+		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
+		return nil
+	}
+	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(false, operationtracker.ResizableOnly)
+	if len(resizableNodesSnapshot) == 0 {
+		klog.V(4).Infof("Defrag %s: No resizable nodes found", PluginName)
+		return nil
+	}
+	return resizableNodesSnapshot
+}
+
+func adjustBalloonPodsSize(clusterSnapshot clustersnapshot.ClusterSnapshot, resizableNodesSnapshot operationtracker.ResizableNodesSnapshot) bool {
+	maxSizes := make(map[string]size.Allocatable, len(resizableNodesSnapshot))
+	for nodeName, resizableNode := range resizableNodesSnapshot {
+		maxSizes[nodeName] = size.Max(resizableNode.DesiredSize, resizableNode.UpsizableMaxSize)
+	}
+	if err := processor.AdjustBalloonPodsSize(clusterSnapshot, maxSizes, nil); err != nil {
+		klog.Errorf("Defrag %s: failed to adjust balloon pods size: %v", PluginName, err)
+		return false
+	}
+	return true
 }
