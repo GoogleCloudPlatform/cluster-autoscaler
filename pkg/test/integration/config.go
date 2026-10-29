@@ -555,6 +555,14 @@ func WithComputeClassScaleDownStatusEnabled() Option[*config.AutoscalingOptions]
 	}
 }
 
+// WithScaleDownPriorityTaintKey sets the node taint key used for scale-down priority.
+func WithScaleDownPriorityTaintKey(taintKey string) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.ScaleDownPriorityTaintKey = taintKey
+		return o
+	}
+}
+
 // WithComputeClassConfigHashEnabled enables ComputeClass configuration hashing in CA.
 func WithComputeClassConfigHashEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
