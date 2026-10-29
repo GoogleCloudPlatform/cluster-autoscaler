@@ -717,7 +717,7 @@ func (b *Builder) setUpProcessors(
 		podInjectionProcessor = podinjection.NewPodInjectionPodListProcessor(podInjectionBackoffRegistry)
 		enforceFakePodsLimitProcessor = podinjection.NewEnforceInjectedPodsLimitProcessor(options.PodInjectionLimit)
 	}
-	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider)
+	laPodProvider := lookaheadbuffer.NewPodProvider(lookaheadBufferStrategyProvider, provider, clock.RealClock{})
 	laWorkloadSeparationsConfigFlags := map[string]int{
 		machinetypes.EK.Name():  options.EkLookaheadMaxWorkloadSeparations,
 		machinetypes.E4A.Name(): options.E4aLookaheadMaxWorkloadSeparations,

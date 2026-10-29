@@ -19,6 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
+
+	klog "k8s.io/klog/v2"
 )
 
 type Status string
@@ -30,7 +33,9 @@ const (
 )
 
 type TieredStrategy struct {
-	Tiers []Tier `json:"tiers"`
+	Tiers                 []Tier `json:"tiers"`
+	NewClusterTier        *Tier  `json:"newClusterTier,omitempty"`
+	NewClusterMaxAgeHours int    `json:"newClusterMaxAgeHours,omitempty"`
 }
 
 type Tier struct {
@@ -91,6 +96,13 @@ func (lps *LookaheadPodStrategy) validate() error {
 	if len(lps.TieredStrategy.Tiers) == 0 {
 		return errors.New("tiered strategy defines no tiers")
 	}
+	if lps.TieredStrategy.NewClusterTier != nil && lps.TieredStrategy.NewClusterMaxAgeHours <= 0 {
+		return errors.New("newClusterTier requires a positive newClusterMaxAgeHours")
+	}
+	if lps.TieredStrategy.NewClusterTier == nil && lps.TieredStrategy.NewClusterMaxAgeHours != 0 {
+		return errors.New("newClusterMaxAgeHours cannot be set without newClusterTier")
+	}
+
 	return nil
 }
 
@@ -105,10 +117,17 @@ func (lps *LookaheadPodStrategy) HasTieredStrategy() bool {
 	return false
 }
 
-// GetTier returns the largest tier whose MinTargetNodesCpu is smaller than or equal to totalCores. It's assumed that tiers are sorted in descending order.
-func (ts *TieredStrategy) GetTier(totalCores int) (Tier, error) {
+// GetTier returns NewClusterTier if clusterAge is less than NewClusterMaxAgeHours and totalCores >=
+// its MinTargetNodesCPU. Otherwise, it returns the largest tier with MinTargetNodesCPU <= totalCores;
+// tiers are assumed sorted in descending order.
+func (ts *TieredStrategy) GetTier(totalCores int, clusterAge time.Duration) (Tier, error) {
 	if ts == nil {
-		return Tier{}, errors.New("TieredStrategy is nil. Use HasTieredStrategy before calling SelectTier")
+		return Tier{}, errors.New("TieredStrategy is nil. Use HasTieredStrategy before calling GetTier")
+	}
+	newClusterMaxAge := time.Duration(ts.NewClusterMaxAgeHours) * time.Hour
+	if ts.NewClusterTier != nil && clusterAge < newClusterMaxAge && totalCores >= ts.NewClusterTier.MinTargetNodesCPU {
+		klog.V(4).Infof("Using new-cluster lookahead tier: cluster age %v < %v", clusterAge, newClusterMaxAge)
+		return *ts.NewClusterTier, nil
 	}
 	for _, tier := range ts.Tiers {
 		if totalCores >= tier.MinTargetNodesCPU {
