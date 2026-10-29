@@ -72,6 +72,12 @@ type DefragProcessor interface {
 	CleanUp()
 }
 
+// fairnessLoopStarter starts a new loop of the fairness enforcer shared by the
+// defrag and ComputeClass min capacity processors.
+type fairnessLoopStarter interface {
+	StartLoop()
+}
+
 // GkeInternalPodListProcessor is a PodListProcessor used in gke internal CA.
 type GkeInternalPodListProcessor struct {
 	crProcessor                    *cr_processors.CapacityRequestPodListProcessor
@@ -98,6 +104,7 @@ type GkeInternalPodListProcessor struct {
 	ccMinCapacityProcessor         *cc_processors.MinCapacityPodListProcessor
 	cccPodFilter                   *cc_processors.CccAnnotationPodFilter
 	storageNodeAffinityProcessor   *StorageNodeAffinityPodListProcessor
+	fairnessLoop                   fairnessLoopStarter
 
 	experimentsManager experiments.Manager
 }
@@ -126,6 +133,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 	ccMinCapacityProcessor *cc_processors.MinCapacityPodListProcessor,
 	cccPodFilter *cc_processors.CccAnnotationPodFilter,
 	storageNodeAffinityProcessor *StorageNodeAffinityPodListProcessor,
+	fairnessLoop fairnessLoopStarter,
 	em experiments.Manager,
 ) *GkeInternalPodListProcessor {
 	p := &GkeInternalPodListProcessor{
@@ -155,6 +163,7 @@ func NewGkeInternalPodListProcessor(crProcessor *cr_processors.CapacityRequestPo
 		ccMinCapacityProcessor:         ccMinCapacityProcessor,
 		cccPodFilter:                   cccPodFilter,
 		storageNodeAffinityProcessor:   storageNodeAffinityProcessor,
+		fairnessLoop:                   fairnessLoop,
 		experimentsManager:             em,
 	}
 
@@ -196,6 +205,12 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
 	registerFlexAdvisorLate := flexadvisor.IsFlexAdvisorLateRegistrationEnabled(p.experimentsManager)
+
+	// Start the fairness loop before any processor calls Admit: the min
+	// capacity processor runs before defrag.
+	if p.fairnessLoop != nil {
+		p.fairnessLoop.StartLoop()
+	}
 
 	if p.cbFakePodStateObserver != nil {
 		p.cbFakePodStateObserver.Reset()

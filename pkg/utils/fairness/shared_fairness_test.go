@@ -15,6 +15,7 @@
 package fairness
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,8 +58,9 @@ func TestSharedAdmit(t *testing.T) {
 			p2 := manager.CreateEnforcer("p2")
 
 			for i := 0; i < len(tc.want1); i++ {
-				got1 := p1.Admit(tc.unschedulable)
-				got2 := p2.Admit(tc.unschedulable)
+				manager.StartLoop()
+				got1 := p1.Admit(tc.unschedulable, true)
+				got2 := p2.Admit(tc.unschedulable, true)
 				assert.Equal(t, tc.want1[i], got1, "processor 1 iteration %d", i)
 				assert.Equal(t, tc.want2[i], got2, "processor 2 iteration %d", i)
 			}
@@ -105,9 +107,153 @@ func TestSharedAdmitSingleProcessor(t *testing.T) {
 			defrag := manager.CreateEnforcer("defrag")
 
 			for i, want := range tc.want {
-				got := defrag.Admit(tc.unschedulable)
+				manager.StartLoop()
+				got := defrag.Admit(tc.unschedulable, true)
 				assert.Equal(t, want, got, "Iteration %d", i)
 			}
 		})
+	}
+}
+
+// TestSharedAdmitMinCapacityAndDefrag mirrors the production setup: defrag is
+// created first, but the min capacity processor runs before it in each loop.
+func TestSharedAdmitMinCapacityAndDefrag(t *testing.T) {
+	t.Parallel()
+	pendingPods := []*apiv1.Pod{test.BuildTestPod("p1", 1, 1000)}
+	type loop struct {
+		minCapacityWantsToRun bool
+		wantMinCapacity       bool
+		wantDefrag            bool
+	}
+	testCases := []struct {
+		name          string
+		unschedulable []*apiv1.Pod
+		maxLoops      int
+		loops         []loop
+	}{
+		{
+			name: "idle min capacity: defrag admitted every loop",
+			loops: []loop{
+				{wantDefrag: true},
+				{wantDefrag: true},
+				{wantDefrag: true},
+				{wantDefrag: true},
+			},
+		},
+		{
+			name:          "idle min capacity with pending pods: defrag admitted every maxLoops",
+			unschedulable: pendingPods,
+			maxLoops:      3,
+			loops: []loop{
+				{},
+				{},
+				{wantDefrag: true},
+				{},
+				{},
+				{wantDefrag: true},
+				{},
+			},
+		},
+		{
+			name: "both with work: turns alternate",
+			loops: []loop{
+				{minCapacityWantsToRun: true, wantDefrag: true},
+				{minCapacityWantsToRun: true, wantMinCapacity: true},
+				{minCapacityWantsToRun: true, wantDefrag: true},
+				{minCapacityWantsToRun: true, wantMinCapacity: true},
+			},
+		},
+		{
+			name: "min capacity work comes and goes: neither is starved",
+			loops: []loop{
+				{wantDefrag: true},
+				{minCapacityWantsToRun: true, wantMinCapacity: true},
+				{minCapacityWantsToRun: true, wantDefrag: true},
+				{minCapacityWantsToRun: true, wantMinCapacity: true},
+				{wantDefrag: true},
+				{wantDefrag: true},
+			},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			manager := NewSharedEnforcerManager(tc.maxLoops, fakeUnhelpableTracker{})
+			defrag := manager.CreateEnforcer("defrag")
+			minCapacity := manager.CreateEnforcer("min-capacity")
+
+			for i, l := range tc.loops {
+				manager.StartLoop()
+				gotMinCapacity := minCapacity.Admit(tc.unschedulable, l.minCapacityWantsToRun)
+				gotDefrag := defrag.Admit(tc.unschedulable, true)
+
+				if gotMinCapacity != l.wantMinCapacity {
+					t.Errorf("loop %d: minCapacity.Admit(%t) = %t, want %t", i, l.minCapacityWantsToRun, gotMinCapacity, l.wantMinCapacity)
+				}
+				if gotDefrag != l.wantDefrag {
+					t.Errorf("loop %d: defrag.Admit(true) = %t, want %t", i, gotDefrag, l.wantDefrag)
+				}
+			}
+		})
+	}
+}
+
+// TestSharedAdmitAtMostOneProcessorPerLoop checks that StartLoop aligns the
+// loop for every processor, whichever order they run in: when both always
+// want to run, exactly one of them is admitted in each loop.
+func TestSharedAdmitAtMostOneProcessorPerLoop(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name               string
+		runInCreationOrder bool
+	}{
+		{name: "processors run in creation order", runInCreationOrder: true},
+		{name: "processors run in reverse creation order", runInCreationOrder: false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			manager := NewSharedEnforcerManager(0, fakeUnhelpableTracker{})
+			enforcers := []FairnessEnforcer{manager.CreateEnforcer("p1"), manager.CreateEnforcer("p2")}
+			if !tc.runInCreationOrder {
+				slices.Reverse(enforcers)
+			}
+
+			for i := range 4 {
+				manager.StartLoop()
+				admitted := 0
+				for _, e := range enforcers {
+					if e.Admit(nil, true) {
+						admitted++
+					}
+				}
+
+				if admitted != 1 {
+					t.Errorf("loop %d: %d processors admitted, want 1", i, admitted)
+				}
+			}
+		})
+	}
+}
+
+// TestSharedAdmitWithoutWorkAfterAdmissionKeepsNextTurn checks that a
+// processor with nothing to do cannot pass its turn in a loop where another
+// processor was already admitted: that turn belongs to the next loop.
+func TestSharedAdmitWithoutWorkAfterAdmissionKeepsNextTurn(t *testing.T) {
+	t.Parallel()
+	manager := NewSharedEnforcerManager(0, fakeUnhelpableTracker{})
+	p1 := manager.CreateEnforcer("p1")
+	p2 := manager.CreateEnforcer("p2")
+	manager.StartLoop()
+	if !p1.Admit(nil, true) {
+		t.Fatal("p1.Admit(nil, true) in the first loop = false, want true")
+	}
+
+	p2.Admit(nil, false)
+	manager.StartLoop()
+	got := p2.Admit(nil, true)
+
+	if !got {
+		t.Error("p2.Admit(nil, true) in the second loop = false, want true")
 	}
 }

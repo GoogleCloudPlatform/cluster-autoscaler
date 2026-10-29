@@ -209,10 +209,17 @@ func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.Autos
 
 	nodeFilter, err := p.nodeFilterFactory.NewDefragNodeFilter(p.ctx)
 	if err != nil {
+		// Pass the turn, so that the other processors still run while this
+		// error persists.
+		if p.fairnessEnforcer != nil {
+			p.fairnessEnforcer.Admit(unschedulablePods, false)
+		}
 		return nil, err
 	}
 
-	if p.fairnessEnforcer != nil && !p.fairnessEnforcer.Admit(unschedulablePods) {
+	// Defrag looks for candidate nodes in every loop it is admitted, so it
+	// always asks to run.
+	if p.fairnessEnforcer != nil && !p.fairnessEnforcer.Admit(unschedulablePods, true) {
 		// Defrag did not evaluate any node this loop, so there is nothing to
 		// say about which nodes are blocked.
 		return unschedulablePods, nil

@@ -599,11 +599,12 @@ func TestCCCMinCapacityNodeConfigDriftMaxNodeDisruption(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		// Run autoscaler loop 3 times:
+		// Run autoscaler loop 2 times:
 		// Loop 1: scales up the replacement compliant nodes for minimum capacity.
-		// Loop 2: compliant nodes become ready.
-		// Loop 3: selects and taints exactly 1 drifted node for deletion while respecting MaxNodeDisruption=1.
-		for i := 0; i < 3; i++ {
+		// Loop 2: compliant nodes are ready; selects and taints exactly 1 drifted
+		// node for deletion while respecting MaxNodeDisruption=1. The idle min
+		// capacity processor passes its fairness turn, so defrag runs every loop.
+		for i := 0; i < 2; i++ {
 			integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
 		}
 
