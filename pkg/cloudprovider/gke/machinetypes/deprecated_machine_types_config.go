@@ -1212,9 +1212,9 @@ var (
 		name:               "c4n",
 		systemArchitecture: gce.Amd64,
 		pricingInfo: MachineFamilyPricingInfo{
-			CpuPricePerHour:         0.051975,
-			MemoryPricePerHourPerGb: 0.005907,
-			PreemptibleDiscount:     0.02079 / 0.051975,
+			CpuPricePerHour:         0.05544,
+			MemoryPricePerHourPerGb: 0.006301,
+			PreemptibleDiscount:     0.02107 / 0.05544,
 		},
 		autoprovisionedMachineTypes: onboardMachineType(
 			NewMachineTypeInfo("c4n-highcpu-2", 2, 4),
@@ -1246,68 +1246,68 @@ var (
 			NewMachineTypeInfo("c4n-highmem-192", 192, 1488),
 			NewMachineTypeInfo("c4n-standard-4-lssd", 4, 15).
 				withAutomaticEphemeralLocalSsdCount(1).
-				withInstancePriceOverride(0.417473).
-				withPreemptibleInstancePriceOverride(0.166989),
+				withInstancePriceOverride(0.445307).
+				withPreemptibleInstancePriceOverride(0.171803),
 			NewMachineTypeInfo("c4n-standard-8-lssd", 8, 30).
 				withAutomaticEphemeralLocalSsdCount(1).
-				withInstancePriceOverride(0.713978).
-				withPreemptibleInstancePriceOverride(0.285591),
+				withInstancePriceOverride(0.761582).
+				withPreemptibleInstancePriceOverride(0.291993),
 			NewMachineTypeInfo("c4n-standard-16-lssd", 16, 60).
 				withAutomaticEphemeralLocalSsdCount(2).
-				withInstancePriceOverride(1.427955).
-				withPreemptibleInstancePriceOverride(0.571182),
+				withInstancePriceOverride(1.523165).
+				withPreemptibleInstancePriceOverride(0.583986),
 			NewMachineTypeInfo("c4n-standard-24-lssd", 24, 90).
 				withAutomaticEphemeralLocalSsdCount(4).
-				withInstancePriceOverride(2.262901).
-				withPreemptibleInstancePriceOverride(0.905160),
+				withInstancePriceOverride(2.413779).
+				withPreemptibleInstancePriceOverride(0.927592),
 			NewMachineTypeInfo("c4n-standard-32-lssd", 32, 120).
 				withAutomaticEphemeralLocalSsdCount(5).
-				withInstancePriceOverride(2.976879).
-				withPreemptibleInstancePriceOverride(1.190751),
+				withInstancePriceOverride(3.175361).
+				withPreemptibleInstancePriceOverride(1.219585),
 			NewMachineTypeInfo("c4n-standard-48-lssd", 48, 180).
 				withAutomaticEphemeralLocalSsdCount(8).
-				withInstancePriceOverride(4.525802).
-				withPreemptibleInstancePriceOverride(1.810321),
+				withInstancePriceOverride(4.827558).
+				withPreemptibleInstancePriceOverride(1.855183),
 			NewMachineTypeInfo("c4n-standard-96-lssd", 96, 360).
 				withAutomaticEphemeralLocalSsdCount(16).
-				withInstancePriceOverride(9.051604).
-				withPreemptibleInstancePriceOverride(3.620642),
+				withInstancePriceOverride(9.655116).
+				withPreemptibleInstancePriceOverride(3.710366),
 			NewMachineTypeInfo("c4n-standard-192-lssd", 192, 720).
 				withAutomaticEphemeralLocalSsdCount(32).
-				withInstancePriceOverride(18.103208).
-				withPreemptibleInstancePriceOverride(7.241283),
+				withInstancePriceOverride(19.310232).
+				withPreemptibleInstancePriceOverride(7.420733),
 			NewMachineTypeInfo("c4n-highmem-4-lssd", 4, 31).
 				withAutomaticEphemeralLocalSsdCount(1).
-				withInstancePriceOverride(0.511985).
-				withPreemptibleInstancePriceOverride(0.204794),
+				withInstancePriceOverride(0.546123).
+				withPreemptibleInstancePriceOverride(0.210107),
 			NewMachineTypeInfo("c4n-highmem-8-lssd", 8, 62).
 				withAutomaticEphemeralLocalSsdCount(1).
-				withInstancePriceOverride(0.903002).
-				withPreemptibleInstancePriceOverride(0.361201),
+				withInstancePriceOverride(0.963214).
+				withPreemptibleInstancePriceOverride(0.368601),
 			NewMachineTypeInfo("c4n-highmem-16-lssd", 16, 124).
 				withAutomaticEphemeralLocalSsdCount(2).
-				withInstancePriceOverride(1.806003).
-				withPreemptibleInstancePriceOverride(0.722401),
+				withInstancePriceOverride(1.926429).
+				withPreemptibleInstancePriceOverride(0.737202),
 			NewMachineTypeInfo("c4n-highmem-24-lssd", 24, 186).
 				withAutomaticEphemeralLocalSsdCount(4).
-				withInstancePriceOverride(2.829973).
-				withPreemptibleInstancePriceOverride(1.131989),
+				withInstancePriceOverride(3.018675).
+				withPreemptibleInstancePriceOverride(1.157416),
 			NewMachineTypeInfo("c4n-highmem-32-lssd", 32, 248).
 				withAutomaticEphemeralLocalSsdCount(5).
-				withInstancePriceOverride(3.732975).
-				withPreemptibleInstancePriceOverride(1.493190),
+				withInstancePriceOverride(3.981889).
+				withPreemptibleInstancePriceOverride(1.526017),
 			NewMachineTypeInfo("c4n-highmem-48-lssd", 48, 372).
 				withAutomaticEphemeralLocalSsdCount(8).
-				withInstancePriceOverride(5.659946).
-				withPreemptibleInstancePriceOverride(2.263978),
+				withInstancePriceOverride(6.037350).
+				withPreemptibleInstancePriceOverride(2.314831),
 			NewMachineTypeInfo("c4n-highmem-96-lssd", 96, 744).
 				withAutomaticEphemeralLocalSsdCount(16).
-				withInstancePriceOverride(11.319892).
-				withPreemptibleInstancePriceOverride(4.527957),
+				withInstancePriceOverride(12.074700).
+				withPreemptibleInstancePriceOverride(4.629662),
 			NewMachineTypeInfo("c4n-highmem-192-lssd", 192, 1488).
 				withAutomaticEphemeralLocalSsdCount(32).
-				withInstancePriceOverride(22.639784).
-				withPreemptibleInstancePriceOverride(9.055913),
+				withInstancePriceOverride(24.149400).
+				withPreemptibleInstancePriceOverride(9.259325),
 		),
 		supportedCpuPlatforms:    CpuPlatformRequirements{lowerBound: IntelEmeraldRapids, upperBound: IntelEmeraldRapids},
 		supportCompactPlacement:  true,

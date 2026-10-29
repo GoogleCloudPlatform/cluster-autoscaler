@@ -282,6 +282,13 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.C3},
 			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
 		},
+		"slice of hardware compute class specifies valid c4n machine family": {
+			podClass:                 machinetypes.PerformanceClass.Name(),
+			machineFamily:            "c4n",
+			autopilotEnabled:         true,
+			expectedFamilies:         []machinetypes.MachineFamily{machinetypes.C4N},
+			expectedComputeClassName: machinetypes.PerformanceClass.Name(),
+		},
 		"slice of hardware compute class specifies valid h3 machine family": {
 			podClass:                 machinetypes.PerformanceClass.Name(),
 			machineFamily:            "h3",
