@@ -821,10 +821,18 @@ func (b *Builder) Build(
 		}
 	}
 
-	if b.manager != nil && computeclass.IsComputeClassCapacityBuffersEnabled(experimentsManager) {
-		if err := capacitybuffers.SetupReconciler(b.manager); err != nil {
-			klog.Errorf("Failed to setup CapacityBuffer reconciler: %v", err)
-			return nil, nil, fmt.Errorf("failed to setup CapacityBuffer reconciler: %w", err)
+	// Cleanup overrides the feature gate: only the periodic sweeper runs to remove derived objects.
+	if b.manager != nil {
+		if autoscalingOptions.ComputeClassCapacityBuffersCleanup {
+			klog.Infof("ComputeClass capacity buffers cleanup is enabled; removing derived CapacityBuffers and PodTemplates")
+			if err := capacitybuffers.SetupSweeper(b.manager); err != nil {
+				return nil, nil, fmt.Errorf("failed to setup CapacityBuffer sweeper: %w", err)
+			}
+		} else if autoscalingOptions.ComputeClassCapacityBuffersEnabled {
+			if err := capacitybuffers.SetupReconciler(b.manager); err != nil {
+				klog.Errorf("Failed to setup CapacityBuffer reconciler: %v", err)
+				return nil, nil, fmt.Errorf("failed to setup CapacityBuffer reconciler: %w", err)
+			}
 		}
 	}
 

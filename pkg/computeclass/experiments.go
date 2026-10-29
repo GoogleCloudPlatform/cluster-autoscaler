@@ -55,15 +55,6 @@ func IsComputeClassConfigHashEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassConfigHashMinCAVersionFlag, true)
 }
 
-// IsComputeClassCapacityBuffersEnabled returns true if the ComputeClass capacity buffers feature is enabled.
-func IsComputeClassCapacityBuffersEnabled(manager experiments.Manager) bool {
-	if manager == nil {
-		return false
-	}
-	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassCapacityBuffersFlag, true) &&
-		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassCapacityBuffersMinCAVersionFlag, false)
-}
-
 // IsComputeClassConfigDriftStatusEnabled returns true if reporting config drift migration progress in the ComputeClass status is enabled.
 func IsComputeClassConfigDriftStatusEnabled(manager experiments.Manager) bool {
 	if manager == nil {

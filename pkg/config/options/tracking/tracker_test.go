@@ -314,6 +314,22 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			},
 			wantRestart: false,
 		},
+		{
+			testName:         "ComputeClassCapacityBuffersEnabled_field_is_tracked",
+			experimentValues: map[string]bool{experiments.ComputeClassCapacityBuffersMinCAVersionFlag: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ComputeClassCapacityBuffersEnabled = true
+			},
+			wantRestart: true,
+		},
+		{
+			testName:         "ComputeClassCapacityBuffersCleanup_field_is_tracked",
+			experimentValues: map[string]bool{experiments.ComputeClassCapacityBuffersCleanupFlag: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.ComputeClassCapacityBuffersCleanup = true
+			},
+			wantRestart: true,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			wantOpts := EmptyTestOptionsTracker().Options()
