@@ -17,6 +17,7 @@ package lookaheadbuffer
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -25,9 +26,11 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	clock "k8s.io/utils/clock/testing"
 )
 
 func TestGetLookaheadPods(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
 		t.Run(family, func(t *testing.T) {
 			for _, tc := range []struct {
@@ -166,11 +169,63 @@ func TestGetLookaheadPods(t *testing.T) {
 				t.Run(tc.desc, func(t *testing.T) {
 					mockStrategyProvider := &mockStrategyProvider{}
 					mockStrategyProvider.On("Strategy", family).Return(tc.laStrategy, tc.laStrategyError)
-					p := NewPodProvider(mockStrategyProvider)
+					p := NewPodProvider(mockStrategyProvider, fakeClusterInfo{}, clock.NewFakePassiveClock(now))
 					got := p.GetLookaheadPods(tc.targetNodesCPUs, "", family)
 					assert.Equal(t, tc.want, got)
 				})
 			}
+		})
+	}
+}
+
+func TestGetLookaheadPodsNewClusterTier(t *testing.T) {
+	family := machinetypes.EK.Name()
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	tieredStrategy := &strategy.TieredStrategy{
+		Tiers: []strategy.Tier{
+			{
+				NumLookaheadPods:     1,
+				LookaheadPodMilliCPU: 4000,
+				LookaheadPodMemKib:   16 * 1024 * 1024,
+				MinTargetNodesCPU:    0,
+			},
+		},
+		NewClusterTier: &strategy.Tier{
+			NumLookaheadPods:     3,
+			LookaheadPodMilliCPU: 6000,
+			LookaheadPodMemKib:   20 * 1024 * 1024,
+			MinTargetNodesCPU:    0,
+		},
+		NewClusterMaxAgeHours: 24,
+	}
+
+	for _, tc := range []struct {
+		desc       string
+		createTime time.Time
+		want       []*apiv1.Pod
+	}{
+		{
+			desc:       "new cluster uses new cluster tier",
+			createTime: now.Add(-time.Hour),
+			want:       GenerateLookaheadPods(3, *resource.NewMilliQuantity(6000, resource.DecimalSI), *resource.NewQuantity(20*size.GiB, resource.BinarySI), "", family),
+		},
+		{
+			desc:       "mature cluster uses regular tiers",
+			createTime: now.Add(-48 * time.Hour),
+			want:       GenerateLookaheadPods(1, *resource.NewMilliQuantity(4000, resource.DecimalSI), *resource.NewQuantity(16*size.GiB, resource.BinarySI), "", family),
+		},
+		{
+			desc:       "unknown cluster create time uses regular tiers",
+			createTime: time.Time{},
+			want:       GenerateLookaheadPods(1, *resource.NewMilliQuantity(4000, resource.DecimalSI), *resource.NewQuantity(16*size.GiB, resource.BinarySI), "", family),
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			mockStrategyProvider := &mockStrategyProvider{}
+			mockStrategyProvider.On("Strategy", family).Return(strategy.LookaheadPodStrategy{Status: strategy.Enabled, TieredStrategy: tieredStrategy}, nil)
+			p := NewPodProvider(mockStrategyProvider, fakeClusterInfo{createTime: tc.createTime}, clock.NewFakePassiveClock(now))
+			got := p.GetLookaheadPods(2, "", family)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }
@@ -291,4 +346,13 @@ type mockStrategyProvider struct {
 func (m *mockStrategyProvider) Strategy(machineFamily string) (strategy.LookaheadPodStrategy, error) {
 	args := m.Called(machineFamily)
 	return args.Get(0).(strategy.LookaheadPodStrategy), args.Error(1)
+}
+
+// fakeClusterInfo is a fake implementation of clusterInfoProvider.
+type fakeClusterInfo struct {
+	createTime time.Time
+}
+
+func (f fakeClusterInfo) GetClusterCreateTime() time.Time {
+	return f.createTime
 }

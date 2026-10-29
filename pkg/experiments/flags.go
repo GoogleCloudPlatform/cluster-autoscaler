@@ -55,6 +55,11 @@ const CapacityCheckWaitTimeSecondsFlexValueMultiHostTpuFlag = "CapacityCheckWait
 const NodeProvisionTimeSingleHostTPU = "NodeProvisionTime::SingleHostTPU"
 
 const EkLookaheadPodsV1Flag = "AutopilotEk::LookaheadPodsV1"
+
+// EkLookaheadPodsV2Flag configures the EK lookahead pod strategy with cluster-age based tiering.
+// It takes precedence over EkLookaheadPodsV1Flag; CA falls back to V1 when V2 resolves to an
+// unspecified strategy. See go/gke-ek-lookahead-time-dimension.
+const EkLookaheadPodsV2Flag = "AutopilotEk::LookaheadPodsV2"
 const EkLookaheadMaxWorkloadSeparationsFlag = "AutopilotEk::LookaheadMaxWorkloadSeparations"
 const EkPreventScheduleOnLookaheadNodesFlag = "AutopilotEk::PreventScheduleOnLookaheadNodes"
 const ConsumableReservationExperimentName = "ClusterAutoscaler::UseConsumableReservationsApi"

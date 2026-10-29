@@ -36,32 +36,40 @@ type autoprovisioningProvider interface {
 
 // Provider manages and provides lookahead buffer strategies across supported machine families.
 type Provider struct {
-	sources         map[string]strategySource
+	// sources holds each machine family's strategy sources ordered by priority (highest first).
+	sources         map[string][]strategySource
 	laMetrics       metrics
 	resizingEnabled map[string]bool
 }
 
 // NewProvider creates a new lookahead provider instance.
+// experimentFlags maps each machine family to its experiment flags ordered by priority (highest
+// first); the first flag that resolves to a specified strategy is used.
 func NewProvider(
 	em experiments.Manager,
 	manifestFlagStrategies map[string]string,
-	experimentFlags map[string]string,
+	experimentFlags map[string][]string,
 	laMetrics metrics,
 	componentVersion version.Version,
 ) (*Provider, error) {
 	// We need to trim single quotes from lookaheadPodStrategy since it's a single-line JSON string
 	// and we wrap it in single quotes for CA manifest to treat it as a string.
-	sources := make(map[string]strategySource, len(manifestFlagStrategies))
+	sources := make(map[string][]strategySource, len(manifestFlagStrategies))
 	for family, configFlag := range manifestFlagStrategies {
 		config, err := ParsePodStrategy(strings.Trim(configFlag, "'"))
 		if err != nil {
 			return nil, fmt.Errorf("cannot parse %s lookahead pod strategy, error: %v", family, err)
 		}
+		// A specified manifest strategy takes precedence over experiment flags.
 		if config.Status != Unspecified {
-			sources[family] = &flagStrategySource{flagStrategy: config}
-		} else {
-			sources[family] = newExperimentStrategySource(em, componentVersion, experimentFlags[family], family)
+			sources[family] = []strategySource{&flagStrategySource{flagStrategy: config}}
+			continue
 		}
+		familySources := make([]strategySource, 0, len(experimentFlags[family]))
+		for _, flag := range experimentFlags[family] {
+			familySources = append(familySources, newExperimentStrategySource(em, componentVersion, flag, family))
+		}
+		sources[family] = familySources
 	}
 
 	return &Provider{
@@ -88,8 +96,8 @@ func (p *Provider) Refresh() {
 		klog.Warning("refresh called on nil Provider. The value should not be nil.")
 		return
 	}
-	for _, source := range p.sources {
-		if source != nil {
+	for _, familySources := range p.sources {
+		for _, source := range familySources {
 			source.refresh()
 		}
 	}
@@ -100,7 +108,7 @@ func (p *Provider) Strategy(machineFamily string) (LookaheadPodStrategy, error) 
 	if p == nil {
 		return unspecifiedStrategy, errors.New("strategy called on nil Provider. The value should not be nil")
 	}
-	source, ok := p.sources[machineFamily]
+	sources, ok := p.sources[machineFamily]
 	if !ok {
 		return unspecifiedStrategy, fmt.Errorf("no LookaheadPodStrategy for machineFamily %s", machineFamily)
 	}
@@ -108,12 +116,20 @@ func (p *Provider) Strategy(machineFamily string) (LookaheadPodStrategy, error) 
 		klog.Infof("%s resizing is not enabled, skipping lookahead buffer", machineFamily)
 		return unspecifiedStrategy, nil
 	}
-	if source == nil {
-		return unspecifiedStrategy, fmt.Errorf("strategy called with nil source for machineFamily %s", machineFamily)
-	}
-	strategy, sourceKind := source.strategy()
+	strategy, sourceKind := firstSpecifiedStrategy(sources)
 	p.updateLaunchStatus(machineFamily, strategy, sourceKind)
 	return strategy, nil
+}
+
+// firstSpecifiedStrategy returns the strategy of the first source, in priority order, that
+// resolves to a specified (enabled or disabled) strategy, or unspecifiedStrategy if none does.
+func firstSpecifiedStrategy(sources []strategySource) (LookaheadPodStrategy, launchSource) {
+	for _, source := range sources {
+		if lps, sourceKind := source.strategy(); lps.Status != Unspecified {
+			return lps, sourceKind
+		}
+	}
+	return unspecifiedStrategy, undefinedSource
 }
 
 func (p *Provider) updateLaunchStatus(machineFamily string, strategy LookaheadPodStrategy, launchedFrom launchSource) {

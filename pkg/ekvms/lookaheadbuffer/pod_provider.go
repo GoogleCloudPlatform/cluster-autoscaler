@@ -16,12 +16,14 @@ package lookaheadbuffer
 
 import (
 	"math"
+	"time"
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer/strategy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	klog "k8s.io/klog/v2"
+	"k8s.io/utils/clock"
 )
 
 type strategyProvider interface {
@@ -32,13 +34,21 @@ type PodProvider interface {
 	GetLookaheadPods(targetNodesCPU int, workloadIDHash, machineFamily string) []*apiv1.Pod
 }
 
-type podProviderImpl struct {
-	strategyProvider strategyProvider
+type clusterInfoProvider interface {
+	GetClusterCreateTime() time.Time
 }
 
-func NewPodProvider(strategyProvider strategyProvider) *podProviderImpl {
+type podProviderImpl struct {
+	strategyProvider    strategyProvider
+	clusterInfoProvider clusterInfoProvider
+	clock               clock.PassiveClock
+}
+
+func NewPodProvider(strategyProvider strategyProvider, clusterInfoProvider clusterInfoProvider, clock clock.PassiveClock) *podProviderImpl {
 	return &podProviderImpl{
-		strategyProvider: strategyProvider,
+		strategyProvider:    strategyProvider,
+		clusterInfoProvider: clusterInfoProvider,
+		clock:               clock,
 	}
 }
 
@@ -59,7 +69,7 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash, m
 		klog.Warning("Lookahead is enabled but no tiered strategy is defined. Skipping lookahead pods")
 		return nil
 	}
-	tier, err := laStrategy.TieredStrategy.GetTier(targetNodesCPU)
+	tier, err := laStrategy.TieredStrategy.GetTier(targetNodesCPU, p.clusterAge())
 	if err != nil {
 		klog.Errorf("Error during getting tier for lookahead pods tieredStrategy, assuming no lookahead pods: %v", err)
 		return nil
@@ -67,6 +77,16 @@ func (p *podProviderImpl) GetLookaheadPods(targetNodesCPU int, workloadIDHash, m
 	cpu := *resource.NewMilliQuantity(int64(tier.LookaheadPodMilliCPU), resource.DecimalSI)
 	memory := *resource.NewQuantity(int64(tier.LookaheadPodMemKib*size.KiB), resource.BinarySI)
 	return GenerateLookaheadPods(getLookaheadPodNumber(targetNodesCPU, tier), cpu, memory, workloadIDHash, machineFamily)
+}
+
+// clusterAge returns the time elapsed since the cluster was created. An unknown (zero) create time
+// yields the maximum duration, so such a cluster is treated as mature.
+func (p *podProviderImpl) clusterAge() time.Duration {
+	createTime := p.clusterInfoProvider.GetClusterCreateTime()
+	if createTime.IsZero() {
+		return time.Duration(math.MaxInt64)
+	}
+	return p.clock.Since(createTime)
 }
 
 func getLookaheadPodNumber(targetNodesCPU int, tier strategy.Tier) int {

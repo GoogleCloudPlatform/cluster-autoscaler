@@ -16,6 +16,7 @@ package strategy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -68,7 +69,7 @@ func TestParse(t *testing.T) {
 `,
 			wantLps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{
+					Tiers: []Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 8000,
@@ -131,7 +132,7 @@ func TestParse(t *testing.T) {
 `,
 			wantLps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{
+					Tiers: []Tier{
 						{
 							NumLookaheadPods:       2,
 							LookaheadPodPercentage: 10,
@@ -160,6 +161,62 @@ func TestParse(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			desc: "parses new cluster tier separately from sorted tiers",
+			jsonStr: `
+{
+  "tieredStrategy": {
+    "newClusterMaxAgeHours": 24,
+    "newClusterTier": {
+      "numLookaheadPods": 3,
+      "lookaheadPodMilliCpu": 6000,
+      "lookaheadPodMemKib": 20971520,
+      "minTargetNodesCpu": 1
+    },
+    "tiers": [
+      {
+        "numLookaheadPods": 0,
+        "minTargetNodesCpu": 0
+      },
+      {
+        "numLookaheadPods": 1,
+        "lookaheadPodMilliCpu": 4000,
+        "lookaheadPodMemKib": 16777216,
+        "minTargetNodesCpu": 1
+      }
+    ]
+  },
+  "minCaVersion": "v1.2.3",
+  "status": "STATUS_ENABLED"
+}
+`,
+			wantLps: LookaheadPodStrategy{
+				TieredStrategy: &TieredStrategy{
+					Tiers: []Tier{
+						{
+							NumLookaheadPods:     1,
+							LookaheadPodMilliCPU: 4000,
+							LookaheadPodMemKib:   16 * size.GiB / size.KiB,
+							MinTargetNodesCPU:    1,
+						},
+						{
+							NumLookaheadPods:  0,
+							MinTargetNodesCPU: 0,
+						},
+					},
+					NewClusterTier: &Tier{
+						NumLookaheadPods:     3,
+						LookaheadPodMilliCPU: 6000,
+						LookaheadPodMemKib:   20 * size.GiB / size.KiB,
+						MinTargetNodesCPU:    1,
+					},
+					NewClusterMaxAgeHours: 24,
+				},
+				MinCaVersion: "v1.2.3",
+				Status:       Enabled,
+			},
+			wantErr: false,
+		},
+		{
 			desc: "status set to enabled with invalid strategy (empty tiers)",
 			jsonStr: `
 {
@@ -172,7 +229,7 @@ func TestParse(t *testing.T) {
 `,
 			wantLps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{},
+					Tiers: []Tier{},
 				},
 				MinCaVersion: "v1.2.3",
 				Status:       Enabled,
@@ -190,7 +247,7 @@ func TestParse(t *testing.T) {
 `,
 			wantLps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{},
+					Tiers: []Tier{},
 				},
 				MinCaVersion: "v1.2.3",
 				Status:       Enabled,
@@ -207,11 +264,116 @@ func TestParse(t *testing.T) {
 `,
 			wantLps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{},
+					Tiers: []Tier{},
 				},
 				MinCaVersion: "v1.2.3",
 				Status:       Enabled,
 			},
+			wantErr: true,
+		},
+		{
+			desc: "status set to enabled with newClusterTier but missing newClusterMaxAgeHours",
+			jsonStr: `
+{
+  "tieredStrategy": {
+    "newClusterTier": {
+      "numLookaheadPods": 3,
+      "lookaheadPodMilliCpu": 6000,
+      "lookaheadPodMemKib": 20971520,
+      "minTargetNodesCpu": 1
+    },
+    "tiers": [
+      {
+        "numLookaheadPods": 1,
+        "lookaheadPodMilliCpu": 4000,
+        "lookaheadPodMemKib": 16777216,
+        "minTargetNodesCpu": 1
+      }
+    ]
+  },
+  "minCaVersion": "v1.2.3",
+  "status": "STATUS_ENABLED"
+}
+`,
+			wantLps: LookaheadPodStrategy{},
+			wantErr: true,
+		},
+		{
+			desc: "status set to enabled with newClusterTier and non-positive newClusterMaxAgeHours",
+			jsonStr: `
+{
+  "tieredStrategy": {
+    "newClusterMaxAgeHours": 0,
+    "newClusterTier": {
+      "numLookaheadPods": 3,
+      "lookaheadPodMilliCpu": 6000,
+      "lookaheadPodMemKib": 20971520,
+      "minTargetNodesCpu": 1
+    },
+    "tiers": [
+      {
+        "numLookaheadPods": 1,
+        "lookaheadPodMilliCpu": 4000,
+        "lookaheadPodMemKib": 16777216,
+        "minTargetNodesCpu": 1
+      }
+    ]
+  },
+  "minCaVersion": "v1.2.3",
+  "status": "STATUS_ENABLED"
+}
+`,
+			wantLps: LookaheadPodStrategy{},
+			wantErr: true,
+		},
+		{
+			desc: "status set to enabled with newClusterTier and negative newClusterMaxAgeHours",
+			jsonStr: `
+{
+  "tieredStrategy": {
+    "newClusterMaxAgeHours": -5,
+    "newClusterTier": {
+      "numLookaheadPods": 3,
+      "lookaheadPodMilliCpu": 6000,
+      "lookaheadPodMemKib": 20971520,
+      "minTargetNodesCpu": 1
+    },
+    "tiers": [
+      {
+        "numLookaheadPods": 1,
+        "lookaheadPodMilliCpu": 4000,
+        "lookaheadPodMemKib": 16777216,
+        "minTargetNodesCpu": 1
+      }
+    ]
+  },
+  "minCaVersion": "v1.2.3",
+  "status": "STATUS_ENABLED"
+}
+`,
+			wantLps: LookaheadPodStrategy{},
+			wantErr: true,
+		},
+		{
+			desc: "status set to enabled with newClusterMaxAgeHours but nil newClusterTier",
+			jsonStr: `
+{
+  "tieredStrategy": {
+    "newClusterMaxAgeHours": 24,
+    "tiers": [
+      {
+        "numLookaheadPods": 1,
+        "lookaheadPodMilliCpu": 4000,
+        "lookaheadPodMemKib": 16777216,
+        "minTargetNodesCpu": 1
+      }
+    ]
+  },
+  "minCaVersion": "v1.2.3",
+  "status": "STATUS_ENABLED"
+}
+`,
+			wantLps: LookaheadPodStrategy{},
 			wantErr: true,
 		},
 	} {
@@ -255,7 +417,7 @@ func TestSelectTier(t *testing.T) {
 			desc: "Selects small tier",
 			lps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{
+					Tiers: []Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 32000,
@@ -311,7 +473,7 @@ func TestSelectTier(t *testing.T) {
 			desc: "no matching tier",
 			lps: LookaheadPodStrategy{
 				TieredStrategy: &TieredStrategy{
-					[]Tier{
+					Tiers: []Tier{
 						{
 							NumLookaheadPods:     1,
 							LookaheadPodMilliCPU: 8000,
@@ -327,13 +489,106 @@ func TestSelectTier(t *testing.T) {
 		},
 	} {
 		t.Run(tc.desc, func(t *testing.T) {
-			tier, err := tc.lps.TieredStrategy.GetTier(tc.targetNodesCpus)
+			tier, err := tc.lps.TieredStrategy.GetTier(tc.targetNodesCpus, 0)
 			if tc.wantErr {
 				assert.Error(t, err)
 				return
 			}
 			assert.NoError(t, err)
 			assert.Equal(t, tc.wantTier, tier)
+		})
+	}
+}
+
+func TestGetTierNewClusterTier(t *testing.T) {
+	newClusterTier := Tier{
+		NumLookaheadPods:     3,
+		LookaheadPodMilliCPU: 6000,
+		LookaheadPodMemKib:   20 * size.GiB / size.KiB,
+		MinTargetNodesCPU:    1,
+	}
+	regularTier := Tier{
+		NumLookaheadPods:     1,
+		LookaheadPodMilliCPU: 4000,
+		LookaheadPodMemKib:   16 * size.GiB / size.KiB,
+		MinTargetNodesCPU:    1,
+	}
+	emptyTier := Tier{NumLookaheadPods: 0, MinTargetNodesCPU: 0}
+	tiers := []Tier{regularTier, emptyTier}
+	tieredStrategy := &TieredStrategy{
+		Tiers:                 tiers,
+		NewClusterTier:        &newClusterTier,
+		NewClusterMaxAgeHours: 24,
+	}
+
+	for _, tc := range []struct {
+		desc            string
+		tieredStrategy  *TieredStrategy
+		clusterAge      time.Duration
+		targetNodesCPUs int
+		want            Tier
+	}{
+		{
+			desc:            "new cluster uses new cluster tier",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      time.Hour,
+			targetNodesCPUs: 2,
+			want:            newClusterTier,
+		},
+		{
+			desc:            "negative cluster age due to clock skew uses new cluster tier",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      -2 * time.Minute,
+			targetNodesCPUs: 2,
+			want:            newClusterTier,
+		},
+		{
+			desc:            "new cluster at new cluster tier min target nodes cpu uses new cluster tier",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      time.Hour,
+			targetNodesCPUs: 1,
+			want:            newClusterTier,
+		},
+		{
+			desc:            "new cluster below new cluster tier min target nodes cpu uses regular tiers",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      time.Hour,
+			targetNodesCPUs: 0,
+			want:            emptyTier,
+		},
+		{
+			desc:            "cluster exactly at max age uses regular tiers",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      24 * time.Hour,
+			targetNodesCPUs: 2,
+			want:            regularTier,
+		},
+		{
+			desc:            "mature cluster uses regular tiers",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      48 * time.Hour,
+			targetNodesCPUs: 2,
+			want:            regularTier,
+		},
+		{
+			desc:            "mature cluster at regular tier min target nodes cpu uses regular tiers",
+			tieredStrategy:  tieredStrategy,
+			clusterAge:      48 * time.Hour,
+			targetNodesCPUs: 1,
+			want:            regularTier,
+		},
+		{
+			desc:            "new cluster without new cluster tier uses regular tiers",
+			tieredStrategy:  &TieredStrategy{Tiers: tiers},
+			clusterAge:      time.Hour,
+			targetNodesCPUs: 2,
+			want:            regularTier,
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			got, err := tc.tieredStrategy.GetTier(tc.targetNodesCPUs, tc.clusterAge)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

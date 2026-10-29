@@ -609,10 +609,13 @@ func (b *Builder) Build(
 		machinetypes.E4A.Name(): autoscalingOptions.E4aLookaheadPodStrategy,
 		machinetypes.E4.Name():  autoscalingOptions.E4LookaheadPodStrategy,
 	}
-	experimentFlags := map[string]string{
-		machinetypes.EK.Name():  experiments.EkLookaheadPodsV1Flag,
-		machinetypes.E4A.Name(): experiments.E4aLookaheadPodsV1Flag,
-		machinetypes.E4.Name():  experiments.E4LookaheadPodsV1Flag,
+	// Experiment flags are ordered by priority; the first flag that resolves to a specified
+	// strategy is used.
+	experimentFlags := map[string][]string{
+		// TODO(b/582686667): Remove EkLookaheadPodsV1Flag once LookaheadPodsV2 reaches 100% rollout.
+		machinetypes.EK.Name():  {experiments.EkLookaheadPodsV2Flag, experiments.EkLookaheadPodsV1Flag},
+		machinetypes.E4A.Name(): {experiments.E4aLookaheadPodsV1Flag},
+		machinetypes.E4.Name():  {experiments.E4LookaheadPodsV1Flag},
 	}
 
 	lookaheadBufferStrategyProvider, err := lookaheadbuffer_strategy.NewProvider(
