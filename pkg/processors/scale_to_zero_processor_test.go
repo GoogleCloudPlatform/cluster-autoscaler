@@ -212,7 +212,10 @@ func TestNonSystemPodsPresent(t *testing.T) {
 			ignoredNamespaces := []string{metav1.NamespaceSystem}
 			ignoredNamespaces = append(ignoredNamespaces, tc.customSystemNamespaces...)
 			p := NewScaleToZeroPodListProcessor(nil, time.Second, systempods.NewClassifier(ignoredNamespaces))
-			assert.Equal(t, tc.wantUserPods, p.blockingPodsPresent(tc.nodeInfos, tc.unschedulablePods))
+			assert.Equal(t, tc.wantUserPods, p.blockingPodsPresent(tc.nodeInfos, tc.unschedulablePods, nil))
+			// Pending pods handled by other CA instances block scale-to-0 the
+			// same way.
+			assert.Equal(t, tc.wantUserPods, p.blockingPodsPresent(tc.nodeInfos, nil, tc.unschedulablePods))
 		})
 	}
 }
@@ -272,6 +275,7 @@ func TestScaleToZeroProcessor(t *testing.T) {
 	testCases := map[string]struct {
 		nodeInfos                   []*framework.NodeInfo
 		unschedulablePods           []*apiv1.Pod
+		otherPendingPods            []*apiv1.Pod
 		emptyFor                    time.Duration
 		expectClusterEmptyTimer     bool
 		expectSystemPodsFiltered    bool
@@ -312,6 +316,33 @@ func TestScaleToZeroProcessor(t *testing.T) {
 			},
 			emptyFor:                    time.Hour,
 			expectedDrainabilityOutcome: drainability.UndefinedOutcome,
+		},
+		"cluster with user pod pending in other CA instance is not empty": {
+			nodeInfos: []*framework.NodeInfo{
+				systemOnlyNode,
+			},
+			unschedulablePods: []*apiv1.Pod{
+				buildTestPod(metav1.NamespaceSystem, "kube-dns"),
+			},
+			otherPendingPods: []*apiv1.Pod{
+				buildTestPod(namespaceDefault, "schrodinger-cat"),
+			},
+			emptyFor:                    time.Hour,
+			expectedDrainabilityOutcome: drainability.UndefinedOutcome,
+		},
+		"system and ds pods pending in other CA instance don't block scale to 0": {
+			nodeInfos: []*framework.NodeInfo{
+				systemOnlyNode,
+				userDsNode,
+			},
+			otherPendingPods: []*apiv1.Pod{
+				buildTestPod(metav1.NamespaceSystem, "kube-dns"),
+				buildTestPod(namespaceDefault, "maxwelld", withDaemonSetOwnerRef()),
+			},
+			emptyFor:                    6 * time.Minute,
+			expectClusterEmptyTimer:     true,
+			expectSystemPodsFiltered:    true,
+			expectedDrainabilityOutcome: drainability.SkipDrain,
 		},
 		"cluster with only system pods is empty, but not scaled to 0 before grace period": {
 			nodeInfos: []*framework.NodeInfo{
@@ -419,7 +450,7 @@ func TestScaleToZeroProcessor(t *testing.T) {
 			proc := NewScaleToZeroPodListProcessor(metricsFilter, 5*time.Minute, systempods.NewClassifier([]string{metav1.NamespaceSystem}))
 			proc.emptySince = time.Now().Add(-1 * tc.emptyFor)
 
-			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
+			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods, tc.otherPendingPods)
 			assert.NoError(t, err)
 
 			metricsFilteredPods := metricsFilter.FilterOutPods(tc.unschedulablePods)

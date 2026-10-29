@@ -90,6 +90,7 @@ func TestMultitenantScaleToZeroProcessor(t *testing.T) {
 	testCases := map[string]struct {
 		nodeInfos             []*framework.NodeInfo
 		unschedulablePods     []*apiv1.Pod
+		otherPendingPods      []*apiv1.Pod
 		wantUnschedulablePods []*apiv1.Pod
 		tenantsFilteredOut    map[string]bool
 		supervisorFilteredOut bool
@@ -150,6 +151,31 @@ func TestMultitenantScaleToZeroProcessor(t *testing.T) {
 				fooUID: true,
 			},
 		},
+		"2 tenants, user pod pending in other CA instance only blocks its own tenant": {
+			unschedulablePods: []*apiv1.Pod{
+				fooSystemWorkload, barSystemWorkload,
+			},
+			otherPendingPods: []*apiv1.Pod{
+				fooUserWorkload,
+			},
+			wantUnschedulablePods: []*apiv1.Pod{
+				fooSystemWorkload,
+			},
+			tenantsFilteredOut: map[string]bool{
+				barUID: true,
+			},
+		},
+		"1 tenant, supervisor pod pending in other CA instance blocks supervisor": {
+			nodeInfos: []*framework.NodeInfo{
+				buildTestNodeInfo("supervisor-system", []*apiv1.Pod{fooSupervisorSystemWorkload, fooSupervisorSystemWorkload}, withNodeLabels(supervisorNodeLabels)),
+			},
+			unschedulablePods: []*apiv1.Pod{
+				fooUserWorkload,
+			},
+			otherPendingPods: []*apiv1.Pod{
+				fooSupervisorWorkload,
+			},
+		},
 		"1 tenant with scheduled supervisor system pods": {
 			nodeInfos: []*framework.NodeInfo{
 				buildTestNodeInfo("supervisor-system", []*apiv1.Pod{fooSupervisorSystemWorkload, fooSupervisorSystemWorkload}, withNodeLabels(supervisorNodeLabels)),
@@ -191,7 +217,7 @@ func TestMultitenantScaleToZeroProcessor(t *testing.T) {
 				assert.Equal(t, drainability.UndefinedOutcome, drainStatus.Outcome)
 			}
 
-			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods)
+			newUnschedulable, err := proc.Process(context.TODO(), autoscalingCtx, tc.unschedulablePods, tc.otherPendingPods)
 			assert.NoError(t, err)
 			if tc.wantUnschedulablePods != nil {
 				assert.Equal(t, newUnschedulable, tc.wantUnschedulablePods)

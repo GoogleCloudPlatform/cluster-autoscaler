@@ -63,9 +63,9 @@ func NewMultitenantScaleToZeroPodListProcessor(metricsFilter filter.MetricsFilte
 // daemonset or system pods. If this is true and has been true for the duration
 // of grace period it filters out non-ds pods both from list of unschedulable
 // pods and ClusterSnapshot for that tenant/supervisor
-func (p *MultitenantScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+func (p *MultitenantScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods, otherPendingPods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	if p.isMultitenantScaleToZeroExpDisabled() {
-		return p.backupScaleToZeroPodListProcessor.Process(ctx, autoscalingCtx, unschedulablePods)
+		return p.backupScaleToZeroPodListProcessor.Process(ctx, autoscalingCtx, unschedulablePods, otherPendingPods)
 	}
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
@@ -83,12 +83,17 @@ func (p *MultitenantScaleToZeroPodListProcessor) Process(ctx context.Context, au
 	// supervisor unschedulable pods
 	tenantToUnschedulablePods := tenantsFromNodes(nodeInfos)
 	supervisorUnschedulablePods := groupUnschedulablePods(unschedulablePods, tenantToUnschedulablePods)
+	// Pending pods handled by other CA instances are grouped the same way, so
+	// that each of them only blocks scale-to-0 of its own tenant (or
+	// supervisor).
+	tenantToOtherPendingPods := make(map[string][]*apiv1.Pod)
+	supervisorOtherPendingPods := groupUnschedulablePods(otherPendingPods, tenantToOtherPendingPods)
 	klog.Infof("Found %d tenants", len(tenantToUnschedulablePods))
 	var leftoverUnschedulablePods []*apiv1.Pod
 	for tenantUID, pods := range tenantToUnschedulablePods {
 		tenantProcessor := p.tenantScaleToZeroProcessor(tenantUID)
 		klog.Infof("Checking for scale down to zero in tenant %s", tenantUID)
-		tenantLeftoverUnschedulablePods, err := tenantProcessor.Process(ctx, autoscalingCtx, pods)
+		tenantLeftoverUnschedulablePods, err := tenantProcessor.Process(ctx, autoscalingCtx, pods, tenantToOtherPendingPods[tenantUID])
 		if err != nil {
 			klog.Errorf("Encountered scale-to-0 error in tenant %s: %v", tenantUID, err)
 		}
@@ -97,7 +102,7 @@ func (p *MultitenantScaleToZeroPodListProcessor) Process(ctx context.Context, au
 	}
 
 	supervisorProcessor := p.supervisorScaleToZeroProcessor()
-	supervisorLeftoverUnschedulablePods, err := supervisorProcessor.Process(ctx, autoscalingCtx, supervisorUnschedulablePods)
+	supervisorLeftoverUnschedulablePods, err := supervisorProcessor.Process(ctx, autoscalingCtx, supervisorUnschedulablePods, supervisorOtherPendingPods)
 	if err != nil {
 		klog.Errorf("Encountered scale-to-0 error in supervisor: %v", err)
 	}

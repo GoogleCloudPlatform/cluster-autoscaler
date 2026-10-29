@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,6 +99,19 @@ func TestCccAnnotationPodFilter(t *testing.T) {
 				gotNames = append(gotNames, p.Name)
 			}
 			assert.ElementsMatch(t, tc.wantPodNames, gotNames)
+
+			owned, unowned := podFilter.PartitionPodsByAutoscaler(allPods)
+			assert.Equal(t, accepted, owned)
+			var wantUnownedNames, gotUnownedNames []string
+			for _, p := range allPods {
+				if !slices.Contains(tc.wantPodNames, p.Name) {
+					wantUnownedNames = append(wantUnownedNames, p.Name)
+				}
+			}
+			for _, p := range unowned {
+				gotUnownedNames = append(gotUnownedNames, p.Name)
+			}
+			assert.ElementsMatch(t, wantUnownedNames, gotUnownedNames)
 		})
 	}
 }
