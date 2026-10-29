@@ -366,3 +366,6 @@ const HighThroughputScaledownMinCAVersionFlag = "HighThroughputScaledown::MinCAV
 const AuthoritativeMachinesCacheEnabledFlag = "AuthoritativeMachinesCache::Enabled"
 const AuthoritativeMachinesCacheMinCAVersionFlag = "AuthoritativeMachinesCache::MinCAVersion"
 const AuthoritativeMachinesCacheRefreshIntervalMinutesFlag = "AuthoritativeMachinesCache::RefreshIntervalMinutes"
+
+const ScaleDownPriorityEnabledFlag = "ScaleDownPriority::Enabled"
+const ScaleDownPriorityMinCAVersionFlag = "ScaleDownPriority::MinCAVersion"
