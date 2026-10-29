@@ -355,6 +355,7 @@ type mockReconcileClient struct {
 	patchCBError   func(cb *cbv1beta1.CapacityBuffer) error
 	deleteCBError  func(cb *cbv1beta1.CapacityBuffer) error
 	patchPTError   func(pt *corev1.PodTemplate) error
+	deletePTError  func(pt *corev1.PodTemplate) error
 	createdCBs     []*cbv1beta1.CapacityBuffer
 	patchedCBs     []string
 	patchedCBBytes map[string][]byte
@@ -447,11 +448,18 @@ func (m *mockReconcileClient) Delete(ctx context.Context, obj client.Object, opt
 	switch o := obj.(type) {
 	case *cbv1beta1.CapacityBuffer:
 		if m.deleteCBError != nil {
-			return m.deleteCBError(o)
+			if err := m.deleteCBError(o); err != nil {
+				return err
+			}
 		}
 		m.deletedCBs = append(m.deletedCBs, o.Name)
 		return nil
 	case *corev1.PodTemplate:
+		if m.deletePTError != nil {
+			if err := m.deletePTError(o); err != nil {
+				return err
+			}
+		}
 		m.deletedPTs = append(m.deletedPTs, o.Name)
 		return nil
 	default:
@@ -2010,5 +2018,89 @@ func TestReconcile_RequeuesWhenCreateRecordExpiresDuringPass(t *testing.T) {
 	}
 	if want := (reconcile.Result{RequeueAfter: defaultInFlightTTL}); res != want {
 		t.Errorf("Pass 2: expected %+v, got %+v", want, res)
+	}
+}
+
+func ownedPT(ccName string, ccUID types.UID, name string) corev1.PodTemplate {
+	return corev1.PodTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: NamespaceGkeManagedCCC,
+			Labels:    commonBufferLabels(ccName),
+			OwnerReferences: []metav1.OwnerReference{
+				{APIVersion: ccapiv1.SchemeGroupVersion.String(), Kind: kindComputeClass, Name: ccName, UID: ccUID},
+			},
+		},
+	}
+}
+
+func TestReconcile_PodTemplateDeleteFailureRequeues(t *testing.T) {
+	ccUID := types.UID("cc-uid-prune")
+	cc := &ccapiv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-cc", UID: ccUID, Generation: 2},
+		Spec: ccapiv1.ComputeClassSpec{Buffers: []ccapiv1.ComputeClassBuffer{
+			{ProvisioningStrategy: activeCapacityStrategy, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("4")}},
+		}},
+	}
+	// The active buffer is in place and ready. The only work left is the PodTemplate of a standby
+	// buffer that was removed from the spec.
+	activeCB := *buildCapacityBuffer(cc, cc.Spec.Buffers[0], "pt-basic-test-cc", "cb-active", "uid-cb-active")
+	activeCB.Status.Conditions = []metav1.Condition{
+		{Type: capacitybuffer.ReadyForProvisioningCondition, Status: metav1.ConditionTrue, Reason: "AttributesSetSuccessfully", Message: "ready"},
+		{Type: capacitybuffer.ProvisioningCondition, Status: metav1.ConditionTrue, Reason: "FakePodsInjected"},
+	}
+	cc.Status = ccapiv1.ComputeClassStatus{
+		Conditions: []metav1.Condition{{
+			Type: conditionTypeBuffersConfigured, Status: metav1.ConditionTrue, Reason: "Ready",
+			Message: "All capacity buffers configured and ready for provisioning", ObservedGeneration: 2,
+		}},
+		ObservedBuffers: []ccapiv1.ObservedBufferStatus{buildObservedBuffer(&activeCB, ccapiv1.ObservedBufferStatus{})},
+	}
+	statusWriter := &mockStatusWriter{}
+	mockClient := &mockReconcileClient{
+		cc:      cc,
+		cbItems: []cbv1beta1.CapacityBuffer{activeCB},
+		ptItems: []corev1.PodTemplate{
+			ownedPT("test-cc", ccUID, "pt-basic-test-cc"),
+			ownedPT("test-cc", ccUID, "pt-standby-test-cc"),
+		},
+		statusWriter: statusWriter,
+		deletePTError: func(pt *corev1.PodTemplate) error {
+			return apierrors.NewServiceUnavailable("unavailable")
+		},
+	}
+	r := &Reconciler{Client: mockClient}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-cc"}}
+
+	res, err := r.Reconcile(t.Context(), req)
+	if err == nil {
+		t.Fatal("Reconcile() error = nil, want the PodTemplate delete error so that the request is retried")
+	}
+	if res != (reconcile.Result{}) {
+		t.Errorf("Reconcile() result = %+v, want empty when returning an error", res)
+	}
+	if len(mockClient.deletedPTs) != 0 || len(mockClient.createdCBs) != 0 || len(mockClient.patchedCBs) != 0 || len(mockClient.deletedCBs) != 0 {
+		t.Errorf("Reconcile() writes: created=%d patchedCBs=%v deletedCBs=%v deletedPTs=%v, want no CapacityBuffer writes and no successful PodTemplate delete",
+			len(mockClient.createdCBs), mockClient.patchedCBs, mockClient.deletedCBs, mockClient.deletedPTs)
+	}
+	// The status already matches the buffers, so it's not patched, and in particular not to ReconcileFailed.
+	if len(statusWriter.patchedBytes) != 0 {
+		t.Errorf("Reconcile() status patch = %s, want none", statusWriter.patchedBytes)
+	}
+
+	// The retry deletes the PodTemplate and succeeds.
+	mockClient.deletePTError = nil
+	res, err = r.Reconcile(t.Context(), req)
+	if err != nil {
+		t.Fatalf("Retry: Reconcile() error = %v, want nil", err)
+	}
+	if res != (reconcile.Result{}) {
+		t.Errorf("Retry: Reconcile() result = %+v, want no requeue", res)
+	}
+	if want := []string{"pt-standby-test-cc"}; !slices.Equal(mockClient.deletedPTs, want) {
+		t.Errorf("Retry: deleted PodTemplates = %v, want %v", mockClient.deletedPTs, want)
+	}
+	if len(statusWriter.patchedBytes) != 0 {
+		t.Errorf("Retry: Reconcile() status patch = %s, want none", statusWriter.patchedBytes)
 	}
 }

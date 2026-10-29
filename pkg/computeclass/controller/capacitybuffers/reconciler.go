@@ -208,19 +208,20 @@ func (r *Reconciler) reconcile(ctx context.Context, req reconcile.Request) (reco
 	}
 
 	// 3. Prune unneeded PodTemplates (only when all buffer deletions succeeded)
+	var ptErr error
 	if !deleteFailed {
-		if err := r.pruneUnneededTemplates(ctx, &cc, expectedPTNames); err != nil {
-			klog.Warningf("%s pruneUnneededTemplates failed for %s: %v", logPrefix, cc.Name, err)
+		if ptErr = r.pruneUnneededTemplates(ctx, &cc, expectedPTNames); ptErr != nil {
+			klog.Warningf("%s pruneUnneededTemplates failed for %s: %v", logPrefix, cc.Name, ptErr)
 		}
 	}
 
 	// 4. Update status
-	if statusErr := r.reconcileStatus(ctx, &cc, activeCB, bufErr); statusErr != nil {
+	statusErr := r.reconcileStatus(ctx, &cc, activeCB, bufErr)
+	if statusErr != nil {
 		klog.Errorf("%s reconcileStatus failed for %s: %v", logPrefix, cc.Name, statusErr)
-		return reconcile.Result{}, errors.Join(bufErr, statusErr)
 	}
-	if bufErr != nil {
-		return reconcile.Result{}, bufErr
+	if err := errors.Join(bufErr, ptErr, statusErr); err != nil {
+		return reconcile.Result{}, err
 	}
 
 	// An in-flight create stands in for its buffer until it's listed or expires. If the buffer
@@ -333,6 +334,7 @@ func (r *Reconciler) applyRequiredTemplates(
 }
 
 // pruneUnneededTemplates deletes any PodTemplates owned by this ComputeClass that are no longer required.
+// It returns an error if listing or a delete fails, so the caller can retry.
 func (r *Reconciler) pruneUnneededTemplates(
 	ctx context.Context,
 	cc *ccapiv1.ComputeClass,
@@ -343,6 +345,7 @@ func (r *Reconciler) pruneUnneededTemplates(
 		return err
 	}
 
+	var errs []error
 	for i := range ptList.Items {
 		pt := &ptList.Items[i]
 		if pt.GetDeletionTimestamp() != nil || !hasOwnerReferenceUID(pt, cc.UID) {
@@ -351,11 +354,12 @@ func (r *Reconciler) pruneUnneededTemplates(
 		if !expectedPTNames.Has(pt.Name) {
 			if err := r.Client.Delete(ctx, pt); err != nil && !apierrors.IsNotFound(err) {
 				klog.Warningf("%s Failed to clean up unneeded PodTemplate %s: %v", logPrefix, pt.Name, err)
+				errs = append(errs, err)
 			}
 		}
 	}
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *Reconciler) applyPodTemplateSSA(ctx context.Context, cc *ccapiv1.ComputeClass, strategy string) error {
