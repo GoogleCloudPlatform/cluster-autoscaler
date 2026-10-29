@@ -822,7 +822,7 @@ func (b *Builder) Build(
 	}
 
 	if b.manager != nil && computeclass.IsComputeClassCapacityBuffersEnabled(experimentsManager) {
-		if err := capacitybuffers.SetupWithManager(b.manager); err != nil {
+		if err := capacitybuffers.SetupReconciler(b.manager); err != nil {
 			klog.Errorf("Failed to setup CapacityBuffer reconciler: %v", err)
 			return nil, nil, fmt.Errorf("failed to setup CapacityBuffer reconciler: %w", err)
 		}
