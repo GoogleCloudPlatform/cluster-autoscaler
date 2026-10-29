@@ -90,6 +90,7 @@ const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinC
 
 const ComputeClassCapacityBuffersFlag = "ComputeClassCapacityBuffers::Enabled"
 const ComputeClassCapacityBuffersMinCAVersionFlag = "ComputeClassCapacityBuffers::MinCAVersion"
+const ComputeClassCapacityBuffersCleanupFlag = "ComputeClassCapacityBuffers::Cleanup"
 
 const ComputeClassConfigDriftStatusEnabledFlag = "ComputeClassConfigDriftStatus::Enabled"
 const ComputeClassConfigDriftStatusMinCAVersionFlag = "ComputeClassConfigDriftStatus::MinCAVersion"
