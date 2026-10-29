@@ -58,7 +58,10 @@ type podProcessor interface {
 }
 
 type ScaleToZeroProcessor interface {
-	podProcessor
+	// Process filters out unschedulablePods if cluster scale-to-0 is triggered.
+	// otherPendingPods are pending pods handled by other CA instances: they're
+	// only used to decide whether the cluster is empty and are never returned.
+	Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods, otherPendingPods []*apiv1.Pod) ([]*apiv1.Pod, error)
 	Drainable(drainContext *drainability.DrainContext, pod *apiv1.Pod, node *framework.NodeInfo) drainability.Status
 	Name() string
 }
@@ -201,9 +204,12 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	klog.Infof("Unschedulable pods count before processing: %v", len(unschedulablePods))
 
 	// Filter unowned real unschedulable pods upfront before status aggregation,
-	// storage affinity, Flex Advisor, and CapacityRequest processing.
+	// storage affinity, Flex Advisor, and CapacityRequest processing. Pods
+	// owned by other CA instances are not processed further, but they're still
+	// taken into account in cluster-wide decisions (cluster scale-to-0).
+	var otherPendingPods []*apiv1.Pod
 	if p.cccPodFilter != nil {
-		unschedulablePods = p.cccPodFilter.FilterPodsByAutoscaler(unschedulablePods)
+		unschedulablePods, otherPendingPods = p.cccPodFilter.PartitionPodsByAutoscaler(unschedulablePods)
 		klog.Infof("Unschedulable pods count after CCC autoscaler ownership filtering: %v", len(unschedulablePods))
 	}
 
@@ -287,7 +293,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	// TODO(b/519117759): Clean-up this experiment after launch.
 	runScaleToZeroLate := p.experimentsManager.DirectLaunchBoolFlag(experiments.ScaleToZeroLateRunFlag)
 	if p.scaleToZeroProcessor != nil && !runScaleToZeroLate {
-		unschedulablePods, err = p.processAndObserve(p.scaleToZeroProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
+		unschedulablePods, err = p.processScaleToZero(autoscalingCtx, unschedulablePods, otherPendingPods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -428,7 +434,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	if p.scaleToZeroProcessor != nil && runScaleToZeroLate {
-		unschedulablePods, err = p.processAndObserve(p.scaleToZeroProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
+		unschedulablePods, err = p.processScaleToZero(autoscalingCtx, unschedulablePods, otherPendingPods)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -444,6 +450,19 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	return unschedulablePods, nil
+}
+
+// processScaleToZero runs scaleToZeroProcessor and observes the pods it
+// filtered out, like processAndObserve. otherPendingPods are only taken into
+// account in the scale-to-0 decision: they're never returned, so they're
+// neither observed nor passed to further processors.
+func (p *GkeInternalPodListProcessor) processScaleToZero(autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods, otherPendingPods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+	remainingPods, err := p.scaleToZeroProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods, otherPendingPods)
+	if err != nil {
+		return []*apiv1.Pod{}, err
+	}
+	p.observePods(podutil.GetMissingPods(unschedulablePods, remainingPods), metrics.NoActionNeeded)
+	return remainingPods, nil
 }
 
 func (p *GkeInternalPodListProcessor) processAndObserve(processor podProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {

@@ -36,14 +36,22 @@ func NewCccAnnotationPodFilter(cccLister lister.Lister) *CccAnnotationPodFilter 
 // FilterPodsByAutoscaler filters pending pods, returning only pods owned by
 // this CA instance.
 func (f *CccAnnotationPodFilter) FilterPodsByAutoscaler(pods []*apiv1.Pod) []*apiv1.Pod {
+	owned, _ := f.PartitionPodsByAutoscaler(pods)
+	return owned
+}
+
+// PartitionPodsByAutoscaler splits pending pods into the ones owned by this CA
+// instance and the ones owned by other CA instances.
+func (f *CccAnnotationPodFilter) PartitionPodsByAutoscaler(pods []*apiv1.Pod) (owned, unowned []*apiv1.Pod) {
 	if f.cccLister == nil {
-		return pods
+		return pods, nil
 	}
-	var owned []*apiv1.Pod
 	for _, pod := range pods {
 		if f.cccLister.IsPodOwned(pod) {
 			owned = append(owned, pod)
+		} else {
+			unowned = append(unowned, pod)
 		}
 	}
-	return owned
+	return owned, unowned
 }

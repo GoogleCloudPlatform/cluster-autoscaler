@@ -17,6 +17,7 @@ package processors
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"testing/synctest"
@@ -52,11 +53,15 @@ import (
 )
 
 type mockScaleToZeroProcessor struct {
-	called bool
+	called                   bool
+	receivedPods             []*v1.Pod
+	receivedOtherPendingPods []*v1.Pod
 }
 
-func (m *mockScaleToZeroProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*v1.Pod) ([]*v1.Pod, error) {
+func (m *mockScaleToZeroProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods, otherPendingPods []*v1.Pod) ([]*v1.Pod, error) {
 	m.called = true
+	m.receivedPods = unschedulablePods
+	m.receivedOtherPendingPods = otherPendingPods
 	return unschedulablePods, nil
 }
 
@@ -715,5 +720,60 @@ func TestCccPodFilterInPodListProcessor(t *testing.T) {
 				t.Errorf("Process returned unexpected pods diff (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestScaleToZeroReceivesPodsOwnedByOtherInstances(t *testing.T) {
+	pOwned := test.BuildTestPod("owned", 100, 1)
+	pUnowned := test.BuildTestPod("unowned", 100, 1)
+	ownedFilter := cc_processors.NewCccAnnotationPodFilter(&mockCccLister{ownership: map[string]bool{"owned": true}})
+
+	testCases := []struct {
+		name                 string
+		cccPodFilter         *cc_processors.CccAnnotationPodFilter
+		wantPods             []*v1.Pod
+		wantOtherPendingPods []*v1.Pod
+	}{
+		{
+			name:         "cccPodFilter is nil: all pods are processed, no other pending pods",
+			cccPodFilter: nil,
+			wantPods:     []*v1.Pod{pOwned, pUnowned},
+		},
+		{
+			name:                 "cccPodFilter is set: unowned pods are passed as other pending pods",
+			cccPodFilter:         ownedFilter,
+			wantPods:             []*v1.Pod{pOwned},
+			wantOtherPendingPods: []*v1.Pod{pUnowned},
+		},
+	}
+
+	for _, tc := range testCases {
+		for _, lateRun := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, late run: %v", tc.name, lateRun), func(t *testing.T) {
+				scaleToZero := &mockScaleToZeroProcessor{}
+				processor := &GkeInternalPodListProcessor{
+					scaleToZeroProcessor:      scaleToZero,
+					defaultPodListerProcessor: &mockDefaultPodListProcessor{},
+					cccPodFilter:              tc.cccPodFilter,
+					podStatusAggregator:       metrics_processors.NewPodStatusAggregator(),
+					experimentsManager: experiments.NewMockManagerWithOptions(version.Version{},
+						map[string]bool{experiments.ScaleToZeroLateRunFlag: lateRun}, map[string]string{}),
+				}
+
+				res, err := processor.Process(context.TODO(), &ca_context.AutoscalingContext{}, []*v1.Pod{pOwned, pUnowned})
+				if err != nil {
+					t.Fatalf("Process() returned unexpected error: %v", err)
+				}
+				if diff := cmp.Diff(tc.wantPods, scaleToZero.receivedPods); diff != "" {
+					t.Errorf("scaleToZeroProcessor received unexpected pods (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantOtherPendingPods, scaleToZero.receivedOtherPendingPods); diff != "" {
+					t.Errorf("scaleToZeroProcessor received unexpected other pending pods (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantPods, res); diff != "" {
+					t.Errorf("Process() returned unexpected pods (-want +got):\n%s", diff)
+				}
+			})
+		}
 	}
 }

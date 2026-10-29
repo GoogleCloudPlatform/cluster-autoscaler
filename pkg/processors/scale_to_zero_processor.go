@@ -70,7 +70,9 @@ func newScaleToZeroPodListProcessorWithNodeFilter(metricsFilter filter.MetricsFi
 // daemonset or system pods. If this is true and has been true for the duration
 // of grace period it filters out non-ds pods both from list of unschedulable
 // pods and ClusterSnapshot.
-func (p *ScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
+// otherPendingPods are pending pods handled by other CA instances. They block
+// scale-to-0 the same way unschedulablePods do, but are never returned.
+func (p *ScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods, otherPendingPods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
 		// This is the safe direction to fail (if in doubt don't take
@@ -83,7 +85,7 @@ func (p *ScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 	p.metricsFilter.ObserveScaleToZero(unschedulablePods, nodeInfos, p.ignoreNodeFn, false)
 
-	if p.blockingPodsPresent(nodeInfos, unschedulablePods) {
+	if p.blockingPodsPresent(nodeInfos, unschedulablePods, otherPendingPods) {
 		p.resetStatus()
 		klog.Info("User pods present")
 		return unschedulablePods, nil
@@ -112,10 +114,12 @@ func (p *ScaleToZeroPodListProcessor) Process(ctx context.Context, autoscalingCt
 	return unschedulablePods, nil
 }
 
-func (p *ScaleToZeroPodListProcessor) blockingPodsPresent(nodeInfos []*framework.NodeInfo, unschedulable []*apiv1.Pod) bool {
-	for _, pod := range unschedulable {
-		if p.podBlocksScaleToZero(pod) {
-			return true
+func (p *ScaleToZeroPodListProcessor) blockingPodsPresent(nodeInfos []*framework.NodeInfo, unschedulable, otherPending []*apiv1.Pod) bool {
+	for _, pods := range [][]*apiv1.Pod{unschedulable, otherPending} {
+		for _, pod := range pods {
+			if p.podBlocksScaleToZero(pod) {
+				return true
+			}
 		}
 	}
 	for _, ni := range nodeInfos {
