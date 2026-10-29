@@ -2097,6 +2097,7 @@ func (m *gkeManagerImpl) refresh(force bool) error {
 	m.cache.InvalidateAllMigBasenames()
 	m.cache.InvalidateAllListManagedInstancesResults()
 	m.cache.InvalidateAllMigInstanceTemplateNames(context.TODO())
+	m.cache.InvalidateMigListingErrors()
 	m.InvalidateNodesScaleDownAllowedCache()
 	m.cache.InvalidateCapacityCheckWaitTimes()
 

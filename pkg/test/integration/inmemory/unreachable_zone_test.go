@@ -302,6 +302,14 @@ func TestUnreachableZoneBlockingPerGceError(t *testing.T) {
 			err:         &googleapi.Error{Code: http.StatusBadRequest, Message: "Bad Request"},
 			wantBlocked: false,
 		},
+		"QuotaExceeded403": {
+			err: &googleapi.Error{
+				Code:    http.StatusForbidden,
+				Message: "Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute' of service 'compute.googleapis.com'.",
+				Errors:  []googleapi.ErrorItem{{Reason: "rateLimitExceeded", Message: "Quota exceeded"}},
+			},
+			wantBlocked: false,
+		},
 	}
 
 	for name, tc := range tests {

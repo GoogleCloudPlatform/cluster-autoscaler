@@ -86,6 +86,8 @@ type GceCacheInterface interface {
 	GetListManagedInstancesResults(gce.GceRef) (string, bool)
 	// InvalidateAllListManagedInstancesResults invalidates all listManagedInstancesResults entries.
 	InvalidateAllListManagedInstancesResults()
+	// InvalidateMigListingErrors clears all cached MIG listing errors.
+	InvalidateMigListingErrors()
 	// DropInstanceTemplatesForMissingMigs clears the instance template
 	// cache intended MIGs which are no longer present in the cluster
 	DropInstanceTemplatesForMissingMigs(ctx context.Context, currentMigs []gce.Mig)
