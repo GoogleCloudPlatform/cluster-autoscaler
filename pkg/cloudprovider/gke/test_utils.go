@@ -3344,6 +3344,10 @@ func (g *MockGceCache) GetListManagedInstancesResults(gce.GceRef) (string, bool)
 func (g *MockGceCache) InvalidateAllListManagedInstancesResults() {
 }
 
+// InvalidateMigListingErrors clears all cached MIG listing errors.
+func (g *MockGceCache) InvalidateMigListingErrors() {
+}
+
 // DropInstanceTemplatesForMissingMigs clears the instance template
 // cache intended MIGs which are no longer present in the cluster
 func (g *MockGceCache) DropInstanceTemplatesForMissingMigs(ctx context.Context, currentMigs []gce.Mig) {
