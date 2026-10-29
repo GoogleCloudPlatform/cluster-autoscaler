@@ -1635,3 +1635,110 @@ func (o *processedNodePoolsObserver) waitForNodePoolsToBeProcessed(duration time
 	}
 	return nil
 }
+
+func (o *processedNodePoolsObserver) waitForUpcomingNodePoolToBeDropped(nodePoolName string, duration time.Duration) error {
+	asyncGkeManager := o.asyncGkeManager
+	o.processedNodePoolsCond.L.Lock()
+	defer o.processedNodePoolsCond.L.Unlock()
+	ctx, cancel := context.WithTimeout(asyncGkeManager.context, duration)
+	defer cancel()
+	context.AfterFunc(ctx, func() {
+		o.processedNodePoolsCond.L.Lock()
+		defer o.processedNodePoolsCond.L.Unlock()
+		o.processedNodePoolsCond.Broadcast()
+	})
+	for {
+		if _, exists := asyncGkeManager.upcomingNodePools[nodePoolName]; !exists {
+			return nil
+		}
+		o.processedNodePoolsCond.Wait()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+}
+
+func TestAsyncMgr_BufferedCleanUpsDoNotExhaustBufferCapacity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		persistentErr := caerrors.NewAutoscalerError(gkeclient.GkePersistentOperationError, "persistent error")
+
+		failedMig1, failedPool1 := ctx.sampleMigWithNodePool()
+		ctx.gkeManager.failNodePoolCreationWithRepeatingError(failedMig1.NodePoolName(), persistentErr, 1, false)
+		init1 := newAsyncNodeGroupInitializer(t)
+		init1.BlockInitialization()
+		res1, err := ctx.asyncGkeManager.CreateNodePoolAsync(failedMig1, init1, init1)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, res1.AllCreatedMigs())
+		ctx.gkeManager.finalizeNodePoolCreation(failedPool1)
+		assert.Error(t, init1.AwaitResultOrFail().Error)
+		synctest.Wait()
+
+		failedMig2, failedPool2 := ctx.sampleMigWithNodePool()
+		ctx.gkeManager.failNodePoolCreationWithRepeatingError(failedMig2.NodePoolName(), persistentErr, 1, false)
+		init2 := newAsyncNodeGroupInitializer(t)
+		init2.BlockInitialization()
+		res2, err := ctx.asyncGkeManager.CreateNodePoolAsync(failedMig2, init2, init2)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, res2.AllCreatedMigs())
+		ctx.gkeManager.finalizeNodePoolCreation(failedPool2)
+		assert.Error(t, init2.AwaitResultOrFail().Error)
+		synctest.Wait()
+
+		// Fill all worker slots first and wait for workers to dequeue them,
+		// then fill all queue slots in the taskQueue with in-flight deletions.
+		var blockingPools []*gkeclient.NodePool
+		var blockingFinalizers []*asyncNodeGroupFinalizerMock
+		for range ctx.taskQueueWorkerCount {
+			mig, np := ctx.sampleCreatedMigWithNodePool()
+			blockingPools = append(blockingPools, np)
+			blockingFinalizers = append(blockingFinalizers, ctx.deleteNodePoolAsyncOrFail(mig))
+		}
+		synctest.Wait()
+		for range ctx.taskQueueSize {
+			mig, np := ctx.sampleCreatedMigWithNodePool()
+			blockingPools = append(blockingPools, np)
+			blockingFinalizers = append(blockingFinalizers, ctx.deleteNodePoolAsyncOrFail(mig))
+		}
+		synctest.Wait()
+
+		// Unblock failedMig1 initialization while the task queue is full so its cleanup is buffered.
+		init1.UnblockInitialization()
+		assert.NoError(t, ctx.processedNodePoolsObserver.waitForUpcomingNodePoolToBeDropped(failedPool1.Name, testAsyncGkeMgrDefaultTimeout))
+		synctest.Wait()
+
+		// Refresh across taskQueueSize-1 iterations while the task queue remains full.
+		for range ctx.taskQueueSize - 1 {
+			assert.NoError(t, ctx.asyncGkeManager.Refresh())
+		}
+
+		// Free one task queue slot; the worker picking up the next queued deletion
+		// automatically schedules failedPool1's buffered cleanup into the freed queue slot,
+		// leaving the task queue full again.
+		ctx.gkeManager.finalizeNodePoolDeletion(blockingPools[0].Name)
+		blockingFinalizers[0].AwaitSuccessfulResultOrFail()
+		synctest.Wait()
+		assert.NoError(t, ctx.asyncGkeManager.Refresh())
+
+		// Unblock failedMig2 initialization while the task queue is full; the cleanup buffer
+		// must still have capacity to buffer failedPool2's cleanup.
+		init2.UnblockInitialization()
+		assert.NoError(t, ctx.processedNodePoolsObserver.waitForUpcomingNodePoolToBeDropped(failedPool2.Name, testAsyncGkeMgrDefaultTimeout))
+		synctest.Wait()
+
+		// Finalize all pending deletions and refresh so buffered cleanups are scheduled and completed.
+		ctx.gkeManager.finalizeNodePoolDeletion(failedPool1.Name)
+		ctx.gkeManager.finalizeNodePoolDeletion(failedPool2.Name)
+		for i := 1; i < len(blockingPools); i++ {
+			ctx.gkeManager.finalizeNodePoolDeletion(blockingPools[i].Name)
+		}
+		for i := 1; i < len(blockingPools); i++ {
+			blockingFinalizers[i].AwaitSuccessfulResultOrFail()
+		}
+
+		ctx.awaitAsyncTasksAndRefresh()
+		assert.True(t, ctx.gkeManager.attemptedDeletion(failedPool1.Name), "expected first failed node pool cleanup to be executed")
+		assert.True(t, ctx.gkeManager.attemptedDeletion(failedPool2.Name), "expected second failed node pool cleanup to be buffered and executed")
+		ctx.assertNoOngoingNodePoolOps()
+	})
+}
