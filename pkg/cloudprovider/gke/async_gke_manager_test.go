@@ -17,6 +17,7 @@ package gke
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -377,6 +378,37 @@ func TestAsyncMgr_ScaleUpDuringInitializationShouldTriggerReinitialization(t *te
 		assert.Equal(t, int64(5), initializer.GetTargetSize(upcomingMig.Id()))
 
 		ctx.awaitAsyncTasks()
+		ctx.assertNoOngoingNodePoolOps()
+	})
+}
+
+func TestAsyncMgr_ScaleUpConcurrentWithCreationCompletion(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		asyncGkeManager := ctx.asyncGkeManager
+
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		upcomingMig := result.MainCreatedMig
+
+		// Initial target size = 10 before creation completes.
+		assert.NoError(t, asyncGkeManager.SetMigSize(upcomingMig, 10))
+
+		// Simulate the interleaving where syncNodePool marks the node pool running and runs
+		// InitializeNodeGroup right before ChangeTargetSize updates the target size.
+		initializer.onBeforeChangeTargetSize = func() {
+			ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+			_ = initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		}
+
+		assert.NoError(t, asyncGkeManager.CreateInstances(upcomingMig, 5))
+		ctx.awaitAsyncTasks()
+
+		observed := initializer.ObservedTargetSizes(upcomingMig.Id())
+
+		// The last InitializeNodeGroup execution must have observed the updated target size (15).
+		assert.NotEmpty(t, observed)
+		assert.Equal(t, int64(15), observed[len(observed)-1], "expected InitializeNodeGroup to observe target size 15, got %v", observed)
 		ctx.assertNoOngoingNodePoolOps()
 	})
 }
@@ -1162,12 +1194,14 @@ func migRefs(migs []*GkeMig) []gce.GceRef {
 // asyncNodeGroupInitializerMock implements interfaces.AsyncNodeGroupFinalizer
 // Used to await node pool initialization in tests.
 type asyncNodeGroupInitializerMock struct {
-	t                   *testing.T
-	executed            chan struct{}
-	blockInitialization chan struct{}
-	mutex               sync.Mutex // guards results and target sizes
-	results             []interfaces.AsyncCreateNodePoolResult
-	targetSizes         map[string]int64
+	t                        *testing.T
+	executed                 chan struct{}
+	blockInitialization      chan struct{}
+	onBeforeChangeTargetSize func()
+	mutex                    sync.Mutex // guards results and target sizes
+	results                  []interfaces.AsyncCreateNodePoolResult
+	targetSizes              map[string]int64
+	observedTargetSizes      map[string][]int64
 }
 
 func newAsyncNodeGroupInitializer(t *testing.T) *asyncNodeGroupInitializerMock {
@@ -1176,6 +1210,7 @@ func newAsyncNodeGroupInitializer(t *testing.T) *asyncNodeGroupInitializerMock {
 		executed:            make(chan struct{}, 10),
 		blockInitialization: make(chan struct{}, 1),
 		targetSizes:         make(map[string]int64),
+		observedTargetSizes: make(map[string][]int64),
 	}
 }
 
@@ -1192,6 +1227,9 @@ func (m *asyncNodeGroupInitializerMock) SetTargetSize(nodeGroupName string, size
 }
 
 func (m *asyncNodeGroupInitializerMock) ChangeTargetSize(nodeGroupName string, delta int64) {
+	if m.onBeforeChangeTargetSize != nil {
+		m.onBeforeChangeTargetSize()
+	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	size := m.targetSizes[nodeGroupName] + delta
@@ -1207,9 +1245,18 @@ func (m *asyncNodeGroupInitializerMock) TargetSizes() map[string]int64 {
 	return m.targetSizes
 }
 
+func (m *asyncNodeGroupInitializerMock) ObservedTargetSizes(nodeGroupName string) []int64 {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return slices.Clone(m.observedTargetSizes[nodeGroupName])
+}
+
 func (m *asyncNodeGroupInitializerMock) InitializeNodeGroup(result interfaces.AsyncCreateNodePoolResult) {
 	m.mutex.Lock()
 	m.results = append(m.results, result)
+	for migId, size := range m.targetSizes {
+		m.observedTargetSizes[migId] = append(m.observedTargetSizes[migId], size)
+	}
 	select {
 	case m.executed <- struct{}{}:
 	default:
