@@ -15,13 +15,17 @@
 package capacitybuffers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	ccapiv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	ccapiv1ac "github.com/googlecloudplatform/compute-class-api/client/applyconfiguration/cloud.google.com/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,6 +37,7 @@ import (
 	csn "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
 	procbuffers "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/capacitybuffers"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // internalCapacityBuffer captures the flat, unified specification and identity of either a live CapacityBuffer
@@ -381,6 +386,28 @@ func removeBufferConditions(existingSlice []metav1.Condition) []metav1.Condition
 		}
 	}
 	return result
+}
+
+// hasBufferStatus reports whether the status of cc has the BuffersConfigured condition or observed buffers.
+func hasBufferStatus(cc *ccapiv1.ComputeClass) bool {
+	return cc != nil && (len(cc.Status.ObservedBuffers) > 0 || meta.FindStatusCondition(cc.Status.Conditions, conditionTypeBuffersConfigured) != nil)
+}
+
+// applyBufferStatus server-side applies status to the ComputeClass ccName as fieldOwnerCCC. Status fields that
+// fieldOwnerCCC applied before and status omits are removed, unless another field manager also owns them.
+func applyBufferStatus(ctx context.Context, c client.Client, ccName string, status *ccapiv1ac.ComputeClassStatusApplyConfiguration) error {
+	ccApply := ccapiv1ac.ComputeClass(ccName).WithStatus(status)
+	patchBytes, err := json.Marshal(ccApply)
+	if err != nil {
+		return fmt.Errorf("marshaling ComputeClass status SSA config: %w", err)
+	}
+	ccObj := &ccapiv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: ccName,
+		},
+	}
+	patch := client.RawPatch(types.ApplyPatchType, patchBytes)
+	return c.Status().Patch(ctx, ccObj, patch, client.FieldOwner(fieldOwnerCCC), client.ForceOwnership)
 }
 
 // cbFullyConforms checks if an existing or in-flight CapacityBuffer already matches desired specification across all critical fields.

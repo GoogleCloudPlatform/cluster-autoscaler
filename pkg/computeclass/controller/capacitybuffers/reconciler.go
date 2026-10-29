@@ -74,18 +74,11 @@ func (r *Reconciler) deleteCache(cccName string) {
 	r.caches.Delete(cccName)
 }
 
-// SetupWithManager registers the Reconciler and dependent watches with the controller manager.
-func SetupWithManager(mgr ctrl.Manager) error {
-	registerCapacityBuffersCollector(mgr.GetClient())
-
-	c, err := newJSONClient(mgr.GetConfig(), client.Options{
-		HTTPClient: mgr.GetHTTPClient(),
-		Scheme:     mgr.GetScheme(),
-		Mapper:     mgr.GetRESTMapper(),
-		Cache:      &client.CacheOptions{Reader: mgr.GetCache()},
-	})
+// SetupReconciler registers the Reconciler and dependent watches with the controller manager.
+func SetupReconciler(mgr ctrl.Manager) error {
+	c, err := setupClientAndCollector(mgr)
 	if err != nil {
-		return fmt.Errorf("failed to create client: %w", err)
+		return err
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
@@ -99,6 +92,21 @@ func SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(enqueueRequestsForOwner),
 		).
 		Complete(&Reconciler{Client: c})
+}
+
+func setupClientAndCollector(mgr ctrl.Manager) (client.Client, error) {
+	registerCapacityBuffersCollector(mgr.GetClient())
+
+	c, err := newJSONClient(mgr.GetConfig(), client.Options{
+		HTTPClient: mgr.GetHTTPClient(),
+		Scheme:     mgr.GetScheme(),
+		Mapper:     mgr.GetRESTMapper(),
+		Cache:      &client.CacheOptions{Reader: mgr.GetCache()},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create client: %w", err)
+	}
+	return c, nil
 }
 
 // newJSONClient returns a client that encodes request bodies as JSON. CA's rest config
@@ -244,9 +252,7 @@ func (r *Reconciler) recordReconcileFailure(ctx context.Context, cc *ccapiv1.Com
 }
 
 func (r *Reconciler) shouldRecordReconcileFailure(ctx context.Context, cc *ccapiv1.ComputeClass) bool {
-	if len(cc.Spec.Buffers) > 0 ||
-		len(cc.Status.ObservedBuffers) > 0 ||
-		meta.FindStatusCondition(cc.Status.Conditions, conditionTypeBuffersConfigured) != nil {
+	if len(cc.Spec.Buffers) > 0 || hasBufferStatus(cc) {
 		return true
 	}
 	var cbList cbv1beta1.CapacityBufferList
@@ -809,16 +815,5 @@ func (r *Reconciler) updateStatus(
 		}
 	}
 
-	ccApply := ccapiv1ac.ComputeClass(cc.Name).WithStatus(statusApply)
-	patchBytes, err := json.Marshal(ccApply)
-	if err != nil {
-		return fmt.Errorf("marshaling ComputeClass status SSA config: %w", err)
-	}
-	ccObj := &ccapiv1.ComputeClass{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: cc.Name,
-		},
-	}
-	patch := client.RawPatch(types.ApplyPatchType, patchBytes)
-	return r.Client.Status().Patch(ctx, ccObj, patch, client.FieldOwner(fieldOwnerCCC), client.ForceOwnership)
+	return applyBufferStatus(ctx, r.Client, cc.Name, statusApply)
 }
