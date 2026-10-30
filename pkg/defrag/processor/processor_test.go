@@ -2087,7 +2087,7 @@ func TestProcessCandidate(t *testing.T) {
 		wantNodesAbsent []string
 		wantErr         bool
 		// minCapacityCrds, if set, enforces the ComputeClass min capacity with
-		// the real AtomicMinCapacityProcessor and these ComputeClasses.
+		// the real ComputeClassMinCapacityProcessor and these ComputeClasses.
 		minCapacityCrds []crdtest.CRD
 	}{
 		{
@@ -2867,7 +2867,7 @@ func TestProcessCandidate(t *testing.T) {
 			var cloudProvider *testprovider.TestCloudProvider
 			if len(tc.minCapacityCrds) > 0 {
 				opts.Config.EnableScaleDownFilter = true
-				opts.ScaleDownNodesFilter = scaledown.NewAtomicMinCapacityProcessor(listertest.NewMockCrdLister(tc.minCapacityCrds), experiments.NewMockManager())
+				opts.ScaleDownNodesFilter = scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(tc.minCapacityCrds), experiments.NewMockManager(), nil)
 				// One node group per node, atomic for an atomic candidate.
 				cloudProvider = testprovider.NewTestCloudProviderBuilder().Build()
 				for node := range tc.nodesWithPods {

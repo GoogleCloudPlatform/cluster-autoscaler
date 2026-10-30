@@ -121,7 +121,7 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 			expectedOrder: []string{
 				"*processors.TotalMinSizeProcessor",
 				"*nodes.AtomicResizeFilteringProcessor",
-				"*scaledown.AtomicMinCapacityProcessor",
+				"*scaledown.ComputeClassMinCapacityProcessor",
 			},
 		},
 		{
@@ -136,7 +136,7 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 				"*processors.TotalMinSizeProcessor",
 				"*scaledown.BlockingLabelsFilteringProcessor",
 				"*nodes.AtomicResizeFilteringProcessor",
-				"*scaledown.AtomicMinCapacityProcessor",
+				"*scaledown.ComputeClassMinCapacityProcessor",
 			},
 		},
 		{
@@ -157,7 +157,7 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{})
 
-			built := buildScaleDownSetProcessors(nil, tc.options, scaledown.NewAtomicMinCapacityProcessor(nil, experimentsManager))
+			built := buildScaleDownSetProcessors(nil, tc.options, scaledown.NewComputeClassMinCapacityProcessor(nil, experimentsManager, nil))
 
 			gotOrder := make([]string, 0, len(built))
 			for _, p := range built {

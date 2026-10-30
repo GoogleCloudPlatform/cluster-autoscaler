@@ -45,8 +45,12 @@ import (
 
 func TestCCCScaleDown(t *testing.T) {
 	testCases := []struct {
-		name                       string
-		experimentEnabled          bool
+		name              string
+		experimentEnabled bool
+		// specMinCapacity and priorityMinCapacity set the ComputeClass
+		// spec-level and priority-level min capacity, if not nil.
+		specMinCapacity            *int
+		priorityMinCapacity        *int
 		nodesTaintedForDeletion    int
 		nodesWithDeletionTimestamp int
 		expectedNodeCount          int
@@ -55,30 +59,52 @@ func TestCCCScaleDown(t *testing.T) {
 		{
 			name:              "prevents scale down below targetNodeCount",
 			experimentEnabled: true,
+			specMinCapacity:   ptr.To(5),
 			expectedNodeCount: 5,
-			failureMessage:    "Expected exactly 5 nodes to remain in the cluster due to TargetNodeCountQuota minimum limit",
+			failureMessage:    "Expected exactly 5 nodes to remain in the cluster due to the min capacity",
 		},
 		{
+			// Nodes in deletion don't count toward the min capacity, so 5 other
+			// nodes are kept.
 			name:                       "scale down limits account for nodes in deletion",
 			experimentEnabled:          true,
+			specMinCapacity:            ptr.To(5),
 			nodesTaintedForDeletion:    2,
 			nodesWithDeletionTimestamp: 1,
-			expectedNodeCount:          8,
-			failureMessage:             "Expected exactly 8 nodes to remain (3 in deletion + 5 alive) because capacity should subtract nodes in deletion",
+			expectedNodeCount:          5,
+			failureMessage:             "Expected exactly 5 nodes not in deletion to remain because capacity should subtract nodes in deletion",
 		},
 		{
 			name:              "scale down not prevented when disabled by experiment",
 			experimentEnabled: false,
+			specMinCapacity:   ptr.To(5),
 			expectedNodeCount: 1,
 			failureMessage:    "Expected node count to drop to 1 because the minimum capacity feature is disabled by the experiment flag",
+		},
+		{
+			// No spec-level min capacity fake pods hold these nodes: only
+			// ComputeClassMinCapacityProcessor keeps the priority-level floor.
+			name:                "prevents scale down below a priority-level targetNodeCount",
+			experimentEnabled:   true,
+			priorityMinCapacity: ptr.To(5),
+			expectedNodeCount:   5,
+			failureMessage:      "Expected exactly 5 nodes to remain in the cluster due to the priority-level min capacity",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			cc := ccc.NewComputeClassBuilder("my-ccc").
-				WithTargetNodeCount(ptr.To(5)).
-				Build()
+			ccBuilder := ccc.NewComputeClassBuilder("my-ccc")
+			if tc.specMinCapacity != nil {
+				ccBuilder.WithTargetNodeCount(tc.specMinCapacity)
+			}
+			if tc.priorityMinCapacity != nil {
+				ccBuilder.AddPriority(v1.Priority{
+					MachineFamily:   ptr.To("n1"),
+					MinimumCapacity: &v1.MinimumCapacity{TargetNodeCount: tc.priorityMinCapacity},
+				})
+			}
+			cc := ccBuilder.Build()
 
 			nodePool := integration.DefaultNodePool(
 				integration.WithNodePoolName("default-pool"),
@@ -93,6 +119,7 @@ func TestCCCScaleDown(t *testing.T) {
 				WithCccCrds(cc).
 				WithOverrides(
 					integration.WithScaleDownUnneededTime(time.Second),
+					integration.WithComputeClassMinCapacityEnabled(),
 				)
 
 			if !tc.experimentEnabled {
@@ -110,7 +137,8 @@ func TestCCCScaleDown(t *testing.T) {
 				assert.NoError(t, err)
 				defer integration_synctest.TearDown(cancel)
 
-				// Label all auto-generated nodes with our ComputeClass label so the TargetNodeCountQuota applies to them.
+				// Label all auto-generated nodes with our ComputeClass label so the
+				// min-capacity processor applies to them.
 				nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 				assert.NoError(t, err)
 				assert.Equal(t, 10, len(nodes.Items))
@@ -120,6 +148,9 @@ func TestCCCScaleDown(t *testing.T) {
 						node.Labels = make(map[string]string)
 					}
 					node.Labels["cloud.google.com/compute-class"] = "my-ccc"
+					if tc.priorityMinCapacity != nil {
+						metav1.SetMetaDataAnnotation(&node.ObjectMeta, gke_labels.CCCPriorityIndexAnnotationKey, "0")
+					}
 					infra.Fakes.K8s.UpdateNode(&node)
 				}
 
@@ -134,7 +165,9 @@ func TestCCCScaleDown(t *testing.T) {
 					assert.NoError(t, listErr)
 
 					for i := 0; i < tc.nodesTaintedForDeletion; i++ {
-						infra.Fakes.K8s.UpdateNode(withDeletionTaint(freshNodes.Items[i]))
+						if _, err := taints.MarkToBeDeleted(ctx, &freshNodes.Items[i], infra.Fakes.KubeClient, false /* cordonNode */); err != nil {
+							t.Fatalf("MarkToBeDeleted(%s) failed: %v", freshNodes.Items[i].Name, err)
+						}
 					}
 					for i := 0; i < tc.nodesWithDeletionTimestamp; i++ {
 						infra.Fakes.K8s.UpdateNode(withDeletionTimestamp(freshNodes.Items[tc.nodesTaintedForDeletion+i]))
@@ -145,30 +178,36 @@ func TestCCCScaleDown(t *testing.T) {
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 0)
 
 				// Wait for the node count to drop to the expected level.
-				var remainingNodes *apiv1.NodeList
+				var remaining int
 				for i := 0; i < 20; i++ {
 					time.Sleep(5 * time.Second)
-					remainingNodes, err = infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-					assert.NoError(t, err)
-					if len(remainingNodes.Items) == tc.expectedNodeCount {
+					remaining = countNodesNotInDeletion(ctx, t, infra)
+					if remaining == tc.expectedNodeCount {
 						break
 					}
 				}
 
-				assert.Equal(t, tc.expectedNodeCount, len(remainingNodes.Items), tc.failureMessage)
+				assert.Equal(t, tc.expectedNodeCount, remaining, tc.failureMessage)
 			})
 		})
 	}
 }
 
-// withDeletionTaint returns a copy of the node as a pointer, with ToBeDeletedTaint added.
-func withDeletionTaint(node apiv1.Node) *apiv1.Node {
-	node.Spec.Taints = append(node.Spec.Taints, apiv1.Taint{
-		Key:    taints.ToBeDeletedTaint,
-		Value:  "true",
-		Effect: apiv1.TaintEffectNoSchedule,
-	})
-	return &node
+// countNodesNotInDeletion returns the number of nodes that are neither tainted
+// for deletion nor have a deletion timestamp.
+func countNodesNotInDeletion(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure) int {
+	t.Helper()
+	nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("Nodes().List() failed: %v", err)
+	}
+	count := 0
+	for _, node := range nodes.Items {
+		if node.DeletionTimestamp == nil && !taints.HasToBeDeletedTaint(&node) {
+			count++
+		}
+	}
+	return count
 }
 
 // withDeletionTimestamp returns a copy of the node as a pointer, with DeletionTimestamp set.
@@ -181,7 +220,7 @@ func withDeletionTimestamp(node apiv1.Node) *apiv1.Node {
 // TestCCCScaleDownAtomicGroups reproduces b/551773344: reducing a ComputeClass
 // minimumCapacity.targetNodeCount for atomic (multi-host TPU) node pools must
 // scale the CC down to the target by removing whole slices rather than getting
-// stuck. The bug was that the per-node TargetNodeCountQuota split the allowance
+// stuck. The bug was that the per-node min capacity quota split the allowance
 // non-deterministically across the slices, so AtomicResizeFilteringProcessor
 // rejected every slice and nothing scaled down.
 //
@@ -260,7 +299,7 @@ func TestCCCScaleDownAtomicGroups(t *testing.T) {
 				assert.Equal(t, 32, len(nodes.Items), "expected 32 pre-existing atomic TPU nodes")
 
 				// Ensure every node carries the ComputeClass label so the
-				// TargetNodeCountQuota / min-capacity processor apply to them.
+				// min-capacity processor applies to them.
 				for _, node := range nodes.Items {
 					if node.Labels == nil {
 						node.Labels = make(map[string]string)
