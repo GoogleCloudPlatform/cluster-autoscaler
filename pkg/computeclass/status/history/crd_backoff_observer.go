@@ -26,6 +26,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -159,7 +160,7 @@ func (i *CrdBackoffObserver) OnBackoff(nodeGroup cloudprovider.NodeGroup, errorI
 		return
 	}
 
-	ruleIdx, c, err := getRuleIndex(nodeGroup, i.lister, i.matcher)
+	ruleIdx, c, err := cc_processors.GetRuleIndex(nodeGroup, i.lister, i.matcher)
 	if err != nil || c == nil {
 		return
 	}

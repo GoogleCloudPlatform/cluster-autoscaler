@@ -23,6 +23,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
@@ -80,7 +81,7 @@ func (p *ScaleDownStatusHistoryProcessor) Process(ctx context.Context, autoscali
 			continue
 		}
 
-		ruleIndex, c, err := getRuleIndex(nodeGroup, p.lister, p.matcher)
+		ruleIndex, c, err := cc_processors.GetRuleIndex(nodeGroup, p.lister, p.matcher)
 		if err != nil {
 			klog.Errorf("Failed to retrieve rule index for node group %v: %v", nodeGroup.Id(), err)
 			continue
