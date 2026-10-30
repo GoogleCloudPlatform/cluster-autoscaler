@@ -44,7 +44,7 @@ require (
 	k8s.io/kubelet v0.38.0-alpha.0
 	k8s.io/kubernetes v1.38.0-alpha.0
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261020155910-bb8680fb97b3
+	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261028161335-6f0994491221
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/karpenter v1.14.1
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0
@@ -220,4 +220,4 @@ replace (
 // We are replacing transitive glog dependency with a klog shim as it's interferes with klog flag initialization logic
 replace github.com/golang/glog => ./modreplaces/glog
 
-replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261020155910-bb8680fb97b3
+replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261028161335-6f0994491221
