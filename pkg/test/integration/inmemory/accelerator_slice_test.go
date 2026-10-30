@@ -34,6 +34,7 @@ import (
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -69,6 +70,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 		name                                string
 		acceleratorTopologyMode             string
 		backendCapacity                     int64
+		wantInitialScaleUpErr               string
 		wantInitialTargetSize               int
 		wantTargetSizeAfterCapacityRestored int
 	}{
@@ -81,6 +83,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 		{
 			name:                                "EmptyMode_Stockout_AllOrNothing",
 			backendCapacity:                     8,
+			wantInitialScaleUpErr:               "ZONE_RESOURCE_POOL_EXHAUSTED",
 			wantInitialTargetSize:               0,
 			wantTargetSizeAfterCapacityRestored: 0,
 		},
@@ -95,6 +98,7 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 			name:                                "AutoConnect_Stockout_AllOrNothing",
 			acceleratorTopologyMode:             "AUTO_CONNECT",
 			backendCapacity:                     8,
+			wantInitialScaleUpErr:               "ZONE_RESOURCE_POOL_EXHAUSTED",
 			wantInitialTargetSize:               0,
 			wantTargetSizeAfterCapacityRestored: 0,
 		},
@@ -140,7 +144,11 @@ func TestAcceleratorSlice_ScaleUp(t *testing.T) {
 				addTPUPods(infra, tpuNodesPerSlice)
 
 				// Step 1: initial scale-up.
-				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				if tc.wantInitialScaleUpErr != "" {
+					integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, tc.wantInitialScaleUpErr)
+				} else {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				}
 
 				assert.Equal(t, tc.wantInitialTargetSize, totalTargetSize(t, autoscaler),
 					"unexpected initial MIG target size")

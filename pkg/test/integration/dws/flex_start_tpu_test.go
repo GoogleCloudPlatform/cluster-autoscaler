@@ -262,7 +262,10 @@ func TestFlexStartTPU_Queued_NAP(t *testing.T) {
 				)
 				infra.Fakes.K8s.AddPod(p)
 
-				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+				// The first loop creates the node pool. The scale-up itself fails (no capacity is
+				// available in the fake) and the loop reports that; this test only inspects the
+				// created node pool spec, so the error is ignored here as it is for the second loop.
+				_ = integration_synctest.RunOnceAfter(ctx, t, autoscaler, time.Second)
 
 				// The second loop advances the virtual clock by the scale-up failure timeout,
 				// allowing the ProvisioningRequest Reconciler to mark the PR as Failed.

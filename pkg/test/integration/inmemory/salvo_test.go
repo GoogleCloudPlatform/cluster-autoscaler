@@ -25,6 +25,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	gke_api_beta "google.golang.org/api/container/v1beta1"
@@ -200,8 +201,9 @@ func TestSalvoMultiScaleUpPartialFailure(t *testing.T) {
 		// Simulate cluster quota / limit state allowing only 1 node pool.
 		infra.Fakes.GkeService.SetMaxNodePoolCount(1)
 
-		// Run the autoscaler loop once
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		// Run the autoscaler loop once. The salvo creates one node pool per zone within this
+		// single loop and the second creation hits the limit (message is the fake GKE client's wording).
+		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "exceeded maximum node pool count")
 
 		// Verify that only one node pool was created (the one that succeeded).
 		cluster := integration.GetTestCluster(t, infra, testConfig)
