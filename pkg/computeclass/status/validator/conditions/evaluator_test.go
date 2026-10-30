@@ -16,6 +16,7 @@ package conditions
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,6 +184,26 @@ func TestEvaluator_GetCRDConditions_CrdMisconfigured(t *testing.T) {
 			wantReason:    UnavailableMachineTypeReason,
 			wantMessage:   fmt.Sprintf(UnavailableMachineTypeMessage, n2dHighCpu, fmt.Errorf("Machine type %s is not available in zone %s.", n2dHighCpu, "zone-c")),
 		},
+		{
+			name: "63-character name",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("cc-"+strings.Repeat("a", 60)),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineTypeRule(&existingMachineType)),
+				}), crd.WithScaleUpAnyway(), crd.WithAutoprovisioningEnabled()),
+			wantCondition: false,
+		},
+		{
+			name: "64-character name",
+			crd: crd.NewTestCrd(crd.WithLabel("crd-1"),
+				crd.WithName("cc-"+strings.Repeat("a", 61)),
+				crd.WithRules([]rules.Rule{
+					rules.NewRule(rules.WithMachineTypeRule(&existingMachineType)),
+				}), crd.WithScaleUpAnyway(), crd.WithAutoprovisioningEnabled()),
+			wantCondition: true,
+			wantReason:    InvalidComputeClassNameReason,
+			wantMessage:   fmt.Sprintf(InvalidComputeClassNameMessage, 63, "crd-1"),
+		},
 	}
 
 	for _, tc := range testCases {
@@ -256,4 +277,36 @@ func TestEvaluator_GetCRDConditions_Deduplication(t *testing.T) {
 	if len(conditions) > 0 {
 		assert.Contains(t, []string{NapCannotBeEnabledReason, MachineTypeNotFoundReason}, conditions[0].Reason)
 	}
+}
+
+func TestEvaluator_GetCRDConditions_InvalidNameTakesPrecedence(t *testing.T) {
+	nonExistingMachineType := "invalid-machine-type"
+	provider := newTestProvider().
+		WithAutoprovisioningEnabled(false).
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	evaluator := newTestEvaluator(provider,
+		withLister(lister.NewMockCrdLister(nil)))
+
+	// With NAP disabled in the cluster, the crd also triggers
+	// napCannotBeEnabledCheck and validateNodeConfigRule, which report
+	// CrdMisconfigured too.
+	c := crd.NewTestCrd(
+		crd.WithLabel("crd-1"),
+		crd.WithName("cc-"+strings.Repeat("a", 61)),
+		crd.WithAutoprovisioningEnabled(),
+		crd.WithRules([]rules.Rule{
+			rules.NewRule(rules.WithMachineTypeRule(&nonExistingMachineType)),
+		}),
+	)
+
+	conditions := evaluator.GetCRDConditions(c, make(map[string]*gke.GkeMig))
+
+	var misconfigured []string
+	for _, cond := range conditions {
+		if cond.Type == CrdMisconfiguredCondition {
+			misconfigured = append(misconfigured, cond.Reason)
+		}
+	}
+	assert.Equal(t, []string{InvalidComputeClassNameReason}, misconfigured)
 }

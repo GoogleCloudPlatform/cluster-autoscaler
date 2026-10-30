@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
@@ -39,6 +40,15 @@ type gkeNodeGroup interface {
 	Spec() *gkeclient.NodePoolSpec
 	TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error)
 	TemplateNodeLabels() (map[string]string, error)
+}
+
+// NameIsValidLabelValue reports whether name can be used as the value of a CRD
+// label such as cloud.google.com/compute-class. Nodes, node taints and pod node
+// selectors use the ComputeClass name as that value, so a ComputeClass whose
+// name is not a valid label value (more than 63 characters) can never be used,
+// even though Kubernetes accepts object names of up to 253 characters.
+func NameIsValidLabelValue(name string) bool {
+	return len(validation.IsValidLabelValue(name)) == 0
 }
 
 func NodeCrdLabel(node *v1.Node, crdLabel string) (string, bool, error) {

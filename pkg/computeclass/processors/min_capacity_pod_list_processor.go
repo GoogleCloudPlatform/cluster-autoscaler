@@ -121,6 +121,13 @@ func (p *MinCapacityPodListProcessor) Process(
 
 	for _, c := range crds {
 		crdName := c.Name()
+		// Fake pods select the ComputeClass by name in their node selector. They
+		// never go through the API server, so nothing rejects an invalid name, and
+		// no node could ever match it.
+		if !crd.NameIsValidLabelValue(crdName) {
+			klog.V(4).Infof("MinCapacityPodListProcessor: skipping ComputeClass %q because its name is not a valid label value", crdName)
+			continue
+		}
 		crdPriorityFakePodsCount := 0
 
 		// 1. Evaluate priority-level fake pods.
