@@ -59,6 +59,13 @@ func WithSubRank(subRank int) InstanceOption {
 	}
 }
 
+// WithMinEstimatedUptime sets the minimum estimated uptime for Spot instances.
+func WithMinEstimatedUptime(minEstimatedUptime MinEstimatedUptime) InstanceOption {
+	return func(instanceConfig *InstanceConfig) {
+		instanceConfig.SetMinEstimatedUptime(minEstimatedUptime)
+	}
+}
+
 // InstanceConfig represents a specific desired machine configuration, including
 // machine type, GPU, provisioning mode, and applicable zones among other fields
 type InstanceConfig struct {
@@ -70,6 +77,7 @@ type InstanceConfig struct {
 	subRank                 int
 	zones                   set.Set[string]
 	maxRunDurationInSeconds string
+	minEstimatedUptime      MinEstimatedUptime
 	workloadPolicies        WorkloadPolicies
 }
 
@@ -108,6 +116,7 @@ func DeepCopyInstanceConfig(config *InstanceConfig) *InstanceConfig {
 		config.zones.Clone(),
 		WithWorkloadPolicies(config.workloadPolicies),
 		WithSubRank(config.subRank),
+		WithMinEstimatedUptime(config.minEstimatedUptime),
 	)
 }
 
@@ -151,6 +160,11 @@ func (i *InstanceConfig) MaxRunDurationInSeconds() string {
 	return i.maxRunDurationInSeconds
 }
 
+// MinEstimatedUptime returns the minimum estimated uptime for Spot instances.
+func (i *InstanceConfig) MinEstimatedUptime() MinEstimatedUptime {
+	return i.minEstimatedUptime
+}
+
 // WorkloadPolicies returns the workload policies.
 func (i *InstanceConfig) WorkloadPolicies() WorkloadPolicies {
 	return i.workloadPolicies
@@ -181,6 +195,11 @@ func (i *InstanceConfig) SetMaxRunDurationInSeconds(maxRunDurationInSeconds stri
 	i.maxRunDurationInSeconds = maxRunDurationInSeconds
 }
 
+// SetMinEstimatedUptime sets the minimum estimated uptime for Spot instances.
+func (i *InstanceConfig) SetMinEstimatedUptime(minEstimatedUptime MinEstimatedUptime) {
+	i.minEstimatedUptime = minEstimatedUptime
+}
+
 // InsertZone adds a zone to the configuration's set of zones.
 func (i *InstanceConfig) InsertZone(zone string) {
 	i.zones.Insert(zone)
@@ -192,8 +211,18 @@ func (i *InstanceConfig) MergeZones(zones set.Set[string]) {
 }
 
 // Signature returns string representation of InstanceConfig.
-// CCC priority priorityScore is not considered since the same configuration is not expected to be in different CCC priorities.
+// CCC priority priorityScore is not part of the signature. If two CCC priorities
+// produce the same configuration, mergeNewInstanceConfigs merges them.
 // Zones are not included in the signature. Including zones makes it impossible search InstanceConfig from information gathered from a mig.
+// The signature does not include minEstimatedUptime. Node pools do not carry
+// minEstimatedUptime, so a lookup from a MIG cannot rebuild it.
+//
+// Known limitation: mergeNewInstanceConfigs merges the configs of Spot
+// priorities that have the same signature but a different minEstimatedUptime.
+// The config of the highest-priority rule (lowest rank, then subRank, then
+// list order) wins, and the merged config gets the union of the zones. CA does
+// not support a tiered uptime fallback between Spot priorities with the same
+// signature yet.
 func (i *InstanceConfig) Signature() string {
 	builder := strings.Builder{}
 	builder.WriteString("machineType: ")
