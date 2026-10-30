@@ -1417,6 +1417,7 @@ func compareInstanceConfigMaps(t *testing.T, want, got map[string]*api.InstanceC
 		assert.Equal(t, val.MachineType(), actualVal.MachineType())
 		assert.Equal(t, val.GpuCount(), actualVal.GpuCount())
 		assert.Equal(t, val.MaxRunDurationInSeconds(), actualVal.MaxRunDurationInSeconds())
+		assert.Equal(t, val.MinEstimatedUptime(), actualVal.MinEstimatedUptime())
 	}
 }
 
@@ -2728,5 +2729,503 @@ func TestSkipUnneededSpotConfigs_Experiment(t *testing.T) {
 				assert.Equal(t, tc.wantConfigs, generated.Configs)
 			}
 		})
+	}
+}
+
+func TestExpandConfigsByMinEstimatedUptime(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+
+	for _, tc := range []struct {
+		name           string
+		rule           rules.Rule
+		manager        experiments.Manager
+		wantSpotUptime api.MinEstimatedUptime
+	}{
+		{
+			name: "spot_rule_sets_only_spot_config",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(10)),
+			),
+			manager:        experiments.NewMockManager(),
+			wantSpotUptime: api.MinUptime10Min,
+		},
+		{
+			name:           "unset_spot_rule_with_default_flag_off_stays_unset",
+			rule:           rules.NewRule(rules.WithSpotRule(ptr.To(true))),
+			manager:        experiments.NewMockManager(),
+			wantSpotUptime: api.MinUptimeUnset,
+		},
+		{
+			name:           "unset_spot_rule_with_default_flag_on_defaults_to_10m",
+			rule:           rules.NewRule(rules.WithSpotRule(ptr.To(true))),
+			manager:        experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantSpotUptime: api.MinUptime10Min,
+		},
+		{
+			name: "explicit_1m_overrides_10m_default",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(1)),
+			),
+			manager:        experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantSpotUptime: api.MinUptime1Min,
+		},
+		{
+			name: "explicit_10m_preserved_when_default_flag_on",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(10)),
+			),
+			manager:        experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantSpotUptime: api.MinUptime10Min,
+		},
+		{
+			name: "explicit_60m_overrides_10m_default",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(60)),
+			),
+			manager:        experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantSpotUptime: api.MinUptime1Hour,
+		},
+		{
+			name: "kill_switch_off_ignores_explicit_uptime_and_default_flag",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(60)),
+			),
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{
+					experiments.FlexAdvisorSpotUptimeEnabledFlag: false,
+				},
+				map[string]string{
+					experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "0.0.0",
+				},
+			),
+			wantSpotUptime: api.MinUptimeUnset,
+		},
+		{
+			name: "non_spot_rule_ignores_min_estimated_uptime",
+			rule: rules.NewRule(
+				rules.WithSpotRule(ptr.To(false)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(60)),
+			),
+			manager:        experiments.NewMockManager(),
+			wantSpotUptime: api.MinUptimeUnset,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spotCfg := api.NewInstanceConfig("n2-standard-4", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration)
+			standardCfg := api.NewInstanceConfig("n2-standard-4", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration)
+			tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, tc.manager)
+			g := &instanceConfigGenerator{optionsTracker: tracker}
+
+			configs := g.expandConfigsByMinEstimatedUptime(tc.rule, []*api.InstanceConfig{spotCfg, standardCfg})
+			assert.Len(t, configs, 2)
+			assert.Equal(t, tc.wantSpotUptime, spotCfg.MinEstimatedUptime())
+			assert.Equal(t, api.MinUptimeUnset, standardCfg.MinEstimatedUptime())
+		})
+	}
+}
+
+func TestExpandConfigsByMinEstimatedUptime_InvalidValue(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+
+	for _, enableDefault := range []bool{false, true} {
+		t.Run(fmt.Sprintf("default_spot_uptime_%t", enableDefault), func(t *testing.T) {
+			initialMetric, err := metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.InvalidMinEstimatedUptime)
+			assert.NoError(t, err)
+
+			rule := rules.NewRule(
+				rules.WithSpotRule(ptr.To(true)),
+				rules.WithMinEstimatedUptimeRule(ptr.To(123123)),
+			)
+			spotCfg := api.NewInstanceConfig("n2-standard-4", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration)
+
+			var manager experiments.Manager = experiments.NewMockManager()
+			if enableDefault {
+				manager = experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag)
+			}
+			tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			g := &instanceConfigGenerator{optionsTracker: tracker}
+
+			configs := g.expandConfigsByMinEstimatedUptime(rule, []*api.InstanceConfig{spotCfg})
+			assert.Len(t, configs, 1)
+			assert.Equal(t, api.MinUptimeUnset, spotCfg.MinEstimatedUptime())
+
+			updatedMetric, err := metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.InvalidMinEstimatedUptime)
+			assert.NoError(t, err)
+			assert.Equal(t, initialMetric+1, updatedMetric)
+		})
+	}
+}
+
+func TestGenerateInstanceConfigs_MinEstimatedUptimeMinutes(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+
+	spotWith1MinUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-1m-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(1),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotWith10MinUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-10m-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(10),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotWithUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(60),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotWithoutUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-no-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType: ptr.To("e2-standard-2"),
+					Spot:        ptr.To(true),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	nonSpotWithUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "nonspot-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					MinEstimatedUptimeMinutes: ptr.To(60),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotFallbackToStandardCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-fallback-standard-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(60),
+				},
+				{
+					MachineType: ptr.To("e2-standard-2"),
+					Spot:        ptr.To(false),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	collidingSpotPrioritiesCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "colliding-spot-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(60),
+					Location:                  &v1.Location{Zones: []string{"us-west1-a"}},
+				},
+				{
+					MachineType:               ptr.To("e2-standard-2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(10),
+					Location:                  &v1.Location{Zones: []string{"us-west1-b"}},
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotWith1MinUptimeCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Spot,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+		api.WithMinEstimatedUptime(api.MinUptime1Min),
+	)
+	spotWith10MinUptimeCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Spot,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+		api.WithMinEstimatedUptime(api.MinUptime10Min),
+	)
+	spotWithUptimeCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Spot,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+		api.WithMinEstimatedUptime(api.MinUptime1Hour),
+	)
+	spotWithoutUptimeCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Spot,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+	)
+	standardCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Standard,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+	)
+	standardRank2Cfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		2,
+		instanceavailability.Standard,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a"),
+	)
+	spotMergedZonesCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2",
+		"",
+		0,
+		1,
+		instanceavailability.Spot,
+		api.EmptyMaxRunDuration,
+		set.New("us-west1-a", "us-west1-b"),
+		api.WithMinEstimatedUptime(api.MinUptime1Hour),
+	)
+
+	for _, tc := range []struct {
+		name        string
+		scope       string
+		manager     experiments.Manager
+		wantConfigs map[string]*api.InstanceConfig
+	}{
+		{
+			name:    "spot_1m_propagates_60s",
+			scope:   "spot-1m-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWith1MinUptimeCfg.Signature(): spotWith1MinUptimeCfg,
+			},
+		},
+		{
+			name:    "spot_10m_propagates_600s",
+			scope:   "spot-10m-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWith10MinUptimeCfg.Signature(): spotWith10MinUptimeCfg,
+			},
+		},
+		{
+			name:    "spot_60m_propagates_3600s",
+			scope:   "spot-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWithUptimeCfg.Signature(): spotWithUptimeCfg,
+			},
+		},
+		{
+			name:  "spot_60m_with_skip_unneeded_spot_disabled_propagates_3600s",
+			scope: "spot-uptime-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false},
+				nil,
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWithUptimeCfg.Signature(): spotWithUptimeCfg,
+			},
+		},
+		{
+			name:    "unset_spot_with_default_flag_off_stays_unset",
+			scope:   "spot-no-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWithoutUptimeCfg.Signature(): spotWithoutUptimeCfg,
+			},
+		},
+		{
+			name:    "unset_spot_with_default_flag_on_defaults_to_10m",
+			scope:   "spot-no-uptime-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWith10MinUptimeCfg.Signature(): spotWith10MinUptimeCfg,
+			},
+		},
+		{
+			name:    "explicit_1m_kept_when_default_flag_on",
+			scope:   "spot-1m-uptime-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWith1MinUptimeCfg.Signature(): spotWith1MinUptimeCfg,
+			},
+		},
+		{
+			name:    "explicit_60m_kept_when_default_flag_on",
+			scope:   "spot-uptime-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWithUptimeCfg.Signature(): spotWithUptimeCfg,
+			},
+		},
+		{
+			name:    "non_spot_stays_unset_when_default_flag_on",
+			scope:   "nonspot-uptime-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature(): standardCfg,
+			},
+		},
+		{
+			name:    "non_spot_does_not_propagate_min_estimated_uptime",
+			scope:   "nonspot-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature(): standardCfg,
+			},
+		},
+		{
+			name:  "non_spot_with_skip_unneeded_spot_disabled_does_not_propagate_min_estimated_uptime",
+			scope: "nonspot-uptime-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false},
+				nil,
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardCfg.Signature():          standardCfg,
+				spotWithoutUptimeCfg.Signature(): spotWithoutUptimeCfg,
+			},
+		},
+		{
+			name:    "spot_and_standard_fallback_keep_separate_configs",
+			scope:   "spot-fallback-standard-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotWithUptimeCfg.Signature(): spotWithUptimeCfg,
+				standardRank2Cfg.Signature():  standardRank2Cfg,
+			},
+		},
+		{
+			name:    "colliding_spot_priorities_keep_higher_priority_uptime_and_union_zones",
+			scope:   "colliding-spot-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotMergedZonesCfg.Signature(): spotMergedZonesCfg,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+			tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, tc.manager)
+			g := NewInstanceConfigGenerator(t.Context(), lister.NewMockCrdLister([]crd.CRD{
+				spotWith1MinUptimeCrd,
+				spotWith10MinUptimeCrd,
+				spotWithUptimeCrd,
+				spotWithoutUptimeCrd,
+				nonSpotWithUptimeCrd,
+				spotFallbackToStandardCrd,
+				collidingSpotPrioritiesCrd,
+			}), provider, tracker)
+			generated, errs := g.generateInstanceConfigs(tc.scope)
+			assert.Empty(t, errs)
+			if assert.NotNil(t, generated) {
+				assert.Equal(t, tc.wantConfigs, generated.Configs)
+			}
+		})
+	}
+}
+
+func TestGenerateInstanceConfigs_InvalidMinEstimatedUptimeMinutes(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+
+	invalidSpotUptimeCrd := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "invalid-spot-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{
+					MachineFamily:             ptr.To("e2"),
+					Spot:                      ptr.To(true),
+					MinEstimatedUptimeMinutes: ptr.To(123123),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	for _, skipUnneededSpot := range []bool{true, false} {
+		for _, enableDefaultSpotUptime := range []bool{false, true} {
+			subtestName := fmt.Sprintf("skip_unneeded_spot_%t_default_spot_uptime_%t", skipUnneededSpot, enableDefaultSpotUptime)
+			t.Run(subtestName, func(t *testing.T) {
+				initialMetric, err := metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.InvalidMinEstimatedUptime)
+				assert.NoError(t, err)
+
+				provider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+				boolFlags := map[string]bool{
+					experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: skipUnneededSpot,
+				}
+				var stringFlags map[string]string
+				if enableDefaultSpotUptime {
+					stringFlags = map[string]string{
+						experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "0.0.0",
+					}
+				}
+				manager := experiments.NewMockManagerWithOptions(version.Version{1, 38, 0, 0}, boolFlags, stringFlags)
+				tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+				g := NewInstanceConfigGenerator(t.Context(), lister.NewMockCrdLister([]crd.CRD{invalidSpotUptimeCrd}), provider, tracker)
+
+				generated, errs := g.generateInstanceConfigs("invalid-spot-uptime-ccc")
+				assert.Empty(t, errs)
+				if assert.NotNil(t, generated) && assert.Greater(t, len(generated.Configs), 1) {
+					for _, cfg := range generated.Configs {
+						assert.Equal(t, instanceavailability.Spot, cfg.ProvisioningMode())
+						assert.Equal(t, api.MinUptimeUnset, cfg.MinEstimatedUptime())
+						assert.False(t, cfg.MinEstimatedUptime().IsSet())
+					}
+				}
+
+				updatedMetric, err := metrics.GetFlexAdvisorGenerationErrorsCountForTest(metrics.InvalidMinEstimatedUptime)
+				assert.NoError(t, err)
+				assert.Equal(t, initialMetric+1, updatedMetric)
+			})
+		}
 	}
 }

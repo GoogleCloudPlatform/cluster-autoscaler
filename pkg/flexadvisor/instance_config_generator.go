@@ -172,9 +172,8 @@ func (g *instanceConfigGenerator) generateInstanceConfigsForRule(rule rules.Rule
 	}
 	configs = g.expandConfigsByProvisioningMode(rule, configs)
 	configs = g.expandConfigsByMaxRunDuration(rule, configs)
-	var zoneErrors []error
-	configs, zoneErrors = g.assignZonesToConfigs(rule, configs)
-	return configs, zoneErrors
+	configs = g.expandConfigsByMinEstimatedUptime(rule, configs)
+	return g.assignZonesToConfigs(rule, configs)
 }
 
 func (g *instanceConfigGenerator) validateGeneratedConfigsForRule(flexibilityScopeKey string, configs []*api.InstanceConfig, errorsForRule []error) {
@@ -418,6 +417,40 @@ func (g *instanceConfigGenerator) expandConfigsByMaxRunDuration(rule rules.Rule,
 	for _, config := range instanceConfigs {
 		// Note: `nodepool` rules cannot have MRD specified in the CCC, for them we set MRD directly in `instanceConfigsForNodePools`
 		config.SetMaxRunDurationInSeconds(ruleMRD)
+	}
+	return instanceConfigs
+}
+
+func (g *instanceConfigGenerator) experimentsManager() experiments.Manager {
+	if g.optionsTracker == nil {
+		return nil
+	}
+	return g.optionsTracker.ExperimentsManager()
+}
+
+func (g *instanceConfigGenerator) expandConfigsByMinEstimatedUptime(rule rules.Rule, instanceConfigs []*api.InstanceConfig) []*api.InstanceConfig {
+	if !rule.Spot() || !experiments.IsFlexAdvisorSpotUptimeEnabled(g.experimentsManager()) {
+		return instanceConfigs
+	}
+
+	minEstimatedUptime, err := api.MinEstimatedUptimeFromMinutes(rule.MinEstimatedUptimeMinutes())
+	if err != nil {
+		metrics.Metrics.RegisterFlexAdvisorGenerationError(metrics.InvalidMinEstimatedUptime)
+		return instanceConfigs
+	}
+
+	// If minEstimatedUptime is not set and default change experiment is not enabled return unchanged configs.
+	if !minEstimatedUptime.IsSet() {
+		if !experiments.IsFlexAdvisorDefaultSpotUptimeEnabled(g.experimentsManager()) {
+			return instanceConfigs
+		}
+		minEstimatedUptime = api.MinUptime10Min
+	}
+
+	for _, config := range instanceConfigs {
+		if config.ProvisioningMode() == instanceavailability.Spot {
+			config.SetMinEstimatedUptime(minEstimatedUptime)
+		}
 	}
 	return instanceConfigs
 }

@@ -70,6 +70,8 @@ type FAGenerationErrorReason string
 const (
 	// ZeroConfigsGeneratedForRule represents generating zero instance configurations for a single CCC rule.
 	ZeroConfigsGeneratedForRule FAGenerationErrorReason = "zero_configs_generated_for_rule"
+	// InvalidMinEstimatedUptime represents an unsupported minEstimatedUptimeMinutes value on a CCC rule.
+	InvalidMinEstimatedUptime FAGenerationErrorReason = "invalid_min_estimated_uptime"
 )
 
 // FAResponseErrorReason describes the reason for a Flex Advisor response error.
