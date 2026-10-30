@@ -30,6 +30,7 @@ import (
 	gke "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -161,8 +162,7 @@ func TestUnregisteredMachineTypeErrorCaching(t *testing.T) {
 		// Loop 1: The first pod group triggers a GCE query, which fails and gets cached.
 		// If caching is working, the other 4 groups will hit the cache and fail immediately
 		// without calling GCE (which would otherwise succeed).
-		// Assert that no nodes are added, confirming the scale-up was blocked.
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "Machine type n1-standard-96 is not supported in zone")
 
 		// Assert that no scale-up happened, confirming the cached error blocked all pod groups.
 		nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})

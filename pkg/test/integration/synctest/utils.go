@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/watch"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 )
 
 // EnableLargeWatchChannel overrides the default watcher channel size in client-go.
@@ -40,7 +41,7 @@ func EnableLargeWatchChannel() func() {
 
 // RunOnceAfter advances the virtual clock by the specified duration and then
 // executes a single Cluster Autoscaler cycle.
-func RunOnceAfter(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, d time.Duration) error {
+func RunOnceAfter(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, d time.Duration) caerrors.AutoscalerError {
 	t.Helper()
 
 	// Ensure any pending work is done before changing the time.
@@ -61,6 +62,19 @@ func MustRunOnceAfter(ctx context.Context, t *testing.T, autoscaler core.Autosca
 	t.Helper()
 	err := RunOnceAfter(ctx, t, autoscaler, d)
 	assert.NoError(t, err)
+}
+
+// MustFailRunOnceAfter is a helper that calls RunOnceAfter and fails the test unless the
+// cycle reports an error of the given type whose message contains wantMsgSubstr.
+// Use this for simulation steps that deliberately make a scale-up fail (stockout, quota,
+// unsupported machine type, ...).
+func MustFailRunOnceAfter(ctx context.Context, t *testing.T, autoscaler core.Autoscaler, d time.Duration, wantType caerrors.AutoscalerErrorType, wantMsgSubstr string) {
+	t.Helper()
+	err := RunOnceAfter(ctx, t, autoscaler, d)
+	if assert.Error(t, err, "expected RunOnce to report a failed scale-up") {
+		assert.Equal(t, wantType, err.Type())
+		assert.ErrorContains(t, err, wantMsgSubstr)
+	}
 }
 
 // TearDown is a helper to tear down the context and drain the synctest bubble.

@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
 	provreqtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/provreq"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	tu "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -68,7 +69,7 @@ func TestProvisioningRequest_Stockout(t *testing.T) {
 
 		// Run autoscaler
 		// The first loop triggers the scale-up attempt which encounters the injected ZONE_RESOURCE_POOL_EXHAUSTED stockout error.
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		integration_synctest.MustFailRunOnceAfter(ctx, t, autoscaler, time.Second, caerrors.CloudProviderError, "ZONE_RESOURCE_POOL_EXHAUSTED")
 		// The second loop advances the virtual clock by the scale-up failure timeout,
 		// allowing the ProvisioningRequest Reconciler to mark the PR as Failed.
 		// We use RunOnceAfter and ignore the error because the synchronous deletion from
