@@ -38,14 +38,14 @@ func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *
 	computeFunctions := []FeatureShardComputeFunction{
 		{
 			"tpu_type",
-			func(p *v1.Pod, ngd *NodeGroupDescriptor) {
-				computeTpuTypeShard(provider, p, ngd)
+			func(p *v1.Pod, req *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeTpuTypeShard(provider, p, req, ngd)
 			},
 		},
 		{
 			"gpu_type",
-			func(p *v1.Pod, ngd *NodeGroupDescriptor) {
-				computeGpuTypeShard(provider, p, ngd)
+			func(p *v1.Pod, req *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeGpuTypeShard(provider, p, req, ngd)
 			},
 		},
 		{
@@ -74,7 +74,7 @@ func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *
 	return NewCompositePodSharder(computeFunctions)
 }
 
-func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 	podRequests := podutils.PodRequests(pod)
 	podGpuCount := podRequests[gpu.ResourceNvidiaGPU]
 
@@ -83,7 +83,9 @@ func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupD
 	}
 
 	nodeGroupDescriptor.RequiresGPU = true
-	req := podrequirements.GetRequirements(pod)
+	if req == nil {
+		req = podrequirements.GetRequirements(pod)
+	}
 
 	gpuType, found := req.LabelReq.GetSingleValue(gkelabels.GPULabel)
 	if !found {
@@ -117,7 +119,7 @@ func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupD
 	}
 }
 
-func computeTpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+func computeTpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 	podRequests := podutils.PodRequests(pod)
 	podTpuCount := podRequests[gketpu.ResourceGoogleTPU]
 
@@ -125,7 +127,9 @@ func computeTpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupD
 		return
 	}
 
-	req := podrequirements.GetRequirements(pod)
+	if req == nil {
+		req = podrequirements.GetRequirements(pod)
+	}
 
 	tpuType := gketpu.DefaultTPU
 	if tpuTypeFromSelector, isSpecified := req.LabelReq.GetSingleValue(gkelabels.TPULabel); isSpecified {
@@ -151,10 +155,12 @@ func computeTpuTypeShard(provider machineConfigProvider, pod *v1.Pod, nodeGroupD
 	}
 }
 
-func computeWorkloadSeparationShardWithAllowlistedLabels(matcher *gkelabels.Matcher) func(*v1.Pod, *NodeGroupDescriptor) {
+func computeWorkloadSeparationShardWithAllowlistedLabels(matcher *gkelabels.Matcher) func(*v1.Pod, *podrequirements.Requirements, *NodeGroupDescriptor) {
 	checker := podrequirements.NewWorkloadSeparationWorkloadChecker(matcher)
-	return func(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
-		req := podrequirements.GetRequirements(pod)
+	return func(pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
+		if req == nil {
+			req = podrequirements.GetRequirements(pod)
+		}
 		taints, labels, err := req.WorkloadSeparationTaintsAndLabels(checker, podrequirements.AllowedNonWorkloadSeparationLabels(pod))
 		if err != nil || len(labels) == 0 {
 			return
@@ -178,19 +184,18 @@ func computeWorkloadSeparationShardWithAllowlistedLabels(matcher *gkelabels.Matc
 	}
 }
 
-func computeCCCShard(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
-	req := podrequirements.GetRequirements(pod)
+func computeCCCShard(_ *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 	if name, found := req.LabelReq.GetSingleValue(gkelabels.ComputeClassLabel); found {
 		nodeGroupDescriptor.SystemLabels[gkelabels.ComputeClassLabel] = name
 	}
 }
 
-func computeCSNShard(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+func computeCSNShard(pod *v1.Pod, _ *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 	id := csn.GetBufferIdFromPod(pod)
 	nodeGroupDescriptor.CSNBufferID = id
 }
 
-func provisioningRequestShard(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+func provisioningRequestShard(pod *v1.Pod, _ *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 	provClass, found := pr_pods.ProvisioningClassName(pod)
 	if !found {
 		return

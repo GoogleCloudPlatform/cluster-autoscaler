@@ -17,6 +17,7 @@ package podsharding
 import (
 	"k8s.io/api/core/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
 
 // FeatureShardComputeFunction function computes part of shard to which pod belongs, looking at specific feature (workload separation, gpu usage, ...).
@@ -31,7 +32,7 @@ type FeatureShardComputeFunction struct {
 	// a shard pod belongs to.
 	// NodeGroupDescriptor for selected shard is also later used for building NodeInfo to be used for extending set of pods in
 	// shard using predicate checking.
-	Function func(*v1.Pod, *NodeGroupDescriptor)
+	Function func(*v1.Pod, *podrequirements.Requirements, *NodeGroupDescriptor)
 }
 
 // CompositePodSharder is an implementation of PodSharder based on list of features with corresponding
@@ -52,9 +53,10 @@ func (sharder *CompositePodSharder) ComputePodShards(pods []*v1.Pod) []*PodShard
 	podShards := make(map[ShardSignature]*PodShard)
 
 	for _, pod := range pods {
+		req := podrequirements.GetRequirements(pod)
 		nodeGroupDescriptor := EmptyNodeGroupDescriptor()
 		for _, computeFunction := range sharder.featureShardComputeFunctions {
-			computeFunction.Function(pod, &nodeGroupDescriptor)
+			computeFunction.Function(pod, req, &nodeGroupDescriptor)
 		}
 
 		shardSignature := nodeGroupDescriptor.signature()

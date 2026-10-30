@@ -15,11 +15,13 @@
 package podsharding
 
 import (
+	"fmt"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	provreqv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -757,4 +759,173 @@ func testPodSharder(t *testing.T, sharder PodSharder, testCases []shardComputeFu
 			assertNodeGroupDescriptorEqual(t, tc.expectedNodeGroupDescriptor, shards[0].NodeGroupDescriptor)
 		})
 	}
+}
+
+func BenchmarkComputePodShards(b *testing.B) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	sharder := NewGkePodSharder(provider, true, nil)
+
+	for _, numPods := range []int{100, 1000, 5000} {
+		pods := buildBenchmarkPods(numPods)
+		b.Run(fmt.Sprintf("%dPods", numPods), func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				shards := sharder.ComputePodShards(pods)
+				if len(shards) == 0 {
+					b.Fatal("expected non-empty shards")
+				}
+			}
+		})
+	}
+}
+
+func buildBenchmarkPods(numPods int) []*v1.Pod {
+	pods := make([]*v1.Pod, 0, numPods)
+	for i := range numPods {
+		uid := types.UID(fmt.Sprintf("pod-%d", i))
+		var pod *v1.Pod
+		switch i % 4 {
+		case 0:
+			// GPU pod with nodeSelector and tolerations
+			pod = &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					UID:       uid,
+					Namespace: "default",
+					Name:      string(uid),
+				},
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						gkelabels.GPULabel:                "nvidia-tesla-a100",
+						gkelabels.GPUSharingStrategyLabel: "time-sharing",
+						gkelabels.ComputeClassLabel:       fmt.Sprintf("gpu-ccc-%d", i%5),
+						"workload":                        fmt.Sprintf("wl-%d", i%10),
+					},
+					Tolerations: []v1.Toleration{
+						{Key: gpu.ResourceNvidiaGPU, Operator: v1.TolerationOpExists, Effect: v1.TaintEffectNoSchedule},
+						{Key: "workload", Operator: v1.TolerationOpEqual, Value: fmt.Sprintf("wl-%d", i%10), Effect: v1.TaintEffectNoSchedule},
+					},
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU:        resource.MustParse("1"),
+									v1.ResourceMemory:     resource.MustParse("4Gi"),
+									gpu.ResourceNvidiaGPU: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			}
+		case 1:
+			// TPU pod
+			pod = &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					UID:       uid,
+					Namespace: "default",
+					Name:      string(uid),
+				},
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						gkelabels.TPULabel:              gkelabels.TpuV4LiteDeviceValue,
+						gkelabels.TPUTopologyLabel:      "2x2",
+						gkelabels.AcceleratorCountLabel: "4",
+						gkelabels.ComputeClassLabel:     fmt.Sprintf("tpu-ccc-%d", i%5),
+					},
+					Tolerations: []v1.Toleration{
+						{Key: tpu.ResourceGoogleTPU, Operator: v1.TolerationOpExists, Effect: v1.TaintEffectNoSchedule},
+					},
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU:        resource.MustParse("2"),
+									tpu.ResourceGoogleTPU: resource.MustParse("4"),
+								},
+							},
+						},
+					},
+				},
+			}
+		case 2:
+			// Workload separation + NodeAffinity pod
+			pod = &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					UID:         uid,
+					Namespace:   "default",
+					Name:        string(uid),
+					Annotations: map[string]string{gkelabels.PTSDomainKeyAnnotation: "pts-domain"},
+				},
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						"team":       fmt.Sprintf("team-%d", i%20),
+						"pts-domain": "domain-a",
+					},
+					Affinity: &v1.Affinity{
+						NodeAffinity: &v1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &v1.NodeSelector{
+								NodeSelectorTerms: []v1.NodeSelectorTerm{
+									{
+										MatchExpressions: []v1.NodeSelectorRequirement{
+											{
+												Key:      gkelabels.ComputeClassLabel,
+												Operator: v1.NodeSelectorOpIn,
+												Values:   []string{fmt.Sprintf("ccc-%d", i%10)},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+					Tolerations: []v1.Toleration{
+						{Key: "team", Operator: v1.TolerationOpEqual, Value: fmt.Sprintf("team-%d", i%20), Effect: v1.TaintEffectNoSchedule},
+					},
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU:    resource.MustParse("500m"),
+									v1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			}
+		case 3:
+			// CSN / ProvisioningRequest pod
+			pod = &v1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					UID:       uid,
+					Namespace: "default",
+					Name:      string(uid),
+					Annotations: map[string]string{
+						metadata.BufferAssignmentKey:                                    fmt.Sprintf("default_buffer-%d", i%5),
+						"cluster-autoscaler.kubernetes.io/consume-provisioning-request": "pr-1",
+						"cluster-autoscaler.kubernetes.io/provisioning-class-name":      "queued-provisioning.gke.io",
+					},
+				},
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						gkelabels.ComputeClassLabel: fmt.Sprintf("csn-ccc-%d", i%5),
+					},
+					Containers: []v1.Container{
+						{
+							Resources: v1.ResourceRequirements{
+								Requests: v1.ResourceList{
+									v1.ResourceCPU: resource.MustParse("1"),
+								},
+							},
+						},
+					},
+				},
+			}
+		}
+		pods = append(pods, pod)
+	}
+	return pods
 }
