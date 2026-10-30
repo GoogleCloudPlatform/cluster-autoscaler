@@ -25,6 +25,7 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -471,4 +472,52 @@ func TestFlexibilityScope_LastSuccessfulRefreshAt(t *testing.T) {
 			assert.Equal(t, tc.wantTime, scope.getFetchStats().lastSuccessfulRefreshAt)
 		})
 	}
+}
+
+func TestRefreshScope_ComputeClassNoLongerOwned(t *testing.T) {
+	const scopeKey = "scope-1"
+	computeClassOwnedBy := func(autoscalerName string) crd.CRD {
+		return ccc.NewCccCrd(&v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        scopeKey,
+				Annotations: map[string]string{options.AutoscalerNameAnnotation: autoscalerName},
+			},
+			Spec: v1.ComputeClassSpec{
+				Priorities: []v1.Priority{{MachineType: ptr.To("e2-standard-2"), Spot: ptr.To(true)}},
+			},
+		}, "", false, crd.TestDefaultDataProvider(), nil)
+	}
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		allComputeClasses := lister.NewMockCrdLister([]crd.CRD{computeClassOwnedBy(options.StandardAutoscalerName)})
+		standardCALister := lister.NewFilteredCccLister(allComputeClasses, []string{options.StandardAutoscalerName})
+		cloudProvider := newMockInstanceConfigCloudProvider([]string{"us-central1-a"}, nil, machinetypes.E2, true, nil)
+		optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, adaptivePollingTestManager(false, nil))
+		generator := NewInstanceConfigGenerator(ctx, standardCALister, cloudProvider, optionsTracker)
+		gceFlexAdvisor := &mockAdviceProvider{}
+		gceFlexAdvisor.On("FetchCapacityGuidance").Return(map[string]*api.InstanceAvailability{}, nil).Once()
+		fa, err := NewFlexAdvisor(ctx, gceFlexAdvisor, standardCALister, cloudProvider, optionsTracker, nil, nil, withInstanceConfigGenerator(generator))
+		require.NoError(t, err)
+
+		// The standard CA owns the ComputeClass: the first refresh calls GCE
+		// Flex Advisor.
+		require.NoError(t, fa.RegisterFlexibilityScope(scopeKey))
+		synctest.Wait()
+		scope, found, _ := fa.getScope(scopeKey)
+		require.True(t, found)
+		require.NoError(t, scope.getFetchStats().lastFetchError)
+
+		// Ownership moves to the solver CA while the scope is still active.
+		allComputeClasses.SetCrds([]crd.CRD{computeClassOwnedBy(options.SolverAutoscalerName)})
+		time.Sleep(defaultFastRefreshInterval + time.Second)
+		synctest.Wait()
+
+		// The next refresh fails without crashing and without calling GCE Flex
+		// Advisor again.
+		assert.ErrorContains(t, scope.getFetchStats().lastFetchError, "not calling GCE Flex Advisor")
+		gceFlexAdvisor.AssertExpectations(t)
+	})
 }

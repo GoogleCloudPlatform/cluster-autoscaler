@@ -622,6 +622,12 @@ func (g *instanceConfigGenerator) matchingCrd(flexibilityScopeKey string) (crd.C
 	if err != nil {
 		return nil, fmt.Errorf("failed to get CRD for flexibilityScopeKey %q: %w", flexibilityScopeKey, err)
 	}
+	if crd == nil {
+		// The ComputeClass is not owned by this autoscaler instance, e.g. its
+		// ownership moved to another instance while the flexibility scope was
+		// still active.
+		return nil, fmt.Errorf("no CRD for flexibilityScopeKey %q: not owned by this autoscaler instance", flexibilityScopeKey)
+	}
 	return crd, nil
 }
 
