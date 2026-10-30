@@ -625,6 +625,26 @@ func testInstanceConfigMap(configs []*api.InstanceConfig) map[string]*api.Instan
 	return configMap
 }
 
+func TestGenerateInstanceConfigs_ComputeClassNotOwned(t *testing.T) {
+	solverComputeClass := crd.NewTestCrd(
+		crd.WithName("solver-ccc"),
+		crd.WithLabel(gkelabels.ComputeClassLabel),
+		crd.WithAnnotations(map[string]string{options.AutoscalerNameAnnotation: options.SolverAutoscalerName}),
+	)
+	allComputeClasses := lister.NewMockCrdListerWithLabel([]crd.CRD{solverComputeClass}, gkelabels.ComputeClassLabel)
+	standardCALister := lister.NewFilteredCccLister(allComputeClasses, []string{options.StandardAutoscalerName})
+	cloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+	optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, experiments.NewMockManager())
+	generator := NewInstanceConfigGenerator(context.Background(), standardCALister, cloudProvider, optionsTracker)
+
+	generated, errs := generator.generateInstanceConfigs("solver-ccc")
+
+	assert.Nil(t, generated)
+	if assert.Len(t, errs, 1) {
+		assert.ErrorContains(t, errs[0], "not owned by this autoscaler instance")
+	}
+}
+
 func TestGenerateInstanceConfigs_PodFamily_ExtendedFallbacks(t *testing.T) {
 	optionsTracker := optstracking.EmptyTestOptionsTracker()
 	gpCcc := ccc.NewCccCrd(&v1.ComputeClass{
