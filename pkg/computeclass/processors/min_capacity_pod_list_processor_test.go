@@ -721,12 +721,84 @@ func TestMinCapacityPodListProcessor_PassesTurnWhenItCannotRun(t *testing.T) {
 	}
 }
 
+func TestMinCapacityPodListProcessor_DefragOnlyFakePodsKillSwitch(t *testing.T) {
+	testCases := []struct {
+		name               string
+		defragOnlyFakePods bool
+		minCapacity        int
+		existingNodes      []*apiv1.Node
+		wantPods           int
+		// wantSnapshotPods maps node names to their min capacity fake pods.
+		wantSnapshotPods map[string]int
+	}{
+		{
+			name:               "enabled: the snapshot is left untouched",
+			defragOnlyFakePods: true,
+			minCapacity:        3,
+			existingNodes:      []*apiv1.Node{buildNodeWithCCC("n1", "my-ccc"), buildNodeWithCCC("n2", "my-ccc")},
+			wantPods:           1,
+			wantSnapshotPods:   map[string]int{"n1": 0, "n2": 0},
+		},
+		{
+			name:               "disabled: one fake pod per ComputeClass node below the min capacity",
+			defragOnlyFakePods: false,
+			minCapacity:        3,
+			existingNodes:      []*apiv1.Node{buildNodeWithCCC("n1", "my-ccc"), buildNodeWithCCC("n2", "my-ccc"), buildNodeWithCCC("other", "")},
+			wantPods:           1,
+			wantSnapshotPods:   map[string]int{"n1": 1, "n2": 1, "other": 0},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			crds := []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithName("my-ccc"),
+					crd.WithLabel(labels.ComputeClassLabel),
+					crd.WithTargetNodeCount(intPtr(tc.minCapacity)),
+				),
+			}
+			manager := experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: tc.defragOnlyFakePods},
+				map[string]string{},
+			)
+			ccLister := lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel)
+			processor := NewMinCapacityPodListProcessor(ccLister, nil, manager, nil, nil)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			for _, n := range tc.existingNodes {
+				if err := snapshot.AddNodeInfo(framework.NewNodeInfo(n, nil)); err != nil {
+					t.Fatalf("AddNodeInfo(%s) failed: %v", n.Name, err)
+				}
+			}
+			ctx := &ca_context.AutoscalingContext{ClusterSnapshot: snapshot, CloudProvider: &minCapacityMockCloudProvider{}}
+
+			pods, err := processor.Process(ctx, nil)
+
+			assert.NoError(t, err)
+			assert.Len(t, pods, tc.wantPods)
+			for nodeName, want := range tc.wantSnapshotPods {
+				nodeInfo, err := snapshot.GetNodeInfo(nodeName)
+				if err != nil {
+					t.Fatalf("GetNodeInfo(%q) failed: %v", nodeName, err)
+				}
+				assert.Equal(t, want, countMinCapacityPods(nodeInfo), "min capacity pods on %s after Process()", nodeName)
+			}
+		})
+	}
+}
+
 // TestMinCapacityPodListProcessor_PlacedPodsDifferFromShortfallPods checks that
 // the pods Process places in the snapshot and the shortfall pods it returns in
-// the same loop never share a name or a UID.
+// the same loop never share a name or a UID. Process places pods only with the
+// defrag-only fake pods kill switch off.
 func TestMinCapacityPodListProcessor_PlacedPodsDifferFromShortfallPods(t *testing.T) {
 	crds := []crd.CRD{crd.NewTestCrd(crd.WithName("my-ccc"), crd.WithLabel(labels.ComputeClassLabel), crd.WithTargetNodeCount(intPtr(4)))}
-	processor := NewMinCapacityPodListProcessor(lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel), nil, nil, nil, nil)
+	manager := experiments.NewMockManagerWithOptions(
+		version.Version{},
+		map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: false},
+		map[string]string{},
+	)
+	processor := NewMinCapacityPodListProcessor(lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel), nil, manager, nil, nil)
 	snapshot := testsnapshot.NewTestSnapshotOrDie(t)
 	for _, name := range []string{"n1", "n2"} {
 		if err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(buildNodeWithCCC(name, "my-ccc"))); err != nil {
@@ -980,7 +1052,7 @@ func TestPlaceMinCapacityPods(t *testing.T) {
 			autoscalingCtx := &ca_context.AutoscalingContext{ClusterSnapshot: snapshot, CloudProvider: provider}
 			processor := NewMinCapacityPodListProcessor(nil, nil, nil, tc.nodeFilter, tc.blockingLabels)
 
-			err := processor.placeMinCapacityPods(autoscalingCtx, tc.crds)
+			_, err := processor.placeMinCapacityPods(autoscalingCtx, tc.crds)
 
 			assert.NoError(t, err)
 			for nodeName, want := range tc.wantMinCapPods {

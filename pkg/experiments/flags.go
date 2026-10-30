@@ -96,6 +96,9 @@ const ComputeClassConfigHashMinCAVersionFlag = "ComputeClassConfigHash::MinCAVer
 const ComputeClassScaleDownStatusEnabledFlag = "ComputeClassScaleDownStatus::Enabled"
 const ComputeClassScaleDownStatusMinCAVersionFlag = "ComputeClassScaleDownStatus::MinCAVersion"
 
+const ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag = "ComputeClassMinCapacityDefragOnlyFakePods::Enabled"
+const ComputeClassMinCapacityDefragOnlyFakePodsMinCAVersionFlag = "ComputeClassMinCapacityDefragOnlyFakePods::MinCAVersion"
+
 const ProvisioningErrorDetailsEnabledFlag = "ProvisioningErrorDetails::Enabled"
 const ProvisioningErrorDetailsMinCAVersionFlag = "ProvisioningErrorDetails::MinCAVersion"
 

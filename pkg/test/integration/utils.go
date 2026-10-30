@@ -433,6 +433,26 @@ func GetTestCluster(t *testing.T, infra *TestInfrastructure, config *TestConfig)
 	return cluster
 }
 
+// UpdateComputeClass stores updated in the fake API server the way the API
+// server applies a user's update of the spec: it keeps the stored status and
+// bumps the generation and the resource version, which the fake does not track
+// but the autoscaler relies on.
+func UpdateComputeClass(ctx context.Context, t testing.TB, infra *TestInfrastructure, updated *cccv1.ComputeClass) {
+	t.Helper()
+	client := infra.Fakes.CccClient.CloudV1().ComputeClasses()
+	existing, err := client.Get(ctx, updated.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get(%q) failed: %v", updated.Name, err)
+	}
+	updated = updated.DeepCopy()
+	updated.Status = existing.Status
+	updated.Generation = existing.Generation + 1
+	updated.ResourceVersion = fmt.Sprintf("%d", updated.Generation+1)
+	if _, err := client.Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update(%q) failed: %v", updated.Name, err)
+	}
+}
+
 // newSimulatorHandle creates a framework handle for testing.
 func newSimulatorHandle(ctx context.Context, t testing.TB, informerFactory informers.SharedInformerFactory) *framework.Handle {
 	t.Helper()

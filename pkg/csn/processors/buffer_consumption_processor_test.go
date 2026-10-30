@@ -27,6 +27,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	nodecontrollertesting "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller/testing"
@@ -68,6 +69,15 @@ func withUnhelpableAnnotation() func(*apiv1.Pod) {
 			pod.Annotations = map[string]string{}
 		}
 		pod.Annotations[testUnhelpableAnnotation] = "true"
+	}
+}
+
+func withMinCapacityFakePodAnnotation() func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[crd.MinCapacityFakePodAnnotation] = "true"
 	}
 }
 
@@ -142,6 +152,20 @@ func TestBufferConsumptionProcess(t *testing.T) {
 				"p4", "p2", "p1",
 			},
 			expectedAllConsumedNodes: []string{"node-1"},
+		},
+		{
+			name: "Min capacity fake pods don't consume CSN nodes",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateSuspended),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateSuspended},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("min-capacity-pod", 0, 0, withMinCapacityFakePodAnnotation()),
+			},
+			expectedUnschedulablePods: []string{"min-capacity-pod"},
+			expectedAllConsumedNodes:  []string{},
 		},
 		{
 			name: "Mark nodes as consumed if they have scheduled pod blocker for suspension",
@@ -791,6 +815,23 @@ func TestBufferConsumptionProcess_ConsideredPodsMetric(t *testing.T) {
 				{Status: internalmetrics.CSNPodScheduled, IsOld: false}:     1,
 				{Status: internalmetrics.CSNPodUnschedulable, IsOld: false}: 1,
 				{Status: internalmetrics.CSNPodUnschedulable, IsOld: true}:  1,
+			},
+		},
+		{
+			name: "CSN considered pods metric excludes min capacity fake pods",
+			initialNodes: []*apiv1.Node{
+				create8CPUTestNode(t, "node-1", csn.NodeStateChilling),
+			},
+			csnNodes: []nodecontroller.CSNNode{
+				{Name: "node-1", DesiredState: csn.NodeStateChilling},
+			},
+			unschedulablePods: []*apiv1.Pod{
+				test.BuildTestPod("min-capacity-pod", 0, 0, withMinCapacityFakePodAnnotation()),
+				test.BuildTestPod("p-unschedulable", 10000, 10*GiB),
+			},
+			experimentsManager: podAgeFallbackExperimentManager(true),
+			expectedConsideredPods: map[internalmetrics.CSNConsideredPodsKey]int{
+				{Status: internalmetrics.CSNPodUnschedulable, IsOld: false}: 1,
 			},
 		},
 		{

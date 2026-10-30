@@ -30,6 +30,7 @@ import (
 
 	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/pod"
@@ -254,66 +255,88 @@ func TestCCCScaleDownBlockedStatusReportsStandardNodePool(t *testing.T) {
 // otherwise idle ComputeClass keeps alive purely to satisfy its own minimumCapacity
 // are reported under minCapacityReached, rather than under noPlaceToMovePods.
 //
-// A unit test cannot prove this: the attribution depends on the fake pods holding
-// the floor really reaching the shared cluster snapshot, where the drain simulation
-// sees them and only their annotation tells them apart from a scheduling dead end.
+// A unit test on the status processor alone would pass a hand-picked unremovable
+// reason instead of checking what CA produces: NodeGroupMinSizeReached from
+// ComputeClassMinCapacityProcessor, or, with ComputeClassMinCapacityDefragOnlyFakePods
+// disabled, NoPlaceToMovePods from fake pods matched by heldOnlyByMinCapacity.
 func TestCCCScaleDownBlockedStatusReportsMinCapacityFloor(t *testing.T) {
 	const (
 		cccName  = "min-capacity-ccc"
 		nodePool = "tpu-slice-1"
 	)
 
-	cccObj := ccc.NewComputeClassBuilder(cccName).
-		WithTargetNodeCount(ptr.To(nodesPerCube)).
-		Build()
+	testCases := []struct {
+		name               string
+		defragOnlyFakePods bool
+	}{
+		{name: "min capacity enforced by counting", defragOnlyFakePods: true},
+		{name: "min capacity held by fake pods in the snapshot", defragOnlyFakePods: false},
+	}
 
-	testConfig := integration.NewTestConfig().
-		WithNodePools(atomicTPUNodePool(nodePool, cccName)).
-		WithCccCrds(cccObj).
-		WithOverrides(
-			integration.WithScaleDownUnneededTime(time.Second),
-			integration.WithComputeClassMinCapacityEnabled(),
-			integration.WithEnhancedCrdStatusReporting(true),
-			integration.WithComputeClassScaleDownStatusEnabled(),
-		)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cccObj := ccc.NewComputeClassBuilder(cccName).
+				WithTargetNodeCount(ptr.To(nodesPerCube)).
+				Build()
 
-	synctest.Test(t, func(t *testing.T) {
-		// Given: one idle node pool whose ComputeClass declares a minimumCapacity floor
-		// covering every node in it.
-		ctx, cancel := context.WithCancel(t.Context())
-		infra := integration.SetupInfrastructure(ctx, t)
+			testConfig := integration.NewTestConfig().
+				WithNodePools(atomicTPUNodePool(nodePool, cccName)).
+				WithCccCrds(cccObj).
+				WithOverrides(
+					integration.WithScaleDownUnneededTime(time.Second),
+					integration.WithComputeClassMinCapacityEnabled(),
+					integration.WithEnhancedCrdStatusReporting(true),
+					integration.WithComputeClassScaleDownStatusEnabled(),
+				).
+				WithExperimentOverrides(
+					map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: tc.defragOnlyFakePods},
+					map[string]string{},
+				)
 
-		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel)
+			synctest.Test(t, func(t *testing.T) {
+				// Given: one idle node pool whose ComputeClass min capacity covers every
+				// node in it.
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
 
-		assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "unexpected initial node count")
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				if err != nil {
+					t.Fatalf("SetupAutoscaler() failed: %v", err)
+				}
+				defer integration_synctest.TearDown(cancel)
 
-		// When: the autoscaler tries to consolidate the idle capacity and the status is flushed.
-		for range caLoops {
-			integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
-		}
-		time.Sleep(consolidationFlushInterval)
+				assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "unexpected initial node count")
 
-		// Then: the floor holds every node.
-		assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "the minimumCapacity floor must keep every node")
+				// When: the autoscaler tries to consolidate the idle capacity and the
+				// status is flushed.
+				for range caLoops {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+				}
+				time.Sleep(consolidationFlushInterval)
 
-		// Then: the pinned nodes are attributed to the floor, not to a phantom scheduling
-		// failure. Comparing the whole slice also asserts that nothing is reported under
-		// noPlaceToMovePods.
-		updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, cccName, metav1.GetOptions{})
-		assert.NoError(t, err)
+				// Then: the min capacity keeps every node.
+				assert.Equal(t, nodesPerCube, countNodes(ctx, t, infra), "the min capacity must keep every node")
 
-		consolidation := consolidationForPriority(t, updatedCCC, firstPriority)
-		if !assert.NotNil(t, consolidation, "expected a Consolidation status block on priority %s", firstPriority) {
-			return
-		}
-		assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
-			{Reason: reasonMinCapacityReached, NodeCount: nodesPerCube, TopologyUnitCount: ptr.To(1)},
-		}, consolidation.BlockedNodes, "expected the whole node pool to be reported blocked by the floor")
-		assert.Equal(t, 0, ptr.Deref(consolidation.NotProcessed, 0), "expected no unprocessed nodes")
-		assert.Equal(t, 0, ptr.Deref(consolidation.ActuationInProgress, 0), "expected no deletion in flight")
-	})
+				// Then: the kept nodes are attributed to the min capacity, not to a
+				// phantom scheduling failure. Comparing the whole slice also asserts
+				// that nothing is reported under noPlaceToMovePods.
+				updatedCCC, err := infra.Fakes.CccClient.CloudV1().ComputeClasses().Get(ctx, cccName, metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("Get(%q) failed: %v", cccName, err)
+				}
+
+				consolidation := consolidationForPriority(t, updatedCCC, firstPriority)
+				if !assert.NotNil(t, consolidation, "expected a Consolidation status block on priority %s", firstPriority) {
+					return
+				}
+				assert.Equal(t, []v1.ConsolidationBlockedNodesInfo{
+					{Reason: reasonMinCapacityReached, NodeCount: nodesPerCube, TopologyUnitCount: ptr.To(1)},
+				}, consolidation.BlockedNodes, "expected the whole node pool to be reported blocked by the min capacity")
+				assert.Equal(t, 0, ptr.Deref(consolidation.NotProcessed, 0), "expected no unprocessed nodes")
+				assert.Equal(t, 0, ptr.Deref(consolidation.ActuationInProgress, 0), "expected no deletion in flight")
+			})
+		})
+	}
 }
 
 // consolidationForPriority returns the Consolidation block reported for the given CCC priority,

@@ -650,6 +650,11 @@ func (b *Builder) setUpProcessors(
 	// Shared by the scale-down set processors and defrag.
 	minCapacityProcessor := scaledown.NewComputeClassMinCapacityProcessor(ccLister, experimentsManager, minQuotasNodeFilter)
 
+	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
+	if options.EnableComputeClassMinCapacity {
+		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, minQuotasNodeFilter, options.ScaleDownBlockingNodeLabels)
+	}
+
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
 			CandidateLimit:   options.DefragCandidateLimit,
@@ -688,6 +693,7 @@ func (b *Builder) setUpProcessors(
 			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
 			CcLister:                 ccLister,
 			ScaleDownNodesFilter:     minCapacityProcessor,
+			MinCapacityPodPlacer:     cccMinCapacityProcessor,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -762,11 +768,6 @@ func (b *Builder) setUpProcessors(
 	var flexAdvisorPodListProcessor *flexadvisor.PodListProcessor
 	if options.GCEFlexAdvisorEnabled {
 		flexAdvisorPodListProcessor = flexadvisor.NewPodListProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)
-	}
-
-	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
-	if options.EnableComputeClassMinCapacity {
-		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, minQuotasNodeFilter, options.ScaleDownBlockingNodeLabels)
 	}
 
 	var cccPodFilter *npc_processors.CccAnnotationPodFilter

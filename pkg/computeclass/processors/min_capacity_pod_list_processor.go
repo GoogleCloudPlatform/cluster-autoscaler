@@ -88,12 +88,9 @@ func (p *MinCapacityPodListProcessor) Process(
 }
 
 // computeFakePods returns the fake pods needed to meet the minimum capacity of
-// the ComputeClasses. It also adds fake pods to the cluster snapshot, on the
-// nodes holding the min capacity.
-//
-// It returns nil when the processor has nothing to do in this loop: minimum
-// capacity is disabled, there are no ComputeClasses, listing fails, or every
-// ComputeClass already has its minimum capacity.
+// the ComputeClasses. When ComputeClassMinCapacityDefragOnlyFakePods is
+// disabled, it also adds fake pods to the cluster snapshot, on the nodes
+// holding the min capacity.
 func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context.AutoscalingContext) []*apiv1.Pod {
 	if !computeclass.IsComputeClassMinCapacityEnabled(p.experimentsManager) {
 		return nil
@@ -165,9 +162,15 @@ func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context
 		}
 	}
 
-	// Scale-down must not remove the nodes holding the min capacity.
-	if err := p.placeMinCapacityPods(autoscalingCtx, crds); err != nil {
-		klog.Errorf("Failed to place min capacity pods in the cluster snapshot: %v", err)
+	// TODO(b/569818553): without the fake pods, idle min capacity nodes are
+	// unneeded, so they get the soft deletion taint and are simulated first by
+	// the candidate sorting. Drop them from scale-down with a
+	// ScaleDownNodeProcessor instead.
+	if !computeclass.IsComputeClassMinCapacityDefragOnlyFakePodsEnabled(p.experimentsManager) {
+		// Scale-down must not remove the nodes holding the min capacity.
+		if _, err := p.placeMinCapacityPods(autoscalingCtx, crds); err != nil {
+			klog.Errorf("Failed to place min capacity pods in the cluster snapshot: %v", err)
+		}
 	}
 
 	return append(specFakePods, priorityFakePods...)
@@ -213,11 +216,12 @@ type atomicGroupInfo struct {
 }
 
 // placeMinCapacityPods adds a min capacity fake pod to up to
-// spec.targetNodeCount nodes of each ComputeClass.
-func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_context.AutoscalingContext, crds []crd.CRD) error {
+// spec.targetNodeCount nodes of each ComputeClass. It returns the pods it
+// placed, including the ones placed before an error.
+func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_context.AutoscalingContext, crds []crd.CRD) ([]*apiv1.Pod, error) {
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
-		return fmt.Errorf("failed to list node infos: %w", err)
+		return nil, fmt.Errorf("failed to list node infos: %w", err)
 	}
 	withMinCapacity := make(map[string]bool)
 	for _, c := range crds {
@@ -226,7 +230,7 @@ func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_co
 		}
 	}
 	if len(withMinCapacity) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Skip the node group lookups for nodes of ComputeClasses without a min
 	// capacity.
@@ -238,6 +242,7 @@ func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_co
 	}
 	atomicGroups, nonAtomicNodes := p.splitIntoAtomicAndNonAtomicGroups(autoscalingCtx, minCapacityNodeInfos)
 	groups := append(sortAtomicGroupsForPacking(atomicGroups), sortAtomicGroupsForPacking(nonAtomicNodes)...)
+	var placed []*apiv1.Pod
 	for _, c := range crds {
 		if !withMinCapacity[c.Name()] {
 			continue
@@ -253,11 +258,12 @@ func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_co
 			// Skip scheduler predicates, so that a full node still gets its fake
 			// pod.
 			if err := autoscalingCtx.ClusterSnapshot.ForceAddPod(pod, nodeName); err != nil {
-				return fmt.Errorf("failed to add min capacity pod %s to node %s: %w", pod.Name, nodeName, err)
+				return placed, fmt.Errorf("failed to add min capacity pod %s to node %s: %w", pod.Name, nodeName, err)
 			}
+			placed = append(placed, pod)
 		}
 	}
-	return nil
+	return placed, nil
 }
 
 func buildPlacedFakePod(ccName, nodeName string) *apiv1.Pod {

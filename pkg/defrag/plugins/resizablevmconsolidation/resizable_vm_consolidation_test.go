@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 
 	v1 "k8s.io/api/core/v1"
@@ -364,6 +366,55 @@ func TestNewCandidate(t *testing.T) {
 				},
 				experimentFlags: map[string]bool{
 					processor.PreventScheduleOnLookaheadExperimentFlags[family]: false,
+				},
+				nodeNames:                 []string{"node-1"},
+				wantCandidateNodeNames:    []string{"node-1"},
+				wantLatestUnfitNodesCount: 1,
+			},
+			{
+				name:                  fmt.Sprintf("%s: Min capacity fake pod cannot move to a node holding another one - no candidates", family),
+				maxCandidateNodeCount: 5,
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+					"node-2": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				},
+				nodes: []*v1.Node{
+					node8(family, "node-1", 8000, 32),
+					node8(family, "node-2", 8000, 32),
+				},
+				podsPerNode: map[string][]*v1.Pod{
+					"node-1": {
+						buildTestMinCapacityFakePod("node-1-min-capacity-pod", "node-1"),
+						buildTestBalloonPod("node-1-balloon-pod", "node-1", 6000, 25),
+					},
+					"node-2": {
+						buildTestMinCapacityFakePod("node-2-min-capacity-pod", "node-2"),
+						buildTestBalloonPod("node-2-balloon-pod", "node-2", 6000, 25),
+					},
+				},
+				nodeNames:                 []string{"node-1"},
+				wantLatestUnfitNodesCount: 1,
+			},
+			{
+				name:                  fmt.Sprintf("%s: Min capacity fake pod can move to a node without one - node 1 is candidate", family),
+				maxCandidateNodeCount: 5,
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+					"node-2": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				},
+				nodes: []*v1.Node{
+					node8(family, "node-1", 8000, 32),
+					node8(family, "node-2", 8000, 32),
+				},
+				podsPerNode: map[string][]*v1.Pod{
+					"node-1": {
+						buildTestMinCapacityFakePod("node-1-min-capacity-pod", "node-1"),
+						buildTestBalloonPod("node-1-balloon-pod", "node-1", 6000, 25),
+					},
+					"node-2": {
+						buildTestPod("node-2-pod", "node-2", 1500, 5),
+						buildTestBalloonPod("node-2-balloon-pod", "node-2", 6000, 25),
+					},
 				},
 				nodeNames:                 []string{"node-1"},
 				wantCandidateNodeNames:    []string{"node-1"},
@@ -828,6 +879,13 @@ func buildTestBalloonPod(name, nodeName string, cpu, mem int64) *v1.Pod {
 		pod.ObjectMeta.Namespace = "kube-system"
 		pod.Spec.NodeName = nodeName
 	})
+}
+
+func buildTestMinCapacityFakePod(name, nodeName string) *v1.Pod {
+	pod := buildTestPod(name, nodeName, 0, 0)
+	pod.Annotations = map[string]string{crd.MinCapacityFakePodAnnotation: "true"}
+	pod.Spec.Containers[0].Ports = []v1.ContainerPort{{HostPort: cc_processors.FakePodAntiAffinityHostPort}}
+	return pod
 }
 
 type mockResizableVmManager struct {

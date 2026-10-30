@@ -21,6 +21,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -133,6 +134,9 @@ type Processor struct {
 	// yet from create-before-delete candidates. Currently only ComputeClass
 	// min capacity is enforced through it.
 	scaleDownNodesFilter ScaleDownFilter
+	// minCapacityPodPlacer places the ComputeClass min capacity fake pods for
+	// a defrag pass. Nil if ComputeClass min capacity is not enabled.
+	minCapacityPodPlacer *cc_processors.MinCapacityPodListProcessor
 
 	config  Config
 	plugins []defrag.Plugin
@@ -171,6 +175,9 @@ type Options struct {
 	CcLister                 lister.Lister
 	// ScaleDownNodesFilter is used when Config.EnableScaleDownFilter is set.
 	ScaleDownNodesFilter ScaleDownFilter
+	// MinCapacityPodPlacer, if set, places the ComputeClass min capacity fake
+	// pods for each pass.
+	MinCapacityPodPlacer *cc_processors.MinCapacityPodListProcessor
 }
 
 // NewProcessor returns the default implementation of defrag processor
@@ -191,6 +198,7 @@ func NewProcessor(opts Options) *Processor {
 		nodeReconciler:       newNodeReconciler(nodeReconcilerOptions{CcLister: opts.CcLister}),
 		pdbTracker:           pdb.NewBasicRemainingPdbTracker(),
 		scaleDownNodesFilter: opts.ScaleDownNodesFilter,
+		minCapacityPodPlacer: opts.MinCapacityPodPlacer,
 		config:               opts.Config,
 		plugins:              opts.Plugins,
 		clock:                c,
@@ -223,6 +231,20 @@ func (p *Processor) Process(ctx context.Context, autoscalingCtx *cacontext.Autos
 		// Defrag did not evaluate any node this loop, so there is nothing to
 		// say about which nodes are blocked.
 		return unschedulablePods, nil
+	}
+
+	if p.minCapacityPodPlacer != nil {
+		// Inject fake pods to prevent scale-down below min capacity. This will
+		// force create-before-delete defrag to do the scale-up first.
+		remove, err := p.minCapacityPodPlacer.PlaceInSnapshot(autoscalingCtx)
+		if err != nil {
+			// Continue rather than return: without the fake pods defrag won't
+			// scale up replacements for nodes kept only for min capacity, but
+			// it still does for the other candidates, and ScaleDownNodesFilter
+			// still keeps it from deleting nodes the min capacity needs.
+			klog.Errorf("Defrag: failed to place min capacity pods: %v", err)
+		}
+		defer remove()
 	}
 
 	if err := p.cleanUpCandidates(nodeFilter); err != nil {
