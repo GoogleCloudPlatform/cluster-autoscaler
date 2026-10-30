@@ -31,6 +31,7 @@ type CapacityGuidance struct {
 	Rank                    *int
 	Zone                    *string
 	MaxRunDurationInSeconds *string
+	MinEstimatedUptime      *flexadvisorapi.MinEstimatedUptime
 	WorkloadPolicies        *flexadvisorapi.WorkloadPolicies
 
 	// Response:
@@ -59,6 +60,9 @@ func (g CapacityGuidance) matches(realConfig *flexadvisorapi.InstanceConfig, zon
 		return false
 	}
 	if g.MaxRunDurationInSeconds != nil && *g.MaxRunDurationInSeconds != realConfig.MaxRunDurationInSeconds() {
+		return false
+	}
+	if g.MinEstimatedUptime != nil && *g.MinEstimatedUptime != realConfig.MinEstimatedUptime() {
 		return false
 	}
 	if g.WorkloadPolicies != nil && g.WorkloadPolicies.AcceleratorTopology != realConfig.WorkloadPolicies().AcceleratorTopology {
@@ -125,6 +129,12 @@ func (g CapacityGuidance) WithGpuCount(count int) CapacityGuidance {
 // WithMaxRunDurationInSeconds sets the target max run duration filter.
 func (g CapacityGuidance) WithMaxRunDurationInSeconds(duration string) CapacityGuidance {
 	g.MaxRunDurationInSeconds = &duration
+	return g
+}
+
+// WithMinEstimatedUptime sets the target minimum estimated uptime filter.
+func (g CapacityGuidance) WithMinEstimatedUptime(uptime flexadvisorapi.MinEstimatedUptime) CapacityGuidance {
+	g.MinEstimatedUptime = &uptime
 	return g
 }
 

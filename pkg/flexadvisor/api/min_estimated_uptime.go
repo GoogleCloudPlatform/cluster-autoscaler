@@ -16,6 +16,8 @@ package api
 
 import (
 	"fmt"
+
+	"k8s.io/klog/v2"
 )
 
 // MinEstimatedUptime represents a Spot uptime filter bucket for GCE Flex Advisor.
@@ -55,4 +57,18 @@ func MinEstimatedUptimeFromMinutes(minutes *int) (MinEstimatedUptime, error) {
 // that the value is a valid Spot uptime bucket.
 func (u MinEstimatedUptime) IsSet() bool {
 	return u != MinUptimeUnset
+}
+
+// AsProtoDuration returns the google.protobuf.Duration JSON wire format string
+// (e.g. "600s"), or "" when unset.
+func (u MinEstimatedUptime) AsProtoDuration() string {
+	switch u {
+	case MinUptime1Min, MinUptime10Min, MinUptime1Hour:
+		return string(u)
+	case MinUptimeUnset:
+		return ""
+	default:
+		klog.Errorf("Unexpected MinEstimatedUptime value: %v", u)
+		return ""
+	}
 }
