@@ -5233,7 +5233,7 @@ func TestNodeTemplateFromMigSpec_MultiNetworking(t *testing.T) {
 				},
 			}
 
-			node, err := g.nodeTemplateFromMigSpec(mig)
+			node, err := g.nodeTemplateFromMigSpec(mig, mig.Version(), false)
 			assert.NoError(t, err)
 			assert.NotNil(t, node)
 

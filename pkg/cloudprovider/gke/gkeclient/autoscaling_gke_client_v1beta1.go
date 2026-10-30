@@ -319,6 +319,7 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 		Status:                           clusterResponse.Status,
 		ClusterVersion:                   clusterResponse.CurrentMasterVersion,
 		EmulatedClusterVersion:           clusterResponse.CurrentEmulatedVersion,
+		DowngradableVersion:              downgradableVersion(clusterResponse),
 		ReleaseChannel:                   releaseChannel,
 		Locations:                        clusterResponse.Locations,
 		NodePools:                        nodePools,
@@ -371,6 +372,16 @@ func isHighThroughputLoggingEnabled(clusterResponse *container.Cluster) bool {
 		return false
 	}
 	return clusterResponse.NodePoolDefaults.NodeConfigDefaults.LoggingConfig.VariantConfig.Variant == MaxThroughputLoggingEnabledLabel
+}
+
+// downgradableVersion returns the version GKE assigns to new node pools created without an explicit
+// version during phase 1 of a rollback-safe upgrade (while the control plane emulates the previous
+// minor version), or "" otherwise.
+func downgradableVersion(clusterResponse *container.Cluster) string {
+	if clusterResponse.CurrentEmulatedVersion == "" || clusterResponse.Master == nil || clusterResponse.Master.CompatibilityStatus == nil {
+		return ""
+	}
+	return clusterResponse.Master.CompatibilityStatus.DowngradableVersion
 }
 
 func convertGkeApiTaintsToApiV1Taints(taints []*gke_api_beta.NodeTaint) []apiv1.Taint {

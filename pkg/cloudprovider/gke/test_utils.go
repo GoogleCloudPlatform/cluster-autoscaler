@@ -1789,6 +1789,14 @@ func (fake *FakeGkeManager) GetEmulatedClusterVersion() string {
 	panic("not implemented")
 }
 
+func (fake *FakeGkeManager) GetDowngradableVersion() string {
+	panic("not implemented")
+}
+
+func (fake *FakeGkeManager) IsGCFSEnabled() bool {
+	panic("not implemented")
+}
+
 func (fake *FakeGkeManager) GetClusterNetwork() (*gce_api.Network, error) {
 	panic("not implemented")
 }
@@ -2624,6 +2632,18 @@ func (m *GkeManagerMock) GetClusterVersion() string {
 func (m *GkeManagerMock) GetEmulatedClusterVersion() string {
 	args := m.Called()
 	return args.String(0)
+}
+
+// GetDowngradableVersion is a mocked method.
+func (m *GkeManagerMock) GetDowngradableVersion() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+// IsGCFSEnabled is a mocked method.
+func (m *GkeManagerMock) IsGCFSEnabled() bool {
+	args := m.Called()
+	return args.Bool(0)
 }
 
 // GetClusterNetwork is a mocked method.

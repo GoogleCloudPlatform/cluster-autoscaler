@@ -154,7 +154,7 @@ func TestWorstAllocatableBasic(t *testing.T) {
 			cache.Add(nodetemplate.BuildKeyForCA(templateId), nodeTemplate, nodetemplate.LongTTL)
 
 			if test.autoprovisioned {
-				key := nodetemplate.BuildKeyForNAP(&spec, imageType, "", "")
+				key := nodetemplate.BuildKeyForNAP(&spec, imageType, "", "", false)
 				cache.Add(key, nodeTemplate, nodetemplate.LongTTL)
 			}
 		}
@@ -249,7 +249,9 @@ func TestWorstAllocatableMultipleNodes(t *testing.T) {
 		SetAutoprovisioned(true).
 		SetNodePoolName("pool-3").
 		SetSpec(ngNAPSpec).Build()
-	key := nodetemplate.BuildKeyForNAP(ngNAPSpec, "cos", "1-2-3", "us-central1-b")
+	// The template was built with cluster-level GCFS enabled; the processor must look it up with the same value.
+	gkeManagerMock.On("IsGCFSEnabled").Return(true)
+	key := nodetemplate.BuildKeyForNAP(ngNAPSpec, "cos", "1-2-3", "us-central1-b", true)
 
 	nodeNAP := BuildTestNode("n3", 1000, 1000)
 	nodeNAP.Spec.ProviderID = "gce://project1/us-central1-b/node-3"

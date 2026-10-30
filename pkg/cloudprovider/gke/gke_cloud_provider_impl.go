@@ -1283,12 +1283,23 @@ func (mig *GkeMig) Version() string {
 		if mig.spec != nil && mig.spec.NodeVersion != "" {
 			return mig.spec.NodeVersion
 		}
+		// During phase 1 of a rollback-safe upgrade, GKE creates node pools at the downgradable
+		// version instead of the new control plane version.
+		if downgradableVersion := mig.gkeManager.GetDowngradableVersion(); downgradableVersion != "" {
+			return downgradableVersion
+		}
 		return mig.gkeManager.GetClusterVersion()
 	}
 	if mig.nodeConfig == nil {
 		return ""
 	}
 	return mig.nodeConfig.Version
+}
+
+// ClusterGCFSEnabled returns whether GCFS (Image Streaming) is enabled in the cluster-level node pool
+// defaults, which NAP node templates are built with.
+func (mig *GkeMig) ClusterGCFSEnabled() bool {
+	return mig.gkeManager.IsGCFSEnabled()
 }
 
 func (mig *GkeMig) IsConfidentialNode() bool {

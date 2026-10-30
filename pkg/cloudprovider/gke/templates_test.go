@@ -1094,6 +1094,7 @@ func TestConditionalLabels(t *testing.T) {
 		machineSerenityLabelsEnabled bool
 		nodeVersion                  string
 		gcfsEnabled                  bool
+		autopilotManaged             bool
 		selfServiceMetadata          map[string]string
 	}
 	testCases := []testCase{
@@ -1315,6 +1316,56 @@ func TestConditionalLabels(t *testing.T) {
 			},
 		},
 		{
+			scenario: "1.37 node, WI enabled, CCC workloadMetadata GCE_METADATA suppresses WI labels",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         false,
+			selfServiceMetadata: map[string]string{gkelabels.WorkloadMetadataLabelKey: "GCE_METADATA"},
+			notContainLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, CCC workloadMetadata GKE_METADATA preserves WI labels",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:         "v1.37.0-gke.100",
+			gcfsEnabled:         false,
+			selfServiceMetadata: map[string]string{gkelabels.WorkloadMetadataLabelKey: "GKE_METADATA"},
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled":          "true",
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
+			scenario: "1.37 node, WI enabled, Autopilot-managed CCC on non-Riptide cluster suppresses WI image pull label",
+			daemonSetConditions: &DaemonSetConditions{
+				MetadataServerEnabled:        true,
+				WorkloadIdentityEnabled:      true,
+				WIImagePullMinVersion:        ver137,
+				DisableWIImagePullForRiptide: true,
+			},
+			nodeVersion:      "v1.37.0-gke.100",
+			gcfsEnabled:      false,
+			autopilotManaged: true,
+			containLabels: map[string]string{
+				"iam.gke.io/gke-metadata-server-enabled": "true",
+			},
+			notContainLabels: map[string]string{
+				"iam.gke.io/workload-identity-image-pull-enabled": "true",
+			},
+		},
+		{
 			scenario: "1.37 node, WI enabled, Riptide ON but DisableWIImagePullForRiptide OFF",
 			daemonSetConditions: &DaemonSetConditions{
 				MetadataServerEnabled:        true,
@@ -1394,6 +1445,7 @@ func TestConditionalLabels(t *testing.T) {
 					SystemArchitecture: &arch,
 					DiskSize:           300,
 					NodeVersion:        tc.nodeVersion,
+					AutopilotManaged:   tc.autopilotManaged,
 					LocalSSDConfig:     &gkeclient.LocalSSDConfig{EphemeralStorageConfig: &gke_api_beta.EphemeralStorageConfig{LocalSsdCount: tc.localSSDCount}},
 					MaxPodsPerNode:     testcase.migMaxPodsPerNode,
 				},
@@ -1578,7 +1630,7 @@ func TestBuildNodeFromMigSpec_ReservedSystemCpus(t *testing.T) {
 
 func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 	const version = "1.35.8-gke.1036000"
-	newMigWithSelfServiceMetadata := func(selfServiceMetadata map[string]string) *GkeMig {
+	newMig := func(selfServiceMetadata map[string]string, autopilotManaged bool) *GkeMig {
 		arch := gce.DefaultArch
 		return NewTestGkeMigBuilder().
 			SetGceRef(gce.GceRef{Project: "project1", Zone: "us-central1-b", Name: "nodeautoprovisioning-323233232"}).
@@ -1587,6 +1639,7 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 				MachineType:         "e2-standard-8",
 				NodeVersion:         version,
 				SystemArchitecture:  &arch,
+				AutopilotManaged:    autopilotManaged,
 				SelfServiceMetadata: selfServiceMetadata,
 			}).
 			Build()
@@ -1596,9 +1649,9 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 	ssdDiskSizeProvider := localssdsize.NewSimpleLocalSSDProvider()
 
 	// Golden values: two node pools differing only by cluster default image streaming configuration, without CCC self-service metadata.
-	goldenNodeWithoutStreaming, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(nil), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	goldenNodeWithoutStreaming, err := tb.BuildNodeFromMigSpec(newMig(nil, false), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, false, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
 	assert.NoError(t, err)
-	goldenNodeWithStreaming, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(nil), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, true, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+	goldenNodeWithStreaming, err := tb.BuildNodeFromMigSpec(newMig(nil, false), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, true, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
 	assert.NoError(t, err)
 	allocatableWithoutStreaming := goldenNodeWithoutStreaming.Status.Allocatable.Memory().Value()
 	allocatableWithStreaming := goldenNodeWithStreaming.Status.Allocatable.Memory().Value()
@@ -1608,6 +1661,7 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 	testCases := []struct {
 		scenario            string
 		clusterGcfsEnabled  bool
+		autopilotManaged    bool
 		selfServiceMetadata map[string]string
 		wantImageStreaming  bool
 	}{
@@ -1635,6 +1689,12 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 			selfServiceMetadata: map[string]string{gkelabels.ImageStreamingLabelKey: "false"},
 			wantImageStreaming:  false,
 		},
+		{
+			scenario:           "cluster-default image streaming OFF, Autopilot-managed CCC enables image streaming",
+			clusterGcfsEnabled: false,
+			autopilotManaged:   true,
+			wantImageStreaming: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.scenario, func(t *testing.T) {
@@ -1642,7 +1702,7 @@ func TestBuildNodeFromMigSpec_ImageStreamingKubeReserved(t *testing.T) {
 			if tc.wantImageStreaming {
 				want = allocatableWithStreaming
 			}
-			node, err := tb.BuildNodeFromMigSpec(newMigWithSelfServiceMetadata(tc.selfServiceMetadata), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, tc.clusterGcfsEnabled, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
+			node, err := tb.BuildNodeFromMigSpec(newMig(tc.selfServiceMetadata, tc.autopilotManaged), gkeMigOsInfo, 8, 32*GiB, nil, &DaemonSetConditions{}, tc.clusterGcfsEnabled, &GkeReserved{}, ssdDiskSizeProvider, gkelabels.DefaultMaxPodsPerNode)
 			assert.NoError(t, err)
 			assert.Equal(t, want, node.Status.Allocatable.Memory().Value())
 		})

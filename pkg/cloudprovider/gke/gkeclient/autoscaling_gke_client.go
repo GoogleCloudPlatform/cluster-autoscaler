@@ -170,6 +170,7 @@ type Cluster struct {
 	// where the API server is emulated to behave like this minor version. Has to be taken into account when CA depends on K8s APIs being enabled by default
 	// from some minor version. More details: go/gke-component-emulated-version.
 	EmulatedClusterVersion string // Only contains the major and minor version, example value: "1.33"
+	DowngradableVersion    string // Version of new node pools without an explicit version while EmulatedClusterVersion is set, empty otherwise.
 	ReleaseChannel         string
 	// Cluster network path in the format "projects/{PROJECT_ID}/global/networks/{NETWORK_NAME}""
 	NetworkPath    string

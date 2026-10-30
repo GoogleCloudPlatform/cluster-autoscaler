@@ -32,7 +32,9 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	kubeletapis "k8s.io/kubelet/pkg/apis"
+	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	test_utils "sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/units"
@@ -627,4 +629,75 @@ func TestGetMigTemplateNodeInfo_DeprecatedLabelsAndCaching(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, nodeInfo.Node())
 	assert.Equal(t, "amd64", nodeInfo.Node().Labels[kubeletapis.LabelArch])
+}
+
+func TestGetMigTemplateNodeInfo_GcfsChangeUsesMatchingTemplate(t *testing.T) {
+	server := test_utils.NewHttpServerMock()
+	t.Cleanup(server.Close)
+
+	const nodeVer = "1.37.0-gke.3630000"
+	minVer, err := version.FromString(nodeVer)
+	assert.NoError(t, err)
+
+	currentCluster := gkeclient.Cluster{
+		ClusterVersion:              nodeVer,
+		Locations:                   []string{zoneB},
+		NodeAutoprovisioningEnabled: true,
+		WorkloadIdentityEnabled:     true,
+		ResourceLimiter:             cloudprovider.NewResourceLimiter(nil, nil),
+	}
+	gkeClient := gkeclient.NewAutoscalingGkeClientMock(
+		func() (gkeclient.Cluster, error) { return currentCluster, nil },
+		nil,
+		nil,
+	)
+
+	gkeManager := newTestGkeManager(t, server.URL, napEnabled, false, false, gkeClient, false, nil, nodeVer)
+	gkeManager.managerOptions.WIImagePullMinVersion = &minVer
+	gkeManager.managerOptions.DisableWIImagePullForRiptide = true
+	gkeManager.cache.SetMachines(nil)
+
+	assert.NoError(t, gkeManager.refreshGkeResources())
+
+	migConfig := testMigConfig{
+		machineType: "e2-standard-8",
+		napCreated:  true,
+	}
+	mig := migConfig.createMig(t, gkeManager, server)
+	mig.spec.NodeVersion = nodeVer
+	mig.spec.ImageType = "COS_CONTAINERD"
+
+	// Initial NAP template has WI image pull label and non-streaming memory.
+	initialNodeInfo, err := gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.Equal(t, "true", initialNodeInfo.Node().Labels["iam.gke.io/workload-identity-image-pull-enabled"])
+
+	// Refreshing with unchanged GCFS configuration keeps the cached NAP template.
+	assert.NoError(t, gkeManager.refreshGkeResources())
+	cachedNodeInfo, err := gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.Equal(t, initialNodeInfo.Node().Name, cachedNodeInfo.Node().Name)
+
+	// Dynamically enabling image streaming on the cluster changes the cache key, so a new template is built.
+	currentCluster.NodePoolDefaults = &gke_api_beta.NodePoolDefaults{
+		NodeConfigDefaults: &gke_api_beta.NodeConfigDefaults{
+			GcfsConfig: &gke_api_beta.GcfsConfig{Enabled: true},
+		},
+	}
+	assert.NoError(t, gkeManager.refreshGkeResources())
+
+	postGcfsNodeInfo, err := gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.NotEqual(t, initialNodeInfo.Node().Name, postGcfsNodeInfo.Node().Name)
+	assert.NotContains(t, postGcfsNodeInfo.Node().Labels, "iam.gke.io/workload-identity-image-pull-enabled")
+	assert.Less(t, postGcfsNodeInfo.Node().Status.Allocatable.Memory().Value(), initialNodeInfo.Node().Status.Allocatable.Memory().Value())
+
+	// Disabling image streaming again uses the template built without image streaming.
+	currentCluster.NodePoolDefaults = nil
+	assert.NoError(t, gkeManager.refreshGkeResources())
+
+	postDisableNodeInfo, err := gkeManager.GetMigTemplateNodeInfo(mig)
+	assert.NoError(t, err)
+	assert.Equal(t, "true", postDisableNodeInfo.Node().Labels["iam.gke.io/workload-identity-image-pull-enabled"])
+	assert.Equal(t, initialNodeInfo.Node().Status.Allocatable.Memory().Value(), postDisableNodeInfo.Node().Status.Allocatable.Memory().Value())
 }
