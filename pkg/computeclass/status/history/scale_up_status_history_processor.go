@@ -27,7 +27,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podkind"
@@ -63,11 +63,11 @@ type ScaleUpStatusHistoryProcessor struct {
 	sharedData *scaleUpData
 	updatesCh  chan<- npc_status.UpdateMessage
 	now        func() time.Time
-	observer   npc_processors.MinCapacityObserver
+	observer   cc_processors.MinCapacityObserver
 }
 
 // NewScaleUpStatusHistoryProcessor creates a new ScaleUpStatusHistoryProcessor.
-func NewScaleUpStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer npc_processors.MinCapacityObserver, experimentsManager experiments.Manager) *ScaleUpStatusHistoryProcessor {
+func NewScaleUpStatusHistoryProcessor(lister lister.Lister, provider machineConfigProvider, sharedData *scaleUpData, updatesCh chan<- npc_status.UpdateMessage, observer cc_processors.MinCapacityObserver, experimentsManager experiments.Manager) *ScaleUpStatusHistoryProcessor {
 	return &ScaleUpStatusHistoryProcessor{
 		lister:             lister,
 		matcher:            computeclass.NewMatcher(lister, provider),
@@ -114,7 +114,7 @@ func (p *ScaleUpStatusHistoryProcessor) collectDeltas(scaleUpStatus *status.Scal
 		if isAsyncNodeGroup(nodeGroup) {
 			continue
 		}
-		ruleIndex, c, err := getRuleIndex(nodeGroup, p.lister, p.matcher)
+		ruleIndex, c, err := cc_processors.GetRuleIndex(nodeGroup, p.lister, p.matcher)
 		if err != nil {
 			klog.Errorf("Failed to retrieve rule index for node group %v: %v", nodeGroup.Id(), err)
 			continue
@@ -220,30 +220,6 @@ func (p *ScaleUpStatusHistoryProcessor) emitConditions(deltasByRule map[npc_stat
 
 func (p *ScaleUpStatusHistoryProcessor) CleanUp() {
 	// Processor doesn't keep state, so nothing to clean up locally.
-}
-
-// getRuleIndex returns the rule index for the given node group.
-// Copied from pkg/computeclass/processors/utils.go to avoid dependency cycle/visibility issues.
-func getRuleIndex(nodeGroup cloudprovider.NodeGroup, lister lister.Lister, matcher computeclass.Matcher) (int, crd.CRD, error) {
-	c, cName, err := lister.NodeGroupCrd(nodeGroup)
-	if err != nil {
-		return -1, nil, err
-	}
-
-	if c == nil || cName == "" {
-		return 0, nil, nil
-	}
-
-	ruleFound, ruleIndex, _ := matcher.FirstMatchedRule(nodeGroup, c)
-
-	// Check for no rule matching.
-	if !ruleFound {
-		if len(c.Rules()) > 0 && !c.ScaleUpAnyway() {
-			return -1, nil, fmt.Errorf("nodepool: %v shouldn't scale scale up. crd: %v:%v", nodeGroup, c.Label(), c.Name())
-		}
-		return len(c.Rules()), c, nil
-	}
-	return ruleIndex, c, nil
 }
 
 func isAsyncNodeGroup(nodeGroup cloudprovider.NodeGroup) bool {

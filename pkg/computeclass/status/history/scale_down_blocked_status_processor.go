@@ -436,7 +436,7 @@ func sortByEvaluationOrder(blockedByReason map[string]*blockedNodes) []crd.Block
 // resolvePriority returns the CCC priority of the node group. Node groups matching no priority
 // are logged once.
 func (p *ScaleDownBlockedStatusProcessor) resolvePriority(nodeGroup cloudprovider.NodeGroup) (priorityKey, bool) {
-	index, c, err := getRuleIndex(nodeGroup, p.lister, p.matcher)
+	index, c, err := cc_processors.GetRuleIndex(nodeGroup, p.lister, p.matcher)
 	if err != nil {
 		if p.loggedUnresolved.Has(nodeGroup.Id()) {
 			klog.V(4).Infof("Node group %v is still not attributed to any ComputeClass priority: %v", nodeGroup.Id(), err)

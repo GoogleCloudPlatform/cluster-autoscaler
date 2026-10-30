@@ -43,8 +43,10 @@ func IsMinCapacityFakePod(pod *apiv1.Pod) bool {
 	return pod != nil && pod.Annotations[MinCapacityFakePodAnnotation] == "true"
 }
 
-// processNodeGroup processes a nodegroup considered for scaleup.
-func getRuleIndexForMetrics(nodeGroup cloudprovider.NodeGroup, lister lister.Lister, matcher computeclass.Matcher) (int, crd.CRD, error) {
+// GetRuleIndex returns the matched priority rule index and CRD for the given node group.
+// If the node group does not belong to any CRD, it returns (0, nil, nil).
+// If no priority rule matches and ScaleUpAnyway is enabled, it returns (len(c.Rules()), c, nil).
+func GetRuleIndex(nodeGroup cloudprovider.NodeGroup, lister lister.Lister, matcher computeclass.Matcher) (int, crd.CRD, error) {
 	c, cName, err := lister.NodeGroupCrd(nodeGroup)
 	if err != nil {
 		return -1, nil, err
@@ -61,18 +63,20 @@ func getRuleIndexForMetrics(nodeGroup cloudprovider.NodeGroup, lister lister.Lis
 		if len(c.Rules()) > 0 && !c.ScaleUpAnyway() {
 			return -1, nil, fmt.Errorf("nodepool: %v shouldn't scale scale up. crd: %v:%v", nodeGroup, c.Label(), c.Name())
 		}
+		// len(c.Rules()) as index means ScaleUpAnyway rule.
 		return len(c.Rules()), c, nil
 	}
-	ruleIndex = min(ruleIndex, maxRuleIndex)
 	return ruleIndex, c, nil
 }
 
-// min returns the minimum of 2 int.
-func min(a, b int) int {
-	if a < b {
-		return a
+// getRuleIndexForMetrics returns the rule index for the given node group clamped to maxRuleIndex.
+func getRuleIndexForMetrics(nodeGroup cloudprovider.NodeGroup, lister lister.Lister, matcher computeclass.Matcher) (int, crd.CRD, error) {
+	ruleIndex, c, err := GetRuleIndex(nodeGroup, lister, matcher)
+	if err != nil {
+		return -1, nil, err
 	}
-	return b
+	// We limit the rule index to avoid high cardinality in metrics.
+	return min(ruleIndex, maxRuleIndex), c, nil
 }
 
 // FakePodAntiAffinityHostPort is chosen to enforce a "one fake pod per node" policy

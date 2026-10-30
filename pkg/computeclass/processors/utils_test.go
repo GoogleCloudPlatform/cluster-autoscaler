@@ -33,13 +33,14 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
-func TestGetFirstMatchingRule(t *testing.T) {
+func TestGetRuleIndex(t *testing.T) {
 	testCrdLabel := "test-crd-label"
 	testCases := []struct {
 		name          string
 		crds          []crd.CRD
 		nodeGroup     cloudprovider.NodeGroup
 		wantErr       bool
+		wantNilCrd    bool
 		wantRuleIndex int
 	}{
 		{
@@ -62,11 +63,16 @@ func TestGetFirstMatchingRule(t *testing.T) {
 			wantRuleIndex: 1,
 		},
 		{
+			name:       "nodegroup without crd label returns zero and nil crd",
+			nodeGroup:  buildMigWithDefaultCrd(),
+			wantNilCrd: true,
+		},
+		{
 			name:    "nil nodegroup",
 			wantErr: true,
 		},
 		{
-			name:      "crd label not present",
+			name:      "crd label error",
 			nodeGroup: buildMigWithCrdLabelError(),
 			wantErr:   true,
 		},
@@ -101,7 +107,7 @@ func TestGetFirstMatchingRule(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "crd without priorties - ScaleUpAnyway",
+			name: "crd without priorities - ScaleUpAnyway",
 			crds: []crd.CRD{
 				crd.NewTestCrd(crd.WithLabel(testCrdLabel),
 					crd.WithName("crd-object-1"),
@@ -145,13 +151,115 @@ func TestGetFirstMatchingRule(t *testing.T) {
 			mockProvider.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.N1)
 			mockProvider.On("IsAutopilotEnabled").Return(false)
 			matcher := computeclass.NewMatcher(mockLister, mockProvider)
-			ruleIndex, _, err := getRuleIndexForMetrics(tc.nodeGroup, mockLister, matcher)
+			ruleIndex, matchedCrd, err := getRuleIndexForMetrics(tc.nodeGroup, mockLister, matcher)
 			if tc.wantErr {
 				assert.Error(t, err)
+				assert.Nil(t, matchedCrd)
 			} else {
 				assert.NoError(t, err)
-				assert.Equal(t, ruleIndex, tc.wantRuleIndex)
+				assert.Equal(t, tc.wantRuleIndex, ruleIndex)
+				if tc.wantNilCrd {
+					assert.Nil(t, matchedCrd)
+				} else {
+					assert.Equal(t, tc.crds[0], matchedCrd)
+				}
 			}
+
+			rawRuleIndex, rawMatchedCrd, rawErr := GetRuleIndex(tc.nodeGroup, mockLister, matcher)
+			if tc.wantErr {
+				assert.Error(t, rawErr)
+				assert.Nil(t, rawMatchedCrd)
+			} else {
+				assert.NoError(t, rawErr)
+				assert.Equal(t, tc.wantRuleIndex, rawRuleIndex)
+				if tc.wantNilCrd {
+					assert.Nil(t, rawMatchedCrd)
+				} else {
+					assert.Equal(t, tc.crds[0], rawMatchedCrd)
+				}
+			}
+		})
+	}
+}
+
+func TestGetRuleIndexClamping(t *testing.T) {
+	testCrdLabel := "test-crd-label"
+	manyRules := make([]rules.Rule, maxRuleIndex+2)
+	for i := range manyRules {
+		manyRules[i] = rules.NewRule(rules.WithNodePoolsRule([]string{"other-nodepool"}))
+	}
+	manyRules[maxRuleIndex-1] = rules.NewRule(rules.WithNodePoolsRule([]string{"pool-below-max"}))
+	manyRules[maxRuleIndex] = rules.NewRule(rules.WithNodePoolsRule([]string{"pool-at-max"}))
+	manyRules[maxRuleIndex+1] = rules.NewRule(rules.WithNodePoolsRule([]string{"pool-above-max"}))
+
+	crds := []crd.CRD{
+		crd.NewTestCrd(
+			crd.WithLabel(testCrdLabel),
+			crd.WithName("crd-many-rules"),
+			crd.WithRules(manyRules),
+			crd.WithScaleUpAnyway(),
+		),
+	}
+
+	mockLister := lister.NewMockCrdLister(crds)
+	mockLister.SetCrdLabel(testCrdLabel)
+	mockProvider := NewMockCloudProvider()
+	mockProvider.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.N1)
+	mockProvider.On("IsAutopilotEnabled").Return(false)
+	matcher := computeclass.NewMatcher(mockLister, mockProvider)
+
+	testCases := []struct {
+		name           string
+		nodePoolName   string
+		wantRawIdx     int
+		wantMetricsIdx int
+	}{
+		{
+			name:           "below maxRuleIndex",
+			nodePoolName:   "pool-below-max",
+			wantRawIdx:     maxRuleIndex - 1,
+			wantMetricsIdx: maxRuleIndex - 1,
+		},
+		{
+			name:           "at maxRuleIndex",
+			nodePoolName:   "pool-at-max",
+			wantRawIdx:     maxRuleIndex,
+			wantMetricsIdx: maxRuleIndex,
+		},
+		{
+			name:           "above maxRuleIndex clamped",
+			nodePoolName:   "pool-above-max",
+			wantRawIdx:     maxRuleIndex + 1,
+			wantMetricsIdx: maxRuleIndex,
+		},
+		{
+			name:           "ScaleUpAnyway fallback clamped",
+			nodePoolName:   "unmatched-nodepool",
+			wantRawIdx:     len(manyRules),
+			wantMetricsIdx: maxRuleIndex,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			nodeGroup := gke.NewTestGkeMigBuilder().
+				SetNodePoolName(tc.nodePoolName).
+				SetSpec(&gkeclient.NodePoolSpec{
+					Labels:      map[string]string{testCrdLabel: "crd-many-rules"},
+					MachineType: "machine-type",
+					Spot:        true,
+				}).
+				Build()
+
+			rawIdx, matchedCrd, err := GetRuleIndex(nodeGroup, mockLister, matcher)
+			assert.NoError(t, err)
+			assert.Equal(t, crds[0], matchedCrd)
+			assert.Equal(t, tc.wantRawIdx, rawIdx)
+
+			metricsIdx, matchedCrd, err := getRuleIndexForMetrics(nodeGroup, mockLister, matcher)
+			assert.NoError(t, err)
+			assert.Equal(t, crds[0], matchedCrd)
+			assert.Equal(t, tc.wantMetricsIdx, metricsIdx)
 		})
 	}
 }
