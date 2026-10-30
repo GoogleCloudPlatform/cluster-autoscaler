@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/api/core/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
 
 type shardFeatureParts map[string]string
@@ -106,7 +107,7 @@ func TestCompositePodSharderBasic(t *testing.T) {
 				computeFunctions = append(computeFunctions,
 					FeatureShardComputeFunction{
 						Feature: featureCopy,
-						Function: func(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+						Function: func(pod *v1.Pod, _ *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 							for _, podFeatures := range tc.podsFeatures {
 								if podFeatures.uid == pod.UID {
 									for k, v := range podFeatures.nodeLables {
@@ -142,7 +143,7 @@ func TestCompositePodSharderNodeDescriptor(t *testing.T) {
 	buildComputeFunction := func(labelKey string) FeatureShardComputeFunction {
 		return FeatureShardComputeFunction{
 			Feature: labelKey,
-			Function: func(pod *v1.Pod, nodeGroupDescriptor *NodeGroupDescriptor) {
+			Function: func(pod *v1.Pod, _ *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
 				for podLabelKey, podLabelValue := range pod.Labels {
 					if podLabelKey == labelKey {
 						nodeGroupDescriptor.Labels[podLabelKey] = podLabelValue

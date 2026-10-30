@@ -80,8 +80,9 @@ func (p *PredicatePodShardFilter) FilterPods(autoscalingCtx *ca_context.Autoscal
 		return PodFilteringResult{}, fmt.Errorf("not enough pods associated to the selected PodShard")
 	}
 	selectedPod := podsByUid[selectedPodShard.PodUidsSlice()[0]]
+	reqs := podrequirements.GetRequirements(selectedPod)
 
-	extensionNodeInfos := p.getExtensionNodeInfosForShard(cloudProvider, selectedPodShard, machineSelector, selectedPod)
+	extensionNodeInfos := p.getExtensionNodeInfosForShard(cloudProvider, selectedPodShard, machineSelector, selectedPod, reqs)
 
 	// list of shards for which we want to have
 	finalPodShards := make(map[ShardSignature]bool)
@@ -92,7 +93,6 @@ func (p *PredicatePodShardFilter) FilterPods(autoscalingCtx *ca_context.Autoscal
 	zoneAgnostic := true
 
 	// if we use ccc zonal preferences for the selected set of pods, we need to ensure zoneAgnostic is not set
-	reqs := podrequirements.GetRequirements(selectedPod)
 	crd, _, _ := p.npcCrdLister.PodReqCrd(reqs)
 	if crd != nil {
 		for _, rule := range crd.Rules() {
@@ -178,7 +178,7 @@ func (p *PredicatePodShardFilter) FilterPods(autoscalingCtx *ca_context.Autoscal
 	}, nil
 }
 
-func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider PredicatePodShardingCloudProvider, shard *PodShard, machineSelector machineselection.Selector, pod *apiv1.Pod) []*framework.NodeInfo {
+func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider PredicatePodShardingCloudProvider, shard *PodShard, machineSelector machineselection.Selector, pod *apiv1.Pod, podRequirements *podrequirements.Requirements) []*framework.NodeInfo {
 	// If Provisioning Request shard was selected we don't want to expand the number of pods.
 	// This avoids situations where one pod shard contains both in-memory injected pods and actual pods from the cluster.
 	if shard.NodeGroupDescriptor.ProvisioningClassName != "" {
@@ -198,7 +198,9 @@ func (p *PredicatePodShardFilter) getExtensionNodeInfosForShard(cloudProvider Pr
 
 	// machines to try from biggest to smallest.
 	// we need to consider smaller ones because if we request machine with GPUs we are constrained on number of CPUs
-	podRequirements := podrequirements.GetRequirements(pod)
+	if podRequirements == nil {
+		podRequirements = podrequirements.GetRequirements(pod)
+	}
 	var gpuLabel = ""
 	if g, ok := shard.NodeGroupDescriptor.SystemLabels[labels.GPULabel]; ok {
 		gpuLabel = g
