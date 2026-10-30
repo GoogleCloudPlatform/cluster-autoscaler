@@ -23,56 +23,64 @@ import (
 
 func TestMinEstimatedUptimeFromMinutes(t *testing.T) {
 	testCases := []struct {
-		name       string
-		minutes    *int
-		wantUptime MinEstimatedUptime
-		wantIsSet  bool
-		wantErr    bool
+		name              string
+		minutes           *int
+		wantUptime        MinEstimatedUptime
+		wantIsSet         bool
+		wantProtoDuration string
+		wantErr           bool
 	}{
 		{
-			name:       "nil_minutes",
-			minutes:    nil,
-			wantUptime: MinUptimeUnset,
-			wantIsSet:  false,
+			name:              "nil_minutes",
+			minutes:           nil,
+			wantUptime:        MinUptimeUnset,
+			wantIsSet:         false,
+			wantProtoDuration: "",
 		},
 		{
-			name:       "1_minute",
-			minutes:    ptr.To(1),
-			wantUptime: MinUptime1Min,
-			wantIsSet:  true,
+			name:              "1_minute",
+			minutes:           ptr.To(1),
+			wantUptime:        MinUptime1Min,
+			wantIsSet:         true,
+			wantProtoDuration: "60s",
 		},
 		{
-			name:       "10_minutes",
-			minutes:    ptr.To(10),
-			wantUptime: MinUptime10Min,
-			wantIsSet:  true,
+			name:              "10_minutes",
+			minutes:           ptr.To(10),
+			wantUptime:        MinUptime10Min,
+			wantIsSet:         true,
+			wantProtoDuration: "600s",
 		},
 		{
-			name:       "60_minutes",
-			minutes:    ptr.To(60),
-			wantUptime: MinUptime1Hour,
-			wantIsSet:  true,
+			name:              "60_minutes",
+			minutes:           ptr.To(60),
+			wantUptime:        MinUptime1Hour,
+			wantIsSet:         true,
+			wantProtoDuration: "3600s",
 		},
 		{
-			name:       "zero_minutes_invalid",
-			minutes:    ptr.To(0),
-			wantUptime: MinUptimeUnset,
-			wantIsSet:  false,
-			wantErr:    true,
+			name:              "zero_minutes_invalid",
+			minutes:           ptr.To(0),
+			wantUptime:        MinUptimeUnset,
+			wantIsSet:         false,
+			wantProtoDuration: "",
+			wantErr:           true,
 		},
 		{
-			name:       "negative_minutes_invalid",
-			minutes:    ptr.To(-5),
-			wantUptime: MinUptimeUnset,
-			wantIsSet:  false,
-			wantErr:    true,
+			name:              "negative_minutes_invalid",
+			minutes:           ptr.To(-5),
+			wantUptime:        MinUptimeUnset,
+			wantIsSet:         false,
+			wantProtoDuration: "",
+			wantErr:           true,
 		},
 		{
-			name:       "unsupported_positive_minutes_invalid",
-			minutes:    ptr.To(123123),
-			wantUptime: MinUptimeUnset,
-			wantIsSet:  false,
-			wantErr:    true,
+			name:              "unsupported_positive_minutes_invalid",
+			minutes:           ptr.To(123123),
+			wantUptime:        MinUptimeUnset,
+			wantIsSet:         false,
+			wantProtoDuration: "",
+			wantErr:           true,
 		},
 	}
 
@@ -86,6 +94,7 @@ func TestMinEstimatedUptimeFromMinutes(t *testing.T) {
 			}
 			assert.Equal(t, tc.wantUptime, got)
 			assert.Equal(t, tc.wantIsSet, got.IsSet())
+			assert.Equal(t, tc.wantProtoDuration, got.AsProtoDuration())
 		})
 	}
 }
@@ -98,5 +107,6 @@ func TestMinEstimatedUptimeIsSetOnlyChecksUnset(t *testing.T) {
 		MinEstimatedUptime("300s"),
 	} {
 		assert.True(t, invalid.IsSet())
+		assert.Empty(t, invalid.AsProtoDuration())
 	}
 }

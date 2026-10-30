@@ -265,6 +265,22 @@ func TestFakeFlexAdvisorClientFilters(t *testing.T) {
 			expectedScore:    0.5,
 		},
 		{
+			name: "match_on_min_estimated_uptime",
+			capacityGuidances: []CapacityGuidance{
+				NewGuidance(machineType).
+					WithProvisioningMode(spotMode).
+					WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min).
+					WithCapacity(45).
+					WithScore(0.75),
+			},
+			config: flexadvisorapi.NewInstanceConfigWithZones(
+				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
+				flexadvisorapi.WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min),
+			),
+			expectedCapacity: 45,
+			expectedScore:    0.75,
+		},
+		{
 			name: "match on workload policies",
 			capacityGuidances: []CapacityGuidance{
 				{
@@ -331,6 +347,22 @@ func TestFakeFlexAdvisorClientFilters(t *testing.T) {
 			capacityGuidances: mismatchGuidance,
 			config: flexadvisorapi.NewInstanceConfigWithZones(
 				machineType, gpuType, gpuCount, rank, spotMode, "mismatch", set.New(zoneA),
+			),
+			expectedCapacity: DefaultZonalCapacity,
+			expectedScore:    DefaultZonalScore,
+		},
+		{
+			name: "mismatch_on_min_estimated_uptime",
+			capacityGuidances: []CapacityGuidance{
+				NewGuidance(machineType).
+					WithProvisioningMode(spotMode).
+					WithMinEstimatedUptime(flexadvisorapi.MinUptime1Hour).
+					WithCapacity(999).
+					WithScore(0.9),
+			},
+			config: flexadvisorapi.NewInstanceConfigWithZones(
+				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
+				flexadvisorapi.WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min),
 			),
 			expectedCapacity: DefaultZonalCapacity,
 			expectedScore:    DefaultZonalScore,
