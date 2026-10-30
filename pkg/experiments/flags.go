@@ -259,6 +259,18 @@ const FlexAdvisorPodFamilySequentialOrderMinCAVersionFlag = "FlexAdvisorPodFamil
 const FlexAdvisorSkipUnneededSpotConfigsEnabledFlag = "FlexAdvisorSkipUnneededSpotConfigs::Enabled"
 const FlexAdvisorSkipUnneededSpotConfigsMinCAVersionFlag = "FlexAdvisorSkipUnneededSpotConfigs::MinCAVersion"
 
+// FlexAdvisorSpotUptimeEnabledFlag controls selective per-cluster/per-project enablement or disablement of sending Spot uptime filters to GCE Flex Advisor.
+const FlexAdvisorSpotUptimeEnabledFlag = "FlexAdvisorSpotUptime::Enabled"
+
+// FlexAdvisorSpotUptimeMinCAVersionFlag controls fleet-wide enablement/disablement (minimum CA version, or "999.999.999" as the fleet-wide kill switch) for sending Spot uptime filters to GCE Flex Advisor.
+const FlexAdvisorSpotUptimeMinCAVersionFlag = "FlexAdvisorSpotUptime::MinCAVersion"
+
+// FlexAdvisorDefaultSpotUptimeEnabledFlag controls selective per-cluster/per-project enablement or disablement of the 10m default Spot uptime filter.
+const FlexAdvisorDefaultSpotUptimeEnabledFlag = "FlexAdvisorDefaultSpotUptime::Enabled"
+
+// FlexAdvisorDefaultSpotUptimeMinCAVersionFlag controls fleet-wide rollout/disablement (minimum CA version) for defaulting unset Spot priorities to a 10m uptime filter.
+const FlexAdvisorDefaultSpotUptimeMinCAVersionFlag = "FlexAdvisorDefaultSpotUptime::MinCAVersion"
+
 // FlexAdvisorBinpackerBlockEnabledFlag enables blocking (within the per-loop time budget) in the bin packer
 // when waiting for the initial fetch of a flexibility scope.
 const FlexAdvisorBinpackerBlockEnabledFlag = "FlexAdvisor::BinpackerBlockEnabled"

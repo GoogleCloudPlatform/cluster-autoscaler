@@ -177,3 +177,161 @@ func TestIsFlexAdvisorSkipUnneededSpotConfigsEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsFlexAdvisorSpotUptimeEnabled(t *testing.T) {
+	testCases := []struct {
+		name    string
+		manager Manager
+		want    bool
+	}{
+		{
+			name:    "nil_manager_defaults_true",
+			manager: nil,
+			want:    true,
+		},
+		{
+			name:    "unconfigured_flags_defaults_true",
+			manager: NewMockManager(),
+			want:    true,
+		},
+		{
+			name: "disabled_via_enabled_flag",
+			manager: NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{
+					FlexAdvisorSpotUptimeEnabledFlag: false,
+				},
+				map[string]string{},
+			),
+			want: false,
+		},
+		{
+			name: "min_version_not_met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 20, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorSpotUptimeMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			want: false,
+		},
+		{
+			name: "min_version_met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 26, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorSpotUptimeMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			want: true,
+		},
+		{
+			name: "min_version_met_but_disabled_via_enabled_flag",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 26, 0, 0},
+				map[string]bool{
+					FlexAdvisorSpotUptimeEnabledFlag: false,
+				},
+				map[string]string{
+					FlexAdvisorSpotUptimeMinCAVersionFlag: "1.25.0-gke.100",
+				},
+			),
+			want: false,
+		},
+		{
+			name:    "mock_manager_with_min_version_flag_enabled",
+			manager: NewMockManager(FlexAdvisorSpotUptimeMinCAVersionFlag),
+			want:    true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsFlexAdvisorSpotUptimeEnabled(tc.manager)
+			if got != tc.want {
+				t.Errorf("IsFlexAdvisorSpotUptimeEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsFlexAdvisorDefaultSpotUptimeEnabled(t *testing.T) {
+	testCases := []struct {
+		name    string
+		manager Manager
+		want    bool
+	}{
+		{
+			name:    "nil_manager_defaults_false",
+			manager: nil,
+			want:    false,
+		},
+		{
+			name:    "unconfigured_flags_defaults_false",
+			manager: NewMockManager(),
+			want:    false,
+		},
+		{
+			name: "enabled_bool_flag_without_min_version_stays_false",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{
+					FlexAdvisorDefaultSpotUptimeEnabledFlag: true,
+				},
+				map[string]string{},
+			),
+			want: false,
+		},
+		{
+			name: "min_version_not_met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 36, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "1.37.0-gke.100",
+				},
+			),
+			want: false,
+		},
+		{
+			name: "min_version_met",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "1.37.0-gke.100",
+				},
+			),
+			want: true,
+		},
+		{
+			name: "min_version_met_but_disabled_via_enabled_flag",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{
+					FlexAdvisorDefaultSpotUptimeEnabledFlag: false,
+				},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "1.37.0-gke.100",
+				},
+			),
+			want: false,
+		},
+		{
+			name:    "mock_manager_with_min_version_flag_enabled",
+			manager: NewMockManager(FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			want:    true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsFlexAdvisorDefaultSpotUptimeEnabled(tc.manager)
+			if got != tc.want {
+				t.Errorf("IsFlexAdvisorDefaultSpotUptimeEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
