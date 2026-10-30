@@ -766,7 +766,7 @@ func (b *Builder) setUpProcessors(
 
 	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
 	if options.EnableComputeClassMinCapacity {
-		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, options.ScaleDownBlockingNodeLabels)
+		cccMinCapacityProcessor = npc_processors.NewMinCapacityPodListProcessor(ccLister, sharedFairnessManager.CreateEnforcer(npc_processors.MinCapacityPodListProcessorName), experimentsManager, minQuotasNodeFilter, options.ScaleDownBlockingNodeLabels)
 	}
 
 	var cccPodFilter *npc_processors.CccAnnotationPodFilter

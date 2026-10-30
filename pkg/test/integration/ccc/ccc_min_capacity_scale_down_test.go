@@ -326,99 +326,109 @@ func TestCCCScaleDownAtomicGroups(t *testing.T) {
 	}
 }
 
-// TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods verifies that when a
-// ComputeClass spec-level targetNodeCount is enforced across two atomic slices
-// and one slice already runs real pods, scale-down removes the *idle* slice and
-// keeps the slice hosting real workload.
+// TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods verifies that, with a
+// ComputeClass min capacity of one slice and two atomic slices, scale-down
+// removes the idle slice and keeps the slice running workload pods, whichever
+// slice comes first by name and however many of its nodes run pods.
 func TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods(t *testing.T) {
-	const cccName = "my-ccc"
+	const (
+		cccName     = "my-ccc"
+		sliceNodes  = 16
+		firstSlice  = "tpu-slice-1"
+		secondSlice = "tpu-slice-2"
+	)
+	testCases := []struct {
+		name         string
+		occupiedPool string
+		idlePool     string
+		// busyNodes is the number of nodes of occupiedPool running a workload pod.
+		busyNodes int
+	}{
+		{
+			name:         "workload on every node of the first slice by name",
+			occupiedPool: firstSlice,
+			idlePool:     secondSlice,
+			busyNodes:    sliceNodes,
+		},
+		{
+			name:         "workload on every node of the last slice by name",
+			occupiedPool: secondSlice,
+			idlePool:     firstSlice,
+			busyNodes:    sliceNodes,
+		},
+		{
+			name:         "workload on some nodes of the last slice by name",
+			occupiedPool: secondSlice,
+			idlePool:     firstSlice,
+			busyNodes:    4,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := ccc.NewComputeClassBuilder(cccName).
+				WithTargetNodeCount(ptr.To(sliceNodes)).
+				Build()
+			testConfig := integration.NewTestConfig().
+				WithNodePools(
+					atomicTPUNodePool(firstSlice, cccName),
+					atomicTPUNodePool(secondSlice, cccName),
+				).
+				WithCccCrds(cc).
+				WithOverrides(
+					integration.WithScaleDownUnneededTime(time.Second),
+					integration.WithComputeClassMinCapacityEnabled(),
+				)
 
-	cc := ccc.NewComputeClassBuilder(cccName).
-		WithTargetNodeCount(ptr.To(16)).
-		Build()
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
+				infra := integration.SetupInfrastructure(ctx, t)
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				if err != nil {
+					t.Fatalf("SetupAutoscaler() failed: %v", err)
+				}
 
-	testConfig := integration.NewTestConfig().
-		WithNodePools(
-			atomicTPUNodePool("tpu-slice-1", cccName),
-			atomicTPUNodePool("tpu-slice-2", cccName),
-		).
-		WithCccCrds(cc).
-		WithOverrides(
-			integration.WithScaleDownUnneededTime(time.Second),
-			integration.WithComputeClassMinCapacityEnabled(),
-		)
+				nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+				if err != nil {
+					t.Fatalf("Nodes().List() failed: %v", err)
+				}
+				nodesByPool := map[string][]string{}
+				for _, node := range nodes.Items {
+					pool := node.Labels[gke_labels.GkeNodePoolLabel]
+					nodesByPool[pool] = append(nodesByPool[pool], node.Name)
+				}
+				if len(nodesByPool[tc.occupiedPool]) != sliceNodes || len(nodesByPool[tc.idlePool]) != sliceNodes {
+					t.Fatalf("got %d nodes in %s and %d in %s, want %d in each", len(nodesByPool[tc.occupiedPool]), tc.occupiedPool, len(nodesByPool[tc.idlePool]), tc.idlePool, sliceNodes)
+				}
+				occupiedNodes := slices.Sorted(slices.Values(nodesByPool[tc.occupiedPool]))
+				// The node pool selector keeps the pods from moving to the idle slice,
+				// so the occupied slice can't be removed.
+				for i, nodeName := range occupiedNodes[:tc.busyNodes] {
+					infra.Fakes.K8s.AddPod(tu.BuildTestPod(fmt.Sprintf("real-pod-%d", i), 100, 100*1024*1024,
+						tu.WithNodeName(nodeName),
+						pod.WithCCC(cccName),
+						pod.WithNodeSelectorEntry(gke_labels.GkeNodePoolLabel, tc.occupiedPool),
+					))
+				}
 
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		infra := integration.SetupInfrastructure(ctx, t)
+				// The first loop marks the idle slice unneeded, the second removes it.
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+				// A further loop must not remove the occupied slice.
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
 
-		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-		assert.NoError(t, err)
-		defer integration_synctest.TearDown(cancel)
-
-		nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		assert.NoError(t, err)
-		assert.Equal(t, 32, len(nodes.Items), "expected 32 pre-existing atomic TPU nodes")
-
-		// Group nodes by their node pool (each atomic slice is a distinct pool),
-		// and label every node with the ComputeClass so the min-capacity
-		// processor / quota apply to them.
-		nodesByPool := map[string][]string{}
-		for _, node := range nodes.Items {
-			if node.Labels == nil {
-				node.Labels = make(map[string]string)
-			}
-			node.Labels[gke_labels.ComputeClassLabel] = cccName
-			infra.Fakes.K8s.UpdateNode(&node)
-			pool := node.Labels[gke_labels.GkeNodePoolLabel]
-			nodesByPool[pool] = append(nodesByPool[pool], node.Name)
-		}
-		assert.Equal(t, 2, len(nodesByPool), "expected two atomic slices (node pools)")
-
-		// Deterministically pick one slice to host real pods.
-		pools := make([]string, 0, len(nodesByPool))
-		for pool := range nodesByPool {
-			pools = append(pools, pool)
-		}
-		sort.Strings(pools)
-		occupiedPool := pools[0]
-		occupiedNodes := nodesByPool[occupiedPool]
-		assert.Equal(t, 16, len(occupiedNodes), "expected 16 nodes in the occupied slice")
-
-		occupiedSet := map[string]bool{}
-		// Pin a real running pod onto every node of the occupied slice. The pods
-		// carry a node-pool selector so they cannot relocate to the idle slice,
-		// which keeps the occupied slice needed (and thus non-removable).
-		for i, nodeName := range occupiedNodes {
-			occupiedSet[nodeName] = true
-			p := tu.BuildTestPod(fmt.Sprintf("real-pod-%d", i), 100, 100*1024*1024,
-				tu.WithNodeName(nodeName),
-				pod.WithCCC(cccName),
-				pod.WithNodeSelectorEntry(gke_labels.GkeNodePoolLabel, occupiedPool),
-			)
-			infra.Fakes.K8s.AddPod(p)
-		}
-
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second) // mark idle slice unneeded
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second) // remove idle slice
-
-		remaining, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		assert.NoError(t, err)
-		assert.Equal(t, 16, len(remaining.Items), "expected exactly the 16-node occupied slice to remain")
-
-		// A further cycle must not scale down below the minimum: the surviving
-		// slice is protected both by its running pods and the min-capacity floor.
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
-		remaining, err = infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-		assert.NoError(t, err)
-		assert.Equal(t, 16, len(remaining.Items), "min-capacity floor must keep the last slice")
-		// Every surviving node must belong to the occupied slice; the idle slice
-		// (with no real pods) is the one that must be scaled down.
-		for _, n := range remaining.Items {
-			assert.True(t, occupiedSet[n.Name],
-				"expected node %s from the occupied slice %q to be kept; the idle slice should have been removed", n.Name, occupiedPool)
-		}
-	})
+				remaining, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+				if err != nil {
+					t.Fatalf("Nodes().List() failed: %v", err)
+				}
+				var remainingNames []string
+				for _, n := range remaining.Items {
+					remainingNames = append(remainingNames, n.Name)
+				}
+				assert.ElementsMatch(t, occupiedNodes, remainingNames, "remaining nodes; want exactly the nodes of %s, with %s removed", tc.occupiedPool, tc.idlePool)
+			})
+		})
+	}
 }
 
 // TestCCCMinCapacityDefragCreateBeforeDelete recycles, with create-before-delete

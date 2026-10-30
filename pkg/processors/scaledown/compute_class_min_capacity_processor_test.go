@@ -499,8 +499,9 @@ func (a fakeActuator) CheckStatus() scaledown.ActuationStatus {
 
 // TestComputeClassMinCapacityProcessor_DefragCandidatesDoNotCountTowardCurrent pins
 // that a node carrying the defrag HardTaint is not counted as current capacity
-// even when it is not being deleted yet (see countsTowardMinCapacity), so it
-// can hold back an unrelated atomic group of the same ComputeClass.
+// even when it is not being deleted yet (see
+// computeclass.CountsTowardMinCapacityScaleDown), so it can hold back an
+// unrelated atomic group of the same ComputeClass.
 func TestComputeClassMinCapacityProcessor_DefragCandidatesDoNotCountTowardCurrent(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
