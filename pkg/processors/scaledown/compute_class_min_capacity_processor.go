@@ -28,14 +28,11 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodes"
 	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
-	"sigs.k8s.io/cluster-autoscaler/pkg/utils/taints"
 
 	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
@@ -268,7 +265,7 @@ func (p *ComputeClassMinCapacityProcessor) buildConstraints(autoscalingCtx *ca_c
 		if node == nil {
 			continue
 		}
-		if !p.countsTowardMinCapacity(node) {
+		if !computeclass.CountsTowardMinCapacityScaleDown(node, p.nodeFilter) {
 			continue
 		}
 		nodesByName[node.Name] = node
@@ -328,27 +325,11 @@ func (p *ComputeClassMinCapacityProcessor) applyRemoval(constraints []*minCapaci
 func (p *ComputeClassMinCapacityProcessor) contributionOf(c *minCapacityConstraint, group []simulator.NodeToBeRemoved) int {
 	contribution := 0
 	for _, n := range group {
-		if c.matches(n.Node) && p.countsTowardMinCapacity(n.Node) {
+		if c.matches(n.Node) && computeclass.CountsTowardMinCapacityScaleDown(n.Node, p.nodeFilter) {
 			contribution++
 		}
 	}
 	return contribution
-}
-
-func (p *ComputeClassMinCapacityProcessor) countsTowardMinCapacity(node *apiv1.Node) bool {
-	// An upcoming placeholder stands for capacity that does not exist yet.
-	if upcoming, err := strconv.ParseBool(node.Annotations[annotations.NodeUpcomingAnnotation]); err == nil && upcoming {
-		return false
-	}
-	// A defrag candidate (HardTaint) is about to be replaced or deleted.
-	// Excluding it keeps the min capacity until its replacement is registered,
-	// at the cost of keeping unrelated nodes of the ComputeClass while the
-	// candidate exists.
-	if node.DeletionTimestamp != nil || taints.HasToBeDeletedTaint(node) || taints.HasTaint(node, defrag.HardTaint) {
-		return false
-	}
-	// The min quotas tracker excludes the same nodes (e.g. surge upgrade nodes).
-	return p.nodeFilter == nil || !p.nodeFilter.ExcludeFromTracking(node)
 }
 
 func nodeNames(candidates []simulator.NodeToBeRemoved) []string {

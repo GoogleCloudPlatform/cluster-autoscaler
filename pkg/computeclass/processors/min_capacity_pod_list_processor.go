@@ -16,6 +16,9 @@ package processors
 
 import (
 	"context"
+	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strconv"
 
@@ -25,9 +28,9 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/core/scaledown/eligibility"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/resourcequotas"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
-	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/scheduling"
+	pod_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
@@ -44,9 +47,11 @@ const MinCapacityPodListProcessorName = "cc-min-capacity-pod-list-processor"
 // MinCapacityPodListProcessor injects fake pods to enforce minimum capacity defined in ComputeClass CRDs.
 type MinCapacityPodListProcessor struct {
 	ccLister           cc_lister.Lister
-	simulator          *scheduling.HintingSimulator
 	fairnessEnforcer   fairness.FairnessEnforcer
 	experimentsManager experiments.Manager
+	// nodeFilter excludes the nodes the min quotas tracker excludes, e.g. surge
+	// upgrade nodes.
+	nodeFilter resourcequotas.NodeFilter
 	// blockingLabels are node label keys (e.g. the TPU slice label) that mark a
 	// node as unable to scale down. When set (or when a node carries the standard
 	// scale-down-disabled annotation), atomic-group packing prefers groups
@@ -55,13 +60,14 @@ type MinCapacityPodListProcessor struct {
 	blockingLabels []string
 }
 
-// NewMinCapacityPodListProcessor creates a MinCapacityPodListProcessor.
-func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer, experimentsManager experiments.Manager, blockingLabels []string) *MinCapacityPodListProcessor {
+// NewMinCapacityPodListProcessor creates a MinCapacityPodListProcessor. A nil
+// nodeFilter excludes no node.
+func NewMinCapacityPodListProcessor(ccLister cc_lister.Lister, fairnessEnforcer fairness.FairnessEnforcer, experimentsManager experiments.Manager, nodeFilter resourcequotas.NodeFilter, blockingLabels []string) *MinCapacityPodListProcessor {
 	return &MinCapacityPodListProcessor{
 		ccLister:           ccLister,
-		simulator:          scheduling.NewHintingSimulator(),
 		fairnessEnforcer:   fairnessEnforcer,
 		experimentsManager: experimentsManager,
+		nodeFilter:         nodeFilter,
 		blockingLabels:     blockingLabels,
 	}
 }
@@ -82,7 +88,8 @@ func (p *MinCapacityPodListProcessor) Process(
 }
 
 // computeFakePods returns the fake pods needed to meet the minimum capacity of
-// the ComputeClasses.
+// the ComputeClasses. It also adds fake pods to the cluster snapshot, on the
+// nodes holding the min capacity.
 //
 // It returns nil when the processor has nothing to do in this loop: minimum
 // capacity is disabled, there are no ComputeClasses, listing fails, or every
@@ -108,7 +115,7 @@ func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context
 	}
 
 	existingByCCAndRule := p.countExistingNodes(autoscalingCtx, nodeInfos, crds)
-	_, saturatedByCC := computeSaturatedNodeCounts(nodeInfos)
+	snapshotNodesByCC := countSnapshotNodesByComputeClass(nodeInfos, p.nodeFilter)
 
 	// In GKE Cluster Autoscaler, minimum capacity can be specified at two levels:
 	//
@@ -116,17 +123,14 @@ func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context
 	//    Each priority rule specifies a target minimum capacity for nodes matching that rule.
 	//    The shortfall is calculated directly: rule.targetNodeCount - existing nodes matching this rule index.
 	//    We generate priority-level fake pods to cover this shortfall only when the existing node count
-	//    is unsatisfied (below the target). These fake pods are always injected directly (bypassing
-	//    the scheduling simulation) to force GKE scale-up of the target priority rule.
+	//    is unsatisfied (below the target). These fake pods are always injected directly to force GKE
+	//    scale-up of the target priority rule.
 	//
 	// 2. Spec-level minimum capacity (`spec.targetNodeCount`):
 	//    This represents the overall target minimum node count for the entire ComputeClass.
-	//    The shortfall is calculated as: spec.targetNodeCount - (priority-level fake pods generated + existing saturated nodes).
-	//    For this shortfall, we generate spec-level fake pods. Since some of these spec-level fake pods
-	//    can potentially be scheduled on existing under-utilized nodes (that are not yet saturated), we
-	//    run a scheduling simulation to filter out any schedulable fake pods. During this simulation,
-	//    these spec-level fake pods are expected to be present (added) in the cluster snapshot. Only the
-	//    truly unschedulable spec-level fake pods are injected, preventing unnecessary scale-up.
+	//    The shortfall is calculated as: spec.targetNodeCount - (priority-level fake pods generated + existing nodes).
+	//    Existing nodes are counted in the snapshot rather than from node group target sizes, so that
+	//    nodes of a pool that drifted from the ComputeClass keep counting while they are replaced.
 	var priorityFakePods []*apiv1.Pod
 	var specFakePods []*apiv1.Pod
 
@@ -141,7 +145,6 @@ func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context
 		}
 		crdPriorityFakePodsCount := 0
 
-		// 1. Evaluate priority-level fake pods.
 		for ruleIdx, r := range c.Rules() {
 			if r.TargetNodeCount() == nil {
 				continue
@@ -154,29 +157,20 @@ func (p *MinCapacityPodListProcessor) computeFakePods(autoscalingCtx *ca_context
 			}
 		}
 
-		// 2. Evaluate spec-level fake pods.
 		if c.TargetNodeCount() != nil {
 			target := *c.TargetNodeCount()
-			saturatedCCCNodeCount := saturatedByCC[crdName]
-			if specPods := buildSpecFakePods(crdName, target, crdPriorityFakePodsCount, saturatedCCCNodeCount); len(specPods) > 0 {
+			if specPods := buildSpecFakePods(crdName, target, crdPriorityFakePodsCount, snapshotNodesByCC[crdName]); len(specPods) > 0 {
 				specFakePods = append(specFakePods, specPods...)
 			}
 		}
 	}
 
-	// 3. Filter spec-level fake pods.
-	trulyUnschedulableSpec := p.filterOutSchedulableFakePods(autoscalingCtx, specFakePods)
-
-	// 4. Combine them.
-	var finalFakePods []*apiv1.Pod
-	if len(trulyUnschedulableSpec) > 0 {
-		finalFakePods = append(finalFakePods, trulyUnschedulableSpec...)
-	}
-	if len(priorityFakePods) > 0 {
-		finalFakePods = append(finalFakePods, priorityFakePods...)
+	// Scale-down must not remove the nodes holding the min capacity.
+	if err := p.placeMinCapacityPods(autoscalingCtx, crds); err != nil {
+		klog.Errorf("Failed to place min capacity pods in the cluster snapshot: %v", err)
 	}
 
-	return finalFakePods
+	return append(specFakePods, priorityFakePods...)
 }
 
 // buildPriorityFakePods returns the list of fake pods needed to satisfy the priority rules of the ComputeClass.
@@ -206,85 +200,105 @@ func buildSpecFakePods(ccName string, target int, priorityFakePodsCount int, sat
 	return pods
 }
 
-// atomicGroupInfo summarizes an atomic node group for packing.
+// atomicGroupInfo summarizes an atomic node group, or a single non-atomic node,
+// for packing.
 type atomicGroupInfo struct {
 	id                   string
 	totalNodes           int
-	freeNodes            int             // nodes in this group that currently host no pod
+	freeNodes            int             // nodes in this group that run no workload pod
 	nodeNames            map[string]bool // node names belonging to this group
 	ccLabels             map[string]bool // ComputeClass labels present on this group's nodes
 	blockedFromScaleDown bool            // true if any node in this group is blocked from scale-down
+	defragCandidate      bool            // true if any node in this group has the defrag HardTaint
 }
 
-// filterOutSchedulableFakePods runs spec-level fake pods through the scheduling
-// simulator and returns the subset that could not be placed on existing nodes.
-// The returned pods will be injected as truly-unschedulable to drive scale-up.
-//
-// Remaining pods fall back to non-atomic nodes; leftovers are returned as truly
-// unschedulable. Atomicity is resolved once per node group (not per node).
-func (p *MinCapacityPodListProcessor) filterOutSchedulableFakePods(autoscalingCtx *ca_context.AutoscalingContext, fakePods []*apiv1.Pod) []*apiv1.Pod {
-	if len(fakePods) == 0 {
-		return nil
-	}
-
+// placeMinCapacityPods adds a min capacity fake pod to up to
+// spec.targetNodeCount nodes of each ComputeClass.
+func (p *MinCapacityPodListProcessor) placeMinCapacityPods(autoscalingCtx *ca_context.AutoscalingContext, crds []crd.CRD) error {
 	nodeInfos, err := autoscalingCtx.ClusterSnapshot.ListNodeInfos()
 	if err != nil {
-		klog.Errorf("MinCapacityPodListProcessor: failed to list node infos: %v", err)
-		return fakePods
+		return fmt.Errorf("failed to list node infos: %w", err)
 	}
-
-	atomicGroups, nonAtomicNodes := p.splitIntoAtomicAndNonAtomicGroups(autoscalingCtx, nodeInfos)
-	remaining := fakePods
-	if len(atomicGroups) > 0 {
-		remaining, err = p.packIntoGroups(autoscalingCtx, remaining, sortAtomicGroupsForPacking(atomicGroups))
-		if err != nil {
-			klog.Errorf("MinCapacityPodListProcessor: error while packing into atomic groups: %v", err)
-			// Fall through: still try non-atomic for whatever is left.
+	withMinCapacity := make(map[string]bool)
+	for _, c := range crds {
+		if c.TargetNodeCount() != nil && *c.TargetNodeCount() > 0 {
+			withMinCapacity[c.Name()] = true
 		}
 	}
-
-	remaining, err = p.packIntoNonAtomic(autoscalingCtx, remaining, nonAtomicNodes)
-	if err != nil {
-		klog.Errorf("MinCapacityPodListProcessor: error while packing into non-atomic nodes: %v", err)
-		return remaining
+	if len(withMinCapacity) == 0 {
+		return nil
 	}
-
-	klog.V(2).Infof("MinCapacityPodListProcessor: packed %d fake pods, %d truly unschedulable for minimum capacity", len(fakePods)-len(remaining), len(remaining))
-	return remaining
+	// Skip the node group lookups for nodes of ComputeClasses without a min
+	// capacity.
+	var minCapacityNodeInfos []*framework.NodeInfo
+	for _, ni := range nodeInfos {
+		if ni.Node() != nil && withMinCapacity[ni.Node().Labels[labels.ComputeClassLabel]] {
+			minCapacityNodeInfos = append(minCapacityNodeInfos, ni)
+		}
+	}
+	atomicGroups, nonAtomicNodes := p.splitIntoAtomicAndNonAtomicGroups(autoscalingCtx, minCapacityNodeInfos)
+	groups := append(sortAtomicGroupsForPacking(atomicGroups), sortAtomicGroupsForPacking(nonAtomicNodes)...)
+	for _, c := range crds {
+		if !withMinCapacity[c.Name()] {
+			continue
+		}
+		var nodeNames []string
+		for _, g := range groups {
+			if g.ccLabels[c.Name()] {
+				nodeNames = append(nodeNames, slices.Sorted(maps.Keys(g.nodeNames))...)
+			}
+		}
+		for _, nodeName := range nodeNames[:min(*c.TargetNodeCount(), len(nodeNames))] {
+			pod := buildPlacedFakePod(c.Name(), nodeName)
+			// Skip scheduler predicates, so that a full node still gets its fake
+			// pod.
+			if err := autoscalingCtx.ClusterSnapshot.ForceAddPod(pod, nodeName); err != nil {
+				return fmt.Errorf("failed to add min capacity pod %s to node %s: %w", pod.Name, nodeName, err)
+			}
+		}
+	}
+	return nil
 }
 
-// splitIntoAtomicAndNonAtomicGroups classifies every node in the snapshot into
-// either an atomic node group (ZeroOrMaxNodeScaling) or the set of non-atomic
-// node names. Atomicity is resolved once per node group (not per node), and
-// nodes whose group cannot be resolved are treated as non-atomic.
-func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscalingCtx *ca_context.AutoscalingContext, nodeInfos []*framework.NodeInfo) (atomicGroups map[string]*atomicGroupInfo, nonAtomicNodes map[string]bool) {
+func buildPlacedFakePod(ccName, nodeName string) *apiv1.Pod {
+	pod := buildFakePod(ccName, nil, 0)
+	// Named after the node, so it never collides with the numbered scale-up
+	// fake pods.
+	pod.Name = fmt.Sprintf("min-nodes-placed-ccc-pod-%s-%s", ccName, nodeName)
+	pod.UID = types.UID(pod.Name)
+	return pod
+}
+
+// splitIntoAtomicAndNonAtomicGroups classifies each of the given nodes that can
+// hold a min capacity fake pod into either an atomic node group
+// (ZeroOrMaxNodeScaling) or a one-node group in nonAtomicNodes, keyed by node
+// name. Atomicity is resolved once per node group (not per node), and nodes
+// whose group cannot be resolved are treated as non-atomic.
+func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscalingCtx *ca_context.AutoscalingContext, nodeInfos []*framework.NodeInfo) (atomicGroups map[string]*atomicGroupInfo, nonAtomicNodes map[string]*atomicGroupInfo) {
 	atomicGroupIDs := p.atomicNodeGroupIDs(autoscalingCtx)
 	atomicGroups = map[string]*atomicGroupInfo{}
-	nonAtomicNodes = map[string]bool{}
+	nonAtomicNodes = map[string]*atomicGroupInfo{}
 	for _, ni := range nodeInfos {
 		node := ni.Node()
-		if node == nil {
+		if node == nil || !computeclass.CanHoldMinCapacityFakePod(node, p.nodeFilter) {
 			continue
 		}
+		groups, id := nonAtomicNodes, node.Name
 		// Fast path: with no atomic node groups every node is non-atomic, so
 		// skip the per-node group lookup entirely.
-		if len(atomicGroupIDs) == 0 {
-			nonAtomicNodes[node.Name] = true
-			continue
+		if len(atomicGroupIDs) > 0 {
+			if groupID, isAtomic := p.classifyNode(autoscalingCtx, node, atomicGroupIDs); isAtomic {
+				groups, id = atomicGroups, groupID
+			}
 		}
-		id, isAtomic := p.classifyNode(autoscalingCtx, node, atomicGroupIDs)
-		if !isAtomic {
-			nonAtomicNodes[node.Name] = true
-			continue
-		}
-		g, ok := atomicGroups[id]
+		g, ok := groups[id]
 		if !ok {
 			g = &atomicGroupInfo{id: id, nodeNames: map[string]bool{}, ccLabels: map[string]bool{}}
-			atomicGroups[id] = g
+			groups[id] = g
 		}
 		g.nodeNames[node.Name] = true
 		g.totalNodes++
-		if cc := p.nodeCCC(node); cc != "" {
+		if cc := node.Labels[labels.ComputeClassLabel]; cc != "" {
 			g.ccLabels[cc] = true
 		}
 		// TODO(b/560039714): this replicates a subset of the scale-down pipeline's
@@ -298,23 +312,38 @@ func (p *MinCapacityPodListProcessor) splitIntoAtomicAndNonAtomicGroups(autoscal
 		if p.nodeIsBlockedFromScaleDown(node) {
 			g.blockedFromScaleDown = true
 		}
-		if len(ni.Pods()) == 0 {
+		if taints.HasTaint(node, defrag.HardTaint) {
+			g.defragCandidate = true
+		}
+		if !runsWorkloadPods(ni) {
 			g.freeNodes++
 		}
 	}
 	return atomicGroups, nonAtomicNodes
 }
 
+func runsWorkloadPods(nodeInfo *framework.NodeInfo) bool {
+	for _, podInfo := range nodeInfo.Pods() {
+		if !pod_util.IsDaemonSetPod(podInfo.Pod) && !pod_util.IsMirrorPod(podInfo.Pod) && !crd.IsMinCapacityFakePod(podInfo.Pod) {
+			return true
+		}
+	}
+	return false
+}
+
 // sortAtomicGroupsForPacking orders atomic groups deterministically for packing:
 //
 //	(0) scale-down-blocked groups first (they cannot scale down anyway, so pinning
 //	    the floor onto them frees unblocked cubes to be reclaimed),
-//	(1) most existing fake pods first (pack into groups already used),
+//	(1) most nodes running workload pods first (pack into groups already used),
 //	(2) then most free nodes (fill biggest group first),
 //	(3) then group ID for tie-break determinism.
 //
 // (0) applies when any node carries a scale-down-blocking label or the standard
 // scale-down-disabled annotation.
+//
+// Groups with a defrag candidate come last, so that a candidate gets a fake pod,
+// and a replacement from defrag, only when the min capacity needs it.
 func sortAtomicGroupsForPacking(atomicGroups map[string]*atomicGroupInfo) []*atomicGroupInfo {
 	sortedGroups := make([]*atomicGroupInfo, 0, len(atomicGroups))
 	for _, g := range atomicGroups {
@@ -322,6 +351,9 @@ func sortAtomicGroupsForPacking(atomicGroups map[string]*atomicGroupInfo) []*ato
 	}
 	sort.Slice(sortedGroups, func(i, j int) bool {
 		a, b := sortedGroups[i], sortedGroups[j]
+		if a.defragCandidate != b.defragCandidate {
+			return b.defragCandidate
+		}
 		if a.blockedFromScaleDown != b.blockedFromScaleDown {
 			return a.blockedFromScaleDown
 		}
@@ -360,106 +392,6 @@ func (p *MinCapacityPodListProcessor) isAtomicNodeGroup(autoscalingCtx *ca_conte
 	return opts.ZeroOrMaxNodeScaling
 }
 
-// packIntoGroups tries to place remaining pods into atomic groups in order,
-// letting each group absorb pods (persisting placements in the snapshot).
-// Groups whose ComputeClass labels don't match any remaining pod are skipped.
-//
-// TODO(b/555154270): the deterministic concentration order (already-used, then
-// emptiest groups) is what frees whole atomic slices for scale-down, so it is
-// kept here. A cheaper follow-up is to replace the per-group scheduling
-// simulation with a count-based greedy assignment.
-func (p *MinCapacityPodListProcessor) packIntoGroups(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, groups []*atomicGroupInfo) ([]*apiv1.Pod, error) {
-	remaining := pods
-	for _, g := range groups {
-		if len(remaining) == 0 {
-			break
-		}
-		if !p.groupTargetsAnyRemainingCCC(g, remaining) {
-			continue
-		}
-		next, err := p.schedulePersisting(autoscalingCtx, remaining, func(ni *framework.NodeInfo) bool {
-			n := ni.Node()
-			if n == nil {
-				return false
-			}
-			return g.nodeNames[n.Name] && isNodeNotBeingDeleted(n)
-		})
-		if err != nil {
-			return remaining, err
-		}
-		klog.V(2).Infof("MinCapacityPodListProcessor: packed %d pods into atomic group %s", len(remaining)-len(next), g.id)
-		remaining = next
-	}
-	return remaining, nil
-}
-
-// packIntoNonAtomic places remaining pods onto non-atomic nodes.
-func (p *MinCapacityPodListProcessor) packIntoNonAtomic(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, nonAtomicNodes map[string]bool) ([]*apiv1.Pod, error) {
-	if len(pods) == 0 {
-		return pods, nil
-	}
-	remaining, err := p.schedulePersisting(autoscalingCtx, pods, func(ni *framework.NodeInfo) bool {
-		n := ni.Node()
-		if n == nil {
-			return false
-		}
-		return nonAtomicNodes[n.Name] && isNodeNotBeingDeleted(n)
-	})
-	if err != nil {
-		return pods, err
-	}
-	klog.V(4).Infof("MinCapacityPodListProcessor: packed %d pods into non-atomic nodes, %d remain unschedulable", len(pods)-len(remaining), len(remaining))
-	return remaining, nil
-}
-
-// schedulePersisting runs the given pods through the scheduling simulator against
-// the shared ClusterSnapshot, letting successful placements persist. It returns
-// the pods that could not be placed. On simulator error the input pods are
-// returned unchanged.
-func (p *MinCapacityPodListProcessor) schedulePersisting(autoscalingCtx *ca_context.AutoscalingContext, pods []*apiv1.Pod, isNodeAcceptable func(*framework.NodeInfo) bool) ([]*apiv1.Pod, error) {
-	res, err := p.simulator.TrySchedulePods(context.Background(), autoscalingCtx.ClusterSnapshot, pods, false, clustersnapshot.SchedulingOptions{
-		IsNodeAcceptable: isNodeAcceptable,
-	})
-	if err != nil {
-		return pods, err
-	}
-	placed := make(map[types.UID]bool, len(res.Statuses))
-	for _, s := range res.Statuses {
-		placed[s.Pod.UID] = true
-	}
-	var remaining []*apiv1.Pod
-	for _, pod := range pods {
-		if !placed[pod.UID] {
-			remaining = append(remaining, pod)
-		}
-	}
-	return remaining, nil
-}
-
-// cccOfPod returns the ComputeClass a fake pod targets. It resolves the name
-// through the lister (rather than reading the raw node selector) so that special
-// cases such as the default ComputeClass are handled consistently.
-func (p *MinCapacityPodListProcessor) cccOfPod(pod *apiv1.Pod) string {
-	_, name, err := p.ccLister.PodCrd(pod)
-	if err != nil {
-		klog.Warningf("MinCapacityPodListProcessor: failed to resolve ComputeClass for pod %s: %v", pod.Name, err)
-		return ""
-	}
-	return name
-}
-
-// nodeCCC returns the ComputeClass assigned to a node. It resolves the name
-// through the lister (rather than reading the raw node label) so that special
-// cases such as the default ComputeClass are handled consistently.
-func (p *MinCapacityPodListProcessor) nodeCCC(node *apiv1.Node) string {
-	_, name, err := p.ccLister.NodeCrd(node)
-	if err != nil {
-		klog.Warningf("MinCapacityPodListProcessor: failed to resolve ComputeClass for node %s: %v", node.Name, err)
-		return ""
-	}
-	return name
-}
-
 // nodeIsBlockedFromScaleDown reports whether the node is blocked from scale-down,
 // either via the standard scale-down-disabled annotation or by carrying any of
 // the configured scale-down-blocking labels (e.g. the TPU slice label) with a
@@ -483,19 +415,6 @@ func (p *MinCapacityPodListProcessor) nodeIsBlockedFromScaleDown(node *apiv1.Nod
 	}
 	for _, l := range p.blockingLabels {
 		if node.Labels[l] != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// groupTargetsAnyRemainingCCC reports whether the group has at least one node
-// whose ComputeClass matches one of the remaining fake pods. This is a cheap,
-// label-only gate: it never skips a group that could actually accept a pod, it
-// only avoids simulating groups belonging to unrelated ComputeClasses.
-func (p *MinCapacityPodListProcessor) groupTargetsAnyRemainingCCC(g *atomicGroupInfo, remaining []*apiv1.Pod) bool {
-	for _, pod := range remaining {
-		if g.ccLabels[p.cccOfPod(pod)] {
 			return true
 		}
 	}
@@ -564,75 +483,18 @@ func (p *MinCapacityPodListProcessor) countExistingNodes(
 	return existingByCCAndRule
 }
 
-// computeSaturatedNodeCounts computes the number of saturated nodes for each ComputeClass and priority rule.
-func computeSaturatedNodeCounts(nodeInfos []*framework.NodeInfo) (map[string]map[string]int, map[string]int) {
-	saturatedByCCAndRule := make(map[string]map[string]int) // ccName -> ruleIdxStr -> count
-	saturatedByCC := make(map[string]int)                   // ccName -> count
-
+// countSnapshotNodesByComputeClass counts the nodes of each ComputeClass that
+// count toward its min capacity scale-up.
+func countSnapshotNodesByComputeClass(nodeInfos []*framework.NodeInfo, nodeFilter resourcequotas.NodeFilter) map[string]int {
+	counts := make(map[string]int)
 	for _, ni := range nodeInfos {
 		node := ni.Node()
-		if !isNodeNotBeingDeleted(node) {
+		if node == nil || !computeclass.CountsTowardMinCapacityScaleUp(node, nodeFilter) {
 			continue
 		}
-		ccName := node.Labels[labels.ComputeClassLabel]
-		if ccName == "" {
-			continue
-		}
-		if !isNodeSaturated(ni) {
-			continue
-		}
-
-		saturatedByCC[ccName]++
-
-		ruleIdxStr := node.Labels[labels.ComputeClassPriorityIdxLabel]
-		if ruleIdxStr != "" && ruleIdxStr != "-1" {
-			if _, ok := saturatedByCCAndRule[ccName]; !ok {
-				saturatedByCCAndRule[ccName] = make(map[string]int)
-			}
-			saturatedByCCAndRule[ccName][ruleIdxStr]++
+		if ccName := node.Labels[labels.ComputeClassLabel]; ccName != "" {
+			counts[ccName]++
 		}
 	}
-	return saturatedByCCAndRule, saturatedByCC
-}
-
-// isNodeSaturated checks if a node is saturated based on the number of pods it hosts.
-// Note: fake pods request 0 compute resources, so they only consume node capacity via HostPort and pod count.
-func isNodeSaturated(nodeInfo *framework.NodeInfo) bool {
-	node := nodeInfo.Node()
-	if node == nil {
-		return false
-	}
-	allocatablePods, ok := node.Status.Allocatable[apiv1.ResourcePods]
-	if !ok {
-		return false
-	}
-	for _, podInfo := range nodeInfo.Pods() {
-		if podInfo.Pod == nil {
-			continue
-		}
-		for _, container := range podInfo.Pod.Spec.Containers {
-			for _, port := range container.Ports {
-				if port.HostPort == FakePodAntiAffinityHostPort {
-					return true
-				}
-			}
-		}
-	}
-
-	limit := allocatablePods.Value()
-	numPods := int64(len(nodeInfo.Pods()))
-	return numPods >= limit
-}
-
-// isNodeNotBeingDeleted returns true if a node is acceptable for min capacity fake pods.
-// Nodes that are being deleted or prepared for deletion (e.g. by defrag hard taint or CA scale-down) are not acceptable.
-func isNodeNotBeingDeleted(node *apiv1.Node) bool {
-	if node == nil || node.DeletionTimestamp != nil {
-		return false
-	}
-	if taints.HasToBeDeletedTaint(node) ||
-		taints.HasTaint(node, defrag.HardTaint) {
-		return false
-	}
-	return true
+	return counts
 }
