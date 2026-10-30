@@ -37,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
@@ -1593,6 +1594,34 @@ func TestSchedulePods(t *testing.T) {
 					buildPodWithNodeSelector("unknown-ccc-pod", 16, 64, map[string]string{gkelabels.ComputeClassLabel: "unknown-ccc"}),
 				},
 			},
+			{
+				desc: "Min capacity fake pod is returned as unschedulable",
+				nodes: []testNodeWithPodsInfo{
+					{
+						node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build(),
+						pods: []*v1.Pod{},
+					},
+				},
+				resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+					"ccc1-node": {Node: ekvms_test.NewNodeBuilder("ccc1-node", 32, 128).WithLabel(gkelabels.ComputeClassLabel, "ccc1").WithMachineFamily(family).Build()},
+				},
+				cccCrds: []crd.CRD{
+					crd.NewTestCrd(
+						crd.WithName("ccc1"),
+						crd.WithLabel(gkelabels.ComputeClassLabel),
+						crd.WithScaleUpAnyway(),
+					),
+				},
+				nodeMigs: map[string]*gke.GkeMig{
+					"ccc1-node": gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{
+						MachineType: family + "-standard-32",
+						Labels:      map[string]string{gkelabels.ComputeClassLabel: "ccc1"},
+					}).Build(),
+				},
+				unschedulable:              []*v1.Pod{minCapacityFakePod("min-capacity-pod", "ccc1")},
+				expectedSchedulablePerNode: map[string][]*v1.Pod{},
+				expectedUnschedulable:      []*v1.Pod{minCapacityFakePod("min-capacity-pod", "ccc1")},
+			},
 		}
 		for _, tc := range testCases {
 			t.Run(tc.desc, func(t *testing.T) {
@@ -3011,6 +3040,13 @@ func daemonSetPod(name string, milliCPU, memBytes int64, nodeName string) *v1.Po
 func buildPodWithNodeSelector(name string, millicpu, mem int64, nodeSelector map[string]string) *v1.Pod {
 	pod := test.BuildTestPod(name, millicpu, mem)
 	pod.Spec.NodeSelector = nodeSelector
+	return pod
+}
+
+func minCapacityFakePod(name, ccName string) *v1.Pod {
+	pod := buildPodWithNodeSelector(name, 0, 0, map[string]string{gkelabels.ComputeClassLabel: ccName})
+	pod.Annotations = map[string]string{crd.MinCapacityFakePodAnnotation: "true"}
+	pod.Spec.Containers[0].Ports = []v1.ContainerPort{{HostPort: cc_processors.FakePodAntiAffinityHostPort}}
 	return pod
 }
 

@@ -347,10 +347,12 @@ func isAtMinSize(ctx context.Context, nodeGroup cloudprovider.NodeGroup) bool {
 // compute class minimum capacity fake pods, which fill their node so that the drain simulation
 // finds nowhere to move them. With any other pod on the node, that pod may be what can't move.
 //
-// Only reached while the fake pods stay in the scale-down snapshot. With
-// ComputeClassMinCapacityPodsRemoval (gkecl/2319094) they are removed before scale-down and the
-// floor arrives as MinimalResourceLimitExceeded or NodeGroupMinSizeReached instead.
-// TODO(b/570549559): Remove together with the ComputeClassMinCapacityPodsRemoval flag.
+// Only reached while the fake pods stay in the scale-down snapshot, i.e. with
+// ComputeClassMinCapacityDefragOnlyFakePods disabled. With it enabled the fake
+// pods never reach scale-down and the nodes held by the min capacity are
+// reported as NodeGroupMinSizeReached instead.
+// TODO(b/570549559): Remove together with the
+// ComputeClassMinCapacityDefragOnlyFakePods flag.
 func heldOnlyByMinCapacity(nodeInfo *framework.NodeInfo) bool {
 	if nodeInfo == nil {
 		return false

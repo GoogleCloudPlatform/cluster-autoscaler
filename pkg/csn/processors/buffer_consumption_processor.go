@@ -23,6 +23,7 @@ import (
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/nodecontroller"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -101,6 +102,9 @@ func (p *BufferConsumptionProcessor) Process(ctx context.Context, autoscalingCtx
 	if unhelpablePodsNum := len(unschedulablePods) - len(helpablePods); unhelpablePodsNum > 0 {
 		klog.Infof("%s filtered out %d unhelpablePods", bufferConsumptionLogPrefix, unhelpablePodsNum)
 	}
+	// Min capacity fake pods request no resources, so they would fit on any CSN
+	// node; they exist to provision new nodes, not to consume buffers.
+	helpablePods = slices.DeleteFunc(helpablePods, crd.IsMinCapacityFakePod)
 
 	now := p.clock.Now()
 	threshold := p.podAgeFallbackThreshold()
@@ -269,6 +273,10 @@ func (p *BufferConsumptionProcessor) consumeCSNBuffers(ctx *ca_context.Autoscali
 func (p *BufferConsumptionProcessor) emitConsideredPodsMetrics(unschedulablePods []*apiv1.Pod, nodesOfScheduledPods map[*apiv1.Pod]string, now time.Time, threshold time.Duration) {
 	consideredPods := map[internalmetrics.CSNConsideredPodsKey]int{}
 	for _, pod := range unschedulablePods {
+		// Process skips min capacity fake pods, so they aren't considered.
+		if crd.IsMinCapacityFakePod(pod) {
+			continue
+		}
 		isOld := isPodTooOld(pod, now, threshold)
 		var status internalmetrics.CSNPodStatus
 		if p.isUnhelpablePod(pod) {

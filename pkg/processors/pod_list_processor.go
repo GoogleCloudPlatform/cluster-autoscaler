@@ -461,7 +461,19 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	if p.scaleToZeroProcessor != nil && runScaleToZeroLate {
+		// Cluster scale-to-zero only looks at pods: without the min capacity
+		// fake pods it would remove the nodes running the system pods, although
+		// the min capacity keeps the cluster from reaching zero nodes.
+		removeMinCapacityPods := func() {}
+		if p.ccMinCapacityProcessor != nil {
+			var placeErr error
+			removeMinCapacityPods, placeErr = p.ccMinCapacityProcessor.PlaceInSnapshot(autoscalingCtx)
+			if placeErr != nil {
+				klog.Errorf("Failed to place min capacity pods for cluster scale-to-0: %v", placeErr)
+			}
+		}
 		unschedulablePods, err = p.processScaleToZero(autoscalingCtx, unschedulablePods, otherPendingPods)
+		removeMinCapacityPods()
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}

@@ -46,6 +46,18 @@ func IsComputeClassScaleDownStatusEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassScaleDownStatusMinCAVersionFlag, true)
 }
 
+// IsComputeClassMinCapacityDefragOnlyFakePodsEnabled returns true if only defrag
+// places ComputeClass min capacity fake pods in the cluster snapshot, for its
+// own pass. When disabled, MinCapacityPodListProcessor places them for the
+// whole loop. This experiment is a kill switch, so it defaults to enabled.
+func IsComputeClassMinCapacityDefragOnlyFakePodsEnabled(manager experiments.Manager) bool {
+	if manager == nil {
+		return true
+	}
+	return manager.EvaluateBoolFlagOrFailsafe(experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.ComputeClassMinCapacityDefragOnlyFakePodsMinCAVersionFlag, true)
+}
+
 // IsComputeClassConfigHashEnabled returns true if the ComputeClass config hashing feature is enabled.
 func IsComputeClassConfigHashEnabled(manager experiments.Manager) bool {
 	if manager == nil {

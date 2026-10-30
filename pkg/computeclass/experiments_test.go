@@ -218,3 +218,53 @@ func TestIsComputeClassScaleDownStatusEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsComputeClassMinCapacityDefragOnlyFakePodsEnabled(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		manager  experiments.Manager
+		expected bool
+	}{
+		{
+			// The experiment is a kill switch, so it fails open.
+			name:     "nil manager",
+			manager:  nil,
+			expected: true,
+		},
+		{
+			name: "flags not configured (defaults to true)",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{},
+				map[string]string{},
+			),
+			expected: true,
+		},
+		{
+			name: "enabled flag false",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{2, 0, 0, 0},
+				map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: false},
+				map[string]string{},
+			),
+			expected: false,
+		},
+		{
+			name: "cluster version too old",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 28, 0, 0},
+				map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: true},
+				map[string]string{experiments.ComputeClassMinCapacityDefragOnlyFakePodsMinCAVersionFlag: "1.29.0"},
+			),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.expected, IsComputeClassMinCapacityDefragOnlyFakePodsEnabled(tc.manager), "IsComputeClassMinCapacityDefragOnlyFakePodsEnabled()")
+		})
+	}
+}

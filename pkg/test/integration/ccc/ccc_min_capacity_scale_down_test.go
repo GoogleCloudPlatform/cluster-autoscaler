@@ -329,7 +329,9 @@ func TestCCCScaleDownAtomicGroups(t *testing.T) {
 // TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods verifies that, with a
 // ComputeClass min capacity of one slice and two atomic slices, scale-down
 // removes the idle slice and keeps the slice running workload pods, whichever
-// slice comes first by name and however many of its nodes run pods.
+// slice comes first by name and however many of its nodes run pods. With
+// ComputeClassMinCapacityDefragOnlyFakePods disabled, the min capacity fake pods
+// are in the snapshot during scale-down, so this also checks where they go.
 func TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods(t *testing.T) {
 	const (
 		cccName     = "my-ccc"
@@ -364,70 +366,76 @@ func TestCCCScaleDownAtomicGroupsKeepsSliceWithRunningPods(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			cc := ccc.NewComputeClassBuilder(cccName).
-				WithTargetNodeCount(ptr.To(sliceNodes)).
-				Build()
-			testConfig := integration.NewTestConfig().
-				WithNodePools(
-					atomicTPUNodePool(firstSlice, cccName),
-					atomicTPUNodePool(secondSlice, cccName),
-				).
-				WithCccCrds(cc).
-				WithOverrides(
-					integration.WithScaleDownUnneededTime(time.Second),
-					integration.WithComputeClassMinCapacityEnabled(),
-				)
+		for _, defragOnlyFakePods := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, defrag-only fake pods %t", tc.name, defragOnlyFakePods), func(t *testing.T) {
+				cc := ccc.NewComputeClassBuilder(cccName).
+					WithTargetNodeCount(ptr.To(sliceNodes)).
+					Build()
+				testConfig := integration.NewTestConfig().
+					WithNodePools(
+						atomicTPUNodePool(firstSlice, cccName),
+						atomicTPUNodePool(secondSlice, cccName),
+					).
+					WithCccCrds(cc).
+					WithOverrides(
+						integration.WithScaleDownUnneededTime(time.Second),
+						integration.WithComputeClassMinCapacityEnabled(),
+					).
+					WithExperimentOverrides(
+						map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: defragOnlyFakePods},
+						map[string]string{},
+					)
 
-			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(t.Context())
-				defer integration_synctest.TearDown(cancel)
-				infra := integration.SetupInfrastructure(ctx, t)
-				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
-				if err != nil {
-					t.Fatalf("SetupAutoscaler() failed: %v", err)
-				}
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer integration_synctest.TearDown(cancel)
+					infra := integration.SetupInfrastructure(ctx, t)
+					autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+					if err != nil {
+						t.Fatalf("SetupAutoscaler() failed: %v", err)
+					}
 
-				nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-				if err != nil {
-					t.Fatalf("Nodes().List() failed: %v", err)
-				}
-				nodesByPool := map[string][]string{}
-				for _, node := range nodes.Items {
-					pool := node.Labels[gke_labels.GkeNodePoolLabel]
-					nodesByPool[pool] = append(nodesByPool[pool], node.Name)
-				}
-				if len(nodesByPool[tc.occupiedPool]) != sliceNodes || len(nodesByPool[tc.idlePool]) != sliceNodes {
-					t.Fatalf("got %d nodes in %s and %d in %s, want %d in each", len(nodesByPool[tc.occupiedPool]), tc.occupiedPool, len(nodesByPool[tc.idlePool]), tc.idlePool, sliceNodes)
-				}
-				occupiedNodes := slices.Sorted(slices.Values(nodesByPool[tc.occupiedPool]))
-				// The node pool selector keeps the pods from moving to the idle slice,
-				// so the occupied slice can't be removed.
-				for i, nodeName := range occupiedNodes[:tc.busyNodes] {
-					infra.Fakes.K8s.AddPod(tu.BuildTestPod(fmt.Sprintf("real-pod-%d", i), 100, 100*1024*1024,
-						tu.WithNodeName(nodeName),
-						pod.WithCCC(cccName),
-						pod.WithNodeSelectorEntry(gke_labels.GkeNodePoolLabel, tc.occupiedPool),
-					))
-				}
+					nodes, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+					if err != nil {
+						t.Fatalf("Nodes().List() failed: %v", err)
+					}
+					nodesByPool := map[string][]string{}
+					for _, node := range nodes.Items {
+						pool := node.Labels[gke_labels.GkeNodePoolLabel]
+						nodesByPool[pool] = append(nodesByPool[pool], node.Name)
+					}
+					if len(nodesByPool[tc.occupiedPool]) != sliceNodes || len(nodesByPool[tc.idlePool]) != sliceNodes {
+						t.Fatalf("got %d nodes in %s and %d in %s, want %d in each", len(nodesByPool[tc.occupiedPool]), tc.occupiedPool, len(nodesByPool[tc.idlePool]), tc.idlePool, sliceNodes)
+					}
+					occupiedNodes := slices.Sorted(slices.Values(nodesByPool[tc.occupiedPool]))
+					// The node pool selector keeps the pods from moving to the idle slice,
+					// so the occupied slice can't be removed.
+					for i, nodeName := range occupiedNodes[:tc.busyNodes] {
+						infra.Fakes.K8s.AddPod(tu.BuildTestPod(fmt.Sprintf("real-pod-%d", i), 100, 100*1024*1024,
+							tu.WithNodeName(nodeName),
+							pod.WithCCC(cccName),
+							pod.WithNodeSelectorEntry(gke_labels.GkeNodePoolLabel, tc.occupiedPool),
+						))
+					}
 
-				// The first loop marks the idle slice unneeded, the second removes it.
-				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
-				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
-				// A further loop must not remove the occupied slice.
-				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+					// The first loop marks the idle slice unneeded, the second removes it.
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
+					// A further loop must not remove the occupied slice.
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 5*time.Second)
 
-				remaining, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-				if err != nil {
-					t.Fatalf("Nodes().List() failed: %v", err)
-				}
-				var remainingNames []string
-				for _, n := range remaining.Items {
-					remainingNames = append(remainingNames, n.Name)
-				}
-				assert.ElementsMatch(t, occupiedNodes, remainingNames, "remaining nodes; want exactly the nodes of %s, with %s removed", tc.occupiedPool, tc.idlePool)
+					remaining, err := infra.Fakes.KubeClient.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+					if err != nil {
+						t.Fatalf("Nodes().List() failed: %v", err)
+					}
+					var remainingNames []string
+					for _, n := range remaining.Items {
+						remainingNames = append(remainingNames, n.Name)
+					}
+					assert.ElementsMatch(t, occupiedNodes, remainingNames, "remaining nodes; want exactly the nodes of %s, with %s removed", tc.occupiedPool, tc.idlePool)
+				})
 			})
-		})
+		}
 	}
 }
 
@@ -641,6 +649,106 @@ func TestCCCMinCapacityDefragCreateBeforeDelete(t *testing.T) {
 				})
 			})
 		}
+	}
+}
+
+// TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes verifies that lowering
+// the min capacity of an idle ComputeClass removes the surplus nodes in the
+// first scale-down loop, or after ScaleDownUnneededTime when
+// ComputeClassMinCapacityDefragOnlyFakePods is disabled.
+func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
+	const (
+		cccName            = "my-ccc"
+		initialMinCapacity = 5
+		loweredMinCapacity = 3
+		unneededTime       = 10 * time.Minute
+	)
+	testCases := []struct {
+		name                    string
+		defragOnlyFakePods      bool
+		wantNodesAfterFirstLoop int
+	}{
+		{
+			name:                    "min capacity enforced by counting: the surplus goes in the first loop",
+			defragOnlyFakePods:      true,
+			wantNodesAfterFirstLoop: loweredMinCapacity,
+		},
+		{
+			name:                    "min capacity held by fake pods: the surplus waits for ScaleDownUnneededTime",
+			defragOnlyFakePods:      false,
+			wantNodesAfterFirstLoop: initialMinCapacity,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			cc := ccc.NewComputeClassBuilder(cccName).
+				WithTargetNodeCount(ptr.To(initialMinCapacity)).
+				AddPriority(v1.Priority{MachineType: ptr.To("n1-standard-1")}).
+				Build()
+			testConfig := integration.NewTestConfig().
+				WithNodePools(integration.DefaultNodePool(
+					integration.WithNodePoolName("pool"),
+					integration.WithNodePoolMachineType("n1-standard-1"),
+					integration.WithNodePoolSize(initialMinCapacity),
+					integration.WithNodePoolMin(0),
+					integration.WithNodePoolMax(initialMinCapacity),
+					integration.WithNodePoolLocations("us-central1-b"),
+					integration.WithNodePoolLabels(map[string]string{gke_labels.ComputeClassLabel: cccName}),
+					integration.WithNodePoolAutoscalingEnabled(true),
+				)).
+				WithCccCrds(cc).
+				WithOverrides(
+					integration.WithComputeClassMinCapacityEnabled(),
+					integration.WithScaleDownUnneededTime(unneededTime),
+				).
+				WithExperimentOverrides(
+					map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: tc.defragOnlyFakePods},
+					map[string]string{},
+				)
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
+				infra := integration.SetupInfrastructure(ctx, t)
+
+				autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+				if err != nil {
+					t.Fatalf("SetupAutoscaler() failed: %v", err)
+				}
+
+				assert.Equal(t, initialMinCapacity, countNodes(ctx, t, infra), "expected the ComputeClass to start on its min capacity")
+
+				// The idle min capacity nodes sit well past ScaleDownUnneededTime
+				// without being touched.
+				for range 3 {
+					integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, unneededTime)
+				}
+				assert.Equal(t, initialMinCapacity, countNodes(ctx, t, infra), "the min capacity must keep every node")
+
+				// Lower the min capacity the way a user would. The spec is taken from the
+				// object the test created rather than from the fake API server: the
+				// fake applies status updates to the whole object, and the CCC
+				// conditions are written with an empty spec.
+				lowered := cc.DeepCopy()
+				lowered.Spec.MinimumCapacity.TargetNodeCount = ptr.To(loweredMinCapacity)
+				integration.UpdateComputeClass(ctx, t, infra, lowered)
+
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+				time.Sleep(5 * time.Second)
+				assert.Equal(t, tc.wantNodesAfterFirstLoop, countNodes(ctx, t, infra), "unexpected node count in the first loop after lowering the min capacity")
+
+				// Either way the ComputeClass converges to the new min capacity once
+				// the surplus nodes have been unneeded for ScaleDownUnneededTime.
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, unneededTime+time.Minute)
+				time.Sleep(5 * time.Second)
+				assert.Equal(t, loweredMinCapacity, countNodes(ctx, t, infra), "expected the ComputeClass to converge to the lowered min capacity")
+
+				// A further loop must not go below the new min capacity.
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, unneededTime+time.Minute)
+				assert.Equal(t, loweredMinCapacity, countNodes(ctx, t, infra), "the lowered min capacity must keep the remaining nodes")
+			})
+		})
 	}
 }
 

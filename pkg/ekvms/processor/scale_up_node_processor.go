@@ -474,6 +474,12 @@ func (p *ScaleUpNodeProcessor) groupPodsStatusesByCCC(unschedulablePodStatuses [
 
 	for _, status := range unschedulablePodStatuses {
 		pod := status.Pod
+		// Min capacity fake pods request no resources, so they would fit on any
+		// resizable node of their ComputeClass; they exist to provision new nodes.
+		if crd.IsMinCapacityFakePod(pod) {
+			skippedPodStatuses = append(skippedPodStatuses, status)
+			continue
+		}
 		cccCrd, cccName, err := p.cccCrdLister.PodCrd(pod)
 		if err != nil {
 			klog.Warningf("Retrieving crd for pod %q failed: %v", pod.Name, err)

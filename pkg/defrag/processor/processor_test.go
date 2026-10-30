@@ -31,9 +31,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 	gke_labels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	crdtest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	listertest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
+	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/observability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
@@ -3701,6 +3703,122 @@ func TestProcessReturnedPods(t *testing.T) {
 				for _, podInfo := range nodeInfo.Pods() {
 					assert.NotContains(t, podInfo.Pod.Annotations, defrag.ActiveMigrationPodAnnotation,
 						"snapshot pod %s should not be annotated", podInfo.Pod.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestProcessPlacesMinCapacityPodsForItsOwnPass(t *testing.T) {
+	// PlaceInSnapshot places fake pods in node name order, so the candidate gets a
+	// fake pod before the spare node.
+	const (
+		candidateFirstByName = "a-candidate"
+		spareAfterCandidate  = "b-spare"
+		minCapacity          = 1
+	)
+	testCases := []struct {
+		name string
+		// otherNodes are idle ComputeClass nodes next to the candidate.
+		otherNodes         []string
+		admit              bool
+		defragOnlyFakePods bool
+		wantPicked         bool
+		// wantReturnedFakePods is the number of min capacity fake pods
+		// surfaced to scale-up as replacement requests.
+		wantReturnedFakePods int
+		// wantDefragPossible expects the candidate to be tracked with all of
+		// its pods fitting on ready nodes.
+		wantDefragPossible bool
+	}{
+		{
+			name:                 "at the min capacity, the candidate's fake pod requests a replacement",
+			admit:                true,
+			defragOnlyFakePods:   true,
+			wantPicked:           true,
+			wantReturnedFakePods: 1,
+		},
+		{
+			name:               "above the min capacity, the candidate's fake pod moves and nothing is requested",
+			otherNodes:         []string{spareAfterCandidate},
+			admit:              true,
+			defragOnlyFakePods: true,
+			wantDefragPossible: true,
+		},
+		{
+			name:               "with ComputeClassMinCapacityDefragOnlyFakePods disabled defrag does not place the pods",
+			admit:              true,
+			defragOnlyFakePods: false,
+			wantDefragPossible: true,
+		},
+		{
+			name:               "not admitted: no candidate is picked",
+			admit:              false,
+			defragOnlyFakePods: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := testprovider.NewTestCloudProviderBuilder().Build()
+			provider.AddNodeGroup("ng1", 0, 10, 1)
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			client := fake.NewSimpleClientset()
+			for _, name := range append([]string{candidateFirstByName}, tc.otherNodes...) {
+				node := withComputeClass(buildReadyNode(name, 1000, 10), testCC, false)
+				provider.AddNode("ng1", node)
+				if err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)); err != nil {
+					t.Fatalf("AddNodeInfo(%q) failed: %v", name, err)
+				}
+				if _, err := client.CoreV1().Nodes().Create(t.Context(), node, metav1.CreateOptions{}); err != nil {
+					t.Fatalf("Create(%q) failed: %v", name, err)
+				}
+			}
+			scaleDownActuator := &mockScaleDownActuator{}
+			scaleDownActuator.On("CheckStatus").Return(&fakeActuationStatus{})
+			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{},
+				map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: tc.defragOnlyFakePods}, map[string]string{})
+			crds := []crdtest.CRD{crdtest.NewTestCrd(crdtest.WithName(testCC), crdtest.WithTargetNodeCount(ptr.To(minCapacity)))}
+			deleteOpts := options.NodeDeleteOptions{}
+			processor := NewProcessor(Options{
+				ScaleDownNodeProcessor: &mockScaleDownNodeProcessor{candidatesFilter: func(nodes []*apiv1.Node) []*apiv1.Node { return nodes }},
+				DeleteOptions:          deleteOpts,
+				DrainabilityRules:      rules.Default(deleteOpts),
+				Plugins:                []defrag.Plugin{mockPluginBuilder{targetNodeName: candidateFirstByName, mode: defrag.CreateBeforeDelete, isAtomic: true}.build()},
+				// ScaleDownDelay keeps a candidate whose pods fit elsewhere from
+				// being scaled down within this single pass.
+				Config:                  Config{CandidateLimit: 3, ScaleDownDelay: time.Hour, EnableScaleDownFilter: true},
+				FairnessEnforcer:        fakeFairnessEnforcer{admit: tc.admit},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+				ScaleDownNodesFilter:    scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(crds), experiments.NewMockManager(), nil),
+				MinCapacityPodPlacer:    cc_processors.NewMinCapacityPodListProcessor(listertest.NewMockCrdLister(crds), nil, experimentsManager, nil, nil),
+				ExperimentsManager:      experimentsManager,
+			})
+			autoscalingCtx := &cacontext.AutoscalingContext{
+				ClusterSnapshot:        snapshot,
+				CloudProvider:          provider,
+				ScaleDownActuator:      scaleDownActuator,
+				RemainingPdbTracker:    pdb.NewBasicRemainingPdbTracker(),
+				AutoscalingKubeClients: cacontext.AutoscalingKubeClients{ClientSet: client},
+			}
+
+			returnedPods, err := processor.Process(t.Context(), autoscalingCtx, nil)
+
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantPicked, processor.DefragPickedCandidate(), "DefragPickedCandidate() after Process()")
+			gotDefragPossible := len(processor.candidateInfos) == 1 && processor.candidateInfos[0].defragPossible
+			assert.Equal(t, tc.wantDefragPossible, gotDefragPossible, "Process() tracked the candidate with every pod fitting on ready nodes")
+			assert.Len(t, returnedPods, tc.wantReturnedFakePods, "Process() returned pods")
+			for _, pod := range returnedPods {
+				assert.True(t, crdtest.IsMinCapacityFakePod(pod), "Process() returned pod %s, want only min capacity fake pods", pod.Name)
+			}
+			nodeInfos, err := snapshot.ListNodeInfos()
+			if err != nil {
+				t.Fatalf("ListNodeInfos() failed: %v", err)
+			}
+			for _, nodeInfo := range nodeInfos {
+				for _, podInfo := range nodeInfo.Pods() {
+					assert.False(t, crdtest.IsMinCapacityFakePod(podInfo.Pod), "min capacity pod %s left on node %s after the pass", podInfo.Pod.Name, nodeInfo.Node().Name)
 				}
 			}
 		})
