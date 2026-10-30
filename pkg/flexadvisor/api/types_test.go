@@ -94,6 +94,16 @@ func TestInstanceConfig_Signature(t *testing.T) {
 			},
 			wantSignature: "machineType: ct5p-hightpu-4t, provisioningMode: STANDARD, acceleratorTopology: 2x2x1",
 		},
+		{
+			name: "spot_excludes_min_estimated_uptime",
+			config: &InstanceConfig{
+				machineType:        "e2-medium",
+				provisioningMode:   instanceavailability.Spot,
+				zones:              set.New[string]("us-central1-b"),
+				minEstimatedUptime: MinUptime1Hour,
+			},
+			wantSignature: "machineType: e2-medium, provisioningMode: SPOT",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -108,12 +118,20 @@ func TestInstanceConfig_SubRankAndDeepCopy(t *testing.T) {
 	defaultCfg := NewInstanceConfig("e2-standard-4", "", 0, 1, instanceavailability.Standard, EmptyMaxRunDuration)
 	assert.Equal(t, 1, defaultCfg.Rank())
 	assert.Equal(t, 0, defaultCfg.SubRank())
+	assert.Equal(t, MinUptimeUnset, defaultCfg.MinEstimatedUptime())
+	assert.False(t, defaultCfg.MinEstimatedUptime().IsSet())
 
-	cfgWithSubRank := NewInstanceConfig("e2-standard-4", "", 0, 2, instanceavailability.Spot, EmptyMaxRunDuration, WithSubRank(5))
-	assert.Equal(t, 2, cfgWithSubRank.Rank())
-	assert.Equal(t, 5, cfgWithSubRank.SubRank())
+	cfgWithOpts := NewInstanceConfig("e2-standard-4", "", 0, 2, instanceavailability.Spot, EmptyMaxRunDuration, WithSubRank(5), WithMinEstimatedUptime(MinUptime1Hour))
+	assert.Equal(t, 2, cfgWithOpts.Rank())
+	assert.Equal(t, 5, cfgWithOpts.SubRank())
+	assert.Equal(t, MinUptime1Hour, cfgWithOpts.MinEstimatedUptime())
 
-	copied := DeepCopyInstanceConfig(cfgWithSubRank)
+	copied := DeepCopyInstanceConfig(cfgWithOpts)
 	assert.Equal(t, 2, copied.Rank())
 	assert.Equal(t, 5, copied.SubRank())
+	assert.Equal(t, MinUptime1Hour, copied.MinEstimatedUptime())
+
+	copied.SetMinEstimatedUptime(MinUptimeUnset)
+	assert.Equal(t, MinUptimeUnset, copied.MinEstimatedUptime())
+	assert.Equal(t, MinUptime1Hour, cfgWithOpts.MinEstimatedUptime())
 }
