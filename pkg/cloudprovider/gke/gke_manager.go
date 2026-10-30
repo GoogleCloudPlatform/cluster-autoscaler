@@ -197,6 +197,11 @@ type GkeManager interface {
 	// GetEmulatedClusterVersion returns the "<major>.<minor>" version emulated by the control plane during
 	// phase 1 of a rollback-safe upgrade, or an empty string if the control plane doesn't emulate a version.
 	GetEmulatedClusterVersion() string
+	// GetDowngradableVersion returns the version GKE assigns to new node pools created without an explicit
+	// version during phase 1 of a rollback-safe upgrade, or an empty string otherwise.
+	GetDowngradableVersion() string
+	// IsGCFSEnabled returns whether GCFS (Image Streaming) is enabled in the cluster-level node pool defaults.
+	IsGCFSEnabled() bool
 	// GetClusterNetwork returns the GCE Network resource of the cluster's VPC
 	GetClusterNetwork() (*gce_api.Network, error)
 	// RecommendLocations returns recommendation made by recommendLocations API.
@@ -478,6 +483,7 @@ type gkeManagerImpl struct {
 	defaultMaxPodsPerNode           atomic.Int64
 	dataplaneV2Enabled              atomic.Bool
 	isDefaultCCCEnabled             atomic.Bool
+	downgradableVersion             atomic.Pointer[string]
 
 	gkeService                 gkeclient.AutoscalingGkeClient
 	gceService                 gceclient.AutoscalingInternalGceClient
@@ -1833,6 +1839,15 @@ func (m *gkeManagerImpl) GetEmulatedClusterVersion() string {
 	return m.emulatedClusterVersion
 }
 
+// GetDowngradableVersion returns the version GKE assigns to new node pools created without an explicit
+// version during phase 1 of a rollback-safe upgrade, or an empty string otherwise.
+func (m *gkeManagerImpl) GetDowngradableVersion() string {
+	if v := m.downgradableVersion.Load(); v != nil {
+		return *v
+	}
+	return ""
+}
+
 // GetClusterNetwork returns the GCE Network resource of the cluster's VPC
 // This function will call Network GCE API once per gkeManager instance lifecycle,
 // then retrieve the cached result on each following call.
@@ -2091,6 +2106,7 @@ func (m *gkeManagerImpl) refreshGkeResources() error {
 	m.clusterCreateTime = cluster.CreateTime
 	m.clusterVersion = cluster.ClusterVersion
 	m.emulatedClusterVersion = cluster.EmulatedClusterVersion
+	m.downgradableVersion.Store(&cluster.DowngradableVersion)
 	m.autoprovisioningNodePoolDefaults = cluster.AutoprovisioningNodePoolDefaults
 	m.nodePoolDefaults = cluster.NodePoolDefaults
 	m.confidentialNodesEnabled = cluster.ConfidentialNodesEnabled
@@ -2349,9 +2365,13 @@ func (m *gkeManagerImpl) fetchExistingMigTemplateNode(mig *GkeMig) (*apiv1.Node,
 
 func (m *gkeManagerImpl) fetchAutoprovisionedMigTemplateNode(mig *GkeMig) (*apiv1.Node, error) {
 	cacheKey := ""
+	// Read the template inputs that refreshGkeResources can change concurrently once, and use the
+	// same values for the cache key and the template, so they cannot disagree.
+	gcfsEnabled := m.IsGCFSEnabled()
+	migVersion := mig.Version()
 
-	if m.clusterVersion != "" {
-		cacheKey = nodetemplate.BuildKeyForNAP(mig.Spec(), string(m.GetOsDistributionForNap(mig)), m.clusterVersion, mig.gceRef.Zone)
+	if migVersion != "" {
+		cacheKey = nodetemplate.BuildKeyForNAP(mig.Spec(), string(m.GetOsDistributionForNap(mig)), migVersion, mig.gceRef.Zone, gcfsEnabled)
 		if node, exists := m.cache.nodeTemplateCache.Get(cacheKey); exists {
 			klog.V(5).Infof("Node template cache hit for autoprovisioned MIG: %s", mig.Id())
 			return node, nil
@@ -2360,7 +2380,7 @@ func (m *gkeManagerImpl) fetchAutoprovisionedMigTemplateNode(mig *GkeMig) (*apiv
 		klog.Warning("Unable to determine cluster version, instance templates are not cached")
 	}
 
-	node, err := m.nodeTemplateFromMigSpec(mig)
+	node, err := m.nodeTemplateFromMigSpec(mig, migVersion, gcfsEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -2490,7 +2510,7 @@ func (m *gkeManagerImpl) nodeTemplateFromInstanceTemplate(mig *GkeMig, template 
 	return node, nil
 }
 
-func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig) (*apiv1.Node, error) {
+func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig, nodeVersion string, gcfsEnabled bool) (*apiv1.Node, error) {
 	machineTypeStr := mig.Spec().MachineType
 	gceMachineType, err := m.GetMachineType(machineTypeStr, mig.GceRef().Zone)
 	if err != nil {
@@ -2506,9 +2526,9 @@ func (m *gkeManagerImpl) nodeTemplateFromMigSpec(mig *GkeMig) (*apiv1.Node, erro
 	}
 	pods := getMaxPodsForNodeForTemplate(mig, m.managerOptions.AutopilotEnabled, m.managerOptions.AutopilotHigherMaxPodsPerNode, gceMachineType.CPU)
 	// TODO: Operating system will need to changed if we ever want NAP for windows.
-	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, m.GetOsDistributionForNap(mig), mig.GetSystemArchitecture()), mig.Version(), mig.IsConfidentialNode())
+	gkeMigOsInfo := NewGkeMigOsInfo(gce.NewMigOsInfo(gce.OperatingSystemLinux, m.GetOsDistributionForNap(mig), mig.GetSystemArchitecture()), nodeVersion, mig.IsConfidentialNode())
 	defaultMaxPodsPerNode := m.defaultMaxPodsPerNode.Load()
-	node, err := m.templates.BuildNodeFromMigSpec(mig, gkeMigOsInfo, cpu, gceMachineType.Memory, pods, m.GetNewNodePoolDaemonSetConditions(), m.isGCFSEnabled(), m.reserved, m.localSSDDiskSizeProvider, defaultMaxPodsPerNode)
+	node, err := m.templates.BuildNodeFromMigSpec(mig, gkeMigOsInfo, cpu, gceMachineType.Memory, pods, m.GetNewNodePoolDaemonSetConditions(), gcfsEnabled, m.reserved, m.localSSDDiskSizeProvider, defaultMaxPodsPerNode)
 	if err != nil {
 		return nil, err
 	}
@@ -2540,7 +2560,8 @@ func (m *gkeManagerImpl) addSupportedDiskTypeLabelsToNode(node *apiv1.Node, mig 
 	return nil
 }
 
-func (m *gkeManagerImpl) isGCFSEnabled() bool {
+// IsGCFSEnabled returns whether GCFS (Image Streaming) is enabled in the cluster-level node pool defaults.
+func (m *gkeManagerImpl) IsGCFSEnabled() bool {
 	defaults := m.nodePoolDefaults
 	return defaults != nil &&
 		defaults.NodeConfigDefaults != nil &&

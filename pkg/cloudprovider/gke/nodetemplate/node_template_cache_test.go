@@ -61,8 +61,8 @@ func TestBuildKeyForNAPProducesConsistentHash(t *testing.T) {
 		LocalNvmeSsdBlockConfig:        &container.LocalNvmeSsdBlockConfig{},
 	}
 
-	hash1 := BuildKeyForNAP(&spec1, "", "", "")
-	hash2 := BuildKeyForNAP(&spec2, "", "", "")
+	hash1 := BuildKeyForNAP(&spec1, "", "", "", false)
+	hash2 := BuildKeyForNAP(&spec2, "", "", "", false)
 
 	assert.Equal(t, spec1, spec2) // safeguard not to miss any changes in tests
 	assert.Equal(t, hash1, hash2)
@@ -71,8 +71,17 @@ func TestBuildKeyForNAPProducesConsistentHash(t *testing.T) {
 func TestBuildKeyForNAPDifferentPerZone(t *testing.T) {
 	spec := gkeclient.NodePoolSpec{}
 
-	hash1 := BuildKeyForNAP(&spec, "", "", "A")
-	hash2 := BuildKeyForNAP(&spec, "", "", "B")
+	hash1 := BuildKeyForNAP(&spec, "", "", "A", false)
+	hash2 := BuildKeyForNAP(&spec, "", "", "B", false)
+
+	assert.NotEqual(t, hash1, hash2)
+}
+
+func TestBuildKeyForNAPDifferentPerGcfsEnabled(t *testing.T) {
+	spec := gkeclient.NodePoolSpec{}
+
+	hash1 := BuildKeyForNAP(&spec, "cos", "1.37.0-gke.3630000", "A", false)
+	hash2 := BuildKeyForNAP(&spec, "cos", "1.37.0-gke.3630000", "A", true)
 
 	assert.NotEqual(t, hash1, hash2)
 }

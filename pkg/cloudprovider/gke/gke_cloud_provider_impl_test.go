@@ -2972,12 +2972,13 @@ func TestUsesBulkProvisioning(t *testing.T) {
 func TestMigVersion(t *testing.T) {
 	gkeManagerMock := &GkeManagerMock{}
 	tests := []struct {
-		name            string
-		autoprovisioned bool
-		spec            *gkeclient.NodePoolSpec
-		nodeConfig      *NodeConfig
-		clusterVersion  string
-		wantVersion     string
+		name                string
+		autoprovisioned     bool
+		spec                *gkeclient.NodePoolSpec
+		nodeConfig          *NodeConfig
+		downgradableVersion string
+		clusterVersion      string
+		wantVersion         string
 	}{
 		{
 			name:            "autoprovisioned with node version in spec",
@@ -2986,6 +2987,13 @@ func TestMigVersion(t *testing.T) {
 				NodeVersion: "1.32.9-gke.1726000",
 			},
 			wantVersion: "1.32.9-gke.1726000",
+		},
+		{
+			name:                "autoprovisioned without node version in spec during rollback-safe upgrade, fallback to downgradable version",
+			autoprovisioned:     true,
+			spec:                &gkeclient.NodePoolSpec{},
+			downgradableVersion: "1.30.5-gke.300",
+			wantVersion:         "1.30.5-gke.300",
 		},
 		{
 			name:            "autoprovisioned without node version in spec, fallback to cluster version",
@@ -3017,6 +3025,9 @@ func TestMigVersion(t *testing.T) {
 				spec:            tc.spec,
 				nodeConfig:      tc.nodeConfig,
 				gkeManager:      gkeManagerMock,
+			}
+			if tc.autoprovisioned && (tc.spec == nil || tc.spec.NodeVersion == "") {
+				gkeManagerMock.On("GetDowngradableVersion").Return(tc.downgradableVersion).Once()
 			}
 			if tc.clusterVersion != "" {
 				gkeManagerMock.On("GetClusterVersion").Return(tc.clusterVersion).Once()

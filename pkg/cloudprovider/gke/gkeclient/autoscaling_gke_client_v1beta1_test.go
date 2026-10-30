@@ -6380,6 +6380,65 @@ func TestEmulatedClusterVersionSetFromClusterProto(t *testing.T) {
 	}
 }
 
+func TestDowngradableVersionSetFromClusterProto(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		apiClusterResponse      string
+		wantDowngradableVersion string
+	}{
+		{
+			name: "no rollback-safe upgrade",
+			apiClusterResponse: `{
+				"currentMasterVersion": "1.37.1-gke.100",
+				"createTime": "2017-10-24T12:20:00+00:00"
+			}`,
+			wantDowngradableVersion: "",
+		},
+		{
+			name: "rollback-safe upgrade phase 1",
+			apiClusterResponse: `{
+				"currentMasterVersion": "1.37.1-gke.100",
+				"currentEmulatedVersion": "1.36",
+				"master": {"compatibilityStatus": {"downgradableVersion": "1.36.4-gke.300"}},
+				"createTime": "2017-10-24T12:20:00+00:00"
+			}`,
+			wantDowngradableVersion: "1.36.4-gke.300",
+		},
+		{
+			name: "emulated version without downgradable version",
+			apiClusterResponse: `{
+				"currentMasterVersion": "1.37.1-gke.100",
+				"currentEmulatedVersion": "1.36",
+				"createTime": "2017-10-24T12:20:00+00:00"
+			}`,
+			wantDowngradableVersion: "",
+		},
+		{
+			name: "downgradable version without emulated version",
+			apiClusterResponse: `{
+				"currentMasterVersion": "1.37.1-gke.100",
+				"master": {"compatibilityStatus": {"downgradableVersion": "1.36.4-gke.300"}},
+				"createTime": "2017-10-24T12:20:00+00:00"
+			}`,
+			wantDowngradableVersion: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster-1").Return(tc.apiClusterResponse).Once()
+			client := newTestAutoscalingGkeClientV1beta1(t, "project1", "us-central1-b", "cluster-1", server.URL)
+			cluster, err := client.GetCluster()
+			if err != nil {
+				t.Fatalf("GetCluster unexpected error: %v, %v", cluster, err)
+			}
+			if tc.wantDowngradableVersion != cluster.DowngradableVersion {
+				t.Errorf("Incorrect DowngradableVersion, want %q, got %q", tc.wantDowngradableVersion, cluster.DowngradableVersion)
+			}
+		})
+	}
+}
+
 func TestGetCluster_NodeVersion(t *testing.T) {
 	server := test_util.NewHttpServerMock()
 	defer server.Close()

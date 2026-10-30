@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"hash/maphash"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -44,8 +45,9 @@ const (
 
 var hashSeed maphash.Seed
 
-// BuildKeyForNAP is constructing key for template created by NodeAutoprovisioning.
-func BuildKeyForNAP(spec *gkeclient.NodePoolSpec, osDistribution string, nodeVersion string, zone string) string {
+// BuildKeyForNAP is constructing key for template created by NodeAutoprovisioning. gcfsEnabled is the
+// cluster-level GCFS (Image Streaming) enablement the template was built with.
+func BuildKeyForNAP(spec *gkeclient.NodePoolSpec, osDistribution string, nodeVersion string, zone string, gcfsEnabled bool) string {
 	hasher := &maphash.Hash{}
 	hasher.SetSeed(hashSeed)
 	hash.DeepHashObject(hasher, spec)
@@ -61,6 +63,11 @@ func BuildKeyForNAP(spec *gkeclient.NodePoolSpec, osDistribution string, nodeVer
 	}
 
 	_, err = hasher.WriteString(zone)
+	if err != nil {
+		klog.Errorf("Error while building a key for node template cache (should never happen): %v", err)
+	}
+
+	_, err = hasher.WriteString(strconv.FormatBool(gcfsEnabled))
 	if err != nil {
 		klog.Errorf("Error while building a key for node template cache (should never happen): %v", err)
 	}

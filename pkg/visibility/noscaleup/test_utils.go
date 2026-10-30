@@ -174,6 +174,10 @@ func (m vizNapTestGkeManager) GetClusterVersion() string {
 	return ""
 }
 
+func (m vizNapTestGkeManager) GetDowngradableVersion() string {
+	return ""
+}
+
 // RecommendLocations returns recommendation made by recommendLocations API.
 func (m vizNapTestGkeManager) RecommendLocations(context context.Context, region string, request gceclient.RecommendLocationsRequest) (*gceclient.RecommendLocationsResponse, error) {
 	return nil, nil

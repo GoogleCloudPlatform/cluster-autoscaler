@@ -147,7 +147,7 @@ func (p *Processor) compareNodesWithNodeTemplates(nodes []*apiv1.Node) error {
 			finalErr.Append(err)
 		}
 		if mig.Autoprovisioned(context.TODO()) {
-			key := nodetemplate.BuildKeyForNAP(mig.Spec(), osDistribution, node.Status.NodeInfo.KubeletVersion[1:], mig.GceRef().Zone)
+			key := nodetemplate.BuildKeyForNAP(mig.Spec(), osDistribution, node.Status.NodeInfo.KubeletVersion[1:], mig.GceRef().Zone, mig.ClusterGCFSEnabled())
 			err = p.compareAndUpdateTheMetric(node, key, mig.MachineType(), osDistribution)
 			if err != nil {
 				finalErr.Append(err)

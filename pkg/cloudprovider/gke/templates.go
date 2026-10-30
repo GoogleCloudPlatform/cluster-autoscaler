@@ -156,14 +156,26 @@ func (t *GkeTemplateBuilder) BuildNodeFromMigSpec(mig *GkeMig, migOsInfo *GkeMig
 	if err != nil {
 		return nil, err
 	}
-	// Determine per-MIG riptide state: check CCC self-service override, fallback to cluster default.
+	// Determine per-MIG riptide state: Autopilot-managed node pools in Standard
+	// clusters always enable Riptide on creation; otherwise check CCC self-service
+	// override and fallback to cluster default.
 	riptideEnabled := gcfsEnabled
+	// GKE metadata server is enabled unless a ComputeClass overrides workloadMetadata away from GKE_METADATA.
+	gkeMetadataEnabled := true
 	if mig.Spec().SelfServiceMetadata != nil {
 		if val, ok := mig.Spec().SelfServiceMetadata[gkelabels.ImageStreamingLabelKey]; ok {
 			riptideEnabled = (val == "true")
 		}
+		switch mig.Spec().SelfServiceMetadata[gkelabels.WorkloadMetadataLabelKey] {
+		case "", "MODE_UNSPECIFIED", "GKE_METADATA":
+		default:
+			gkeMetadataEnabled = false
+		}
 	}
-	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os(), mig.Version(), riptideEnabled)
+	if mig.Spec().AutopilotManaged {
+		riptideEnabled = true
+	}
+	gkeDaemonSetLabels := getGKEDaemonSetLabels(daemonSetConditions, migOsInfo.Os(), migOsInfo.NodeVersion(), riptideEnabled, gkeMetadataEnabled)
 	for k, v := range gkeDaemonSetLabels {
 		labels[k] = v
 	}
@@ -397,13 +409,13 @@ func buildLabelsForAutoprovisionedMig(mig *GkeMig, nodeName string, os gce.Opera
 	return labels, nil
 }
 
-func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem, nodeVersion string, riptideEnabled bool) map[string]string {
+func getGKEDaemonSetLabels(conditions *DaemonSetConditions, os gce.OperatingSystem, nodeVersion string, riptideEnabled bool, gkeMetadataEnabled bool) map[string]string {
 	labels := make(map[string]string)
-	if conditions.MetadataServerEnabled {
+	if conditions.MetadataServerEnabled && gkeMetadataEnabled {
 		labels["iam.gke.io/gke-metadata-server-enabled"] = "true"
 	}
 
-	if conditions.WIImagePullMinVersion != nil && !(conditions.DisableWIImagePullForRiptide && riptideEnabled) {
+	if conditions.WIImagePullMinVersion != nil && !(conditions.DisableWIImagePullForRiptide && riptideEnabled) && gkeMetadataEnabled {
 		nv, err := version.FromString(nodeVersion)
 		if err == nil {
 			if !nv.LessThan(*conditions.WIImagePullMinVersion) && conditions.WorkloadIdentityEnabled {
