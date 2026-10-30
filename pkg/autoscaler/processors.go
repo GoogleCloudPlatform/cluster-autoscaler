@@ -288,22 +288,22 @@ func initCapacityBufferMetricsProcessor(experimentsManager experiments.Manager, 
 // which applies them in slice order and only ever moves nodes from removable to
 // unremovable (a node dropped by one processor is never reconsidered).
 //
-// ORDERING INVARIANT: every per-node processor must run before
-// nodes.AtomicResizeFilteringProcessor, and only whole-group processors may run
-// after it.
+// ORDERING INVARIANT: every processor that may drop single nodes of an atomic
+// node group must run before nodes.AtomicResizeFilteringProcessor. Processors
+// running after it must keep or drop atomic groups as a whole.
 //
 // Concretely:
 //   - BlockingLabelsFilteringProcessor (per-node) runs before the atomic filter,
 //     so blocking a single slice-bound node protects the whole cube downstream.
-//   - AtomicMinCapacityProcessor (whole-group) runs after the atomic filter, so it
-//     only ever sees complete groups; it accepts/rejects whole groups and thus
-//     preserves atomicity.
+//   - ComputeClassMinCapacityProcessor runs after the atomic filter, so atomic
+//     candidates arrive as whole groups. It decides on atomic groups as a whole,
+//     which preserves atomicity, and on other ComputeClass nodes one by one.
 //
 // This invariant is guarded by TestBuildScaleDownSetProcessorsOrdering.
 func buildScaleDownSetProcessors(
 	provider GkeCloudProvider,
 	options *internalopts.AutoscalingOptions,
-	minCapacityProcessor *scaledown.AtomicMinCapacityProcessor,
+	minCapacityProcessor *scaledown.ComputeClassMinCapacityProcessor,
 ) []nodes.ScaleDownSetProcessor {
 	scaleDownSetProcessors := []nodes.ScaleDownSetProcessor{
 		internal_processors.NewMinSizeProcessor(provider),
@@ -319,8 +319,7 @@ func buildScaleDownSetProcessors(
 	scaleDownSetProcessors = append(scaleDownSetProcessors, nodes.NewAtomicResizeFilteringProcessor())
 	if options.EnableComputeClassMinCapacity {
 		// Runs after AtomicResizeFilteringProcessor so atomic candidates arrive as
-		// whole groups. Enforces ComputeClass targetNodeCount for atomic node
-		// groups and nodes being deleted, which are exempt from the per-node TargetNodeCountQuota.
+		// whole groups.
 		scaleDownSetProcessors = append(scaleDownSetProcessors, minCapacityProcessor)
 	}
 	return scaleDownSetProcessors
@@ -374,6 +373,7 @@ func (b *Builder) setUpProcessors(
 	updatesCh chan npc_status.UpdateMessage,
 	minCapacityObserver npc_processors.MinCapacityObserver,
 	minQuotasTrackerFactory *resourcequotas.TrackerFactory,
+	minQuotasNodeFilter resourcequotas.NodeFilter,
 	scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) (*processors.AutoscalingProcessors, error) {
 
 	allowlistedSystemLabelsMatcher, err := labels.NewMatcher(systemLabelPatterns)
@@ -648,7 +648,7 @@ func (b *Builder) setUpProcessors(
 	}
 
 	// Shared by the scale-down set processors and defrag.
-	atomicMinCapacityProcessor := scaledown.NewAtomicMinCapacityProcessor(ccLister, experimentsManager)
+	minCapacityProcessor := scaledown.NewComputeClassMinCapacityProcessor(ccLister, experimentsManager, minQuotasNodeFilter)
 
 	if options.DefragEnabled {
 		defragConfig := defrag_processor.Config{
@@ -687,7 +687,7 @@ func (b *Builder) setUpProcessors(
 			FairnessEnforcer:         sharedFairnessManager.CreateEnforcer(defrag_processor.DefragProcessorName),
 			MinQuotasTrackerFactory:  minQuotasTrackerFactory,
 			CcLister:                 ccLister,
-			ScaleDownNodesFilter:     atomicMinCapacityProcessor,
+			ScaleDownNodesFilter:     minCapacityProcessor,
 		})
 	}
 	var quotaProcessor *nodequota_processor.NodeQuotaProcessor
@@ -891,7 +891,7 @@ func (b *Builder) setUpProcessors(
 	autoscalingProcessors.BinpackingLimiter = metricsbinpacking.NewBinpackingMetricsProcessor(autoscalingProcessors.BinpackingLimiter)
 	autoscalingProcessors.NodeGroupManager = apNodeGroupManager
 	autoscalingProcessors.ScaleDownSetProcessor = nodes.NewCompositeScaleDownSetProcessor(
-		buildScaleDownSetProcessors(provider, options, atomicMinCapacityProcessor))
+		buildScaleDownSetProcessors(provider, options, minCapacityProcessor))
 
 	var nodeGroupSetProcessor nodegroupset.NodeGroupSetProcessor
 	nodeGroupSetProcessor = &nodegroupset.BalancingNodeGroupSetProcessor{Comparator: internal_processors.IsGkeNodeInfoSimilar}

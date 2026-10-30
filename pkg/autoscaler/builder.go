@@ -953,12 +953,13 @@ func (b *Builder) Build(
 
 	capacitybufferPodsRegistry := fakepods.NewRegistry(nil)
 
+	// ComputeClass min capacity is not a min quota here: the min quotas tracker
+	// in the OSS code consumes quotas node by node and can't keep atomic node
+	// groups whole, so scaledown.ComputeClassMinCapacityProcessor enforces it as a
+	// scale-down set processor instead.
 	minQuotasTrackerOptions := resourcequotas.TrackerOptions{
 		CustomResourcesProcessor: customResourcesProcessor,
-		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
-			resourcequotas.NewCloudMinProvider(cloudProvider),
-			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, false, experimentsManager, cloudProvider, true /* exemptAtomicNodeGroups */),
-		}),
+		QuotaProvider:            resourcequotas.NewCloudMinProvider(cloudProvider),
 		NodeFilter: resourcequotas.NewCombinedNodeFilter([]resourcequotas.NodeFilter{
 			utils.VirtualKubeletNodeFilter{},
 			gke_utils.TerminatingNodeFilter{},
@@ -970,8 +971,7 @@ func (b *Builder) Build(
 		CustomResourcesProcessor: customResourcesProcessor,
 		QuotaProvider: resourcequotas.NewCombinedQuotasProvider([]resourcequotas.Provider{
 			resourcequotas.NewCloudMinProvider(cloudProvider),
-			// exemptAtomicNodeGroups is false on purpose: the atomic-group exemption only applies to the scale-down path.
-			cc_resourcequota.NewTargetNodeCountProvider(b.npcCrdLister, true, experimentsManager, nil, false /* exemptAtomicNodeGroups */),
+			cc_resourcequota.NewRuleMinCapacityQuotaProvider(b.npcCrdLister, experimentsManager),
 		}),
 		NodeFilter: minQuotasTrackerOptions.NodeFilter,
 	}
@@ -1052,6 +1052,7 @@ func (b *Builder) Build(
 		cccStatusUpdatesCh,
 		minCapacityObserver,
 		defragMinQuotasTrackerFactory,
+		minQuotasTrackerOptions.NodeFilter,
 		scaleUpLimiterTracker)
 	if err != nil {
 		return nil, nil, err

@@ -111,7 +111,7 @@ func TestBlockingLabelsFilteringProcessor_FilterUnremovableNodes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := setupAtomicMinCapacityCtx(t, tc.groups)
+			ctx := setupMinCapacityCtx(t, tc.groups)
 			processor := NewBlockingLabelsFilteringProcessor(tc.blockingLabels)
 
 			removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(tc.groups))
