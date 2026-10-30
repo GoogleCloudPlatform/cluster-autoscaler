@@ -16,6 +16,7 @@ package processors
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -385,6 +386,45 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 				assert.Equal(t, metav1.NamespaceDefault, p.Namespace)
 			}
 		})
+	}
+}
+
+// Tests that ComputeClasses whose name is not a valid label value get no fake
+// pods, while other ComputeClasses still do.
+func TestMinCapacityPodListProcessor_SkipsInvalidComputeClassName(t *testing.T) {
+	validName := "cc-" + strings.Repeat("a", 60)   // 63 characters
+	invalidName := "cc-" + strings.Repeat("b", 61) // 64 characters
+	crds := []crd.CRD{
+		crd.NewTestCrd(
+			crd.WithName(validName),
+			crd.WithLabel(labels.ComputeClassLabel),
+			crd.WithTargetNodeCount(intPtr(2)),
+		),
+		crd.NewTestCrd(
+			crd.WithName(invalidName),
+			crd.WithLabel(labels.ComputeClassLabel),
+			crd.WithTargetNodeCount(intPtr(3)),
+			crd.WithRules([]rules.Rule{
+				rules.NewRule(
+					rules.WithLabelsRule(map[string]string{"cloud.google.com/compute-class-priority": "0"}),
+					rules.WithTargetNodeCountRule(intPtr(4)),
+				),
+			}),
+		),
+	}
+	ccLister := lister.NewMockCrdListerWithLabel(crds, labels.ComputeClassLabel)
+	processor := NewMinCapacityPodListProcessor(ccLister, nil, nil, nil)
+	ctx := &ca_context.AutoscalingContext{
+		ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t),
+		CloudProvider:   &minCapacityMockCloudProvider{},
+	}
+
+	fakePods, err := processor.Process(ctx, nil)
+
+	assert.NoError(t, err)
+	assert.Len(t, fakePods, 2)
+	for _, p := range fakePods {
+		assert.Equal(t, validName, p.Spec.NodeSelector[labels.ComputeClassLabel])
 	}
 }
 

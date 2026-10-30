@@ -379,7 +379,8 @@ func (o *minCapacityObserver) CheckLongUnprovisioned(now time.Time) {
 }
 
 // OnComputeClassAdded handles the addition of a new ComputeClass. It initializes its provisioning
-// state tracking if the ComputeClass has any target node count defined.
+// state tracking if the ComputeClass name is a valid label value and the ComputeClass has any
+// target node count defined.
 func (o *minCapacityObserver) OnComputeClassAdded(cc *cc_api.ComputeClass, now time.Time) {
 	o.Lock()
 	defer o.Unlock()
@@ -446,8 +447,14 @@ func (o *minCapacityObserver) cleanupCC(name string) {
 	}
 }
 
-// needsTracking returns true if the CC has any target node count defined (either at spec level or in any rule).
+// needsTracking returns true if the CC name is a valid label value and the CC has any target node count
+// defined (either at spec level or in any rule).
 func (o *minCapacityObserver) needsTracking(cc *cc_api.ComputeClass) bool {
+	// MinCapacityPodListProcessor skips a ComputeClass with an invalid name
+	// because no node can ever match it, so don't report it as unprovisioned.
+	if !crd.NameIsValidLabelValue(cc.Name) {
+		return false
+	}
 	if targetNodeCount(cc) != nil {
 		return true
 	}

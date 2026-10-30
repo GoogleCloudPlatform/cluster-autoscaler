@@ -16,6 +16,7 @@ package crd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,24 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
+
+func TestNameIsValidLabelValue(t *testing.T) {
+	testCases := []struct {
+		name    string
+		crdName string
+		want    bool
+	}{
+		{name: "short name", crdName: "my-ccc", want: true},
+		{name: "63-character name", crdName: "cc-" + strings.Repeat("a", 60), want: true},
+		{name: "64-character name", crdName: "cc-" + strings.Repeat("a", 61), want: false},
+		{name: "253-character name", crdName: "cc-" + strings.Repeat("a", 250), want: false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, NameIsValidLabelValue(tc.crdName))
+		})
+	}
+}
 
 func TestNodeCrdLabel(t *testing.T) {
 	testCrdLabel := "test.io/crd"

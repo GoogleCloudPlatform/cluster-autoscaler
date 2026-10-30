@@ -145,6 +145,10 @@ func (e *Evaluator) setUpConditionCheckers() {
 		&minCpuPlatformConfigChecker{provider: e.provider},
 	}
 	e.crdChecks = []crdConditionCheck{
+		// invalidNameCheck goes first: GetCRDConditions keeps only the first
+		// condition of each type, and a crd with an invalid name can't be used
+		// whatever else is configured.
+		&invalidNameCheck{},
 		&noRuleMatchingCheck{matcher: e.matcher},
 		&crdLabelNotMatchingCheck{matcher: e.matcher},
 		&taintMissingCheck{lister: e.lister, matcher: e.matcher},

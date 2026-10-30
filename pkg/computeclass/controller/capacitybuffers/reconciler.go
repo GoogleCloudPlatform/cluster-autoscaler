@@ -41,6 +41,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	"k8s.io/client-go/rest"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -162,7 +163,7 @@ func (r *Reconciler) reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, nil
 	}
 
-	if len(cc.Spec.Buffers) > 0 && len(validation.IsValidLabelValue(cc.Name)) > 0 {
+	if len(cc.Spec.Buffers) > 0 && !crd.NameIsValidLabelValue(cc.Name) {
 		msg := fmt.Sprintf("ComputeClass name must be a valid label value of at most %d characters when capacity buffers are configured", validation.LabelValueMaxLength)
 		klog.Warningf("%s %s in ComputeClass %s", logPrefix, msg, cc.Name)
 		return reconcile.Result{}, r.updateStatus(

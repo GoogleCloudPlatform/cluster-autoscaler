@@ -15,6 +15,7 @@
 package processors
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -332,6 +333,50 @@ func TestCheckLongUnprovisioned_GaugeReset(t *testing.T) {
 
 	observer.OnProvisioningComplete("cc1", -1, now.Add(32*time.Minute))
 	metrics.AssertCalled(t, "ObserveCcLongUnprovisionedMinTargetNodesCount", []internalmetrics.CcLongUnprovisionedSample(nil))
+}
+
+func TestCheckLongUnprovisioned_SkipsInvalidComputeClassName(t *testing.T) {
+	invalidCC := &cccv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "cc-" + strings.Repeat("a", 61)}, // 64 characters
+		Spec: cccv1.ComputeClassSpec{
+			MinimumCapacity: &cccv1.MinimumCapacity{
+				TargetNodeCount: intPtr(5),
+			},
+			Priorities: []cccv1.Priority{
+				{
+					MinimumCapacity: &cccv1.MinimumCapacity{
+						TargetNodeCount: intPtr(2),
+					},
+				},
+			},
+		},
+	}
+	validCC := &cccv1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "valid-cc"},
+		Spec: cccv1.ComputeClassSpec{
+			MinimumCapacity: &cccv1.MinimumCapacity{
+				TargetNodeCount: intPtr(5),
+			},
+		},
+	}
+
+	metrics := computeclass.NewMockMetrics()
+	observer := NewMinCapacityObserver(metrics, nil)
+
+	now := time.Now()
+	observer.OnComputeClassAdded(invalidCC, now)
+	observer.OnComputeClassAdded(validCC, now)
+	observer.CheckLongUnprovisioned(now.Add(31 * time.Minute))
+
+	// Only valid-cc is reported. Tracking invalidCC would add a spec-level and a
+	// priority-level sample.
+	metrics.AssertCalled(t, "ObserveCcLongUnprovisionedMinTargetNodesCount", []internalmetrics.CcLongUnprovisionedSample{
+		{
+			ProvisioningErrorEncountered: "",
+			Unhelpable:                   false,
+			DefinedInPriority:            false,
+		},
+	})
 }
 
 func TestPriorityLevelTracking(t *testing.T) {

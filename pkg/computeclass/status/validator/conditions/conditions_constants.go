@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 // Conditions for crd status.
@@ -39,6 +40,7 @@ const (
 	NoRuleMatchingReason                        = "NoRuleMatching"
 
 	NapDisabledAndNoMatchingNodegroupsReason            = "NapDisabledAndNoMatchingNodegroups"
+	InvalidComputeClassNameReason                       = "InvalidComputeClassName"
 	CrdLabelNotMatchingReason                           = "CrdLabelNotMatching"
 	MultipleCrdTaintsReason                             = "MultipleCrdTaints"
 	TaintMissingReason                                  = "TaintMissing"
@@ -77,6 +79,7 @@ const (
 	UnavailableMachineTypeMessage                        = "Machine type %s is not available in any of auto provisioned zones, last zone check error: %v"
 	NoRuleMatchingMessage                                = "Nodepool %v has an Crd label but doesn't match any priority rule."
 	NapDisabledAndNoMatchingNodegroupsMessage            = "Crd with NAP disabled should have at least one matching nodepool with autoscaling enabled."
+	InvalidComputeClassNameMessage                       = "ComputeClass name must be a valid label value of at most %d characters because it is used as the value of the %s label. Pods and nodes cannot use this ComputeClass. Recreate it with a shorter name."
 	CrdLabelNotMatchingMessage                           = "Crd label doesn't match Crd name for the nodepool %v."
 	MultipleCrdTaintsMessage                             = "Nodepool %v has more than one crd taints."
 	TaintMissingMessage                                  = "Crd taint is missing for the nodepool %v."
@@ -202,6 +205,18 @@ func NoRuleMatchingCondition(nodepoolName string) *metav1.Condition {
 		LastTransitionTime: metav1.Now(),
 		Reason:             NoRuleMatchingReason,
 		Message:            fmt.Sprintf(NoRuleMatchingMessage, nodepoolName),
+	}
+}
+
+// InvalidComputeClassNameCondition returns a CrdMisconfigured condition for a
+// crd whose name is not a valid value of its crdLabel label.
+func InvalidComputeClassNameCondition(crdLabel string) *metav1.Condition {
+	return &metav1.Condition{
+		Type:               CrdMisconfiguredCondition,
+		Status:             metav1.ConditionTrue,
+		LastTransitionTime: metav1.Now(),
+		Reason:             InvalidComputeClassNameReason,
+		Message:            fmt.Sprintf(InvalidComputeClassNameMessage, validation.LabelValueMaxLength, crdLabel),
 	}
 }
 
