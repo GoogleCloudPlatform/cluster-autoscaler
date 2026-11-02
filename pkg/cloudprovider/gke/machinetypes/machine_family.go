@@ -217,14 +217,16 @@ func (f MachineFamily) AreConstraintsSupported(constraints Constraints) bool {
 	return len(f.AutoprovisionedMachineTypes(constraints)) > 0
 }
 
-// IsPlatformSupported returns whether the given CPU platform is supported by any autoprovisioned machine type from this family.
-func (f MachineFamily) IsPlatformSupported(cpuPlatform CpuPlatform) bool {
-	return f.AreConstraintsSupported(Constraints{CpuPlatform: cpuPlatform, GpuType: ""})
+// IsPlatformSupported returns whether the given CPU platform is supported by any autoprovisioned machine type from this family,
+// scoped to the explicit machine types if any are provided.
+func (f MachineFamily) IsPlatformSupported(cpuPlatform CpuPlatform, machineTypes ...string) bool {
+	return f.AreConstraintsSupported(Constraints{CpuPlatform: cpuPlatform, GpuType: "", ExplicitMachineTypes: machineTypes})
 }
 
-// IsDiskTypeSupported returns whether the given disk type is supported by any machine type in the machine family.
-func (f MachineFamily) IsDiskTypeSupported(diskType string) bool {
-	return f.AreConstraintsSupported(Constraints{CpuPlatform: AnyPlatform, DiskType: diskType})
+// IsDiskTypeSupported returns whether the given disk type is supported by any machine type in the machine family,
+// scoped to the explicit machine types if any are provided.
+func (f MachineFamily) IsDiskTypeSupported(diskType string, machineTypes ...string) bool {
+	return f.AreConstraintsSupported(Constraints{CpuPlatform: AnyPlatform, DiskType: diskType, ExplicitMachineTypes: machineTypes})
 }
 
 // AreMachineTypesSupported returns whether any of the provided machine types is supported in the machine family.

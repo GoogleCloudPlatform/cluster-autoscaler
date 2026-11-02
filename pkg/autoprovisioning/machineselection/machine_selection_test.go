@@ -1091,11 +1091,24 @@ func TestSelectMinCpuPlatform(t *testing.T) {
 		podPlatformsFromSupported []string
 		clusterWidePlatform       string
 		rule                      rules.Rule
+		explicitMachineTypes      []string
 		expectedPlatform          machinetypes.CpuPlatform
 		expectedErr               error
 	}{
 		"AnyPlatform returned if nothing specified": {
 			expectedPlatform: machinetypes.AnyPlatform,
+		},
+		"cluster-wide platform supported only by explicitReqOnly shape is ignored when no explicit types": {
+			families:             []machinetypes.MachineFamily{machinetypes.C4},
+			clusterWidePlatform:  "Intel Emerald Rapids",
+			explicitMachineTypes: []string{"c4-standard-288-metal"},
+			expectedPlatform:     machinetypes.AnyPlatform,
+		},
+		"cluster-wide platform supported only by explicitReqOnly shape is used when explicit type specified": {
+			families:             []machinetypes.MachineFamily{machinetypes.C4},
+			clusterWidePlatform:  "Intel Granite Rapids",
+			explicitMachineTypes: []string{"c4-standard-288-metal"},
+			expectedPlatform:     machinetypes.IntelGraniteRapids,
 		},
 		"cluster-wide platform returned if specified and compatible with the only family": {
 			families:            []machinetypes.MachineFamily{machinetypes.N1},
@@ -1243,7 +1256,7 @@ func TestSelectMinCpuPlatform(t *testing.T) {
 			}
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithDefaultNodePoolMinCpuPlatform(tc.clusterWidePlatform).Build()
 			selector := Selector{CloudProvider: provider}
-			gotPlatform, gotErr := selector.selectMinCpuPlatform(tc.families, podrequirements.NewLabelRequirements(req), tc.rule)
+			gotPlatform, gotErr := selector.selectMinCpuPlatform(tc.families, podrequirements.NewLabelRequirements(req), tc.rule, tc.explicitMachineTypes)
 			assert.Equal(t, tc.expectedPlatform, gotPlatform)
 			assert.Equal(t, tc.expectedErr, gotErr)
 		})
@@ -1649,6 +1662,14 @@ func TestLimitMachineSpec(t *testing.T) {
 			},
 			expectedErr: NewMachineTypesUnsupportedByFamilyError([]string{"n2-standard-2"}, `machine family "m1"`),
 		},
+		"error if machine family does not support explicit machine type when minCpuPlatform is specified": {
+			spec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.M1},
+				MinCpuPlatform:       machinetypes.IntelBroadwell,
+				ExplicitMachineTypes: []string{"n2-standard-4"},
+			},
+			expectedErr: NewMachineTypesUnsupportedByFamilyError([]string{"n2-standard-4"}, `machine family "m1"`),
+		},
 		"error if machine family constraints result in no compatible machine types": {
 			spec: machinetypes.MachineSpec{
 				Families:       []machinetypes.MachineFamily{constraintsTestFamily},
@@ -1665,6 +1686,23 @@ func TestLimitMachineSpec(t *testing.T) {
 				BootDiskType:   machinetypes.DiskTypeSSD,
 			},
 			expectedErr: NewMachineConfigInvalidError(machinetypes.Constraints{CpuPlatform: machinetypes.AnyPlatform, GpuType: machinetypes.NvidiaH200Ultra_141gb.Name(), DiskType: machinetypes.DiskTypeSSD}.String(), "no machine types supporting all parts of the config found"),
+		},
+		"error if minCpuPlatform is incompatible with explicit machine type": {
+			spec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.C4},
+				MinCpuPlatform:       machinetypes.IntelEmeraldRapids,
+				ExplicitMachineTypes: []string{"c4-standard-288-metal"},
+			},
+			expectedErr: NewMinCpuPlatformInvalidError(`machine family "c4"`, "Intel Emerald Rapids"),
+		},
+		"error if bootDiskType is incompatible with explicit machine type": {
+			spec: machinetypes.MachineSpec{
+				Families:             []machinetypes.MachineFamily{machinetypes.A3},
+				MinCpuPlatform:       machinetypes.AnyPlatform,
+				BootDiskType:         machinetypes.DiskTypeSSD,
+				ExplicitMachineTypes: []string{"a3-ultragpu-8g-nolssd"},
+			},
+			expectedErr: NewBootDiskTypeIncompatibleError(`machine family "a3"`, machinetypes.DiskTypeSSD),
 		},
 		"supported family with BootDiskStoragePools": {
 			spec: machinetypes.MachineSpec{
