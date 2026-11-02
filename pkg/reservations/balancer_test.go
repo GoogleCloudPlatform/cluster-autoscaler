@@ -20,14 +20,12 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/testutil"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	autoscaling_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/nodegroupset"
@@ -45,14 +43,14 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 	mig1SameZone := newNamedTestNodeGroup("mig-same-zone", "machine-type-2", "zone-a", 3, 10)
 
 	testCases := []struct {
-		name                  string
-		groups                []cloudprovider.NodeGroup
-		withFallbackBalancers func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor
-		upcomingNodeGroups    []cloudprovider.NodeGroup
-		reservations          []*reservation.Reservation
-		newNodes              int
-		wantScaleUpInfo       []nodegroupset.ScaleUpInfo
-		wantReservations      []*reservation.Reservation
+		name               string
+		groups             []cloudprovider.NodeGroup
+		fallbackBalancer   nodegroupset.NodeGroupSetProcessor
+		upcomingNodeGroups []cloudprovider.NodeGroup
+		reservations       []*reservation.Reservation
+		newNodes           int
+		wantScaleUpInfo    []nodegroupset.ScaleUpInfo
+		wantReservations   []*reservation.Reservation
 	}{
 		{
 			name: "single group, no reservations",
@@ -99,7 +97,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			name:   "resources for upcoming node groups are ignored when matching reservations",
 			groups: []cloudprovider.NodeGroup{mig1},
 			upcomingNodeGroups: []cloudprovider.NodeGroup{
-				newUpcomingTestNodeGroup("", "machine-type-2", "zone-a", 10, 6),
+				newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 6),
 			},
 			newNodes: 10,
 			reservations: []*reservation.Reservation{
@@ -116,7 +114,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			name:   "resources for upcoming node groups are fully consumed by matching reservations",
 			groups: []cloudprovider.NodeGroup{mig1},
 			upcomingNodeGroups: []cloudprovider.NodeGroup{
-				newUpcomingTestNodeGroup("", "machine-type-2", "zone-a", 10, 10),
+				newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 10),
 			},
 			reservations: []*reservation.Reservation{
 				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 10),
@@ -127,15 +125,10 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 		},
 		{
-			name:     "newNodes are completely handled by available reservations - doesn't call fallback balancers",
-			groups:   []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
-			newNodes: 100,
-			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
-				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Maybe().Panic("fallbackBalancer: should not be called")
-				registerMock(&mockBalancer.Mock)
-				return mockBalancer
-			},
+			name:             "newNodes are completely handled by available reservations - doesn't call fallback balancers",
+			groups:           []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
+			newNodes:         100,
+			fallbackBalancer: &failingTestBalancingProcessor{},
 			reservations: []*reservation.Reservation{
 				BuildAvailableReservation("machine-type-2", "zone-a", 100),
 			},
@@ -147,21 +140,10 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 		},
 		{
-			name:     "newNodes are not completely handled by available reservations - calls fallback balancers",
-			groups:   []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
-			newNodes: 1000,
-			withFallbackBalancers: func(registerMock func(m *mock.Mock)) nodegroupset.NodeGroupSetProcessor {
-				mockBalancer := new(testutil.MockBalancer)
-				mockBalancer.On("BalanceScaleUpBetweenGroups", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().Return(
-					func(autoscalingCtx *autoscaling_context.AutoscalingContext, groups []cloudprovider.NodeGroup, newNodes int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
-						// use OSS balancer which should distribute remaining nodes
-						ossBalancer := &nodegroupset.BalancingNodeGroupSetProcessor{}
-						return ossBalancer.BalanceScaleUpBetweenGroups(context.TODO(), autoscalingCtx, groups, newNodes)
-					},
-				)
-				registerMock(&mockBalancer.Mock)
-				return mockBalancer
-			},
+			name:             "newNodes are not completely handled by available reservations - calls fallback balancers",
+			groups:           []cloudprovider.NodeGroup{mig1000_1, mig1000_2, mig1000_3},
+			newNodes:         1000,
+			fallbackBalancer: &nodegroupset.BalancingNodeGroupSetProcessor{},
 			reservations: []*reservation.Reservation{
 				BuildAvailableReservation("machine-type-2", "zone-a", 500),
 			},
@@ -175,20 +157,39 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			},
 		},
 		{
-			// Both groups see the 2 reservation slots left after the upcoming node group, so the
-			// balancer gives each of them 2 nodes, but only 2 of these 4 nodes use the reservation.
 			name:   "groups sharing a reservation don't use the same slots twice",
 			groups: []cloudprovider.NodeGroup{mig1, mig1SameZone},
 			upcomingNodeGroups: []cloudprovider.NodeGroup{
 				newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 1),
 			},
-			newNodes: 4,
+			newNodes:         4,
+			fallbackBalancer: &nodegroupset.BalancingNodeGroupSetProcessor{},
 			reservations: []*reservation.Reservation{
 				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 3),
 			},
 			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
-				newTestScaleUpInfo(mig1, 5, 7, 10),
+				newTestScaleUpInfo(mig1, 5, 6, 10),
+				newTestScaleUpInfo(mig1SameZone, 3, 6, 10),
+			},
+			// The upcoming node group isn't subtracted from the puller, so 3 - 2 = 1 slot is left.
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 1),
+			},
+		},
+		{
+			name:   "groups sharing a reservation pass remaining unreserved nodes to fallback balancer",
+			groups: []cloudprovider.NodeGroup{mig1, mig1SameZone, mig1000_2},
+			upcomingNodeGroups: []cloudprovider.NodeGroup{
+				newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 1),
+			},
+			newNodes:         4,
+			fallbackBalancer: &nodegroupset.BalancingNodeGroupSetProcessor{},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 3),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
 				newTestScaleUpInfo(mig1SameZone, 3, 5, 10),
+				newTestScaleUpInfo(mig1000_2, 0, 2, 1000),
 			},
 			// The upcoming node group isn't subtracted from the puller, so 3 - 2 = 1 slot is left.
 			wantReservations: []*reservation.Reservation{
@@ -214,28 +215,18 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// store all mocks created throughout the test to verify their calls at the end
-			mocks := []*mock.Mock{}
-			registerMock := func(m *mock.Mock) {
-				mocks = append(mocks, m)
-			}
-
 			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
 				WithFetchZones(func(region string) ([]string, error) { return []string{"zone-a, zone-b"}, nil })
 			puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
 			puller.SetReservations(tc.reservations)
 
-			provider := &gke.GkeCloudProviderMock{}
-			provider.On("NodeGroups").Return(append(tc.groups, tc.upcomingNodeGroups...)).Once()
-			registerMock(&provider.Mock)
+			provider := newTestCloudProvider(append(tc.groups, tc.upcomingNodeGroups...)...)
 
-			fallbackBalancers := (nodegroupset.NodeGroupSetProcessor)(nil)
-			if tc.withFallbackBalancers != nil {
-				fallbackBalancers = tc.withFallbackBalancers(registerMock)
-			} else {
-				fallbackBalancers = &noopTestBalancingProcessor{}
+			fallbackBalancer := tc.fallbackBalancer
+			if fallbackBalancer == nil {
+				fallbackBalancer = &noopTestBalancingProcessor{}
 			}
-			processor := NewReservationBalancingProcessor(fallbackBalancers, puller, localssdsize.NewSimpleLocalSSDProvider(), provider)
+			processor := NewReservationBalancingProcessor(fallbackBalancer, puller, localssdsize.NewSimpleLocalSSDProvider(), provider)
 
 			autoscalingCtx := &autoscaling_context.AutoscalingContext{
 				CloudProvider: provider,
@@ -245,19 +236,17 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
 			assert.ElementsMatch(t, tc.wantReservations, puller.GetReservations())
-
-			for _, m := range mocks {
-				m.AssertExpectations(t)
-			}
 		})
 	}
 }
 
 func TestDistributeNewNodes(t *testing.T) {
 	mig1 := newTestNodeGroup("machine-type-2", "zone-a", 5, 10)
+	mig1SameZone := newNamedTestNodeGroup("mig-same-zone", "machine-type-2", "zone-a", 4, 10)
 	mig2 := newTestNodeGroup("machine-type-2", "zone-b", 3, 10)
 	mig3 := newTestNodeGroup("machine-type-2", "zone-c", 6, 10)
 	mig4 := newTestNodeGroup("machine-type-2", "zone-d", 3, 5)
+
 	testCases := []struct {
 		name           string
 		balancingInfos []*balancingInfo
@@ -268,62 +257,86 @@ func TestDistributeNewNodes(t *testing.T) {
 		{
 			name: "no reservations",
 			balancingInfos: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 0},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}},
 			},
 			newNodes: 10,
 			want: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 0},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}},
 			},
 			wantAddedNodes: 0,
 		},
 		{
 			name: "limited reservations in some zones not sufficient for the total scale up",
 			balancingInfos: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, unUsedReservationCount: 3},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 4},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 4)}},
 			},
 			newNodes: 10,
 			want: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 8, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, unUsedReservationCount: 0},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 10, MaxSize: 10}, unUsedReservationCount: 0},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 8, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 10, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 4)}},
 			},
 			wantAddedNodes: 7,
 		},
 		{
 			name: "enough reservations in all zones, sufficient for the total scale up",
 			balancingInfos: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, unUsedReservationCount: 10},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, unUsedReservationCount: 10},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 10},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 3, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(2, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 10)}},
 			},
 			newNodes: 4,
 			want: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 9},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 7},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 10},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig2, CurrentSize: 3, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(2, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 10)}},
 			},
 			wantAddedNodes: 4,
 		},
 		{
 			name: "enough reservations in all zones, respect node group max size",
 			balancingInfos: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, unUsedReservationCount: 10},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig4, CurrentSize: 3, NewSize: 3, MaxSize: 5}, unUsedReservationCount: 10},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, unUsedReservationCount: 10},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig4, CurrentSize: 3, NewSize: 3, MaxSize: 5}, matchingReservations: []*reservation.Reservation{newTestReservation(4, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 10)}},
 			},
 			newNodes: 5,
 			want: []*balancingInfo{
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 7, MaxSize: 10}, unUsedReservationCount: 8},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig4, CurrentSize: 3, NewSize: 5, MaxSize: 5}, unUsedReservationCount: 8},
-				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 7, MaxSize: 10}, unUsedReservationCount: 9},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 7, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig4, CurrentSize: 3, NewSize: 5, MaxSize: 5}, matchingReservations: []*reservation.Reservation{newTestReservation(4, 10)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig3, CurrentSize: 6, NewSize: 7, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(3, 10)}},
 			},
 			wantAddedNodes: 5,
+		},
+		{
+			name: "groups sharing a reservation don't double-allocate its slots",
+			balancingInfos: []*balancingInfo{
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1SameZone, CurrentSize: 4, NewSize: 4, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+			},
+			newNodes: 5,
+			want: []*balancingInfo{
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1SameZone, CurrentSize: 4, NewSize: 6, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 3)}},
+			},
+			wantAddedNodes: 3,
+		},
+		{
+			name: "node group matching multiple reservations claims slots from both",
+			balancingInfos: []*balancingInfo{
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 5, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 1), newTestReservation(2, 2)}},
+			},
+			newNodes: 5,
+			want: []*balancingInfo{
+				{scaleUpInfo: nodegroupset.ScaleUpInfo{Group: mig1, CurrentSize: 5, NewSize: 8, MaxSize: 10}, matchingReservations: []*reservation.Reservation{newTestReservation(1, 1), newTestReservation(2, 2)}},
+			},
+			wantAddedNodes: 3,
 		},
 	}
 
@@ -364,6 +377,25 @@ func (p *noopTestBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.Con
 
 func (p *noopTestBalancingProcessor) CleanUp() {}
 
+// failingTestBalancingProcessor returns an error if BalanceScaleUpBetweenGroups is called.
+type failingTestBalancingProcessor struct {
+	noopTestBalancingProcessor
+}
+
+func (p *failingTestBalancingProcessor) BalanceScaleUpBetweenGroups(context.Context, *autoscaling_context.AutoscalingContext, []cloudprovider.NodeGroup, int) ([]nodegroupset.ScaleUpInfo, auto_errors.AutoscalerError) {
+	return nil, auto_errors.NewAutoscalerError(auto_errors.InternalError, "fallback balancer should not be called")
+}
+
+func newTestCloudProvider(groups ...cloudprovider.NodeGroup) *gke.TestAutoprovisioningCloudProvider {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+	for _, ng := range groups {
+		provider.InsertNodeGroup(ng)
+	}
+	return provider
+}
+
 func newTestNodeGroup(machineType, zone string, currentSize, maxSize int) cloudprovider.NodeGroup {
 	return newNamedTestNodeGroup("", machineType, zone, currentSize, maxSize)
 }
@@ -381,6 +413,13 @@ func newTestScaleUpInfo(group cloudprovider.NodeGroup, currentSize, newSize, max
 		CurrentSize: currentSize,
 		NewSize:     newSize,
 		MaxSize:     maxSize,
+	}
+}
+
+func newTestReservation(id uint64, availableCount int64) *reservation.Reservation {
+	return &reservation.Reservation{
+		ID:                  id,
+		SpecificReservation: &reservation.SpecificReservation{AvailableCount: availableCount},
 	}
 }
 

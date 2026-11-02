@@ -117,10 +117,10 @@ func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovi
 			NewSize:     currentSize,
 			MaxSize:     group.MaxSize(context.TODO()),
 		}
-		matchingReservations := MatchingUnusedReservations(p.provider, group, reservations, p.localSSDDiskSizeProvider, false)
+		matchingReservations, _ := matchingUnusedReservations(p.provider, group, reservations, p.localSSDDiskSizeProvider, false)
 		balancingInfos = append(balancingInfos, &balancingInfo{
-			scaleUpInfo,
-			matchingReservations,
+			scaleUpInfo:          scaleUpInfo,
+			matchingReservations: matchingReservations,
 		})
 	}
 
@@ -129,10 +129,31 @@ func (p *ReservationBalancingProcessor) createBalancingInfos(groups []cloudprovi
 
 func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) ([]*balancingInfo, int) {
 	initialNodes := newNodes
+	claimed := make(map[uint64]int)
+
+	hasUnusedReservation := func(info *balancingInfo) bool {
+		for _, rsv := range info.matchingReservations {
+			if rsv.SpecificReservation != nil && claimed[rsv.ID] < int(rsv.SpecificReservation.AvailableCount) {
+				return true
+			}
+		}
+		return false
+	}
+
+	claimReservationSlot := func(info *balancingInfo) bool {
+		for _, rsv := range info.matchingReservations {
+			if rsv.SpecificReservation != nil && claimed[rsv.ID] < int(rsv.SpecificReservation.AvailableCount) {
+				claimed[rsv.ID]++
+				return true
+			}
+		}
+		return false
+	}
+
 	pq := make(balancingInfoPriorityQueue, 0)
 	heap.Init(&pq)
 	for _, info := range balancingInfos {
-		if info.unUsedReservationCount <= 0 {
+		if !hasUnusedReservation(info) {
 			continue
 		}
 		if info.scaleUpInfo.NewSize >= info.scaleUpInfo.MaxSize {
@@ -143,11 +164,13 @@ func distributeNewNodes(balancingInfos []*balancingInfo, newNodes int) ([]*balan
 
 	for pq.Len() > 0 && newNodes > 0 {
 		info := heap.Pop(&pq).(*balancingInfo)
-		info.scaleUpInfo.NewSize += 1
-		info.unUsedReservationCount -= 1
-		newNodes -= 1
+		if !claimReservationSlot(info) {
+			continue
+		}
+		info.scaleUpInfo.NewSize++
+		newNodes--
 
-		if info.unUsedReservationCount <= 0 {
+		if !hasUnusedReservation(info) {
 			continue
 		}
 		if info.scaleUpInfo.NewSize >= info.scaleUpInfo.MaxSize {
@@ -343,8 +366,8 @@ func filterEmptyScaleUpInfos(scaleUpInfos []nodegroupset.ScaleUpInfo) []nodegrou
 
 // balancingInfo contains balancing information about planned scale-up of a single NodeGroup.
 type balancingInfo struct {
-	scaleUpInfo            nodegroupset.ScaleUpInfo
-	unUsedReservationCount int
+	scaleUpInfo          nodegroupset.ScaleUpInfo
+	matchingReservations []*reservation.Reservation
 }
 
 // balancingInfoPriorityQueue implements heap.Interface and holds balancingInfo pointers.
