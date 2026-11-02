@@ -29,6 +29,7 @@ import (
 	resizerequestclient "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
+	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/provisioningrequest/pods"
 )
 
@@ -1064,7 +1065,154 @@ func TestGetRequirements(t *testing.T) {
 			if req.QueuedProvisioningReq != tc.expectedQueuedProvisioningReq {
 				t.Errorf("Expected queuedProvisioningReq %+v, got %+v", tc.expectedQueuedProvisioningReq, req.QueuedProvisioningReq)
 			}
+			if diff := cmp.Diff(podutils.PodRequests(tc.pod), req.PodRequests); diff != "" {
+				t.Errorf("Unexpected PodRequests (-want +got):\n%s", diff)
+			}
 		})
+	}
+}
+
+func TestGetRequirementsPodRequests(t *testing.T) {
+	tests := []struct {
+		name                string
+		pod                 *apiv1.Pod
+		expectedPodRequests apiv1.ResourceList
+	}{
+		{
+			name:                "pod without containers",
+			pod:                 &apiv1.Pod{},
+			expectedPodRequests: apiv1.ResourceList{},
+		},
+		{
+			name: "pod with requests summed across containers",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					Containers: []apiv1.Container{
+						{
+							Resources: apiv1.ResourceRequirements{
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceCPU:                    resource.MustParse("1"),
+									apiv1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+								},
+							},
+						},
+						{
+							Resources: apiv1.ResourceRequirements{
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceCPU:                    resource.MustParse("2"),
+									apiv1.ResourceName("nvidia.com/gpu"): resource.MustParse("3"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPodRequests: apiv1.ResourceList{
+				apiv1.ResourceCPU:                    resource.MustParse("3"),
+				apiv1.ResourceName("nvidia.com/gpu"): resource.MustParse("4"),
+			},
+		},
+		{
+			name: "pod with init container requesting more than regular containers",
+			pod: &apiv1.Pod{
+				Spec: apiv1.PodSpec{
+					InitContainers: []apiv1.Container{
+						{
+							Resources: apiv1.ResourceRequirements{
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceMemory: resource.MustParse("8Gi"),
+								},
+							},
+						},
+					},
+					Containers: []apiv1.Container{
+						{
+							Resources: apiv1.ResourceRequirements{
+								Requests: apiv1.ResourceList{
+									apiv1.ResourceMemory: resource.MustParse("1Gi"),
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPodRequests: apiv1.ResourceList{
+				apiv1.ResourceMemory: resource.MustParse("8Gi"),
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := GetRequirements(tc.pod)
+			if req.PodRequests == nil {
+				t.Fatalf("Expected PodRequests to be populated, got nil")
+			}
+			if len(req.PodRequests) != len(tc.expectedPodRequests) {
+				t.Fatalf("Expected PodRequests %v, got %v", tc.expectedPodRequests, req.PodRequests)
+			}
+			for name, want := range tc.expectedPodRequests {
+				got, ok := req.PodRequests[name]
+				if !ok || got.Cmp(want) != 0 {
+					t.Errorf("Expected PodRequests[%q] = %s, got %s (present: %v)", name, want.String(), got.String(), ok)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkGetRequirements(b *testing.B) {
+	pod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "default",
+			Name:      "bench-pod",
+		},
+		Spec: apiv1.PodSpec{
+			NodeSelector: map[string]string{
+				gkelabels.GPULabel:          "nvidia-tesla-a100",
+				gkelabels.ComputeClassLabel: "gpu-ccc",
+				"workload":                  "wl-1",
+			},
+			Tolerations: []apiv1.Toleration{
+				{Key: "nvidia.com/gpu", Operator: apiv1.TolerationOpExists, Effect: apiv1.TaintEffectNoSchedule},
+				{Key: "workload", Operator: apiv1.TolerationOpEqual, Value: "wl-1", Effect: apiv1.TaintEffectNoSchedule},
+			},
+			InitContainers: []apiv1.Container{
+				{
+					Resources: apiv1.ResourceRequirements{
+						Requests: apiv1.ResourceList{
+							apiv1.ResourceCPU: resource.MustParse("500m"),
+						},
+					},
+				},
+			},
+			Containers: []apiv1.Container{
+				{
+					Resources: apiv1.ResourceRequirements{
+						Requests: apiv1.ResourceList{
+							apiv1.ResourceCPU:                    resource.MustParse("1"),
+							apiv1.ResourceMemory:                 resource.MustParse("4Gi"),
+							apiv1.ResourceName("nvidia.com/gpu"): resource.MustParse("1"),
+						},
+					},
+				},
+				{
+					Resources: apiv1.ResourceRequirements{
+						Requests: apiv1.ResourceList{
+							apiv1.ResourceCPU:    resource.MustParse("250m"),
+							apiv1.ResourceMemory: resource.MustParse("512Mi"),
+						},
+					},
+				},
+			},
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		req := GetRequirements(pod)
+		if req == nil {
+			b.Fatal("expected non-nil requirements")
+		}
 	}
 }
 

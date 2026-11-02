@@ -164,7 +164,11 @@ type Requirements struct {
 	// Toleration lists all tolerations for "hard" (not preferred) taints.
 	Tolerations []apiv1.Toleration
 	// LabelReq contains scheduling label requirements of a pod.
-	LabelReq                    LabelRequirements
+	LabelReq LabelRequirements
+	// PodRequests contains the aggregated resource requests of the pod, as
+	// computed by podutils.PodRequests. It is retained so that callers do not
+	// need to recompute it.
+	PodRequests                 apiv1.ResourceList
 	PodCapacity                 string
 	NetworkingReq               NetworkingRequirements
 	NetworkingAnnotation        string
@@ -280,7 +284,8 @@ func GetRequirements(pod *apiv1.Pod) *Requirements {
 		labelReq[k] = affinityVal
 	}
 
-	podCap := getPodPerVMRequirements(pod)
+	podRequests := podutils.PodRequests(pod)
+	podCap := getPodPerVMRequirements(podRequests)
 
 	var queuedProvisioningReq QueuedProvisioningRequirements
 	prName, prFound := provreq_pods.ProvisioningRequestName(pod)
@@ -305,8 +310,9 @@ func GetRequirements(pod *apiv1.Pod) *Requirements {
 	return &Requirements{
 		Tolerations:                 getTolerations(pod),
 		LabelReq:                    LabelRequirements{req: labelReq},
+		PodRequests:                 podRequests,
 		PodCapacity:                 podCap,
-		NetworkingReq:               getNetworkingRequirements(pod),
+		NetworkingReq:               getNetworkingRequirements(podRequests),
 		NetworkingAnnotation:        networkingAnnotation,
 		QueuedProvisioningReq:       queuedProvisioningReq,
 		DiskEncryptionKeyAnnotation: diskEncryptionKeyAnnotation,
@@ -343,8 +349,7 @@ func getResourceLabel(labelKey string, annotations map[string]string) (string, e
 
 // getPodPerVMRequirements returns the pod-per-vm capacity value requested
 // as a string or empty string if non pod-per-vm capacity is requested.
-func getPodPerVMRequirements(pod *apiv1.Pod) string {
-	podRequests := podutils.PodRequests(pod)
+func getPodPerVMRequirements(podRequests apiv1.ResourceList) string {
 	podSlotCount := podRequests[gkelabels.PodCapacityLabel]
 
 	if podSlotCount.Value() != 0 {
@@ -355,8 +360,8 @@ func getPodPerVMRequirements(pod *apiv1.Pod) string {
 
 // getNetworkingRequirements returns AdditionalNetworkResources associated with
 // a given pod based on resource requests of pod containers.
-func getNetworkingRequirements(pod *apiv1.Pod) NetworkingRequirements {
-	networks := networkingutils.GetNetworkResourcesNamesFromResourceList(podutils.PodRequests(pod))
+func getNetworkingRequirements(podRequests apiv1.ResourceList) NetworkingRequirements {
+	networks := networkingutils.GetNetworkResourcesNamesFromResourceList(podRequests)
 
 	res := NetworkingRequirements{}
 	res.AdditionalNetworkResources = append(res.AdditionalNetworkResources, networks...)
