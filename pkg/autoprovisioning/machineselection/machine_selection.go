@@ -87,10 +87,6 @@ func (s Selector) selectMachineSpec(
 	if err != nil {
 		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
 	}
-	minCpuPlatform, err := s.selectMinCpuPlatform(families, labelReq, rule)
-	if err != nil {
-		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
-	}
 	var explicitMachineTypes []string
 	if reservationMachineType != "" {
 		explicitMachineTypes = []string{reservationMachineType}
@@ -106,6 +102,10 @@ func (s Selector) selectMachineSpec(
 	}
 	if rule != nil && rule.MachineType() != "" {
 		explicitMachineTypes = []string{rule.MachineType()}
+	}
+	minCpuPlatform, err := s.selectMinCpuPlatform(families, labelReq, rule, explicitMachineTypes)
+	if err != nil {
+		return machinetypes.MachineSpec{}, machinetypes.SelectionTypeNone, err
 	}
 	var bootDiskStoragePools []string
 	var bootDiskProvisionedIops, bootDiskProvisionedThroughput int64
@@ -269,7 +269,7 @@ func (s Selector) selectMachineGroup(labelReq podrequirements.LabelRequirements,
 
 // selectMinCpuPlatform selects a min_cpu_platform to be used for NAP node groups.
 // Note: The returned platform is not necessarily validated here (even against the provided family).
-func (s Selector) selectMinCpuPlatform(families []machinetypes.MachineFamily, labelReq podrequirements.LabelRequirements, rule rules.Rule) (machinetypes.CpuPlatform, errors.AutoscalerError) {
+func (s Selector) selectMinCpuPlatform(families []machinetypes.MachineFamily, labelReq podrequirements.LabelRequirements, rule rules.Rule, explicitMachineTypes []string) (machinetypes.CpuPlatform, errors.AutoscalerError) {
 	// If the pods have a corresponding CRD rule, always try to use it. If it's not supported on the chosen
 	// family, we'll fail during validation. In case of any errors here we want to error out to provide
 	// an explicit error for this pod.
@@ -304,7 +304,7 @@ func (s Selector) selectMinCpuPlatform(families []machinetypes.MachineFamily, la
 		var names []string
 		for _, family := range families {
 			names = append(names, family.Name())
-			if family.IsPlatformSupported(clusterWidePlatform) {
+			if family.IsPlatformSupported(clusterWidePlatform, explicitMachineTypes...) {
 				return clusterWidePlatform, nil
 			}
 		}
@@ -493,7 +493,10 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	if len(family.AutoprovisionedMachineTypes(machinetypes.NoConstraints)) == 0 {
 		return NewMachineFamilyNotSupportedError(family.Name())
 	}
-	if !family.IsPlatformSupported(spec.MinCpuPlatform) {
+	if len(spec.ExplicitMachineTypes) > 0 && !family.AreMachineTypesSupported(spec.ExplicitMachineTypes) {
+		return NewMachineTypesUnsupportedByFamilyError(spec.ExplicitMachineTypes, machineGroupName)
+	}
+	if spec.MinCpuPlatform != machinetypes.AnyPlatform && !family.IsPlatformSupported(spec.MinCpuPlatform, spec.ExplicitMachineTypes...) {
 		return NewMinCpuPlatformInvalidError(machineGroupName, machinetypes.CpuPlatformDebugName(spec.MinCpuPlatform))
 	}
 	if !family.IsGpuTypeSupported(spec.GpuType) {
@@ -502,13 +505,13 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	if !family.IsTpuTypeSupported(spec.TpuType) {
 		return NewTpuIncompatibleError(machineGroupName, spec.TpuType)
 	}
-	if !family.IsDiskTypeSupported(spec.BootDiskType) {
+	if spec.BootDiskType != "" && !family.IsDiskTypeSupported(spec.BootDiskType, spec.ExplicitMachineTypes...) {
 		return NewBootDiskTypeIncompatibleError(machineGroupName, spec.BootDiskType)
 	}
-	if len(spec.BootDiskStoragePools) > 0 && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced) {
+	if len(spec.BootDiskStoragePools) > 0 && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced, spec.ExplicitMachineTypes...) {
 		return NewBootDiskTypeIncompatibleError(machineGroupName, machinetypes.DiskTypeHyperdiskBalanced)
 	}
-	if (spec.BootDiskProvisionedIops > 0 || spec.BootDiskProvisionedThroughput > 0) && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced) {
+	if (spec.BootDiskProvisionedIops > 0 || spec.BootDiskProvisionedThroughput > 0) && !family.IsDiskTypeSupported(machinetypes.DiskTypeHyperdiskBalanced, spec.ExplicitMachineTypes...) {
 		return NewBootDiskTypeIncompatibleError(machineGroupName, machinetypes.DiskTypeHyperdiskBalanced)
 	}
 	// K80 has some additional restrictions on min_cpu_platform.
@@ -530,9 +533,6 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 		}
 		sort.Strings(archNames)
 		return NewSystemArchitectureIncompatibleError(machineGroupName, strings.Join(archNames, ","))
-	}
-	if len(spec.ExplicitMachineTypes) > 0 && !family.AreMachineTypesSupported(spec.ExplicitMachineTypes) {
-		return NewMachineTypesUnsupportedByFamilyError(spec.ExplicitMachineTypes, machineGroupName)
 	}
 	constraints := machinetypes.Constraints{
 		CpuPlatform:               spec.MinCpuPlatform,

@@ -317,9 +317,10 @@ func TestGetMachineFamilyFromMachineName(t *testing.T) {
 
 func TestIsPlatformSupported(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		family   MachineFamily
-		platform CpuPlatform
-		expected bool
+		family       MachineFamily
+		platform     CpuPlatform
+		machineTypes []string
+		expected     bool
 	}{
 		"no autoprovisioned machine types defined - no platform supported": {
 			family: MachineFamily{
@@ -439,9 +440,21 @@ func TestIsPlatformSupported(t *testing.T) {
 			platform: IntelIvyBridge,
 			expected: true,
 		},
+		"platform on explicitReqOnly shape unsupported without explicit machine types": {
+			family:       C4,
+			platform:     IntelEmeraldRapids,
+			machineTypes: []string{"c4-standard-288-metal"},
+			expected:     false,
+		},
+		"platform on explicitReqOnly shape supported when explicit machine type specified": {
+			family:       C4,
+			platform:     IntelGraniteRapids,
+			machineTypes: []string{"c4-standard-288-metal"},
+			expected:     true,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			got := tc.family.IsPlatformSupported(tc.platform)
+			got := tc.family.IsPlatformSupported(tc.platform, tc.machineTypes...)
 			assert.Equal(t, tc.expected, got)
 		})
 	}
@@ -580,9 +593,10 @@ func TestIsGpuTypeSupported(t *testing.T) {
 
 func TestIsDiskTypeSupported(t *testing.T) {
 	for tn, tc := range map[string]struct {
-		family   MachineFamily
-		diskType string
-		expected bool
+		family       MachineFamily
+		diskType     string
+		machineTypes []string
+		expected     bool
 	}{
 		"machine family: C2 - supports pd-standard": {
 			family:   C2,
@@ -629,10 +643,22 @@ func TestIsDiskTypeSupported(t *testing.T) {
 			diskType: DiskTypeHyperdiskBalanced,
 			expected: true,
 		},
+		"disk on explicitReqOnly shape unsupported without explicit machine types": {
+			family:       A3,
+			diskType:     DiskTypeSSD,
+			machineTypes: []string{"a3-ultragpu-8g-nolssd"},
+			expected:     false,
+		},
+		"disk on explicitReqOnly shape supported when explicit machine type specified": {
+			family:       A3,
+			diskType:     DiskTypeHyperdiskBalanced,
+			machineTypes: []string{"a3-ultragpu-8g-nolssd"},
+			expected:     true,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
 
-			got := tc.family.IsDiskTypeSupported(tc.diskType)
+			got := tc.family.IsDiskTypeSupported(tc.diskType, tc.machineTypes...)
 			assert.Equal(t, tc.expected, got, "Machine family: %v", tc.family)
 
 		})
