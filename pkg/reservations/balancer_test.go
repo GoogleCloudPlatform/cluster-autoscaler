@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -41,6 +42,28 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 	mig1000_2 := newTestNodeGroup("machine-type-2", "zone-b", 0, 1000)
 	mig1000_3 := newTestNodeGroup("machine-type-2", "zone-c", 0, 1000)
 	mig1SameZone := newNamedTestNodeGroup("mig-same-zone", "machine-type-2", "zone-a", 3, 10)
+	mig1Size6 := newTestNodeGroup("machine-type-2", "zone-a", 6, 10)
+	mig1Size7 := newTestNodeGroup("machine-type-2", "zone-a", 7, 10)
+	upcomingSize0 := newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 0)
+	upcomingSize2 := newUpcomingTestNodeGroup("upcoming", "machine-type-2", "zone-a", 10, 2)
+	// upcomingInitialized is the upcomingSize0 node group after it got scaled up to 3 nodes and
+	// its node pool got created and initialized, so it is no longer upcoming.
+	upcomingInitialized := newNamedTestNodeGroup("upcoming", "machine-type-2", "zone-a", 3, 10)
+	assert.Equal(t, upcomingSize0.Id(), upcomingInitialized.Id())
+
+	// followingLoop describes a call to BalanceScaleUpBetweenGroups in a following autoscaling
+	// loop, made on the same processor and puller.
+	type followingLoop struct {
+		// updatedNodeGroups replace node groups with the same ID in the cloud provider.
+		updatedNodeGroups []cloudprovider.NodeGroup
+		// refreshedReservations, if not nil, are reservations the puller refreshed from GCE
+		// since the previous loop.
+		refreshedReservations []*reservation.Reservation
+		groups                []cloudprovider.NodeGroup
+		newNodes              int
+		wantScaleUpInfo       []nodegroupset.ScaleUpInfo
+		wantReservations      []*reservation.Reservation
+	}
 
 	testCases := []struct {
 		name               string
@@ -51,6 +74,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 		newNodes           int
 		wantScaleUpInfo    []nodegroupset.ScaleUpInfo
 		wantReservations   []*reservation.Reservation
+		followingLoops     []followingLoop
 	}{
 		{
 			name: "single group, no reservations",
@@ -211,6 +235,94 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 0),
 			},
 		},
+		{
+			// Newly created async node group (IsUpcoming == true, TargetSize == 0) scales up 0 -> 2.
+			// The puller is updated, so that all its other users see the slots as used.
+			name:     "upcoming node group scaled up in a previous loop is not subtracted twice",
+			groups:   []cloudprovider.NodeGroup{upcomingSize0},
+			newNodes: 2,
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 4),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(upcomingSize0, 0, 2, 10),
+			},
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 2),
+			},
+			followingLoops: []followingLoop{
+				{
+					// Before puller refresh: the upcoming node group now reports TargetSize == 2. Its
+					// nodes are already subtracted from the puller, so mig1 sees 2 available slots (not 0).
+					updatedNodeGroups: []cloudprovider.NodeGroup{upcomingSize2, mig1},
+					groups:            []cloudprovider.NodeGroup{mig1},
+					newNodes:          1,
+					wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+						newTestScaleUpInfo(mig1, 5, 6, 10),
+					},
+					wantReservations: []*reservation.Reservation{
+						BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 1),
+					},
+				},
+				{
+					// Before puller refresh: the upcoming nodes are still not subtracted twice after
+					// the balancer itself updated the puller, so the last slot is available.
+					updatedNodeGroups: []cloudprovider.NodeGroup{mig1Size6},
+					groups:            []cloudprovider.NodeGroup{mig1Size6},
+					newNodes:          4,
+					wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+						newTestScaleUpInfo(mig1Size6, 6, 7, 10),
+					},
+					wantReservations: []*reservation.Reservation{
+						BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 0),
+					},
+				},
+				{
+					// After puller refresh: GCE reports the 2 VMs of mig1 as using the reservation, but
+					// the node pool is still being created. The refreshed reservation doesn't include
+					// the upcoming nodes, so they are subtracted on the fly and no slots are available.
+					updatedNodeGroups: []cloudprovider.NodeGroup{mig1Size7},
+					refreshedReservations: []*reservation.Reservation{
+						BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 2),
+					},
+					groups:          []cloudprovider.NodeGroup{mig1Size7},
+					newNodes:        2,
+					wantScaleUpInfo: []nodegroupset.ScaleUpInfo{},
+					wantReservations: []*reservation.Reservation{
+						BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 2),
+					},
+				},
+			},
+		},
+		{
+			name:     "upcoming node group initialized before puller refresh keeps its slots",
+			groups:   []cloudprovider.NodeGroup{upcomingSize0},
+			newNodes: 3,
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 4),
+			},
+			wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+				newTestScaleUpInfo(upcomingSize0, 0, 3, 10),
+			},
+			wantReservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 1),
+			},
+			followingLoops: []followingLoop{
+				{
+					// Before puller refresh: the node group is no longer upcoming. Its slots must
+					// stay subtracted, leaving a single slot for mig1.
+					updatedNodeGroups: []cloudprovider.NodeGroup{upcomingInitialized, mig1},
+					groups:            []cloudprovider.NodeGroup{mig1},
+					newNodes:          3,
+					wantScaleUpInfo: []nodegroupset.ScaleUpInfo{
+						newTestScaleUpInfo(mig1, 5, 6, 10),
+					},
+					wantReservations: []*reservation.Reservation{
+						BuildAvailableReservationWithID(1, "machine-type-2", "zone-a", 0),
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -236,6 +348,19 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 			assert.Equal(t, len(tc.wantScaleUpInfo), len(scaleUpInfos))
 			assert.ElementsMatch(t, tc.wantScaleUpInfo, scaleUpInfos)
 			assert.ElementsMatch(t, tc.wantReservations, puller.GetReservations())
+
+			for i, loop := range tc.followingLoops {
+				for _, ng := range loop.updatedNodeGroups {
+					provider.InsertNodeGroup(ng)
+				}
+				if loop.refreshedReservations != nil {
+					puller.SetReservations(loop.refreshedReservations)
+				}
+				scaleUpInfos, err := processor.BalanceScaleUpBetweenGroups(context.TODO(), autoscalingCtx, loop.groups, loop.newNodes)
+				assert.NoError(t, err, "following loop %d", i)
+				assert.ElementsMatch(t, loop.wantScaleUpInfo, scaleUpInfos, "following loop %d", i)
+				assert.ElementsMatch(t, loop.wantReservations, puller.GetReservations(), "following loop %d", i)
+			}
 		})
 	}
 }
@@ -430,6 +555,7 @@ func TestUpdateReservations(t *testing.T) {
 	spec := &gkeclient.NodePoolSpec{MachineType: matching}
 	migA := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-A").Build()
 	migA2 := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-A").SetGceRefName("mig-a-2").Build()
+	upcomingMigA := newUpcomingTestNodeGroup("upcoming-a", matching, "zone-A", 10, 0)
 	migB := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-B").Build()
 	migC := gke.NewTestGkeMigBuilder().SetSpec(spec).SetGceRefZone("zone-C").Build()
 
@@ -439,6 +565,9 @@ func TestUpdateReservations(t *testing.T) {
 		reservations               []*reservation.Reservation
 		consumedReservations       map[uint64]int
 		wantReservationsPostUpdate []*reservation.Reservation
+		// wantUpcomingDeductions is the expected number of slots recorded as subtracted for
+		// upcoming node groups, by reservation ID and node group ID.
+		wantUpcomingDeductions map[uint64]map[string]int
 	}{
 		{
 			name:         "No scale up info",
@@ -550,6 +679,47 @@ func TestUpdateReservations(t *testing.T) {
 				BuildAvailableReservationWithID(1, matching, "zone-A", 1),
 			},
 		},
+		{
+			name: "Upcoming node group decrements pulled reservations",
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{Group: upcomingMigA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+			},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 4),
+			},
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 2),
+			},
+			wantUpcomingDeductions: map[uint64]map[string]int{1: {upcomingMigA.Id(): 2}},
+		},
+		{
+			name: "Upcoming node group scaled up before sibling node group",
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{Group: upcomingMigA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+				{Group: migA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+			},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 3),
+			},
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 0),
+			},
+			wantUpcomingDeductions: map[uint64]map[string]int{1: {upcomingMigA.Id(): 2}},
+		},
+		{
+			name: "Upcoming node group scaled up after sibling node group",
+			scaleUpInfos: []nodegroupset.ScaleUpInfo{
+				{Group: migA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+				{Group: upcomingMigA, CurrentSize: 0, NewSize: 2, MaxSize: 10},
+			},
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 3),
+			},
+			wantReservationsPostUpdate: []*reservation.Reservation{
+				BuildAvailableReservationWithID(1, matching, "zone-A", 0),
+			},
+			wantUpcomingDeductions: map[uint64]map[string]int{1: {upcomingMigA.Id(): 1}},
+		},
 	}
 
 	cloneReservations := func(src []*reservation.Reservation) []*reservation.Reservation {
@@ -578,6 +748,13 @@ func TestUpdateReservations(t *testing.T) {
 
 			if diff := cmp.Diff(tc.wantReservationsPostUpdate, reservations); diff != "" {
 				t.Errorf("updateReservations() diff (-want +got):\n%s", diff)
+			}
+			gotUpcomingDeductions := map[uint64]map[string]int{}
+			for id, deduction := range processor.upcomingDeductions {
+				gotUpcomingDeductions[id] = deduction.nodes
+			}
+			if diff := cmp.Diff(tc.wantUpcomingDeductions, gotUpcomingDeductions, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("updateReservations() upcoming deductions diff (-want +got):\n%s", diff)
 			}
 			if diff := cmp.Diff(wantPulledInput, pulledRsvs); diff != "" {
 				t.Errorf("updateReservations() modified pulledReservations in place, diff (-want +got):\n%s", diff)
