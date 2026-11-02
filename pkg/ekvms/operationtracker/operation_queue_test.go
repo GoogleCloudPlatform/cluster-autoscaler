@@ -50,58 +50,66 @@ func TestEnqueue(t *testing.T) {
 		return ops
 	}
 
-	fixOp := operation{fix: &fixOperation{NodeName: node.Name}}
+	fixOp := newFixOp(node.Name)
 
 	testCases := []struct {
-		desc                 string
-		operations           []operation
-		expectedUpsizesCount int
+		desc           string
+		operations     []operation
+		wantOperations []operation
 	}{
 		{
-			desc:                 "empty operations",
-			operations:           []operation{},
-			expectedUpsizesCount: 0,
+			desc:           "empty operations",
+			operations:     []operation{},
+			wantOperations: nil,
 		},
 		{
-			desc:                 "fix operations only",
-			operations:           []operation{fixOp, fixOp, fixOp},
-			expectedUpsizesCount: 0,
+			desc:           "fix operations only",
+			operations:     []operation{fixOp, fixOp, fixOp},
+			wantOperations: []operation{fixOp},
 		},
 		{
-			desc:                 "upsizes only",
-			operations:           newOperationsForResize(newSize(100, 100), newSize(200, 200), newSize(400, 800)),
-			expectedUpsizesCount: 1,
+			desc:           "upsizes only",
+			operations:     newOperationsForResize(newSize(100, 100), newSize(200, 200), newSize(400, 800)),
+			wantOperations: newOperationsForResize(newSize(100, 100), newSize(400, 800)),
 		},
 		{
-			desc:                 "downsizes only",
-			operations:           []operation{fixOp, newOperationForResize(newSize(200, 200), newSize(100, 100))},
-			expectedUpsizesCount: 0,
+			desc:           "downsizes only",
+			operations:     []operation{fixOp, newOperationForResize(newSize(200, 200), newSize(100, 100))},
+			wantOperations: newOperationsForResize(newSize(200, 200), newSize(100, 100)),
 		},
 		{
-			desc:                 "mixed operations",
-			operations:           newOperationsForResize(newSize(100, 100), newSize(200, 400), newSize(150, 50)),
-			expectedUpsizesCount: 1,
+			desc:           "mixed operations",
+			operations:     newOperationsForResize(newSize(100, 100), newSize(200, 400), newSize(150, 50)),
+			wantOperations: newOperationsForResize(newSize(100, 100), newSize(150, 100), newSize(150, 50)),
 		},
 		{
-			desc:                 "upsize+downsize -> downsize",
-			operations:           newOperationsForResize(newSize(200, 200), newSize(200, 400), newSize(100, 100)),
-			expectedUpsizesCount: 0,
+			desc:           "upsize+downsize -> downsize",
+			operations:     newOperationsForResize(newSize(200, 200), newSize(200, 400), newSize(100, 100)),
+			wantOperations: newOperationsForResize(newSize(200, 200), newSize(100, 100)),
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("Enqueue: %s", tc.desc), func(t *testing.T) {
 			opQueue := newOperationQueue("test")
+			defer opQueue.ShutDown()
+
 			for _, op := range tc.operations {
 				opQueue.Enqueue(op)
 			}
-			assert.Equal(t, tc.expectedUpsizesCount, opQueue.upsizeCounter)
+
+			gotOperations := popOperations(t, opQueue, len(tc.wantOperations))
+			assert.Equal(t, tc.wantOperations, gotOperations)
 		})
-		t.Run(fmt.Sprintf("EnqueueAfter one second: %s", tc.desc), func(t *testing.T) {
+		t.Run(fmt.Sprintf("EnqueueAfter: %s", tc.desc), func(t *testing.T) {
 			opQueue := newOperationQueue("test")
+			defer opQueue.ShutDown()
+
 			for _, op := range tc.operations {
-				opQueue.EnqueueAfter(op, 1*time.Second)
+				opQueue.EnqueueAfter(op, 10*time.Millisecond)
 			}
-			assert.Equal(t, tc.expectedUpsizesCount, opQueue.upsizeCounter)
+
+			gotOperations := popOperations(t, opQueue, len(tc.wantOperations))
+			assert.Equal(t, tc.wantOperations, gotOperations)
 		})
 	}
 }
@@ -109,9 +117,10 @@ func TestEnqueue(t *testing.T) {
 func TestMixOfEnqueueAndEnqueueAfter(t *testing.T) {
 	node := test.BuildTestNode("node1", 1000, 1024)
 
-	fixOp := operation{fix: &fixOperation{NodeName: node.Name}}
+	fixOp := newFixOp(node.Name)
 
 	opQueue := newOperationQueue("test")
+	defer opQueue.ShutDown()
 	opQueue.EnqueueAfter(fixOp, 1*time.Hour)
 	opQueue.Enqueue(fixOp)
 
@@ -125,7 +134,7 @@ func TestEnqueueFront(t *testing.T) {
 	node := test.BuildTestNode("node1", 1000, 1024)
 
 	fixOp := operation{fix: &fixOperation{NodeName: node.Name, MachineFamily: "ek"}}
-	resizeOp := operation{resize: &ResizeOperation{NodeName: node.Name, StartingSize: newSize(100, 100), DesiredSize: newSize(200, 200)}}
+	resizeOp := newResizeOp(node.Name, 100, 200)
 
 	opQueue := newOperationQueue("test")
 	defer opQueue.ShutDown()
@@ -183,15 +192,15 @@ func TestGetUpsizesFirst(t *testing.T) {
 	}
 
 	upsize := func(node *v1.Node) operation {
-		return operation{resize: &ResizeOperation{NodeName: node.Name, StartingSize: newSize(100, 100), DesiredSize: newSize(200, 200)}}
+		return newResizeOp(node.Name, 100, 200)
 	}
 
 	downsize := func(node *v1.Node) operation {
-		return operation{resize: &ResizeOperation{NodeName: node.Name, StartingSize: newSize(200, 200), DesiredSize: newSize(100, 100)}}
+		return newResizeOp(node.Name, 200, 100)
 	}
 
 	fix := func(node *v1.Node) operation {
-		return operation{fix: &fixOperation{NodeName: node.Name}}
+		return newFixOp(node.Name)
 	}
 
 	ops := []operation{
@@ -219,7 +228,6 @@ func TestGetUpsizesFirst(t *testing.T) {
 			break
 		}
 
-		assert.True(t, opQueue.upsizeCounter >= 0)
 		if operationCounter < upsizesCount {
 			assert.True(t, isUpsize(operation))
 		} else {
@@ -231,7 +239,107 @@ func TestGetUpsizesFirst(t *testing.T) {
 	}
 
 	opQueue.ShutDown()
-	assert.Equal(t, operationCounter, len(ops))
+	assert.Equal(t, len(ops), operationCounter)
+}
+
+func TestEnqueueAfterWithUpsizes(t *testing.T) {
+	t.Run("delayed_upsize_does_not_block_ready_non_upsizes", func(t *testing.T) {
+		opQueue := newOperationQueue("test")
+		defer opQueue.ShutDown()
+
+		opQueue.EnqueueAfter(newResizeOp("node1", 100, 200), 1*time.Hour)
+		opQueue.Enqueue(newResizeOp("node2", 200, 100))
+		opQueue.Enqueue(newFixOp("node3"))
+
+		wantOperations := []operation{newResizeOp("node2", 200, 100), newFixOp("node3")}
+		gotOperations := popOperations(t, opQueue, len(wantOperations))
+		assert.Equal(t, wantOperations, gotOperations)
+	})
+
+	t.Run("delayed_upsize_preempts_non_upsize_once_ready", func(t *testing.T) {
+		opQueue := newOperationQueue("test")
+		defer opQueue.ShutDown()
+
+		opQueue.Enqueue(newResizeOp("node2", 200, 100))
+		opQueue.EnqueueAfter(newResizeOp("node1", 100, 200), 20*time.Millisecond)
+		time.Sleep(40 * time.Millisecond)
+
+		wantOperations := []operation{newResizeOp("node1", 100, 200), newResizeOp("node2", 200, 100)}
+		gotOperations := popOperations(t, opQueue, len(wantOperations))
+		assert.Equal(t, wantOperations, gotOperations)
+	})
+}
+
+func TestGetPriorityDowngrade(t *testing.T) {
+	testCases := []struct {
+		name              string
+		enqueueOperations []operation
+		clearNodeName     string
+		postClearEnqueue  []operation
+		wantOperations    []operation
+	}{
+		{
+			name: "upsize_squashed_into_net_downsize",
+			enqueueOperations: []operation{
+				newResizeOp("node1", 100, 200),
+				newResizeOp("node2", 200, 100),
+				newResizeOp("node1", 200, 50),
+				newResizeOp("node3", 100, 200),
+			},
+			wantOperations: []operation{
+				newResizeOp("node3", 100, 200),
+				newResizeOp("node2", 200, 100),
+				newResizeOp("node1", 100, 50),
+			},
+		},
+		{
+			name: "upsize_overridden_by_reconcile_node_state",
+			enqueueOperations: []operation{
+				newResizeOp("node1", 100, 200),
+				newReconcileOp("node1"),
+				newResizeOp("node2", 100, 200),
+			},
+			wantOperations: []operation{
+				newResizeOp("node2", 100, 200),
+				newReconcileOp("node1"),
+			},
+		},
+		{
+			name: "upsize_cleared_and_replaced_by_fix",
+			enqueueOperations: []operation{
+				newResizeOp("node1", 100, 200),
+			},
+			clearNodeName: "node1",
+			postClearEnqueue: []operation{
+				newFixOp("node1"),
+				newResizeOp("node2", 100, 200),
+			},
+			wantOperations: []operation{
+				newResizeOp("node2", 100, 200),
+				newFixOp("node1"),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			opQueue := newOperationQueue("test")
+			defer opQueue.ShutDown()
+
+			for _, op := range tc.enqueueOperations {
+				opQueue.Enqueue(op)
+			}
+			if tc.clearNodeName != "" {
+				opQueue.ClearResizeOperations(tc.clearNodeName)
+			}
+			for _, op := range tc.postClearEnqueue {
+				opQueue.Enqueue(op)
+			}
+
+			gotOperations := popOperations(t, opQueue, len(tc.wantOperations))
+			assert.Equal(t, tc.wantOperations, gotOperations)
+		})
+	}
 }
 
 func TestMultipleWorkerProcessSingleNodeOperationsSequentially(t *testing.T) {
@@ -314,7 +422,7 @@ func TestClearNodeQueue(t *testing.T) {
 
 	node := test.BuildTestNode("node1", 1000, 1024)
 	op1 := operation{resize: &ResizeOperation{NodeName: node.Name}}
-	wantOp := operation{fix: &fixOperation{NodeName: node.Name}}
+	wantOp := newFixOp(node.Name)
 
 	opQueue.Enqueue(op1)
 	opQueue.ClearResizeOperations(node.Name)
@@ -453,7 +561,7 @@ func TestIsNodeResizingOrPending(t *testing.T) {
 	assert.Equal(t, opQueue.IsNodeResizingOrPending(nodeName), false)
 
 	// Fix operation is in progress
-	opQueue.Enqueue(operation{fix: &fixOperation{NodeName: nodeName}})
+	opQueue.Enqueue(newFixOp(nodeName))
 	fixOp, _ := opQueue.Get()
 	assert.Equal(t, opQueue.IsNodeResizingOrPending(nodeName), false)
 	opQueue.Done(fixOp)
@@ -469,4 +577,43 @@ func TestIsNodeResizingOrPending(t *testing.T) {
 	// Resize operation is finished
 	opQueue.Done(resizeOp)
 	assert.Equal(t, opQueue.IsNodeInProcess(nodeName), false)
+}
+
+func newResizeOp(nodeName string, from, to int64) operation {
+	return operation{
+		resize: &ResizeOperation{
+			NodeName:     nodeName,
+			StartingSize: newSize(from, from),
+			DesiredSize:  newSize(to, to),
+		},
+	}
+}
+
+func newFixOp(nodeName string) operation {
+	return operation{
+		fix: &fixOperation{
+			NodeName: nodeName,
+		},
+	}
+}
+
+func newReconcileOp(nodeName string) operation {
+	return operation{
+		reconcileNodeState: &reconcileNodeStateOperation{
+			nodeName:   nodeName,
+			targetSize: newSize(100, 100),
+		},
+	}
+}
+
+func popOperations(t *testing.T, opQueue *operationQueue, count int) []operation {
+	t.Helper()
+	var gotOperations []operation
+	for range count {
+		op, quit := opQueue.Get()
+		assert.False(t, quit)
+		gotOperations = append(gotOperations, op)
+		opQueue.Done(op)
+	}
+	return gotOperations
 }
