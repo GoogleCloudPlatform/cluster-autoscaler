@@ -151,7 +151,7 @@ func (b *ScaleUpBalancer) BalanceScaleUpBetweenGroups(ctx context.Context, autos
 		for _, info := range balancingInfos {
 			if info.scaleUpInfo.NewSize > info.scaleUpInfo.CurrentSize {
 				gkeGroup, ok := info.scaleUpInfo.Group.(gke.NodeGroup)
-				if ok && !gkeGroup.IsUpcoming() {
+				if ok {
 					gkeGroup.GetMig().SetRecommendation(gke.ScaleUpRecommendation{
 						RecommendationId: info.snapshot.GuidanceId(),
 						SpecKey:          info.snapshot.SpecKey(),

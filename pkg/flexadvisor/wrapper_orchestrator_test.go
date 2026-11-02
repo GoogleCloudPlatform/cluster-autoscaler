@@ -713,3 +713,18 @@ func TestWrapperOrchestrator_InitializeAndMinSizeDelegation(t *testing.T) {
 	assert.Equal(t, status.ScaleUpNotTried, scaleUpStatus.Result)
 	assert.True(t, inner.minSizeCalled)
 }
+
+func TestScaleUpEndProcessorFunc(t *testing.T) {
+	called := false
+	fn := ScaleUpEndProcessorFunc(func() {
+		called = true
+	})
+	fn.OnScaleUpEnd()
+	assert.True(t, called)
+
+	// Calling OnScaleUpEnd on a nil ScaleUpEndProcessorFunc must not panic.
+	var nilFn ScaleUpEndProcessorFunc
+	assert.NotPanics(t, func() {
+		nilFn.OnScaleUpEnd()
+	})
+}

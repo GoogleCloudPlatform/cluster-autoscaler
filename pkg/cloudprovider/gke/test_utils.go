@@ -3428,12 +3428,19 @@ func (fake *FakeGkeManager) ClearRecommendations() {}
 func (m *GkeManagerMock) SetRecommendation(migId string, rec ScaleUpRecommendation) {
 	m.Called(migId, rec)
 }
+
 func (m *GkeManagerMock) PopRecommendation(migId string) (rec ScaleUpRecommendation, ok bool) {
 	args := m.Called(migId)
 	return args.Get(0).(ScaleUpRecommendation), args.Bool(1)
 }
+
 func (m *GkeManagerMock) ClearRecommendations() {
 	m.Called()
+}
+
+func (m *GkeManagerMock) CreateInstancesWithRecommendation(mig gce.Mig, delta int64, rec ScaleUpRecommendation) error {
+	args := m.Called(mig, delta, rec)
+	return args.Error(0)
 }
 
 func (cp *TestAutoprovisioningCloudProvider) IsAutopilotNapDefaultFallbackEnabled() bool {

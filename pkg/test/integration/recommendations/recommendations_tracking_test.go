@@ -16,14 +16,18 @@ package recommendations
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
+	fakegce "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	fakeflexadvisor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
@@ -381,5 +385,418 @@ func TestRecommendLocationsRecommendationsTracking_FallbackOnError(t *testing.T)
 		injectedCount, err := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.RLA)
 		assert.NoError(t, err)
 		assert.Equal(t, float64(0), injectedCount)
+	})
+}
+
+// TestFlexAdvisorRecommendationsTracking_AsyncNAP verifies that FA
+// recommendations are preserved across async NAP node pool creation (surviving
+// intermediate Refresh() loops) and attached to
+// CreateInstancesWithRecommendation on the newly created MIG.
+func TestFlexAdvisorRecommendationsTracking_AsyncNAP(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("nap-fa-ccc").
+		WithNapEnabled().
+		WithPriorities(v1.Priority{
+			MachineType: new(testMachineType),
+		}).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithExperiments(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag).
+		WithClusterOverrides(
+			integration.WithAutoprovisioningLocations(zoneA, zoneB),
+			integration.WithClusterAutoProvisioningEnabled(),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithBalanceSimilarNodeGroups(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithHighThroughputNAPEnabled(10, 100),
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneA).
+				WithCapacity(10).
+				WithScore(0.8).
+				WithGuidanceId("test-fa-nap-rec-789").
+				WithSpecKey("nap-spec-1"),
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneB).
+				WithCapacity(10).
+				WithScore(0.2),
+		)
+		infra.Fakes.GkeService.DisableOperationDelay(true)
+		infra.Fakes.GkeService.SetCreateNodePoolDelay(30 * time.Second)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// Loop 1: Pod triggers async NAP node pool creation.
+		testPod := tu.BuildTestPod("pod-nap-fa", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("nap-fa-ccc"))
+		infra.Fakes.K8s.AddPod(testPod)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		// Loop 2 (at +10s, while the 30s GKE CreateNodePool op is in progress):
+		// CloudProvider.Refresh() runs ClearRecommendations(), which must not
+		// wipe the upcoming node pool's recommendation.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Second)
+
+		// Loop 3 (at +30s, after GKE CreateNodePool completes and
+		// InitializeNodeGroup runs CreateInstances on the real MIG):
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		// Loop 4: CloudProvider.Refresh() drops the processed upcoming node
+		// pool and exposes the real created MIGs.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "pod-nap-fa", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Pod should be scheduled on the newly created NAP node pool")
+
+		var allRecorded []string
+		for _, ng := range autoscaler.CloudProvider.NodeGroups(ctx) {
+			if gkeGroup, ok := ng.(gke.NodeGroup); ok {
+				allRecorded = append(allRecorded, infra.Fakes.GceService.GetRecordedRecommendations(gkeGroup.GetMig().GceRef())...)
+			}
+		}
+		assert.Equal(t, []string{"1/test-fa-nap-rec-789//nap-spec-1"}, allRecorded, "Expected FA recommendation token to be recorded on async-created NAP MIG")
+
+		injectedCount, err := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), injectedCount, "Injected FA metrics count mismatch")
+
+		// FA's background availability cache refreshes poll FetchCapacity
+		// multiple times across the 42s synctest window.
+		extractedCount, err := internalmetrics.GetDemandFungibilityExtractedCountForTest(internalmetrics.FA)
+		assert.NoError(t, err)
+		assert.GreaterOrEqual(t, extractedCount, float64(1), "Extracted FA metrics count should be at least 1")
+	})
+}
+
+// TestRecommendLocationsRecommendationsTracking_AsyncNAP verifies that RLA
+// recommendations are preserved across async NAP node pool creation (surviving
+// intermediate Refresh() loops) and attached to
+// CreateInstancesWithRecommendation on the newly created MIG.
+func TestRecommendLocationsRecommendationsTracking_AsyncNAP(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("nap-rla-ccc").
+		WithNapEnabled().
+		WithPriorities(v1.Priority{
+			MachineType: new(testMachineType),
+			Spot:        new(true),
+		}).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithExperiments(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag).
+		WithClusterOverrides(
+			integration.WithAutoprovisioningLocations(zoneA, zoneB),
+			integration.WithClusterAutoProvisioningEnabled(),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithBalanceSimilarNodeGroups(),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithHighThroughputNAPEnabled(10, 100),
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		infra.Fakes.RecommendLocationsClient.SetRecommendationID("test-rla-nap-rec-999")
+		infra.Fakes.RecommendLocationsClient.SetSpecKey("rla-nap-spec")
+		infra.Fakes.GkeService.DisableOperationDelay(true)
+		infra.Fakes.GkeService.SetCreateNodePoolDelay(30 * time.Second)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// Loop 1: Pod triggers async NAP Spot node pool creation
+		// (LocationPolicy ANY -> balanced by RLA).
+		testPod := tu.BuildTestPod("pod-nap-rla", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("nap-rla-ccc"))
+		infra.Fakes.K8s.AddPod(testPod)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		// Loop 2 (at +10s, while the 30s GKE CreateNodePool op is in progress):
+		// CloudProvider.Refresh() runs ClearRecommendations(), which must not
+		// wipe the upcoming node pool's recommendation.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Second)
+
+		// Loop 3 (at +30s, after GKE CreateNodePool completes and
+		// InitializeNodeGroup runs CreateInstances on the real MIG):
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		// Loop 4: CloudProvider.Refresh() drops the processed upcoming node
+		// pool and exposes the real created MIGs.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, "pod-nap-rla", metav1.GetOptions{})
+		assert.NoError(t, err)
+		assert.NotEmpty(t, updatedPod.Spec.NodeName, "Pod should be scheduled on the newly created NAP node pool")
+
+		var allRecorded []string
+		for _, ng := range autoscaler.CloudProvider.NodeGroups(ctx) {
+			if gkeGroup, ok := ng.(gke.NodeGroup); ok {
+				allRecorded = append(allRecorded, infra.Fakes.GceService.GetRecordedRecommendations(gkeGroup.GetMig().GceRef())...)
+			}
+		}
+		assert.Equal(t, []string{"1/test-rla-nap-rec-999//rla-nap-spec"}, allRecorded, "Expected RLA recommendation token to be recorded on async-created NAP MIG")
+
+		injectedCount, err := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.RLA)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), injectedCount, "Injected RLA metrics count mismatch")
+
+		extractedCount, err := internalmetrics.GetDemandFungibilityExtractedCountForTest(internalmetrics.RLA)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(1), extractedCount, "Extracted RLA metrics count mismatch")
+	})
+}
+
+// TestFlexAdvisorRecommendationsTracking_AsyncNAP_Salvo verifies that multiple
+// async NAP scale-ups within a single Salvo loop each preserve their own FA
+// recommendation across inter-pass clearing and intermediate Refresh() loops.
+func TestFlexAdvisorRecommendationsTracking_AsyncNAP_Salvo(t *testing.T) {
+	const secondMachineType = "n2-standard-4"
+
+	cccObj := ccc.NewComputeClassBuilder("nap-salvo-ccc").
+		WithNapEnabled().
+		WithPriorities(
+			v1.Priority{MachineType: new(testMachineType)},
+			v1.Priority{MachineType: new(secondMachineType)},
+		).
+		Build()
+
+	testConfig := integration.NewTestConfig().
+		WithCccCrds(cccObj).
+		WithExperiments(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag).
+		WithClusterOverrides(
+			integration.WithAutoprovisioningLocations(zoneA, zoneB),
+			integration.WithClusterAutoProvisioningEnabled(),
+		).
+		WithOverrides(
+			integration.WithMaxMemoryTotal(140*1024*1024*1024),
+			integration.WithBalanceSimilarNodeGroups(),
+			integration.WithFlexAdvisorEnabled(),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithHighThroughputNAPEnabled(10, 100),
+			func(o *options.AutoscalingOptions) *options.AutoscalingOptions {
+				o.SalvoScaleUp = true
+				o.SalvoScaleUpBudget = time.Minute
+				return o
+			},
+		)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		// Priority 1 (n1-standard-4) has capacity for 1 node per zone (2
+		// total), so Salvo pass 1 creates an n1-standard-4 async NAP pool
+		// across both zones for 2 pods and pass 2 falls through to Priority 2
+		// (n2-standard-4) for the third pod. Both zones are given non-zero
+		// capacity so temporary-MIG zone selection stays deterministic.
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneA).
+				WithCapacity(1).
+				WithScore(0.8).
+				WithGuidanceId("test-fa-salvo-rec-1").
+				WithSpecKey("salvo-spec-1"),
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneB).
+				WithCapacity(1).
+				WithScore(0.2).
+				WithGuidanceId("test-fa-salvo-rec-1").
+				WithSpecKey("salvo-spec-1"),
+			fakeflexadvisor.NewGuidance(secondMachineType).
+				WithZone(zoneA).
+				WithCapacity(10).
+				WithScore(0.8).
+				WithGuidanceId("test-fa-salvo-rec-2").
+				WithSpecKey("salvo-spec-2"),
+			fakeflexadvisor.NewGuidance(secondMachineType).
+				WithZone(zoneB).
+				WithCapacity(10).
+				WithScore(0.2).
+				WithGuidanceId("test-fa-salvo-rec-2").
+				WithSpecKey("salvo-spec-2"),
+		)
+		infra.Fakes.GkeService.DisableOperationDelay(true)
+		infra.Fakes.GkeService.SetCreateNodePoolDelay(30 * time.Second)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// Loop 1: Three pods in the same CCC shard trigger two Salvo passes
+		// and initiate two async NAP node pools within a single CA loop.
+		for _, podName := range []string{"pod-salvo-1", "pod-salvo-2", "pod-salvo-3"} {
+			p := tu.BuildTestPod(podName, 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("nap-salvo-ccc"))
+			p.UID = types.UID(podName)
+			infra.Fakes.K8s.AddPod(p)
+		}
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		// Confirm both async NAP pools were initiated in Loop 1 by Salvo.
+		upcomingPools := make(map[string]bool)
+		for _, ng := range autoscaler.CloudProvider.NodeGroups(ctx) {
+			if gkeGroup, ok := ng.(gke.NodeGroup); ok {
+				upcomingPools[gkeGroup.GetMig().NodePoolName()] = true
+			}
+		}
+		assert.Len(t, upcomingPools, 2, "Expected Salvo to initiate 2 async NAP pools in a single loop")
+
+		// Loop 2 (at +10s, while both 30s GKE CreateNodePool ops are running):
+		// Refresh() clears GkeManager recommendations without wiping either
+		// upcoming node pool's recommendation.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Second)
+
+		// Loop 3 (at +30s, after both GKE CreateNodePool ops complete and
+		// InitializeNodeGroup runs CreateInstances on both real MIGs):
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 30*time.Second)
+		// Loop 4: Refresh() exposes the real created MIGs.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		for _, podName := range []string{"pod-salvo-1", "pod-salvo-2", "pod-salvo-3"} {
+			updatedPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+			assert.NoError(t, err)
+			assert.NotEmpty(t, updatedPod.Spec.NodeName, "Expected %s to be scheduled", podName)
+		}
+
+		cluster := integration.GetTestCluster(t, infra, testConfig)
+		assert.Len(t, cluster.NodePools, 2, "Expected 2 created NAP node pools")
+
+		recordedByMachineType := make(map[string][]string)
+		for _, np := range cluster.NodePools {
+			for _, zone := range []string{zoneA, zoneB} {
+				recs := infra.Fakes.GceService.GetRecordedRecommendations(gceRefForTest(np.Name, zone))
+				recordedByMachineType[np.Config.MachineType] = append(recordedByMachineType[np.Config.MachineType], recs...)
+			}
+		}
+		assert.Equal(t, []string{
+			"1/test-fa-salvo-rec-1//salvo-spec-1",
+			"1/test-fa-salvo-rec-1//salvo-spec-1",
+		}, recordedByMachineType[testMachineType])
+		assert.Equal(t, []string{"1/test-fa-salvo-rec-2//salvo-spec-2"}, recordedByMachineType[secondMachineType])
+
+		injectedCount, err := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(3), injectedCount, "Injected FA metrics count mismatch")
+	})
+}
+
+type failFirstCreateInstancesGceClient struct {
+	*fakegce.GceClient
+	mu          sync.Mutex
+	failedFirst bool
+	failedZone  string
+}
+
+func (c *failFirstCreateInstancesGceClient) CreateInstancesWithRecommendation(ref gce.GceRef, templateName string, count int64, names []string, recommendation string) ([]string, error) {
+	c.mu.Lock()
+	if !c.failedFirst {
+		c.failedFirst = true
+		c.failedZone = ref.Zone
+		c.mu.Unlock()
+		return nil, assert.AnError
+	}
+	c.mu.Unlock()
+	return c.GceClient.CreateInstancesWithRecommendation(ref, templateName, count, names, recommendation)
+}
+
+// TestRecommendationsTracking_Safeguard_PerPassClear verifies that unpopped
+// recommendations left by a ScaleUp pass are cleared at the end of that pass
+// (via ScaleUpEndProcessor) so subsequent scaling in the same loop (e.g.
+// scaleUpMinNodes without an intervening Refresh()) cannot attach stale tokens.
+func TestRecommendationsTracking_Safeguard_PerPassClear(t *testing.T) {
+	cccObj := ccc.NewComputeClassBuilder("per-pass-ccc").
+		WithNodePoolsRules("pool-per-pass").
+		Build()
+	nodePool := integration.DefaultNodePool(
+		integration.WithNodePoolName("pool-per-pass"),
+		integration.WithNodePoolMachineType(testMachineType),
+		integration.WithNodePoolSize(0),
+		integration.WithNodePoolMin(1),
+		integration.WithNodePoolMax(5),
+		integration.WithNodePoolLocations(zoneA, zoneB),
+		integration.WithNodePoolLocationPolicy("BALANCED"),
+		integration.WithNodePoolCCCLabel(cccObj.Name),
+	)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+
+		wrappedGce := &failFirstCreateInstancesGceClient{GceClient: infra.Fakes.GceService}
+		testConfig := integration.NewTestConfig().
+			WithNodePools(nodePool).
+			WithCccCrds(cccObj).
+			WithExperiments(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag).
+			WithGceClient(wrappedGce).
+			WithOverrides(
+				integration.WithMaxMemoryTotal(140*1024*1024*1024),
+				integration.WithBalanceSimilarNodeGroups(),
+				integration.WithFlexAdvisorEnabled(),
+			)
+
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneA).
+				WithCapacity(10).
+				WithScore(0.8).
+				WithGuidanceId("test-fa-per-pass-rec").
+				WithSpecKey("per-pass-spec"),
+			fakeflexadvisor.NewGuidance(testMachineType).
+				WithZone(zoneB).
+				WithCapacity(10).
+				WithScore(0.2),
+		)
+
+		autoscaler, err := integration.SetupAutoscaler(ctx, t, testConfig, infra)
+		assert.NoError(t, err)
+		defer integration_synctest.TearDown(cancel)
+
+		// Add two pods so FA balances across both zones and stages a
+		// recommendation on both MIGs. When the first zone fails during
+		// synchronous execution, the sibling zone's recommendation stays
+		// unpopped until OnScaleUpEnd() clears it before scaleUpMinNodes runs.
+		pod1 := tu.BuildTestPod("pod-per-pass-1", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("per-pass-ccc"))
+		pod1.UID = types.UID("pod-per-pass-1")
+		pod2 := tu.BuildTestPod("pod-per-pass-2", 3000, 12000, tu.MarkUnschedulable(), pod.WithCCC("per-pass-ccc"))
+		pod2.UID = types.UID("pod-per-pass-2")
+		infra.Fakes.K8s.AddPod(pod1)
+		infra.Fakes.K8s.AddPod(pod2)
+
+		runErr := integration_synctest.RunOnceAfter(ctx, t, autoscaler, time.Second)
+		assert.Error(t, runErr, "Expected RunOnce to report the simulated first-zone scale-up error")
+
+		wrappedGce.mu.Lock()
+		failedZone := wrappedGce.failedZone
+		wrappedGce.mu.Unlock()
+		assert.NotEmpty(t, failedZone, "Expected first zone CreateInstancesWithRecommendation to be attempted")
+
+		otherZone := zoneB
+		if failedZone == zoneB {
+			otherZone = zoneA
+		}
+		otherMigRef := gceRefForTest("pool-per-pass", otherZone)
+
+		// Confirm scaleUpMinNodes actually scaled the healthy sibling zone in
+		// the same loop without attaching the stale FA recommendation.
+		targetSize, err := infra.Fakes.GceService.FetchMigTargetSize(ctx, otherMigRef)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), targetSize, "Expected scaleUpMinNodes to scale healthy sibling zone %s to min size", otherZone)
+		assert.Empty(t, infra.Fakes.GceService.GetRecordedRecommendations(otherMigRef),
+			"Expected no stale FA recommendation on sibling zone %s scaled by scaleUpMinNodes", otherZone)
 	})
 }

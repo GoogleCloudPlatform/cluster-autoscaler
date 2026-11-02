@@ -1093,7 +1093,10 @@ func (b *Builder) Build(
 		b.npcCrdLister,
 		bypassTracker,
 		scaleUpLimiterTracker,
-		[]flexadvisor.ScaleUpEndProcessor{estimationLimiter},
+		[]flexadvisor.ScaleUpEndProcessor{
+			estimationLimiter,
+			flexadvisor.ScaleUpEndProcessorFunc(cloudProvider.ClearRecommendations),
+		},
 		experimentsManager,
 	)
 	if autoscalingOptions.KarpenterEnabled {

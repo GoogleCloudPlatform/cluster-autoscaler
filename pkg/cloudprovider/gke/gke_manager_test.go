@@ -2628,6 +2628,40 @@ func TestCreateInstances_WithRecommendation(t *testing.T) {
 	assert.Equal(t, initialMetric+1, finalMetric)
 }
 
+func TestCreateInstancesWithRecommendation_SurvivesConcurrentClear(t *testing.T) {
+	registerMetricsOnce.Do(internalmetrics.RegisterAll)
+	server := NewHttpServerMock()
+	defer server.Close()
+	g := newTestGkeManager(t, server.URL, napDisabled, false, false, nil, false, nil)
+	addDefaultListMigsMocks(server, g.cache)
+
+	experimentsManager := experiments.NewMockManager(experiments.DemandFungibilityImpactTrackingMinCAVersionFlag)
+	g.optsTracker = optstracking.TestOptionsTracker(internalopts.AutoscalingOptions{}, gkeclient.Cluster{}, experimentsManager)
+
+	mig := testZonalNodePool().configure(g).migs[0]
+
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Run(func(args mock.Arguments) {
+		// Simulate a concurrent Refresh() clearing staged recommendations
+		// mid-CreateInstances.
+		g.ClearRecommendations()
+	}).Return(buildListInstanceGroupManagersResponse(
+		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
+	)).Once()
+	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
+
+	initialMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+	mockGceClient := gceclient.BuildAutoscalingInternalGceClientMock()
+	g.gceService = mockGceClient
+	rec := ScaleUpRecommendation{RecommendationId: "rec-async", SpecKey: "spec-async", Source: internalmetrics.FA}
+
+	err := g.CreateInstancesWithRecommendation(mig, 1, rec)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"1/rec-async//spec-async"}, mockGceClient.GetRecordedRecommendations(mig.gceRef))
+	finalMetric, _ := internalmetrics.GetDemandFungibilityInjectedCountForTest(internalmetrics.FA)
+	assert.Equal(t, initialMetric+1, finalMetric)
+}
+
 func TestCreateInstances_WithRecommendation_EmptyFallback(t *testing.T) {
 	server := NewHttpServerMock()
 	defer server.Close()

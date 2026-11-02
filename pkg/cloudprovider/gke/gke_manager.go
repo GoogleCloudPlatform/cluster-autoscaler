@@ -1608,6 +1608,18 @@ func (m *gkeManagerImpl) IsMigStable(mig gce.Mig) (bool, error) {
 }
 
 func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
+	var rec *ScaleUpRecommendation
+	if popped, ok := m.PopRecommendation(mig.Id()); ok {
+		rec = &popped
+	}
+	return m.createInstances(mig, delta, rec)
+}
+
+func (m *gkeManagerImpl) CreateInstancesWithRecommendation(mig gce.Mig, delta int64, rec ScaleUpRecommendation) error {
+	return m.createInstances(mig, delta, &rec)
+}
+
+func (m *gkeManagerImpl) createInstances(mig gce.Mig, delta int64, rec *ScaleUpRecommendation) error {
 	klog.V(0).Infof("Adding %d new instances to mig %v.", delta, mig.Id())
 	instances, err := m.GetMigNodes(mig)
 	if err != nil {
@@ -1628,7 +1640,7 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 	var recommendationString string
 	var recommendationSource internalmetrics.DemandFungibilitySource
 	if experiments.IsDemandFungibilityImpactTrackingEnabled(m.ExperimentsManager()) {
-		if rec, ok := m.PopRecommendation(mig.Id()); ok && rec.RecommendationId != "" {
+		if rec != nil && rec.RecommendationId != "" {
 			recommendationString = fmt.Sprintf("1/%s//%s", rec.RecommendationId, rec.SpecKey)
 			recommendationSource = rec.Source
 		}

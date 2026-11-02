@@ -47,6 +47,16 @@ type ScaleUpEndProcessor interface {
 	OnScaleUpEnd()
 }
 
+// ScaleUpEndProcessorFunc adapts a function to ScaleUpEndProcessor.
+type ScaleUpEndProcessorFunc func()
+
+// OnScaleUpEnd invokes f if it is non-nil.
+func (f ScaleUpEndProcessorFunc) OnScaleUpEnd() {
+	if f != nil {
+		f()
+	}
+}
+
 // WrapperOrchestrator wraps a scaleup.Orchestrator to manage FlexAdvisor per-pass
 // limiter tracking and recommendations bypass lifecycle within a single execution layer.
 type WrapperOrchestrator struct {

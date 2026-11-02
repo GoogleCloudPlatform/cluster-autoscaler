@@ -117,6 +117,7 @@ type extendedGkeManager interface {
 	CreateNodePoolNoRefresh(nodePoolName string, nodePoolSpec *gkeclient.NodePoolSpec) error
 	DeleteNodePoolNoRefresh(mig *GkeMig) error
 	RefreshForce() error
+	CreateInstancesWithRecommendation(mig gce.Mig, delta int64, rec ScaleUpRecommendation) error
 }
 
 type processedNodePoolListener = func(nodePoolName string)
@@ -411,6 +412,7 @@ func (m *asyncGkeManager) createUpcomingNodePool(
 		createdAt:                  now,
 		lastStatusChangeSynced:     now,
 		initializationStatusSynced: initializationIdle,
+		recommendationsSynced:      make(map[string]ScaleUpRecommendation),
 	}
 	m.upcomingNodePools[mig.NodePoolName()] = upcoming
 	m.measureOngoingOperations()
@@ -921,6 +923,14 @@ func (m *asyncGkeManager) getUpcomingMigForInstanceLocked(instance gce.GceRef) g
 func (m *asyncGkeManager) CreateInstances(mig gce.Mig, delta int64) error {
 	if upcoming := m.getUpcomingNodePoolByMigIdLocked(mig.Id()); upcoming != nil {
 		klog.Infof("Scheduling addition of %d new instances to upcoming mig %v", delta, mig.Id())
+		// Updating recommendations and ChangeTargetSize use separate locks,
+		// leaving a narrow benign window where an in-flight initializer can
+		// consume this recommendation for an earlier delta.
+		if rec, ok := m.GkeManager.PopRecommendation(mig.Id()); ok {
+			upcoming.setRecommendation(mig.Id(), rec)
+		} else {
+			upcoming.popRecommendation(mig.Id())
+		}
 		upcoming.updater.ChangeTargetSize(mig.Id(), delta)
 		if createdMig := upcoming.getCreatedMigByZone(mig.GceRef().Zone); createdMig != nil {
 			klog.Infof("Adding %d new instances in parallel to async created mig %v (upcomingMig: %v)", delta, createdMig.Id(), mig.Id())
@@ -931,6 +941,9 @@ func (m *asyncGkeManager) CreateInstances(mig gce.Mig, delta int64) error {
 			m.runNodePoolInitalizer(upcoming)
 		}
 		return nil
+	}
+	if rec, ok := m.popUpcomingRecommendationLocked(mig); ok {
+		return m.extendedGkeManager.CreateInstancesWithRecommendation(mig, delta, rec)
 	}
 	return m.GkeManager.CreateInstances(mig, delta)
 }
@@ -1108,6 +1121,23 @@ func (m *asyncGkeManager) ClearRecommendations() {
 	m.GkeManager.ClearRecommendations()
 }
 
+func (m *asyncGkeManager) popUpcomingRecommendationLocked(mig gce.Mig) (ScaleUpRecommendation, bool) {
+	gkeMig, ok := mig.(*GkeMig)
+	if !ok {
+		return ScaleUpRecommendation{}, false
+	}
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	upcoming, found := m.upcomingNodePools[gkeMig.NodePoolName()]
+	if !found {
+		return ScaleUpRecommendation{}, false
+	}
+	if upcomingMigId, ok := m.translateCreatedToUpcomingMigs(upcoming)[mig.Id()]; ok {
+		return upcoming.popRecommendation(upcomingMigId)
+	}
+	return ScaleUpRecommendation{}, false
+}
+
 // upcomingNodePool represents a node pool that will be created in the near future.
 // Access to fields with "Synced" suffix using methods - they require synchronization.
 type upcomingNodePool struct {
@@ -1133,6 +1163,27 @@ type upcomingNodePool struct {
 	initializationStatusSynced initializationStatus
 	// reinitializationCounterSynced limits the number of times initialization can be re-triggered to prevent infinite loops.
 	reinitializationCounterSynced int
+	// recommendationsSynced stores scale-up recommendations keyed by upcoming
+	// MIG ID across async node pool creation. When multiple scale-ups of the
+	// same upcoming MIG coalesce before initialization, the latest scale-up
+	// wins (an unrecommended scale-up clears any prior recommendation).
+	recommendationsSynced map[string]ScaleUpRecommendation
+}
+
+func (n *upcomingNodePool) setRecommendation(migId string, rec ScaleUpRecommendation) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	n.recommendationsSynced[migId] = rec
+}
+
+func (n *upcomingNodePool) popRecommendation(migId string) (ScaleUpRecommendation, bool) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	rec, ok := n.recommendationsSynced[migId]
+	if ok {
+		delete(n.recommendationsSynced, migId)
+	}
+	return rec, ok
 }
 
 func (n *upcomingNodePool) extraMigs() []*GkeMig {
