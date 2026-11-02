@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
@@ -744,6 +745,166 @@ type shardComputeFunctionTestCase struct {
 	name                        string
 	pod                         v1.Pod
 	expectedNodeGroupDescriptor NodeGroupDescriptor
+}
+
+// TestAcceleratorShardsUsePrecomputedPodRequests verifies that the GPU and TPU shard
+// compute functions read accelerator requests from the precomputed
+// podrequirements.Requirements instead of recomputing them from the pod. The pods in
+// these cases intentionally have no container requests, so any accelerator-related
+// output can only come from req.PodRequests.
+func TestAcceleratorShardsUsePrecomputedPodRequests(t *testing.T) {
+	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+		Build()
+
+	testCases := []struct {
+		name                        string
+		pod                         *v1.Pod
+		req                         *podrequirements.Requirements
+		compute                     func(*v1.Pod, *podrequirements.Requirements, *NodeGroupDescriptor)
+		expectedNodeGroupDescriptor NodeGroupDescriptor
+	}{
+		{
+			name: "gpu: precomputed requests drive the shard",
+			pod:  &v1.Pod{},
+			req: &podrequirements.Requirements{
+				LabelReq:    podrequirements.NewLabelRequirements(map[string]podrequirements.Values{gkelabels.GPULabel: podrequirements.NewValues("nvidia-tesla-k80")}),
+				PodRequests: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+			},
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeGpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{
+				RequiresGPU:    true,
+				SystemLabels:   map[string]string{gkelabels.GPULabel: "nvidia-tesla-k80"},
+				ExtraResources: map[string]resource.Quantity{gpu.ResourceNvidiaGPU: resource.MustParse("8")},
+			},
+		},
+		{
+			name: "gpu: precomputed requests without gpu skip the shard even if pod requests gpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{gkelabels.GPULabel: "nvidia-tesla-k80"},
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+						},
+					}},
+				},
+			},
+			req: &podrequirements.Requirements{
+				LabelReq:    podrequirements.NewLabelRequirements(map[string]podrequirements.Values{gkelabels.GPULabel: podrequirements.NewValues("nvidia-tesla-k80")}),
+				PodRequests: v1.ResourceList{},
+			},
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeGpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{},
+		},
+		{
+			name: "gpu: nil requirements fall back to computing from pod",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{gkelabels.GPULabel: "nvidia-tesla-k80"},
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+						},
+					}},
+				},
+			},
+			req: nil,
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeGpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{
+				RequiresGPU:    true,
+				SystemLabels:   map[string]string{gkelabels.GPULabel: "nvidia-tesla-k80"},
+				ExtraResources: map[string]resource.Quantity{gpu.ResourceNvidiaGPU: resource.MustParse("8")},
+			},
+		},
+		{
+			name: "tpu: precomputed requests drive the shard",
+			pod:  &v1.Pod{},
+			req: &podrequirements.Requirements{
+				LabelReq: podrequirements.NewLabelRequirements(map[string]podrequirements.Values{
+					gkelabels.TPULabel:         podrequirements.NewValues(gkelabels.TpuV4LiteDeviceValue),
+					gkelabels.TPUTopologyLabel: podrequirements.NewValues("2x2"),
+				}),
+				PodRequests: v1.ResourceList{tpu.ResourceGoogleTPU: resource.MustParse("4")},
+			},
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeTpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{
+				SystemLabels: map[string]string{
+					gkelabels.TPULabel:         gkelabels.TpuV4LiteDeviceValue,
+					gkelabels.TPUTopologyLabel: "2x2",
+				},
+				ExtraResources: map[string]resource.Quantity{tpu.ResourceGoogleTPU: resource.MustParse("4")},
+			},
+		},
+		{
+			name: "tpu: precomputed requests without tpu skip the shard even if pod requests tpu",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{gkelabels.TPULabel: gkelabels.TpuV4LiteDeviceValue},
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{tpu.ResourceGoogleTPU: resource.MustParse("4")},
+						},
+					}},
+				},
+			},
+			req: &podrequirements.Requirements{
+				LabelReq:    podrequirements.NewLabelRequirements(map[string]podrequirements.Values{gkelabels.TPULabel: podrequirements.NewValues(gkelabels.TpuV4LiteDeviceValue)}),
+				PodRequests: v1.ResourceList{},
+			},
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeTpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{},
+		},
+		{
+			name: "tpu: nil requirements fall back to computing from pod",
+			pod: &v1.Pod{
+				Spec: v1.PodSpec{
+					NodeSelector: map[string]string{
+						gkelabels.TPULabel:         gkelabels.TpuV4LiteDeviceValue,
+						gkelabels.TPUTopologyLabel: "2x2",
+					},
+					Containers: []v1.Container{{
+						Resources: v1.ResourceRequirements{
+							Requests: v1.ResourceList{tpu.ResourceGoogleTPU: resource.MustParse("4")},
+						},
+					}},
+				},
+			},
+			req: nil,
+			compute: func(p *v1.Pod, r *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				computeTpuTypeShard(provider, p, r, ngd)
+			},
+			expectedNodeGroupDescriptor: NodeGroupDescriptor{
+				SystemLabels: map[string]string{
+					gkelabels.TPULabel:         gkelabels.TpuV4LiteDeviceValue,
+					gkelabels.TPUTopologyLabel: "2x2",
+				},
+				ExtraResources: map[string]resource.Quantity{tpu.ResourceGoogleTPU: resource.MustParse("4")},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ngd := NodeGroupDescriptor{
+				Labels:         map[string]string{},
+				SystemLabels:   map[string]string{},
+				ExtraResources: map[string]resource.Quantity{},
+			}
+			tc.compute(tc.pod, tc.req, &ngd)
+			assertNodeGroupDescriptorEqual(t, tc.expectedNodeGroupDescriptor, ngd)
+		})
+	}
 }
 
 func testPodSharder(t *testing.T, sharder PodSharder, testCases []shardComputeFunctionTestCase) {

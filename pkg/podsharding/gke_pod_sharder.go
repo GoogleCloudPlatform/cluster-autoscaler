@@ -24,7 +24,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
-	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
@@ -75,17 +74,16 @@ func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *
 }
 
 func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
-	podRequests := podutils.PodRequests(pod)
-	podGpuCount := podRequests[gpu.ResourceNvidiaGPU]
+	if req == nil {
+		req = podrequirements.GetRequirements(pod)
+	}
+	podGpuCount := req.PodRequests[gpu.ResourceNvidiaGPU]
 
 	if podGpuCount.Value() == 0 {
 		return
 	}
 
 	nodeGroupDescriptor.RequiresGPU = true
-	if req == nil {
-		req = podrequirements.GetRequirements(pod)
-	}
 
 	gpuType, found := req.LabelReq.GetSingleValue(gkelabels.GPULabel)
 	if !found {
@@ -120,15 +118,13 @@ func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podre
 }
 
 func computeTpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
-	podRequests := podutils.PodRequests(pod)
-	podTpuCount := podRequests[gketpu.ResourceGoogleTPU]
+	if req == nil {
+		req = podrequirements.GetRequirements(pod)
+	}
+	podTpuCount := req.PodRequests[gketpu.ResourceGoogleTPU]
 
 	if podTpuCount.Value() == 0 {
 		return
-	}
-
-	if req == nil {
-		req = podrequirements.GetRequirements(pod)
 	}
 
 	tpuType := gketpu.DefaultTPU
@@ -184,7 +180,10 @@ func computeWorkloadSeparationShardWithAllowlistedLabels(matcher *gkelabels.Matc
 	}
 }
 
-func computeCCCShard(_ *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
+func computeCCCShard(pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {
+	if req == nil {
+		req = podrequirements.GetRequirements(pod)
+	}
 	if name, found := req.LabelReq.GetSingleValue(gkelabels.ComputeClassLabel); found {
 		nodeGroupDescriptor.SystemLabels[gkelabels.ComputeClassLabel] = name
 	}
