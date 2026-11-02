@@ -382,13 +382,9 @@ func TestCalculatePodsRequestedResources(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			for resName, wantQty := range tc.want {
-				got, err := CalculatePodsRequestedResources(tc.nodeInfo, resName)
-				if err != nil {
-					t.Errorf("CalculatePodsRequestedResources(nodeInfo, %q) returned unexpected error: %v", resName, err)
-					continue
-				}
+				got := calculatePodsRequestedResources(tc.nodeInfo, resName)
 				if !got.Equal(wantQty) {
-					t.Errorf("CalculatePodsRequestedResources(nodeInfo, %q) = %s, want %s", resName, got.String(), wantQty.String())
+					t.Errorf("calculatePodsRequestedResources(nodeInfo, %q) = %s, want %s", resName, got.String(), wantQty.String())
 				}
 
 			}
