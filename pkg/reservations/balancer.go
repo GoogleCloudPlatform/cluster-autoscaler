@@ -38,6 +38,24 @@ type ReservationBalancingProcessor struct {
 	puller                   *gceclient.ReservationsPuller
 	localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider
 	provider                 machineConfigProvider
+
+	// upcomingDeductions tracks, by reservation ID, the slots that upcoming node groups claimed in
+	// updateReservations and that are still subtracted from the reservation stored in the puller.
+	// consumeUpcomingScaleUps skips those nodes, so that they are not subtracted twice.
+	//
+	// BalanceScaleUpBetweenGroups is only called from the main autoscaling loop, so access to this
+	// map is not synchronized.
+	upcomingDeductions map[uint64]*upcomingDeduction
+}
+
+// upcomingDeduction describes the slots of a single reservation claimed by upcoming node groups.
+type upcomingDeduction struct {
+	// snapshot is the reservation object stored in the puller that the slots were subtracted
+	// from. The puller replaces the object when it refreshes the reservation from GCE, which
+	// invalidates the deduction.
+	snapshot *reservation.Reservation
+	// nodes is the number of subtracted slots by upcoming node group ID.
+	nodes map[string]int
 }
 
 // NewReservationBalancingProcessor creates a new ScaleUpProcessor.
@@ -47,6 +65,7 @@ func NewReservationBalancingProcessor(p nodegroupset.NodeGroupSetProcessor, pull
 		puller:                   puller,
 		localSSDDiskSizeProvider: localSSDDiskSizeProvider,
 		provider:                 provider,
+		upcomingDeductions:       make(map[uint64]*upcomingDeduction),
 	}
 }
 
@@ -63,6 +82,7 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.
 	var scaleUpInfos []nodegroupset.ScaleUpInfo
 
 	pullerReservations := p.puller.GetReservations()
+	p.dropStaleUpcomingDeductions(pullerReservations)
 	// Subtract resources from reservations that can be used by upcoming nodes.
 	reservations := p.consumeUpcomingScaleUps(autoscalingCtx, pullerReservations)
 
@@ -97,7 +117,6 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.
 	scaleUpInfos = filterEmptyScaleUpInfos(scaleUpInfos)
 
 	// Subtract resources from reservations that are used by the current scale up and update the puller.
-	// The puller is not updated for reservations that could be consumed by upcoming node groups.
 	p.puller.SetReservations(p.updateReservations(scaleUpInfos, reservations, pullerReservations))
 
 	return scaleUpInfos, nil
@@ -256,15 +275,27 @@ func (p *ReservationBalancingProcessor) consumeUpcomingScaleUps(context *autosca
 	return adjusted
 }
 
+func isUpcomingNodeGroup(ng cloudprovider.NodeGroup) bool {
+	gkeMig, ok := ng.(*gke.GkeMig)
+	return ok && gkeMig.IsUpcoming()
+}
+
 func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscalingCtx *autoscaling_context.AutoscalingContext, reservations []*reservation.Reservation) map[uint64]int {
 	consumedReservations := make(map[uint64]int)
+	upcomingIDs := make(map[string]bool)
 	for _, ng := range autoscalingCtx.CloudProvider.NodeGroups(context.TODO()) {
-		gkeMig, ok := ng.(*gke.GkeMig)
-		if !ok || !gkeMig.IsUpcoming() {
+		if !isUpcomingNodeGroup(ng) {
 			continue
 		}
+		upcomingIDs[ng.Id()] = true
 		size, err := ng.TargetSize(context.TODO())
-		if err != nil || size <= 0 {
+		if err != nil {
+			continue
+		}
+		// Nodes that are already subtracted from the reservations stored in the puller must not be
+		// subtracted again.
+		size -= p.deductedUpcomingNodes(ng.Id())
+		if size <= 0 {
 			continue
 		}
 		for _, rsv := range reservations {
@@ -280,7 +311,74 @@ func (p *ReservationBalancingProcessor) reservationsForUpcomingNodes(autoscaling
 			}
 		}
 	}
+	p.dropDeductionsOfNotUpcomingNodeGroups(upcomingIDs)
 	return consumedReservations
+}
+
+// dropStaleUpcomingDeductions drops deductions for reservations that the puller refreshed (or no
+// longer returns) since the deductions were recorded. Refreshed reservations don't include the
+// deductions, so consumeUpcomingScaleUps has to subtract the upcoming nodes again.
+func (p *ReservationBalancingProcessor) dropStaleUpcomingDeductions(pulledReservations []*reservation.Reservation) {
+	if len(p.upcomingDeductions) == 0 {
+		return
+	}
+	pulled := make(map[uint64]*reservation.Reservation, len(pulledReservations))
+	for _, rsv := range pulledReservations {
+		pulled[rsv.ID] = rsv
+	}
+	for id, deduction := range p.upcomingDeductions {
+		if pulled[id] != deduction.snapshot {
+			delete(p.upcomingDeductions, id)
+		}
+	}
+}
+
+// dropDeductionsOfNotUpcomingNodeGroups drops deductions of node groups that are no longer
+// upcoming. Their slots stay subtracted from the reservations stored in the puller until the
+// puller refreshes them, the same as for any other node group.
+func (p *ReservationBalancingProcessor) dropDeductionsOfNotUpcomingNodeGroups(upcomingIDs map[string]bool) {
+	for id, deduction := range p.upcomingDeductions {
+		for ngID := range deduction.nodes {
+			if !upcomingIDs[ngID] {
+				delete(deduction.nodes, ngID)
+			}
+		}
+		if len(deduction.nodes) == 0 {
+			delete(p.upcomingDeductions, id)
+		}
+	}
+}
+
+// deductedUpcomingNodes returns the number of nodes of the upcoming node group that are already
+// subtracted from the reservations stored in the puller.
+func (p *ReservationBalancingProcessor) deductedUpcomingNodes(nodeGroupID string) int {
+	deducted := 0
+	for _, deduction := range p.upcomingDeductions {
+		deducted += deduction.nodes[nodeGroupID]
+	}
+	return deducted
+}
+
+// recordUpcomingDeductions records slots of a reservation claimed by upcoming node groups, after
+// the reservation object stored in the puller changes from oldRsv to newRsv. Deductions recorded
+// against oldRsv are carried over, as newRsv is derived from it.
+func (p *ReservationBalancingProcessor) recordUpcomingDeductions(oldRsv, newRsv *reservation.Reservation, claimedByUpcoming map[string]int) {
+	deduction := p.upcomingDeductions[newRsv.ID]
+	if deduction == nil || deduction.snapshot != oldRsv {
+		if len(claimedByUpcoming) == 0 {
+			delete(p.upcomingDeductions, newRsv.ID)
+			return
+		}
+		deduction = &upcomingDeduction{nodes: make(map[string]int, len(claimedByUpcoming))}
+		if p.upcomingDeductions == nil {
+			p.upcomingDeductions = make(map[uint64]*upcomingDeduction)
+		}
+		p.upcomingDeductions[newRsv.ID] = deduction
+	}
+	deduction.snapshot = newRsv
+	for ngID, nodes := range claimedByUpcoming {
+		deduction.nodes[ngID] += nodes
+	}
 }
 
 func subtractReservations(reservations []*reservation.Reservation, consumedReservations map[uint64]int) []*reservation.Reservation {
@@ -298,6 +396,10 @@ func subtractReservations(reservations []*reservation.Reservation, consumedReser
 	return subtracted
 }
 
+// updateReservations returns pulledReservations with the slots used by scaleUpInfos subtracted.
+// Slots are subtracted for upcoming node groups as well, so that everything that reads the puller
+// sees them as used. They are recorded in upcomingDeductions, so that consumeUpcomingScaleUps
+// doesn't subtract them for the second time once the node groups report their new target size.
 func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegroupset.ScaleUpInfo, reservations, pulledReservations []*reservation.Reservation) []*reservation.Reservation {
 	usedReservations := map[gceclient.MetricLabels]int{}
 	pulledReservationMap := map[uint64]*reservation.Reservation{}
@@ -308,8 +410,11 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 
 	// claimed counts the slots of each reservation used by earlier node groups in this call.
 	claimed := map[uint64]int{}
+	// claimedByUpcoming counts the slots of each reservation used by upcoming node groups, by node group ID.
+	claimedByUpcoming := map[uint64]map[string]int{}
 	for _, scaleUpInfo := range scaleUpInfos {
 		newReservedNodes := scaleUpInfo.NewSize - scaleUpInfo.CurrentSize
+		upcoming := isUpcomingNodeGroup(scaleUpInfo.Group)
 
 		for _, rsv := range reservations {
 			if newReservedNodes <= 0 {
@@ -326,6 +431,12 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 					}
 					usedNodes := min(unusedNodes, newReservedNodes)
 					claimed[rsv.ID] += usedNodes
+					if upcoming {
+						if claimedByUpcoming[rsv.ID] == nil {
+							claimedByUpcoming[rsv.ID] = map[string]int{}
+						}
+						claimedByUpcoming[rsv.ID][scaleUpInfo.Group.Id()] += usedNodes
+					}
 					newReservedNodes -= usedNodes
 					usedReservations[gceclient.ReservationMetricLabels(pulledRsv)] += usedNodes
 				}
@@ -350,6 +461,7 @@ func (p *ReservationBalancingProcessor) updateReservations(scaleUpInfos []nodegr
 		}
 		rsvCopy := pulledRsv.Clone()
 		rsvCopy.SpecificReservation.AvailableCount = max(0, rsvCopy.SpecificReservation.AvailableCount-int64(used))
+		p.recordUpcomingDeductions(pulledRsv, rsvCopy, claimedByUpcoming[pulledRsv.ID])
 		updatedReservations = append(updatedReservations, rsvCopy)
 	}
 
