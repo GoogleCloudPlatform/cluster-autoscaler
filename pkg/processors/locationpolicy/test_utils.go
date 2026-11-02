@@ -48,7 +48,7 @@ func newTestMig(mockManager *gke.GkeManagerMock, config testMigConfig, getInstan
 		SetMaxSize(config.maxSize).
 		SetLocationPolicy(config.locationPolicy).
 		SetSpec(config.spec).
-		SetExist(true).
+		SetExist(!mockManager.MockIsUpcoming).
 		Build()
 
 	if getInstanceTemplateErr {

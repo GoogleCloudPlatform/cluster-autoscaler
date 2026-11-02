@@ -50,6 +50,7 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 		wantCall               recommendLocationsCall
 		wantScaleUpInfo        map[gce.GceRef]nodegroupset.ScaleUpInfo
 		wantErr                bool
+		isUpcoming             bool
 		wantRecommendations    map[string]gke.ScaleUpRecommendation
 		wantPopRecommendations []string
 	}{
@@ -79,6 +80,48 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 			},
 			wantRecommendations: map[string]gke.ScaleUpRecommendation{
 				"https://www.googleapis.com/compute/v1/projects/test/zones/us-test1-a/instanceGroups/mig-1": {
+					RecommendationId: "test-rla-rec-id",
+					SpecKey:          "test-rla-spec-key",
+					Source:           internalmetrics.RLA,
+				},
+			},
+		},
+		{
+			name:               "upcoming mig balancing sets recommendation",
+			enabledExperiments: []string{experiments.DemandFungibilityImpactTrackingMinCAVersionFlag},
+			isUpcoming:         true,
+			migConfigs: []testMigConfig{
+				{
+					project:        "test",
+					zone:           "us-test1-a",
+					name:           "mig-1-async-0",
+					maxSize:        10,
+					locationPolicy: gke.LocationPolicyAny,
+					spec:           &gkeclient.NodePoolSpec{MachineType: "e2-standard-4"},
+				},
+			},
+			newNodes: 5,
+			wantCall: newRecommendLocationCall(recommendLocationsCallConfig{
+				migName:  gce.GceRef{Project: "test", Zone: "us-test1-a", Name: "mig-1-async-0"}.Name,
+				newNodes: 5,
+				allowedZones: map[string]int64{
+					"us-test1-a": 10,
+				},
+				deniedZones: []string{"us-test1-b", "us-test1-c"},
+				recommendation: map[string]int{
+					"us-test1-a": 5,
+				},
+				instanceProperties: instanceTemplatePropertiesFromGkeNodeGroup(
+					gke.NewTestGkeMigBuilder().SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build(),
+				),
+				recommendationID: "test-rla-rec-id",
+				specKey:          "test-rla-spec-key",
+			}),
+			wantScaleUpInfo: map[gce.GceRef]nodegroupset.ScaleUpInfo{
+				{Project: "test", Zone: "us-test1-a", Name: "mig-1-async-0"}: {CurrentSize: 0, NewSize: 5, MaxSize: 10},
+			},
+			wantRecommendations: map[string]gke.ScaleUpRecommendation{
+				"https://www.googleapis.com/compute/v1/projects/test/zones/us-test1-a/instanceGroups/mig-1-async-0": {
 					RecommendationId: "test-rla-rec-id",
 					SpecKey:          "test-rla-spec-key",
 					Source:           internalmetrics.RLA,
@@ -408,7 +451,8 @@ func TestLocationPolicyAnyBalancer(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			gkeManager := &gke.GkeManagerMock{}
+			gkeManager := &gke.GkeManagerMock{MockIsUpcoming: tc.isUpcoming}
+			gkeManager.On("IsUpcoming", mock.Anything).Return(tc.isUpcoming).Maybe()
 			gkeManager.On("GetZonesInRegion", "us-test1").Return(zones, nil).Maybe()
 			gkeManager.On("RecommendLocations", mock.Anything, "us-test1", tc.wantCall.req).Return(tc.wantCall.rsp, tc.wantCall.err).Maybe()
 			gkeManager.On("GetAutoprovisioningDefaultFamily").Return(machinetypes.E2).Maybe()
@@ -473,6 +517,7 @@ type recommendLocationsCallConfig struct {
 	deniedZones                []string
 	recommendation             map[string]int
 	templateSelfLink           string
+	instanceProperties         *gceclient.InstanceProperties
 	unsetTargetShape           bool
 	recommendationTypeOverride gceclient.RecommendationType
 	maxRunDuration             *time.Duration
@@ -509,6 +554,7 @@ func newRecommendLocationCall(config recommendLocationsCallConfig) recommendLoca
 		req: gceclient.RecommendLocationsRequest{
 			Count:                  config.newNodes,
 			SourceInstanceTemplate: config.templateSelfLink,
+			InstanceProperties:     config.instanceProperties,
 			TargetShape:            targetShape,
 			LocationSettings:       locationSettings,
 			RecommendationType:     config.recommendationTypeOverride,

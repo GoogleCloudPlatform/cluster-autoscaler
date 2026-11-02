@@ -88,7 +88,8 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		return nil, fmt.Errorf("while consulting RecommendLocations got error: %v", err)
 	}
 
-	// DemandFungibilityImpactTrackingEnabled safeguard 1: populate recommendation except for upcoming/trial node groups.
+	// DemandFungibilityImpactTrackingEnabled safeguard 1: populate
+	// recommendation for scaled-up node groups.
 	trackDemand := experiments.IsDemandFungibilityImpactTrackingEnabled(b.experimentsManager)
 	if trackDemand {
 		defer func() {
@@ -102,7 +103,7 @@ func (b *locationPolicyAnyBalancer) Balance(gkeNodeGroups []gke.NodeGroup, newNo
 		for loc, nodesResize := range resp.Recommendation {
 			if nodesResize > 0 {
 				gkeNodeGroup, ok := gkeNodeGroupsMap[loc]
-				if ok && !gkeNodeGroup.IsUpcoming() {
+				if ok {
 					gkeNodeGroup.GetMig().SetRecommendation(gke.ScaleUpRecommendation{
 						RecommendationId: resp.RecommendationID,
 						SpecKey:          resp.SpecKey,

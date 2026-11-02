@@ -1385,20 +1385,22 @@ func createRepeatingError(err error, numberOfRepetitions int, followedBySuccess 
 
 type testExtendedGkeManager struct {
 	extendedGkeManager
-	mock                   *GkeManagerMock
-	t                      *testing.T
-	ctx                    context.Context
-	mutex                  sync.Mutex
-	domainUrl              string
-	nodePools              map[*gkeclient.NodePool][]*GkeMig
-	nodePoolSpecs          map[*GkeMig]*gkeclient.NodePoolSpec
-	nodePoolCreationErrs   map[string]repeatingError
-	nodePoolDeletionErrs   map[string]repeatingError
-	nodePoolCreationSignal map[string]chan *gkeclient.NodePool
-	nodePoolDeletionSignal map[string]chan struct{}
-	migInstances           map[string]int64
-	reportEmptyClusterOnce bool
-	deletedNodePools       map[string]struct{}
+	mock                    *GkeManagerMock
+	t                       *testing.T
+	ctx                     context.Context
+	mutex                   sync.Mutex
+	domainUrl               string
+	nodePools               map[*gkeclient.NodePool][]*GkeMig
+	nodePoolSpecs           map[*GkeMig]*gkeclient.NodePoolSpec
+	nodePoolCreationErrs    map[string]repeatingError
+	nodePoolDeletionErrs    map[string]repeatingError
+	nodePoolCreationSignal  map[string]chan *gkeclient.NodePool
+	nodePoolDeletionSignal  map[string]chan struct{}
+	migInstances            map[string]int64
+	recommendations         map[string]ScaleUpRecommendation
+	recordedRecommendations map[string][]ScaleUpRecommendation
+	reportEmptyClusterOnce  bool
+	deletedNodePools        map[string]struct{}
 }
 
 func newTestExtendedGkeManager(t *testing.T, ctx context.Context) *testExtendedGkeManager {
@@ -1406,19 +1408,21 @@ func newTestExtendedGkeManager(t *testing.T, ctx context.Context) *testExtendedG
 	gkeManagerMock.On("Refresh").Return(nil)
 	gkeManagerMock.On("RefreshForce").Return(nil)
 	return &testExtendedGkeManager{
-		extendedGkeManager:     gkeManagerMock,
-		mock:                   gkeManagerMock,
-		t:                      t,
-		ctx:                    ctx,
-		domainUrl:              "",
-		nodePools:              make(map[*gkeclient.NodePool][]*GkeMig),
-		nodePoolSpecs:          make(map[*GkeMig]*gkeclient.NodePoolSpec),
-		nodePoolCreationErrs:   make(map[string]repeatingError),
-		nodePoolDeletionErrs:   make(map[string]repeatingError),
-		nodePoolCreationSignal: make(map[string]chan *gkeclient.NodePool),
-		nodePoolDeletionSignal: make(map[string]chan struct{}),
-		migInstances:           make(map[string]int64),
-		deletedNodePools:       make(map[string]struct{}),
+		extendedGkeManager:      gkeManagerMock,
+		mock:                    gkeManagerMock,
+		t:                       t,
+		ctx:                     ctx,
+		domainUrl:               "",
+		nodePools:               make(map[*gkeclient.NodePool][]*GkeMig),
+		nodePoolSpecs:           make(map[*GkeMig]*gkeclient.NodePoolSpec),
+		nodePoolCreationErrs:    make(map[string]repeatingError),
+		nodePoolDeletionErrs:    make(map[string]repeatingError),
+		nodePoolCreationSignal:  make(map[string]chan *gkeclient.NodePool),
+		nodePoolDeletionSignal:  make(map[string]chan struct{}),
+		migInstances:            make(map[string]int64),
+		recommendations:         make(map[string]ScaleUpRecommendation),
+		recordedRecommendations: make(map[string][]ScaleUpRecommendation),
+		deletedNodePools:        make(map[string]struct{}),
 	}
 }
 
@@ -1508,8 +1512,48 @@ func (c *testExtendedGkeManager) SetMigSize(mig gce.Mig, size int64) error {
 func (c *testExtendedGkeManager) CreateInstances(mig gce.Mig, delta int64) error {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
+	if rec, ok := c.recommendations[mig.Id()]; ok {
+		delete(c.recommendations, mig.Id())
+		c.recordedRecommendations[mig.Id()] = append(c.recordedRecommendations[mig.Id()], rec)
+	}
 	c.migInstances[mig.Id()] += delta
 	return nil
+}
+
+func (c *testExtendedGkeManager) CreateInstancesWithRecommendation(mig gce.Mig, delta int64, rec ScaleUpRecommendation) error {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.recordedRecommendations[mig.Id()] = append(c.recordedRecommendations[mig.Id()], rec)
+	c.migInstances[mig.Id()] += delta
+	return nil
+}
+
+func (c *testExtendedGkeManager) SetRecommendation(migId string, rec ScaleUpRecommendation) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.recommendations[migId] = rec
+}
+
+func (c *testExtendedGkeManager) PopRecommendation(migId string) (ScaleUpRecommendation, bool) {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	rec, ok := c.recommendations[migId]
+	if ok {
+		delete(c.recommendations, migId)
+	}
+	return rec, ok
+}
+
+func (c *testExtendedGkeManager) ClearRecommendations() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	clear(c.recommendations)
+}
+
+func (c *testExtendedGkeManager) GetRecordedRecommendations(migId string) []ScaleUpRecommendation {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return slices.Clone(c.recordedRecommendations[migId])
 }
 
 func (c *testExtendedGkeManager) GetMigInstances(migId string) int {
@@ -1788,4 +1832,121 @@ func TestAsyncMgr_BufferedCleanUpsDoNotExhaustBufferCapacity(t *testing.T) {
 		assert.True(t, ctx.gkeManager.attemptedDeletion(failedPool2.Name), "expected second failed node pool cleanup to be buffered and executed")
 		ctx.assertNoOngoingNodePoolOps()
 	})
+}
+
+func TestAsyncMgr_AsyncNodePoolCreationPropagatesRecommendations(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx := newAsyncGkeManagerTestContext(t)
+		mig, nodePool := ctx.sampleMigWithNodePool()
+		for i, loc := range nodePool.Spec.Locations {
+			nodePool.InstanceGroupUrls[i] = fmt.Sprintf(
+				"https://www.googleapis.com/compute/v1/projects/%s/zones/%s/instanceGroupManagers/gke-created-mig-%d",
+				mig.gceRef.Project, loc, i,
+			)
+		}
+
+		result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+		upcomingMigs := result.AllCreatedMigs()
+		assert.Equal(t, 3, len(upcomingMigs))
+
+		committedRec := ScaleUpRecommendation{
+			RecommendationId: "fa-rec-123",
+			SpecKey:          "spec-1",
+		}
+		uncommittedRec := ScaleUpRecommendation{
+			RecommendationId: "uncommitted-rec-456",
+			SpecKey:          "spec-2",
+		}
+
+		// Stage recommendations on two upcoming MIGs, but only commit scale-up
+		// (CreateInstances) on upcomingMigs[0].
+		ctx.asyncGkeManager.SetRecommendation(upcomingMigs[0].Id(), committedRec)
+		ctx.asyncGkeManager.SetRecommendation(upcomingMigs[1].Id(), uncommittedRec)
+		assert.NoError(t, ctx.asyncGkeManager.CreateInstances(upcomingMigs[0], 4))
+
+		// Simulate top-of-loop CloudProvider.Refresh() clearing unpopped
+		// recommendations while GKE provisions the node pool.
+		ctx.asyncGkeManager.ClearRecommendations()
+
+		ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+		asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+		createdMigs := asyncResult.CreationResult.AllCreatedNodeGroups()
+		assert.Equal(t, 3, len(createdMigs))
+
+		createdMig0 := createdMigs[0].(*GkeMig)
+		createdMig1 := createdMigs[1].(*GkeMig)
+		assert.NotEqual(t, upcomingMigs[0].Id(), createdMig0.Id())
+
+		// Simulate InitializeNodeGroup scaling up the newly created MIGs.
+		assert.NoError(t, ctx.asyncGkeManager.CreateInstances(createdMig0, 4))
+		assert.NoError(t, ctx.asyncGkeManager.CreateInstances(createdMig1, 1))
+
+		assert.Equal(t, []ScaleUpRecommendation{committedRec}, ctx.gkeManager.GetRecordedRecommendations(createdMig0.Id()))
+		assert.Empty(t, ctx.gkeManager.GetRecordedRecommendations(createdMig1.Id()))
+		ctx.assertNoOngoingNodePoolOps()
+	})
+}
+
+func TestAsyncMgr_AsyncNodePoolCreationCoalescedRecommendations(t *testing.T) {
+	firstRec := ScaleUpRecommendation{
+		RecommendationId: "fa-rec-first",
+		SpecKey:          "spec-1",
+	}
+	secondRec := ScaleUpRecommendation{
+		RecommendationId: "fa-rec-second",
+		SpecKey:          "spec-2",
+	}
+
+	testCases := []struct {
+		name            string
+		secondRec       *ScaleUpRecommendation
+		wantRecordedRec []ScaleUpRecommendation
+	}{
+		{
+			name:            "subsequent unrecommended scale-up clears prior recommendation",
+			secondRec:       nil,
+			wantRecordedRec: nil,
+		},
+		{
+			name:            "subsequent recommended scale-up overwrites prior recommendation",
+			secondRec:       &secondRec,
+			wantRecordedRec: []ScaleUpRecommendation{secondRec},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := newAsyncGkeManagerTestContext(t)
+				mig, nodePool := ctx.sampleMigWithNodePool()
+				for i, loc := range nodePool.Spec.Locations {
+					nodePool.InstanceGroupUrls[i] = fmt.Sprintf(
+						"https://www.googleapis.com/compute/v1/projects/%s/zones/%s/instanceGroupManagers/gke-created-mig-%d",
+						mig.gceRef.Project, loc, i,
+					)
+				}
+
+				result, initializer := ctx.createNodePoolAsyncOrFail(mig)
+				upcomingMig := result.AllCreatedMigs()[0]
+
+				// First scale-up commits firstRec onto the upcoming MIG.
+				ctx.asyncGkeManager.SetRecommendation(upcomingMig.Id(), firstRec)
+				assert.NoError(t, ctx.asyncGkeManager.CreateInstances(upcomingMig, 2))
+
+				// Second coalesced scale-up either replaces or clears firstRec.
+				if tc.secondRec != nil {
+					ctx.asyncGkeManager.SetRecommendation(upcomingMig.Id(), *tc.secondRec)
+				}
+				assert.NoError(t, ctx.asyncGkeManager.CreateInstances(upcomingMig, 1))
+
+				ctx.gkeManager.finalizeNodePoolCreation(nodePool)
+				asyncResult := initializer.AwaitSuccessfulResultOrFail(mig, nodePool)
+				createdMig := asyncResult.CreationResult.AllCreatedNodeGroups()[0].(*GkeMig)
+
+				assert.NoError(t, ctx.asyncGkeManager.CreateInstances(createdMig, 3))
+				assert.Equal(t, tc.wantRecordedRec, ctx.gkeManager.GetRecordedRecommendations(createdMig.Id()))
+				ctx.assertNoOngoingNodePoolOps()
+			})
+		})
+	}
 }
