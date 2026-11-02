@@ -44,9 +44,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/scaledownpriority"
 )
 
-const testCC = "my-ccc"
+const (
+	testCC               = "my-ccc"
+	testPriorityTaintKey = "cloud.google.com/gke-scale-down-priority"
+)
 
 func ptrInt(v int) *int { return &v }
 
@@ -188,6 +192,46 @@ func TestComputeClassMinCapacityProcessor_FilterUnremovableNodes(t *testing.T) {
 			wantUnremovable: nil,
 		},
 		{
+			name: "releases the surplus non-atomic node with the highest priority",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: false, nodes: []*apiv1.Node{
+					buildCCNode("ng1-a", testCC),
+					withPriorityTaint(buildCCNode("ng1-b", testCC), "1"),
+					buildCCNode("ng1-c", testCC),
+					withPriorityTaint(buildCCNode("ng1-d", testCC), "5"),
+					buildCCNode("ng1-e", testCC),
+				}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(4)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng1-d"},
+			wantUnremovable: []string{"ng1-a", "ng1-b", "ng1-c", "ng1-e"},
+		},
+		{
+			name: "prioritized non-atomic node goes before an atomic group",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC)}},
+				{id: "ng2", atomic: false, nodes: []*apiv1.Node{buildCCNode("ng2-a", testCC), withPriorityTaint(buildCCNode("ng2-b", testCC), "1")}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(3)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng2-b"},
+			wantUnremovable: []string{"ng1-a", "ng1-b", "ng2-a"},
+		},
+		{
+			name: "prioritized atomic group goes before non-atomic nodes",
+			// ng2's nodes come first in the candidates, so releasing ng1
+			// shows that it was decided on first.
+			groups: []testNodeGroup{
+				{id: "ng2", atomic: false, nodes: []*apiv1.Node{buildCCNode("ng2-a", testCC), withPriorityTaint(buildCCNode("ng2-b", testCC), "1")}},
+				{id: "ng1", atomic: true, nodes: []*apiv1.Node{withPriorityTaint(buildCCNode("ng1-a", testCC), "5"), buildCCNode("ng1-b", testCC)}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng1-a", "ng1-b"},
+			wantUnremovable: []string{"ng2-a", "ng2-b"},
+		},
+		{
 			name: "rule-level min capacity is enforced for non-atomic nodes",
 			groups: []testNodeGroup{
 				{id: "ng1", atomic: false, nodes: []*apiv1.Node{withRuleIndex(buildCCNode("ng1-a", testCC), 0), withRuleIndex(buildCCNode("ng1-b", testCC), 0)}},
@@ -268,13 +312,24 @@ func TestComputeClassMinCapacityProcessor_FilterUnremovableNodes(t *testing.T) {
 			wantRemovable:   nil,
 			wantUnremovable: []string{"ng1-a", "ng1-b", "ng1-c"},
 		},
+		{
+			name: "removes prioritized atomic group first",
+			groups: []testNodeGroup{
+				{id: "ng1", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng1-a", testCC), buildCCNode("ng1-b", testCC)}},
+				{id: "ng2", atomic: true, nodes: []*apiv1.Node{withPriorityTaint(buildCCNode("ng2-a", testCC), "1"), buildCCNode("ng2-b", testCC)}},
+			},
+			crds:            []crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))},
+			experimentsMgr:  experiments.NewMockManager(),
+			wantRemovable:   []string{"ng2-a", "ng2-b"},
+			wantUnremovable: []string{"ng1-a", "ng1-b"},
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := setupMinCapacityCtx(t, tc.groups)
 			ccLister := cc_lister.NewMockCrdLister(tc.crds)
-			processor := NewComputeClassMinCapacityProcessor(ccLister, tc.experimentsMgr, nil)
+			processor := NewComputeClassMinCapacityProcessor(ccLister, tc.experimentsMgr, nil, scaledownpriority.NewTaintParser(testPriorityTaintKey, nil))
 
 			removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(tc.groups))
 
@@ -289,6 +344,11 @@ func withRuleIndex(node *apiv1.Node, idx int) *apiv1.Node {
 		node.Annotations = map[string]string{}
 	}
 	node.Annotations[gke_labels.CCCPriorityIndexAnnotationKey] = strconv.Itoa(idx)
+	return node
+}
+
+func withPriorityTaint(node *apiv1.Node, value string) *apiv1.Node {
+	node.Spec.Taints = append(node.Spec.Taints, apiv1.Taint{Key: testPriorityTaintKey, Value: value, Effect: apiv1.TaintEffectNoSchedule})
 	return node
 }
 
@@ -307,7 +367,7 @@ func TestComputeClassMinCapacityProcessor_DecidesInCandidateOrder(t *testing.T) 
 	// 6 nodes and a min capacity of 3: the first atomic group given, ng-b, and
 	// the first single node given, node-z, go.
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(3)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 
@@ -330,7 +390,7 @@ func TestComputeClassMinCapacityProcessor_DecidesOnLargerGroupsFirst(t *testing.
 	autoscalingCtx := setupMinCapacityCtx(t, groups)
 	// 36 nodes and a min capacity of 20: the surplus of 16 is one whole slice.
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(20)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 
@@ -354,7 +414,7 @@ func TestComputeClassMinCapacityProcessor_DecidesOnEmptyGroupsFirst(t *testing.T
 	// 5 nodes and a min capacity of 2: the surplus of 3 fits either slice, but
 	// not both.
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidates)
 
@@ -382,7 +442,7 @@ func TestComputeClassMinCapacityProcessor_GroupsOnlyComputeClassNodes(t *testing
 		{id: "ng-predefined", atomic: false, nodes: []*apiv1.Node{buildCCNode("balanced", machinetypes.BalancedClass.Name())}},
 	}
 	autoscalingCtx := setupMinCapacityCtx(t, groups)
-	processor := NewComputeClassMinCapacityProcessor(cc_lister.NewMockCrdLister(nil), experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(cc_lister.NewMockCrdLister(nil), experiments.NewMockManager(), nil, nil)
 
 	gotGroups := processor.groupCandidates(t.Context(), autoscalingCtx, candidatesFromGroups(groups))
 
@@ -391,6 +451,97 @@ func TestComputeClassMinCapacityProcessor_GroupsOnlyComputeClassNodes(t *testing
 		gotGroupNames = append(gotGroupNames, nodeNames(group))
 	}
 	assert.Equal(t, [][]string{{"cc-a", "cc-b"}}, gotGroupNames, "groupCandidates() groups")
+}
+
+// TestComputeClassMinCapacityProcessor_DecidesTiesInCandidateOrder checks that,
+// with scale-down priority enabled, the prioritized group is decided on first
+// and groups of the same priority that otherwise tie are decided on in
+// candidate order, not by node name or node group ID. The removable candidates
+// keep their input order.
+func TestComputeClassMinCapacityProcessor_DecidesTiesInCandidateOrder(t *testing.T) {
+	groups := []testNodeGroup{
+		{id: "ng-z", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng-z-a", testCC), buildCCNode("ng-z-b", testCC)}},
+		{id: "ng-plain", atomic: false, nodes: []*apiv1.Node{buildCCNode("node-c", testCC), buildCCNode("node-a", testCC)}},
+		{id: "ng-a", atomic: true, nodes: []*apiv1.Node{buildCCNode("ng-a-a", testCC), buildCCNode("ng-a-b", testCC)}},
+		{id: "ng-prio", atomic: false, nodes: []*apiv1.Node{withPriorityTaint(buildCCNode("node-p", testCC), "1")}},
+	}
+	autoscalingCtx := setupMinCapacityCtx(t, groups)
+	// 7 nodes and a min capacity of 3: node-p, then ng-z and node-c go.
+	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(3)))})
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, scaledownpriority.NewTaintParser(testPriorityTaintKey, nil))
+
+	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
+
+	assert.Equal(t, []string{"ng-z-a", "ng-z-b", "node-c", "node-p"}, nodeNames(removable), "FilterUnremovableNodes() removable nodes")
+	assert.Equal(t, []string{"ng-a-a", "ng-a-b", "node-a"}, unremovableNames(unremovable), "FilterUnremovableNodes() unremovable nodes")
+}
+
+// TestComputeClassMinCapacityProcessor_OrderWithAndWithoutScaleDownPriority
+// checks that scale-down priority only changes which ComputeClass nodes the min
+// capacity releases: the removable candidates keep their input order, and with
+// scale-down priority disabled the priority taint is ignored and the nodes are
+// decided on in candidate order.
+func TestComputeClassMinCapacityProcessor_OrderWithAndWithoutScaleDownPriority(t *testing.T) {
+	testCases := []struct {
+		name            string
+		prioritySource  *scaledownpriority.TaintParser
+		minCapacity     *int
+		wantRemovable   []string
+		wantUnremovable []string
+	}{
+		{
+			name:            "disabled without min capacity: candidates unchanged",
+			prioritySource:  scaledownpriority.NewTaintParser("", nil),
+			wantRemovable:   []string{"cc-a", "plain", "cc-prio5"},
+			wantUnremovable: []string{},
+		},
+		{
+			name:            "nil parser without min capacity: candidates unchanged",
+			prioritySource:  nil,
+			wantRemovable:   []string{"cc-a", "plain", "cc-prio5"},
+			wantUnremovable: []string{},
+		},
+		{
+			name:            "enabled without min capacity: candidates unchanged",
+			prioritySource:  scaledownpriority.NewTaintParser(testPriorityTaintKey, nil),
+			wantRemovable:   []string{"cc-a", "plain", "cc-prio5"},
+			wantUnremovable: []string{},
+		},
+		{
+			name:            "disabled at the min capacity: the first ComputeClass candidate goes",
+			prioritySource:  scaledownpriority.NewTaintParser("", nil),
+			minCapacity:     ptrInt(1),
+			wantRemovable:   []string{"cc-a", "plain"},
+			wantUnremovable: []string{"cc-prio5"},
+		},
+		{
+			name:            "enabled at the min capacity: the prioritized node goes, in input order",
+			prioritySource:  scaledownpriority.NewTaintParser(testPriorityTaintKey, nil),
+			minCapacity:     ptrInt(1),
+			wantRemovable:   []string{"plain", "cc-prio5"},
+			wantUnremovable: []string{"cc-a"},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ccA := buildCCNode("cc-a", testCC)
+			plain := buildCCNode("plain", "")
+			ccPrio5 := withPriorityTaint(buildCCNode("cc-prio5", testCC), "5")
+			groups := []testNodeGroup{
+				{id: "ng-cc", nodes: []*apiv1.Node{ccA, ccPrio5}},
+				{id: "ng-plain", nodes: []*apiv1.Node{plain}},
+			}
+			autoscalingCtx := setupMinCapacityCtx(t, groups)
+			ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(tc.minCapacity))})
+			processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, tc.prioritySource)
+			candidates := []simulator.NodeToBeRemoved{{Node: ccA}, {Node: plain}, {Node: ccPrio5}}
+
+			removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidates)
+
+			assert.Equal(t, tc.wantRemovable, nodeNames(removable), "FilterUnremovableNodes() removable nodes")
+			assert.Equal(t, tc.wantUnremovable, unremovableNames(unremovable), "FilterUnremovableNodes() unremovable nodes")
+		})
+	}
 }
 
 // TestComputeClassMinCapacityProcessor_KeepsCandidateOrder checks that the removable
@@ -405,7 +556,7 @@ func TestComputeClassMinCapacityProcessor_KeepsCandidateOrder(t *testing.T) {
 	autoscalingCtx := setupMinCapacityCtx(t, groups)
 	// 3 ComputeClass nodes and a min capacity of 1: cc-1 and cc-2 go, cc-3 stays.
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(1)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 
@@ -429,7 +580,7 @@ func TestComputeClassMinCapacityProcessor_TrimScaleDownCandidates(t *testing.T) 
 		crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2))),
 		crd.NewTestCrd(crd.WithName(otherCC), crd.WithTargetNodeCount(ptrInt(1))),
 	})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	got := processor.TrimScaleDownCandidates(context.Background(), ctx, []*apiv1.Node{groups[0].nodes[2], blockedNode, groups[2].nodes[0]})
 
@@ -449,7 +600,7 @@ func TestComputeClassMinCapacityProcessor_AccountsForNodesInDeletion(t *testing.
 	}
 	ctx := setupMinCapacityCtx(t, groups)
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	// ng1 (2 nodes) is already being deleted; only ng2 is offered as a candidate.
 	scaleDownCtx := nodes.NewDefaultScaleDownContext()
@@ -479,7 +630,7 @@ func TestComputeClassMinCapacityProcessor_TrimScaleDownCandidatesAccountsForNode
 	autoscalingCtx := setupMinCapacityCtx(t, groups)
 	autoscalingCtx.ScaleDownActuator = fakeActuator{status: &fakeActuationStatus{drainedNodesList: []string{"ng1-a", "ng1-b"}}}
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	got := processor.TrimScaleDownCandidates(t.Context(), autoscalingCtx, groups[1].nodes)
 
@@ -532,7 +683,7 @@ func TestComputeClassMinCapacityProcessor_DefragCandidatesDoNotCountTowardCurren
 			}
 			ctx := setupMinCapacityCtx(t, groups)
 			ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-			processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+			processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 			// Only the atomic group ng1 is offered; ng2-a is a defrag candidate but not being deleted.
 			ng1Candidates := []simulator.NodeToBeRemoved{{Node: groups[0].nodes[0]}, {Node: groups[0].nodes[1]}}
@@ -572,7 +723,7 @@ func TestComputeClassMinCapacityProcessor_UpcomingNodesShouldNotCountTowardCurre
 	}
 	ctx := setupMinCapacityCtx(t, groups)
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	// Only ng1 (real, ready) is a scale-down candidate. ng2 is upcoming and thus
 	// not offered as a candidate, matching the real RunOnce flow.
@@ -645,7 +796,7 @@ func TestComputeClassMinCapacityProcessor_SkipsNodesExcludedByNodeFilter(t *test
 			groups := []testNodeGroup{{id: "ng1", nodes: clusterNodes}}
 			autoscalingCtx := setupMinCapacityCtx(t, groups)
 			ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(tc.minCapacity)))})
-			processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), tc.nodeFilter)
+			processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), tc.nodeFilter, nil)
 			var candidates []simulator.NodeToBeRemoved
 			for _, node := range clusterNodes {
 				if slices.Contains(tc.candidates, node.Name) {
@@ -697,7 +848,7 @@ func TestComputeClassMinCapacityProcessor_FailsClosedOnListerError(t *testing.T)
 		{id: "ng-regular-non-cc", atomic: false, nodes: []*apiv1.Node{buildCCNode("regular-non-cc-1", "")}},
 	}
 	ctx := setupMinCapacityCtx(t, groups)
-	processor := NewComputeClassMinCapacityProcessor(&erroringCrdLister{cc_lister.NewMockCrdLister(nil)}, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(&erroringCrdLister{cc_lister.NewMockCrdLister(nil)}, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 
@@ -724,7 +875,7 @@ func TestComputeClassMinCapacityProcessor_ChecksNodesOnNodeGroupForNodeError(t *
 	autoscalingCtx := setupMinCapacityCtx(t, groups)
 	autoscalingCtx.CloudProvider = erroringNodeGroupProvider{autoscalingCtx.CloudProvider}
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(t.Context(), autoscalingCtx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 
@@ -762,7 +913,7 @@ func TestComputeClassMinCapacityProcessor_ChecksNodesOnGetOptionsError(t *testin
 	ctx := setupMinCapacityCtx(t, groups)
 	ctx.CloudProvider = erroringOptionsProvider{ctx.CloudProvider}
 	ccLister := cc_lister.NewMockCrdLister([]crd.CRD{crd.NewTestCrd(crd.WithName(testCC), crd.WithTargetNodeCount(ptrInt(2)))})
-	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil)
+	processor := NewComputeClassMinCapacityProcessor(ccLister, experiments.NewMockManager(), nil, nil)
 
 	removable, unremovable := processor.FilterUnremovableNodes(context.Background(), ctx, nodes.NewDefaultScaleDownContext(), candidatesFromGroups(groups))
 

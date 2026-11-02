@@ -34,12 +34,15 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
 	cc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/scaledownpriority"
 )
 
 // ComputeClassMinCapacityProcessor implements nodes.ScaleDownSetProcessor and the
 // defrag processor's ScaleDownFilter. It enforces ComputeClass min capacity on
 // scale-down, deciding on atomically-scaled (ZeroOrMaxNodeScaling) node groups
-// as whole groups and on other ComputeClass nodes one by one.
+// as whole groups and on other ComputeClass nodes one by one. When scale-down
+// priority is enabled, it decides on higher-priority groups first, so that the
+// priority chooses which ComputeClass nodes above the min capacity go.
 //
 // It must run after AtomicResizeFilteringProcessor. Defrag also calls it before
 // deleting a create-before-delete candidate because defrag's quota tracker only
@@ -49,16 +52,19 @@ type ComputeClassMinCapacityProcessor struct {
 	experimentsManager experiments.Manager
 	// nodeFilter excludes nodes from the ComputeClass node counts, the same way
 	// it excludes them from the min quotas tracker (e.g. surge upgrade nodes).
-	nodeFilter resourcequotas.NodeFilter
+	nodeFilter     resourcequotas.NodeFilter
+	prioritySource *scaledownpriority.TaintParser
 }
 
 // NewComputeClassMinCapacityProcessor creates a new
-// ComputeClassMinCapacityProcessor. A nil nodeFilter excludes no node.
-func NewComputeClassMinCapacityProcessor(ccLister cc_lister.Lister, experimentsManager experiments.Manager, nodeFilter resourcequotas.NodeFilter) *ComputeClassMinCapacityProcessor {
+// ComputeClassMinCapacityProcessor. A nil nodeFilter excludes no node, and a
+// nil prioritySource disables scale-down priority.
+func NewComputeClassMinCapacityProcessor(ccLister cc_lister.Lister, experimentsManager experiments.Manager, nodeFilter resourcequotas.NodeFilter, prioritySource *scaledownpriority.TaintParser) *ComputeClassMinCapacityProcessor {
 	return &ComputeClassMinCapacityProcessor{
 		ccLister:           ccLister,
 		experimentsManager: experimentsManager,
 		nodeFilter:         nodeFilter,
+		prioritySource:     prioritySource,
 	}
 }
 
@@ -84,9 +90,10 @@ func (c *minCapacityConstraint) matches(node *apiv1.Node) bool {
 
 // FilterUnremovableNodes blocks the scale-down of ComputeClass nodes that would
 // take an affected ComputeClass below its min capacity, deciding on atomic node
-// groups as a whole: groups with no pods to reschedule first, then larger
-// groups. Other candidates pass through. The removable candidates keep their
-// input order.
+// groups as a whole: groups with a higher scale-down priority first and, within
+// a priority, groups with no pods to reschedule first, then larger groups.
+// Other candidates pass through. The removable candidates keep their input
+// order.
 func (p *ComputeClassMinCapacityProcessor) FilterUnremovableNodes(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleDownCtx *nodes.ScaleDownContext, candidates []simulator.NodeToBeRemoved) ([]simulator.NodeToBeRemoved, []simulator.UnremovableNode) {
 	groups := p.groupCandidates(ctx, autoscalingCtx, candidates)
 	if len(groups) == 0 {
@@ -104,6 +111,7 @@ func (p *ComputeClassMinCapacityProcessor) FilterUnremovableNodes(ctx context.Co
 		return candidates, nil
 	}
 
+	p.sortByPriority(groups)
 	var keptGroups [][]simulator.NodeToBeRemoved
 	var released, kept []string
 	for _, group := range groups {
@@ -169,9 +177,9 @@ func (p *ComputeClassMinCapacityProcessor) TrimScaleDownCandidates(ctx context.C
 // evictions. Then larger groups come first, so that single nodes don't use up
 // the surplus a whole atomic group could free. Groups that tie keep the order
 // in which their first node appears in the candidates. For non-atomic nodes
-// this is the scale-down candidate order, so that order decides which nodes go.
-// In the main scale-down, atomic groups that tie come from
-// AtomicResizeFilteringProcessor in no particular order.
+// this is the scale-down candidate order, so that order decides which nodes of
+// the same scale-down priority go. In the main scale-down, atomic groups that
+// tie come from AtomicResizeFilteringProcessor in no particular order.
 //
 // A ComputeClass node whose node group can't be determined is decided on as
 // its own group, so that the min capacity still protects it.
@@ -221,6 +229,27 @@ func (p *ComputeClassMinCapacityProcessor) groupCandidates(ctx context.Context, 
 
 func hasNoPodsToReschedule(group []simulator.NodeToBeRemoved) bool {
 	return !slices.ContainsFunc(group, func(c simulator.NodeToBeRemoved) bool { return len(c.PodsToReschedule) > 0 })
+}
+
+// sortByPriority sorts groups by descending scale-down priority, the maximum
+// over a group's nodes. Groups of the same priority keep the order of
+// groupCandidates.
+func (p *ComputeClassMinCapacityProcessor) sortByPriority(groups [][]simulator.NodeToBeRemoved) {
+	if !p.prioritySource.Enabled() {
+		return
+	}
+	// Keyed by the group's first node, which is in no other group.
+	priorities := make(map[string]int, len(groups))
+	for _, group := range groups {
+		priority := 0
+		for _, c := range group {
+			priority = max(priority, p.prioritySource.NodePriority(c.Node))
+		}
+		priorities[group[0].Node.Name] = priority
+	}
+	slices.SortStableFunc(groups, func(a, b []simulator.NodeToBeRemoved) int {
+		return cmp.Compare(priorities[b[0].Node.Name], priorities[a[0].Node.Name])
+	})
 }
 
 // buildConstraints reads targetNodeCount limits from all ComputeClass CRDs and

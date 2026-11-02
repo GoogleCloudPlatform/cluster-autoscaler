@@ -27,10 +27,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaledown"
 	scaleup_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/scaleup"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/scaledownpriority"
 	utils_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/processors"
 	viz_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/visibility/processors"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/scaledowncandidates/previouscandidates"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/options"
 )
 
 func TestInitCapacityBufferMetricsProcessor(t *testing.T) {
@@ -157,13 +160,60 @@ func TestBuildScaleDownSetProcessorsOrdering(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			experimentsManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{}, map[string]string{})
 
-			built := buildScaleDownSetProcessors(nil, tc.options, scaledown.NewComputeClassMinCapacityProcessor(nil, experimentsManager, nil))
+			built := buildScaleDownSetProcessors(nil, tc.options, scaledown.NewComputeClassMinCapacityProcessor(nil, experimentsManager, nil, nil))
 
 			gotOrder := make([]string, 0, len(built))
 			for _, p := range built {
 				gotOrder = append(gotOrder, reflect.TypeOf(p).String())
 			}
 			assert.Equal(t, tc.expectedOrder, gotOrder)
+		})
+	}
+}
+
+// TestBuildScaleDownComparersOrdering guards the comparer order documented on
+// buildScaleDownComparers. buildScaleDownComparers takes no autoscaling
+// options, so the order doesn't depend on ComputeClass min capacity. Big Unit
+// Tests don't cover it: their candidates fit in the scale-down candidate pool,
+// so its order doesn't decide what goes.
+func TestBuildScaleDownComparersOrdering(t *testing.T) {
+	testCases := []struct {
+		name      string
+		taintKey  string
+		wantOrder []string
+	}{
+		{
+			name:     "scale-down priority enabled: priority first",
+			taintKey: "example.com/scale-down-priority",
+			wantOrder: []string{
+				"*scaledownpriority.Sorting",
+				"*emptycandidates.EmptySorting",
+				"*previouscandidates.PreviousCandidates",
+				"*processors.crdScaleDownSortingProcessor",
+			},
+		},
+		{
+			name:     "scale-down priority disabled: no priority comparer",
+			taintKey: "",
+			wantOrder: []string{
+				"*emptycandidates.EmptySorting",
+				"*previouscandidates.PreviousCandidates",
+				"*processors.crdScaleDownSortingProcessor",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			parser := scaledownpriority.NewTaintParser(tc.taintKey, nil)
+
+			built := buildScaleDownComparers(parser, nil, nil, nil, options.NodeDeleteOptions{}, nil, previouscandidates.NewPreviousCandidates())
+
+			gotOrder := make([]string, 0, len(built))
+			for _, c := range built {
+				gotOrder = append(gotOrder, reflect.TypeOf(c).String())
+			}
+			assert.Equal(t, tc.wantOrder, gotOrder, "buildScaleDownComparers() with taint key %q returned the wrong comparer types", tc.taintKey)
 		})
 	}
 }
