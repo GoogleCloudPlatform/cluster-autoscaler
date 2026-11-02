@@ -18,40 +18,45 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/client-go/util/workqueue"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/controller/priorityqueue"
+)
+
+const (
+	defaultPriority = 0
+	upsizePriority  = 1
+
+	noDelay = time.Duration(0)
 )
 
 // operationQueue is a thread-safe operations queue.
 // All operations are group by the nodes.
 type operationQueue struct {
-	nodeQueue       workqueue.TypedDelayingInterface[string]
+	nodeQueue       priorityqueue.PriorityQueue[string]
 	isNodeInProcess sync.Map
 
 	mux               sync.Mutex
 	operationsPerNode map[string][]operation
-	upsizeCounter     int
 }
 
 // newOperationQueue returns a new instance of operation queue.
 func newOperationQueue(name string) *operationQueue {
 	return &operationQueue{
-		nodeQueue:         workqueue.NewTypedDelayingQueueWithConfig(workqueue.TypedDelayingQueueConfig[string]{Name: name}),
+		nodeQueue:         priorityqueue.New[string](name),
 		operationsPerNode: map[string][]operation{},
 	}
 }
 
 func (q *operationQueue) Enqueue(op operation) {
-	q.enqueue(op, 0, false)
+	q.enqueue(op, noDelay, false)
 }
 
 func (q *operationQueue) EnqueueFront(op operation) {
-	q.enqueue(op, 0, true)
+	q.enqueue(op, noDelay, true)
 }
 
-// Don't use it for upsizes with high priority (currently upsizes) until b/423865823 is fixed.
-// TODO(b/423865823): Remove the above comment after the bug is fixed.
 func (q *operationQueue) EnqueueAfter(op operation, delay time.Duration) {
 	q.enqueue(op, delay, false)
 }
@@ -67,7 +72,6 @@ func (q *operationQueue) enqueue(op operation, delay time.Duration, front bool) 
 	q.mux.Lock()
 	defer q.mux.Unlock()
 
-	upsizesBefore := countUpsizes(q.operationsPerNode[nodeName])
 	var ops []operation
 	if front {
 		ops = append([]operation{op}, q.operationsPerNode[nodeName]...)
@@ -75,22 +79,31 @@ func (q *operationQueue) enqueue(op operation, delay time.Duration, front bool) 
 		ops = append(q.operationsPerNode[nodeName], op)
 	}
 	q.operationsPerNode[nodeName] = squashOperations(ops)
-	upsizesAfter := countUpsizes(q.operationsPerNode[nodeName])
-	q.upsizeCounter = q.upsizeCounter + upsizesAfter - upsizesBefore
+	q.enqueueNode(nodeName, delay)
+}
 
-	q.nodeQueue.AddAfter(nodeName, delay)
+func (q *operationQueue) enqueueNode(nodeName string, delay time.Duration) {
+	operations := q.operationsPerNode[nodeName]
+	if len(operations) == 0 {
+		return
+	}
+
+	q.nodeQueue.AddWithOpts(priorityqueue.AddOpts{
+		After:    delay,
+		Priority: ptr.To(operationPriority(operations[0])),
+	}, nodeName)
 }
 
 // Get returns either an operation to be processed or a shutdown notification.
 // If gets returns operation, Done should be called for this operation.
 func (q *operationQueue) Get() (operation, bool) {
 	for {
-		nodeName, quit := q.nodeQueue.Get()
+		nodeName, priority, quit := q.nodeQueue.GetWithPriority()
 		if quit {
 			return operation{}, true
 		}
 
-		operation, hasNext := q.popNextPreferredOperation(nodeName)
+		operation, hasNext := q.popNextPreferredOperation(nodeName, priority)
 		if hasNext {
 			q.isNodeInProcess.Store(nodeName, operation)
 			return operation, false
@@ -123,7 +136,6 @@ func (q *operationQueue) ClearResizeOperations(nodeName string) {
 	q.mux.Lock()
 	defer q.mux.Unlock()
 
-	q.upsizeCounter -= countUpsizes(q.operationsPerNode[nodeName])
 	nonResizeOperations := []operation{}
 	for _, operation := range q.operationsPerNode[nodeName] {
 		if operation.resize == nil {
@@ -142,7 +154,7 @@ func (q *operationQueue) ClearResizeOperations(nodeName string) {
 // If there are upsizes in the queue, preferred operation is an upsize,
 // otherwise any.
 // This method is thread-safe.
-func (q *operationQueue) popNextPreferredOperation(nodeName string) (operation, bool) {
+func (q *operationQueue) popNextPreferredOperation(nodeName string, priority int) (operation, bool) {
 	q.mux.Lock()
 	defer q.mux.Unlock()
 
@@ -153,16 +165,13 @@ func (q *operationQueue) popNextPreferredOperation(nodeName string) (operation, 
 		return operation{}, false
 	}
 
-	// In the valid state if an upsize is present in node operations,
-	// it will be the first operation in the list
-	if q.upsizeCounter > 0 && !isUpsize(op) {
-		q.nodeQueue.Add(nodeName)
+	// If the operation priority was downgraded after enqueueing (e.g., an upsize
+	// was squashed with a downsize into a net downsize, or cleared), re-enqueue
+	// the node with its current lower priority so higher-priority items go first.
+	if operationPriority(op) < priority {
+		q.enqueueNode(nodeName, noDelay)
 		q.nodeQueue.Done(nodeName)
 		return operation{}, false
-	}
-
-	if isUpsize(op) {
-		q.upsizeCounter--
 	}
 
 	q.dropNextOperation(nodeName)
@@ -261,15 +270,11 @@ func squashResizeOperations(operations []operation) []operation {
 	return []operation{{resize: &upsizeOperation}, {resize: &downsizeOperation}}
 }
 
-func countUpsizes(operations []operation) int {
-	upsizes := 0
-	for _, op := range operations {
-		if isUpsize(op) {
-			upsizes++
-		}
+func operationPriority(op operation) int {
+	if isUpsize(op) {
+		return upsizePriority
 	}
-
-	return upsizes
+	return defaultPriority
 }
 
 func isUpsize(op operation) bool {
