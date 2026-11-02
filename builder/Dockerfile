@@ -61,10 +61,12 @@ RUN curl -fLO https://github.com/protocolbuffers/protobuf/releases/download/v${P
 ARG PROTOC_GEN_GO_VERSION=v1.36.12
 ARG GOLANGCI_LINT_VERSION=v2.9.0
 ARG MISSPEL_VERSION=v0.3.4
+ARG GO_JUNIT_REPORT_VERSION=v2.1.0
 RUN \
     go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION} && \
     go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION} && \
-    go install github.com/client9/misspell/cmd/misspell@${MISSPEL_VERSION}
+    go install github.com/client9/misspell/cmd/misspell@${MISSPEL_VERSION} && \
+    go install github.com/jstemmer/go-junit-report/v2@${GO_JUNIT_REPORT_VERSION}
 
 RUN go version && protoc --version
 
