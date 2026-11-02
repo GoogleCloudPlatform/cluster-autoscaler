@@ -60,6 +60,12 @@ const (
 
 // MatchingUnusedReservations sums up all the unused reservations that match the given node group
 func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, allowAggregate bool) int {
+	_, availableCount := matchingUnusedReservations(provider, nodegroup, reservations, localSSDDiskSizeProvider, allowAggregate)
+	return availableCount
+}
+
+func matchingUnusedReservations(provider machineConfigProvider, nodegroup cloudprovider.NodeGroup, reservations []*reservation.Reservation, localSSDDiskSizeProvider localssdsize.LocalSSDSizeProvider, allowAggregate bool) ([]*reservation.Reservation, int) {
+	var matched []*reservation.Reservation
 	availableCount := 0
 	notMatchingLogQuota := klogx.NewLoggingQuota(notMatchingLogLimit)
 	for _, rsv := range reservations {
@@ -75,6 +81,9 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 		} else {
 			reservationCount = int(rsv.SpecificReservation.AvailableCount)
 		}
+		if reservationCount > 0 {
+			matched = append(matched, rsv)
+		}
 		availableCount += reservationCount
 		klog.V(4).Infof("Matching reservation found: nodegroup=%s, reservation=%s, availableCount=%d", nodegroup.Id(), rsv.Name, reservationCount)
 	}
@@ -84,7 +93,7 @@ func MatchingUnusedReservations(provider machineConfigProvider, nodegroup cloudp
 		klog.V(4).Infof("MatchingUnusedReservations found: nodegroup=%s, availableCount=%d", nodegroup.Id(), availableCount)
 	}
 
-	return availableCount
+	return matched, availableCount
 }
 
 // aggregateAvailableNodes returns the number of VMs of the MIG's TPU shape that fit in the
