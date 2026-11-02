@@ -653,9 +653,10 @@ func TestCCCMinCapacityDefragCreateBeforeDelete(t *testing.T) {
 }
 
 // TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes verifies that lowering
-// the min capacity of an idle ComputeClass removes the surplus nodes in the
-// first scale-down loop, or after ScaleDownUnneededTime when
-// ComputeClassMinCapacityDefragOnlyFakePods is disabled.
+// the min capacity of an idle ComputeClass removes the surplus nodes, those
+// with the highest scale-down priority first, in the first scale-down loop, or
+// after ScaleDownUnneededTime when ComputeClassMinCapacityDefragOnlyFakePods is
+// disabled.
 func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
 	const (
 		cccName            = "my-ccc"
@@ -667,13 +668,23 @@ func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
 		name                    string
 		defragOnlyFakePods      bool
 		wantNodesAfterFirstLoop int
+		// priorityByNodeIndex maps indexes into the sorted node names to the
+		// scale-down priority taint value set on that node.
+		priorityByNodeIndex map[int]string
+		// wantRemoved are the indexes of the nodes expected to be gone once the
+		// ComputeClass has converged to the lowered min capacity.
+		wantRemoved []int
 	}{
 		{
-			name:                    "min capacity enforced by counting: the surplus goes in the first loop",
+			name:                    "min capacity enforced by counting: the surplus goes in the first loop, prioritized nodes first",
 			defragOnlyFakePods:      true,
 			wantNodesAfterFirstLoop: loweredMinCapacity,
+			priorityByNodeIndex:     map[int]string{1: "5", 3: "1"},
+			wantRemoved:             []int{1, 3},
 		},
 		{
+			// The fake pods decide which nodes become the surplus, not the
+			// scale-down priority.
 			name:                    "min capacity held by fake pods: the surplus waits for ScaleDownUnneededTime",
 			defragOnlyFakePods:      false,
 			wantNodesAfterFirstLoop: initialMinCapacity,
@@ -701,6 +712,7 @@ func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
 				WithOverrides(
 					integration.WithComputeClassMinCapacityEnabled(),
 					integration.WithScaleDownUnneededTime(unneededTime),
+					integration.WithScaleDownPriorityTaintKey(scaleDownPriorityTaintKey),
 				).
 				WithExperimentOverrides(
 					map[string]bool{experiments.ComputeClassMinCapacityDefragOnlyFakePodsEnabledFlag: tc.defragOnlyFakePods},
@@ -717,7 +729,18 @@ func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
 					t.Fatalf("SetupAutoscaler() failed: %v", err)
 				}
 
-				assert.Equal(t, initialMinCapacity, countNodes(ctx, t, infra), "expected the ComputeClass to start on its min capacity")
+				names := sortedNodeNames(ctx, t, infra)
+				if len(names) != initialMinCapacity {
+					t.Fatalf("got %d initial nodes, want %d: the ComputeClass must start on its min capacity", len(names), initialMinCapacity)
+				}
+
+				// The priority does not bypass the min capacity: it only
+				// chooses which nodes go once the min capacity is lowered.
+				priorityByNode := map[string]string{}
+				for idx, value := range tc.priorityByNodeIndex {
+					priorityByNode[names[idx]] = value
+				}
+				addPriorityTaints(ctx, t, infra, priorityByNode)
 
 				// The idle min capacity nodes sit well past ScaleDownUnneededTime
 				// without being touched.
@@ -742,11 +765,15 @@ func TestCCCMinCapacityLoweringMinCapacityRemovesIdleNodes(t *testing.T) {
 				// the surplus nodes have been unneeded for ScaleDownUnneededTime.
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, unneededTime+time.Minute)
 				time.Sleep(5 * time.Second)
-				assert.Equal(t, loweredMinCapacity, countNodes(ctx, t, infra), "expected the ComputeClass to converge to the lowered min capacity")
+				remaining := sortedNodeNames(ctx, t, infra)
+				assert.Len(t, remaining, loweredMinCapacity, "expected the ComputeClass to converge to the lowered min capacity")
+				for _, idx := range tc.wantRemoved {
+					assert.NotContains(t, remaining, names[idx], "expected the prioritized node to be released first")
+				}
 
 				// A further loop must not go below the new min capacity.
 				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, unneededTime+time.Minute)
-				assert.Equal(t, loweredMinCapacity, countNodes(ctx, t, infra), "the lowered min capacity must keep the remaining nodes")
+				assert.Equal(t, remaining, sortedNodeNames(ctx, t, infra), "the lowered min capacity must keep the remaining nodes")
 			})
 		})
 	}

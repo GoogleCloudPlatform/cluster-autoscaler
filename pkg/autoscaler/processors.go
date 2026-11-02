@@ -139,6 +139,7 @@ import (
 	pr_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/reconciler"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/scaledownpriority"
 	sohw_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/sliceofhardware/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/fairness"
@@ -325,6 +326,38 @@ func buildScaleDownSetProcessors(
 	return scaleDownSetProcessors
 }
 
+// buildScaleDownComparers returns the scale-down candidate comparers in order
+// of precedence: a comparer only breaks the ties of the comparers before it.
+// When scale-down priority is enabled, its comparer comes first, whether or not
+// ComputeClass min capacity is enabled, so it decides which nodes become
+// scale-down candidates first.
+//
+// The comparers don't order the deletions within a loop: the planner passes
+// the removable nodes on empty before drained, otherwise in map order
+// (unneeded.Nodes iterates a map), and the scale-down budget takes atomic node
+// groups first and the other nodes by node group. With MaxScaleDownParallelism
+// below the number of removable nodes, a prioritized node may wait for a later
+// loop. Keeping the candidate order through unneeded.Nodes is a follow-up in
+// the OSS code.
+//
+// Turn ScaleDownPriority::Enabled off together with
+// ComputeClassMinCapacityDefragOnlyFakePods::Enabled: with the min capacity
+// fake pods back in the scale-down snapshot, a prioritized slice bound to a TPU
+// Slice moves its fake pods onto an idle slice and nothing scales down.
+//
+// The order is guarded by TestBuildScaleDownComparersOrdering.
+func buildScaleDownComparers(priorityParser *scaledownpriority.TaintParser, provider GkeCloudProvider, clusterSnapshot clustersnapshot.ClusterSnapshot, ccLister npc_lister.Lister, deleteOptions options.NodeDeleteOptions, drainabilityRules rules.Rules, previousCandidates *previouscandidates.PreviousCandidates) []scaledowncandidates.CandidatesComparer {
+	var comparers []scaledowncandidates.CandidatesComparer
+	if priorityParser.Enabled() {
+		comparers = append(comparers, scaledownpriority.NewSorting(priorityParser, provider, clusterSnapshot))
+	}
+	return append(comparers,
+		emptycandidates.NewEmptySortingProcessor(emptycandidates.NewNodeInfoGetter(clusterSnapshot), deleteOptions, drainabilityRules),
+		previousCandidates,
+		npc_processors.NewCrdScaleDownSortingProcessor(ccLister, provider),
+	)
+}
+
 func (b *Builder) setUpProcessors(
 	context ctx.Context,
 	manager ctrl.Manager,
@@ -385,6 +418,11 @@ func (b *Builder) setUpProcessors(
 	limitProvider.RegisterConfigs(internalmetrics.Metrics, *options)
 	resizeCalculator := calculator.New(vmreservation.New(gkeReserved, options.DefaultReservedResourcesV2Enabled), provider, options.IsClusterUsingDPV1, limitProvider)
 	autoscalingProcessors := processors.DefaultProcessors(options.AutoscalingOptions)
+
+	scaleDownPriorityParser := scaledownpriority.NewTaintParser(options.ScaleDownPriorityTaintKey, autoscalingKubeClients.Recorder)
+	if scaleDownPriorityParser.Enabled() {
+		klog.Infof("Scale-down priority enabled with taint key %q", options.ScaleDownPriorityTaintKey)
+	}
 
 	// Insert the ShortLivedUpgradeNodeInfoProvider right after MixedTemplateNodeInfoProvider, which provides the initial nodeInfos.
 	// As such, if needed, the nodeInfos will be replaced right at the beginning and they will go through
@@ -534,13 +572,7 @@ func (b *Builder) setUpProcessors(
 	}
 	sdCandidatesSorting := previouscandidates.NewPreviousCandidates()
 	autoscalingProcessors.ScaleDownCandidatesNotifier.Register(sdCandidatesSorting)
-	scaleDownComparers := []scaledowncandidates.CandidatesComparer{
-		emptycandidates.NewEmptySortingProcessor(emptycandidates.NewNodeInfoGetter(clusterSnapshot), deleteOptions, drainabilityRules),
-		sdCandidatesSorting,
-	}
-
-	npcCrdComparer := npc_processors.NewCrdScaleDownSortingProcessor(ccLister, provider)
-	scaleDownComparers = append(scaleDownComparers, npcCrdComparer)
+	scaleDownComparers := buildScaleDownComparers(scaleDownPriorityParser, provider, clusterSnapshot, ccLister, deleteOptions, drainabilityRules, sdCandidatesSorting)
 
 	var ekvmsProcessor *ekvms_processor.ScaleUpNodeProcessor
 	var resizableVmManager ekvms_operationtracker.Manager
@@ -648,7 +680,7 @@ func (b *Builder) setUpProcessors(
 	}
 
 	// Shared by the scale-down set processors and defrag.
-	minCapacityProcessor := scaledown.NewComputeClassMinCapacityProcessor(ccLister, experimentsManager, minQuotasNodeFilter)
+	minCapacityProcessor := scaledown.NewComputeClassMinCapacityProcessor(ccLister, experimentsManager, minQuotasNodeFilter, scaleDownPriorityParser)
 
 	var cccMinCapacityProcessor *npc_processors.MinCapacityPodListProcessor
 	if options.EnableComputeClassMinCapacity {

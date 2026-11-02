@@ -2869,7 +2869,7 @@ func TestProcessCandidate(t *testing.T) {
 			var cloudProvider *testprovider.TestCloudProvider
 			if len(tc.minCapacityCrds) > 0 {
 				opts.Config.EnableScaleDownFilter = true
-				opts.ScaleDownNodesFilter = scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(tc.minCapacityCrds), experiments.NewMockManager(), nil)
+				opts.ScaleDownNodesFilter = scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(tc.minCapacityCrds), experiments.NewMockManager(), nil, nil)
 				// One node group per node, atomic for an atomic candidate.
 				cloudProvider = testprovider.NewTestCloudProviderBuilder().Build()
 				for node := range tc.nodesWithPods {
@@ -3790,7 +3790,7 @@ func TestProcessPlacesMinCapacityPodsForItsOwnPass(t *testing.T) {
 				Config:                  Config{CandidateLimit: 3, ScaleDownDelay: time.Hour, EnableScaleDownFilter: true},
 				FairnessEnforcer:        fakeFairnessEnforcer{admit: tc.admit},
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
-				ScaleDownNodesFilter:    scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(crds), experiments.NewMockManager(), nil),
+				ScaleDownNodesFilter:    scaledown.NewComputeClassMinCapacityProcessor(listertest.NewMockCrdLister(crds), experiments.NewMockManager(), nil, nil),
 				MinCapacityPodPlacer:    cc_processors.NewMinCapacityPodListProcessor(listertest.NewMockCrdLister(crds), nil, experimentsManager, nil, nil),
 				ExperimentsManager:      experimentsManager,
 			})
