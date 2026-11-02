@@ -1068,19 +1068,6 @@ func (msg MachineSelectionGenerator) UpdateRequirements(ngReq *nodeGroupRequirem
 	}
 	ngReq.machineSpec = machineSpec
 	ngReq.machineSelectionType = machineSelectionType
-	if vals, exists := podReq.LabelReq.GetValues(apiv1.LabelInstanceTypeStable); exists {
-		mtMap := vals.Get()
-		mtList := []string{}
-		for mt, ok := range mtMap {
-			if ok {
-				mtList = append(mtList, mt)
-			}
-		}
-		ngReq.machineSpec.ExplicitMachineTypes = mtList
-	}
-	if ngReq.computeClassRule != nil && ngReq.computeClassRule.MachineType() != "" {
-		ngReq.machineSpec.ExplicitMachineTypes = []string{ngReq.computeClassRule.MachineType()}
-	}
 	return nil
 }
 

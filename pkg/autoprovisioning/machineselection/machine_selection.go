@@ -32,6 +32,8 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+
+	apiv1 "k8s.io/api/core/v1"
 )
 
 // Selector can be used to select machine types to base injected NAP node groups on.
@@ -91,7 +93,19 @@ func (s Selector) selectMachineSpec(
 	}
 	var explicitMachineTypes []string
 	if reservationMachineType != "" {
-		explicitMachineTypes = append(explicitMachineTypes, reservationMachineType)
+		explicitMachineTypes = []string{reservationMachineType}
+	}
+	if vals, exists := labelReq.GetValues(apiv1.LabelInstanceTypeStable); exists {
+		explicitMachineTypes = nil
+		for mt, ok := range vals.Get() {
+			if ok {
+				explicitMachineTypes = append(explicitMachineTypes, mt)
+			}
+		}
+		sort.Strings(explicitMachineTypes)
+	}
+	if rule != nil && rule.MachineType() != "" {
+		explicitMachineTypes = []string{rule.MachineType()}
 	}
 	var bootDiskStoragePools []string
 	var bootDiskProvisionedIops, bootDiskProvisionedThroughput int64

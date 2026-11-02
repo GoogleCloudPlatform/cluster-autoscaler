@@ -28,6 +28,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 
+	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/utils/ptr"
 )
 
@@ -56,6 +57,7 @@ func TestSelectMachineSpec(t *testing.T) {
 
 	for tn, tc := range map[string]struct {
 		machineFamily                         string
+		machineType                           string
 		podClass                              string
 		specifiedGpu                          string
 		specifiedTpu                          string
@@ -503,36 +505,49 @@ func TestSelectMachineSpec(t *testing.T) {
 			expectedErr: NewPodFamilyUnknownError(unknownPodFamily),
 		},
 		"known machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&knownMachineType)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.N2D},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&knownMachineType)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.N2D},
+			expectedMachineType: []string{knownMachineType},
+		},
+		"known machine type specified via pod label": {
+			machineType:         knownMachineType,
+			expectedFamilies:    []machinetypes.MachineFamily{defaultCloudProviderFamily},
+			expectedMachineType: []string{knownMachineType},
 		},
 		"known n1 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN1)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.N1},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN1)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.N1},
+			expectedMachineType: []string{customMachineTypeN1},
 		},
 		"known n2 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN2)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.N2},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN2)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.N2},
+			expectedMachineType: []string{customMachineTypeN2},
 		},
 		"known n4 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN4)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.N4},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN4)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.N4},
+			expectedMachineType: []string{customMachineTypeN4},
 		},
 		"known n2d family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN2D)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.N2D},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeN2D)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.N2D},
+			expectedMachineType: []string{customMachineTypeN2D},
 		},
 		"known e2 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeE2)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E2},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeE2)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.E2},
+			expectedMachineType: []string{customMachineTypeE2},
 		},
 		"known e4 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeE4)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.E4},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeE4)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.E4},
+			expectedMachineType: []string{customMachineTypeE4},
 		},
 		"known g2 family custom machine type specified in CCC rule": {
-			rule:             rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeG2)),
-			expectedFamilies: []machinetypes.MachineFamily{machinetypes.G2},
+			rule:                rules.NewRule(rules.WithMachineTypeRule(&customMachineTypeG2)),
+			expectedFamilies:    []machinetypes.MachineFamily{machinetypes.G2},
+			expectedMachineType: []string{customMachineTypeG2},
 		},
 		"unknown machine type specified in CCC rule": {
 			rule:        rules.NewRule(rules.WithMachineTypeRule(&unknownMachineType)),
@@ -559,6 +574,12 @@ func TestSelectMachineSpec(t *testing.T) {
 			specifiedReservationMachineType: "n2-standard-2",
 			expectedFamilies:                []machinetypes.MachineFamily{machinetypes.N2},
 			expectedMachineType:             []string{"n2-standard-2"},
+		},
+		"pod label machine type overrides reservation machine type": {
+			machineType:                     knownMachineType,
+			specifiedReservationMachineType: "n2-standard-2",
+			expectedFamilies:                []machinetypes.MachineFamily{machinetypes.N2},
+			expectedMachineType:             []string{knownMachineType},
 		},
 		"invalid min cpu platform specified in CCC rule": {
 			rule:        rules.NewRule(rules.WithMinCpuPlatformRule(ptr.To("invalid"))),
@@ -978,6 +999,9 @@ func TestSelectMachineSpec(t *testing.T) {
 			req := map[string]podrequirements.Values{}
 			if tc.machineFamily != "" {
 				req[gkelabels.MachineFamilyLabel] = podrequirements.NewValues(tc.machineFamily)
+			}
+			if tc.machineType != "" {
+				req[apiv1.LabelInstanceTypeStable] = podrequirements.NewValues(tc.machineType)
 			}
 			if tc.podClass != "" {
 				req[gkelabels.ComputeClassLabel] = podrequirements.NewValues(tc.podClass)
