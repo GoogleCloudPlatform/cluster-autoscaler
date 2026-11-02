@@ -52,7 +52,7 @@ type Constraints struct {
 
 // String returns a human-readable representation of the constraints.
 func (c Constraints) String() string {
-	return fmt.Sprintf("CPU platform: %q, GPU type: %q, TPU type: %q", CpuPlatformDebugName(c.CpuPlatform), c.GpuType, c.TpuType)
+	return fmt.Sprintf("CPU platform: %q, GPU type: %q, TPU type: %q, disk type: %q", CpuPlatformDebugName(c.CpuPlatform), c.GpuType, c.TpuType, c.DiskType)
 }
 
 func (c Constraints) isNoConstraints() bool {

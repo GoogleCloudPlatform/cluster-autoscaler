@@ -26,7 +26,8 @@ func TestMachineTypesGeneric(t *testing.T) {
 	gpuType2 := NewTestGpu("gpu-type-2", true, nil, nil)
 
 	t1 := NewMachineTypeInfo("t1", 1, 1).
-		withGpuOverride(gpuType2, 0)
+		withGpuOverride(gpuType2, 0).
+		withSupportedDisksOverride([]string{DiskTypeStandard})
 	t2 := NewMachineTypeInfo("t2", 2, 2)
 	t3 := NewMachineTypeInfo("t3", 3, 3).withCpuPlatformRequirements(iceLake)
 	t4 := NewMachineTypeInfo("t4", 4, 4)
@@ -39,6 +40,7 @@ func TestMachineTypesGeneric(t *testing.T) {
 		autoprovisionedMachineTypes: onboardMachineType(t1, t2, t3),
 		supportedCpuPlatforms:       CpuPlatformRequirements{lowerBound: IntelBroadwell, upperBound: IntelCascadeLake},
 		supportedGpuTypes:           onboardSupportedGpus(gpuType1),
+		supportedBootDiskTypes:      sliceToSet([]string{DiskTypeSSD, DiskTypeStandard}),
 	}
 	otherFamily := MachineFamily{
 		name:                        "other",
@@ -49,6 +51,7 @@ func TestMachineTypesGeneric(t *testing.T) {
 		families               []MachineFamily
 		platform               CpuPlatform
 		gpuType                string
+		bootDiskType           string
 		expectedMachines       []MachineType
 		expectedLargestMachine MachineType
 	}{
@@ -144,9 +147,23 @@ func TestMachineTypesGeneric(t *testing.T) {
 			expectedMachines:       []MachineType{t1},
 			expectedLargestMachine: t1,
 		},
+		"one family, machines are cropped correctly for the specified boot disk type with supportedDisksOverride": {
+			families:               []MachineFamily{testFamily},
+			platform:               AnyPlatform,
+			bootDiskType:           DiskTypeSSD,
+			expectedMachines:       []MachineType{t2, t3},
+			expectedLargestMachine: t3,
+		},
+		"one family, machines with supportedDisksOverride are included when matching boot disk type specified": {
+			families:               []MachineFamily{testFamily},
+			platform:               AnyPlatform,
+			bootDiskType:           DiskTypeStandard,
+			expectedMachines:       []MachineType{t1, t2, t3},
+			expectedLargestMachine: t3,
+		},
 	} {
 		t.Run(tn, func(t *testing.T) {
-			spec := MachineSpec{Families: tc.families, MinCpuPlatform: tc.platform, GpuType: tc.gpuType}
+			spec := MachineSpec{Families: tc.families, MinCpuPlatform: tc.platform, GpuType: tc.gpuType, BootDiskType: tc.bootDiskType}
 			assert.ElementsMatch(t, tc.expectedMachines, spec.AutoprovisionedMachineTypes())
 			assert.Equal(t, tc.expectedLargestMachine, spec.LargestAutoprovisionedMachineType())
 		})

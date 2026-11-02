@@ -1657,6 +1657,15 @@ func TestLimitMachineSpec(t *testing.T) {
 			},
 			expectedErr: NewMachineConfigInvalidError(machinetypes.Constraints{GpuType: "gpu-type-1", CpuPlatform: machinetypes.IntelCascadeLake}.String(), "no machine types supporting all parts of the config found"),
 		},
+		"error if machine family constraints with BootDiskType result in no compatible machine types": {
+			spec: machinetypes.MachineSpec{
+				Families:       []machinetypes.MachineFamily{machinetypes.A3},
+				MinCpuPlatform: machinetypes.AnyPlatform,
+				GpuType:        machinetypes.NvidiaH200Ultra_141gb.Name(),
+				BootDiskType:   machinetypes.DiskTypeSSD,
+			},
+			expectedErr: NewMachineConfigInvalidError(machinetypes.Constraints{CpuPlatform: machinetypes.AnyPlatform, GpuType: machinetypes.NvidiaH200Ultra_141gb.Name(), DiskType: machinetypes.DiskTypeSSD}.String(), "no machine types supporting all parts of the config found"),
+		},
 		"supported family with BootDiskStoragePools": {
 			spec: machinetypes.MachineSpec{
 				Families:             []machinetypes.MachineFamily{machinetypes.C3D},

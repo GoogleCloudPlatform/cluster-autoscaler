@@ -537,6 +537,7 @@ func (s Selector) validateMachineFamily(family machinetypes.MachineFamily, spec 
 	constraints := machinetypes.Constraints{
 		CpuPlatform:               spec.MinCpuPlatform,
 		GpuType:                   spec.GpuType,
+		DiskType:                  spec.BootDiskType,
 		ExplicitMachineTypes:      spec.ExplicitMachineTypes,
 		ConfidentialNodesRequired: spec.ConfidentialNodesEnabled,
 		ConfidentialNodeType:      spec.ConfidentialNodeType,
