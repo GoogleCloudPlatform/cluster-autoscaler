@@ -26,6 +26,8 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	provreqv1 "k8s.io/autoscaler/cluster-autoscaler/apis/provisioningrequest/autoscaling.x-k8s.io/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
@@ -36,12 +38,18 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	npc_rules "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/clusterstate"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	capacitybuffer "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
+	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
@@ -160,8 +168,8 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 				{crdName: "test-ccc", ruleIdx: "1", resource: "memory", unit: "GiB", currentCount: 16, targetCount: 16, utilizationPercentage: 50},
 				{crdName: "test-ccc", ruleIdx: "1", resource: crd.ResourceName(tpu.ResourceGoogleTPU), unit: "Chips", currentCount: 4, targetCount: 4, utilizationPercentage: 50},
 
-				{crdName: "test-ccc-2", ruleIdx: "0", resource: "cpu", unit: "Cores", currentCount: 4, targetCount: 8, utilizationPercentage: 50},
-				{crdName: "test-ccc-2", ruleIdx: "0", resource: "memory", unit: "GiB", currentCount: 16, targetCount: 32, utilizationPercentage: 25},
+				{crdName: "test-ccc-2", ruleIdx: "0", resource: "cpu", unit: "Cores", currentCount: 4, targetCount: 8, utilizationPercentage: 25},
+				{crdName: "test-ccc-2", ruleIdx: "0", resource: "memory", unit: "GiB", currentCount: 16, targetCount: 32, utilizationPercentage: 12},
 
 				{crdName: "test-ccc-2", ruleIdx: "ScaleUpAnyway", resource: "cpu", unit: "Cores", currentCount: 8, targetCount: 8, utilizationPercentage: 25},
 				{crdName: "test-ccc-2", ruleIdx: "ScaleUpAnyway", resource: "memory", unit: "GiB", currentCount: 32, targetCount: 32, utilizationPercentage: 50},
@@ -323,6 +331,111 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 				{crdName: "template-ccc", ruleIdx: "0", resource: "memory", unit: "GiB", currentCount: 0, targetCount: 16, utilizationPercentage: 0},
 			},
 		},
+		"excludes_upcoming_and_template_node_pods": {
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithCrdType("CCC"),
+					crd.WithLabel(testCrdLabel),
+					crd.WithName("upcoming-ccc"),
+					crd.WithRules([]npc_rules.Rule{
+						npc_rules.NewMachineSpecRule(&machineFamilyN2, nil, nil, nil),
+					}),
+				),
+			},
+			nodeGroups: []nodeGroupDef{
+				{
+					machineType: "n2-standard-4",
+					labels:      map[string]string{testCrdLabel: "upcoming-ccc"},
+					nodes: []nodeDef{
+						{
+							name: "node-real", cpu: 4000, mem: 16 * GB, gpu: 2,
+							gpuConfig: &cloudprovider.GpuConfig{
+								Label:                gkelabels.GPULabel,
+								Type:                 machinetypes.NvidiaTeslaA100.Name(),
+								ExtendedResourceName: gpu.ResourceNvidiaGPU,
+							},
+							pods: []podDef{
+								{name: "real-pod", cpu: 1000, mem: 4 * GB, gpu: 1},
+							},
+						},
+						{
+							name: "node-upcoming", cpu: 4000, mem: 16 * GB, gpu: 2, isUpcoming: true,
+							gpuConfig: &cloudprovider.GpuConfig{
+								Label:                gkelabels.GPULabel,
+								Type:                 machinetypes.NvidiaTeslaA100.Name(),
+								ExtendedResourceName: gpu.ResourceNvidiaGPU,
+							},
+							pods: []podDef{
+								{name: "upcoming-ds-pod", cpu: 1000, mem: 4 * GB, gpu: 1},
+								{name: "upcoming-sim-pod", cpu: 2000, mem: 8 * GB, gpu: 1},
+							},
+						},
+						{
+							name: "node-template", cpu: 4000, mem: 16 * GB, gpu: 2, isTemplate: true,
+							gpuConfig: &cloudprovider.GpuConfig{
+								Label:                gkelabels.GPULabel,
+								Type:                 machinetypes.NvidiaTeslaA100.Name(),
+								ExtendedResourceName: gpu.ResourceNvidiaGPU,
+							},
+							pods: []podDef{
+								{name: "template-ds-pod", cpu: 1000, mem: 4 * GB, gpu: 1},
+								{name: "template-sim-pod", cpu: 2000, mem: 8 * GB, gpu: 1},
+							},
+						},
+					},
+				},
+			},
+			expectedUpdates: []expectedUpdateDef{
+				{crdName: "upcoming-ccc", ruleIdx: "0", resource: "cpu", unit: "Cores", currentCount: 4, targetCount: 12, utilizationPercentage: 25},
+				{crdName: "upcoming-ccc", ruleIdx: "0", resource: "memory", unit: "GiB", currentCount: 16, targetCount: 48, utilizationPercentage: 25},
+				{crdName: "upcoming-ccc", ruleIdx: "0", resource: crd.ResourceName(gpu.ResourceNvidiaGPU), unit: "Devices", currentCount: 2, targetCount: 6, utilizationPercentage: 50},
+			},
+		},
+		"excludes_unbound_balloon_and_synthetic_pods": {
+			crds: []crd.CRD{
+				crd.NewTestCrd(
+					crd.WithCrdType("CCC"),
+					crd.WithLabel(testCrdLabel),
+					crd.WithName("filtered-ccc"),
+					crd.WithRules([]npc_rules.Rule{
+						npc_rules.NewMachineSpecRule(&machineFamilyN2, nil, nil, nil),
+					}),
+				),
+			},
+			nodeGroups: []nodeGroupDef{
+				{
+					machineType: "n2-standard-4",
+					labels:      map[string]string{testCrdLabel: "filtered-ccc"},
+					nodes: []nodeDef{
+						{
+							name: "node-real", cpu: 8000, mem: 32 * GB, gpu: 4,
+							gpuConfig: &cloudprovider.GpuConfig{
+								Label:                gkelabels.GPULabel,
+								Type:                 machinetypes.NvidiaTeslaA100.Name(),
+								ExtendedResourceName: gpu.ResourceNvidiaGPU,
+							},
+							pods: []podDef{
+								{name: "real-bound-pod", cpu: 2000, mem: 8 * GB, gpu: 1},
+								{name: "unbound-sim-pod", cpu: 2000, mem: 8 * GB, gpu: 1, unbound: true},
+								{name: "balloon-pod", cpu: 1000, mem: 4 * GB, isBalloon: true},
+								{name: "lookahead-pod", cpu: 1000, mem: 4 * GB, isLookahead: true},
+								{name: "provreq-pod", cpu: 500, mem: 2 * GB, gpu: 1, annotations: map[string]string{provreqv1.ProvisioningRequestPodAnnotationKey: "pr-1"}, provReqController: "pr-1"},
+								{name: "capreq-pod", cpu: 500, mem: 2 * GB, annotations: map[string]string{"cr.internal.gkeautoscaler.google.com/capacityrequest": "true"}},
+								{name: "defrag-pod", cpu: 500, mem: 2 * GB, annotations: map[string]string{defrag.ActiveMigrationPodAnnotation: "true"}},
+								{name: "mincap-pod", cpu: 500, mem: 2 * GB, annotations: map[string]string{crd.MinCapacityFakePodAnnotation: "true"}},
+								{name: "capbuf-pod", cpu: 500, mem: 2 * GB, annotations: map[string]string{capacitybuffer.CapacityBufferFakePodAnnotationKey: capacitybuffer.CapacityBufferFakePodAnnotationValue}},
+								{name: "generic-fake-pod", cpu: 500, mem: 2 * GB, isGenericFake: true},
+							},
+						},
+					},
+				},
+			},
+			expectedUpdates: []expectedUpdateDef{
+				{crdName: "filtered-ccc", ruleIdx: "0", resource: "cpu", unit: "Cores", currentCount: 8, targetCount: 8, utilizationPercentage: 25},
+				{crdName: "filtered-ccc", ruleIdx: "0", resource: "memory", unit: "GiB", currentCount: 32, targetCount: 32, utilizationPercentage: 25},
+				{crdName: "filtered-ccc", ruleIdx: "0", resource: crd.ResourceName(gpu.ResourceNvidiaGPU), unit: "Devices", currentCount: 4, targetCount: 4, utilizationPercentage: 25},
+			},
+		},
 	}
 
 	for name, testCase := range tests {
@@ -348,6 +461,12 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 					if nDef.isTemplate {
 						node.Annotations = map[string]string{gkelabels.NodeGeneratedFromTemplateAnnotation: "true"}
 					}
+					if nDef.isUpcoming {
+						if node.Annotations == nil {
+							node.Annotations = make(map[string]string)
+						}
+						node.Annotations[annotations.NodeUpcomingAnnotation] = "true"
+					}
 					if nDef.gpu > 0 {
 						test.AddGpusToNode(node, nDef.gpu)
 					}
@@ -360,7 +479,43 @@ func TestCrdResourceReportingProcessor_Process(t *testing.T) {
 
 					var pods []*apiv1.Pod
 					for _, pDef := range nDef.pods {
-						pod := test.BuildTestPod(pDef.name, pDef.cpu, pDef.mem)
+						var pod *apiv1.Pod
+						switch {
+						case pDef.isBalloon:
+							var err error
+							pod, err = operationtracker.GenerateBalloonPod(
+								node,
+								*resource.NewMilliQuantity(pDef.cpu, resource.DecimalSI),
+								*resource.NewQuantity(pDef.mem, resource.BinarySI),
+								true,
+							)
+							if err != nil {
+								t.Fatalf("GenerateBalloonPod failed: %v", err)
+							}
+						case pDef.isLookahead:
+							pod = lookaheadbuffer.GenerateLookaheadPods(
+								1,
+								*resource.NewMilliQuantity(pDef.cpu, resource.DecimalSI),
+								*resource.NewQuantity(pDef.mem, resource.BinarySI),
+								pDef.name,
+								"n2",
+							)[0]
+							pod.Spec.NodeName = nDef.name
+						case pDef.unbound:
+							pod = test.BuildTestPod(pDef.name, pDef.cpu, pDef.mem)
+						default:
+							pod = test.BuildScheduledTestPod(pDef.name, pDef.cpu, pDef.mem, nDef.name)
+						}
+						if len(pDef.annotations) > 0 {
+							pod.Annotations = pDef.annotations
+						}
+						if pDef.provReqController != "" {
+							isController := true
+							pod.OwnerReferences = []metav1.OwnerReference{{Kind: "ProvisioningRequest", Name: pDef.provReqController, Controller: &isController}}
+						}
+						if pDef.isGenericFake {
+							pod = fake.WithFakePodAnnotation(pod)
+						}
 						if pDef.gpu > 0 {
 							test.RequestGpuForPod(pod, pDef.gpu)
 						}
@@ -478,11 +633,18 @@ func (s *FakeCrdStatus) ResetAllResourceInfo() {
 }
 
 type podDef struct {
-	name string
-	cpu  int64
-	mem  int64
-	gpu  int64
-	tpu  int64
+	name          string
+	cpu           int64
+	mem           int64
+	gpu           int64
+	tpu           int64
+	unbound       bool
+	isBalloon     bool
+	isLookahead   bool
+	isGenericFake bool
+	annotations   map[string]string
+	// provReqController makes the pod controlled by this ProvisioningRequest, like the pods CA injects for it.
+	provReqController string
 }
 
 type nodeDef struct {
@@ -492,6 +654,7 @@ type nodeDef struct {
 	gpu        int64
 	tpu        int64
 	isTemplate bool
+	isUpcoming bool
 	gpuConfig  *cloudprovider.GpuConfig
 	pods       []podDef
 }
