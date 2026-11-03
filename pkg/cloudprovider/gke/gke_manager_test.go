@@ -6364,8 +6364,6 @@ func TestRefreshShortLivedUpgradeInProgress(t *testing.T) {
 func TestGetDeploymentType(t *testing.T) {
 	server := NewHttpServerMock()
 	defer server.Close()
-	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-		WithFetchZones(func(region string) ([]string, error) { return []string{zoneB}, nil })
 
 	reservations := []*reservation.Reservation{
 		{
@@ -6381,8 +6379,7 @@ func TestGetDeploymentType(t *testing.T) {
 			SelfLink:       "https://www.googleapis.com/compute/v1/projects/project1/zones/us-central1-b/reservations/unspecified-res",
 		},
 	}
-	reservationsPuller, err := gceclient.NewReservationsPuller(mGceClient, nil, experiments.NewMockManager(), projectId, true, zoneB)
-	assert.NoError(t, err)
+	reservationsPuller := gceclient.NewReservationsPuller(nil, nil, experiments.NewMockManager(), nil, projectId, true)
 	reservationsPuller.SetReservations(reservations)
 
 	g := newTestGkeManager(t, server.URL, napEnabled, false, false, nil, false, nil)

@@ -26,8 +26,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/reservation"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
-
-	gkeutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util"
 	"k8s.io/klog/v2"
 )
 
@@ -55,11 +53,16 @@ const (
 	experimentUpdaterInterval = 3 * time.Minute
 )
 
+// ZonesProvider provides the list of zones in the cluster's region.
+type ZonesProvider interface {
+	GetAllZones() ([]string, error)
+}
+
 // ProjectPuller periodically pulls GCE Reservations for a specific project.
 type ProjectPuller struct {
-	gceClient AutoscalingInternalGceClient
-	zones     []string
-	projectID string
+	gceClient     AutoscalingInternalGceClient
+	zonesProvider ZonesProvider
+	projectID     string
 
 	// DO NOT refer .reservations directly
 	// use getter and setter to leverage locks
@@ -73,12 +76,12 @@ type ProjectPuller struct {
 }
 
 // NewProjectPuller builds a new Puller for a specific project.
-func NewProjectPuller(gceClient AutoscalingInternalGceClient, projectID string, zones []string) *ProjectPuller {
+func NewProjectPuller(gceClient AutoscalingInternalGceClient, zonesProvider ZonesProvider, projectID string) *ProjectPuller {
 	return &ProjectPuller{
 		gceClient:           gceClient,
+		zonesProvider:       zonesProvider,
 		projectID:           projectID,
 		lastReservationSeen: time.Now().Add(initialActivityTime - inactivityTimeThreshold),
-		zones:               zones,
 	}
 }
 
@@ -134,6 +137,13 @@ func (p *ProjectPuller) Loop() {
 	startTime := time.Now()
 	p.lastLoopError = nil
 
+	zones, err := p.zonesProvider.GetAllZones()
+	if err != nil {
+		klog.Errorf("Error when getting zones: %v", err)
+		p.lastLoopError = err
+		return
+	}
+
 	gceReservations, err := p.gceClient.FetchReservationsInProject(p.projectID)
 	if err != nil {
 		klog.Warningf("Couldn't get reservations from project %s: %v", p.projectID, err)
@@ -141,12 +151,7 @@ func (p *ProjectPuller) Loop() {
 		return
 	}
 	reservations := reservation.FromV1List(gceReservations)
-	filteredReservations, err := filterReservations(reservations, p.zones)
-	if err != nil {
-		klog.Errorf("Error when filtering reservations %v", err)
-		p.lastLoopError = err
-		return
-	}
+	filteredReservations := filterReservations(reservations, zones)
 	if len(filteredReservations) > 0 {
 		p.lastReservationSeen = time.Now()
 	}
@@ -155,7 +160,7 @@ func (p *ProjectPuller) Loop() {
 	klog.V(4).Infof("reservations.Puller loop: projectID='%s' allReservations=%d, filteredReservations=%d, duration=%v", p.projectID, len(reservations), len(filteredReservations), time.Since(startTime))
 }
 
-func filterReservations(reservations []*reservation.Reservation, zones []string) ([]*reservation.Reservation, error) {
+func filterReservations(reservations []*reservation.Reservation, zones []string) []*reservation.Reservation {
 	result := make([]*reservation.Reservation, 0, len(reservations))
 	for _, rsv := range reservations {
 		// Filter out unusable reservations
@@ -173,7 +178,7 @@ func filterReservations(reservations []*reservation.Reservation, zones []string)
 
 		result = append(result, rsv)
 	}
-	return result, nil
+	return result
 }
 
 // UpdateInterval shares the interval to wait between updates
@@ -197,7 +202,7 @@ func jitter(duration time.Duration) time.Duration {
 type ReservationsPuller struct {
 	gceClient                    AutoscalingInternalGceClient
 	consumableReservationsClient consumablereservations.Client
-	zones                        []string
+	zonesProvider                ZonesProvider
 	localProjectId               string
 
 	mutex   sync.RWMutex
@@ -227,41 +232,30 @@ func (p *ReservationsPuller) updateConsumablePullerInterval() time.Duration {
 	return inactiveSleep
 }
 
-// NewReservationsPuller builds a new Puller.
-func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableReservationsClient consumablereservations.Client, experimentsManager experiments.Manager, projectID string, enableConsumablePuller bool, location string) (*ReservationsPuller, error) {
+// NewReservationsPuller builds a new Puller. Reservations outside of the zones returned by
+// zonesProvider are filtered out.
+func NewReservationsPuller(gceClient AutoscalingInternalGceClient, consumableReservationsClient consumablereservations.Client, experimentsManager experiments.Manager, zonesProvider ZonesProvider, projectID string, enableConsumablePuller bool) *ReservationsPuller {
 	useConsumablePuller := false
 	if experimentsManager != nil {
 		// Only enable the consumable puller if experiments manager is reachable.
 		useConsumablePuller = enableConsumablePuller
 	}
 
-	region, err := gkeutil.GetRegionFromLocation(location)
-	if err != nil {
-		klog.Errorf("Couldn't get region from location %s: %v", location, err)
-		return nil, fmt.Errorf("couldn't get region from location %s: %v", location, err)
-	}
-
-	zones, err := gceClient.FetchZones(context.TODO(), region)
-	if err != nil {
-		klog.Errorf("Couldn't get zones from region %s: %v", region, err)
-		return nil, fmt.Errorf("couldn't get zones from region %s: %v", region, err)
-	}
-
 	pp := &ReservationsPuller{
 		gceClient:                     gceClient,
 		consumableReservationsClient:  consumableReservationsClient,
+		zonesProvider:                 zonesProvider,
 		localProjectId:                projectID,
 		projectPullers:                map[string]*ProjectPuller{},
 		experimentsManager:            experimentsManager,
 		lastConsumableReservationSeen: time.Now().Add(initialActivityTime - inactivityTimeThreshold),
-		zones:                         zones,
 	}
 
 	pp.useConsumablePuller.Store(useConsumablePuller)
 
 	// Adding local project puller with aggregate reservations enabled
 	pp.AddProject(projectID)
-	return pp, nil
+	return pp
 }
 
 // updateExperiments queries experiments manager to check whether consumable reservation experiment
@@ -408,7 +402,7 @@ func (p *ReservationsPuller) AddProject(projectID string) {
 		return
 	}
 
-	puller := NewProjectPuller(p.gceClient, projectID, p.zones)
+	puller := NewProjectPuller(p.gceClient, p.zonesProvider, projectID)
 	p.projectPullers[projectID] = puller
 	if p.context != nil {
 		p.runProjectPuller(puller, p.context)
@@ -485,9 +479,16 @@ func (p *ReservationsPuller) consumablePullerLoop(ctx context.Context) {
 	klog.V(4).Infof("Starting ConsumableReservationPuller.Pull: projectID='%s'", p.localProjectId)
 	startTime := time.Now()
 
+	zones, err := p.zonesProvider.GetAllZones()
+	if err != nil {
+		klog.Errorf("Error when getting zones: %v", err)
+		p.lastConsumableLoopFailed = true
+		return
+	}
+
 	apiCallAlwaysFailed := true
 	var reservations []*reservation.Reservation
-	for _, zone := range p.zones {
+	for _, zone := range zones {
 		rs, err := p.consumableReservationsClient.FetchConsumableReservations(ctx, p.localProjectId, zone)
 		if err != nil {
 			if err.Type() == consumablereservations.ClientError {
@@ -511,12 +512,7 @@ func (p *ReservationsPuller) consumablePullerLoop(ctx context.Context) {
 		return
 	}
 	// filter out unusable reservations
-	filteredReservations, err := filterReservations(reservations, p.zones)
-	if err != nil {
-		klog.Errorf("Error when filtering reservations %v", err)
-		p.lastConsumableLoopFailed = true
-		return
-	}
+	filteredReservations := filterReservations(reservations, zones)
 	if len(filteredReservations) > 0 {
 		p.lastConsumableReservationSeen = time.Now()
 	}

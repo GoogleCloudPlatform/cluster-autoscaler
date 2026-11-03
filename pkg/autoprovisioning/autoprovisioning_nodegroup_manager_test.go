@@ -1162,10 +1162,7 @@ func TestInjectedLocations(t *testing.T) {
 			processor := internal_customresources.NewProcessor(nodetemplate.NewCache())
 			computeClassLister := computeclass_lister.NewMockCrdLister([]computeclass.CRD{})
 
-			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
-			fakeRP, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "proj", false, "us-central1")
-			assert.NoError(t, err)
+			fakeRP := gceclient.NewReservationsPuller(nil, nil, nil, nil, "proj", false)
 			fakeRP.SetReservations(tc.reservations)
 			em := experiments.NewMockManager()
 

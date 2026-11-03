@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -90,7 +91,7 @@ func TestProjectPullerPullReservations(t *testing.T) {
 			mGceClient := BuildAutoscalingInternalGceClientMock().
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservationsInProject, tc.err })
 
-			puller := NewProjectPuller(mGceClient, tc.projectID, []string{"us-central1-a", "us-central1-b"})
+			puller := NewProjectPuller(mGceClient, newFakeZonesProvider([]string{"us-central1-a", "us-central1-b"}, nil), tc.projectID)
 			puller.lastReservationSeen = time.Time{}
 			puller.Loop()
 
@@ -182,14 +183,13 @@ func TestPullConsumableReservations(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
+			mGceClient := BuildAutoscalingInternalGceClientMock()
 			crClient := consumablereservations.NewClientMock(func(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, consumablereservations.Error) {
 				return reservation.FromV1List(tc.callsPerZone[zone].reservations), tc.callsPerZone[zone].err
 			})
 			gm := experiments.NewMockManager("ClusterAutoscaler::UseConsumableReservationsApi")
 
-			puller, _ := NewReservationsPuller(mGceClient, crClient, gm, "", true, "us-central1")
+			puller := NewReservationsPuller(mGceClient, crClient, gm, newFakeZonesProvider([]string{"us-central1-a", "us-central1-b"}, nil), "", true)
 			puller.updateExperiments()
 			puller.lastConsumableReservationSeen = time.Time{}
 			puller.consumablePullerLoop(ctx)
@@ -222,10 +222,8 @@ func TestFilterReservations(t *testing.T) {
 	testCases := []struct {
 		name             string
 		zones            []string
-		zonesErr         error
 		reservations     []*gce_api.Reservation
 		wantReservations []*gce_api.Reservation
-		wantErr          bool
 	}{
 		{
 			name:  "no reservations",
@@ -301,14 +299,8 @@ func TestFilterReservations(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reservations, err := filterReservations(reservation.FromV1List(tc.reservations), tc.zones)
-
-			if tc.wantErr {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-				assert.ElementsMatch(t, reservation.FromV1List(tc.wantReservations), reservations)
-			}
+			reservations := filterReservations(reservation.FromV1List(tc.reservations), tc.zones)
+			assert.ElementsMatch(t, reservation.FromV1List(tc.wantReservations), reservations)
 		})
 	}
 }
@@ -343,7 +335,7 @@ func TestProjectPullerUpdateInterval(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mGceClient := BuildAutoscalingInternalGceClientMock()
-			puller := NewProjectPuller(mGceClient, "", []string{})
+			puller := NewProjectPuller(mGceClient, newFakeZonesProvider(nil, nil), "")
 
 			// manually set the puller config
 			puller.lastLoopError = tc.lastLoopFailed
@@ -388,10 +380,9 @@ func TestUpdateConsumablePullerInterval(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{"us-centra1-b"}, nil })
+			mGceClient := BuildAutoscalingInternalGceClientMock()
 			gm := experiments.NewMockManager("ClusterAutoscaler::UseConsumableReservationsApi")
-			puller, _ := NewReservationsPuller(mGceClient, nil, gm, "", true, "us-central1")
+			puller := NewReservationsPuller(mGceClient, nil, gm, nil, "", true)
 
 			puller.lastConsumableLoopFailed = tc.lastLoopFailed
 			puller.lastConsumableReservationSeen = tc.lastReservationSeen
@@ -509,11 +500,10 @@ func TestPullerPullReservations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return tc.zones, nil }).
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
-			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-b")
+			puller := NewReservationsPuller(mGceClient, nil, gm, newFakeZonesProvider(tc.zones, nil), tc.localProject, len(tc.experimentFlags) > 0)
 			puller.consumableReservations = reservation.FromV1List(tc.consumableReservations)
 
 			for _, p := range tc.addProjectBeforeRun {
@@ -646,11 +636,10 @@ func TestPullerPullReservationsInProject(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 
 			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return tc.zones, nil }).
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 			gm := experiments.NewMockManager(tc.experimentFlags...)
 
-			puller, _ := NewReservationsPuller(mGceClient, nil, gm, tc.localProject, len(tc.experimentFlags) > 0, "us-central1-a")
+			puller := NewReservationsPuller(mGceClient, nil, gm, newFakeZonesProvider(tc.zones, nil), tc.localProject, len(tc.experimentFlags) > 0)
 			puller.consumableReservations = reservation.FromV1List(tc.consumableReservations)
 
 			for _, p := range tc.addProjectBeforeRun {
@@ -684,7 +673,6 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 		sharedRsv := buildSingleMachineReservation("fake-machine-type", zone)
 
 		mGceClient := BuildAutoscalingInternalGceClientMock().
-			WithFetchZones(func(region string) ([]string, error) { return []string{zone}, nil }).
 			WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
 				if project == localProject {
 					// We no longer need to "widen windows" with real time; synctest.Wait() ensures the bubble is idle.
@@ -693,7 +681,7 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 				return []*gce_api.Reservation{sharedRsv}, nil
 			})
 
-		puller, _ := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
+		puller := NewReservationsPuller(mGceClient, nil, nil, newFakeZonesProvider([]string{zone}, nil), localProject, false)
 		defer puller.Wait()
 		defer cancel()
 
@@ -771,7 +759,6 @@ func TestReservationsPuller_SetReservations(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{zone}, nil }).
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
 					if project == sharedProject {
 						return nil, tc.sharedProjectErr
@@ -779,10 +766,7 @@ func TestReservationsPuller_SetReservations(t *testing.T) {
 					return tc.localReservations, nil
 				})
 			gm := experiments.NewMockManager(experiments.ConsumableReservationExperimentName)
-			puller, err := NewReservationsPuller(mGceClient, nil, gm, localProject, true, zone)
-			if err != nil {
-				t.Fatalf("NewReservationsPuller() failed: %v", err)
-			}
+			puller := NewReservationsPuller(mGceClient, nil, gm, newFakeZonesProvider([]string{zone}, nil), localProject, true)
 			puller.updateExperiments()
 			puller.AddProject(sharedProject)
 			pull := func() {
@@ -858,10 +842,9 @@ func TestPullerPullLocalReservations(t *testing.T) {
 			defer cancel()
 
 			mGceClient := BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return zones, nil }).
 				WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) { return tc.reservations[project], nil })
 
-			puller, _ := NewReservationsPuller(mGceClient, nil, nil, localProject, false, "us-central1-c")
+			puller := NewReservationsPuller(mGceClient, nil, nil, newFakeZonesProvider(zones, nil), localProject, false)
 			puller.AddProject(sharedProject)
 
 			puller.Run(ctx)
@@ -872,6 +855,156 @@ func TestPullerPullLocalReservations(t *testing.T) {
 			}
 		})
 	}
+}
+
+type zonesResult struct {
+	zones []string
+	err   error
+}
+
+type fakeZonesProvider struct {
+	state atomic.Pointer[zonesResult]
+}
+
+func newFakeZonesProvider(zones []string, err error) *fakeZonesProvider {
+	f := &fakeZonesProvider{}
+	f.set(zones, err)
+	return f
+}
+
+func (f *fakeZonesProvider) set(zones []string, err error) {
+	f.state.Store(&zonesResult{zones: slices.Clone(zones), err: err})
+}
+
+func (f *fakeZonesProvider) GetAllZones() ([]string, error) {
+	s := f.state.Load()
+	return slices.Clone(s.zones), s.err
+}
+
+func TestReservationsPuller_DynamicZoneRefresh(t *testing.T) {
+	const (
+		localProject  = "local-proj"
+		sharedProject = "shared-proj"
+		standardZone  = "us-central1-a"
+		aiZone        = "us-central1-ai1a"
+	)
+
+	rsvLocalStandard := buildSingleMachineReservation("a3-megagpu-8g", standardZone)
+	rsvLocalStandard.Id = 1
+	rsvLocalStandard.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/reservations/rsv-1", localProject, standardZone)
+
+	rsvLocalAI := buildSingleMachineReservation("a3-megagpu-8g", aiZone)
+	rsvLocalAI.Id = 2
+	rsvLocalAI.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/reservations/rsv-2", localProject, aiZone)
+
+	rsvSharedAI := buildSingleMachineReservation("a3-megagpu-8g", aiZone)
+	rsvSharedAI.Id = 3
+	rsvSharedAI.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/%s/zones/%s/reservations/rsv-3", sharedProject, aiZone)
+
+	rsvConsumableAI := buildSingleMachineReservation("a3-megagpu-8g", aiZone)
+	rsvConsumableAI.Id = 4
+	rsvConsumableAI.SelfLink = fmt.Sprintf("https://www.googleapis.com/compute/v1/projects/unpulled-proj/zones/%s/reservations/rsv-4", aiZone)
+
+	mGceClient := BuildAutoscalingInternalGceClientMock().
+		WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
+			switch project {
+			case localProject:
+				return []*gce_api.Reservation{rsvLocalStandard, rsvLocalAI}, nil
+			case sharedProject:
+				return []*gce_api.Reservation{rsvSharedAI}, nil
+			default:
+				return nil, nil
+			}
+		})
+
+	crClient := consumablereservations.NewClientMock(func(ctx context.Context, projectID, zone string) ([]*reservation.Reservation, consumablereservations.Error) {
+		if zone == aiZone {
+			return reservation.FromV1List([]*gce_api.Reservation{rsvConsumableAI}), nil
+		}
+		return nil, nil
+	})
+	gm := experiments.NewMockManager(experiments.ConsumableReservationExperimentName)
+
+	zp := newFakeZonesProvider([]string{standardZone}, nil)
+	puller := NewReservationsPuller(mGceClient, crClient, gm, zp, localProject, true)
+	puller.updateExperiments()
+	puller.AddProject(sharedProject)
+
+	ctx := t.Context()
+	pullAll := func() {
+		for _, pp := range puller.projectPullers {
+			pp.Loop()
+		}
+		puller.consumablePullerLoop(ctx)
+	}
+
+	// 1. Before AI zone is visible: only standardZone reservations are returned.
+	pullAll()
+	if diff := cmp.Diff(reservation.FromV1List([]*gce_api.Reservation{rsvLocalStandard}), puller.GetReservations(), cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+		t.Errorf("GetReservations() before AI zone allowlisting diff (-want +got):\n%s", diff)
+	}
+
+	// 2. AI zone becomes visible via ZonesProvider: local, shared, and consumable AI zone reservations are discovered.
+	zp.set([]string{standardZone, aiZone}, nil)
+	pullAll()
+	wantAll := []*gce_api.Reservation{rsvLocalStandard, rsvLocalAI, rsvSharedAI, rsvConsumableAI}
+	if diff := cmp.Diff(reservation.FromV1List(wantAll), puller.GetReservations(), cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+		t.Errorf("GetReservations() after AI zone allowlisting diff (-want +got):\n%s", diff)
+	}
+
+	// 3. Transient error in GetAllZones() fails the loop and preserves previously cached reservations.
+	zp.set(nil, errors.New("transient GCE outage"))
+	pullAll()
+	assert.Error(t, puller.LastLoopErrorInProject(localProject))
+	assert.Error(t, puller.LastLoopErrorInProject(sharedProject))
+	assert.True(t, puller.lastConsumableLoopFailed)
+	if diff := cmp.Diff(reservation.FromV1List(wantAll), puller.GetReservations(), cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+		t.Errorf("GetReservations() on transient GetAllZones() error diff (-want +got):\n%s", diff)
+	}
+}
+
+func TestReservationsPuller_RunRefreshesZonesPeriodically(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			localProject = "local-proj"
+			standardZone = "us-central1-a"
+			aiZone       = "us-central1-ai1a"
+		)
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		rsvStandard := buildSingleMachineReservation("a3-megagpu-8g", standardZone)
+		rsvStandard.Id = 1
+		rsvAI := buildSingleMachineReservation("a3-megagpu-8g", aiZone)
+		rsvAI.Id = 2
+
+		mGceClient := BuildAutoscalingInternalGceClientMock().
+			WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
+				return []*gce_api.Reservation{rsvStandard, rsvAI}, nil
+			})
+
+		zp := newFakeZonesProvider([]string{standardZone}, nil)
+		puller := NewReservationsPuller(mGceClient, nil, nil, zp, localProject, false)
+		defer puller.Wait()
+		defer cancel()
+
+		go puller.Run(ctx)
+
+		synctest.Wait()
+
+		if diff := cmp.Diff(reservation.FromV1List([]*gce_api.Reservation{rsvStandard}), puller.GetReservations(), cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+			t.Fatalf("GetReservations() before AI zone visibility diff (-want +got):\n%s", diff)
+		}
+
+		// Simulate AI zone becoming visible on the running cluster and advance past activeSleep + jitter.
+		zp.set([]string{standardZone, aiZone}, nil)
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+
+		if diff := cmp.Diff(reservation.FromV1List([]*gce_api.Reservation{rsvStandard, rsvAI}), puller.GetReservations(), cmpopts.EquateEmpty(), cmpopts.SortSlices(less)); diff != "" {
+			t.Errorf("GetReservations() after periodic refresh diff (-want +got):\n%s", diff)
+		}
+	})
 }
 
 func buildSingleMachineReservation(machineType, zone string) *gce_api.Reservation {

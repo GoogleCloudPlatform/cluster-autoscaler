@@ -661,10 +661,11 @@ func (b *Builder) Build(
 	klog.V(1).Infof("GCE projectId=%s location=%s", b.projectID, b.location)
 
 	// Initialize GCE Reservations Puller.
-	reservationsPuller, err := gceclient.NewReservationsPuller(b.gceClient, b.consumableReservationsClient, experimentsManager, b.projectID, autoscalingOptions.EnableConsumablePuller, autoscalingOptions.Location)
+	zonesProvider, err := gke.NewRegionZonesProvider(b.gkeCache, b.gceClient, b.location)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create reservations puller: %v", err)
+		return nil, nil, fmt.Errorf("failed to create zones provider for reservations puller: %v", err)
 	}
+	reservationsPuller := gceclient.NewReservationsPuller(b.gceClient, b.consumableReservationsClient, experimentsManager, zonesProvider, b.projectID, autoscalingOptions.EnableConsumablePuller)
 	go reservationsPuller.Run(bgContext)
 
 	// Self-service features must be registered before the GKE cloud provider is

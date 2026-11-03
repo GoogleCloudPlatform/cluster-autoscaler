@@ -120,9 +120,7 @@ func WithPvmUnfitnessPenalty() func(*gkePriceBased) {
 // WithReservations sets reservations for testing.
 func WithReservations(rsvs []*reservation.Reservation) func(*gkePriceBased) {
 	return func(g *gkePriceBased) {
-		mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-			WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a"}, nil })
-		puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+		puller := gceclient.NewReservationsPuller(nil, nil, nil, nil, "", false)
 		puller.SetReservations(rsvs)
 		g.reservationsPuller = puller
 	}
