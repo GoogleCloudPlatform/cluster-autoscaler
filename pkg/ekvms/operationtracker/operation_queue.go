@@ -112,7 +112,6 @@ func (q *operationQueue) Get() (operation, bool) {
 }
 
 // Done marks item as done processing.
-// Moreover, it will re-add the node to the queue for further processing.
 func (q *operationQueue) Done(op operation) {
 	nodeName := op.nodeName()
 	if nodeName == "" {
@@ -120,8 +119,6 @@ func (q *operationQueue) Done(op operation) {
 		return
 	}
 
-	// Re-Add node to queue. Node will be only removed from queue when there is no operation for the given node.
-	q.nodeQueue.Add(nodeName)
 	q.isNodeInProcess.Delete(nodeName)
 	q.nodeQueue.Done(nodeName)
 }
@@ -175,6 +172,11 @@ func (q *operationQueue) popNextPreferredOperation(nodeName string, priority int
 	}
 
 	q.dropNextOperation(nodeName)
+	// If further operations remain for this node (e.g., a mixed resize
+	// operation that squashed into [upsize, downsize]), re-enqueue the node
+	// with the remaining head operation's priority so it is processed once
+	// Done(nodeName) is called.
+	q.enqueueNode(nodeName, noDelay)
 	return op, true
 }
 
@@ -193,7 +195,7 @@ func (q *operationQueue) peekNextOperation(nodeName string) (operation, bool) {
 // dropNextOperation drops a top operation from the queue.
 func (q *operationQueue) dropNextOperation(nodeName string) {
 	operations := q.operationsPerNode[nodeName]
-	if len(operations) == 0 {
+	if len(operations) <= 1 {
 		delete(q.operationsPerNode, nodeName)
 		return
 	}

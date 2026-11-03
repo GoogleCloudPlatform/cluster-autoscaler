@@ -440,6 +440,44 @@ func TestShutdown(t *testing.T) {
 	assert.True(t, quit)
 }
 
+func TestDoneDoesNotOverrideEnqueueAfterDelay(t *testing.T) {
+	opQueue := newOperationQueue("test")
+	defer opQueue.ShutDown()
+
+	op1 := operation{reconcileNodeState: &reconcileNodeStateOperation{nodeName: "node1", attempts: 1}}
+	op2 := operation{reconcileNodeState: &reconcileNodeStateOperation{nodeName: "node1", attempts: 2}}
+
+	opQueue.Enqueue(op1)
+	got, quit := opQueue.Get()
+	assert.False(t, quit)
+	assert.Equal(t, op1, got)
+
+	// Simulate handleReconcileNodeStateOperation scheduling a delayed retry
+	// before defer opQueue.Done(op1) runs.
+	delay := 40 * time.Millisecond
+	opQueue.EnqueueAfter(op2, delay)
+	opQueue.Done(got)
+
+	gotCh := make(chan operation, 1)
+	go func() {
+		op, _ := opQueue.Get()
+		gotCh <- op
+	}()
+
+	select {
+	case <-gotCh:
+		t.Fatal("Done() must not override EnqueueAfter delay and make the retry ready immediately")
+	case <-time.After(15 * time.Millisecond):
+	}
+
+	select {
+	case gotRetry := <-gotCh:
+		assert.Equal(t, op2, gotRetry)
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for delayed retry after Done()")
+	}
+}
+
 func TestSquashOperations(t *testing.T) {
 	newOperationForResize := func(from, to size.VmSize) operation {
 		resizeOperation := ResizeOperation{
