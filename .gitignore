@@ -24,3 +24,6 @@ Session.vim
 **/vendor/**/OWNERS_ALIASES
 /modreplaces/**/OWNERS
 /modreplaces/**/OWNERS_ALIASES
+
+# Ignore pycache for python scripts
+__pycache__/
