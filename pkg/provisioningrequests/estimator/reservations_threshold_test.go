@@ -18,7 +18,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	gke_api_beta "google.golang.org/api/container/v1beta1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce/localssdsize"
@@ -183,11 +182,8 @@ func TestReservationsThresholdNodeLimit(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{firstZone}, nil })
 			gkeManagerMock := &gke.GkeManagerMock{}
-			puller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, firstZone)
-			assert.NoError(t1, err)
+			puller := gceclient.NewReservationsPuller(nil, nil, nil, nil, "", false)
 
 			res := make([]*reservation.Reservation, 0)
 			for i, resConfig := range tt.reservationsConfig {

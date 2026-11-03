@@ -270,9 +270,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 
 		var puller *gceclient.ReservationsPuller
 		if len(tc.reservations) > 0 {
-			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
-			puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+			puller = gceclient.NewReservationsPuller(nil, nil, nil, nil, "", false)
 			puller.SetReservations(tc.reservations)
 		}
 
@@ -1624,9 +1622,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 
 			var puller *gceclient.ReservationsPuller
 			if len(tc.reservations) > 0 {
-				mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-					WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-a", "us-central1-b"}, nil })
-				puller, _ = gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+				puller = gceclient.NewReservationsPuller(nil, nil, nil, nil, "", false)
 				puller.SetReservations(tc.reservations)
 			}
 

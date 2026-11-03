@@ -972,10 +972,7 @@ func TestAutoprovisioningNodeGroupManager_gpuRequestsForPod(t *testing.T) {
 		nil)
 	res1.Name = "res1"
 	res1.SelfLink = "https://www.googleapis.com/compute/v1/projects/res-proj/zones/us-central1-c/reservations/res1"
-	mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-		WithFetchZones(func(region string) ([]string, error) { return []string{"us-central1-c"}, nil })
-	mockReservationPuller, err := gceclient.NewReservationsPuller(mGceClient, nil, nil, "res-proj", false, "us-central1")
-	assert.NoError(t, err)
+	mockReservationPuller := gceclient.NewReservationsPuller(nil, nil, nil, nil, "res-proj", false)
 
 	tests := []struct {
 		name               string

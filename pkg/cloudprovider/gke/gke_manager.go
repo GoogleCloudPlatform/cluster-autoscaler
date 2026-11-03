@@ -1995,18 +1995,7 @@ func (m *gkeManagerImpl) SendCapacityDecision(ctx context.Context, decision api.
 
 // GetZonesInRegion returns all zones within a given region.
 func (m *gkeManagerImpl) GetZonesInRegion(region string) ([]string, error) {
-	zones, found := m.cache.GetZonesInRegion(region)
-	if found {
-		return zones, nil
-	}
-
-	zones, err := m.gceService.FetchZones(context.TODO(), region)
-	if err != nil {
-		return nil, err
-	}
-
-	m.cache.SetZonesInRegion(region, zones)
-	return zones, nil
+	return zonesInRegion(m.cache, m.gceService, region)
 }
 
 // GetStandardZonesInRegion returns all standard zones within a given region.

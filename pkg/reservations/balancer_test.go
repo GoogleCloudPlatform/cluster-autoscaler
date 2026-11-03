@@ -327,9 +327,7 @@ func TestBalanceScaleUpBetweenGroups(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			mGceClient := gceclient.BuildAutoscalingInternalGceClientMock().
-				WithFetchZones(func(region string) ([]string, error) { return []string{"zone-a, zone-b"}, nil })
-			puller, _ := gceclient.NewReservationsPuller(mGceClient, nil, nil, "", false, "us-central1")
+			puller := gceclient.NewReservationsPuller(nil, nil, nil, nil, "", false)
 			puller.SetReservations(tc.reservations)
 
 			provider := newTestCloudProvider(append(tc.groups, tc.upcomingNodeGroups...)...)
