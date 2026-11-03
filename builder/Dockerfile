@@ -32,7 +32,7 @@ RUN \
     qemu-user-static \
     rsync \
     jq \
-    zstd \
+    squashfs-tools \
     apt-transport-https \
     gpg \
     gnupg \
