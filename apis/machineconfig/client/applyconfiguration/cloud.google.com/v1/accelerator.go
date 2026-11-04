@@ -28,6 +28,7 @@ type AcceleratorApplyConfiguration struct {
 	Topologies                    []string                              `json:"topologies,omitempty"`
 	MultiInstanceSharingSupported *bool                                 `json:"multiInstanceSharingSupported,omitempty"`
 	TimeSharingSupported          *bool                                 `json:"timeSharingSupported,omitempty"`
+	NAPDisabled                   *bool                                 `json:"napDisabled,omitempty"`
 }
 
 // AcceleratorApplyConfiguration constructs an declarative configuration of the Accelerator type for use with
@@ -118,5 +119,13 @@ func (b *AcceleratorApplyConfiguration) WithMultiInstanceSharingSupported(value 
 // If called multiple times, the TimeSharingSupported field is set to the value of the last call.
 func (b *AcceleratorApplyConfiguration) WithTimeSharingSupported(value bool) *AcceleratorApplyConfiguration {
 	b.TimeSharingSupported = &value
+	return b
+}
+
+// WithNAPDisabled sets the NAPDisabled field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the NAPDisabled field is set to the value of the last call.
+func (b *AcceleratorApplyConfiguration) WithNAPDisabled(value bool) *AcceleratorApplyConfiguration {
+	b.NAPDisabled = &value
 	return b
 }

@@ -31,6 +31,7 @@ type MachinePropertiesApplyConfiguration struct {
 	ConfidentialNodeConfig       *ConfidentialNodeConfigApplyConfiguration    `json:"confidentialNodeConfig,omitempty"`
 	NumaAlignmentUnsupported     *bool                                        `json:"numaAlignmentUnsupported,omitempty"`
 	SupportsNestedVirtualization *bool                                        `json:"supportsNestedVirtualization,omitempty"`
+	DWSDisabled                  *bool                                        `json:"dwsDisabled,omitempty"`
 }
 
 // MachinePropertiesApplyConfiguration constructs an declarative configuration of the MachineProperties type for use with
@@ -142,5 +143,13 @@ func (b *MachinePropertiesApplyConfiguration) WithNumaAlignmentUnsupported(value
 // If called multiple times, the SupportsNestedVirtualization field is set to the value of the last call.
 func (b *MachinePropertiesApplyConfiguration) WithSupportsNestedVirtualization(value bool) *MachinePropertiesApplyConfiguration {
 	b.SupportsNestedVirtualization = &value
+	return b
+}
+
+// WithDWSDisabled sets the DWSDisabled field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the DWSDisabled field is set to the value of the last call.
+func (b *MachinePropertiesApplyConfiguration) WithDWSDisabled(value bool) *MachinePropertiesApplyConfiguration {
+	b.DWSDisabled = &value
 	return b
 }
