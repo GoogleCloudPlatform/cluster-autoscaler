@@ -15,6 +15,7 @@
 package machinetypes
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -1147,6 +1148,83 @@ func TestToMachineFamilyObject_UsagePolicy(t *testing.T) {
 
 			if diff := cmp.Diff(rawMF(tc.want), rawMF(got), cmp.AllowUnexported(rawMF{}, CpuPlatformRequirements{}, MachinePriceInfo{}, MachineType{}), cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("ToMachineFamilyObject() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestToMachineFamilyObject_Accelerators(t *testing.T) {
+	tpuAccelerator := mcv1.Accelerator{Name: "tpu-v5-lite-podslice", ProviderType: ptr.To("tpu")}
+	gpuAccelerator := mcv1.Accelerator{Name: "nvidia-l4", ProviderType: ptr.To("nvidia")}
+	tpuMachineType := mcv1.MachineType{
+		Name:      "ct5lp-hightpu-4t",
+		Resources: mcv1.MachineResources{CPUs: 112, Memory: 196608, Accelerator: &mcv1.AcceleratorSpec{Name: tpuAccelerator.Name, FixedCount: 4}},
+	}
+	cpuMachineType := mcv1.MachineType{
+		Name:      "ct5lp-cpu-only",
+		Resources: mcv1.MachineResources{CPUs: 112, Memory: 196608},
+	}
+	testCases := []struct {
+		name         string
+		usagePolicy  *mcv1.UsagePolicy
+		accelerators []mcv1.Accelerator
+		machineTypes []mcv1.MachineType
+		wantErr      error
+	}{
+		{
+			name:         "no accelerators",
+			machineTypes: []mcv1.MachineType{cpuMachineType},
+		},
+		{
+			name:         "TPU family accelerator and machine type accelerator",
+			accelerators: []mcv1.Accelerator{tpuAccelerator},
+			machineTypes: []mcv1.MachineType{tpuMachineType},
+			wantErr:      errAcceleratorsNotSupported,
+		},
+		{
+			name:         "family accelerator only",
+			accelerators: []mcv1.Accelerator{gpuAccelerator},
+			machineTypes: []mcv1.MachineType{cpuMachineType},
+			wantErr:      errAcceleratorsNotSupported,
+		},
+		{
+			name:         "machine type accelerator only",
+			machineTypes: []mcv1.MachineType{tpuMachineType},
+			wantErr:      errAcceleratorsNotSupported,
+		},
+		{
+			name:         "PropertiesOnly with accelerators",
+			usagePolicy:  &mcv1.UsagePolicy{Mode: ptr.To(mcv1.UsagePolicyModePropertiesOnly)},
+			accelerators: []mcv1.Accelerator{tpuAccelerator},
+			machineTypes: []mcv1.MachineType{tpuMachineType},
+			wantErr:      errAcceleratorsNotSupported,
+		},
+		{
+			name:         "WeightsOnly ignores accelerators",
+			usagePolicy:  &mcv1.UsagePolicy{Mode: ptr.To(mcv1.UsagePolicyModeWeightsOnly)},
+			accelerators: []mcv1.Accelerator{tpuAccelerator},
+			machineTypes: []mcv1.MachineType{tpuMachineType},
+		},
+		{
+			name:         "Legacy ignores accelerators",
+			usagePolicy:  &mcv1.UsagePolicy{Mode: ptr.To(mcv1.UsagePolicyModeLegacy)},
+			accelerators: []mcv1.Accelerator{tpuAccelerator},
+			machineTypes: []mcv1.MachineType{tpuMachineType},
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := &mcv1.MachineFamily{
+				Name:         "ct5lp",
+				UsagePolicy:  tc.usagePolicy,
+				Accelerators: tc.accelerators,
+				MachineTypes: tc.machineTypes,
+			}
+
+			_, gradedErr := ToMachineFamilyObject(input, cpSource, false)
+
+			if !errors.Is(gradedErr.Err, tc.wantErr) {
+				t.Errorf("ToMachineFamilyObject() error = %v, want %v", gradedErr.Err, tc.wantErr)
 			}
 		})
 	}

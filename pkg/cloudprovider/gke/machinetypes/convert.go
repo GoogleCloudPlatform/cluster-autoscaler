@@ -29,6 +29,10 @@ import (
 
 const bytesPerMiB = 1024 * 1024
 
+// errAcceleratorsNotSupported is returned for families with accelerators, which
+// the conversion cannot represent yet.
+var errAcceleratorsNotSupported = errors.New("accelerator conversion is not supported")
+
 func ToCpuPlatformInfoObject(cp mcv1.CPUPlatform) (cpuPlatformInfo, error) {
 	var as []CpuPlatform
 	for _, alias := range cp.Aliases {
@@ -93,7 +97,7 @@ func ToMachineFamilyObject(mf *mcv1.MachineFamily, cpSource *cpuPlatformsSource,
 
 	if err := validateMachineFamily(mf, usagePolicy); err != nil {
 		return MachineFamily{}, GradedError{
-			Err: fmt.Errorf("failed to validate machine family %q: %v", mf.Name, err),
+			Err: fmt.Errorf("failed to validate machine family %q: %w", mf.Name, err),
 		}
 	}
 
@@ -234,6 +238,9 @@ func validateMachineFamily(mf *mcv1.MachineFamily, policy *UsagePolicy) error {
 }
 
 func validateCore(mf *mcv1.MachineFamily) error {
+	if err := validateNoAccelerators(mf); err != nil {
+		return err
+	}
 	if err := validateMachineTypes(mf.MachineTypes); err != nil {
 		return err
 	}
@@ -250,6 +257,23 @@ func validateCore(mf *mcv1.MachineFamily) error {
 		return err
 	}
 	// TODO(b/489334073): validate CPU platform settings
+	return nil
+}
+
+// validateNoAccelerators rejects families that list accelerators or have a machine type with one.
+//
+// Accelerator data is not converted from the MachineConfig CRD yet, so using such
+// a family would silently drop its GPU or TPU support. Rejecting it keeps the
+// hard-coded configuration of the family in use instead.
+func validateNoAccelerators(mf *mcv1.MachineFamily) error {
+	if len(mf.Accelerators) > 0 {
+		return fmt.Errorf("%w: family lists %d accelerators", errAcceleratorsNotSupported, len(mf.Accelerators))
+	}
+	for _, mt := range mf.MachineTypes {
+		if mt.Resources.Accelerator != nil {
+			return fmt.Errorf("%w: machine type %q has accelerator %q", errAcceleratorsNotSupported, mt.Name, mt.Resources.Accelerator.Name)
+		}
+	}
 	return nil
 }
 
