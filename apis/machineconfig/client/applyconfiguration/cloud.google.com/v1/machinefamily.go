@@ -19,14 +19,15 @@ package v1
 // MachineFamilyApplyConfiguration represents an declarative configuration of the MachineFamily type for use
 // with apply.
 type MachineFamilyApplyConfiguration struct {
-	Name              *string                                 `json:"name,omitempty"`
-	UsagePolicy       *UsagePolicyApplyConfiguration          `json:"usagePolicy,omitempty"`
-	DefaultProperties *MachinePropertiesApplyConfiguration    `json:"defaultProperties,omitempty"`
-	Weights           *MachineFamilyWeightsApplyConfiguration `json:"weights,omitempty"`
-	MachineTypes      []MachineTypeApplyConfiguration         `json:"machineTypes,omitempty"`
-	Accelerators      []AcceleratorApplyConfiguration         `json:"accelerators,omitempty"`
-	ComputeClasses    []string                                `json:"computeClasses,omitempty"`
-	PageType          *string                                 `json:"pageType,omitempty"`
+	Name                   *string                                   `json:"name,omitempty"`
+	UsagePolicy            *UsagePolicyApplyConfiguration            `json:"usagePolicy,omitempty"`
+	DefaultProperties      *MachinePropertiesApplyConfiguration      `json:"defaultProperties,omitempty"`
+	Weights                *MachineFamilyWeightsApplyConfiguration   `json:"weights,omitempty"`
+	MachineTypes           []MachineTypeApplyConfiguration           `json:"machineTypes,omitempty"`
+	Accelerators           []AcceleratorApplyConfiguration           `json:"accelerators,omitempty"`
+	ComputeClasses         []string                                  `json:"computeClasses,omitempty"`
+	PageType               *string                                   `json:"pageType,omitempty"`
+	AcceleratorSliceConfig *AcceleratorSliceConfigApplyConfiguration `json:"acceleratorSliceConfig,omitempty"`
 }
 
 // MachineFamilyApplyConfiguration constructs an declarative configuration of the MachineFamily type for use with
@@ -108,5 +109,13 @@ func (b *MachineFamilyApplyConfiguration) WithComputeClasses(values ...string) *
 // If called multiple times, the PageType field is set to the value of the last call.
 func (b *MachineFamilyApplyConfiguration) WithPageType(value string) *MachineFamilyApplyConfiguration {
 	b.PageType = &value
+	return b
+}
+
+// WithAcceleratorSliceConfig sets the AcceleratorSliceConfig field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the AcceleratorSliceConfig field is set to the value of the last call.
+func (b *MachineFamilyApplyConfiguration) WithAcceleratorSliceConfig(value *AcceleratorSliceConfigApplyConfiguration) *MachineFamilyApplyConfiguration {
+	b.AcceleratorSliceConfig = value
 	return b
 }

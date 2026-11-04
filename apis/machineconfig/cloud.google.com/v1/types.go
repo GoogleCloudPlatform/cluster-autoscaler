@@ -113,6 +113,12 @@ type MachineFamily struct {
 	//
 	// +optional
 	PageType *string `json:"pageType,omitempty"`
+
+	// AcceleratorSliceConfig specifies the accelerator slice options of the
+	// machine family.
+	//
+	// +optional
+	AcceleratorSliceConfig *AcceleratorSliceConfig `json:"acceleratorSliceConfig,omitempty"`
 }
 
 // MachineProperties defines properties of a machine family/type.
@@ -178,6 +184,12 @@ type MachineProperties struct {
 	//
 	// +optional
 	SupportsNestedVirtualization *bool `json:"supportsNestedVirtualization,omitempty"`
+
+	// DWSDisabled specifies if the machine configuration is excluded from
+	// Dynamic Workload Scheduler support. Unset means DWS is not disabled.
+	//
+	// +optional
+	DWSDisabled *bool `json:"dwsDisabled,omitempty"`
 }
 
 // MachineType defines a machine type.
@@ -277,6 +289,12 @@ type Accelerator struct {
 	//
 	// +optional
 	TimeSharingSupported *bool `json:"timeSharingSupported"`
+
+	// NAPDisabled specifies if the accelerator is excluded from autoprovisioning support.
+	// Unset means NAP is not disabled.
+	//
+	// +optional
+	NAPDisabled *bool `json:"napDisabled,omitempty"`
 }
 
 // AcceleratorConfig defines an available accelerator configuration.
@@ -324,6 +342,16 @@ type CPUPlatform struct {
 	//
 	// +optional
 	VendorOrder *int64 `json:"vendorOrder"`
+}
+
+// AcceleratorSliceConfig contains information about the accelerator slice
+// options available for the machine family.
+type AcceleratorSliceConfig struct {
+	// Supported specifies whether the machine family supports accelerator
+	// slices. Unset means not supported.
+	//
+	// +optional
+	Supported *bool `json:"supported,omitempty"`
 }
 
 // CompactPlacementConfig contains information about the compact placement options available for

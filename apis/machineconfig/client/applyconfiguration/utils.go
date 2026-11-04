@@ -31,6 +31,8 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &cloudgooglecomv1.AcceleratorApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("AcceleratorConfig"):
 		return &cloudgooglecomv1.AcceleratorConfigApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("AcceleratorSliceConfig"):
+		return &cloudgooglecomv1.AcceleratorSliceConfigApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("AcceleratorSpec"):
 		return &cloudgooglecomv1.AcceleratorSpecApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("BootDiskConfig"):

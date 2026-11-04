@@ -67,6 +67,17 @@ spec:
               machineFamily:
                 description: Machine family specified by this machine configuration.
                 properties:
+                  acceleratorSliceConfig:
+                    description: |-
+                      AcceleratorSliceConfig specifies the accelerator slice options of the
+                      machine family.
+                    properties:
+                      supported:
+                        description: |-
+                          Supported specifies whether the machine family supports accelerator
+                          slices. Unset means not supported.
+                        type: boolean
+                    type: object
                   accelerators:
                     description: Accelerators available for this machine family.
                     items:
@@ -105,6 +116,11 @@ spec:
                         name:
                           description: Name of the accelerator.
                           type: string
+                        napDisabled:
+                          description: |-
+                            NAPDisabled specifies if the accelerator is excluded from autoprovisioning support.
+                            Unset means NAP is not disabled.
+                          type: boolean
                         partitionSizes:
                           additionalProperties:
                             format: int64
@@ -232,6 +248,11 @@ spec:
                           - name
                           type: object
                         type: array
+                      dwsDisabled:
+                        description: |-
+                          DWSDisabled specifies if the machine configuration is excluded from
+                          Dynamic Workload Scheduler support. Unset means DWS is not disabled.
+                        type: boolean
                       explicitRequestOnly:
                         description: ExplicitRequestOnly specifies if the machine
                           configuration should only be provisioned when explicitly
@@ -376,6 +397,11 @@ spec:
                                 - name
                                 type: object
                               type: array
+                            dwsDisabled:
+                              description: |-
+                                DWSDisabled specifies if the machine configuration is excluded from
+                                Dynamic Workload Scheduler support. Unset means DWS is not disabled.
+                              type: boolean
                             explicitRequestOnly:
                               description: ExplicitRequestOnly specifies if the machine
                                 configuration should only be provisioned when explicitly
