@@ -172,7 +172,7 @@ type MachineProperties struct {
 	// Whether the machine family is excluded from NUMA alignment support.
 	//
 	// +optional
-	NumaAlignmentUnsupported bool `json:"numaAlignmentUnsupported"`
+	NumaAlignmentUnsupported bool `json:"numaAlignmentUnsupported,omitempty"`
 
 	// SupportsNestedVirtualization specifies whether nested virtualization is supported for this machine configuration.
 	//
