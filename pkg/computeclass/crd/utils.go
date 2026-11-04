@@ -25,6 +25,16 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
+// MinCapacityFakePodAnnotation marks synthetic pods injected to keep a
+// ComputeClass rule at its minimum target node count.
+const MinCapacityFakePodAnnotation = "autoscaling.gke.io/min-nodes-fake-pod"
+
+// IsMinCapacityFakePod returns true if the pod was injected to keep a
+// ComputeClass rule at its target node count.
+func IsMinCapacityFakePod(pod *v1.Pod) bool {
+	return pod != nil && pod.Annotations[MinCapacityFakePodAnnotation] == "true"
+}
+
 type gkeNodeGroup interface {
 	Spec() *gkeclient.NodePoolSpec
 	TemplateNodeInfo(ctx context.Context) (*framework.NodeInfo, error)

@@ -28,7 +28,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
@@ -60,7 +59,7 @@ func TestScaleDownBlockedStatusProcessorMapReason(t *testing.T) {
 	plainNode := &apiv1.Node{ObjectMeta: metav1.ObjectMeta{Name: "plain-node"}}
 	fakePod := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name:        "min-nodes-fake-ccc-pod-my-ccc-0",
-		Annotations: map[string]string{cc_processors.MinCapacityFakePodAnnotation: "true"},
+		Annotations: map[string]string{crd.MinCapacityFakePodAnnotation: "true"},
 	}}
 	realPod := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "real-pod"}}
 

@@ -21,7 +21,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	podutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
@@ -220,7 +220,7 @@ func isFakeOrSyntheticPod(pod *apiv1.Pod) bool {
 	if _, isInjectedPR := pr_pods.InjectedPodProvReqRef(pod); isInjectedPR {
 		return true
 	}
-	if pod.Annotations != nil && pod.Annotations[cc_processors.MinCapacityFakePodAnnotation] == "true" {
+	if pod.Annotations != nil && pod.Annotations[crd.MinCapacityFakePodAnnotation] == "true" {
 		return true
 	}
 	return false

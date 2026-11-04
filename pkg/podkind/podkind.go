@@ -25,7 +25,7 @@ package podkind
 import (
 	apiv1 "k8s.io/api/core/v1"
 	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
-	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
 	provreq_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
@@ -88,7 +88,7 @@ func Of(pod *apiv1.Pod) Kind {
 		return CapacityRequest
 	case defrag.IsActiveMigrationPod(pod):
 		return ActiveMigration
-	case npc_processors.IsMinCapacityFakePod(pod):
+	case crd.IsMinCapacityFakePod(pod):
 		return MinCapacity
 	case capacitybuffer.IsFakeCapacityBuffersPod(pod):
 		return CapacityBuffer
