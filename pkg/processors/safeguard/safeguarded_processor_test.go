@@ -23,7 +23,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	podutil "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/config"
@@ -69,7 +69,7 @@ func TestProcessor(t *testing.T) {
 
 	podMinCapFakeOldScheduled := test.BuildTestPod("pod-mincap-fake-old-scheduled", 100, 1)
 	podMinCapFakeOldScheduled.CreationTimestamp = metav1.Time{Time: longPendingTime}
-	podMinCapFakeOldScheduled.Annotations = map[string]string{cc_processors.MinCapacityFakePodAnnotation: "true"}
+	podMinCapFakeOldScheduled.Annotations = map[string]string{crd.MinCapacityFakePodAnnotation: "true"}
 
 	autoscalingCtx := &ca_context.AutoscalingContext{
 		AutoscalingOptions: config.AutoscalingOptions{

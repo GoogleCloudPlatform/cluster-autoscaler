@@ -358,7 +358,7 @@ func heldOnlyByMinCapacity(nodeInfo *framework.NodeInfo) bool {
 	hasFakePod := false
 	for _, podInfo := range nodeInfo.Pods() {
 		switch {
-		case cc_processors.IsMinCapacityFakePod(podInfo.Pod):
+		case crd.IsMinCapacityFakePod(podInfo.Pod):
 			hasFakePod = true
 		case pod_util.IsDaemonSetPod(podInfo.Pod), pod_util.IsMirrorPod(podInfo.Pod), pod_util.IsStaticPod(podInfo.Pod):
 			// Not moved by a drain.

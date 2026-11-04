@@ -381,7 +381,7 @@ func TestMinCapacityPodListProcessor_Process(t *testing.T) {
 			assert.Equal(t, tc.expectedFakePods, len(trulyUnschedulable))
 
 			for _, p := range trulyUnschedulable {
-				assert.Contains(t, p.Annotations, MinCapacityFakePodAnnotation)
+				assert.Contains(t, p.Annotations, crd.MinCapacityFakePodAnnotation)
 				assert.Equal(t, metav1.NamespaceDefault, p.Namespace)
 			}
 		})

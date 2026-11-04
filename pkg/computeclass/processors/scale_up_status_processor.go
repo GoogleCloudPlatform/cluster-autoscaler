@@ -19,6 +19,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -106,7 +107,7 @@ func filterMinCapacityFakePods[T any](items []T, getPod func(T) *apiv1.Pod) []T 
 	}
 	filtered := make([]T, 0, len(items))
 	for _, item := range items {
-		if !IsMinCapacityFakePod(getPod(item)) {
+		if !crd.IsMinCapacityFakePod(getPod(item)) {
 			filtered = append(filtered, item)
 		}
 	}

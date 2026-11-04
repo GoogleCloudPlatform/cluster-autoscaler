@@ -25,7 +25,7 @@ import (
 	cr_types "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/apis/internal.autoscaling.gke.io/v1"
 	cr_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/capacityrequests/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
-	npc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
@@ -82,7 +82,7 @@ func TestOf(t *testing.T) {
 		},
 		{
 			name: "min capacity pod",
-			pod:  podWithAnnotations("min-capacity-pod", map[string]string{npc_processors.MinCapacityFakePodAnnotation: "true"}),
+			pod:  podWithAnnotations("min-capacity-pod", map[string]string{crd.MinCapacityFakePodAnnotation: "true"}),
 			want: MinCapacity,
 		},
 		{

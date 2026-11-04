@@ -30,18 +30,10 @@ import (
 )
 
 const (
-	maxRuleIndex = 1000
-	// MinCapacityFakePodAnnotation is the annotation used to identify fake pods used for min capacity.
-	MinCapacityFakePodAnnotation = "autoscaling.gke.io/min-nodes-fake-pod"
-	MinCapacityOwnerVersion      = "autoscaling.gke.io/v1"
-	MinCapacityOwnerKind         = "ComputeClass"
+	maxRuleIndex            = 1000
+	MinCapacityOwnerVersion = "autoscaling.gke.io/v1"
+	MinCapacityOwnerKind    = "ComputeClass"
 )
-
-// IsMinCapacityFakePod returns true if the pod was injected to keep a
-// ComputeClass rule at its target node count.
-func IsMinCapacityFakePod(pod *apiv1.Pod) bool {
-	return pod != nil && pod.Annotations[MinCapacityFakePodAnnotation] == "true"
-}
 
 // GetRuleIndex returns the matched priority rule index and CRD for the given node group.
 // If the node group does not belong to any CRD, it returns (0, nil, nil).
@@ -104,8 +96,8 @@ func buildFakePod(cccName string, priorityIdx *int, index int) *apiv1.Pod {
 			Namespace: metav1.NamespaceDefault,
 			UID:       types.UID(name),
 			Annotations: map[string]string{
-				MinCapacityFakePodAnnotation: "true",
-				drain.PodSafeToEvictKey:      "true",
+				crd.MinCapacityFakePodAnnotation: "true",
+				drain.PodSafeToEvictKey:          "true",
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{

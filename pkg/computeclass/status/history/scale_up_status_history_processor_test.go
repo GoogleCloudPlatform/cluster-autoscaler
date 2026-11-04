@@ -37,7 +37,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	npc_status "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/status"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
@@ -527,7 +526,7 @@ func TestScaleUpStatusHistoryProcessor_Conditions(t *testing.T) {
 		defrag.ActiveMigrationPodAnnotation: "true",
 	})
 	minCapacityPod := annotatedPod("min-capacity-pod", map[string]string{
-		cc_processors.MinCapacityFakePodAnnotation: "true",
+		crd.MinCapacityFakePodAnnotation: "true",
 	})
 	capacityBufferPod := annotatedPod("capacity-buffer-pod", map[string]string{
 		capacitybuffer.CapacityBufferFakePodAnnotationKey: capacitybuffer.CapacityBufferFakePodAnnotationValue,
@@ -861,7 +860,7 @@ func TestScaleUpStatusHistoryProcessor_ProcessMinCapacity(t *testing.T) {
 					{
 						ObjectMeta: metav1.ObjectMeta{
 							Annotations: map[string]string{
-								cc_processors.MinCapacityFakePodAnnotation: "true",
+								crd.MinCapacityFakePodAnnotation: "true",
 							},
 						},
 						Spec: apiv1.PodSpec{
@@ -898,7 +897,7 @@ func TestScaleUpStatusHistoryProcessor_ProcessMinCapacity(t *testing.T) {
 					{
 						ObjectMeta: metav1.ObjectMeta{
 							Annotations: map[string]string{
-								cc_processors.MinCapacityFakePodAnnotation: "true",
+								crd.MinCapacityFakePodAnnotation: "true",
 							},
 						},
 						Spec: apiv1.PodSpec{
@@ -934,7 +933,7 @@ func TestScaleUpStatusHistoryProcessor_ProcessMinCapacity(t *testing.T) {
 					{
 						ObjectMeta: metav1.ObjectMeta{
 							Annotations: map[string]string{
-								cc_processors.MinCapacityFakePodAnnotation: "true",
+								crd.MinCapacityFakePodAnnotation: "true",
 							},
 						},
 						Spec: apiv1.PodSpec{
