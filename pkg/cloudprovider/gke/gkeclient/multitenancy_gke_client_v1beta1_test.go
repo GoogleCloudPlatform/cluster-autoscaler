@@ -16,9 +16,11 @@ package gkeclient
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
@@ -302,4 +304,71 @@ func ensureLegacyMTNodepoolSpec(t *testing.T, network, subnetwork, podRange stri
 		}
 		return nil
 	}
+}
+
+func TestAddProviderConfigRace(t *testing.T) {
+	network := "projects/gketenancy-e2e-testing/global/networks/test-network"
+	subnetwork := "projects/gketenancy-e2e-testing/regions/us-central1/subnetworks/test-subnetwork"
+	podRange := "test-pod-range"
+
+	mtGKEClient := &multitenancyGkeClientV1beta1{
+		autoscalingGkeClient: &fakeGKEClient{
+			createNodePoolVerificationFunc: ensureMTNodepoolSpec(t, network, subnetwork, podRange),
+		},
+		providerConfigToNetworkConfig: map[string]*multitenancy.ProviderNetworkConfig{},
+		experimentsManager:            experiments.NewMockManager(),
+		mutex:                         sync.Mutex{},
+	}
+
+	baseProviderConfig := &multitenancy.ProviderConfig{
+		Name: "t1234-tenant1",
+		NetworkConfig: &multitenancy.ProviderNetworkConfig{
+			Network:    network,
+			Subnetwork: subnetwork,
+			PodRange:   podRange,
+		},
+	}
+	assert.NoError(t, mtGKEClient.AddProviderConfig(baseProviderConfig))
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := range 25 {
+			pc := &multitenancy.ProviderConfig{
+				Name: fmt.Sprintf("tenant-%d", i),
+				NetworkConfig: &multitenancy.ProviderNetworkConfig{
+					Network:    network,
+					Subnetwork: subnetwork,
+					PodRange:   podRange,
+				},
+			}
+			assert.NoError(t, mtGKEClient.AddProviderConfig(pc))
+			runtime.Gosched()
+			assert.NoError(t, mtGKEClient.DeleteProviderConfig(pc))
+			runtime.Gosched()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for range 25 {
+			spec := &NodePoolSpec{
+				Labels: map[string]string{
+					multitenancy.ProviderConfigLabel: "t1234-tenant1",
+				},
+			}
+			err := mtGKEClient.CreateNodePool("test", spec)
+			assert.NoError(t, err)
+			assert.Equal(t, podRange, spec.PodRange)
+			runtime.Gosched()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
 }
