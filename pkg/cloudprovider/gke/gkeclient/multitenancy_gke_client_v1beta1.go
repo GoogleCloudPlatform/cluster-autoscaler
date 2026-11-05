@@ -96,7 +96,9 @@ func (m *multitenancyGkeClientV1beta1) CreateNodePool(name string, spec *NodePoo
 		klog.V(4).Infof("CreateNodePool call for nodepool %s has no provider config label", name)
 		return m.autoscalingGkeClient.CreateNodePool(name, spec)
 	}
+	m.mutex.Lock()
 	networkConfig, exists := m.providerConfigToNetworkConfig[providerConfigName]
+	m.mutex.Unlock()
 	if !exists {
 		return fmt.Errorf("unable to find network config for provider config %s", providerConfigName)
 	}
