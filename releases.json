@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "releases": {
+    "1.37": {
+      "tags": {
+        "cluster-autoscaler-v37.242.0": {
+          "gerrit_commit": "e12eb44e20edf9a2c952a73908be3922cad01c1e",
+          "github_commit": "ee04c73b035ca0bbd9821682739538231157a4a1",
+          "date": "2026-11-05T11:10:18Z"
+        }
+      }
+    }
+  }
+}
