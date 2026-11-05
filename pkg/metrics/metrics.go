@@ -783,15 +783,6 @@ var (
 		[]string{"machine_family", "direction", "reason", "status"},
 	)
 
-	// TODO(b/470880235): delete after migrating to general resize metrics
-	ekBackoffStatus = k8smetrics.NewGauge(
-		&k8smetrics.GaugeOpts{
-			Namespace: caNamespace,
-			Name:      "ek_backoff_status",
-			Help:      "Describes if cluster is in resize backoff. Ongoing backoff if 1, no backoff otherwise.",
-		},
-	)
-
 	resizeBackoffStatus = k8smetrics.NewGaugeVec(
 		&k8smetrics.GaugeOpts{
 			Namespace: caNamespace,
@@ -1352,7 +1343,6 @@ var allMetrics = []k8smetrics.Registerable{
 	balloonPodIpprResizeDuration,
 	vmGceResizeRequestDuration,
 	vmResizeOperation,
-	ekBackoffStatus,
 	resizeBackoffStatus,
 	resizeIncrementStepMilliCpus,
 	taskQueueSize,
@@ -1907,15 +1897,6 @@ func (pm *prometheusMetrics) RegisterVmResizeOperation(machineFamily, direction,
 	}
 }
 
-// UpdateEkBackoffStatus updates the EK backoff status metric.
-func (*prometheusMetrics) UpdateEkBackoffStatus(isBackedOff bool) {
-	if isBackedOff {
-		ekBackoffStatus.Set(1)
-	} else {
-		ekBackoffStatus.Set(0)
-	}
-}
-
 // UpdateResizeIncrementStep reports the resize increment step a machine family is configured with.
 func (pm *prometheusMetrics) UpdateResizeIncrementStep(machineFamily string, milliCpus int64) {
 	resizeIncrementStepMilliCpus.WithLabelValues(machineFamily).Set(float64(milliCpus))
@@ -1927,11 +1908,6 @@ func (pm *prometheusMetrics) UpdateResizeBackoffStatus(machineFamily string, isB
 		resizeBackoffStatus.WithLabelValues(machineFamily).Set(1)
 	} else {
 		resizeBackoffStatus.WithLabelValues(machineFamily).Set(0)
-	}
-
-	// TODO(b/470880235): delete after migrating to general resize metrics
-	if machineFamily == machinetypes.EK.Name() {
-		pm.UpdateEkBackoffStatus(isBackedOff)
 	}
 }
 
