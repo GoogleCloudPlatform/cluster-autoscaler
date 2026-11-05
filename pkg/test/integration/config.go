@@ -702,6 +702,14 @@ func WithAutoProvisioningEnabled() Option[*config.AutoscalingOptions] {
 	}
 }
 
+// WithNapMaxNodes sets the max size for NAP MIGs
+func WithNapMaxNodes(napMaxNodes int) Option[*config.AutoscalingOptions] {
+	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
+		o.NapMaxNodes = napMaxNodes
+		return o
+	}
+}
+
 // WithMultiNetworkSupportEnabled enables multi-network support in autoscaling options.
 func WithMultiNetworkSupportEnabled() Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {

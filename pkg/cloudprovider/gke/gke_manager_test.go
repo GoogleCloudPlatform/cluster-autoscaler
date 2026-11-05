@@ -2583,14 +2583,14 @@ func TestCreateInstances(t *testing.T) {
 	mig := testZonalNodePool().configure(g).migs[0]
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
 		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
-	)).Once()
+	)).Twice()
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
 	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
 	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
 	err := g.CreateInstances(mig, 1)
 	assert.NoError(t, err)
 
-	// Cache should be updated during CreateInstances so we do not expect API call on subsequent GetMigSize
+	// Cache should be updated during CreateInstances so we do not expect a MIG fetch, but we do expect an instance fetch
 	server.On("handle", fmt.Sprintf("/projects/project1/zones/us-central1-b/instanceGroupManagers/%v/createInstances", mig.gceRef.Name)).Return(createInstancesResponse).Once()
 	server.On("handle", "/projects/project1/zones/us-central1-b/operations/operation-1624366531120-5c55a4e128c15-fc5daa90-e1ef6c32/wait").Return(createInstancesOperationResponse).Once()
 	err = g.CreateInstances(mig, 1)
@@ -2694,7 +2694,7 @@ func TestCreateInstancesWithMultipleRequests(t *testing.T) {
 	mig := testZonalNodePool().configure(g).migs[0]
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool/listManagedInstances").Return(buildListInstanceGroupManagersResponse(
 		buildListInstanceGroupManagersResponsePart(defaultPoolMigName, zoneB, 3),
-	)).Once()
+	)).Times(3)
 	server.On("handle", "/projects/project1/zones/us-central1-b/instanceGroupManagers/gke-cluster-1-default-pool").Return(getInstanceGroupManager(zoneB)).Once()
 
 	tests := []struct {
