@@ -26,37 +26,11 @@ import (
 )
 
 func TestPodRequestsAccelerator(t *testing.T) {
-	requirement := func(key string, op apiv1.NodeSelectorOperator, values ...string) apiv1.NodeSelectorRequirement {
-		return apiv1.NodeSelectorRequirement{Key: key, Operator: op, Values: values}
-	}
-	zoneRequirement := requirement("topology.kubernetes.io/zone", apiv1.NodeSelectorOpIn, "us-central1-a")
-	podWithResource := func(name apiv1.ResourceName) *apiv1.Pod {
-		pod := test.BuildTestPod("pod", 1000, units.GiB)
-		pod.Spec.Containers[0].Resources.Requests[name] = resource.MustParse("1")
-		return pod
-	}
-	podWithNodeSelector := func(key, value string) *apiv1.Pod {
-		return &apiv1.Pod{
-			Spec: apiv1.PodSpec{
-				NodeSelector: map[string]string{key: value},
-			},
+	zoneRequirement := nodeSelectorRequirement("topology.kubernetes.io/zone", apiv1.NodeSelectorOpIn, "us-central1-a")
+	withResource := func(name apiv1.ResourceName) func(*apiv1.Pod) {
+		return func(pod *apiv1.Pod) {
+			pod.Spec.Containers[0].Resources.Requests[name] = resource.MustParse("1")
 		}
-	}
-	podWithTerms := func(terms ...apiv1.NodeSelectorTerm) *apiv1.Pod {
-		return &apiv1.Pod{
-			Spec: apiv1.PodSpec{
-				Affinity: &apiv1.Affinity{
-					NodeAffinity: &apiv1.NodeAffinity{
-						RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
-							NodeSelectorTerms: terms,
-						},
-					},
-				},
-			},
-		}
-	}
-	term := func(reqs ...apiv1.NodeSelectorRequirement) apiv1.NodeSelectorTerm {
-		return apiv1.NodeSelectorTerm{MatchExpressions: reqs}
 	}
 
 	tests := []struct {
@@ -71,90 +45,90 @@ func TestPodRequestsAccelerator(t *testing.T) {
 		},
 		{
 			name: "GPU request",
-			pod:  podWithResource("nvidia.com/gpu"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withResource("nvidia.com/gpu")),
 			want: true,
 		},
 		{
 			name: "TPU request",
-			pod:  podWithResource("google.com/tpu"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withResource("google.com/tpu")),
 			want: true,
 		},
 		{
 			name: "non-accelerator extended resource request",
-			pod:  podWithResource("example.com/widget"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withResource("example.com/widget")),
 			want: false,
 		},
 		{
 			name: "nodeSelector on GPU label",
-			pod:  podWithNodeSelector(labels.GPULabel, "nvidia-l4"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withNodeSelector(labels.GPULabel, "nvidia-l4")),
 			want: true,
 		},
 		{
 			name: "nodeSelector on TPU label",
-			pod:  podWithNodeSelector(labels.TPULabel, "tpu-v5-lite-podslice"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withNodeSelector(labels.TPULabel, "tpu-v5-lite-podslice")),
 			want: true,
 		},
 		{
 			name: "nodeSelector on unrelated label",
-			pod:  podWithNodeSelector("cloud.google.com/compute-class", "gpu-class"),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withNodeSelector("cloud.google.com/compute-class", "gpu-class")),
 			want: false,
 		},
 		{
 			name: "nodeAffinity with empty nodeSelectorTerms",
-			pod:  podWithTerms(),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms()),
 			want: false,
 		},
 		{
 			name: "nodeAffinity GPU In in single term",
-			pod:  podWithTerms(term(requirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4"))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4")))),
 			want: true,
 		},
 		{
 			name: "nodeAffinity TPU Exists in single term",
-			pod:  podWithTerms(term(requirement(labels.TPULabel, apiv1.NodeSelectorOpExists))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.TPULabel, apiv1.NodeSelectorOpExists)))),
 			want: true,
 		},
 		{
 			// podrequirements reads only In and Exists expressions.
 			name: "nodeAffinity GPU Gt in single term",
-			pod:  podWithTerms(term(requirement(labels.GPULabel, apiv1.NodeSelectorOpGt, "1"))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.GPULabel, apiv1.NodeSelectorOpGt, "1")))),
 			want: false,
 		},
 		{
 			name: "nodeAffinity TPU Lt in single term",
-			pod:  podWithTerms(term(requirement(labels.TPULabel, apiv1.NodeSelectorOpLt, "1"))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.TPULabel, apiv1.NodeSelectorOpLt, "1")))),
 			want: false,
 		},
 		{
 			name: "nodeAffinity requires an accelerator in all terms",
-			pod: podWithTerms(
-				term(zoneRequirement, requirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4")),
-				term(requirement(labels.TPULabel, apiv1.NodeSelectorOpExists)),
-			),
+			pod: test.BuildTestPod("pod", 1000, units.GiB, withTerms(
+				nodeSelectorTerm(zoneRequirement, nodeSelectorRequirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4")),
+				nodeSelectorTerm(nodeSelectorRequirement(labels.TPULabel, apiv1.NodeSelectorOpExists)),
+			)),
 			want: true,
 		},
 		{
 			name: "nodeAffinity requires an accelerator in only one of two terms",
-			pod: podWithTerms(
-				term(requirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4")),
-				term(zoneRequirement),
-			),
+			pod: test.BuildTestPod("pod", 1000, units.GiB, withTerms(
+				nodeSelectorTerm(nodeSelectorRequirement(labels.GPULabel, apiv1.NodeSelectorOpIn, "nvidia-l4")),
+				nodeSelectorTerm(zoneRequirement),
+			)),
 			// Requirements are merged across terms, matching how NAP provisions for the pod.
 			want: true,
 		},
 		{
 			name: "nodeAffinity GPU DoesNotExist",
-			pod:  podWithTerms(term(requirement(labels.GPULabel, apiv1.NodeSelectorOpDoesNotExist))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.GPULabel, apiv1.NodeSelectorOpDoesNotExist)))),
 			want: false,
 		},
 		{
 			name: "nodeAffinity TPU NotIn",
-			pod:  podWithTerms(term(requirement(labels.TPULabel, apiv1.NodeSelectorOpNotIn, "tpu-v5-lite-podslice"))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement(labels.TPULabel, apiv1.NodeSelectorOpNotIn, "tpu-v5-lite-podslice")))),
 			want: false,
 		},
 		{
 			name: "nodeAffinity Exists on unrelated label",
-			pod:  podWithTerms(term(requirement("example.com/accelerator", apiv1.NodeSelectorOpExists))),
+			pod:  test.BuildTestPod("pod", 1000, units.GiB, withTerms(nodeSelectorTerm(nodeSelectorRequirement("example.com/accelerator", apiv1.NodeSelectorOpExists)))),
 			want: false,
 		},
 	}

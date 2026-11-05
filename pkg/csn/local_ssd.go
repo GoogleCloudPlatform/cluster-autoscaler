@@ -17,51 +17,30 @@ package csn
 import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
+
+// noLocalSSDRequirement is ANDed into every node selector term by withSuspensionConstraints.
+var noLocalSSDRequirement = apiv1.NodeSelectorRequirement{
+	Key:      labels.EphemeralLocalSsdLabel,
+	Operator: apiv1.NodeSelectorOpNotIn,
+	Values:   []string{labels.EphemeralLocalSsdEnabledValue},
+}
 
 // TODO(b/570359780): Extend the Local SSD label set beyond EphemeralLocalSsdLabel.
 //
 // podRequestsLocalSSD reports whether pod's own scheduling constraints require nodes with
-// ephemeral Local SSDs, which makes it unschedulable on any node that standby buffers support.
-// TODO(b/574455058): Make LocalSSD validation use the podrequirements package same as for GPUs
+// ephemeral Local SSDs, which makes it unschedulable on any node that standby buffers support. It
+// extracts the pod's label requirements via podrequirements (nodeSelector plus In/Exists affinity
+// expressions) so the check matches how NAP interprets the pod when provisioning.
 func podRequestsLocalSSD(pod *apiv1.Pod) bool {
 	if pod == nil {
 		return false
 	}
-	if pod.Spec.NodeSelector[labels.EphemeralLocalSsdLabel] == labels.EphemeralLocalSsdEnabledValue {
-		return true
-	}
-	if pod.Spec.Affinity == nil ||
-		pod.Spec.Affinity.NodeAffinity == nil ||
-		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		return false
-	}
-	terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-	if len(terms) == 0 {
-		return false
-	}
-	for _, term := range terms {
-		if !termRequiresLocalSSD(term) {
-			return false
-		}
-	}
-	return true
-}
-
-func termRequiresLocalSSD(term apiv1.NodeSelectorTerm) bool {
-	for _, req := range term.MatchExpressions {
-		if isLocalSSDRequirement(req, apiv1.NodeSelectorOpIn) {
-			return true
-		}
-	}
-	return false
-}
-
-func isLocalSSDRequirement(req apiv1.NodeSelectorRequirement, op apiv1.NodeSelectorOperator) bool {
-	return req.Key == labels.EphemeralLocalSsdLabel &&
-		req.Operator == op &&
-		len(req.Values) == 1 &&
-		req.Values[0] == labels.EphemeralLocalSsdEnabledValue
+	vals, found := podrequirements.GetRequirements(pod).LabelReq.GetValues(labels.EphemeralLocalSsdLabel)
+	// IsAny() covers Exists affinities (where vals.Get() is nil): GKE only sets
+	// EphemeralLocalSsdLabel on nodes with Local SSDs, so Exists also requires Local SSDs.
+	return found && (vals.IsAny() || vals.Get()[labels.EphemeralLocalSsdEnabledValue])
 }
 
 func hasLocalSSD(node *apiv1.Node) bool {

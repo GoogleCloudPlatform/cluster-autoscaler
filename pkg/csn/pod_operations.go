@@ -16,7 +16,6 @@ package csn
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -95,14 +94,23 @@ func MakePodCSN(pod *apiv1.Pod, bufferId string, opts ...PodOption) {
 	nodeSelector.NodeSelectorTerms = withSuspensionConstraints(nodeSelector.NodeSelectorTerms, options.memoryLimit)
 }
 
-var noLocalSSDRequirement = apiv1.NodeSelectorRequirement{
-	Key:      labels.EphemeralLocalSsdLabel,
-	Operator: apiv1.NodeSelectorOpNotIn,
-	Values:   []string{labels.EphemeralLocalSsdEnabledValue},
-}
-
 // conjunctiveSuspensionRequirements must hold on every node that hosts a standby buffer.
 var conjunctiveSuspensionRequirements = append([]apiv1.NodeSelectorRequirement{noLocalSSDRequirement}, noAcceleratorRequirements...)
+
+// suspensionRequirements combines the disjunctive memory limit requirements (A1 OR A2) with the
+// conjunctive exclusions (B: no Local SSD, no GPU, no TPU) into the requirement slices that must
+// hold on one of the node selector terms of a standby buffer pod: (A1 AND B) OR (A2 AND B).
+func suspensionRequirements(memoryLimit MemoryLimit) [][]apiv1.NodeSelectorRequirement {
+	memoryReqs := memoryLimit.nodeSelectorRequirements()
+	result := make([][]apiv1.NodeSelectorRequirement, 0, len(memoryReqs))
+	for _, memReq := range memoryReqs {
+		reqs := make([]apiv1.NodeSelectorRequirement, 0, 1+len(conjunctiveSuspensionRequirements))
+		reqs = append(reqs, memReq)
+		reqs = append(reqs, conjunctiveSuspensionRequirements...)
+		result = append(result, reqs)
+	}
+	return result
+}
 
 // withSuspensionConstraints ANDs the Suspend/Resume requirements (the disjunctive memory limit
 // A1 OR A2 and the conjunctive exclusions B: no Local SSD, no GPU, no TPU) into every existing
@@ -111,49 +119,36 @@ var conjunctiveSuspensionRequirements = append([]apiv1.NodeSelectorRequirement{n
 // Kubernetes ORs NodeSelectorTerms and only ANDs the requirements within a single term, so the
 // suspension constraints must not be appended as new terms - that would widen the pod's affinity
 // instead of narrowing it, letting a node satisfy the pod by matching the injected requirements
-// alone. The result is therefore the cross product with the memory requirements, with the
-// conjunctive requirements B appended to every term:
+// alone. The result is therefore the cross product with the suspension requirement branches:
 //
-//	(T1 OR T2) AND (A1 OR A2) AND B == (T1 AND A1 AND B) OR (T1 AND A2 AND B) OR (T2 AND A1 AND B) OR (T2 AND A2 AND B)
+//	(T1 OR T2) AND ((A1 AND B) OR (A2 AND B)) == (T1 AND A1 AND B) OR (T1 AND A2 AND B) OR (T2 AND A1 AND B) OR (T2 AND A2 AND B)
 func withSuspensionConstraints(terms []apiv1.NodeSelectorTerm, memoryLimit MemoryLimit) []apiv1.NodeSelectorTerm {
-	memoryRequirements := []apiv1.NodeSelectorRequirement{
-		{
-			Key:      labels.MemoryScalingLevelLabel,
-			Operator: apiv1.NodeSelectorOpLt,
-			Values:   []string{strconv.FormatInt(memoryLimit.GB(), 10)},
-		},
-		{
-			Key:      labels.MemoryScalingLevelLabel,
-			Operator: apiv1.NodeSelectorOpDoesNotExist,
-		},
-	}
+	requirementSets := suspensionRequirements(memoryLimit)
 
 	if len(terms) == 0 {
 		// Nothing to narrow, the requirements stand on their own.
 		terms = []apiv1.NodeSelectorTerm{{}}
 	}
-	result := make([]apiv1.NodeSelectorTerm, 0, len(terms)*len(memoryRequirements))
+	result := make([]apiv1.NodeSelectorTerm, 0, len(terms)*len(requirementSets))
 	for _, term := range terms {
-		for _, req := range memoryRequirements {
-			// The term needs to be copied for two reasons:
+		for _, reqs := range requirementSets {
+			// Both the term and each injected requirement need to be deep-copied for two reasons:
 			// 1. The terms generated for suspension constraints need
 			// to not share the same MatchExpressions slice. Otherwise, the
 			// generated terms would share all added constraints. That is:
 			// (T1) AND (A1 OR A2) AND B == (T1 AND A1 AND B AND A2 AND B) OR (T1 AND A1 AND B AND A2 AND B)
 			// instead of the expected:
 			// (T1) AND (A1 OR A2) AND B == (T1 AND A1 AND B) OR (T1 AND A2 AND B)
-			// 2. All other fields need to be copied as well in case some other
+			// 2. All other fields (including Values slices on the injected
+			// requirements) need to be copied as well in case some other
 			// place in CA starts mutating node affinities and is unpleasantly
 			// surprised that modifying a (sub)field of one term also modifies
 			// the same for the neighbouring term.
 			copied := *term.DeepCopy()
-			expressions := make([]apiv1.NodeSelectorRequirement, 0, len(copied.MatchExpressions)+1+len(conjunctiveSuspensionRequirements))
-			expressions = append(expressions, copied.MatchExpressions...)
-			expressions = append(expressions, *req.DeepCopy())
-			for _, conjunctive := range conjunctiveSuspensionRequirements {
-				expressions = append(expressions, *conjunctive.DeepCopy())
+			copied.MatchExpressions = slices.Grow(copied.MatchExpressions, len(reqs))
+			for _, req := range reqs {
+				copied.MatchExpressions = append(copied.MatchExpressions, *req.DeepCopy())
 			}
-			copied.MatchExpressions = expressions
 			result = append(result, copied)
 		}
 	}
@@ -233,7 +228,7 @@ func isSuspensionConstraint(req apiv1.NodeSelectorRequirement) bool {
 	case labels.MemoryScalingLevelLabel:
 		return req.Operator == apiv1.NodeSelectorOpLt || req.Operator == apiv1.NodeSelectorOpDoesNotExist
 	case labels.EphemeralLocalSsdLabel:
-		return isLocalSSDRequirement(req, apiv1.NodeSelectorOpNotIn)
+		return nodeSelectorRequirementEqual(req, noLocalSSDRequirement)
 	case labels.GPULabel, labels.TPULabel:
 		return req.Operator == apiv1.NodeSelectorOpDoesNotExist
 	default:

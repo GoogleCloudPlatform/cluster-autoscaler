@@ -60,6 +60,23 @@ func (l MemoryLimit) GB() int64 {
 	return l.minUnsupportedGB
 }
 
+// nodeSelectorRequirements returns the disjunctive node selector requirements (A1 OR A2) that
+// withSuspensionConstraints ANDs into every node selector term to keep standby buffers off nodes
+// at or above the limit.
+func (l MemoryLimit) nodeSelectorRequirements() []apiv1.NodeSelectorRequirement {
+	return []apiv1.NodeSelectorRequirement{
+		{
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpLt,
+			Values:   []string{strconv.FormatInt(l.GB(), 10)},
+		},
+		{
+			Key:      labels.MemoryScalingLevelLabel,
+			Operator: apiv1.NodeSelectorOpDoesNotExist,
+		},
+	}
+}
+
 // exceededByPodRequest reports whether pod requests more memory than any node small enough to be
 // suspended could ever offer, which makes it unschedulable whatever node shapes are available.
 //

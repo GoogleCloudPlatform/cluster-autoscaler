@@ -852,3 +852,32 @@ func TestRemoveBufferAssignmentWorkloadSeparation(t *testing.T) {
 		})
 	}
 }
+
+func nodeSelectorRequirement(key string, op apiv1.NodeSelectorOperator, values ...string) apiv1.NodeSelectorRequirement {
+	return apiv1.NodeSelectorRequirement{Key: key, Operator: op, Values: values}
+}
+
+func nodeSelectorTerm(reqs ...apiv1.NodeSelectorRequirement) apiv1.NodeSelectorTerm {
+	return apiv1.NodeSelectorTerm{MatchExpressions: reqs}
+}
+
+func withNodeSelector(key, value string) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		if pod.Spec.NodeSelector == nil {
+			pod.Spec.NodeSelector = map[string]string{}
+		}
+		pod.Spec.NodeSelector[key] = value
+	}
+}
+
+func withTerms(terms ...apiv1.NodeSelectorTerm) func(*apiv1.Pod) {
+	return func(pod *apiv1.Pod) {
+		pod.Spec.Affinity = &apiv1.Affinity{
+			NodeAffinity: &apiv1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+					NodeSelectorTerms: terms,
+				},
+			},
+		}
+	}
+}
