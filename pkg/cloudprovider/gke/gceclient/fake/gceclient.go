@@ -554,7 +554,7 @@ func (g *GceClient) addInstances(mig *gcev1.InstanceGroupManager, template *gcev
 		return fmt.Errorf("machine type %s not found in zone %s", template.Properties.MachineType, ref.Zone)
 	}
 
-	existingNames := g.getExistingInstanceNames(migKey, nil)
+	existingNames := g.getExistingInstanceNames(migKey)
 	newNames := generateInstanceNames(mig.BaseInstanceName, numToAdd, existingNames)
 
 	return g.createInstancesInternal(ref, mig, mt, template, newNames, template.Name)
@@ -1087,7 +1087,11 @@ func (g *GceClient) createInstancesLocked(ref gceinternal.GceRef, templateName s
 		baseName = mig.BaseInstanceName
 	}
 
-	existingNames := g.getExistingInstanceNames(migKey, names)
+	existingNames := g.namesToMap(names)
+	if err := g.validateExistingNames(migKey, existingNames); err != nil {
+		return nil, err
+	}
+
 	newNames := generateInstanceNames(baseName, actualCount, existingNames)
 
 	err = g.resizeAtomicallyLocked(ref, templateName, newNames)
@@ -1154,15 +1158,41 @@ func (g *GceClient) resizeAtomicallyLocked(ref gceinternal.GceRef, templateName 
 	return nil
 }
 
-func (g *GceClient) getExistingInstanceNames(migKey string, names []string) map[string]bool {
+func (g *GceClient) namesToMap(names []string) map[string]bool {
 	existingNames := make(map[string]bool)
 	for _, id := range names {
 		existingNames[path.Base(id)] = true
 	}
+	return existingNames
+}
+
+func (g *GceClient) getExistingInstanceNames(migKey string) map[string]bool {
+	existingNames := make(map[string]bool)
 	for name := range g.instances[migKey] {
 		existingNames[name] = true
 	}
 	return existingNames
+}
+
+func (g *GceClient) validateExistingNames(migKey string, existingNames map[string]bool) error {
+	for name := range g.instances[migKey] {
+		if !existingNames[name] {
+			// If we're here, this means we have previously created an instance and later we did not
+			// pass it in existingNames. This, in itself, does not always cause an error, we might
+			// get lucky. However, relying on randomness for tests would make them flaky. If we see
+			// that we're not excluding the correct set of names, which potentially leads to a
+			// substantial probability of collision, we're assuming it's going to always going to
+			// happen.
+			return &googleapi.Error{
+				Code:    400,
+				Message: "MEMBER_ALREADY_EXISTS",
+				Errors: []googleapi.ErrorItem{
+					{Reason: "MEMBER_ALREADY_EXISTS", Message: "GCE API error: member already exists"},
+				},
+			}
+		}
+	}
+	return nil
 }
 
 func generateInstanceNames(baseName string, count int64, existingNames map[string]bool) []string {

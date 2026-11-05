@@ -338,6 +338,57 @@ func TestSalvoMultiScaleUpSharded(t *testing.T) {
 	})
 }
 
+// TestSalvoSameMigChosen tests a scenario in which Salvo picks the same MIG TWICE in a row in the same Salvo
+// This relies on the fact that NAP nodepools do not have the correct SimilarNodeGroups, so we underestimate
+// the binpacking, which then gets balanced across three zones. Then, the next salvo loop picks up the same
+// MIGs again, as they have not been correctly saturated.
+func TestSalvoSameMigChosenTwice(t *testing.T) {
+	testConfig := integration.NewTestConfig().
+		WithOverrides(
+			withSalvoMultiScaleUp(true),
+			integration.WithBalanceSimilarNodeGroups(),
+			integration.WithAutoProvisioningEnabled(),
+			integration.WithNapMaxNodes(3),
+		).
+		WithClusterOverrides(
+			integration.WithClusterAutoProvisioningEnabled(),
+		)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer integration_synctest.TearDown(cancel)
+		infra := integration.SetupInfrastructure(ctx, t)
+		autoscaler := integration.MustSetupAutoscaler(ctx, t, testConfig, infra)
+
+		numPods := 6
+		pods := make([]*apiv1.Pod, 0, numPods)
+		for i := range numPods {
+			pods = append(
+				pods,
+				buildPod(
+					fmt.Sprint(i),
+					3000,
+					1000,
+					"",
+					pod.WithNodeSelectorEntry(apiv1.LabelInstanceTypeStable, "n1-standard-4"),
+				),
+			)
+		}
+
+		for _, pod := range pods {
+			infra.Fakes.K8s.AddPod(pod)
+		}
+
+		// Run CA
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+
+		// Run scheduler
+		infra.Fakes.RunScheduler(ctx, t)
+
+		// Verify all pods are scheduled
+		assertScheduledPodsCount(t, ctx, infra, pods, numPods)
+	})
+}
+
 func withSalvoMultiScaleUp(enabled bool, budget ...time.Duration) integration.Option[*config.AutoscalingOptions] {
 	return func(o *config.AutoscalingOptions) *config.AutoscalingOptions {
 		o.SalvoScaleUp = enabled

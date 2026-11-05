@@ -1544,6 +1544,8 @@ func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
 		}
 	}
 
+	defer m.cache.InvalidateMigInstances(context.TODO(), mig.GceRef())
+
 	for i := 0; i < totalReqs; i++ {
 		increment := min(remaining, createInstancesRequestLimit)
 		if totalReqs > 1 {
