@@ -125,17 +125,12 @@ func TestUpdateResizeBackoffStatus(t *testing.T) {
 	e4aName := machinetypes.E4A.Name()
 
 	// Test Case 1: EK family
-	// Expectation: Both resizeBackoffStatus for EK and ekBackoffStatus should be set to 1 (true)
+	// Expectation: resizeBackoffStatus for EK should be set to 1 (true)
 	pm.UpdateResizeBackoffStatus(ekName, true)
-
-	// Verify ekBackoffStatus
-	val, err := testutil.GetGaugeMetricValue(ekBackoffStatus)
-	assert.NoError(t, err)
-	assert.Equal(t, float64(1), val)
 
 	// Verify resizeBackoffStatus for EK
 	gauge := resizeBackoffStatus.WithLabelValues(ekName)
-	val, err = testutil.GetGaugeMetricValue(gauge)
+	val, err := testutil.GetGaugeMetricValue(gauge)
 	assert.NoError(t, err)
 	assert.Equal(t, float64(1), val)
 
@@ -151,9 +146,6 @@ func TestUpdateResizeBackoffStatus(t *testing.T) {
 
 	// Test Case 3: Set backoff to false for EK
 	pm.UpdateResizeBackoffStatus(ekName, false)
-	val, err = testutil.GetGaugeMetricValue(ekBackoffStatus)
-	assert.NoError(t, err)
-	assert.Equal(t, float64(0), val)
 
 	gauge = resizeBackoffStatus.WithLabelValues(ekName)
 	val, err = testutil.GetGaugeMetricValue(gauge)
