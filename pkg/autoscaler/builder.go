@@ -984,16 +984,25 @@ func (b *Builder) Build(
 	quotaProviders := []resourcequotas.Provider{resourcequotas.NewCloudQuotasProvider(cloudProvider)}
 	if autoscalingOptions.CapacityQuotasEnabled {
 		quotaProviders = append(quotaProviders, capacityquota.NewCapacityQuotasProvider(b.manager.GetClient()))
-		cqReconciler := capacityquota.NewCapacityQuotaReconciler(b.manager.GetClient(), capacityquota.ReconcilerOptions{
-			// We do not want surgeUpgradeTracker here, as it's thread unsafe and bound to a specific loop
-			// This is fine, since NodeFilter in the controller is used only to calculate the usages for observability
-			NodeFilter: utils.VirtualKubeletNodeFilter{},
-			CustomValidators: []capacityquota.Validator{
-				internalcq.NewDefaultBlocklistedLabelsValidator(),
-			},
-		})
-		if err := cqReconciler.SetupWithManager(b.manager); err != nil {
-			return nil, nil, fmt.Errorf("failed to setup CapacityQuota reconciler: %w", err)
+		// Every CA instance enforces CapacityQuotas, but the reconciler only
+		// writes their status (validity and usage over all matching nodes),
+		// which doesn't depend on the instance, so it runs in one instance.
+		// Enforcement uses only quotas the reconciler marked valid.
+		if internalopts.HandlesUnannotated(autoscalingOptions.AutoscalerNames) {
+			cqReconciler := capacityquota.NewCapacityQuotaReconciler(b.manager.GetClient(), capacityquota.ReconcilerOptions{
+				// We do not want surgeUpgradeTracker here, as it's thread unsafe and bound to a specific loop
+				// This is fine, since NodeFilter in the controller is used only to calculate the usages for observability
+				NodeFilter: utils.VirtualKubeletNodeFilter{},
+				CustomValidators: []capacityquota.Validator{
+					internalcq.NewDefaultBlocklistedLabelsValidator(),
+				},
+			})
+			if err := cqReconciler.SetupWithManager(b.manager); err != nil {
+				return nil, nil, fmt.Errorf("failed to setup CapacityQuota reconciler: %w", err)
+			}
+			klog.Infof("Running the CapacityQuota reconciler: this instance (autoscalerNames=%v) validates CapacityQuotas and writes their status.", autoscalingOptions.AutoscalerNames)
+		} else {
+			klog.Infof("Not running the CapacityQuota reconciler: this instance (autoscalerNames=%v) enforces only CapacityQuotas marked valid by the instance handling unannotated ComputeClasses (%q).", autoscalingOptions.AutoscalerNames, internalopts.UnannotatedAutoscalerName)
 		}
 	}
 	quotasTrackerOpts := resourcequotas.TrackerOptions{
