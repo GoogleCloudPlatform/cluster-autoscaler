@@ -27,3 +27,6 @@ Session.vim
 
 # Ignore pycache for python scripts
 __pycache__/
+
+# CC BY-SA docs-only license files; code is Apache-2.0 (go/cloudimage scan)
+vendor/**/LICENSE.docs
