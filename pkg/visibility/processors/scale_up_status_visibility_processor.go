@@ -128,7 +128,7 @@ func (p *ScaleUpStatusVisibilityProcessor) processNoScaleUpEvent(context *ca_con
 	if len(unreportedReasons.SkippedMigs) > 0 {
 		data.SkippedMigs = make([]*vispb.MigExplanation, 0, len(unreportedReasons.SkippedMigs))
 		for i, skippedMig := range unreportedReasons.SkippedMigs {
-			if i > visibility.MaxSkippedMIGsInEvent {
+			if i >= visibility.MaxSkippedMIGsInEvent {
 				break
 			}
 			data.SkippedMigs = append(data.SkippedMigs, skippedMig.Proto())

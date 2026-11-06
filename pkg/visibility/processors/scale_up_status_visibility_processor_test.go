@@ -880,6 +880,26 @@ func TestNoScaleUpEventListsNodeResourcesFitMigsFirstWithoutTrimming(t *testing.
 	assert.Equal(t, "mig-4", podGroups[0].GetRejectedMigs()[0].GetMig().GetName())
 }
 
+func TestNoScaleUpEventCapsSkippedMigs(t *testing.T) {
+	processor := ScaleUpStatusVisibilityProcessor{
+		logger:    new(visibility.MockEventLogger),
+		opts:      visibility.VisibilityOptions{EmitNoScaleUpEvents: true},
+		data:      NewSharedData(),
+		idGen:     new(visibility.MockEventIDGenerator),
+		noScaleUp: noscaleup.NewNoScaleUp(10*time.Minute, false, nil),
+	}
+	ctx := &ca_context.AutoscalingContext{ProcessorCallbacks: callbacks.NewTestProcessorCallbacks()}
+	noScaleUpInfos, consideredMigs := createNoScaleUpInfos(1, visibility.MaxSkippedMIGsInEvent+10, false, true)
+	s := vistypes.ScaleUpStatus{
+		ConsideredMigs: consideredMigs,
+		NoScaleUpInfos: noScaleUpInfos,
+	}
+
+	ev, _ := processor.processNoScaleUpEvent(ctx, &s, time.Now())
+
+	assert.Len(t, ev.GetNoDecisionStatus().GetNoScaleUp().GetSkippedMigs(), visibility.MaxSkippedMIGsInEvent)
+}
+
 // buildMigReasons builds count rejected MIG explanations named mig-00, mig-01, ... MIGs listed in
 // nodeResourcesFitMigIds fail the NodeResourcesFit predicate, the rest fail NodeAffinity.
 func buildMigReasons(count int, nodeResourcesFitMigIds ...string) map[string]*vistypes.MigExplanation {
