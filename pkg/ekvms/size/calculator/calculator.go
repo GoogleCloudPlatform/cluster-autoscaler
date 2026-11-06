@@ -16,7 +16,6 @@ package calculator
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -79,6 +78,7 @@ func New(reservation vmreservation.VmReservation, provider cloudProvider, isClus
 }
 
 // ToVmSize returns VM size for a given allocatable size assuming kube and os reserved based on provided node.
+// Requested dimensions that exceed the node's maximum allocatable size are clamped to the maximum VM size.
 func (c *calculator) ToVmSize(node *apiv1.Node, s size.Allocatable) (size.VmSize, error) {
 	lmts, err := c.limitProvider.GetLimits(node)
 	if err != nil {
@@ -88,16 +88,10 @@ func (c *calculator) ToVmSize(node *apiv1.Node, s size.Allocatable) (size.VmSize
 	if err != nil {
 		return size.VmSize{}, err
 	}
-	// We have to use increments of MiB in the binary search to maintain its monotonicity (as there is rounding to MiB in the allocatable calculations).
-	memMiBLow := size.RoundUpToIncrement(s.KBytes, size.KiB) / size.MiBToKiB
-	memMiBHigh := int64(maxVmSize.KBytes / size.MiBToKiB)
-	memKiB := binarySearchFirstTrue(memMiBLow, memMiBHigh, func(sizeInMiB int64) bool {
-		return c.toAllocatableMemory(node, sizeInMiB*size.MiBToKiB, lmts) >= s.KBytes
-	}) * size.MiBToKiB
-	cpu := binarySearchFirstTrue(s.MilliCpus, maxVmSize.MilliCpus, func(milliCores int64) bool {
-		return c.toAllocatableCpu(node, milliCores, getMaxPodsPerNode(node), lmts) >= s.MilliCpus
+	return c.MakeVmSizeValid(node, size.VmSize{
+		KBytes:    c.toVmMemory(node, s.KBytes, maxVmSize.KBytes, lmts),
+		MilliCpus: c.toVmCpu(node, s.MilliCpus, maxVmSize.MilliCpus, lmts),
 	})
-	return c.MakeVmSizeValid(node, size.VmSize{KBytes: memKiB, MilliCpus: cpu})
 }
 
 // ToAllocatable returns allocatable for a given VM size assuming kube and os reserved based on provided node.
@@ -130,6 +124,33 @@ func (c *calculator) RoundUp(node *apiv1.Node, allocatable size.Allocatable) (si
 // GetMaxResizableVmSizeByMachineType returns the maximum size for the given resizable machine type.
 func (c *calculator) GetMaxResizableVmSizeByMachineType(machineType string) (size.VmSize, error) {
 	return c.provider.MachineConfigProvider().GetMaxResizableVmSizeByMachineType(machineType)
+}
+
+func (c *calculator) toVmCpu(node *apiv1.Node, requestedMilliCpus, maxVmMilliCpus int64, lmts limits) int64 {
+	maxPods := getMaxPodsPerNode(node)
+	cpu, found := binarySearchFirstTrue(requestedMilliCpus, maxVmMilliCpus, func(milliCores int64) bool {
+		return c.toAllocatableCpu(node, milliCores, maxPods, lmts) >= requestedMilliCpus
+	})
+	if !found {
+		return maxVmMilliCpus
+	}
+	return cpu
+}
+
+func (c *calculator) toVmMemory(node *apiv1.Node, requestedKBytes, maxVmKBytes int64, lmts limits) int64 {
+	if requestedKBytes >= maxVmKBytes {
+		return maxVmKBytes
+	}
+	// We have to use increments of MiB in the binary search to maintain its monotonicity (as there is rounding to MiB in the allocatable calculations).
+	memMiBLow := size.RoundUpToIncrement(requestedKBytes, size.KiB) / size.MiBToKiB
+	memMiBHigh := maxVmKBytes / size.MiBToKiB
+	memMiB, found := binarySearchFirstTrue(memMiBLow, memMiBHigh, func(sizeInMiB int64) bool {
+		return c.toAllocatableMemory(node, sizeInMiB*size.MiBToKiB, lmts) >= requestedKBytes
+	})
+	if !found {
+		return maxVmKBytes
+	}
+	return memMiB * size.MiBToKiB
 }
 
 func (c *calculator) toAllocatableCpu(node *apiv1.Node, cpuMillicores int64, maxPodsPerNode int64, lmts limits) int64 {
@@ -289,20 +310,23 @@ func (c *calculator) kubeProxyMemKiBOverhead(node *apiv1.Node, lmts limits) reso
 	return *resource.NewQuantity(resizableConfig.KubeProxyMemoryBytesOverheadPerCPU.Value()*cpuRounded, resource.BinarySI)
 }
 
-// binarySearchFirstTrue returns the smallest x where f(x) = true && low <= x <= high, and returns math.MinInt64 if all x in the range evaluate to false.
+// binarySearchFirstTrue returns the smallest x where f(x) = true && low <= x <= high,
+// along with whether such an x was found.
 // Assumes that there is no x and y pair where low <= x < y <= high && f(x) = true && f(y) = false
-func binarySearchFirstTrue(low, high int64, f func(int64) bool) int64 {
-	var result int64 = math.MinInt64
+func binarySearchFirstTrue(low, high int64, f func(int64) bool) (int64, bool) {
+	var result int64
+	found := false
 	for low <= high {
 		mid := low + (high-low)/2
 		if f(mid) {
 			result = mid
+			found = true
 			high = mid - 1
 		} else {
 			low = mid + 1
 		}
 	}
-	return result
+	return result, found
 }
 
 func getMaxVmSize(provider cloudProvider, node *apiv1.Node) (size.VmSize, error) {
