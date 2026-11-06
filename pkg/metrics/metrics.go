@@ -672,12 +672,18 @@ var (
 		},
 	)
 
+	binpackingNodeGroupsBuckets = []float64{
+		10, 20, 30, 40, 60, 80, 100,
+		120, 160, 200, 300, 400, 600, 800, 1000,
+		1200, 1600, 2000, 3000, 4000, 6000, 8000, 10000,
+	}
+
 	binpackingNodeGroupsTotal = k8smetrics.NewHistogram(
 		&k8smetrics.HistogramOpts{
 			Namespace: caNamespace,
 			Name:      "binpacking_node_groups_total",
 			Help:      "Distribution of node groups passed to binpacking algorithm.",
-			Buckets:   []float64{10, 20, 30, 40, 60, 80, 100, 120, 160, 200, 300, 400, 600, 800, 1000},
+			Buckets:   binpackingNodeGroupsBuckets,
 		},
 	)
 
@@ -686,7 +692,7 @@ var (
 			Namespace: caNamespace,
 			Name:      "binpacking_node_groups_processed",
 			Help:      "Distribution of node groups processed by binpacking algorithm.",
-			Buckets:   []float64{10, 20, 30, 40, 60, 80, 100, 120, 160, 200, 300, 400, 600, 800, 1000},
+			Buckets:   binpackingNodeGroupsBuckets,
 		},
 	)
 
@@ -695,7 +701,7 @@ var (
 			Namespace: caNamespace,
 			Name:      "binpacking_node_groups_skipped",
 			Help:      "Distribution of node groups skipped by binpacking algorithm.",
-			Buckets:   []float64{10, 20, 30, 40, 60, 80, 100, 120, 160, 200, 300, 400, 600, 800, 1000},
+			Buckets:   binpackingNodeGroupsBuckets,
 		},
 	)
 
