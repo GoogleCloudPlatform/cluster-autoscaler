@@ -224,65 +224,85 @@ func TestGetGkeMigOsInfo(t *testing.T) {
 
 func TestBinarySearchFirstTrue(t *testing.T) {
 	tests := []struct {
-		name        string
-		low         int64
-		high        int64
-		f           func(int64) bool
-		expectedVal int64
+		name          string
+		low           int64
+		high          int64
+		f             func(int64) bool
+		expectedVal   int64
+		expectedFound bool
 	}{
 		{
-			name:        "returns correct value",
-			low:         55,
-			high:        75,
-			f:           func(val int64) bool { return val >= 71 },
-			expectedVal: 71,
+			name:          "returns correct value",
+			low:           55,
+			high:          75,
+			f:             func(val int64) bool { return val >= 71 },
+			expectedVal:   71,
+			expectedFound: true,
 		},
 		{
-			name:        "returns correct value with low being large negative",
-			low:         -987654321098765432,
-			high:        987654321098765432,
-			f:           func(val int64) bool { return val >= -987654321098765 },
-			expectedVal: -987654321098765,
+			name:          "returns correct value with low being large negative",
+			low:           -987654321098765432,
+			high:          987654321098765432,
+			f:             func(val int64) bool { return val >= -987654321098765 },
+			expectedVal:   -987654321098765,
+			expectedFound: true,
 		},
 		{
-			name:        "returns correct value with low and high being negative",
-			low:         -987654321098765432,
-			high:        -987654321,
-			f:           func(val int64) bool { return val >= -987654321098765 },
-			expectedVal: -987654321098765,
+			name:          "returns correct value with low and high being negative",
+			low:           -987654321098765432,
+			high:          -987654321,
+			f:             func(val int64) bool { return val >= -987654321098765 },
+			expectedVal:   -987654321098765,
+			expectedFound: true,
 		},
 		{
-			name:        "returns correct value with low and high being the same value",
-			low:         987654321098765432,
-			high:        987654321098765432,
-			f:           func(val int64) bool { return val >= 987654321098765432 },
-			expectedVal: 987654321098765432,
+			name:          "returns correct value with low and high being the same value",
+			low:           987654321098765432,
+			high:          987654321098765432,
+			f:             func(val int64) bool { return val >= 987654321098765432 },
+			expectedVal:   987654321098765432,
+			expectedFound: true,
 		},
 		{
-			name:        "returns correct value with low and high being have difference of 1 value",
-			low:         -1,
-			high:        0,
-			f:           func(val int64) bool { return val >= 0 },
-			expectedVal: 0,
+			name:          "returns correct value with low and high being have difference of 1 value",
+			low:           -1,
+			high:          0,
+			f:             func(val int64) bool { return val >= 0 },
+			expectedVal:   0,
+			expectedFound: true,
 		},
 		{
-			name:        "returns correct value without overflowing",
-			low:         math.MaxInt64,
-			high:        math.MaxInt64,
-			f:           func(val int64) bool { return val >= math.MaxInt64 },
-			expectedVal: math.MaxInt64,
+			name:          "returns correct value without overflowing",
+			low:           math.MaxInt64,
+			high:          math.MaxInt64,
+			f:             func(val int64) bool { return val >= math.MaxInt64 },
+			expectedVal:   math.MaxInt64,
+			expectedFound: true,
 		},
 		{
-			name:        "returns math.MinInt64 when value doesn't exist",
-			low:         -987654321098765432,
-			high:        987654321098765432,
-			f:           func(val int64) bool { return val >= 987654321098765433 },
-			expectedVal: math.MinInt64,
+			name:          "returns false when value doesn't exist",
+			low:           -987654321098765432,
+			high:          987654321098765432,
+			f:             func(val int64) bool { return val >= 987654321098765433 },
+			expectedVal:   0,
+			expectedFound: false,
+		},
+		{
+			name:          "returns false when low exceeds high",
+			low:           16559,
+			high:          16000,
+			f:             func(val int64) bool { return true },
+			expectedVal:   0,
+			expectedFound: false,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expectedVal, binarySearchFirstTrue(tc.low, tc.high, tc.f))
+			gotVal, gotFound := binarySearchFirstTrue(tc.low, tc.high, tc.f)
+			assert.Equal(t, tc.expectedFound, gotFound)
+			if tc.expectedFound {
+				assert.Equal(t, tc.expectedVal, gotVal)
+			}
 		})
 	}
 }
@@ -507,48 +527,167 @@ func TestRoundUp(t *testing.T) {
 	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
 	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
 
-	minVmSize := apiv1.ResourceList{
-		"cpu":    resource.MustParse("250m"),
-		"memory": resource.MustParse("2Gi"),
+	limitConfig := LimitConfig{
+		MinVmSize: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("250m"),
+			apiv1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+		IncrementStep: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("50m"),
+			apiv1.ResourceMemory: resource.MustParse("1Mi"),
+		},
+		SafetyBuffer: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("200m"),
+			apiv1.ResourceMemory: resource.MustParse("500Mi"),
+		},
 	}
-	incrementStep := apiv1.ResourceList{
-		"cpu":    resource.MustParse("50m"),
-		"memory": resource.MustParse("1Mi"),
-	}
-	limitConfig := LimitConfig{MinVmSize: minVmSize, IncrementStep: incrementStep}
 	limitProvider := NewResizeLimitProvider(&mockCloudProvider{})
 	limitProvider.RegisterConfig(machinetypes.EK.Name(), limitConfig)
 	sizeCalc := New(mockReservation, &mockCloudProvider{}, false, limitProvider)
 
-	t.Run("success", func(t *testing.T) {
-		node := createEkNode8()
-		// Request an allocatable that isn't a multiple of the increment step.
-		alloc := size.Allocatable{
-			MilliCpus: 251,
-			KBytes:    (2 * 1024 * 1024) + 1,
-		}
-		// Expect it to be rounded up to the next valid size.
-		// Min memory for ek-8 is 2Gi.
-		// 2Gi + 1KiB allocatable -> 2Gi + 100Mi + 1KiB capacity -> rounds to 2149 MiB.
-		// 2149 MiB capacity -> 2049 MiB allocatable.
-		// CPU: 251m -> 300m.
-		expectedRoundedAllocatable := size.Allocatable{
-			MilliCpus: 300,
-			KBytes:    2098176,
-		}
+	const (
+		maxAllocCpu    = 8000 - 200              // 8 vCPUs - 200m safety buffer
+		maxAllocMemKiB = 32*1024*1024 - 600*1024 // 32Gi - 100Mi eviction threshold - 500Mi safety buffer
+		midAllocCpu    = 4000 - 200              // 4 vCPUs - 200m safety buffer
+		midAllocMemKiB = 16*1024*1024 - 600*1024 // 16Gi - 600Mi overhead
+	)
 
-		rounded, err := sizeCalc.RoundUp(node, alloc)
-		assert.NoError(t, err)
-		assert.Equal(t, expectedRoundedAllocatable, rounded)
-	})
+	tests := []struct {
+		name    string
+		node    *apiv1.Node
+		alloc   size.Allocatable
+		want    size.Allocatable
+		wantErr bool
+	}{
+		{
+			name: "rounds up to increment step",
+			node: createEkNode8(),
+			alloc: size.Allocatable{
+				MilliCpus: 251,
+				KBytes:    2*1024*1024 + 1,
+			},
+			// CPU: 251m + 200m safety buffer = 451m -> rounds up to 500m VM -> 300m allocatable.
+			// Memory: 2Gi + 1Ki + 600Mi overhead -> rounds up to 2649Mi VM -> 2049Mi allocatable.
+			want: size.Allocatable{
+				MilliCpus: 300,
+				KBytes:    2049 * 1024,
+			},
+		},
+		{
+			name:  "clamps over-allocatable CPU without affecting memory",
+			node:  createEkNode8(),
+			alloc: size.Allocatable{MilliCpus: maxAllocCpu + 1, KBytes: midAllocMemKiB},
+			want:  size.Allocatable{MilliCpus: maxAllocCpu, KBytes: midAllocMemKiB},
+		},
+		{
+			name:  "clamps over-allocatable memory without affecting CPU",
+			node:  createEkNode8(),
+			alloc: size.Allocatable{MilliCpus: midAllocCpu, KBytes: maxAllocMemKiB + 1},
+			want:  size.Allocatable{MilliCpus: midAllocCpu, KBytes: maxAllocMemKiB},
+		},
+		{
+			name:  "clamps MaxInt64 in both dimensions to max allocatable",
+			node:  createEkNode8(),
+			alloc: size.Allocatable{MilliCpus: math.MaxInt64, KBytes: math.MaxInt64},
+			want:  size.Allocatable{MilliCpus: maxAllocCpu, KBytes: maxAllocMemKiB},
+		},
+		{
+			name:    "error on invalid machine type",
+			node:    createEkNodeWithLabelsAndVersion("node-1", "", map[string]string{apiv1.LabelInstanceTypeStable: "invalid-machine-type"}),
+			alloc:   size.Allocatable{MilliCpus: 1000, KBytes: 1000},
+			wantErr: true,
+		},
+	}
 
-	t.Run("error on invalid machine type", func(t *testing.T) {
-		nodeInvalid := createEkNodeWithLabelsAndVersion("node-1", "", map[string]string{apiv1.LabelInstanceTypeStable: "invalid-machine-type"})
-		alloc := size.Allocatable{MilliCpus: 1000, KBytes: 1000}
-		_, err := sizeCalc.RoundUp(nodeInvalid, alloc)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to get machine family for machine type")
-	})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := sizeCalc.RoundUp(tc.node, tc.alloc)
+			if tc.wantErr {
+				assert.Error(t, err)
+				assert.Contains(t, err.Error(), "failed to get machine family for machine type")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestToVmSizeClampsRequestsExceedingMaxAllocatable(t *testing.T) {
+	mockReservation := new(vmreservation_test.MockVmReservation)
+	mockReservation.On("CalculateKernelReserved", mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+
+	limitConfig := LimitConfig{
+		MinVmSize: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("2"),
+			apiv1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+		IncrementStep: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("2"),
+			apiv1.ResourceMemory: resource.MustParse("1Mi"),
+		},
+		SafetyBuffer: apiv1.ResourceList{
+			apiv1.ResourceCPU:    resource.MustParse("200m"),
+			apiv1.ResourceMemory: resource.MustParse("500Mi"),
+		},
+	}
+	limitProvider := NewResizeLimitProvider(&mockCloudProvider{})
+	limitProvider.RegisterConfig(machinetypes.EK.Name(), limitConfig)
+	sizeCalc := New(mockReservation, &mockCloudProvider{}, false, limitProvider)
+
+	node := createEkNode8()
+	const (
+		maxVmCpu       = 8000
+		maxVmMemKiB    = 32 * 1024 * 1024
+		midVmCpu       = 4000
+		midVmMemKiB    = 16 * 1024 * 1024
+		maxAllocCpu    = maxVmCpu - 200         // 200m safety buffer
+		maxAllocMemKiB = maxVmMemKiB - 600*1024 // 100Mi eviction threshold + 500Mi safety buffer
+		midAllocCpu    = midVmCpu - 200
+		midAllocMemKiB = midVmMemKiB - 600*1024
+	)
+
+	tests := []struct {
+		name       string
+		requested  size.Allocatable
+		wantVmSize size.VmSize
+	}{
+		{
+			name:       "CPU between maxAllocatable and maxVmSize clamps CPU to maxVmSize",
+			requested:  size.Allocatable{MilliCpus: maxAllocCpu + 1, KBytes: midAllocMemKiB},
+			wantVmSize: size.VmSize{MilliCpus: maxVmCpu, KBytes: midVmMemKiB},
+		},
+		{
+			name:       "CPU exceeding maxVmSize clamps CPU to maxVmSize",
+			requested:  size.Allocatable{MilliCpus: maxVmCpu + 559, KBytes: midAllocMemKiB},
+			wantVmSize: size.VmSize{MilliCpus: maxVmCpu, KBytes: midVmMemKiB},
+		},
+		{
+			name:       "memory between maxAllocatable and maxVmSize clamps memory to maxVmSize",
+			requested:  size.Allocatable{MilliCpus: midAllocCpu, KBytes: maxAllocMemKiB + 1},
+			wantVmSize: size.VmSize{MilliCpus: midVmCpu, KBytes: maxVmMemKiB},
+		},
+		{
+			name:       "memory exceeding maxVmSize clamps memory to maxVmSize",
+			requested:  size.Allocatable{MilliCpus: midAllocCpu, KBytes: maxVmMemKiB + 1024},
+			wantVmSize: size.VmSize{MilliCpus: midVmCpu, KBytes: maxVmMemKiB},
+		},
+		{
+			name:       "MaxInt64 in both dimensions clamps to maxVmSize without overflow",
+			requested:  size.Allocatable{MilliCpus: math.MaxInt64, KBytes: math.MaxInt64},
+			wantVmSize: size.VmSize{MilliCpus: maxVmCpu, KBytes: maxVmMemKiB},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotVmSize, err := sizeCalc.ToVmSize(node, tc.requested)
+			assert.NoError(t, err)
+			assert.Equal(t, tc.wantVmSize, gotVmSize)
+		})
+	}
 }
 
 func createEkNodeWithHugepages(name string, hugepage1gSize resource.Quantity) *apiv1.Node {

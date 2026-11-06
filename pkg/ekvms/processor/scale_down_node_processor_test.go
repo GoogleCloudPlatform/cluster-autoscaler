@@ -28,6 +28,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
@@ -39,8 +40,10 @@ import (
 
 	processor_proto "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor/proto"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 
 	calculator_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator/test"
+	vmreservation_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/vmreservation/test"
 
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
@@ -106,6 +109,22 @@ type testNodeWithPodsInfo struct {
 
 func TestScaleDownProcess(t *testing.T) {
 	downsizeError := fmt.Errorf("downsize error")
+	realCalc := newTestRealCalculator()
+	// ek-standard-8 (8 vCPUs, 32 GiB) with 0 reservations, 200m/500Mi safety buffer, and 100Mi eviction threshold.
+	realCalcMaxAlloc8 := size.Allocatable{
+		MilliCpus: 8000 - 200,
+		KBytes:    32*giBToKiB - 600*size.MiBToKiB,
+	}
+	realCalcNode8 := ekvms_test.EkNode8("node-8", realCalcMaxAlloc8.MilliCpus, realCalcMaxAlloc8.KBytes*size.KiB)
+	realCalcNode8Snapshot := operationtracker.ResizableNodesSnapshot{
+		"node-8": {
+			MachineFamily:     machinetypes.EK.Name(),
+			DesiredSize:       realCalcMaxAlloc8,
+			PhysicalMaxSize:   realCalcMaxAlloc8,
+			UpsizableMaxSize:  realCalcMaxAlloc8,
+			LastOperationTime: testStartTime.Add(-2 * time.Hour),
+		},
+	}
 	testCases := map[string]struct {
 		nodes             []*testNodeWithPodsInfo
 		updateInfo        []*v1alpha1.UpdateInfo
@@ -117,7 +136,7 @@ func TestScaleDownProcess(t *testing.T) {
 		}
 		downsizePossibleSince         map[string]time.Time
 		isResizingEnabled             bool
-		useRoundingCalculator         bool
+		calculator                    calculator.Calculator
 		downsizeNonResizable          bool
 		nodesScaleDownAllowed         map[string]bool
 		expectedNodesScaleDownAllowed map[string]bool
@@ -835,7 +854,7 @@ func TestScaleDownProcess(t *testing.T) {
 				},
 			},
 			isResizingEnabled:     true,
-			useRoundingCalculator: true,
+			calculator:            calculator_test.NewRoundingCalculator(10),
 			nodesScaleDownAllowed: map[string]bool{},
 			expectedNodesScaleDownAllowed: map[string]bool{
 				"node-32": true,
@@ -1483,6 +1502,109 @@ func TestScaleDownProcess(t *testing.T) {
 				},
 			},
 		},
+		"over-allocatable CPU peak clamps CPU to max while downsizing memory": {
+			nodes: []*testNodeWithPodsInfo{
+				{
+					node: realCalcNode8,
+					pods: []*v1.Pod{
+						userPod("pod1", 7000, 8*size.GiB),
+						balloonPod(t, "node-8", 0, 1*size.GiB),
+					},
+				},
+			},
+			allNodesSnapshot: realCalcNode8Snapshot,
+			maxWindowsSamples: map[string][]struct {
+				addTime     time.Time
+				allocatable size.Allocatable
+			}{
+				"node-8": {
+					{
+						addTime:     testStartTime.Add(-10 * time.Second),
+						allocatable: size.Allocatable{MilliCpus: 8500, KBytes: 8 * giBToKiB},
+					},
+				},
+			},
+			downsizePossibleSince:         map[string]time.Time{"node-8": testStartTime.Add(-2 * time.Minute)},
+			isResizingEnabled:             true,
+			calculator:                    realCalc,
+			expectedNodesScaleDownAllowed: map[string]bool{"node-8": false},
+			expectedCandidates:            []string{},
+			expectedDownsizes:             []string{"node-8"},
+			expectedTargetSizes: map[string]size.Allocatable{
+				"node-8": {MilliCpus: realCalcMaxAlloc8.MilliCpus, KBytes: realCalcMaxAlloc8.KBytes / 2},
+			},
+			expectedPods: map[string][]*v1.Pod{
+				"node-8": {
+					userPod("pod1", 7000, 8*size.GiB),
+					balloonPod(t, "node-8", 0, (realCalcMaxAlloc8.KBytes/2)*size.KiB),
+				},
+			},
+		},
+		"over-allocatable memory peak clamps memory to max while downsizing CPU": {
+			nodes: []*testNodeWithPodsInfo{
+				{
+					node: realCalcNode8,
+					pods: []*v1.Pod{
+						userPod("pod1", 3000, 28*size.GiB),
+						balloonPod(t, "node-8", 500, 0),
+					},
+				},
+			},
+			allNodesSnapshot: realCalcNode8Snapshot,
+			maxWindowsSamples: map[string][]struct {
+				addTime     time.Time
+				allocatable size.Allocatable
+			}{
+				"node-8": {
+					{
+						addTime:     testStartTime.Add(-10 * time.Second),
+						allocatable: size.Allocatable{MilliCpus: 3000, KBytes: 33 * giBToKiB},
+					},
+				},
+			},
+			downsizePossibleSince:         map[string]time.Time{"node-8": testStartTime.Add(-2 * time.Minute)},
+			isResizingEnabled:             true,
+			calculator:                    realCalc,
+			expectedNodesScaleDownAllowed: map[string]bool{"node-8": false},
+			expectedCandidates:            []string{},
+			expectedDownsizes:             []string{"node-8"},
+			// 50% of 7800m = 3900m -> 4100m VM -> rounds up to 6000m VM -> 5800m allocatable.
+			expectedTargetSizes: map[string]size.Allocatable{
+				"node-8": {MilliCpus: 5800, KBytes: realCalcMaxAlloc8.KBytes},
+			},
+			expectedPods: map[string][]*v1.Pod{
+				"node-8": {
+					userPod("pod1", 3000, 28*size.GiB),
+					balloonPod(t, "node-8", 2000, operationtracker.MinBalloonPodMem),
+				},
+			},
+		},
+		"over-allocatable CPU and memory peaks clamp to max with no downsize": {
+			nodes: []*testNodeWithPodsInfo{
+				{
+					node: realCalcNode8,
+					pods: []*v1.Pod{userPod("pod1", 7000, 28*size.GiB)},
+				},
+			},
+			allNodesSnapshot: realCalcNode8Snapshot,
+			maxWindowsSamples: map[string][]struct {
+				addTime     time.Time
+				allocatable size.Allocatable
+			}{
+				"node-8": {
+					{
+						addTime:     testStartTime.Add(-10 * time.Second),
+						allocatable: size.Allocatable{MilliCpus: 8500, KBytes: 33 * giBToKiB},
+					},
+				},
+			},
+			downsizePossibleSince:         map[string]time.Time{"node-8": testStartTime.Add(-2 * time.Minute)},
+			isResizingEnabled:             true,
+			calculator:                    realCalc,
+			expectedNodesScaleDownAllowed: map[string]bool{"node-8": false},
+			expectedCandidates:            []string{},
+			expectedDownsizes:             []string{},
+		},
 	}
 	for tn, tc := range testCases {
 		t.Run(tn, func(t *testing.T) {
@@ -1520,9 +1642,9 @@ func TestScaleDownProcess(t *testing.T) {
 			testClock := clock.NewFakeClock(testStartTime)
 			fetcher := kubernetes.NewUpdateInfoFetcher(mockUpdateInfoLister, testClock)
 			assert.NoError(t, fetcher.Refresh())
-			calc := calculator_test.New()
-			if tc.useRoundingCalculator {
-				calc = calculator_test.NewRoundingCalculator(10)
+			calc := tc.calculator
+			if calc == nil {
+				calc = calculator_test.New()
 			}
 
 			gm := experiments.NewMockManager(experimentFlags...)
@@ -2236,6 +2358,42 @@ func TestUpdateRequestedResources(t *testing.T) {
 			assert.Equal(t, tc.wantDownsizePossibleSince, processor.downsizePossibleSince)
 		})
 	}
+}
+
+func newTestRealCalculator() calculator.Calculator {
+	mockReservation := new(vmreservation_test.MockVmReservation)
+	mockReservation.On("CalculateKernelReserved", mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedMemory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+	mockReservation.On("PredictKubeReservedCpuMillicores", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(int64(0))
+
+	limitConfig := calculator.LimitConfig{
+		MinVmSize: v1.ResourceList{
+			v1.ResourceCPU:    resource.MustParse("2"),
+			v1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+		IncrementStep: v1.ResourceList{
+			v1.ResourceCPU:    resource.MustParse("2"),
+			v1.ResourceMemory: resource.MustParse("1Mi"),
+		},
+		SafetyBuffer: v1.ResourceList{
+			v1.ResourceCPU:    resource.MustParse("200m"),
+			v1.ResourceMemory: resource.MustParse("500Mi"),
+		},
+	}
+	cp := &realCalcCloudProvider{}
+	limitProvider := calculator.NewResizeLimitProvider(cp)
+	limitProvider.RegisterConfig(machinetypes.EK.Name(), limitConfig)
+	return calculator.New(mockReservation, cp, false, limitProvider)
+}
+
+type realCalcCloudProvider struct{}
+
+func (*realCalcCloudProvider) GetClusterVersion() string {
+	return "1.35.8-gke.1000000"
+}
+
+func (*realCalcCloudProvider) MachineConfigProvider() *machinetypes.MachineConfigProvider {
+	return machinetypes.NewMachineConfigProvider(nil)
 }
 
 func userPod(name string, cpu, mem int64) *v1.Pod {
