@@ -58,7 +58,7 @@ func TestIsNestedVirtualizationSupported(t *testing.T) {
 
 	supportedFamilies := sets.New(
 		"a2", "a3", "c2", "c3", "c3d", "c4", "c4d", "c4n",
-		"ct3", "ct3p", "ct4l", "ct5p",
+		"ct3", "ct3p", "ct4l", "ct5p", "e4",
 		"g2", "h3", "h4d", "n1", "n2", "n2d", "n4", "n4d",
 		"tpu7", "tpu7x",
 		"z3", "z4m", "m4",
