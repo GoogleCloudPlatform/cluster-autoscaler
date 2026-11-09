@@ -62,6 +62,11 @@ type ConsumeHandler struct {
 }
 
 func NewConsumeHandler(sm StateManager, cp CloudProvider, c K8sClient, nl NodeLister, b CSNCompositeBackoff, em experiments.Manager) *ConsumeHandler {
+	// Pre-initialize here rather than in init(): /metrics starts serving before
+	// leader election, whereas NewConsumeHandler runs only on the elected leader
+	// and only when CSN is enabled, avoiding empty series on standby masters and
+	// non-CSN clusters.
+	initReadinessWaitMetrics()
 	return &ConsumeHandler{
 		stateManager:       sm,
 		cloudProvider:      cp,

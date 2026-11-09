@@ -62,6 +62,24 @@ const (
 	readinessAborted  = "aborted"
 )
 
+var allReadinessStatuses = []string{
+	readinessReady,
+	readinessDeleted,
+	readinessTimedOut,
+	readinessAborted,
+}
+
+// initReadinessWaitMetrics pre-initializes zero-valued histogram series for
+// every readiness status so /metrics exposes a count=0 baseline before the
+// first CSN resume occurs. Without a baseline point, Monarch's Delta() ignores
+// process_start_time_seconds once the process has been up for >4 export
+// intervals and drops the first burst of observations.
+func initReadinessWaitMetrics() {
+	for _, status := range allReadinessStatuses {
+		nodeReadinessWaitSeconds.WithLabelValues(status)
+	}
+}
+
 func init() {
 	legacyregistry.MustRegister(
 		opGceBatchSize,
