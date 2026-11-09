@@ -1892,8 +1892,9 @@ var (
 			DiskTypeHyperdiskMl:                       UnspecifiedMode,
 			DiskTypeHyperdiskBalancedHighAvailability: UnspecifiedMode,
 		},
-		supportHugepageSize1g: false,
-		defaultDiskType:       "hyperdisk-balanced",
+		supportHugepageSize1g:       false,
+		supportNestedVirtualization: true,
+		defaultDiskType:             "hyperdisk-balanced",
 		resizableConfig: &ResizableMachineFamilyConfig{
 			DefaultMachineTypes:                []string{"e4-standard-8", "e4-standard-16", "e4-standard-32"},
 			KubeProxyMemoryBytesOverheadPerCPU: *resource.NewQuantity(8192000, resource.BinarySI),
