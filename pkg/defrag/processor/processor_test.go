@@ -3255,10 +3255,71 @@ func TestFilterExpansionOptions(t *testing.T) {
 				Plugins:                 []defrag.Plugin{plugin},
 				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
 			})
-			tc.wantCandidateInfo.candidate = &defrag.Candidate{IsAtomic: true, Plugin: plugin}
-			processor.pickedCandidateInfo = tc.wantCandidateInfo
+			processor.pickedCandidateInfo = &candidateInfo{
+				candidate:        &defrag.Candidate{IsAtomic: true, Plugin: plugin},
+				creationTime:     timeNow,
+				scaleUpNoOptions: true,
+			}
+			tc.wantCandidateInfo.candidate = processor.pickedCandidateInfo.candidate
 			assert.ElementsMatch(t, tc.wantOptions, processor.BestOptions(context.TODO(), tc.options, nil))
 			assert.Equal(t, tc.wantCandidateInfo, processor.pickedCandidateInfo)
+		})
+	}
+}
+
+func TestFilterExpansionOptionsSalvo(t *testing.T) {
+	validOption := expander.Option{Debug: "valid"}
+	invalidOption := expander.Option{Debug: "invalid"}
+
+	testCases := []struct {
+		name          string
+		salvoOptions  [][]expander.Option
+		wantOptions   [][]expander.Option
+		wantNoOptions bool
+	}{
+		{
+			name:          "valid option in first salvo then no valid options in second salvo - scaleUpNoOptions is false",
+			salvoOptions:  [][]expander.Option{{validOption, invalidOption}, {invalidOption}},
+			wantOptions:   [][]expander.Option{{validOption}, nil},
+			wantNoOptions: false,
+		},
+		{
+			name:          "no valid options in first salvo then valid option in second salvo - scaleUpNoOptions is false",
+			salvoOptions:  [][]expander.Option{{invalidOption}, {validOption}},
+			wantOptions:   [][]expander.Option{nil, {validOption}},
+			wantNoOptions: false,
+		},
+		{
+			name:          "no valid options across all salvos - scaleUpNoOptions remains true",
+			salvoOptions:  [][]expander.Option{{invalidOption}, {invalidOption}},
+			wantOptions:   [][]expander.Option{nil, nil},
+			wantNoOptions: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := &mockPlugin{}
+			plugin.On("IsExpansionOptionValid", mock.Anything, mock.Anything, validOption).Return(true).Maybe()
+			plugin.On("IsExpansionOptionValid", mock.Anything, mock.Anything, invalidOption).Return(false).Maybe()
+
+			deleteOpts := options.NodeDeleteOptions{}
+			processor := NewProcessor(Options{
+				DeleteOptions:           deleteOpts,
+				DrainabilityRules:       rules.Default(deleteOpts),
+				Plugins:                 []defrag.Plugin{plugin},
+				MinQuotasTrackerFactory: newTestTrackerFactory(nil),
+			})
+			processor.pickedCandidateInfo = &candidateInfo{
+				candidate:        &defrag.Candidate{Plugin: plugin},
+				scaleUpNoOptions: true,
+			}
+
+			for i, options := range tc.salvoOptions {
+				gotOptions := processor.BestOptions(context.TODO(), options, nil)
+				assert.ElementsMatch(t, tc.wantOptions[i], gotOptions)
+			}
+			assert.Equal(t, tc.wantNoOptions, processor.pickedCandidateInfo.scaleUpNoOptions)
 		})
 	}
 }

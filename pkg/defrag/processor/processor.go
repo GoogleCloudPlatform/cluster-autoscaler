@@ -777,8 +777,11 @@ func (p *Processor) BestOptions(ctx context.Context, options []expander.Option, 
 
 	klog.V(2).Infof("Defrag kept %d out of %d scale-up options, plugin %q", len(validOptions), len(options), p.pickedCandidateInfo.candidate.Plugin.String())
 
-	// Mark scale-up as impossible if there are no valid options
-	p.pickedCandidateInfo.scaleUpNoOptions = len(validOptions) == 0
+	// Clear scaleUpNoOptions (initialized to true when the candidate is picked
+	// in processCandidates) once any salvo iteration finds a valid option.
+	if len(validOptions) > 0 {
+		p.pickedCandidateInfo.scaleUpNoOptions = false
+	}
 
 	return validOptions
 }
