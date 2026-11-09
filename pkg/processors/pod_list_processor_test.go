@@ -27,6 +27,7 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
@@ -41,7 +42,9 @@ import (
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podtopologyspread"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/safeguard"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/systempods"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
@@ -720,6 +723,127 @@ func TestCSNBufferConsumptionObservesPodState(t *testing.T) {
 // withoutPod returns a copy of pods without the given pod.
 func withoutPod(pods []*v1.Pod, pod *v1.Pod) []*v1.Pod {
 	return slices.DeleteFunc(slices.Clone(pods), func(p *v1.Pod) bool { return p == pod })
+}
+
+type mockZonalCloudProvider struct {
+	zones []string
+}
+
+func (m mockZonalCloudProvider) GetAutoprovisioningLocations() []string {
+	return m.zones
+}
+
+func TestPodTopologySpreadObservesPodState(t *testing.T) {
+	ptsConstraint := v1.TopologySpreadConstraint{
+		MaxSkew:           1,
+		TopologyKey:       v1.LabelTopologyZone,
+		WhenUnsatisfiable: v1.DoNotSchedule,
+		LabelSelector:     &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
+	}
+	newPTSPod := func(name string, cpuMillis int64, extraAnnotations map[string]string) *v1.Pod {
+		return buildTestPod(namespaceDefault, name, func(p *v1.Pod) {
+			p.UID = types.UID(name + "-uid")
+			p.Labels = map[string]string{"app": "web"}
+			p.Annotations = extraAnnotations
+			p.Spec.Containers[0].Resources.Requests[v1.ResourceCPU] = *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI)
+			p.Spec.TopologySpreadConstraints = []v1.TopologySpreadConstraint{ptsConstraint}
+		})
+	}
+
+	schedulablePod := newPTSPod("pts-schedulable", 100, nil)
+	tooLargePod := newPTSPod("pts-too-large", 5000, nil)
+	bufferPod := newPTSPod("pts-buffer-pod", 100, map[string]string{
+		cbprocessors.CapacityBufferFakePodAnnotationKey: cbprocessors.CapacityBufferFakePodAnnotationValue,
+	})
+	buffer := &v1beta1.CapacityBuffer{ObjectMeta: metav1.ObjectMeta{Name: "buffer", UID: "buffer-uid"}}
+
+	testCases := []struct {
+		name                string
+		unschedulablePods   []*v1.Pod
+		upcomingNode        bool
+		wantRemainingNames  []string
+		wantReactions       []observedReaction
+		wantBufferReactions []metrics.ReactionType
+	}{
+		{
+			name:              "PTS pod scheduled on ready node observes NoActionNeeded",
+			unschedulablePods: []*v1.Pod{schedulablePod},
+			wantReactions:     []observedReaction{{systemPod: false, reactionType: metrics.NoActionNeeded}},
+		},
+		{
+			name:              "PTS pod scheduled on upcoming node observes NoActionNeeded",
+			unschedulablePods: []*v1.Pod{schedulablePod},
+			upcomingNode:      true,
+			wantReactions:     []observedReaction{{systemPod: false, reactionType: metrics.NoActionNeeded}},
+		},
+		{
+			name:                "capacity buffer PTS pod scheduled on node observes NoActionNeeded",
+			unschedulablePods:   []*v1.Pod{bufferPod},
+			wantBufferReactions: []metrics.ReactionType{metrics.NoActionNeeded},
+		},
+		{
+			name:               "PTS pod that does not fit remains unschedulable and is not observed",
+			unschedulablePods:  []*v1.Pod{tooLargePod},
+			wantRemainingNames: []string{tooLargePod.Name},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := testsnapshot.NewTestSnapshotOrDie(t)
+			node := test.BuildTestNode("node-zone-a", 1000, 1000)
+			node.Labels = map[string]string{v1.LabelTopologyZone: "us-central1-a"}
+			if tc.upcomingNode {
+				node.Annotations = map[string]string{annotations.NodeUpcomingAnnotation: "true"}
+			}
+			if err := snapshot.AddNodeInfo(framework.NewTestNodeInfo(node)); err != nil {
+				t.Fatalf("AddNodeInfo() unexpected error: %v", err)
+			}
+
+			synctest.Test(t, func(t *testing.T) {
+				observer, reactionMetrics := newTestPodStateObserver(t, schedulablePod, tooLargePod)
+				bufferMetrics := &mockBufferReactionTimeObserver{}
+				registry := fakepods.NewRegistry(map[types.UID]*v1beta1.CapacityBuffer{bufferPod.UID: buffer})
+				cbObserver := cb_metrics.NewFakePodStateObserver(systempods.NewClassifier([]string{metav1.NamespaceSystem}), bufferMetrics, registry, clock.RealClock{}, false)
+
+				em := experiments.NewMockManager("PodTopologySpreadZonal::MinCAVersion")
+				pts := podtopologyspread.NewPodTopologySpreadProcessor(
+					[]podtopologyspread.PTSDomainDiscovery{
+						podtopologyspread.NewZonalDomainDiscovery(em, mockZonalCloudProvider{zones: []string{"us-central1-a", "us-central1-b"}}),
+					},
+					nil,
+				)
+
+				processor := &GkeInternalPodListProcessor{
+					defaultPodListerProcessor:  &mockBufferPodsInjector{observer: cbObserver},
+					podTopologySpreadProcessor: safeguard.NewSafeguardedPodListProcessor(pts, metrics.TopologySpreadMutation, false),
+					podStateObserver:           observer,
+					cbFakePodStateObserver:     cbObserver,
+					podStatusAggregator:        metrics_processors.NewPodStatusAggregator(),
+					experimentsManager:         em,
+				}
+
+				gotPods, err := processor.Process(t.Context(), &ca_context.AutoscalingContext{ClusterSnapshot: snapshot}, tc.unschedulablePods)
+				if err != nil {
+					t.Fatalf("processor.Process() unexpected error: %v", err)
+				}
+
+				var gotNames []string
+				for _, p := range gotPods {
+					gotNames = append(gotNames, p.Name)
+				}
+				if diff := cmp.Diff(tc.wantRemainingNames, gotNames, cmpopts.EquateEmpty()); diff != "" {
+					t.Errorf("processor.Process() remaining pod names diff (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantReactions, reactionMetrics.reactions, cmp.AllowUnexported(observedReaction{})); diff != "" {
+					t.Errorf("observed reactions diff (-want +got):\n%s", diff)
+				}
+				if diff := cmp.Diff(tc.wantBufferReactions, bufferMetrics.reactions); diff != "" {
+					t.Errorf("observed capacity buffer reactions diff (-want +got):\n%s", diff)
+				}
+			})
+		})
+	}
 }
 
 func TestCccPodFilterInPodListProcessor(t *testing.T) {

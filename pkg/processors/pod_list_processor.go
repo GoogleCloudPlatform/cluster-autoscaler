@@ -413,7 +413,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	}
 
 	if p.podTopologySpreadProcessor != nil {
-		unschedulablePods, err = p.podTopologySpreadProcessor.Process(ctx, autoscalingCtx, unschedulablePods)
+		unschedulablePods, err = p.processAndObserve(ctx, p.podTopologySpreadProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 		if err != nil {
 			return []*apiv1.Pod{}, err
 		}
@@ -422,7 +422,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 
 	if p.ekvmsProcessor != nil {
 		unschedulablePodsBeforeEkvmsProcessor := unschedulablePods
-		unschedulablePods, err = p.processAndObserve(p.ekvmsProcessor, autoscalingCtx, unschedulablePods, metrics.EkUpsize)
+		unschedulablePods, err = p.processAndObserve(context.TODO(), p.ekvmsProcessor, autoscalingCtx, unschedulablePods, metrics.EkUpsize)
 		unschedulablePodsAfterEkvmsProcessor := unschedulablePods
 		p.ekvmsProcessor.TrackUnschedulablePods(unschedulablePodsBeforeFiltering, unschedulablePodsBeforeEkvmsProcessor, unschedulablePodsAfterEkvmsProcessor)
 		if err != nil {
@@ -437,7 +437,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 			// We still run the processor (but without any unschedulable pods) to trigger consumption of chilling CSN nodes where Kubernetes Scheduler scheduled pods on.
 			_, err = p.csnBufferConsumptionProcessor.Process(context.TODO(), autoscalingCtx, nil)
 		} else {
-			unschedulablePods, err = p.processAndObserve(p.csnBufferConsumptionProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
+			unschedulablePods, err = p.processAndObserve(context.TODO(), p.csnBufferConsumptionProcessor, autoscalingCtx, unschedulablePods, metrics.NoActionNeeded)
 		}
 		if err != nil {
 			return []*apiv1.Pod{}, err
@@ -504,9 +504,9 @@ func (p *GkeInternalPodListProcessor) processScaleToZero(autoscalingCtx *ca_cont
 	return remainingPods, nil
 }
 
-func (p *GkeInternalPodListProcessor) processAndObserve(processor podProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
+func (p *GkeInternalPodListProcessor) processAndObserve(ctx context.Context, processor podProcessor, autoscalingCtx *ca_context.AutoscalingContext, unschedulablePods []*apiv1.Pod, reactionType metrics.ReactionType) ([]*apiv1.Pod, error) {
 
-	withoutSchedulable, err := processor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
+	withoutSchedulable, err := processor.Process(ctx, autoscalingCtx, unschedulablePods)
 	if err != nil {
 		return []*apiv1.Pod{}, err
 	}
