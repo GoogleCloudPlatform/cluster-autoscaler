@@ -26,8 +26,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient"
@@ -978,6 +980,41 @@ func deletedAfterLookups(presentLookups int) *test.MockNodeLister {
 	}
 }
 
+// TestNewConsumeHandler_PreinitializesReadinessWaitMetrics covers that all
+// bounded readiness statuses exist with count=0 on /metrics as soon as the
+// handler is constructed, before any node has been resumed.
+func TestNewConsumeHandler_PreinitializesReadinessWaitMetrics(t *testing.T) {
+	nodeReadinessWaitSeconds.Reset()
+	t.Cleanup(initReadinessWaitMetrics)
+
+	families, err := legacyregistry.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, mf := range families {
+		require.NotEqual(t, "cluster_autoscaler_csn_node_readiness_wait", mf.GetName(),
+			"uninitialized HistogramVec should emit no series after Reset")
+	}
+
+	NewConsumeHandler(&statetest.MockStateManager{}, &test.MockCloudProvider{}, &test.MockK8sClient{}, &test.MockNodeLister{}, &mockCSNCompositeBackoff{}, readinessWaitExperiment(false))
+
+	families, err = legacyregistry.DefaultGatherer.Gather()
+	require.NoError(t, err)
+
+	var gotStatuses []string
+	for _, mf := range families {
+		if mf.GetName() != "cluster_autoscaler_csn_node_readiness_wait" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			require.Len(t, m.GetLabel(), 1)
+			assert.Equal(t, "status", m.GetLabel()[0].GetName())
+			gotStatuses = append(gotStatuses, m.GetLabel()[0].GetValue())
+			assert.Zero(t, m.GetHistogram().GetSampleCount())
+			assert.Zero(t, m.GetHistogram().GetSampleSum())
+		}
+	}
+	assert.ElementsMatch(t, []string{"ready", "deleted", "timeout", "aborted"}, gotStatuses)
+}
+
 // readinessWaitDeltas starts watching what the readiness wait metric records,
 // and returns what to check once the handler is done. Every status is watched,
 // including the ones expected to record nothing, so that a wait recorded under
@@ -987,8 +1024,9 @@ func deletedAfterLookups(presentLookups int) *test.MockNodeLister {
 // on the seconds added to a status rather than on the waits behind them.
 func readinessWaitDeltas(t *testing.T, expected map[string]time.Duration) map[string]*test.MetricDelta {
 	t.Helper()
+	require.Subset(t, allReadinessStatuses, expected, "expected wait status is missing from allReadinessStatuses")
 	deltas := map[string]*test.MetricDelta{}
-	for _, status := range []string{readinessReady, readinessDeleted, readinessTimedOut, readinessAborted} {
+	for _, status := range allReadinessStatuses {
 		d := test.NewMetricDelta(test.ExpectedValue(expected[status].Seconds()), nodeReadinessWaitSeconds, []string{status})
 		d.Init(t)
 		deltas[status] = d
