@@ -166,6 +166,7 @@ type InternalOptions struct {
 	FilterMigsByClusterNameEnabled               bool
 	ResizableVmEdpEnabled                        bool
 	AuthoritativeMachinesCacheEnabled            bool
+	LockWaitWatchdogEnabled                      bool
 	FlagOverrideResult                           FlagOverrideResult
 }
 

@@ -43,6 +43,7 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
 	"sigs.k8s.io/cluster-autoscaler/pkg/loop"
 	"sigs.k8s.io/cluster-autoscaler/pkg/metrics"
+	caerrors "sigs.k8s.io/cluster-autoscaler/pkg/utils/errors"
 	kube_util "sigs.k8s.io/cluster-autoscaler/pkg/utils/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -61,6 +62,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/cli"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/lockwatchdog"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
@@ -86,7 +88,16 @@ func init() {
 	utilruntime.Must(ccc_api.AddToScheme(scheme))
 }
 
-func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter) {
+// runOnceFunc adapts a function to the loop.Autoscaler interface so main can
+// inspect the error returned by autoscaler.RunOnce (which loop.RunAutoscalerOnce
+// handles internally and does not return).
+type runOnceFunc func(ctx context.Context, currentTime time.Time) caerrors.AutoscalerError
+
+func (f runOnceFunc) RunOnce(ctx context.Context, currentTime time.Time) caerrors.AutoscalerError {
+	return f(ctx, currentTime)
+}
+
+func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter, lockWatchdog *lockwatchdog.Watchdog) {
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
@@ -132,6 +143,7 @@ func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *opt
 	if err != nil {
 		klog.Fatalf("Failed to create autoscaler: %v", err)
 	}
+	lockWatchdog.SetEnabled(optsTracker.Options().LockWaitWatchdogEnabled)
 
 	// Start updating health check endpoint.
 	healthCheck.StartMonitoring()
@@ -157,7 +169,17 @@ func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *opt
 				trigger.Wait(lastRun)
 				lastRun = time.Now()
 
-				loop.RunAutoscalerOnce(ctx, autoscaler, healthCheck, lastRun, iteration)
+				runOnce := runOnceFunc(func(runCtx context.Context, currentTime time.Time) caerrors.AutoscalerError {
+					runErr := autoscaler.RunOnce(runCtx, currentTime)
+					// Match the condition under which loop.RunAutoscalerOnce calls
+					// healthCheck.UpdateLastSuccessfulRun: only arm watchdog restarts once
+					// a run has succeeded and cold caches have been populated.
+					if runErr == nil || runErr.Type() == caerrors.TransientError {
+						lockWatchdog.SetRestartEnabled(true)
+					}
+					return runErr
+				})
+				loop.RunAutoscalerOnce(ctx, runOnce, healthCheck, lastRun, iteration)
 
 				// Recompute options only once, at the end of the loop to keep them consistent during the loop execution
 				if err := optsTracker.RecomputeOptions(); err != nil {
@@ -166,6 +188,7 @@ func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *opt
 				// Sync dynamically updated options from OptionsTracker to the OSS AutoscalingOptions in AutoscalingContext.
 				// This propagation is strictly for fields explicitly configured in OptionsTracker to support dynamic updates without a restart.
 				optsTracker.PropagateDynamicOptions(&autoscaler.AutoscalingOptions)
+				lockWatchdog.SetEnabled(optsTracker.Options().LockWaitWatchdogEnabled)
 
 				// Let Cluster Autoscaler run at least 5 minutes before restarting to pick up a new configuration
 				if time.Now().After(loopStart.Add(5*time.Minute)) && optsTracker.OptionChangesRequireRestart() {
@@ -265,6 +288,13 @@ func main() {
 		klog.Fatalf("Unable to create GkeDebuggingSnapshotter: %v", err)
 	}
 
+	// The watchdog runs for the whole lifetime of the process, staying in
+	// log-only mode until the first successful autoscaler run completes to
+	// allow cold-cache startup to complete without restarts.
+	lockWatchdog := lockwatchdog.New(options.LockWaitWatchdogEnabled)
+	lockWatchdog.SetRestartEnabled(false)
+	go lockWatchdog.Run(rootCtx.Done())
+
 	updateMachineFamiliesOnFlag(options)
 
 	go func() {
@@ -301,7 +331,7 @@ func main() {
 	}()
 
 	if !leaderElection.LeaderElect {
-		run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter)
+		run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
 	} else {
 		id, err := os.Hostname()
 		if err != nil {
@@ -349,7 +379,7 @@ func main() {
 						// Termination was requested while acquiring the lease: don't start, just release it.
 						return
 					}
-					run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter)
+					run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
 				},
 				OnStoppedLeading: func() {
 					if electionCtx.Err() != nil {

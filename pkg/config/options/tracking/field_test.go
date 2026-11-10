@@ -62,6 +62,12 @@ func TestTrackedFieldSetValue(t *testing.T) {
 		filterMigsByClusterNameStringExperimentFlags = map[string]string{
 			minCAVersion: experiments.FilterMigsByClusterNameMinCAVersionFlag,
 		}
+		lockWaitWatchdogBoolExperimentFlags = map[string]string{
+			enabled: experiments.LockWaitWatchdogEnabledFlag,
+		}
+		lockWaitWatchdogStringExperimentFlags = map[string]string{
+			minCAVersion: experiments.LockWaitWatchdogMinCAVersionFlag,
+		}
 	)
 
 	for _, trackedFieldTc := range []struct {
@@ -130,6 +136,18 @@ func TestTrackedFieldSetValue(t *testing.T) {
 			},
 			getFlag: func(opts internalopts.AutoscalingOptions) bool {
 				return opts.FilterMigsByClusterNameEnabled
+			},
+		},
+		{
+			name:                  "LockWaitWatchdogEnabled",
+			field:                 lockWaitWatchdogEnabledField,
+			boolExperimentFlags:   lockWaitWatchdogBoolExperimentFlags,
+			stringExperimentFlags: lockWaitWatchdogStringExperimentFlags,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.LockWaitWatchdogEnabled = value
+			},
+			getFlag: func(opts internalopts.AutoscalingOptions) bool {
+				return opts.LockWaitWatchdogEnabled
 			},
 		},
 	} {
@@ -332,6 +350,13 @@ func TestTrackedFieldValueEqual(t *testing.T) {
 			field: filterMigsByClusterNameEnabledField,
 			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
 				opts.FilterMigsByClusterNameEnabled = value
+			},
+		},
+		{
+			name:  "LockWaitWatchdogEnabled",
+			field: lockWaitWatchdogEnabledField,
+			setFlag: func(opts *internalopts.AutoscalingOptions, value bool) {
+				opts.LockWaitWatchdogEnabled = value
 			},
 		},
 	} {

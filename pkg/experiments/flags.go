@@ -369,3 +369,6 @@ const AuthoritativeMachinesCacheRefreshIntervalMinutesFlag = "AuthoritativeMachi
 
 const ScaleDownPriorityEnabledFlag = "ScaleDownPriority::Enabled"
 const ScaleDownPriorityMinCAVersionFlag = "ScaleDownPriority::MinCAVersion"
+
+const LockWaitWatchdogEnabledFlag = "LockWaitWatchdog::Enabled"
+const LockWaitWatchdogMinCAVersionFlag = "LockWaitWatchdog::MinCAVersion"
