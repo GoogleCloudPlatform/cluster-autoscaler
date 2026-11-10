@@ -492,7 +492,11 @@ func TestPostBinpackingAnalyzer_MppnAnalysisFuncAutopilotCluster(t *testing.T) {
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, tc.newNodesWithPods)
+			template, err := tc.nodeGroup.TemplateNodeInfo(t.Context())
+			if err != nil {
+				t.Fatalf("Failed to get template node info: %v", err)
+			}
+			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotMppn := tc.nodeGroup.Spec().MaxPodsPerNode; gotMppn != tc.expectedMppn {
 				t.Errorf("Unexpected max pods per node, got: %d, want: %d", gotMppn, tc.expectedMppn)
 			}
@@ -655,7 +659,11 @@ func TestPostBinpackingAnalyzer_MppnAnalysisFuncStandardCluster(t *testing.T) {
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, tc.newNodesWithPods)
+			template, err := tc.nodeGroup.TemplateNodeInfo(t.Context())
+			if err != nil {
+				t.Fatalf("Failed to get template node info: %v", err)
+			}
+			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotMppn := tc.nodeGroup.Spec().MaxPodsPerNode; gotMppn != tc.expectedMppn {
 				t.Errorf("Unexpected max pods per node, got: %d, want: %d", gotMppn, tc.expectedMppn)
 			}
