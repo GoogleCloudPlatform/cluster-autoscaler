@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,6 +98,27 @@ func (p *ProjectPuller) SetReservations(reservations []*reservation.Reservation)
 	defer p.mutex.Unlock()
 
 	p.reservations = reservations
+}
+
+// updateReservations replaces the reservations held by the puller with the given reservations
+// with the same IDs. It returns the IDs of the replaced reservations.
+func (p *ProjectPuller) updateReservations(updated map[uint64]*reservation.Reservation) []uint64 {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	var replaced []uint64
+	// The slice returned by GetReservations() must not be modified, so it is copied.
+	reservations := slices.Clone(p.reservations)
+	for i, r := range reservations {
+		if u, found := updated[r.ID]; found {
+			reservations[i] = u
+			replaced = append(replaced, r.ID)
+		}
+	}
+	if len(replaced) > 0 {
+		p.reservations = reservations
+	}
+	return replaced
 }
 
 // Run runs the Puller.
@@ -342,9 +364,46 @@ func (p *ReservationsPuller) GetReservationsInProject(project string) []*reserva
 	return result
 }
 
-// SetReservations overrides pulled reservations, e.g. to account for capacity used by a scale-up
-// before GCE reports it. Each reservation is stored back in the puller that returned it, so that
-// the puller's next successful pull replaces it.
+// UpdateReservations replaces pulled reservations with the given reservations with the same IDs,
+// e.g. to account for capacity used by a scale-up before GCE reports it. A reservation is replaced
+// in every puller that currently holds it, so that the next successful pull replaces it.
+//
+// Reservations that no puller holds are ignored. A puller may have stopped returning a
+// reservation since the caller got it from GetReservations(). Storing such a reservation in
+// another puller would make it outlive all the following pulls if that puller keeps failing,
+// e.g. because of missing permissions to list reservations in a shared project.
+func (p *ReservationsPuller) UpdateReservations(reservations []*reservation.Reservation) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	updated := make(map[uint64]*reservation.Reservation, len(reservations))
+	for _, r := range reservations {
+		updated[r.ID] = r
+	}
+
+	held := make(map[uint64]bool, len(updated))
+	for _, pp := range p.projectPullers {
+		for _, id := range pp.updateReservations(updated) {
+			held[id] = true
+		}
+	}
+	for i, r := range p.consumableReservations {
+		if u, found := updated[r.ID]; found {
+			p.consumableReservations[i] = u
+			held[r.ID] = true
+		}
+	}
+
+	for id, r := range updated {
+		if !held[id] {
+			klog.V(4).Infof("Ignoring update of reservation %s, as it is no longer returned by any puller", GetShortSelfLink(r))
+		}
+	}
+}
+
+// SetReservations overrides all pulled reservations, storing each of them in the puller of its
+// project, or in the consumable puller if only that puller holds it. It is meant for setting up
+// the puller's state. Use UpdateReservations to update reservations returned by GetReservations().
 func (p *ReservationsPuller) SetReservations(reservations []*reservation.Reservation) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()

@@ -117,7 +117,7 @@ func (p *ReservationBalancingProcessor) BalanceScaleUpBetweenGroups(ctx context.
 	scaleUpInfos = filterEmptyScaleUpInfos(scaleUpInfos)
 
 	// Subtract resources from reservations that are used by the current scale up and update the puller.
-	p.puller.SetReservations(p.updateReservations(scaleUpInfos, reservations, pullerReservations))
+	p.puller.UpdateReservations(p.updateReservations(scaleUpInfos, reservations, pullerReservations))
 
 	return scaleUpInfos, nil
 }
