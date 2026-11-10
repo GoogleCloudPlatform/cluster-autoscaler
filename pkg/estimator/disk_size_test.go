@@ -238,7 +238,8 @@ func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncAutopilotCluster(t *testing.
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, tc.newNodesWithPods)
+			template := framework.NewTestNodeInfo(&apiv1.Node{})
+			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotDiskSize := tc.nodeGroup.Spec().DiskSize; gotDiskSize != tc.expectedDiskSize {
 				t.Errorf("Unexpected disk size, got: %d, want: %d", gotDiskSize, tc.expectedDiskSize)
 			}
@@ -408,7 +409,8 @@ func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncStandardCluster(t *testing.T
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, tc.newNodesWithPods)
+			template := framework.NewTestNodeInfo(&apiv1.Node{})
+			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotDiskSize := tc.nodeGroup.Spec().DiskSize; gotDiskSize != tc.expectedDiskSize {
 				t.Errorf("Unexpected disk size, got: %d, want: %d", gotDiskSize, tc.expectedDiskSize)
 			}

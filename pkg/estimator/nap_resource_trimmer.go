@@ -58,7 +58,7 @@ func (nrt *NapResourceTrimmer) NapResourceAnalyzerFunc() estimator.EstimationAna
 	return nrt.analysisChainFunc
 }
 
-func (nrt *NapResourceTrimmer) analysisChainFunc(clusterSnapshot clustersnapshot.ClusterSnapshot, nodeGroup cloudprovider.NodeGroup, newNodesWithPods map[string]bool) {
+func (nrt *NapResourceTrimmer) analysisChainFunc(clusterSnapshot clustersnapshot.ClusterSnapshot, nodeGroup cloudprovider.NodeGroup, nodeInfo *framework.NodeInfo, newNodesWithPods map[string]bool) {
 	if nodeGroup.Exist(context.TODO()) || !nodeGroup.Autoprovisioned(context.TODO()) {
 		return
 	}
