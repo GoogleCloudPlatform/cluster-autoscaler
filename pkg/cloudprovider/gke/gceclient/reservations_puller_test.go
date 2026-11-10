@@ -701,7 +701,7 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 	})
 }
 
-func TestReservationsPuller_SetReservations(t *testing.T) {
+func TestReservationsPuller_UpdateReservations(t *testing.T) {
 	const (
 		localProject    = "local-proj"
 		sharedProject   = "shared-proj"
@@ -735,25 +735,45 @@ func TestReservationsPuller_SetReservations(t *testing.T) {
 		localReservations      []*gce_api.Reservation
 		sharedProjectErr       error
 		consumableReservations []*reservation.Reservation
-		// usedReservation is passed to SetReservations, like the balancer does after a scale-up.
+		// consumablePullerDropsReservations makes the consumable puller stop returning
+		// consumableReservations after they are read and before they are updated, as happens when
+		// listing them fails in the zone of the reservations but succeeds in another zone.
+		consumablePullerDropsReservations bool
+		// usedReservation is passed to UpdateReservations, like the balancer does after a scale-up.
 		usedReservation *reservation.Reservation
+		// wantAvailableAfterUpdate are the expected available counts right after the update.
+		wantAvailableAfterUpdate []int64
 	}{
 		{
-			name:                   "reservation_returned_only_by_consumable_puller_and_project_cannot_be_pulled",
-			sharedProjectErr:       errors.New("googleapi: Error 403: Required 'compute.reservations.list' permission"),
-			consumableReservations: []*reservation.Reservation{freeShared},
-			usedReservation:        usedShared,
+			name:                     "reservation_returned_only_by_consumable_puller_and_project_cannot_be_pulled",
+			sharedProjectErr:         errors.New("googleapi: Error 403: Required 'compute.reservations.list' permission"),
+			consumableReservations:   []*reservation.Reservation{freeShared},
+			usedReservation:          usedShared,
+			wantAvailableAfterUpdate: []int64{0},
 		},
 		{
-			name:                   "reservation_returned_by_project_and_consumable_pullers",
-			localReservations:      []*gce_api.Reservation{freeLocal},
-			consumableReservations: []*reservation.Reservation{reservation.FromV1(freeLocal)},
-			usedReservation:        usedLocal,
+			name:                     "reservation_returned_by_project_and_consumable_pullers",
+			localReservations:        []*gce_api.Reservation{freeLocal},
+			consumableReservations:   []*reservation.Reservation{reservation.FromV1(freeLocal)},
+			usedReservation:          usedLocal,
+			wantAvailableAfterUpdate: []int64{0},
 		},
 		{
-			name:                   "reservation_returned_only_by_consumable_puller_and_project_without_puller",
-			consumableReservations: []*reservation.Reservation{freeUnpulled},
-			usedReservation:        usedUnpulled,
+			name:                     "reservation_returned_only_by_consumable_puller_and_project_without_puller",
+			consumableReservations:   []*reservation.Reservation{freeUnpulled},
+			usedReservation:          usedUnpulled,
+			wantAvailableAfterUpdate: []int64{0},
+		},
+		{
+			// The used reservation must not be stored in the puller of the shared project. That
+			// puller never succeeds, so the reservation would stay there forever, hiding the one
+			// returned by the consumable puller.
+			name:                              "reservation_dropped_by_consumable_puller_before_update_and_project_cannot_be_pulled",
+			sharedProjectErr:                  errors.New("googleapi: Error 403: Required 'compute.reservations.list' permission"),
+			consumableReservations:            []*reservation.Reservation{freeShared},
+			consumablePullerDropsReservations: true,
+			usedReservation:                   usedShared,
+			wantAvailableAfterUpdate:          nil,
 		},
 	}
 	for _, tc := range testCases {
@@ -777,9 +797,12 @@ func TestReservationsPuller_SetReservations(t *testing.T) {
 			}
 
 			pull()
-			puller.SetReservations([]*reservation.Reservation{tc.usedReservation})
-			if diff := cmp.Diff([]int64{0}, availableCounts(puller.GetReservations())); diff != "" {
-				t.Errorf("GetReservations() after SetReservations() available counts diff (-want +got):\n%s", diff)
+			if tc.consumablePullerDropsReservations {
+				puller.consumableReservations = nil
+			}
+			puller.UpdateReservations([]*reservation.Reservation{tc.usedReservation})
+			if diff := cmp.Diff(tc.wantAvailableAfterUpdate, availableCounts(puller.GetReservations())); diff != "" {
+				t.Errorf("GetReservations() after UpdateReservations() available counts diff (-want +got):\n%s", diff)
 			}
 
 			pull()
