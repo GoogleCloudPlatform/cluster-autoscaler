@@ -387,6 +387,17 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			},
 			wantRestart: true,
 		},
+		{
+			testName: "LockWaitWatchdogEnabled_field_is_tracked",
+			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.LockWaitWatchdogEnabled = true
+			},
+			experimentValues: map[string]bool{experiments.LockWaitWatchdogEnabledFlag: false},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.LockWaitWatchdogEnabled = false
+			},
+			wantRestart: false,
+		},
 	} {
 		t.Run(tc.testName, func(t *testing.T) {
 			wantOpts := EmptyTestOptionsTracker().Options()

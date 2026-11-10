@@ -155,6 +155,7 @@ var (
 	napMaxNodes                          = flag.Int("nap-max-nodes", 1000, "The max number of nodes per zone in autoprovisioned node pools.")
 	daemonSetMutationEnabled             = flag.Bool("enable-daemonset-mutation", true, "Whether DaemonSet mutation is enabled.")
 	filterMigsByClusterNameEnabled       = flag.Bool("enable-filter-migs-by-cluster-name", true, "Whether GKE MIGs are filtered by cluster name on the GCE server-side is enabled.")
+	enableLockWaitWatchdog               = flag.Bool("enable-lock-wait-watchdog", true, "Whether the lock wait watchdog that logs all goroutines and exits on prolonged mutex waits is enabled.")
 
 	// See go/gke-ca-perf-node-pod-watch-selector, read Risks sections before using
 	nodeWatchLabelSelector = flag.String("node-watch-label-selector", "", "Label selector to filter nodes in informer watch, defaults to all nodes.")
@@ -427,6 +428,7 @@ func InternalOptsFromFlags(flagOverrideResult internalopts.FlagOverrideResult) i
 		ExperimentsConfigMap:                         *experimentsConfigMap,
 		KarpenterEnabled:                             *karpenterEnabled,
 		FilterMigsByClusterNameEnabled:               *filterMigsByClusterNameEnabled,
+		LockWaitWatchdogEnabled:                      *enableLockWaitWatchdog,
 		FlagOverrideResult:                           flagOverrideResult,
 	}
 }

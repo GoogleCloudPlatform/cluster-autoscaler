@@ -92,6 +92,7 @@ var allTrackedFields = []trackedField{
 	maxConcurrentNodesTaintingField,
 	authoritativeMachinesCacheEnabledField,
 	scaleDownPriorityTaintKeyField,
+	lockWaitWatchdogEnabledField,
 }
 
 // OptionsTracker computes AutoscalingOptions based on <CLI flags, experiments, Cluster proto> and tracks changes to them during Cluster Autoscaler runtime.
