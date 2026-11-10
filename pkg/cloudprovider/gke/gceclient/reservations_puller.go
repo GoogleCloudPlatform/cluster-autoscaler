@@ -74,6 +74,11 @@ type ProjectPuller struct {
 	loopLock            sync.Mutex
 	lastLoopError       error
 	lastReservationSeen time.Time
+
+	// initialPull is closed when the first pull started by ReservationsPuller.AddProject
+	// finishes. It is nil if AddProject didn't start the pull, as ReservationsPuller wasn't
+	// running yet. It is set before the puller becomes visible to other goroutines.
+	initialPull chan struct{}
 }
 
 // NewProjectPuller builds a new Puller for a specific project.
@@ -451,21 +456,38 @@ func (p *ProjectPuller) LastLoopError() error {
 	return p.lastLoopError
 }
 
-// AddProject adds the project to the set of projects while optionally
-// allowing aggregate reservations to get discovered.
+// AddProject adds the project to the set of pulled projects. If ReservationsPuller is running,
+// reservations of the project are pulled before this method returns, also if the project is being
+// added by a concurrent call.
 func (p *ReservationsPuller) AddProject(projectID string) {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
-	if _, ok := p.projectPullers[projectID]; ok {
+	if existing, ok := p.projectPullers[projectID]; ok {
+		initialPull := existing.initialPull
+		p.mutex.Unlock()
+		if initialPull != nil {
+			// Callers expect the reservations right after this method returns, so wait for the
+			// call that added the project to pull them.
+			<-initialPull
+		}
 		return
 	}
 
 	puller := NewProjectPuller(p.gceClient, p.zonesProvider, projectID)
-	p.projectPullers[projectID] = puller
-	if p.context != nil {
-		p.runProjectPuller(puller, p.context)
+	ctx := p.context
+	if ctx != nil {
+		puller.initialPull = make(chan struct{})
 	}
+	p.projectPullers[projectID] = puller
+	p.mutex.Unlock()
+
+	if ctx == nil {
+		// Run() pulls the reservations once ReservationsPuller is started.
+		return
+	}
+	// The reservations are pulled without holding the mutex, so that a slow call to GCE doesn't
+	// block everything that reads the reservations.
+	defer close(puller.initialPull)
+	p.runProjectPuller(puller, ctx)
 }
 
 // Run runs pulling on all the watched projects.

@@ -701,6 +701,61 @@ func TestReservationsPuller_AddProjectRace(t *testing.T) {
 	})
 }
 
+func TestReservationsPuller_AddProjectPullsWithoutBlockingReaders(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		localProject := "local-project"
+		sharedProject := "shared-project"
+		zone := "us-central1-a"
+
+		ctx, cancel := context.WithCancel(t.Context())
+
+		localRsv := buildSingleMachineReservation("fake-machine-type", zone)
+		sharedRsv := buildSingleMachineReservation("fake-machine-type", zone)
+
+		// Pulls of the shared project hang until unblockSharedProject is closed.
+		unblockSharedProject := make(chan struct{})
+		mGceClient := BuildAutoscalingInternalGceClientMock().
+			WithFetchReservationsInProject(func(project string) ([]*gce_api.Reservation, error) {
+				if project == localProject {
+					return []*gce_api.Reservation{localRsv}, nil
+				}
+				<-unblockSharedProject
+				return []*gce_api.Reservation{sharedRsv}, nil
+			})
+
+		puller := NewReservationsPuller(mGceClient, nil, nil, newFakeZonesProvider([]string{zone}, nil), localProject, false)
+		defer puller.Wait()
+		defer cancel()
+
+		go puller.Run(ctx)
+		synctest.Wait()
+
+		// Add the same project concurrently: one call pulls it and the other one waits for the pull.
+		var added [2]atomic.Bool
+		for i := range added {
+			go func() {
+				puller.AddProject(sharedProject)
+				added[i].Store(true)
+			}()
+		}
+		synctest.Wait()
+
+		for i := range added {
+			assert.False(t, added[i].Load(), "AddProject() call %d returned before the project got pulled", i)
+		}
+		// Reading reservations must not wait for the pull of the shared project.
+		assert.ElementsMatch(t, reservation.FromV1List([]*gce_api.Reservation{localRsv}), puller.GetReservations())
+
+		close(unblockSharedProject)
+		synctest.Wait()
+
+		for i := range added {
+			assert.True(t, added[i].Load(), "AddProject() call %d didn't return after the project got pulled", i)
+		}
+		assert.ElementsMatch(t, reservation.FromV1List([]*gce_api.Reservation{sharedRsv}), puller.GetReservationsInProject(sharedProject))
+	})
+}
+
 func TestReservationsPuller_UpdateReservations(t *testing.T) {
 	const (
 		localProject    = "local-proj"
