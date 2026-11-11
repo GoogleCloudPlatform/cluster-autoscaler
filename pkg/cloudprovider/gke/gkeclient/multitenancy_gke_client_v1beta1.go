@@ -32,10 +32,12 @@ type MultitenancyGKEClient interface {
 }
 
 type multitenancyGkeClientV1beta1 struct {
-	autoscalingGkeClient          AutoscalingGkeClient
-	providerConfigToNetworkConfig map[string]*multitenancy.ProviderNetworkConfig
-	experimentsManager            experiments.Manager
+	autoscalingGkeClient AutoscalingGkeClient
+	experimentsManager   experiments.Manager
+
+	// mutex guards providerConfigToNetworkConfig.
 	mutex                         sync.Mutex
+	providerConfigToNetworkConfig map[string]*multitenancy.ProviderNetworkConfig
 }
 
 var _ MultitenancyGKEClient = &multitenancyGkeClientV1beta1{}
