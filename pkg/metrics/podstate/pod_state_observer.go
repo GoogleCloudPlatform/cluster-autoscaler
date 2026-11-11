@@ -38,6 +38,7 @@ import (
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	coreutils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
 	osspodutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 )
@@ -66,6 +67,9 @@ type podStateData struct {
 	unschedulableSince *time.Time
 	cccName            string
 	allocationMode     podutils.DeviceAllocationMode
+	// scaleUpEligibleAt is when the pod's scale-up delay ends. See
+	// PodStateObserver.scaleUpEligibleAt.
+	scaleUpEligibleAt time.Time
 }
 
 type PodStateObserver struct {
@@ -81,6 +85,10 @@ type PodStateObserver struct {
 	// allowedSchedulers mirrors --allowed-scheduler-names. When non-empty, CA
 	// ignores pods targeting any other scheduler.
 	allowedSchedulers map[string]bool
+	// newPodScaleUpDelay mirrors --new-pod-scale-up-delay. CA withholds pods
+	// from scale-up until they are older than this or their pod-scale-up-delay
+	// annotation, whichever is longer.
+	newPodScaleUpDelay time.Duration
 
 	mux                 sync.Mutex
 	unreportedPodStates map[types.UID]*podStateData
@@ -88,11 +96,11 @@ type PodStateObserver struct {
 }
 
 // NewPodStateObserver returns a new PodStateObserver.
-func NewPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool) (*PodStateObserver, error) {
-	return newPodStateObserver(informerFactory, reactionTimeMetrics, podsClassifier, npc_crd_lister, defaultPeriodicCheckFrequency, clock.RealClock{}, enablePendingPodsMetric, enablePendingPodsPerCccMetric, expendablePodsPriorityCutoff, allowedSchedulers)
+func NewPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool, newPodScaleUpDelay time.Duration) (*PodStateObserver, error) {
+	return newPodStateObserver(informerFactory, reactionTimeMetrics, podsClassifier, npc_crd_lister, defaultPeriodicCheckFrequency, clock.RealClock{}, enablePendingPodsMetric, enablePendingPodsPerCccMetric, expendablePodsPriorityCutoff, allowedSchedulers, newPodScaleUpDelay)
 }
 
-func newPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, periodicCheckFrequency time.Duration, clock clock.WithTicker, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool) (*PodStateObserver, error) {
+func newPodStateObserver(informerFactory informers.SharedInformerFactory, reactionTimeMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npc_crd_lister npc_lister.Lister, periodicCheckFrequency time.Duration, clock clock.WithTicker, enablePendingPodsMetric, enablePendingPodsPerCccMetric bool, expendablePodsPriorityCutoff int, allowedSchedulers map[string]bool, newPodScaleUpDelay time.Duration) (*PodStateObserver, error) {
 	o := &PodStateObserver{
 		autoscalerStartTime:    clock.Now(),
 		informerFactory:        informerFactory,
@@ -104,6 +112,7 @@ func newPodStateObserver(informerFactory informers.SharedInformerFactory, reacti
 		npcCrdLister:                 npc_crd_lister,
 		expendablePodsPriorityCutoff: expendablePodsPriorityCutoff,
 		allowedSchedulers:            allowedSchedulers,
+		newPodScaleUpDelay:           newPodScaleUpDelay,
 		unreportedPodStates:          make(map[types.UID]*podStateData),
 		reportedPodStates:            make(map[types.UID]*podStateData),
 	}
@@ -164,7 +173,7 @@ func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.
 	filteredPods := slices.DeleteFunc(slices.Clone(pods), o.shouldIgnorePod)
 	reactionDataToReportReactionTime := o.updateAndGetReactionDataToReport(filteredPods, reactionType)
 	for pod, sd := range reactionDataToReportReactionTime {
-		t := getTimePassedFromBeingUnschedulable(now, sd)
+		t := elapsedReactionTime(now, sd)
 		o.reactionTimeMetrics.ObserveFirstReactionTime(t, sd.systemPod, sd.hasPVC, sd.hasCSI, reactionType, sd.allocationMode.String())
 		if t > loggingThreshold {
 			klogx.V(1).UpTo(loggingQuota).Infof("PodStateObserver: overdue reaction for pod %v (UID=%v) - %v after %v", pod.Name, pod.UID, reactionType, t)
@@ -271,6 +280,7 @@ func (o *PodStateObserver) track(pod *v1.Pod, unschedulableSince *time.Time) {
 		hasCSI:             HasCSI(pod),
 		reactionType:       metrics.NoReaction,
 		unschedulableSince: unschedulableSince,
+		scaleUpEligibleAt:  o.scaleUpEligibleAt(pod),
 		cccName:            o.getPodCccName(pod),
 		allocationMode:     podutils.DeviceAllocationModeForPod(pod),
 	}
@@ -301,6 +311,9 @@ func (o *PodStateObserver) onUpdate(oldObj, newObj interface{}) {
 	}
 	// if pod is marked as unscheduled we want to store the last transition timestamp
 	o.updatePodUnschedulableTime(oldPod, newPod)
+	if oldPod.Annotations[annotations.PodScaleUpDelayAnnotationKey] != newPod.Annotations[annotations.PodScaleUpDelayAnnotationKey] {
+		o.updateScaleUpEligibleAt(newPod)
+	}
 	switch {
 	case oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "":
 		// Pods are only scheduled once in their lifetime, so we can safely delete it now.
@@ -357,7 +370,7 @@ func (o *PodStateObserver) observeReactionAndForgetPod(pod *v1.Pod, reactionType
 		// No data - skip.
 		return
 	}
-	reactionTime := getTimePassedFromBeingUnschedulable(o.clock.Now(), *info)
+	reactionTime := elapsedReactionTime(o.clock.Now(), *info)
 	var logMessage string
 	var logLevel klog.Level
 	o.reactionTimeMetrics.ObserveFirstReactionTime(reactionTime, info.systemPod, info.hasPVC, info.hasCSI, reactionType, info.allocationMode.String())
@@ -426,7 +439,7 @@ func (o *PodStateObserver) processTimedOutPods() map[types.UID]podStateData {
 		if podStateData.unschedulableSince == nil {
 			continue
 		}
-		if o.clock.Since(*podStateData.unschedulableSince) >= metrics.MaxReactionTime {
+		if elapsedReactionTime(o.clock.Now(), *podStateData) >= metrics.MaxReactionTime {
 			podStateData.reactionType = metrics.Timeout
 			timeoutPods[uid] = *podStateData
 			delete(o.unreportedPodStates, uid)
@@ -524,6 +537,36 @@ func (o *PodStateObserver) getPodUnschedulableTime(pod *v1.Pod) *time.Time {
 	return nil
 }
 
+// scaleUpEligibleAt returns when the pod's scale-up delay ends, i.e. when
+// StaticAutoscaler.filterOutYoungPods stops withholding it from scale-up. For a
+// pod without a delay, that's its creation time. Like filterOutYoungPods, it
+// ignores pod-scale-up-delay annotations that are invalid or shorter than
+// --new-pod-scale-up-delay.
+// TODO(b/587286812): Use a helper shared with filterOutYoungPods once upstream
+// exports one, so the two can't drift.
+func (o *PodStateObserver) scaleUpEligibleAt(pod *v1.Pod) time.Time {
+	delay := o.newPodScaleUpDelay
+	if val, ok := pod.Annotations[annotations.PodScaleUpDelayAnnotationKey]; ok {
+		if parsed, err := time.ParseDuration(val); err == nil && parsed > delay {
+			delay = parsed
+		}
+	}
+	return pod.CreationTimestamp.Add(delay)
+}
+
+// updateScaleUpEligibleAt recomputes scaleUpEligibleAt for a pod whose reaction
+// hasn't been reported yet, as filterOutYoungPods re-reads the
+// pod-scale-up-delay annotation on every loop. Already reported reactions are
+// not changed.
+func (o *PodStateObserver) updateScaleUpEligibleAt(pod *v1.Pod) {
+	eligibleAt := o.scaleUpEligibleAt(pod)
+	o.mux.Lock()
+	defer o.mux.Unlock()
+	if data, ok := o.unreportedPodStates[pod.UID]; ok {
+		data.scaleUpEligibleAt = eligibleAt
+	}
+}
+
 func hasSchedulingGates(pod *v1.Pod) bool {
 	return len(pod.Spec.SchedulingGates) > 0
 }
@@ -609,13 +652,17 @@ func HasCSI(pod *v1.Pod) bool {
 	return false
 }
 
-// getTimePassedFromBeingUnschedulable returns the time that passed since pod was marked as unschedulable
-// otherwise if pod was not marked so, 0 is returned
-func getTimePassedFromBeingUnschedulable(currentTime time.Time, podStateData podStateData) time.Duration {
-	var timePassed time.Duration
-	// if unschedulableSince is equal to the default value, it means that pod is not marked as unschedulable
-	if podStateData.unschedulableSince != nil {
-		timePassed = currentTime.Sub(*podStateData.unschedulableSince)
+// elapsedReactionTime returns the time that passed since the reaction clock
+// started: the later of when the pod was marked as unschedulable and when its
+// scale-up delay ended, as CA doesn't scale up for the pod until then. It
+// returns 0 if the pod was not marked as unschedulable.
+func elapsedReactionTime(currentTime time.Time, data podStateData) time.Duration {
+	if data.unschedulableSince == nil {
+		return 0
 	}
-	return timePassed
+	start := *data.unschedulableSince
+	if data.scaleUpEligibleAt.After(start) {
+		start = data.scaleUpEligibleAt
+	}
+	return max(currentTime.Sub(start), 0)
 }
