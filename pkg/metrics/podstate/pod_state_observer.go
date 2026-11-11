@@ -234,6 +234,9 @@ func (o *PodStateObserver) onAdd(obj interface{}) {
 		return
 	}
 	o.track(pod, o.getPodUnschedulableTime(pod))
+	if hasNominatedNode(pod) {
+		o.observeNominated(pod)
+	}
 }
 
 // track starts tracking the pod if it is pending and in scope for the reaction
@@ -306,6 +309,28 @@ func (o *PodStateObserver) onUpdate(oldObj, newObj interface{}) {
 		// A pod waiting on finalizers can stay around long after it starts
 		// terminating, but CA stops acting on it right away.
 		o.observeReactionAndForgetPod(newPod, metrics.Deleted)
+	case hasNominatedNode(newPod):
+		// CA treats pods with Status.NominatedNodeName set as allocated on that
+		// node (kube_util.ArrangePodsBySchedulability) and never acts on them.
+		// Checked on every update, not only when the nomination appears, as the
+		// pod may be marked Unschedulable only after it was nominated.
+		o.observeNominated(newPod)
+	}
+}
+
+// observeNominated reports NoActionNeeded for a tracked pod once kube-scheduler
+// nominates a node for it, e.g. while preempted pods terminate. Pods that were
+// never marked unschedulable, e.g. nominated via
+// NominatedNodeNameForExpectation while PreBind runs, can't time out and are
+// reported as Scheduled once bound. Pods already reported as NoActionNeeded
+// are skipped.
+func (o *PodStateObserver) observeNominated(pod *v1.Pod) {
+	o.mux.Lock()
+	data := o.getPodStateDataNoLock(pod)
+	shouldReport := data != nil && data.unschedulableSince != nil && data.reactionType != metrics.NoActionNeeded
+	o.mux.Unlock()
+	if shouldReport {
+		o.ObserveReaction([]*v1.Pod{pod}, metrics.NoActionNeeded)
 	}
 }
 
@@ -501,6 +526,14 @@ func (o *PodStateObserver) getPodUnschedulableTime(pod *v1.Pod) *time.Time {
 
 func hasSchedulingGates(pod *v1.Pod) bool {
 	return len(pod.Spec.SchedulingGates) > 0
+}
+
+// hasNominatedNode reports whether a node is nominated for the pod, e.g. by
+// kube-scheduler after preempting pods there. Like
+// kube_util.ArrangePodsBySchedulability, CA treats such pods as allocated on
+// that node rather than unschedulable, so it never acts on them.
+func hasNominatedNode(pod *v1.Pod) bool {
+	return pod.Status.NominatedNodeName != ""
 }
 
 // isSchedulingGated reports whether the pod is gated, or was gated the last
