@@ -243,6 +243,14 @@ func TestPodStateObserver(t *testing.T) {
 	// The same pod before kube-scheduler has set any PodScheduled condition.
 	var pGatedNoCondition = test.BuildTestPod("gated", 100, 1, withSchedulingGate("kueue"))
 	const gatedFor = 90 * time.Minute
+	// A pod for which kube-scheduler nominated a node after preempting pods
+	// there. The pod stays Unschedulable, so LastTransitionTime stays at st.
+	var puNominated = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st), withNominatedNode("node-1"))
+	var puNominatedOtherNode = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st), withNominatedNode("node-2"))
+	// A pod nominated without ever being Unschedulable, as kube-scheduler does
+	// with NominatedNodeNameForExpectation while PreBind runs.
+	var pNominatedNotUnschedulable = test.BuildTestPod("p1", 100, 1, withNominatedNode("node-1"))
+	const nominatedFor = 90 * time.Minute
 
 	const periodicCheckFrequency = time.Minute * 90
 	testCases := []struct {
@@ -388,6 +396,133 @@ func TestPodStateObserver(t *testing.T) {
 			observedReactionType:   metrics.ScaleUp,
 			observedAllocationType: podutils.AllocationModeNone.String(),
 			observedReactionTimes:  []time.Duration{time.Second * 15},
+		},
+		{
+			// E.g. CA restarts while the pod waits for the pods it preempted to
+			// terminate.
+			desc: "Reports NoActionNeeded for pod that is already nominated when added",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puNominated},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{0},
+		},
+		{
+			// kube-scheduler sets the Unschedulable condition and the nominated
+			// node in the same status update, right after it preempts pods.
+			desc: "Reports NoActionNeeded for pod nominated on its first scheduling attempt",
+			events: []event{
+				{t: st, et: newPodEvent, pod: p},
+				{t: st.Add(time.Second * 5), et: updatePodEvent, pod: puNominated},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 5},
+		},
+		{
+			desc: "Reports NoActionNeeded for pod nominated after an earlier failed scheduling attempt",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(time.Second * 5), et: updatePodEvent, pod: puNominated},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second * 5},
+		},
+		{
+			desc: "Reports Scheduled for pod nominated without being Unschedulable",
+			events: []event{
+				{t: st, et: newPodEvent, pod: p},
+				{t: st.Add(time.Second * 5), et: updatePodEvent, pod: pNominatedNotUnschedulable},
+				{t: st.Add(time.Second * 10), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.Scheduled,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{0},
+		},
+		{
+			desc: "Reports Scheduled for pod that is already nominated without being Unschedulable when added",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pNominatedNotUnschedulable},
+				{t: st.Add(time.Second * 10), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.Scheduled,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{0},
+		},
+		{
+			// E.g. PreBind fails after NominatedNodeNameForExpectation, and the
+			// pod keeps its nominated node.
+			desc: "Reports NoActionNeeded for nominated pod once it is marked Unschedulable",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pNominatedNotUnschedulable},
+				{t: st.Add(10 * time.Second), et: updatePodEvent, pod: puNominated},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{10 * time.Second},
+		},
+		{
+			// E.g. PreBind fails after NominatedNodeNameForExpectation, and
+			// kube-scheduler preempts pods on another node, in a coalesced update.
+			desc: "Reports NoActionNeeded for nominated pod marked Unschedulable and nominated to another node",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pNominatedNotUnschedulable},
+				{t: st.Add(10 * time.Second), et: updatePodEvent, pod: puNominatedOtherNode},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{10 * time.Second},
+		},
+		{
+			desc: "Does not double-report when nomination moves to another node",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puNominated},
+				{t: st.Add(time.Minute), et: updatePodEvent, pod: puNominatedOtherNode},
+				{t: st.Add(nominatedFor), et: timeoutEvent},
+				{t: st.Add(nominatedFor), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.NoActionNeeded,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{0},
+		},
+		{
+			desc: "Nominated -> nomination cleared -> ScaleUp: updates final state without reporting a second reaction",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puNominated},
+				{t: st.Add(10 * time.Second), et: updatePodEvent, pod: pu},
+				{t: st.Add(15 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu}}},
+			},
+			observedReactionType:      metrics.NoActionNeeded,
+			observedAllocationType:    podutils.AllocationModeNone.String(),
+			observedReactionTimes:     []time.Duration{0},
+			expectedFinalReactionType: map[types.UID]metrics.ReactionType{pu.UID: metrics.ScaleUp},
+		},
+		{
+			desc: "ScaleUp -> nominated -> nomination cleared: does not report a second reaction",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(15 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu}}},
+				{t: st.Add(20 * time.Second), et: updatePodEvent, pod: puNominated},
+				{t: st.Add(30 * time.Second), et: updatePodEvent, pod: pu},
+				{t: st.Add(30*time.Second + nominatedFor), et: timeoutEvent},
+				{t: st.Add(30*time.Second + nominatedFor + 5*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu}}},
+				{t: st.Add(30*time.Second + nominatedFor + 10*time.Second), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{15 * time.Second},
 		},
 		{
 			desc: "Reports scale up",
@@ -852,6 +987,7 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 	var p2 = test.BuildTestPod("p2", 200, 2)
 	var p3 = test.BuildTestPod("p3", 200, 2, func(p *v1.Pod) { p.Namespace = metav1.NamespaceSystem })
 	var ps = test.BuildScheduledTestPod("p1", 100, 1, "some node")
+	var pNominated = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st), withNominatedNode("node-1"))
 	testCases := []struct {
 		name   string
 		events []event
@@ -934,6 +1070,60 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 				{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0},
 				{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0},
 				{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 1},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 0},
+			},
+		},
+		{
+			name: "pod counts as no_action_taken once a node is nominated for it",
+			events: []event{
+				{t: st, et: newPodEvent, pod: p, scaleUp: nil},
+				{t: st.Add(time.Second * 10), et: scaleUpEvent, pod: nil, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{p}}},
+				{t: st.Add(time.Second * 20), et: updatePodEvent, pod: pNominated, scaleUp: nil},
+			},
+			want: []podstatetypes.PendingPodsMetric{
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 1},
+			},
+		},
+		{
+			name: "pod counts as no_action_taken when already nominated on add",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pNominated, scaleUp: nil},
+			},
+			want: []podstatetypes.PendingPodsMetric{
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 1},
+			},
+		},
+		{
+			name: "reported pod updates to unable_to_provision after nomination is cleared",
+			events: []event{
+				{t: st, et: newPodEvent, pod: p, scaleUp: nil},
+				{t: st.Add(time.Second * 10), et: scaleUpEvent, pod: nil, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{p}}},
+				{t: st.Add(time.Second * 20), et: updatePodEvent, pod: pNominated, scaleUp: nil},
+				{t: st.Add(time.Second * 30), et: updatePodEvent, pod: p, scaleUp: nil},
+				{t: st.Add(time.Second * 40), et: scaleUpEvent, pod: nil, scaleUp: &status.ScaleUpStatus{PodsRemainUnschedulable: []status.NoScaleUpInfo{{Pod: p}}}},
+			},
+			want: []podstatetypes.PendingPodsMetric{
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.ProvisioningInProgress, SystemPod: false, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.UnableToProvision, SystemPod: false, Count: 1},
+				{Kind: podstatetypes.Unprocessed, SystemPod: true, Count: 0},
+				{Kind: podstatetypes.Unprocessed, SystemPod: false, Count: 0},
 				{Kind: podstatetypes.NoActionTaken, SystemPod: true, Count: 0},
 				{Kind: podstatetypes.NoActionTaken, SystemPod: false, Count: 0},
 			},
@@ -1357,6 +1547,14 @@ func withPodScheduledCondition(reason string, lastTransitionTime time.Time) func
 func withSchedulingGate(name string) func(*v1.Pod) {
 	return func(pod *v1.Pod) {
 		pod.Spec.SchedulingGates = append(pod.Spec.SchedulingGates, v1.PodSchedulingGate{Name: name})
+	}
+}
+
+// withNominatedNode sets the node nominated for the pod, as kube-scheduler does
+// after preempting pods there.
+func withNominatedNode(name string) func(*v1.Pod) {
+	return func(pod *v1.Pod) {
+		pod.Status.NominatedNodeName = name
 	}
 }
 
