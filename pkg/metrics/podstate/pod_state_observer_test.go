@@ -43,6 +43,7 @@ import (
 	cb "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	fakepods "sigs.k8s.io/cluster-autoscaler/pkg/simulator/fake"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 
 	podstatetypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate/types"
@@ -251,11 +252,33 @@ func TestPodStateObserver(t *testing.T) {
 	// with NominatedNodeNameForExpectation while PreBind runs.
 	var pNominatedNotUnschedulable = test.BuildTestPod("p1", 100, 1, withNominatedNode("node-1"))
 	const nominatedFor = 90 * time.Minute
+	// Pods with a scale-up delay, marked unschedulable 5s after they are
+	// created at st.
+	var puScaleUpDelay3m = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st.Add(5*time.Second)), withPodScaleUpDelay("3m"))
+	var puScaleUpDelayInvalid = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st.Add(5*time.Second)), withPodScaleUpDelay("invalid"))
+	var puScaleUpDelay10mUpdated = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st.Add(5*time.Second)), withPodScaleUpDelay("10m"), func(p *v1.Pod) {
+		p.CreationTimestamp = metav1.NewTime(st)
+	})
+	var pu5secUpdated = test.BuildTestPod("p1", 100, 1, markPodUnschedulableWithTime(st.Add(5*time.Second)), func(p *v1.Pod) {
+		p.CreationTimestamp = metav1.NewTime(st)
+	})
+	// puScaleUpDelay3m after it is scheduled.
+	var psScaleUpDelay3m = test.BuildTestPod("p1", 100, 1, withPodScaleUpDelay("3m"), func(p *v1.Pod) {
+		p.CreationTimestamp = metav1.NewTime(st)
+		p.Spec.NodeName = "some node"
+	})
+	// A pod with a 10m scale-up delay, gated when created at st, and the same
+	// pod after its gate is removed.
+	var pGatedScaleUpDelay10m = test.BuildTestPod("gated", 100, 1, withSchedulingGate("kueue"), withPodScheduledCondition(v1.PodReasonSchedulingGated, st), withPodScaleUpDelay("10m"))
+	var pUngatedScaleUpDelay10m = test.BuildTestPod("gated", 100, 1, withPodScheduledCondition(v1.PodReasonUnschedulable, st), withPodScaleUpDelay("10m"), func(p *v1.Pod) {
+		p.CreationTimestamp = metav1.NewTime(st)
+	})
 
 	const periodicCheckFrequency = time.Minute * 90
 	testCases := []struct {
 		desc                      string
 		allowedSchedulers         map[string]bool
+		newPodScaleUpDelay        time.Duration
 		events                    []event
 		observedReactionType      metrics.ReactionType
 		observedSystemPod         bool
@@ -523,6 +546,104 @@ func TestPodStateObserver(t *testing.T) {
 			observedReactionType:   metrics.ScaleUp,
 			observedAllocationType: podutils.AllocationModeNone.String(),
 			observedReactionTimes:  []time.Duration{15 * time.Second},
+		},
+		{
+			desc: "Measures scale-up from when the pod-scale-up-delay ends",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(3*time.Minute + 15*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelay3m}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{15 * time.Second},
+		},
+		{
+			desc: "Reports 0s for pod scheduled before its pod-scale-up-delay ends",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(2 * time.Minute), et: updatePodEvent, pod: psScaleUpDelay3m},
+			},
+			observedReactionType:   metrics.Scheduled,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{0},
+		},
+		{
+			// E.g. the informer coalesced the annotation change with the
+			// scheduling.
+			desc: "Refreshes scaleUpEligibleAt when pod-scale-up-delay annotation is removed in the update that schedules the pod",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(2 * time.Minute), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.Scheduled,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{2*time.Minute - 5*time.Second},
+		},
+		{
+			desc:               "Uses --new-pod-scale-up-delay when the pod-scale-up-delay annotation is shorter",
+			newPodScaleUpDelay: 5 * time.Minute,
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(5*time.Minute + 10*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelay3m}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{10 * time.Second},
+		},
+		{
+			desc:               "Uses --new-pod-scale-up-delay when the pod-scale-up-delay annotation is invalid",
+			newPodScaleUpDelay: 2 * time.Minute,
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelayInvalid},
+				{t: st.Add(2*time.Minute + 10*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelayInvalid}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{10 * time.Second},
+		},
+		{
+			desc: "Reports timeout MaxReactionTime after the pod-scale-up-delay ends",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(metrics.MaxReactionTime + time.Minute), et: timeoutEvent},
+				{t: st.Add(metrics.MaxReactionTime + 3*time.Minute), et: timeoutEvent},
+			},
+			observedReactionType:   metrics.Timeout,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{metrics.MaxReactionTime},
+		},
+		{
+			desc: "Measures scale-up for an ungated pod from when its pod-scale-up-delay ends",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGatedScaleUpDelay10m},
+				{t: st.Add(2 * time.Minute), et: updatePodEvent, pod: pUngatedScaleUpDelay10m},
+				{t: st.Add(10*time.Minute + 15*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pUngatedScaleUpDelay10m}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{15 * time.Second},
+		},
+		{
+			desc: "Refreshes scaleUpEligibleAt when pod-scale-up-delay annotation is added on update",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu5sec},
+				{t: st.Add(time.Minute), et: updatePodEvent, pod: puScaleUpDelay10mUpdated},
+				{t: st.Add(10*time.Minute + 20*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelay10mUpdated}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{20 * time.Second},
+		},
+		{
+			desc: "Refreshes scaleUpEligibleAt when pod-scale-up-delay annotation is removed on update",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(time.Minute), et: updatePodEvent, pod: pu5secUpdated},
+				{t: st.Add(time.Minute + 20*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu5secUpdated}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Minute + 15*time.Second},
 		},
 		{
 			desc: "Reports scale up",
@@ -832,7 +953,7 @@ func TestPodStateObserver(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{unownedCccs: map[string]bool{"unowned-ccc": true}}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers)
+				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{unownedCccs: map[string]bool{"unowned-ccc": true}}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers, tc.newPodScaleUpDelay)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
 				informerFactory.Start(stopCh)
@@ -1158,7 +1279,7 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, false, false, -10, nil)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, false, false, -10, nil, 0)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1473,7 +1594,7 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds, unownedCccs: map[string]bool{"unowned-ccc": true}}, time.Minute, fakeClock, false, false, -10, nil)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds, unownedCccs: map[string]bool{"unowned-ccc": true}}, time.Minute, fakeClock, false, false, -10, nil, 0)
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1555,6 +1676,16 @@ func withSchedulingGate(name string) func(*v1.Pod) {
 func withNominatedNode(name string) func(*v1.Pod) {
 	return func(pod *v1.Pod) {
 		pod.Status.NominatedNodeName = name
+	}
+}
+
+// withPodScaleUpDelay sets the pod-scale-up-delay annotation.
+func withPodScaleUpDelay(delay string) func(*v1.Pod) {
+	return func(pod *v1.Pod) {
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[annotations.PodScaleUpDelayAnnotationKey] = delay
 	}
 }
 

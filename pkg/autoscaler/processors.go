@@ -779,7 +779,7 @@ func (b *Builder) setUpProcessors(
 		internalmetrics.Metrics,
 		laChurnTracker)
 
-	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff, options.AllowedSchedulers)
+	psObserver, err := podstate.NewPodStateObserver(informerFactory, internalmetrics.Metrics, systemPodsClassifier, ccLister, options.PendingPodsMetricEnabled, options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag), options.ExpendablePodsPriorityCutoff, options.AllowedSchedulers, options.NewPodScaleUpDelay)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {
 		autoscalingProcessors.ScaleStateNotifier.Register(metricsccc.NewNodeGroupChangePerCCCMetricsProducer(ccLister))
 	}
