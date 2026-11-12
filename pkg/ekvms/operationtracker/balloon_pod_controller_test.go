@@ -19,12 +19,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -317,6 +319,111 @@ func TestCreateBalloonPod(t *testing.T) {
 				assert.NoError(t, err)
 				pods := bPController.List()
 				assert.Equal(t, tc.wantPods, pods)
+			})
+		})
+	}
+}
+
+func TestCreateBalloonPod_RetriesOnConflict(t *testing.T) {
+	node := test.BuildTestNode("node1", 1000, 1024*1024)
+
+	testCases := []struct {
+		desc                  string
+		failuresBeforeSuccess int
+		createErr             error
+		wantAttempts          int
+		wantPodsCount         int
+		wantErrContains       string
+	}{
+		{
+			desc:                  "succeeds after transient ResourceQuota 409 conflicts",
+			failuresBeforeSuccess: 2,
+			createErr: apierrors.NewConflict(
+				v1.Resource("resourcequotas"),
+				"gcp-critical-pods",
+				errors.New("the object has been modified"),
+			),
+			wantAttempts:  3,
+			wantPodsCount: 1,
+		},
+		{
+			desc:                  "returns conflict error after exhausting retries",
+			failuresBeforeSuccess: defaultPodCreateConflictBackoff.Steps,
+			createErr: apierrors.NewConflict(
+				v1.Resource("resourcequotas"),
+				"gcp-critical-pods",
+				errors.New("the object has been modified"),
+			),
+			wantAttempts:    defaultPodCreateConflictBackoff.Steps,
+			wantPodsCount:   0,
+			wantErrContains: "gcp-critical-pods",
+		},
+		{
+			desc:                  "does not retry on non-conflict error",
+			failuresBeforeSuccess: 2,
+			createErr: apierrors.NewForbidden(
+				v1.Resource("pods"),
+				"gke-system-balloon-pod",
+				errors.New("forbidden"),
+			),
+			wantAttempts:    1,
+			wantPodsCount:   0,
+			wantErrContains: "forbidden",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				stopCh := make(chan struct{})
+				defer close(stopCh)
+
+				clientSet := fake.NewSimpleClientset()
+				attempts := 0
+
+				clientSet.PrependReactor("create", "pods", func(action client_testing.Action) (bool, runtime.Object, error) {
+					attempts++
+					if attempts <= tc.failuresBeforeSuccess {
+						return true, nil, tc.createErr
+					}
+					return false, nil, nil
+				})
+
+				informerFactory := informers.NewSharedInformerFactory(clientSet, 0)
+				runner := podRunner(t, clientSet)
+
+				_, err := informerFactory.Core().V1().Pods().Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+					AddFunc: runner,
+					UpdateFunc: func(_, newObj interface{}) {
+						runner(newObj)
+					},
+				})
+				require.NoError(t, err)
+
+				bPController := newBalloonPodController(clientSet, informerFactory)
+				require.NoError(t, bPController.Init())
+
+				informerFactory.Start(stopCh)
+
+				synced := informerFactory.WaitForCacheSync(stopCh)
+				require.True(t, synced[reflect.TypeOf(&v1.Pod{})], "Failed to sync pods cache")
+
+				synctest.Wait()
+
+				err = bPController.CreateBalloonPod(
+					node,
+					*resource.NewMilliQuantity(1000, resource.DecimalSI),
+					*resource.NewQuantity(1024*1024, resource.DecimalSI),
+				)
+
+				if tc.wantErrContains != "" {
+					assert.ErrorContains(t, err, tc.wantErrContains)
+				} else {
+					assert.NoError(t, err)
+				}
+
+				assert.Equal(t, tc.wantAttempts, attempts)
+				assert.Len(t, bPController.List(), tc.wantPodsCount)
 			})
 		})
 	}

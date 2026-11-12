@@ -28,9 +28,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 
 	ek_errors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/errors"
@@ -46,6 +48,13 @@ const (
 
 	balloonPodControllerLogPrefix = "Balloon Pod Controller: "
 )
+
+var defaultPodCreateConflictBackoff = wait.Backoff{
+	Steps:    6,
+	Duration: 50 * time.Millisecond,
+	Factor:   2.0,
+	Jitter:   0.2,
+}
 
 type resizeWaiter struct {
 	targetCpu resource.Quantity
@@ -67,6 +76,7 @@ type balloonPodControllerImpl struct {
 	podDeletionTimeout time.Duration
 	podCreationTimeout time.Duration
 	podResizeTimeout   time.Duration
+	podCreateBackoff   wait.Backoff
 
 	mux  sync.Mutex
 	pods map[string]map[types.UID]*podStatus
@@ -82,6 +92,7 @@ func newBalloonPodController(clientSet clientset.Interface, informerFactory info
 		podDeletionTimeout: podDeletionTimeout,
 		podCreationTimeout: podCreationTimeout,
 		podResizeTimeout:   ipprKubeletResizeTimeout,
+		podCreateBackoff:   defaultPodCreateConflictBackoff,
 		pods:               make(map[string]map[types.UID]*podStatus),
 	}
 	b.onAdd = b.defaultOnAdd
@@ -137,7 +148,12 @@ func (c *balloonPodControllerImpl) CreateBalloonPod(node *v1.Node, cpu, mem reso
 	if err != nil {
 		return fmt.Errorf("balloon pod generation error: %v", err)
 	}
-	pod, err := c.clientSet.CoreV1().Pods(bp.Namespace).Create(ctx, bp, metav1.CreateOptions{})
+	var pod *v1.Pod
+	err = retry.RetryOnConflict(c.podCreateBackoff, func() error {
+		var createErr error
+		pod, createErr = c.clientSet.CoreV1().Pods(bp.Namespace).Create(ctx, bp, metav1.CreateOptions{})
+		return createErr
+	})
 	if err != nil {
 		return fmt.Errorf("balloon pod creation error: %v", err)
 	}
