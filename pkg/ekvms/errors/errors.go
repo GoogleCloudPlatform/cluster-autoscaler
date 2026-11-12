@@ -113,6 +113,9 @@ var (
 	ConcurrentResizeError = errors.New("balloon pod resize already in progress")
 	// NoActiveBalloonPodError indicates no active balloon pod found on the node.
 	NoActiveBalloonPodError = errors.New("no active balloon pod found")
+	// BalloonPodNotRunningError indicates the balloon pod's container has not started yet (e.g. it is
+	// still being created or its image can't be pulled), so Kubelet won't actuate an in-place resize.
+	BalloonPodNotRunningError = errors.New("balloon pod is not running")
 )
 
 func (e ResizeErrorType) Error() string {

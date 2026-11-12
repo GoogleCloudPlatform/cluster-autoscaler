@@ -262,6 +262,15 @@ func (c *balloonPodControllerImpl) reservePodForResize(node *v1.Node, cpu, mem r
 		return nil, nil, fmt.Errorf("%w for node %q", ek_errors.NoActiveBalloonPodError, node.Name)
 	}
 
+	// Kubelet only actuates in-place resizes of started containers. Patching a balloon pod that is
+	// still being created, or whose image can't be pulled, would just wait for the full Kubelet
+	// timeout before falling back to recreation, so fall back right away.
+	if state := getBalloonPodState(pod); state != BalloonPodRunning {
+		klog.V(4).Infof("%sBalloon pod %q for node %q is in state %s, skipping in-place resize in favor of recreation",
+			balloonPodControllerLogPrefix, pod.Name, node.Name, state)
+		return nil, nil, fmt.Errorf("%w: balloon pod %q for node %q is in state %s", ek_errors.BalloonPodNotRunningError, pod.Name, node.Name, state)
+	}
+
 	if isGuaranteedQoS(pod) {
 		klog.V(4).Infof("%sBalloon pod %q for node %q is in the Guaranteed QoS class, skipping in-place resize in favor of recreation",
 			balloonPodControllerLogPrefix, pod.Name, node.Name)

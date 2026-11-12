@@ -1041,6 +1041,8 @@ func getIpprFallbackReason(err error) string {
 		return string(metrics.IpprFallbackReasonPatchError)
 	case errors.Is(err, ek_errors.NoActiveBalloonPodError):
 		return string(metrics.IpprFallbackReasonNoActivePod)
+	case errors.Is(err, ek_errors.BalloonPodNotRunningError):
+		return string(metrics.IpprFallbackReasonPodNotRunning)
 	default:
 		return string(metrics.IpprFallbackReasonOther)
 	}
