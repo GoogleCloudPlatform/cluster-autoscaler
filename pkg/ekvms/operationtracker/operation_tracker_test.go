@@ -944,6 +944,7 @@ func buildBaseNode() *v1.Node {
 	node := test.WithAllocatable(test.BuildTestNode("node1", nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
 	node.Spec.ProviderID = "gce://project1/us-central1-b/node1"
 	node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: "e4a-standard-32"})
+	node.Status.NodeInfo.KubeletVersion = "v1.37.0-gke.1000"
 	return node
 }
 
@@ -1396,18 +1397,26 @@ func (m *recordingIpprMetrics) recordedDurations() map[ipprDurationKey]int {
 
 // ipprMetricsTestCase runs one resize and asserts the metric series it produced.
 type ipprMetricsTestCase struct {
-	desc          string
-	ipprEnabled   bool
-	setupResizer  func(f *testFixtures)
-	wantEvents    map[ipprEventKey]int
-	wantDurations map[ipprDurationKey]int
-	wantErr       string
+	desc           string
+	ipprEnabled    bool
+	kubeletVersion *string
+	setupResizer   func(f *testFixtures)
+	wantEvents     map[ipprEventKey]int
+	wantDurations  map[ipprDurationKey]int
+	wantErr        string
+}
+
+func strPtr(s string) *string {
+	return &s
 }
 
 func runIpprMetricsTest(t *testing.T, tc ipprMetricsTestCase, resize func(tracker *operationTracker, nodeName string) error) {
 	t.Helper()
 
 	node := buildMetricsTestNode("node1", ipprMetricsTestFamily)
+	if tc.kubeletVersion != nil {
+		node.Status.NodeInfo.KubeletVersion = *tc.kubeletVersion
+	}
 	tracker, f := setupTestTracker(t, node, ipprMetricsTestFamily, tc.ipprEnabled)
 	tc.setupResizer(f)
 
@@ -1521,6 +1530,51 @@ func TestBalloonPodIpprMetrics_Upsize(t *testing.T) {
 				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
 			},
 		},
+		{
+			desc:           "1.38 preview kubelet resizes in place and records attempt and success",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr("v1.38.0-gke.4814000+preview"),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("resizeBalloonPodInPlace", matchNode(f.node), mock.Anything).Return(nil).Once()
+			},
+			wantEvents: map[ipprEventKey]int{
+				ipprAttempt(direction): 1,
+				ipprSuccess(direction): 1,
+			},
+			wantDurations: map[ipprDurationKey]int{
+				ipprDuration(direction, metrics.IpprActionSuccess): 1,
+			},
+		},
+		{
+			desc:           "1.36 kubelet skips IPPR with no metrics and uses recreation",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr("v1.36.4-gke.2377000"),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+		{
+			desc:           "invalid kubelet version fails closed with no metrics and uses recreation",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr("not-a-version"),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+		{
+			desc:           "empty kubelet version fails closed with no metrics and uses recreation",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr(""),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1605,6 +1659,26 @@ func TestBalloonPodIpprMetrics_Downsize(t *testing.T) {
 				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
 			},
 		},
+		{
+			desc:           "1.36 kubelet skips IPPR with no metrics and uses recreation",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr("v1.36.4-gke.2377000"),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
+		{
+			desc:           "empty kubelet version fails closed with no metrics and uses recreation",
+			ipprEnabled:    true,
+			kubeletVersion: strPtr(""),
+			setupResizer: func(f *testFixtures) {
+				f.resizer.On("addTaint", matchNode(f.node), mock.Anything).Return(f.node, nil).Once()
+				f.resizer.On("resizeBalloonPod", matchNode(f.node), mock.Anything).Return(nil).Once()
+				f.resizer.On("removeTaint", matchNode(f.node)).Return(f.node, nil).Once()
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1630,6 +1704,7 @@ func buildMetricsTestNode(name, family string) *v1.Node {
 	node.SetLabels(map[string]string{
 		v1.LabelInstanceTypeStable: fmt.Sprintf("%s-standard-32", family),
 	})
+	node.Status.NodeInfo.KubeletVersion = "v1.37.0-gke.1000"
 	return node
 }
 

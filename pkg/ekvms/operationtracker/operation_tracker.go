@@ -63,6 +63,9 @@ const (
 	getNodeTimeout                   = 10 * time.Second
 	fixerLogPrefix                   = "Resizable VM fixer: "
 	downsizeDelayAfterTaint          = 1 * time.Second
+	// minIpprKubeletMinorVersion is the minimum 1.x Kubelet minor version that safely updates
+	// pod-level status.resources.requests.memory during in-place vertical pod resizing (b/583763422).
+	minIpprKubeletMinorVersion = 37
 )
 
 type ResizeDirection string
@@ -883,8 +886,8 @@ func (o *operationTracker) isIpprEnabled() bool {
 	return o.optionsTracker.Options().BalloonPodIpprResizeEnabled
 }
 
-// tryResizeBalloonPodInPlace attempts in-place pod resize if IPPR is enabled.
-// Returns true if resized in-place successfully, false if disabled or if recreation is needed.
+// tryResizeBalloonPodInPlace attempts in-place pod resize if IPPR is enabled and supported by the node.
+// Returns true if resized in-place successfully, false if disabled/unsupported or if recreation is needed.
 // Callers decide whether the node has to be tainted around this call; see the
 // comments in upsize and downsize for why they differ.
 func (o *operationTracker) tryResizeBalloonPodInPlace(
@@ -893,7 +896,7 @@ func (o *operationTracker) tryResizeBalloonPodInPlace(
 	machineFamily string,
 	direction ResizeDirection,
 ) bool {
-	if !o.isIpprEnabled() {
+	if !o.isIpprEnabled() || !nodeSupportsIppr(node) {
 		return false
 	}
 	o.metrics.RegisterBalloonPodIpprEvent(machineFamily, string(direction), string(metrics.IpprFallbackReasonNone), metrics.IpprActionAttempt)
