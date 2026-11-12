@@ -59,9 +59,22 @@ gen-clients-capacityrequests:
 gen-clients-mc:
 	bash hack/gen-clients.sh machineconfig
 
+# compute-tag/compute-version use `override` so that only values validated by
+# compute-version-tag.sh reach the recipes, even if TAG/VERSION are passed on
+# the make command line. Convert TAG/VERSION to simple variables via $(value ...)
+# first so Make does not expand $(shell ...) in command-line arguments, and only
+# export TAG when non-empty so empty TAG= does not duplicate the commit suffix.
+override TAG := $(value TAG)
+override VERSION := $(value VERSION)
+ifneq ($(TAG),)
+export TAG
+else
+unexport TAG
+endif
+
 .PHONY: compute-tag
 compute-tag:
-	$(eval TAG=$(shell ./hack/compute-version-tag.sh tag))
+	$(eval override TAG := $(shell ./hack/compute-version-tag.sh tag))
 	if [ -n "${TAG}" ]; then \
 		echo "computed TAG: ${TAG}"; \
 	else \
@@ -71,7 +84,7 @@ compute-tag:
 
 .PHONY: compute-version
 compute-version:
-	$(eval VERSION=$(shell ./hack/compute-version-tag.sh version))
+	$(eval override VERSION := $(shell ./hack/compute-version-tag.sh version))
 	if [ -n "${VERSION}" ]; then \
 		echo "computed VERSION: ${VERSION}"; \
 	else \
