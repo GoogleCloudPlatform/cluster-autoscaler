@@ -16,6 +16,7 @@ package ekvms
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
@@ -187,35 +189,86 @@ func staticRecommenderFactory(maxSize ekvmsize.VmSize) nodesizerecommender.Recom
 	return newStaticNodeSizeRecommender(maxSize).factory()
 }
 
-// installBalloonPodRunningReactor simulates Kubelet starting balloon pods created in kube-system
-// by assigning a generated Name, UID, and PodRunning phase upon creation.
+// installBalloonPodRunningReactor simulates Kubelet starting and in-place resizing balloon pods
+// in kube-system. On 1.36.* nodes, in-place resize leaves pod.Status.Resources.Requests[memory]
+// at its initial PodRunning value, matching the 1.36 Kubelet bug (b/583763422).
 func installBalloonPodRunningReactor(infra *integration.TestInfrastructure) {
 	var uidCounter int64
+	podsGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+	nodesGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
+
+	populateBalloonStatus := func(pod *apiv1.Pod, podLevelMem resource.Quantity) {
+		c := pod.Spec.Containers[0]
+		reqs := c.Resources.Requests.DeepCopy()
+		pod.Status.Phase = apiv1.PodRunning
+		pod.Status.ContainerStatuses = []apiv1.ContainerStatus{{
+			Name:               c.Name,
+			Ready:              true,
+			State:              apiv1.ContainerState{Running: &apiv1.ContainerStateRunning{}},
+			AllocatedResources: reqs.DeepCopy(),
+		}}
+		pod.Status.AllocatedResources = reqs.DeepCopy()
+		pod.Status.Resources = &apiv1.ResourceRequirements{
+			Requests: apiv1.ResourceList{
+				apiv1.ResourceCPU:    reqs[apiv1.ResourceCPU],
+				apiv1.ResourceMemory: podLevelMem,
+			},
+		}
+	}
+
 	infra.Fakes.KubeClient.Fake.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
 		createAction, ok := action.(k8stesting.CreateAction)
 		if !ok {
 			return false, nil, nil
 		}
 		pod, ok := createAction.GetObject().(*apiv1.Pod)
-		if !ok {
+		if !ok || !operationtracker.IsBalloonPod(pod) {
 			return false, nil, nil
 		}
-		if pod.Namespace == "kube-system" && (strings.HasPrefix(pod.Name, "gke-system-balloon-pod-") || pod.GenerateName == "gke-system-balloon-pod-") {
-			// balloonPodChecker performs a DryRunAll Create with an unbound node (Spec.NodeName == "").
-			// Return without persisting it in the fake tracker, matching real kube-apiserver DryRunAll behavior.
-			if pod.Spec.NodeName == "" {
-				return true, pod, nil
-			}
-			seq := atomic.AddInt64(&uidCounter, 1)
-			if pod.UID == "" {
-				pod.UID = types.UID(fmt.Sprintf("balloon-uid-%d", seq))
-			}
-			if pod.Name == "" {
-				pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, seq)
-			}
-			pod.Status.Phase = apiv1.PodRunning
+		// balloonPodChecker performs a DryRunAll Create with an unbound node (Spec.NodeName == "").
+		// Return without persisting it in the fake tracker, matching real kube-apiserver DryRunAll behavior.
+		if pod.Spec.NodeName == "" {
+			return true, pod, nil
 		}
+		seq := atomic.AddInt64(&uidCounter, 1)
+		if pod.UID == "" {
+			pod.UID = types.UID(fmt.Sprintf("balloon-uid-%d", seq))
+		}
+		if pod.Name == "" {
+			pod.Name = fmt.Sprintf("%s%d", pod.GenerateName, seq)
+		}
+		populateBalloonStatus(pod, pod.Spec.Containers[0].Resources.Requests[apiv1.ResourceMemory])
 		return false, nil, nil
+	})
+
+	infra.Fakes.KubeClient.Fake.PrependReactor("patch", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		patchAction, ok := action.(k8stesting.PatchAction)
+		if !ok || patchAction.GetSubresource() != "resize" {
+			return false, nil, nil
+		}
+		obj, err := infra.Fakes.KubeClient.Tracker().Get(podsGVR, patchAction.GetNamespace(), patchAction.GetName())
+		if err != nil {
+			return true, nil, err
+		}
+		updated := obj.(*apiv1.Pod).DeepCopy()
+		var patchPayload apiv1.Pod
+		if err := json.Unmarshal(patchAction.GetPatch(), &patchPayload); err != nil {
+			return true, nil, err
+		}
+		updated.Spec.Containers[0].Resources = patchPayload.Spec.Containers[0].Resources
+
+		podLevelMem := updated.Spec.Containers[0].Resources.Requests[apiv1.ResourceMemory]
+		if nodeObj, err := infra.Fakes.KubeClient.Tracker().Get(nodesGVR, "", updated.Spec.NodeName); err == nil {
+			if strings.HasPrefix(strings.TrimPrefix(nodeObj.(*apiv1.Node).Status.NodeInfo.KubeletVersion, "v"), "1.36.") && updated.Status.Resources != nil {
+				podLevelMem = updated.Status.Resources.Requests[apiv1.ResourceMemory]
+			}
+		}
+		populateBalloonStatus(updated, podLevelMem)
+
+		if err := infra.Fakes.KubeClient.Tracker().Update(podsGVR, updated, updated.Namespace); err != nil {
+			return true, nil, err
+		}
+		return true, updated, nil
 	})
 }
 
@@ -272,60 +325,102 @@ func waitForEkNodeReady(ctx context.Context, t *testing.T, infra *integration.Te
 	return balloonNodeName
 }
 
-func TestEkvmsUpsizeOnPendingPod(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		ctx, cancel := context.WithCancel(t.Context())
-		defer integration_synctest.TearDown(cancel)
-
-		infra := integration.SetupInfrastructure(ctx, t)
-		installBalloonPodRunningReactor(infra)
-
-		// Start the ek-standard-8 VM at a downsized state (2 vCPU, 8 GiB) with max recommended size 8 vCPU, 32 GiB.
-		initialVmSize := ekvmsize.VmSize{MilliCpus: 2000, KBytes: 8 * ekvmsize.GiBToKiB}
-		maxVmSize := ekvmsize.VmSize{MilliCpus: 8000, KBytes: 32 * ekvmsize.GiBToKiB}
-		rvClient := newFakeResizableVmClient(initialVmSize)
-		recommender := newStaticNodeSizeRecommender(maxVmSize)
-
-		cfg := integration.NewTestConfig().
-			WithNodePools(ekNodePool("ek-pool", 1, 3, nil)).
-			WithResizableVmClient(rvClient).
-			WithNodeSizeRecommenderFactory(recommender.factory()).
-			WithOverrides(integration.WithEkvmsEnabled(true))
-
-		autoscaler := integration.MustSetupAutoscaler(ctx, t, cfg, infra)
-
-		waitForEkNodeReady(ctx, t, infra, autoscaler, recommender)
-
-		// Add an unschedulable pod requesting 3 CPUs and 4 GiB memory, which exceeds the current 2 CPU
-		// allocatable (with the 6 CPU balloon pod) but fits within the 8 CPU max size of the EK node.
-		pod := kube_test.BuildTestPod("ek-workload-pod", 3000, 4*1024*1024*1024, kube_test.MarkUnschedulable())
-		pod.Namespace = "default"
-		infra.Fakes.K8s.AddPod(pod)
-
-		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Millisecond)
-		for range 5 {
-			time.Sleep(50 * time.Millisecond)
-			synctest.Wait()
-			if len(rvClient.getResizeCalls()) >= 1 {
-				break
-			}
+func findNodeBalloonPod(ctx context.Context, t *testing.T, infra *integration.TestInfrastructure, nodeName string) *apiv1.Pod {
+	t.Helper()
+	pods, err := infra.Fakes.KubeClient.CoreV1().Pods("kube-system").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("failed to list kube-system pods: %v", err)
+	}
+	for i := range pods.Items {
+		if operationtracker.IsBalloonPod(&pods.Items[i]) && pods.Items[i].Spec.NodeName == nodeName {
+			return &pods.Items[i]
 		}
+	}
+	return nil
+}
 
-		calls := rvClient.getResizeCalls()
-		if assert.GreaterOrEqual(t, len(calls), 1, "expected ResizableVmClient.ResizeVm to be called to upsize the EK node") {
-			assert.Greater(t, calls[0].desiredCpuMillicores, initialVmSize.MilliCpus)
-		}
+func TestEkvmsUpsizeAndBalloonPodIppr(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		nodeVersion       string
+		wantInPlaceResize bool
+	}{
+		{
+			name:              "1.37_kubelet_resizes_in_place",
+			nodeVersion:       "1.37.1-gke.3020000",
+			wantInPlaceResize: true,
+		},
+		{
+			name:              "1.36_kubelet_recreates_balloon_pod",
+			nodeVersion:       "1.36.4-gke.2377000",
+			wantInPlaceResize: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer integration_synctest.TearDown(cancel)
 
-		// Allow operationTracker.upsize background polling (5ms interval) to complete finishInPlaceResize.
-		time.Sleep(50 * time.Millisecond)
-		synctest.Wait()
+				infra := integration.SetupInfrastructure(ctx, t)
+				installBalloonPodRunningReactor(infra)
 
-		cluster := integration.GetTestCluster(t, infra, cfg)
-		if !assert.Len(t, cluster.NodePools, 1) {
-			t.FailNow()
-		}
-		assert.Equal(t, int64(1), infra.Fakes.GkeService.MustGetTargetSize(t, cluster.NodePools[0]), "expected ek-pool not to add a new node when upsizing existing EK VM suffices")
-	})
+				// Start the ek-standard-8 VM at a downsized state (2 vCPU, 8 GiB) with max recommended size 8 vCPU, 32 GiB.
+				initialVmSize := ekvmsize.VmSize{MilliCpus: 2000, KBytes: 8 * ekvmsize.GiBToKiB}
+				maxVmSize := ekvmsize.VmSize{MilliCpus: 8000, KBytes: 32 * ekvmsize.GiBToKiB}
+				rvClient := newFakeResizableVmClient(initialVmSize)
+				recommender := newStaticNodeSizeRecommender(maxVmSize)
+
+				np := ekNodePool("ek-pool", 1, 3, nil)
+				np.Version = tc.nodeVersion
+
+				cfg := integration.NewTestConfig().
+					WithClusterOverrides(integration.WithCurrentMasterVersion("1.37.1-gke.3020000")).
+					WithNodePools(np).
+					WithResizableVmClient(rvClient).
+					WithNodeSizeRecommenderFactory(recommender.factory()).
+					WithOverrides(integration.WithEkvmsEnabled(true))
+
+				autoscaler := integration.MustSetupAutoscaler(ctx, t, cfg, infra)
+				ekNodeName := waitForEkNodeReady(ctx, t, infra, autoscaler, recommender)
+				initialBP := findNodeBalloonPod(ctx, t, infra, ekNodeName)
+				if initialBP == nil {
+					t.Fatalf("expected initial balloon pod on node %q", ekNodeName)
+				}
+
+				// 16 GiB workload exceeds current 2 vCPU / 8 GiB size and only fits on the 32 GiB node once the
+				// ~24 GiB balloon pod shrinks without leaving stale pod.Status.Resources.Requests[memory].
+				pod := kube_test.BuildTestPod("ek-workload-pod", 3000, 16*1024*1024*1024, kube_test.MarkUnschedulable())
+				pod.Namespace = "default"
+				infra.Fakes.K8s.AddPod(pod)
+
+				integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 10*time.Millisecond)
+				time.Sleep(150 * time.Millisecond)
+				synctest.Wait()
+
+				calls := rvClient.getResizeCalls()
+				if assert.GreaterOrEqual(t, len(calls), 1, "expected ResizableVmClient.ResizeVm to be called to upsize the EK node") {
+					assert.Greater(t, calls[0].desiredCpuMillicores, initialVmSize.MilliCpus)
+				}
+
+				afterBP := findNodeBalloonPod(ctx, t, infra, ekNodeName)
+				if afterBP == nil {
+					t.Fatalf("expected balloon pod on node %q after upsize", ekNodeName)
+				}
+				assert.Equal(t, tc.wantInPlaceResize, afterBP.UID == initialBP.UID, "unexpected balloon pod resize mechanism (initial UID %q, after UID %q)", initialBP.UID, afterBP.UID)
+
+				cluster := integration.GetTestCluster(t, infra, cfg)
+				if assert.Len(t, cluster.NodePools, 1) {
+					assert.Equal(t, int64(1), infra.Fakes.GkeService.MustGetTargetSize(t, cluster.NodePools[0]), "expected ek-pool not to add a new node when upsizing existing EK VM suffices")
+				}
+
+				infra.Fakes.RunScheduler(ctx, t)
+				scheduled, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, pod.Name, metav1.GetOptions{})
+				if assert.NoError(t, err) {
+					assert.Equal(t, ekNodeName, scheduled.Spec.NodeName)
+				}
+			})
+		})
+	}
 }
 
 func TestEkvmsResizableVmClientErrorsHandledGracefully(t *testing.T) {

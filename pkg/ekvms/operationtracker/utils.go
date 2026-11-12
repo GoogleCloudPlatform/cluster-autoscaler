@@ -24,8 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/pkg/api/v1/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
@@ -109,4 +111,27 @@ func isNodeReady(node *v1.Node) bool {
 		}
 	}
 	return false
+}
+
+// nodeSupportsIppr reports whether the node's Kubelet version can safely resize balloon pods in place.
+// Worker nodes are not upgraded together with KCP and can remain on 1.36 after KCP moves to 1.37.
+// Kubelet 1.36 enables InPlacePodLevelResourcesVerticalScaling by default while freezing pod-level
+// status.resources.requests.memory at its initial PodRunning value, causing 1.37 kube-scheduler to
+// over-count shrunk balloon pods (b/583763422). Nodes on < 1.37 (or with unparseable versions)
+// therefore use pod recreation without recording IPPR fallback metrics.
+func nodeSupportsIppr(node *v1.Node) bool {
+	if node == nil {
+		return false
+	}
+	kubeletVerStr := node.Status.NodeInfo.KubeletVersion
+	kubeletVer, err := version.FromString(kubeletVerStr)
+	if err != nil {
+		klog.Warningf("Skipping in-place balloon pod resize for node %q: unable to parse kubelet version %q: %v", node.Name, kubeletVerStr, err)
+		return false
+	}
+	if kubeletVer.MinorVersion().LessThan(version.MinorVersion{1, minIpprKubeletMinorVersion}) {
+		klog.V(4).Infof("Skipping in-place balloon pod resize for node %q: kubelet version %q is older than 1.%d", node.Name, kubeletVerStr, minIpprKubeletMinorVersion)
+		return false
+	}
+	return true
 }
