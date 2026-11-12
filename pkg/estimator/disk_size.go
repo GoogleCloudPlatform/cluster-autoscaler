@@ -29,15 +29,9 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 )
 
-// SetNodeInfosMap
-// TODO(b/322314237): temporary solution, to be removed
-func (nrt *NapResourceTrimmer) SetNodeInfosMap(nodeInfos map[string]*framework.NodeInfo) {
-	nrt.nodeInfos = nodeInfos
-}
-
 // diskSizeAnalysisFunc trims ephemeral storage to a value that fits all pending pods, taking into account approximate future pods
 // Details: go/ap-dynamic-eph-storage
-func (nrt *NapResourceTrimmer) diskSizeAnalysisFunc(clusterSnapshot clustersnapshot.ClusterSnapshot, nodeGroup cloudprovider.NodeGroup, newNodesWithPods map[string]bool, workloadAnalysisResult gkeprice.UserWorkloadClusterAnalysis) {
+func (nrt *NapResourceTrimmer) diskSizeAnalysisFunc(clusterSnapshot clustersnapshot.ClusterSnapshot, nodeGroup cloudprovider.NodeGroup, nodeTemplate *framework.NodeInfo, newNodesWithPods map[string]bool, workloadAnalysisResult gkeprice.UserWorkloadClusterAnalysis) {
 	mig := nodeGroup.(*gke.GkeMig)
 
 	if _, exist := mig.Spec().Labels[gkelabels.BootDiskSizeLabelKey]; exist {
@@ -104,13 +98,13 @@ func (nrt *NapResourceTrimmer) diskSizeAnalysisFunc(clusterSnapshot clustersnaps
 			return
 		}
 
-		// TODO(b/322314237): to be replaced with: ea.ctx.TemplateNodesForGroups[nodeGroup.Id()].Node()...
-		// the "gce/boot-disk-size" annotation is used for gce_price_model.NodePrice
-		if nodeInfo, found := nrt.nodeInfos[nodeGroup.Id()]; found {
-			if nodeInfo.Node().Annotations == nil {
-				nodeInfo.Node().Annotations = make(map[string]string)
+		// The "cluster-autoscaler/gce/boot-disk-size" annotation is used by
+		// gce_price_model.NodePrice.
+		if nodeTemplate != nil && nodeTemplate.Node() != nil {
+			if nodeTemplate.Node().Annotations == nil {
+				nodeTemplate.Node().Annotations = make(map[string]string)
 			}
-			nodeInfo.Node().Annotations[gce.BootDiskSizeAnnotation] = strconv.FormatInt(estimatedDiskSizeGiB, 10)
+			nodeTemplate.Node().Annotations[gce.BootDiskSizeAnnotation] = strconv.FormatInt(estimatedDiskSizeGiB, 10)
 		}
 	}
 }
