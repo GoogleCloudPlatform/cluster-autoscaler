@@ -22,7 +22,16 @@ if [[ "$MODE" != "tag" && "$MODE" != "version" ]]; then
   exit 1
 fi
 
+is_valid_version() {
+  local LC_ALL=C
+  [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+}
+
 if [[ "$TAG" != "" ]]; then
+  if ! is_valid_version "$TAG"; then
+    echo "Invalid TAG: must match [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}" >&2
+    exit 3
+  fi
   # if tag was set explicitly use it
   BASE_VERSION=$TAG
   SKIP_COMMIT_SUFFIX=true
@@ -31,7 +40,7 @@ fi
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   # Not a git repository or git command is malfunctioning
   if [[ "$TAG" != "" ]]; then
-    echo $TAG
+    echo "$TAG"
     exit 0
   else
     echo "Not a git repository and TAG not set" >&2
@@ -41,9 +50,13 @@ fi
 
 if [[ "$BASE_VERSION" == "" ]]; then
   # If commit is tagged with cluster-autoscaler-v* set TAG based on that.
-  GIT_TAG=$(git describe --tags --exact-match 2>/dev/null |grep cluster-autoscaler-v | sort | head -1)
-  if [[ "$GIT_TAG" != "" ]];then
-    BASE_VERSION=$(echo $GIT_TAG | cut -d - -f 3-)
+  GIT_TAG=$(git describe --tags --exact-match 2>/dev/null | grep '^cluster-autoscaler-v' | sort | head -1)
+  if [[ "$GIT_TAG" != "" ]]; then
+    BASE_VERSION=$(echo "$GIT_TAG" | cut -d - -f 3-)
+    if ! is_valid_version "$BASE_VERSION"; then
+      echo "Invalid git tag version: must match [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}" >&2
+      exit 3
+    fi
     SKIP_COMMIT_SUFFIX=true
   fi
 fi
@@ -81,12 +94,18 @@ fi
 if [[ $MODE == "tag" && "$SKIP_COMMIT_SUFFIX" == "true" ]]; then
   # we do not add commit/dirty suffix if we are operating in tag mode and
   # TAG was set explicitly or based on git tag
-  echo "$BASE_VERSION"
+  OUTPUT="$BASE_VERSION"
 else
   CURRENT_COMMIT=$(git rev-parse --short HEAD)
   DIRTY_SUFFIX=""
   if ! git diff --quiet; then
     DIRTY_SUFFIX="-dirty"
   fi
-  echo "$BASE_VERSION-$CURRENT_COMMIT$DIRTY_SUFFIX"
+  OUTPUT="$BASE_VERSION-$CURRENT_COMMIT$DIRTY_SUFFIX"
 fi
+
+if ! is_valid_version "$OUTPUT"; then
+  echo "Computed version does not match [A-Za-z0-9_][A-Za-z0-9_.-]{0,127}" >&2
+  exit 3
+fi
+echo "$OUTPUT"
