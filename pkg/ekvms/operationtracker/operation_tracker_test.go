@@ -1945,6 +1945,19 @@ func TestFix(t *testing.T) {
 			bPod1 := mustGenerateRunningBalloonPod(t, node, (nodeMilliCpu-vmCurrentSize.MilliCpus)*3/4, (nodeMem-vmCurrentSize.KBytes*size.KiB)*3/4)
 			bPod2 := mustGenerateRunningBalloonPod(t, node, (nodeMilliCpu-vmCurrentSize.MilliCpus)*3/4, (nodeMem-vmCurrentSize.KBytes*size.KiB)*3/4)
 			bPodWithIncorrectSize := mustGenerateRunningBalloonPod(t, node, vmCurrentSize.MilliCpus, vmCurrentSize.KBytes*size.KiB)
+			bPodWithStalePodStatus := bPod1.DeepCopy()
+			bPodWithStalePodStatus.Status.ContainerStatuses = []apiv1.ContainerStatus{{
+				Name:               balloonContainerName,
+				State:              apiv1.ContainerState{Running: &apiv1.ContainerStateRunning{}},
+				AllocatedResources: bPod1.Spec.Containers[0].Resources.Requests.DeepCopy(),
+			}}
+			bPodWithStalePodStatus.Status.AllocatedResources = bPod1.Spec.Containers[0].Resources.Requests.DeepCopy()
+			bPodWithStalePodStatus.Status.Resources = &apiv1.ResourceRequirements{
+				Requests: apiv1.ResourceList{
+					apiv1.ResourceCPU:    bPod1.Spec.Containers[0].Resources.Requests[apiv1.ResourceCPU],
+					apiv1.ResourceMemory: *resource.NewQuantity(nodeMem, resource.DecimalSI),
+				},
+			}
 
 			bPodFailing, err := GenerateBalloonPod(
 				node,
@@ -2025,6 +2038,15 @@ func TestFix(t *testing.T) {
 				{
 					desc:  "balloon pod with incorrect size -> Fix",
 					bPods: []*v1.Pod{bPodWithIncorrectSize},
+					expectedBalloonResizes: []size.Allocatable{
+						{MilliCpus: vmCurrentSize.MilliCpus * 3 / 4, KBytes: vmCurrentSize.KBytes * 3 / 4},
+					},
+					expectedAddResizeTaintCallCount:    1,
+					expectedRemoveResizeTaintCallCount: 1,
+				},
+				{
+					desc:  "balloon pod with stale pod-level status requests -> Fix",
+					bPods: []*v1.Pod{bPodWithStalePodStatus},
 					expectedBalloonResizes: []size.Allocatable{
 						{MilliCpus: vmCurrentSize.MilliCpus * 3 / 4, KBytes: vmCurrentSize.KBytes * 3 / 4},
 					},
