@@ -60,7 +60,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	npc_client "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/client"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender"
+	nodesizerecommenderfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/nodesizerecommender/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	fakeflexadvisor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
@@ -154,6 +154,7 @@ type FakeSet struct {
 	MccClient                *mccfake.Clientset
 	RecommendLocationsClient *fakegce.RecommendLocationsClient
 	ResizableVmClient        *resizablevmsfake.Client
+	NodeSizeRecommender      *nodesizerecommenderfake.Recommender
 	CapacityBufferIndexer    cache.Indexer
 	CapacityBufferClient     *cbclient.CapacityBufferClient
 }
@@ -203,6 +204,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		MccClient:                mccClient,
 		RecommendLocationsClient: rlClient,
 		ResizableVmClient:        rvClient,
+		NodeSizeRecommender:      nodesizerecommenderfake.NewRecommender(nil),
 		CapacityBufferIndexer:    cbIndexer,
 		CapacityBufferClient:     cbClient,
 	}
@@ -316,9 +318,14 @@ func DefaultAutoscalingBuilder(
 		gceClientToUse = config.GceClient
 	}
 
+	if infra.Fakes.NodeSizeRecommender == nil {
+		infra.Fakes.NodeSizeRecommender = nodesizerecommenderfake.NewRecommender(machineConfigProvider)
+	} else {
+		infra.Fakes.NodeSizeRecommender.WithMachineConfigProvider(machineConfigProvider)
+	}
 	nodeSizeRecommenderFactory := config.NodeSizeRecommenderFactory
 	if nodeSizeRecommenderFactory == nil {
-		nodeSizeRecommenderFactory = nodesizerecommender.DefaultFactory
+		nodeSizeRecommenderFactory = infra.Fakes.NodeSizeRecommender.Factory()
 	}
 
 	b := autoscaler.NewBuilder(tracker).
