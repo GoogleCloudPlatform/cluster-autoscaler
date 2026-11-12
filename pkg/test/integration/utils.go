@@ -155,6 +155,7 @@ type FakeSet struct {
 	RecommendLocationsClient *fakegce.RecommendLocationsClient
 	ResizableVmClient        *resizablevmsfake.Client
 	NodeSizeRecommender      *nodesizerecommenderfake.Recommender
+	BalloonPodReactor        *reactors.BalloonPodReactor
 	CapacityBufferIndexer    cache.Indexer
 	CapacityBufferClient     *cbclient.CapacityBufferClient
 }
@@ -164,6 +165,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	kubeClient := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
 	)
+	balloonReactor := reactors.InstallBalloonPodReactor(kubeClient)
 	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
 	k8s := fake_k8s.NewKubernetes(kubeClient, informerFactory)
 	gceService := fakegce.NewGceClient(t, k8s)
@@ -205,6 +207,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		RecommendLocationsClient: rlClient,
 		ResizableVmClient:        rvClient,
 		NodeSizeRecommender:      nodesizerecommenderfake.NewRecommender(nil),
+		BalloonPodReactor:        balloonReactor,
 		CapacityBufferIndexer:    cbIndexer,
 		CapacityBufferClient:     cbClient,
 	}
