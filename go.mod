@@ -20,12 +20,12 @@ require (
 	github.com/googlecloudplatform/compute-class-api v0.0.0-20261020144048-b4b47b6c230a
 	github.com/prometheus/client_golang v1.25.0
 	github.com/satori/go.uuid v1.2.0
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.291.0
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/gcfg.v1 v1.2.3
 	gopkg.in/yaml.v2 v2.4.0
@@ -44,7 +44,7 @@ require (
 	k8s.io/kubelet v0.37.2
 	k8s.io/kubernetes v1.37.2
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261102094346-9cf0dc6458d4
+	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261110134206-b0acfe39ee90
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/karpenter v1.15.1
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0
@@ -74,12 +74,12 @@ require (
 	github.com/samber/lo v1.53.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.5.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	k8s.io/streaming v0.37.2 // indirect
 )
 
 require (
-	cel.dev/expr v0.25.2 // indirect
+	cel.dev/expr v0.25.3 // indirect
 	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/auth v0.22.0 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
@@ -116,7 +116,7 @@ require (
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/onsi/ginkgo/v2 v2.33.1 // indirect
+	github.com/onsi/ginkgo/v2 v2.34.0 // indirect
 	github.com/onsi/gomega v1.44.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -150,7 +150,7 @@ require (
 	golang.org/x/time v0.15.0
 	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260817212433-ac3dfec99bb1 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
@@ -222,4 +222,4 @@ replace github.com/golang/glog => ./modreplaces/glog
 
 replace k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260924204426-714dd7841448
 
-replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261102094346-9cf0dc6458d4
+replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261110134206-b0acfe39ee90
