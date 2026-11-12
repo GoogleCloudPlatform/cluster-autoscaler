@@ -1854,6 +1854,7 @@ func TestFix(t *testing.T) {
 			nodeMilliCpu := int64(10 * 1000)
 			nodeMem := int64(10 * size.GiB)
 			node := test.WithAllocatable(test.BuildTestNode("node1", nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+			test.SetNodeReadyState(node, true, time.Time{})
 			node.Spec.ProviderID = "gce://project1/us-central1-b/node1"
 			node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: supportedMachineType})
 
@@ -1875,6 +1876,7 @@ func TestFix(t *testing.T) {
 			testCases := []struct {
 				desc                               string
 				bPods                              []*v1.Pod
+				nodeConditions                     []v1.NodeCondition
 				taintsOnNode                       []*v1.Taint
 				targetSize                         *size.VmSize
 				bpResizeErr                        error
@@ -2000,6 +2002,21 @@ func TestFix(t *testing.T) {
 					expectedRemoveResizeTaintCallCount: 1,
 					expectedErrContains:                removeTaintErr,
 				},
+				{
+					desc:           "0 balloon pods on NotReady=False node -> Do nothing",
+					bPods:          []*v1.Pod{},
+					nodeConditions: []v1.NodeCondition{{Type: v1.NodeReady, Status: v1.ConditionFalse}},
+				},
+				{
+					desc:           "0 balloon pods on NotReady=Unknown node -> Do nothing",
+					bPods:          []*v1.Pod{},
+					nodeConditions: []v1.NodeCondition{{Type: v1.NodeReady, Status: v1.ConditionUnknown}},
+				},
+				{
+					desc:           "0 balloon pods on node without Ready condition -> Do nothing",
+					bPods:          []*v1.Pod{},
+					nodeConditions: []v1.NodeCondition{},
+				},
 			}
 
 			for _, tc := range testCases {
@@ -2008,6 +2025,9 @@ func TestFix(t *testing.T) {
 					sizeCalc := calculator_test.New() // Allocatable is 3/4 of VMSize
 
 					node := node.DeepCopy()
+					if tc.nodeConditions != nil {
+						node.Status.Conditions = tc.nodeConditions
+					}
 					for _, taint := range tc.taintsOnNode {
 						var err error
 						node, _, err = taints.AddOrUpdateTaint(node, taint)
@@ -2077,6 +2097,8 @@ func TestFix(t *testing.T) {
 						assert.Equal(t, *tc.expectedDownsize, cachedSize)
 					}
 
+					_, exists := nsm.getNode(node.Name)
+					assert.True(t, exists)
 					mockBalloonPodResizer.AssertNumberOfCalls(t, "addTaint", tc.expectedAddResizeTaintCallCount)
 					mockBalloonPodResizer.AssertNumberOfCalls(t, "resizeBalloonPod", len(tc.expectedBalloonResizes))
 					mockBalloonPodResizer.AssertNumberOfCalls(t, "removeTaint", tc.expectedRemoveResizeTaintCallCount)
@@ -2111,6 +2133,7 @@ func TestFixerLoop(t *testing.T) {
 			nodeMilliCpu := int64(10 * 1000)
 			nodeMem := int64(10 * size.GiB)
 			node := test.WithAllocatable(test.BuildTestNode("node1", nodeMilliCpu, nodeMem), nodeMilliCpu*3/4, nodeMem*3/4)
+			test.SetNodeReadyState(node, true, time.Time{})
 			node.Spec.ProviderID = "gce://project1/us-central1-b/node1"
 			node.SetLabels(map[string]string{v1.LabelInstanceTypeStable: supportedMachineType})
 

@@ -639,6 +639,10 @@ func (o *operationTracker) handleFixOperation(op fixOperation) error {
 		klog.Warningf("%sFixing node %q: node was not found", fixerLogPrefix, op.NodeName)
 		return nil
 	}
+	if !isNodeReady(resizableNode.Node) {
+		klog.V(4).Infof("%sSkipping fix for node %q: node is not ready", fixerLogPrefix, op.NodeName)
+		return nil
+	}
 	return o.fixNode(resizableNode.Node.DeepCopy(), op.MachineFamily, fixerLoopSource)
 }
 
