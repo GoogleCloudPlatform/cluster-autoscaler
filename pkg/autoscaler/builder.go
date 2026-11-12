@@ -921,17 +921,14 @@ func (b *Builder) Build(
 		))
 	}
 
-	var napResourceTrimmer *internalestimator.NapResourceTrimmer
-	var napResourceAnalyzerFunc estimator.EstimationAnalyserFunc
-
 	// When setting max pods per node value we calculate approximate resources
 	// of "future pods" to account for free space on a node that can be filled
 	// with pods later. We do not want to include certain types of pods when calculating
 	// approximation - Daemon set pods and pods from "system namespace", as user
 	// pods are better predictors for future pods.
 	ca := gkeprice.NewGroupingClusterAnalyzer(cloudProvider, autoscalingKubeClients.AllNodeLister(), autoscalingKubeClients.AllPodLister(), systemPodsClassifier)
-	napResourceTrimmer = internalestimator.NewNapResourceTrimmer(ca, cloudProvider, autoscalingOptions.AutopilotEnabled)
-	napResourceAnalyzerFunc = napResourceTrimmer.NapResourceAnalyzerFunc()
+	napResourceTrimmer := internalestimator.NewNapResourceTrimmer(ca, cloudProvider, autoscalingOptions.AutopilotEnabled)
+	napResourceAnalyzerFunc := napResourceTrimmer.NapResourceAnalyzerFunc()
 
 	estimationLimiter := internalestimator.NewEstimationLimiterWrapper(
 		estimator.NewThresholdBasedEstimationLimiter(thresholds),
@@ -1030,7 +1027,6 @@ func (b *Builder) Build(
 		matcher,
 		informerFactory,
 		gkeReserved,
-		napResourceTrimmer,
 		systemLabelPatterns,
 		systemPodsClassifier,
 		metricsFilter,

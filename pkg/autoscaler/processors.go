@@ -92,7 +92,6 @@ import (
 	defrag_plugins "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins"
 	defrag_plugins_config "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	defrag_processor "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/processor"
-	des_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/dynamicephemeralstorage/processors"
 	ekvms_backoff "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff"
 	ekvms_customthresholds "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/backoff/customthresholds"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
@@ -107,7 +106,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/vmreservation"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
-	internalestimator "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/estimator"
 	edps "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/extendeddurationpods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -384,7 +382,6 @@ func (b *Builder) setUpProcessors(
 	matcher networking.Matcher,
 	informerFactory informers.SharedInformerFactory,
 	gkeReserved *gke.GkeReserved,
-	napResourceTrimmer *internalestimator.NapResourceTrimmer,
 	systemLabelPatterns []string,
 	systemPodsClassifier systempods.Classifier,
 	metricsFilter filter.MetricsFilter,
@@ -890,10 +887,6 @@ func (b *Builder) setUpProcessors(
 		processor := csn_processors.NewNodeGroupListProcessor(autoscalingProcessors.NodeGroupListProcessor, experimentsManager)
 		autoscalingProcessors.NodeGroupListProcessor = processor
 	}
-
-	// TODO(b/322314237): !!! HACK !!! TO BE REMOVED IN NEAR FUTURE !!!
-	processor := des_processors.NewNodeGroupListProcessor(autoscalingProcessors.NodeGroupListProcessor, napResourceTrimmer)
-	autoscalingProcessors.NodeGroupListProcessor = processor
 
 	pr_processor := pr_processors.NewFilterQueuedNodeGroupListProcessor(autoscalingProcessors.NodeGroupListProcessor)
 	autoscalingProcessors.NodeGroupListProcessor = pr_processor

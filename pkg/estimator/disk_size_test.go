@@ -15,6 +15,7 @@
 package estimator
 
 import (
+	"strconv"
 	"testing"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -238,10 +239,20 @@ func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncAutopilotCluster(t *testing.
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			template := framework.NewTestNodeInfo(&apiv1.Node{})
+			template := framework.NewTestNodeInfo(&apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						gce.BootDiskSizeAnnotation: strconv.FormatInt(tc.nodeGroup.Spec().DiskSize, 10),
+					},
+				},
+			})
 			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotDiskSize := tc.nodeGroup.Spec().DiskSize; gotDiskSize != tc.expectedDiskSize {
 				t.Errorf("Unexpected disk size, got: %d, want: %d", gotDiskSize, tc.expectedDiskSize)
+			}
+			wantAnnotation := strconv.FormatInt(tc.expectedDiskSize, 10)
+			if gotAnnotation := template.Node().Annotations[gce.BootDiskSizeAnnotation]; gotAnnotation != wantAnnotation {
+				t.Errorf("analysisChainFunc() set %s annotation = %q, want %q", gce.BootDiskSizeAnnotation, gotAnnotation, wantAnnotation)
 			}
 		})
 	}
@@ -409,10 +420,92 @@ func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncStandardCluster(t *testing.T
 					t.Fatalf("Failed to add nodes: %v", err)
 				}
 			}
-			template := framework.NewTestNodeInfo(&apiv1.Node{})
+			template := framework.NewTestNodeInfo(&apiv1.Node{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						gce.BootDiskSizeAnnotation: strconv.FormatInt(tc.nodeGroup.Spec().DiskSize, 10),
+					},
+				},
+			})
 			nrt.analysisChainFunc(clusterSnapshot, tc.nodeGroup, template, tc.newNodesWithPods)
 			if gotDiskSize := tc.nodeGroup.Spec().DiskSize; gotDiskSize != tc.expectedDiskSize {
 				t.Errorf("Unexpected disk size, got: %d, want: %d", gotDiskSize, tc.expectedDiskSize)
+			}
+			wantAnnotation := strconv.FormatInt(tc.expectedDiskSize, 10)
+			if gotAnnotation := template.Node().Annotations[gce.BootDiskSizeAnnotation]; gotAnnotation != wantAnnotation {
+				t.Errorf("analysisChainFunc() set %s annotation = %q, want %q", gce.BootDiskSizeAnnotation, gotAnnotation, wantAnnotation)
+			}
+		})
+	}
+}
+
+func runDiskSizeTrimWithTemplate(t *testing.T, nodeTemplate *framework.NodeInfo) int64 {
+	t.Helper()
+	gkeManager := &gke.GkeManagerMock{}
+	gkeManager.On("GetClusterVersion").Return("1.2.3-gke.100")
+	gkeManager.On("AreConfidentialNodesEnabled").Return(false)
+
+	a := staticClusterAnalyzer{&staticClusterAnalysis{}}
+	storageCalc := staticStorageCalculator{}
+	nrt := NewNapResourceTrimmer(&a, &storageCalc, true /* autopilotEnabled */)
+	clusterSnapshot := testsnapshot.NewTestSnapshotOrDie(t)
+	simNode := &apiv1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "n1",
+			Labels: map[string]string{labels.GPULabel: "accelerator"},
+		},
+		Status: apiv1.NodeStatus{
+			Allocatable: apiv1.ResourceList{
+				apiv1.ResourceCPU:              *resource.NewQuantity(16, resource.DecimalSI),
+				apiv1.ResourceMemory:           *resource.NewQuantity(32*units.GB, resource.DecimalSI),
+				apiv1.ResourceEphemeralStorage: maxAllocatableEphemeralStorage,
+				gpu.ResourceNvidiaGPU:          *resource.NewQuantity(2, resource.DecimalSI),
+			},
+		},
+	}
+	if err := clusterSnapshot.AddNodeInfo(framework.NewTestNodeInfo(simNode, createPods(1, 250, 500, 200*volume.MiB)...)); err != nil {
+		t.Fatalf("clusterSnapshot.AddNodeInfo() failed: %v", err)
+	}
+	nodeGroup := gke.NewTestGkeMigBuilder().SetGkeManager(gkeManager).SetAutoprovisioned(true).SetExist(false).SetSpec(
+		&gkeclient.NodePoolSpec{SystemArchitecture: &arch, DiskSize: maxSupportedDiskSize},
+	).Build()
+
+	nrt.analysisChainFunc(clusterSnapshot, nodeGroup, nodeTemplate, map[string]bool{"n1": true})
+	return nodeGroup.Spec().DiskSize
+}
+
+func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncNilAnnotations(t *testing.T) {
+	template := framework.NewTestNodeInfo(&apiv1.Node{})
+
+	gotDiskSize := runDiskSizeTrimWithTemplate(t, template)
+
+	if gotDiskSize != 100 {
+		t.Errorf("analysisChainFunc() DiskSize = %d, want 100", gotDiskSize)
+	}
+	if gotAnnotation := template.Node().Annotations[gce.BootDiskSizeAnnotation]; gotAnnotation != "100" {
+		t.Errorf("analysisChainFunc() set %s annotation = %q, want %q", gce.BootDiskSizeAnnotation, gotAnnotation, "100")
+	}
+}
+
+func TestPostBinpackingAnalyzer_DiskSizeAnalysisFuncNilNodeTemplate(t *testing.T) {
+	tcs := []struct {
+		name         string
+		nodeTemplate *framework.NodeInfo
+	}{
+		{
+			name:         "nil nodeTemplate",
+			nodeTemplate: nil,
+		},
+		{
+			name:         "NodeInfo with nil Node",
+			nodeTemplate: framework.NewNodeInfo(nil, nil),
+		},
+	}
+
+	for _, tc := range tcs {
+		t.Run(tc.name, func(t *testing.T) {
+			if gotDiskSize := runDiskSizeTrimWithTemplate(t, tc.nodeTemplate); gotDiskSize != 100 {
+				t.Errorf("analysisChainFunc() DiskSize = %d, want 100", gotDiskSize)
 			}
 		})
 	}

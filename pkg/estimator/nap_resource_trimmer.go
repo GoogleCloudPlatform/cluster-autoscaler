@@ -38,9 +38,6 @@ type NapResourceTrimmer struct {
 	clusterAnalyser   gkeprice.ClusterAnalyzer
 	storageCalculator storageCalculator
 	autopilotEnabled  bool
-
-	// TODO(b/322314237): !!! HACK !!! TO BE FIXED IN NEAR FUTURE !!!
-	nodeInfos map[string]*framework.NodeInfo
 }
 
 func NewNapResourceTrimmer(a gkeprice.ClusterAnalyzer,
@@ -83,7 +80,7 @@ func (nrt *NapResourceTrimmer) analysisChainFunc(clusterSnapshot clustersnapshot
 	}
 
 	if shouldEstimateDiskSize {
-		nrt.diskSizeAnalysisFunc(clusterSnapshot, nodeGroup, newNodesWithPods, workloadAnalysisResult)
+		nrt.diskSizeAnalysisFunc(clusterSnapshot, nodeGroup, nodeInfo, newNodesWithPods, workloadAnalysisResult)
 	}
 	if shouldEstimateMppn {
 		nrt.mppnAnalysisFunc(clusterSnapshot, nodeGroup, newNodesWithPods, workloadAnalysisResult)
