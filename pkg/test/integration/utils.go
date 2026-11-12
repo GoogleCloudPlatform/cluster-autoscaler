@@ -52,6 +52,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/consumablereservations"
 	fakegce "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms"
+	resizablevmsfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizablevms/fake"
 	resizerequest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gceclient/resizerequest/fake"
 	gkeclientfake "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient/fake"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
@@ -152,7 +153,7 @@ type FakeSet struct {
 	ResizeRequestClient      *resizerequest.ResizeRequestClient
 	MccClient                *mccfake.Clientset
 	RecommendLocationsClient *fakegce.RecommendLocationsClient
-	ResizableVmClient        resizablevms.Client
+	ResizableVmClient        *resizablevmsfake.Client
 	CapacityBufferIndexer    cache.Indexer
 	CapacityBufferClient     *cbclient.CapacityBufferClient
 }
@@ -169,6 +170,20 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 	mccClient := setupFakeMachineConfigClient()
 	eventLogger := visibilityfake.NewEventLogger()
 	rlClient := fakegce.NewRecommendLocationsClient()
+	rvClient := resizablevmsfake.NewClient(resizablevmsfake.WithMachineTypeResolver(func(instance gce.GceRef) string {
+		nodeList := k8s.Nodes()
+		if nodeList == nil {
+			return ""
+		}
+		providerID := instance.ToProviderId()
+		for i := range nodeList.Items {
+			n := &nodeList.Items[i]
+			if n.Spec.ProviderID == providerID || n.Name == instance.Name {
+				return n.Labels[corev1.LabelInstanceTypeStable]
+			}
+		}
+		return ""
+	}))
 	cbIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 	cbLister := cbv1beta1listers.NewCapacityBufferLister(cbIndexer)
 	cbClient, err := cbclient.NewCapacityBufferClient(nil, kubeClient, cbLister, nil, nil, nil, nil, nil, nil, nil, nil)
@@ -187,7 +202,7 @@ func NewFakeSet(ctx context.Context, t testing.TB) *FakeSet {
 		ResizeRequestClient:      rrClient,
 		MccClient:                mccClient,
 		RecommendLocationsClient: rlClient,
-		ResizableVmClient:        resizablevms.NewNoOpClient(),
+		ResizableVmClient:        rvClient,
 		CapacityBufferIndexer:    cbIndexer,
 		CapacityBufferClient:     cbClient,
 	}
@@ -312,11 +327,13 @@ func DefaultAutoscalingBuilder(
 		networkMatcher = networking.GetMatcher(&mockNetworkParamSetLister{paramSets: config.GkeNetworkParamSets})
 	}
 
+	var resizableVmClientToUse resizablevms.Client
 	if config.ResizableVmClient != nil {
-		infra.Fakes.ResizableVmClient = config.ResizableVmClient
-	}
-	if infra.Fakes.ResizableVmClient == nil {
-		infra.Fakes.ResizableVmClient = resizablevms.NewNoOpClient()
+		resizableVmClientToUse = config.ResizableVmClient
+	} else if infra.Fakes.ResizableVmClient != nil {
+		resizableVmClientToUse = infra.Fakes.ResizableVmClient
+	} else {
+		resizableVmClientToUse = resizablevms.NewNoOpClient()
 	}
 
 	var gceClientToUse gceclient.AutoscalingInternalGceClient = fakeGceClient
@@ -350,7 +367,7 @@ func DefaultAutoscalingBuilder(
 		WithHttpClient(httpClient).
 		WithGCEClient(gceClientToUse).
 		WithGkeClient(gkeClient).
-		WithResizableVmClient(infra.Fakes.ResizableVmClient).
+		WithResizableVmClient(resizableVmClientToUse).
 		WithConsumableReservationsClient(consumablereservations.NewNoOpClient()).
 		WithProvReqCache(fakePrCache).
 		WithRecommendLocationsClient(infra.Fakes.RecommendLocationsClient).
