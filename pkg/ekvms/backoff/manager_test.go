@@ -15,8 +15,11 @@
 package backoff
 
 import (
+	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -31,14 +34,13 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
 	resizable_vm_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-	clock "k8s.io/utils/clock/testing"
+	"k8s.io/utils/clock"
 )
 
 var caVersion = getCaVersion("35.197.0")
 var defaultCustomThresholdsProvider = ekvms_customthresholds.NewCustomThresholdsProvider(nil, caVersion)
 
 func TestBackoff(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
 	mockCP := &mockCloudProvider{}
 
 	for _, tt := range []struct {
@@ -74,41 +76,111 @@ func TestBackoff(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			family, err := resizable_vm_utils.GetMachineFamilyName(tt.node)
-			assert.NoError(t, err)
+			synctest.Test(t, func(t *testing.T) {
+				family, err := resizable_vm_utils.GetMachineFamilyName(tt.node)
+				assert.NoError(t, err)
 
-			backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-			assert.False(t, backoffManager.isClusterBackedOff(family))
-			backoffManager.Backoff(tt.node, tt.resizeError)
-			got := backoffManager.IsBackedOff(family, tt.node.Name)
-			assert.Equal(t, tt.wantBackoff, got)
+				backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider)
+				assert.False(t, backoffManager.isClusterBackedOff(family))
+				backoffManager.Backoff(tt.node, tt.resizeError)
+				got := backoffManager.IsBackedOff(family, tt.node.Name)
+				assert.Equal(t, tt.wantBackoff, got)
+			})
 		})
 	}
 }
 
-func TestClusterLevelErrorTriggersClusterLevelBackoff(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
-	mockCP := &mockCloudProvider{}
+type nodeBackoffInput struct {
+	node *v1.Node
+	err  ek_errors.ResizeError
+}
 
+func TestBackoffPropagationAndExpiry(t *testing.T) {
+	mockCP := &mockCloudProvider{}
 	ek1 := test.EkNode32("node1", 1, 1)
 	ek2 := test.EkNode8("node2", 1, 1)
+	ek3 := test.EkNode32("node3", 1, 1)
 	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
 	assert.NoError(t, err)
 
-	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-	assert.False(t, backoffManager.isClusterBackedOff(family))
+	nodeErr := ek_errors.ResizeError{
+		Backoff:       ek_errors.NodeLevel,
+		ErrType:       ek_errors.NotEnoughResourceOnHostError,
+		OriginalError: errors.New("host exhausted"),
+	}
+	clusterErr := ek_errors.ResizeError{
+		Backoff:       ek_errors.ClusterLevel,
+		ErrType:       ek_errors.Http5xxError,
+		OriginalError: errors.New("http 503"),
+	}
 
-	clusterLevelError := ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("New error")}
+	tests := []struct {
+		name          string
+		firstBatch    []nodeBackoffInput
+		sleepDuration time.Duration
+		secondBatch   []nodeBackoffInput
+		wantBackedOff map[string]bool
+	}{
+		{
+			name:       "cluster_level_error_backs_off_all_family_nodes",
+			firstBatch: []nodeBackoffInput{{node: ek1, err: clusterErr}},
+			wantBackedOff: map[string]bool{
+				ek1.Name: true,
+				ek2.Name: true,
+				ek3.Name: true,
+			},
+		},
+		{
+			name:          "expired_cluster_level_backoff_clears_all_family_nodes",
+			firstBatch:    []nodeBackoffInput{{node: ek1, err: clusterErr}},
+			sleepDuration: gke_backoff.ResizableFamilyInitialBackOffDuration + time.Minute,
+			wantBackedOff: map[string]bool{
+				ek1.Name: false,
+				ek2.Name: false,
+				ek3.Name: false,
+			},
+		},
+		{
+			name: "expired_node_backoffs_do_not_trigger_cluster_backoff",
+			firstBatch: []nodeBackoffInput{
+				{node: ek1, err: nodeErr},
+				{node: ek2, err: nodeErr},
+			},
+			sleepDuration: nodeBackoffExpiry + time.Minute,
+			secondBatch:   []nodeBackoffInput{{node: ek3, err: nodeErr}},
+			wantBackedOff: map[string]bool{
+				ek1.Name: false,
+				ek2.Name: false,
+				ek3.Name: true,
+			},
+		},
+	}
 
-	backoffManager.Backoff(ek1, clusterLevelError)
-	assert.True(t, backoffManager.IsBackedOff(family, ek1.Name))
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider)
+				assert.False(t, backoffManager.isClusterBackedOff(family))
 
-	// 2nd node that we didn't explicitly backoff should be in cluster-wide backoff.
-	assert.True(t, backoffManager.IsBackedOff(family, ek2.Name))
+				for _, call := range tc.firstBatch {
+					backoffManager.Backoff(call.node, call.err)
+				}
+				if tc.sleepDuration > 0 {
+					time.Sleep(tc.sleepDuration)
+				}
+				for _, call := range tc.secondBatch {
+					backoffManager.Backoff(call.node, call.err)
+				}
+
+				for nodeName, want := range tc.wantBackedOff {
+					assert.Equal(t, want, backoffManager.IsBackedOff(family, nodeName), "node %s", nodeName)
+				}
+			})
+		})
+	}
 }
 
 func TestNodeLevelBackoffTriggersClusterLevelBackoff(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
 	mockCP := &mockCloudProvider{}
 
 	ek1 := test.EkNode32("node1", 1, 1)
@@ -186,265 +258,326 @@ func TestNodeLevelBackoffTriggersClusterLevelBackoff(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			mockCustomThresholds := &mockCustomThresholdsProvider{}
-			mockCustomThresholds.On("RefreshCustomThresholds").Return()
-			mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(
-				!tc.errorThresholdsDisabled)
-			for errType, threshold := range tc.customErrorThresholds {
-				mockCustomThresholds.On("GetThreshold", errType).Return(threshold, true)
-			}
-			mockCustomThresholds.On("GetThreshold", mock.Anything).Return(0, false)
-			backoffManager := NewManager(mockCP, mockCustomThresholds, fakeClock)
-			assert.False(t, backoffManager.isClusterBackedOff(family))
-			for i := range tc.rateLimitErrorCount {
-				backoffManager.Backoff(ekNodes[i], *rateLimitError)
-			}
-			for i := range tc.guestAgentResizeErrorCount {
-				backoffManager.Backoff(ekNodes[i], *guestAgentResizeTimeoutError)
-			}
-			// Check the status of the 5th node that we didn't explicitly backoff.
-			assert.Equal(t, tc.expectedClusterLevelBackoff, backoffManager.IsBackedOff(family, ek5.Name))
+			synctest.Test(t, func(t *testing.T) {
+				mockCustomThresholds := &mockCustomThresholdsProvider{}
+				mockCustomThresholds.On("RefreshCustomThresholds").Return()
+				mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(
+					!tc.errorThresholdsDisabled)
+				for errType, threshold := range tc.customErrorThresholds {
+					mockCustomThresholds.On("GetThreshold", errType).Return(threshold, true)
+				}
+				mockCustomThresholds.On("GetThreshold", mock.Anything).Return(0, false)
+				backoffManager := NewManager(mockCP, mockCustomThresholds)
+				assert.False(t, backoffManager.isClusterBackedOff(family))
+				for i := range tc.rateLimitErrorCount {
+					backoffManager.Backoff(ekNodes[i], *rateLimitError)
+				}
+				for i := range tc.guestAgentResizeErrorCount {
+					backoffManager.Backoff(ekNodes[i], *guestAgentResizeTimeoutError)
+				}
+				// Check the status of the 5th node that we
+				// didn't explicitly backoff.
+				assert.Equal(t, tc.expectedClusterLevelBackoff, backoffManager.IsBackedOff(family, ek5.Name))
+			})
 		})
 	}
 }
 
-func TestExpiredNodesDoNotTriggerClusterLevelBackoff(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
-	mockCP := &mockCloudProvider{}
-
-	ek1 := test.EkNode32("node1", 1, 1)
-	ek2 := test.EkNode32("node2", 1, 1)
-	ek3 := test.EkNode32("node3", 1, 1)
-	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
-	assert.NoError(t, err)
-
-	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-	assert.False(t, backoffManager.isClusterBackedOff(family))
-
-	nodeLevelError := ek_errors.ResizeError{Backoff: ek_errors.NodeLevel, ErrType: ek_errors.NotEnoughResourceOnHostError, OriginalError: errors.New("New error")}
-
-	backoffManager.Backoff(ek1, nodeLevelError)
-	assert.True(t, backoffManager.IsBackedOff(family, ek1.Name))
-	assert.False(t, backoffManager.isClusterBackedOff(family))
-
-	backoffManager.Backoff(ek2, nodeLevelError)
-	assert.True(t, backoffManager.IsBackedOff(family, ek2.Name))
-
-	// Forward to time where current two nodes in node level backoff are already expired.
-	fakeClock.SetTime(fakeClock.Now().Add(nodeBackoffExpiry + 1*time.Minute))
-
-	// 3rd node, but only 1 active in backoff. Should not trigger cluster wide backoff.
-	backoffManager.Backoff(ek3, nodeLevelError)
-	assert.False(t, backoffManager.IsBackedOff(family, ek1.Name))
-	assert.False(t, backoffManager.IsBackedOff(family, ek2.Name))
-	assert.True(t, backoffManager.IsBackedOff(family, ek3.Name))
-}
-
-func TestExpiredClusterLevelBackoff(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
-	mockCP := &mockCloudProvider{}
-
-	ek1 := test.EkNode32("node1", 1, 1)
-	ek2 := test.EkNode8("node2", 1, 1)
-	family, err := resizable_vm_utils.GetMachineFamilyName(ek1)
-	assert.NoError(t, err)
-
-	backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-	assert.False(t, backoffManager.isClusterBackedOff(family))
-
-	clusterLevelError := ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("New error")}
-
-	backoffManager.Backoff(ek1, clusterLevelError)
-	assert.True(t, backoffManager.IsBackedOff(family, ek1.Name))
-	assert.True(t, backoffManager.IsBackedOff(family, ek2.Name))
-
-	fakeClock.SetTime(fakeClock.Now().Add(gke_backoff.ResizableFamilyInitialBackOffDuration + 1*time.Minute))
-
-	// cluster backoff is expired
-	assert.False(t, backoffManager.IsBackedOff(family, ek1.Name))
-	assert.False(t, backoffManager.IsBackedOff(family, ek2.Name))
-}
-
 func TestIsClusterBackedOff(t *testing.T) {
-	testStartTime := time.Now()
 	errorType := string(ek_errors.RateLimitExceededError)
 	machineFamily := machinetypes.EK.Name()
-	mockCustomThresholds := &mockCustomThresholdsProvider{}
-	mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(
-		false)
 	for _, tc := range []struct {
-		name                      string
-		backedOffNodesCount       int
-		clusterBackoffUntil       time.Duration
-		expectedNodeBasedBackoffs map[string]time.Time
-		expectedBackoffStatus     bool
+		name                    string
+		backedOffNodesCount     int
+		clusterBackoffUntil     time.Duration
+		expectNodeBasedBackoffs bool
+		expectedBackoffStatus   bool
 	}{
 		{
-			name:                      "backed off nodes count below threshold, no cluster level backoff",
-			backedOffNodesCount:       1,
-			clusterBackoffUntil:       -2 * time.Hour,
-			expectedNodeBasedBackoffs: map[string]time.Time{},
-			expectedBackoffStatus:     false,
+			name:                  "backed off nodes count below threshold, no cluster level backoff",
+			backedOffNodesCount:   1,
+			clusterBackoffUntil:   -2 * time.Hour,
+			expectedBackoffStatus: false,
 		},
 		{
-			name:                      "backed off nodes count below threshold, cluster level backoff",
-			backedOffNodesCount:       1,
-			clusterBackoffUntil:       10 * time.Hour,
-			expectedNodeBasedBackoffs: map[string]time.Time{},
-			expectedBackoffStatus:     true,
+			name:                  "backed off nodes count below threshold, cluster level backoff",
+			backedOffNodesCount:   1,
+			clusterBackoffUntil:   10 * time.Hour,
+			expectedBackoffStatus: true,
 		},
 		{
-			name:                      "backed off nodes count above threshold, cluster level backoff",
-			backedOffNodesCount:       4,
-			clusterBackoffUntil:       -2 * time.Hour,
-			expectedNodeBasedBackoffs: map[string]time.Time{machineFamily: testStartTime.Add(nodeBackoffExpiry)},
-			expectedBackoffStatus:     true,
+			name:                    "backed off nodes count above threshold, cluster level backoff",
+			backedOffNodesCount:     4,
+			clusterBackoffUntil:     -2 * time.Hour,
+			expectNodeBasedBackoffs: true,
+			expectedBackoffStatus:   true,
 		},
 		{
-			name:                      "backed off nodes count above threshold, cluster level backoff",
-			backedOffNodesCount:       4,
-			clusterBackoffUntil:       2 * time.Hour,
-			expectedNodeBasedBackoffs: map[string]time.Time{},
-			expectedBackoffStatus:     true,
+			name:                  "backed off nodes count above threshold, cluster level backoff",
+			backedOffNodesCount:   4,
+			clusterBackoffUntil:   2 * time.Hour,
+			expectedBackoffStatus: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fakeClock := clock.NewFakeClock(testStartTime)
-			manager := NewManager(nil, mockCustomThresholds, fakeClock)
+			synctest.Test(t, func(t *testing.T) {
+				testStartTime := time.Now()
+				mockCustomThresholds := &mockCustomThresholdsProvider{}
+				mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(false)
+				manager := NewManager(nil, mockCustomThresholds)
 
-			nodeBackoff := &mockNodeBackoff{}
-			nodeBackoff.On("Count").Return(tc.backedOffNodesCount, testStartTime.Add(nodeBackoffExpiry))
-			manager.nodeBackoffs.setTracker(machineFamily, errorType, nodeBackoff)
+				nodeBackoff := &mockNodeBackoff{}
+				nodeBackoff.On("Count").Return(tc.backedOffNodesCount, testStartTime.Add(nodeBackoffExpiry))
+				manager.nodeBackoffs.setTracker(machineFamily, errorType, nodeBackoff)
 
-			clusterBackoff := &mockClusterBackoff{}
-			clusterBackoff.On("BackoffUntil").Return(testStartTime.Add(tc.clusterBackoffUntil))
-			manager.clusterBackoffs[machineFamily] = clusterBackoff
+				clusterBackoff := &mockClusterBackoff{}
+				clusterBackoff.On("BackoffUntil").Return(testStartTime.Add(tc.clusterBackoffUntil))
+				manager.clusterBackoffs[machineFamily] = clusterBackoff
 
-			assert.Equal(t, tc.expectedBackoffStatus, manager.isClusterBackedOff(machineFamily))
-			assert.Equal(t, tc.expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+				expectedNodeBasedBackoffs := map[string]time.Time{}
+				if tc.expectNodeBasedBackoffs {
+					expectedNodeBasedBackoffs[machineFamily] = testStartTime.Add(nodeBackoffExpiry)
+				}
+
+				assert.Equal(t, tc.expectedBackoffStatus, manager.isClusterBackedOff(machineFamily))
+				assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+			})
 		})
 	}
 }
 
 func TestIsClusterBackedOff_StoresEarliestExpiration(t *testing.T) {
-	testStartTime := time.Now()
-	machineFamily := machinetypes.EK.Name()
-	mockCustomThresholds := &mockCustomThresholdsProvider{}
-	mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(
-		false)
+	synctest.Test(t, func(t *testing.T) {
+		testStartTime := time.Now()
+		machineFamily := machinetypes.EK.Name()
+		mockCustomThresholds := &mockCustomThresholdsProvider{}
+		mockCustomThresholds.On("IsErrorThresholdsFeatureEnabled").Return(false)
 
-	fakeClock := clock.NewFakeClock(testStartTime)
-	manager := NewManager(nil, mockCustomThresholds, fakeClock)
+		manager := NewManager(nil, mockCustomThresholds)
 
-	// Tracker 1: RateLimit, count 2, expires in 10 minutes
-	tracker1 := nodetracker.New(fakeClock)
-	tracker1.AddNode("node1", testStartTime.Add(10*time.Minute))
-	tracker1.AddNode("node2", testStartTime.Add(10*time.Minute))
-	manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.RateLimitExceededError), tracker1)
+		// Tracker 1: RateLimit, count 2, expires in 10 minutes
+		tracker1 := nodetracker.New(clock.RealClock{})
+		tracker1.AddNode("node1", testStartTime.Add(10*time.Minute))
+		tracker1.AddNode("node2", testStartTime.Add(10*time.Minute))
+		manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.RateLimitExceededError), tracker1)
 
-	// Tracker 2: GuestAgentResizeTimeout, count 2, expires in 5 minutes
-	tracker2 := nodetracker.New(fakeClock)
-	tracker2.AddNode("node3", testStartTime.Add(5*time.Minute))
-	tracker2.AddNode("node4", testStartTime.Add(5*time.Minute))
-	manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.GuestAgentResizeTimeout), tracker2)
+		// Tracker 2: GuestAgentResizeTimeout, count 2, expires in 5
+		// minutes
+		tracker2 := nodetracker.New(clock.RealClock{})
+		tracker2.AddNode("node3", testStartTime.Add(5*time.Minute))
+		tracker2.AddNode("node4", testStartTime.Add(5*time.Minute))
+		manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.GuestAgentResizeTimeout), tracker2)
 
-	// Tracker 3: QuotaExceededError, count 2, expires in 15 minutes, but will add them to the manager later
-	tracker3 := nodetracker.New(fakeClock)
-	tracker3.AddNode("node5", testStartTime.Add(15*time.Minute))
-	tracker3.AddNode("node6", testStartTime.Add(15*time.Minute))
+		// Tracker 3: QuotaExceededError, count 2, expires in 15 minutes
+		// (added to manager after initial expiry check).
+		tracker3 := nodetracker.New(clock.RealClock{})
+		tracker3.AddNode("node5", testStartTime.Add(15*time.Minute))
+		tracker3.AddNode("node6", testStartTime.Add(15*time.Minute))
 
-	// Cluster backoff is not active
-	clusterBackoff := &mockClusterBackoff{}
-	clusterBackoff.On("BackoffUntil").Return(testStartTime.Add(-1 * time.Hour))
-	manager.clusterBackoffs[machineFamily] = clusterBackoff
+		// Cluster backoff is not active
+		clusterBackoff := &mockClusterBackoff{}
+		clusterBackoff.On("BackoffUntil").Return(testStartTime.Add(-1 * time.Hour))
+		manager.clusterBackoffs[machineFamily] = clusterBackoff
 
-	// Total count is 4 >= 3 (threshold). Should trigger cluster backoff.
-	assert.True(t, manager.isClusterBackedOff(machineFamily))
-	expectedNodeBasedBackoffs := map[string]time.Time{
-		machineFamily: testStartTime.Add(5 * time.Minute),
-	}
-	assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+		// Total count is 4 >= 3 (threshold). Should trigger cluster
+		// backoff.
+		assert.True(t, manager.isClusterBackedOff(machineFamily))
+		expectedNodeBasedBackoffs := map[string]time.Time{
+			machineFamily: testStartTime.Add(5 * time.Minute),
+		}
+		assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
 
-	// Advance clock by 5 minutes. The 2 nodes in tracker2 should expire.
-	fakeClock.SetTime(testStartTime.Add(5 * time.Minute))
+		// Advance clock by 5 minutes so the 2 nodes in tracker2 expire.
+		time.Sleep(5 * time.Minute)
 
-	// Total count should now be 2 (only tracker1 nodes) < 3. Cluster should NOT be backed off.
-	assert.False(t, manager.isClusterBackedOff(machineFamily))
-	assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+		// Total count is now 2 (only tracker1 nodes) < 3; cluster is
+		// not backed off.
+		assert.False(t, manager.isClusterBackedOff(machineFamily))
+		assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
 
-	// Add two more backoff nodes to trigger the map update and cluster backoff.
-	manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.QuotaExceededError), tracker3)
-	expectedNodeBasedBackoffs = map[string]time.Time{
-		machineFamily: testStartTime.Add(10 * time.Minute),
-	}
-	assert.True(t, manager.isClusterBackedOff(machineFamily))
-	assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+		// Add two more backoff nodes to trigger the map update and
+		// cluster backoff.
+		manager.nodeBackoffs.setTracker(machineFamily, string(ek_errors.QuotaExceededError), tracker3)
+		expectedNodeBasedBackoffs = map[string]time.Time{
+			machineFamily: testStartTime.Add(10 * time.Minute),
+		}
+		assert.True(t, manager.isClusterBackedOff(machineFamily))
+		assert.Equal(t, expectedNodeBasedBackoffs, manager.nodeBasedBackoffs)
+	})
 }
 
 func TestUpdateBackoffMetrics(t *testing.T) {
-	fakeClock := clock.NewFakeClock(time.Now())
 	mockCP := &mockCloudProvider{}
-	manager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
+	clusterErr := ek_errors.ResizeError{
+		Backoff:       ek_errors.ClusterLevel,
+		ErrType:       ek_errors.Http5xxError,
+		OriginalError: errors.New("http 500"),
+	}
 
-	mockMetrics := &mockMetrics{}
-	// For all resizable machine types, we expect UpdateResizeBackoffStatus to be called.
-	// We don't want to hardcode all families here, but we can at least check it doesn't panic
-	// and maybe check one specific family like "ek".
-	mockMetrics.On("UpdateEkBackoffStatus", mock.Anything).Return()
-	mockMetrics.On("UpdateResizeBackoffStatus", mock.Anything, mock.Anything).Return()
-	manager.metrics = mockMetrics
+	tests := []struct {
+		name        string
+		backoffNode *v1.Node
+		wantStatus  map[string]bool
+	}{
+		{
+			name:       "no_backoff_active",
+			wantStatus: map[string]bool{"ek": false, "e4a": false},
+		},
+		{
+			name:        "ek_cluster_backoff_isolated",
+			backoffNode: test.EkNode32("ek-node", 1, 1),
+			wantStatus:  map[string]bool{"ek": true, "e4a": false},
+		},
+		{
+			name:        "e4a_cluster_backoff_isolated",
+			backoffNode: test.E4aNode32("e4a-node", 1, 1),
+			wantStatus:  map[string]bool{"ek": false, "e4a": true},
+		},
+	}
 
-	manager.updateBackoffMetrics()
-	mockMetrics.AssertCalled(t, "UpdateResizeBackoffStatus", machinetypes.EK.Name(), false)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager := NewManager(mockCP, defaultCustomThresholdsProvider)
+				mockMetrics := &mockMetrics{}
+				mockMetrics.On("UpdateResizeBackoffStatus", mock.Anything, mock.Anything).Return()
+				manager.metrics = mockMetrics
+
+				if tc.backoffNode != nil {
+					manager.Backoff(tc.backoffNode, clusterErr)
+				}
+				manager.updateBackoffMetrics()
+
+				for family, wantBackedOff := range tc.wantStatus {
+					mockMetrics.AssertCalled(t, "UpdateResizeBackoffStatus", family, wantBackedOff)
+				}
+			})
+		})
+	}
+}
+
+func TestRunUpdatesMetricsAndStopsOnCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		mockCP := &mockCloudProvider{}
+		manager := NewManager(mockCP, defaultCustomThresholdsProvider)
+		recMetrics := &recordingMetrics{}
+		manager.metrics = recMetrics
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			manager.Run(ctx)
+		}()
+		synctest.Wait()
+
+		assert.Equal(t, int64(1), recMetrics.ekUpdates.Load())
+		assert.False(t, recMetrics.ekBackedOff.Load())
+
+		ekNode := test.EkNode32("ek-node", 1, 1)
+		manager.Backoff(ekNode, ek_errors.ResizeError{
+			Backoff:       ek_errors.ClusterLevel,
+			ErrType:       ek_errors.Http5xxError,
+			OriginalError: errors.New("http 500"),
+		})
+
+		time.Sleep(metricInterval)
+		synctest.Wait()
+		assert.True(t, recMetrics.ekBackedOff.Load())
+
+		cancel()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatalf("Manager.Run did not exit after context cancellation")
+		}
+	})
+}
+
+type familyNodeExpectation struct {
+	family string
+	node   string
+	want   bool
 }
 
 func TestBackoffIsolation(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
 	mockCP := &mockCloudProvider{}
+	ekNode1 := test.EkNode32("node1", 1, 1)
+	ekNode2 := test.EkNode32("node2", 1, 1)
+	e4aNode := test.E4aNode32("e4a-node", 1, 1)
+	nodeErr := ek_errors.ResizeError{Backoff: ek_errors.NodeLevel}
+	clusterErr := ek_errors.ResizeError{
+		Backoff:       ek_errors.ClusterLevel,
+		ErrType:       ek_errors.Http5xxError,
+		OriginalError: errors.New("error"),
+	}
 
-	t.Run("Node-level backoff isolation between families", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-		ekNode := test.EkNode32("ek-node", 1, 1)
-		e4aNode := test.E4aNode32("e4a-node", 1, 1)
+	tests := []struct {
+		name         string
+		backoffs     []nodeBackoffInput
+		deleteFamily string
+		deleteNode   string
+		wantStates   []familyNodeExpectation
+	}{
+		{
+			name:     "node_level_backoff_isolated_between_families",
+			backoffs: []nodeBackoffInput{{node: ekNode1, err: nodeErr}},
+			wantStates: []familyNodeExpectation{
+				{family: "ek", node: ekNode1.Name, want: true},
+				{family: "e4a", node: e4aNode.Name, want: false},
+			},
+		},
+		{
+			name:     "cluster_level_backoff_isolated_between_families",
+			backoffs: []nodeBackoffInput{{node: ekNode1, err: clusterErr}},
+			wantStates: []familyNodeExpectation{
+				{family: "ek", node: ekNode2.Name, want: true},
+				{family: "e4a", node: e4aNode.Name, want: false},
+			},
+		},
+		{
+			name:     "node_level_backoff_isolated_within_same_family",
+			backoffs: []nodeBackoffInput{{node: ekNode1, err: nodeErr}},
+			wantStates: []familyNodeExpectation{
+				{family: "ek", node: ekNode1.Name, want: true},
+				{family: "ek", node: ekNode2.Name, want: false},
+			},
+		},
+		{
+			name: "delete_node_clears_only_deleted_node",
+			backoffs: []nodeBackoffInput{
+				{node: ekNode1, err: nodeErr},
+				{node: ekNode2, err: nodeErr},
+			},
+			deleteFamily: "ek",
+			deleteNode:   ekNode1.Name,
+			wantStates: []familyNodeExpectation{
+				{family: "ek", node: ekNode1.Name, want: false},
+				{family: "ek", node: ekNode2.Name, want: true},
+			},
+		},
+	}
 
-		backoffManager.Backoff(ekNode, ek_errors.ResizeError{Backoff: ek_errors.NodeLevel})
-		assert.True(t, backoffManager.IsBackedOff("ek", ekNode.Name))
-		assert.False(t, backoffManager.IsBackedOff("e4a", e4aNode.Name))
-	})
-
-	t.Run("Cluster-level backoff isolation between families", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-		ekNode := test.EkNode32("ek-node", 1, 1)
-
-		backoffManager.Backoff(ekNode, ek_errors.ResizeError{Backoff: ek_errors.ClusterLevel, ErrType: ek_errors.Http5xxError, OriginalError: errors.New("error")})
-		assert.True(t, backoffManager.isClusterBackedOff("ek"))
-		assert.False(t, backoffManager.isClusterBackedOff("e4a"))
-	})
-
-	t.Run("Node-level backoff isolation within the same family", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-		ekNode1 := test.EkNode32("node1", 1, 1)
-		ekNode2 := test.EkNode32("node2", 1, 1)
-
-		backoffManager.Backoff(ekNode1, ek_errors.ResizeError{Backoff: ek_errors.NodeLevel})
-		assert.True(t, backoffManager.IsBackedOff("ek", ekNode1.Name))
-		assert.False(t, backoffManager.IsBackedOff("ek", ekNode2.Name))
-	})
-
-	t.Run("DeleteNode isolation", func(t *testing.T) {
-		backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider, fakeClock)
-		ekNode1 := test.EkNode32("node1", 1, 1)
-		ekNode2 := test.EkNode32("node2", 1, 1)
-
-		backoffManager.Backoff(ekNode1, ek_errors.ResizeError{Backoff: ek_errors.NodeLevel})
-		backoffManager.Backoff(ekNode2, ek_errors.ResizeError{Backoff: ek_errors.NodeLevel})
-		assert.True(t, backoffManager.IsBackedOff("ek", ekNode1.Name))
-		assert.True(t, backoffManager.IsBackedOff("ek", ekNode2.Name))
-
-		backoffManager.DeleteNode("ek", ekNode1.Name)
-		assert.False(t, backoffManager.IsBackedOff("ek", ekNode1.Name))
-		assert.True(t, backoffManager.IsBackedOff("ek", ekNode2.Name))
-	})
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backoffManager := NewManager(mockCP, defaultCustomThresholdsProvider)
+				for _, b := range tc.backoffs {
+					backoffManager.Backoff(b.node, b.err)
+				}
+				if tc.deleteNode != "" {
+					backoffManager.DeleteNode(tc.deleteFamily, tc.deleteNode)
+				}
+				for _, exp := range tc.wantStates {
+					assert.Equal(t, exp.want, backoffManager.IsBackedOff(exp.family, exp.node),
+						"family=%s node=%s", exp.family, exp.node)
+				}
+			})
+		})
+	}
 }
 
 func TestRefreshCustomThresholds(t *testing.T) {
@@ -560,7 +693,7 @@ func TestRefreshCustomThresholds(t *testing.T) {
 
 			caVersion := getCaVersion(tc.caVersion)
 			provider := ekvms_customthresholds.NewCustomThresholdsProvider(mockGM, caVersion)
-			manager := NewManager(nil, provider, nil)
+			manager := NewManager(nil, provider)
 
 			for errType, wantThreshold := range tc.wantCustomThresholds {
 				gotThreshold, found := manager.customThresholdsProvider.GetThreshold(errType)
@@ -573,7 +706,6 @@ func TestRefreshCustomThresholds(t *testing.T) {
 }
 
 func TestNodeLevelBackoffTriggersClusterLevelBackoffWithExperimentManager(t *testing.T) {
-	fakeClock := clock.NewFakePassiveClock(time.Now())
 	mockCP := &mockCloudProvider{}
 
 	ek1 := test.EkNode32("node1", 1, 1)
@@ -725,25 +857,28 @@ func TestNodeLevelBackoffTriggersClusterLevelBackoffWithExperimentManager(t *tes
 
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			stringFlags := map[string]string{}
-			if tc.experimentFlagValue != "" {
-				stringFlags[experiments.ResizableClusterBackoffCustomThresholdsPerErrorTypeFlag] = tc.experimentFlagValue
-			}
-			caVersion, _ := version.FromString(tc.caVersion)
-			mockGM := experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags)
-			customThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(mockGM, caVersion)
-			backoffManager := NewManager(mockCP, customThresholdsProvider, fakeClock)
-			assert.False(t, backoffManager.isClusterBackedOff(family))
-			for i := range tc.quotaErrorCount {
-				backoffManager.Backoff(ekNodes[i], *quotaError)
-			}
-			for i := range tc.guestAgentResizeErrorCount {
-				backoffManager.Backoff(ekNodes[i], *guestAgentResizeTimeoutError)
-			}
-			// Check the status of the 5th node that we didn't explicitly backoff.
-			assert.Equal(t, tc.expectedClusterLevelBackoff, backoffManager.IsBackedOff(family, ek5.Name))
-			_, found := backoffManager.nodeBasedBackoffs[family]
-			assert.Equal(t, tc.expectedClusterLevelBackoff, found)
+			synctest.Test(t, func(t *testing.T) {
+				stringFlags := map[string]string{}
+				if tc.experimentFlagValue != "" {
+					stringFlags[experiments.ResizableClusterBackoffCustomThresholdsPerErrorTypeFlag] = tc.experimentFlagValue
+				}
+				caVersion, _ := version.FromString(tc.caVersion)
+				mockGM := experiments.NewMockManagerWithOptions(version.Version{}, nil, stringFlags)
+				customThresholdsProvider := ekvms_customthresholds.NewCustomThresholdsProvider(mockGM, caVersion)
+				backoffManager := NewManager(mockCP, customThresholdsProvider)
+				assert.False(t, backoffManager.isClusterBackedOff(family))
+				for i := range tc.quotaErrorCount {
+					backoffManager.Backoff(ekNodes[i], *quotaError)
+				}
+				for i := range tc.guestAgentResizeErrorCount {
+					backoffManager.Backoff(ekNodes[i], *guestAgentResizeTimeoutError)
+				}
+				// Check the status of the 5th node that we didn't
+				// explicitly backoff.
+				assert.Equal(t, tc.expectedClusterLevelBackoff, backoffManager.IsBackedOff(family, ek5.Name))
+				_, found := backoffManager.nodeBasedBackoffs[family]
+				assert.Equal(t, tc.expectedClusterLevelBackoff, found)
+			})
 		})
 	}
 
@@ -795,6 +930,18 @@ func (m *mockMetrics) UpdateEkBackoffStatus(isBackedOff bool) {
 
 func (m *mockMetrics) UpdateResizeBackoffStatus(machineFamily string, isBackedOff bool) {
 	m.Called(machineFamily, isBackedOff)
+}
+
+type recordingMetrics struct {
+	ekUpdates   atomic.Int64
+	ekBackedOff atomic.Bool
+}
+
+func (r *recordingMetrics) UpdateResizeBackoffStatus(machineFamily string, isBackedOff bool) {
+	if machineFamily == machinetypes.EK.Name() {
+		r.ekUpdates.Add(1)
+		r.ekBackedOff.Store(isBackedOff)
+	}
 }
 
 type mockCustomThresholdsProvider struct {
