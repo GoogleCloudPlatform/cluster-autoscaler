@@ -21,6 +21,7 @@ import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	resourcehelper "k8s.io/component-helpers/resource"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size/calculator"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
@@ -312,7 +313,8 @@ func hasMatchingSpec(pod *apiv1.Pod, cpu, mem resource.Quantity) bool {
 	return hasCPU && hasMem && reqCPU.Equal(cpu) && reqMem.Equal(mem)
 }
 
-// hasMatchingAlloc checks if Kubelet's allocated resources match desired CPU and memory.
+// hasMatchingAlloc checks if Kubelet's allocated resources match desired CPU and memory and
+// pod-level status does not cause kube-scheduler to over-count effective requests (b/583763422).
 func hasMatchingAlloc(pod *apiv1.Pod, cpu, mem resource.Quantity) bool {
 	c := getBalloonContainerStatus(pod)
 	if c == nil {
@@ -320,7 +322,14 @@ func hasMatchingAlloc(pod *apiv1.Pod, cpu, mem resource.Quantity) bool {
 	}
 	allocCPU, hasCPU := c.AllocatedResources[apiv1.ResourceCPU]
 	allocMem, hasMem := c.AllocatedResources[apiv1.ResourceMemory]
-	return hasCPU && hasMem && allocCPU.Equal(cpu) && allocMem.Equal(mem)
+	if !hasCPU || !hasMem || !allocCPU.Equal(cpu) || !allocMem.Equal(mem) {
+		return false
+	}
+	effective := resourcehelper.AggregateContainerRequests(pod, resourcehelper.PodResourcesOptions{
+		UseStatusResources: true,
+		InPlacePodLevelResourcesVerticalScalingEnabled: true,
+	})
+	return cpu.Cmp(effective[apiv1.ResourceCPU]) >= 0 && mem.Cmp(effective[apiv1.ResourceMemory]) >= 0
 }
 
 // balloonPodResizeState describes how far Kubelet has got with an in-place resize of a balloon pod.

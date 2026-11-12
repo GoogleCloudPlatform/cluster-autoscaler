@@ -1162,6 +1162,47 @@ func TestBalloonPodController_ResizeBalloonPodInPlace_Events(t *testing.T) {
 			},
 		},
 		{
+			desc:      "1.36 kubelet leaves stale pod-level status.resources.requests.memory on shrink -> times out for fallback",
+			targetCpu: resource.MustParse("500m"),
+			targetMem: resource.MustParse("50Mi"),
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				downCpu := resource.MustParse("500m")
+				downMem := resource.MustParse("50Mi")
+				updated := buildPodWithAllocated(t, currentPod, downCpu, downMem)
+				updated.Status.AllocatedResources = v1.ResourceList{
+					v1.ResourceCPU:    downCpu,
+					v1.ResourceMemory: downMem,
+				}
+				updated.Status.Resources = &v1.ResourceRequirements{
+					Requests: v1.ResourceList{
+						v1.ResourceCPU:    downCpu,
+						v1.ResourceMemory: initialMem, // Frozen at initial value by 1.36 kubelet
+					},
+				}
+				c.defaultOnUpdate(currentPod, updated)
+			},
+			wantErr: ek_errors.ResizeTimeoutError,
+		},
+		{
+			desc:      "1.37 kubelet updates pod-level status with cgroup v2 rounded CPU and matching memory -> resize succeeds",
+			targetCpu: resource.MustParse("3990m"),
+			targetMem: targetMem,
+			emitEvent: func(t *testing.T, c *balloonPodControllerImpl, currentPod *v1.Pod) {
+				updated := buildPodWithAllocated(t, currentPod, resource.MustParse("3990m"), targetMem)
+				updated.Status.AllocatedResources = v1.ResourceList{
+					v1.ResourceCPU:    resource.MustParse("3990m"),
+					v1.ResourceMemory: targetMem,
+				}
+				updated.Status.Resources = &v1.ResourceRequirements{
+					Requests: v1.ResourceList{
+						v1.ResourceCPU:    resource.MustParse("3970m"),
+						v1.ResourceMemory: targetMem,
+					},
+				}
+				c.defaultOnUpdate(currentPod, updated)
+			},
+		},
+		{
 			desc:      "kubelet updates allocated resources while InProgress, then clears InProgress -> resize succeeds",
 			targetCpu: targetCpu,
 			targetMem: targetMem,

@@ -65,6 +65,17 @@ func balloonPodRequests(bPod *v1.Pod) (*resource.Quantity, *resource.Quantity) {
 	return &cpu, &memory
 }
 
+func formatResourcePair(rl v1.ResourceList) (cpu, mem string) {
+	cpu, mem = "none", "none"
+	if q, ok := rl[v1.ResourceCPU]; ok {
+		cpu = q.String()
+	}
+	if q, ok := rl[v1.ResourceMemory]; ok {
+		mem = q.String()
+	}
+	return cpu, mem
+}
+
 func getBalloonPodsLog(bpStatus BalloonPodStatus, balloonPods []*v1.Pod, node *v1.Node, desiredAllocatable size.Allocatable) string {
 	desiredCpu, desiredMem := getBalloonPodSize(node, desiredAllocatable)
 	switch bpStatus {
@@ -78,24 +89,23 @@ func getBalloonPodsLog(bpStatus BalloonPodStatus, balloonPods []*v1.Pod, node *v
 	case BalloonPodIncorrectSize:
 		bPod := balloonPods[0]
 		bPodCpu, bPodMem := balloonPodRequests(bPod)
-		allocCpuStr := "none"
-		allocMemStr := "none"
+		var allocReqs, statusReqs v1.ResourceList
 		if cStatus := getBalloonContainerStatus(bPod); cStatus != nil {
-			if q, ok := cStatus.AllocatedResources[v1.ResourceCPU]; ok {
-				allocCpuStr = q.String()
-			}
-			if q, ok := cStatus.AllocatedResources[v1.ResourceMemory]; ok {
-				allocMemStr = q.String()
-			}
+			allocReqs = cStatus.AllocatedResources
 		}
+		if bPod.Status.Resources != nil {
+			statusReqs = bPod.Status.Resources.Requests
+		}
+		allocCpuStr, allocMemStr := formatResourcePair(allocReqs)
+		statusCpuStr, statusMemStr := formatResourcePair(statusReqs)
 
 		resizeState := string(getResizeState(bPod))
 		if resizeState == "" {
 			resizeState = "none"
 		}
 
-		return fmt.Sprintf("Want balloon pod %q size: {cpu: %q, memory: %q}, got requests: {cpu: %q, memory: %q}, got allocated: {cpu: %q, memory: %q}, resizeState: %q.",
-			bPod.Name, desiredCpu.String(), desiredMem.String(), bPodCpu.String(), bPodMem.String(), allocCpuStr, allocMemStr, resizeState)
+		return fmt.Sprintf("Want balloon pod %q size: {cpu: %q, memory: %q}, got requests: {cpu: %q, memory: %q}, got allocated: {cpu: %q, memory: %q}, got podStatusRequests: {cpu: %q, memory: %q}, resizeState: %q.",
+			bPod.Name, desiredCpu.String(), desiredMem.String(), bPodCpu.String(), bPodMem.String(), allocCpuStr, allocMemStr, statusCpuStr, statusMemStr, resizeState)
 	case BalloonPodNotRunning:
 		bPod := balloonPods[0]
 		return fmt.Sprintf("Want balloon pod %q status: %q, got: %q.", bPod.Name, v1.PodRunning, bPod.Status.Phase)

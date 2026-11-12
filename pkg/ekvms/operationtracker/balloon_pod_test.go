@@ -811,6 +811,17 @@ func TestBalloonContainerHelpers(t *testing.T) {
 	})
 
 	t.Run("hasMatchingAlloc", func(t *testing.T) {
+		largerMem := *resource.NewQuantity(400*size.MiB, resource.DecimalSI)
+		podWithPodStatus := func(containerAlloc, podAlloc, podReqs apiv1.ResourceList) *apiv1.Pod {
+			p := podWithRequests(balloonContainerName, containerAlloc)
+			p.Status = apiv1.PodStatus{
+				ContainerStatuses:  []apiv1.ContainerStatus{{Name: balloonContainerName, AllocatedResources: containerAlloc}},
+				AllocatedResources: podAlloc,
+				Resources:          &apiv1.ResourceRequirements{Requests: podReqs},
+			}
+			return p
+		}
+
 		testCases := []struct {
 			desc      string
 			pod       *apiv1.Pod
@@ -865,6 +876,50 @@ func TestBalloonContainerHelpers(t *testing.T) {
 			{
 				desc:      "mismatched allocated memory",
 				pod:       podWithAllocated(balloonContainerName, apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: otherMem}),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc: "stale pod-level status.resources.requests.memory (1.36 kubelet bug)",
+				pod: podWithPodStatus(
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: largerMem},
+				),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc: "pod-level status.resources.requests.cpu rounded down by cgroup v2 cpu.weight matches",
+				pod: podWithPodStatus(
+					apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("3990m"), apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("3990m"), apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("3970m"), apiv1.ResourceMemory: desiredMem},
+				),
+				targetCPU: resource.MustParse("3990m"),
+				targetMem: desiredMem,
+				wantMatch: true,
+			},
+			{
+				desc: "pod-level status.resources.requests.cpu above target does not match",
+				pod: podWithPodStatus(
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: resource.MustParse("5000m"), apiv1.ResourceMemory: desiredMem},
+				),
+				targetCPU: desiredCPU,
+				targetMem: desiredMem,
+				wantMatch: false,
+			},
+			{
+				desc: "stale pod-level status.allocatedResources above target does not match",
+				pod: podWithPodStatus(
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: largerMem},
+					apiv1.ResourceList{apiv1.ResourceCPU: desiredCPU, apiv1.ResourceMemory: desiredMem},
+				),
 				targetCPU: desiredCPU,
 				targetMem: desiredMem,
 				wantMatch: false,

@@ -122,68 +122,69 @@ func TestGetBalloonPodLogs(t *testing.T) {
 	node := test.BuildTestNode("node", nodeMilliCpu, nodeMem)
 	desiredAllocatable := size.Allocatable{MilliCpus: nodeMilliCpu / 2, KBytes: nodeMem / 2 / size.KiB}
 
+	makeBalloonPod := func(name string, cpu, mem resource.Quantity) *v1.Pod {
+		bPod, err := GenerateBalloonPod(node, cpu, mem, true)
+		assert.NoError(t, err)
+		bPod.Name = name
+		return bPod
+	}
+	halfCpu := *resource.NewMilliQuantity(nodeMilliCpu/2, resource.BinarySI)
+	halfMem := *resource.NewQuantity(nodeMem/2, resource.BinarySI)
+
+	bpFailed := makeBalloonPod("bp1", halfCpu, halfMem)
+	bpFailed.Status.Phase = v1.PodFailed
+
+	bpUnknown := makeBalloonPod("bp1", halfCpu, halfMem)
+	bpUnknown.Status.Phase = v1.PodUnknown
+
+	bpStaleStatus := makeBalloonPod("bp1", *resource.NewMilliQuantity(nodeMilliCpu/2, resource.DecimalSI), *resource.NewQuantity(nodeMem/2, resource.DecimalSI))
+	bpStaleStatus.Status.Resources = &v1.ResourceRequirements{
+		Requests: v1.ResourceList{
+			v1.ResourceCPU:    *resource.NewMilliQuantity(nodeMilliCpu/2, resource.DecimalSI),
+			v1.ResourceMemory: *resource.NewQuantity(nodeMem*3/4, resource.DecimalSI),
+		},
+	}
+
 	testCases := []struct {
 		desc       string
 		bPodStatus BalloonPodStatus
-		bPodNames  []string
-		bPodSizes  [][]resource.Quantity
-		bPodPhase  v1.PodPhase
+		bPods      []*v1.Pod
 		want       string
 	}{
 		{
 			desc:       "wrong number of balloon pods",
 			bPodStatus: BalloonPodWrongCount,
-			bPodNames:  []string{"bp1", "bp2"},
-			bPodSizes: [][]resource.Quantity{
-				{*resource.NewMilliQuantity(nodeMilliCpu/2, resource.BinarySI), *resource.NewQuantity(nodeMem/2, resource.BinarySI)},
-				{*resource.NewMilliQuantity(nodeMilliCpu/2, resource.BinarySI), *resource.NewQuantity(nodeMem/2, resource.BinarySI)},
-			},
-			want: "Want single balloon pod: {cpu: \"5\", memory: \"5368709120\"}, got 2: [balloon pod: {name: \"bp1\", cpu: \"5\", memory: \"5Gi\"}., balloon pod: {name: \"bp2\", cpu: \"5\", memory: \"5Gi\"}.]",
+			bPods:      []*v1.Pod{makeBalloonPod("bp1", halfCpu, halfMem), makeBalloonPod("bp2", halfCpu, halfMem)},
+			want:       "Want single balloon pod: {cpu: \"5\", memory: \"5368709120\"}, got 2: [balloon pod: {name: \"bp1\", cpu: \"5\", memory: \"5Gi\"}., balloon pod: {name: \"bp2\", cpu: \"5\", memory: \"5Gi\"}.]",
 		},
 		{
 			desc:       "incorrect size",
 			bPodStatus: BalloonPodIncorrectSize,
-			bPodNames:  []string{"bp1"},
-			bPodSizes: [][]resource.Quantity{
-				{*resource.NewMilliQuantity(nodeMilliCpu/4, resource.BinarySI), *resource.NewQuantity(nodeMem/4, resource.BinarySI)},
-			},
-			want: "Want balloon pod \"bp1\" size: {cpu: \"5\", memory: \"5368709120\"}, got requests: {cpu: \"2500m\", memory: \"2560Mi\"}, got allocated: {cpu: \"none\", memory: \"none\"}, resizeState: \"none\".",
+			bPods:      []*v1.Pod{makeBalloonPod("bp1", *resource.NewMilliQuantity(nodeMilliCpu/4, resource.BinarySI), *resource.NewQuantity(nodeMem/4, resource.BinarySI))},
+			want:       "Want balloon pod \"bp1\" size: {cpu: \"5\", memory: \"5368709120\"}, got requests: {cpu: \"2500m\", memory: \"2560Mi\"}, got allocated: {cpu: \"none\", memory: \"none\"}, got podStatusRequests: {cpu: \"none\", memory: \"none\"}, resizeState: \"none\".",
+		},
+		{
+			desc:       "incorrect size with stale pod-level status requests",
+			bPodStatus: BalloonPodIncorrectSize,
+			bPods:      []*v1.Pod{bpStaleStatus},
+			want:       "Want balloon pod \"bp1\" size: {cpu: \"5\", memory: \"5368709120\"}, got requests: {cpu: \"5\", memory: \"5368709120\"}, got allocated: {cpu: \"none\", memory: \"none\"}, got podStatusRequests: {cpu: \"5\", memory: \"8053063680\"}, resizeState: \"none\".",
 		},
 		{
 			desc:       "balloon pod not running",
 			bPodStatus: BalloonPodNotRunning,
-			bPodNames:  []string{"bp1"},
-			bPodSizes: [][]resource.Quantity{
-				{*resource.NewMilliQuantity(nodeMilliCpu/2, resource.BinarySI), *resource.NewQuantity(nodeMem/2, resource.BinarySI)},
-			},
-			bPodPhase: v1.PodFailed,
-			want:      "Want balloon pod \"bp1\" status: \"Running\", got: \"Failed\".",
+			bPods:      []*v1.Pod{bpFailed},
+			want:       "Want balloon pod \"bp1\" status: \"Running\", got: \"Failed\".",
 		},
 		{
 			desc:       "wrong status",
 			bPodStatus: "",
-			bPodNames:  []string{"bp1"},
-			bPodSizes: [][]resource.Quantity{
-				{*resource.NewMilliQuantity(nodeMilliCpu/2, resource.BinarySI), *resource.NewQuantity(nodeMem/2, resource.BinarySI)},
-			},
-			bPodPhase: v1.PodUnknown,
-			want:      "Unknown balloon pod problem.",
+			bPods:      []*v1.Pod{bpUnknown},
+			want:       "Unknown balloon pod problem.",
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.desc, func(t *testing.T) {
-			var bPods []*v1.Pod
-			for i, bPodSize := range tc.bPodSizes {
-				bPodCpu, bPodMem := bPodSize[0], bPodSize[1]
-				bPod, err := GenerateBalloonPod(node, bPodCpu, bPodMem, true)
-				assert.NoError(t, err)
-				bPod.Name = tc.bPodNames[i]
-				bPod.Status.Phase = tc.bPodPhase
-				bPods = append(bPods, bPod)
-			}
-
-			logs := getBalloonPodsLog(tc.bPodStatus, bPods, node, desiredAllocatable)
-			assert.Equal(t, tc.want, logs)
+			assert.Equal(t, tc.want, getBalloonPodsLog(tc.bPodStatus, tc.bPods, node, desiredAllocatable))
 		})
 	}
 }
