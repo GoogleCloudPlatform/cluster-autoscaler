@@ -85,7 +85,6 @@ func (t nodeTrackers) getTracker(machineFamily, errorType string) (nodetracker.I
 type manager struct {
 	cloudProvider            cloudProvider
 	customThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider
-	clock                    clock.PassiveClock
 	metrics                  backoffMetrics
 
 	mu                sync.RWMutex
@@ -94,11 +93,11 @@ type manager struct {
 	nodeBasedBackoffs map[string]time.Time // stores machine family backoffs based on nodes backoff along with the earliest expiration time among those nodes.
 }
 
-func NewManager(cloudProvider cloudProvider, customThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider, clock clock.PassiveClock) *manager {
+// NewManager returns a new backoff manager for resizable VMs.
+func NewManager(cloudProvider cloudProvider, customThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider) *manager {
 	return &manager{
 		cloudProvider:            cloudProvider,
 		customThresholdsProvider: customThresholdsProvider,
-		clock:                    clock,
 		metrics:                  internalmetrics.Metrics,
 		nodeBackoffs:             make(nodeTrackers),
 		clusterBackoffs:          make(map[string]exponentialBackoff),
@@ -134,10 +133,10 @@ func (m *manager) backoffNodeLevel(machineFamily, nodeName string, errType ek_er
 	defer m.mu.Unlock()
 
 	errTypeStr := string(errType)
-	expirationTime := m.clock.Now().Add(nodeBackoffExpiry)
+	expirationTime := time.Now().Add(nodeBackoffExpiry)
 	tracker, ok := m.nodeBackoffs.getTracker(machineFamily, errTypeStr)
 	if !ok {
-		tracker = nodetracker.New(m.clock)
+		tracker = nodetracker.New(clock.RealClock{})
 		m.nodeBackoffs.setTracker(machineFamily, errTypeStr, tracker)
 	}
 	tracker.AddNode(nodeName, expirationTime)
@@ -148,7 +147,7 @@ func (m *manager) backoffClusterLevel(machineFamily string, resizeError ek_error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	currentTime := m.clock.Now()
+	currentTime := time.Now()
 	if _, ok := m.clusterBackoffs[machineFamily]; !ok {
 		m.clusterBackoffs[machineFamily] = gke_backoff.NewExponentialBackoff(gke_backoff.ResizableFamilyInitialBackOffDuration, gke_backoff.MaxNodeGroupBackoffDuration, backoffResetTime)
 	}
@@ -181,15 +180,16 @@ func (m *manager) isClusterBackoffStillActive(machineFamily string) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	now := time.Now()
 	// Check if earliest node backoff expiration is still valid.
 	if earliestNodeBackoffExpiration, ok := m.nodeBasedBackoffs[machineFamily]; ok {
-		if earliestNodeBackoffExpiration.After(m.clock.Now()) {
+		if earliestNodeBackoffExpiration.After(now) {
 			return true
 		}
 	}
 	// Check if explicit cluster backoff expiration is still valid.
 	if backoff, ok := m.clusterBackoffs[machineFamily]; ok {
-		if backoff.BackoffUntil().After(m.clock.Now()) {
+		if backoff.BackoffUntil().After(now) {
 			return true
 		}
 	}

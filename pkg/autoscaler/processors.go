@@ -549,7 +549,7 @@ func (b *Builder) setUpProcessors(
 	laChurnTracker := ekvms_churntracker.NewChurnTracker(churnTrackerConfigProvider, provider.MachineConfigProvider(), internalmetrics.Metrics, clock.RealClock{})
 
 	if options.EkvmsFixerEnabled {
-		resizableVmBackoffManager := ekvms_backoff.NewManager(provider, resizableVmCustomThresholdsProvider, clock.RealClock{})
+		resizableVmBackoffManager := ekvms_backoff.NewManager(provider, resizableVmCustomThresholdsProvider)
 		nodeStateManager := ekvms_operationtracker.NewNodeStateManager(provider, nodeSizeRecommender, resizableVmBackoffManager, resizeCalculator, clock.RealClock{})
 		opTracker := ekvms_operationtracker.New(kubeClient, informerFactory, provider, nodeStateManager, internalmetrics.Metrics, resizeCalculator, options.EkvmsConcurrentResizeWorkers, options.EkvmsFixerEnabled, options.EkvmsFixerInterval, optionsTracker)
 		resizableVmManager = ekvms_operationtracker.NewManager(provider, opTracker, resizeCalculator, nodeSizeRecommender, internalmetrics.Metrics, nodeStateManager)
