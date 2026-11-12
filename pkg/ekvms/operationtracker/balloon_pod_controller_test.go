@@ -933,6 +933,17 @@ func TestBalloonPodController_ResizeBalloonPodInPlace_Immediate(t *testing.T) {
 	failedPod := basePod.DeepCopy()
 	failedPod.Status.Phase = v1.PodFailed
 
+	// Balloon pod whose image can't be pulled: Kubelet never starts the container.
+	imagePullBackOffPod := basePod.DeepCopy()
+	imagePullBackOffPod.Status.Phase = v1.PodPending
+	imagePullBackOffPod.Status.ContainerStatuses = []v1.ContainerStatus{{
+		Name:  balloonContainerName,
+		State: v1.ContainerState{Waiting: &v1.ContainerStateWaiting{Reason: "ImagePullBackOff"}},
+	}}
+
+	// Balloon pod Kubelet hasn't reported any container status for yet.
+	notStartedPod := basePod.DeepCopy()
+	notStartedPod.Status.Phase = v1.PodPending
 	secondPod := setupTestPod(t, node, resource.MustParse("1000m"), resource.MustParse("100Mi"))
 	secondPod.Name = "balloon-pod-node1-second"
 	secondPod.UID = "pod-uid-node1-second"
@@ -985,6 +996,22 @@ func TestBalloonPodController_ResizeBalloonPodInPlace_Immediate(t *testing.T) {
 			pod:         failedPod,
 			seedCache:   true,
 			wantErr:     ek_errors.NoActiveBalloonPodError.Error(),
+			expectPatch: false,
+		},
+		{
+			desc:        "balloon pod stuck in ImagePullBackOff returns BalloonPodNotRunningError without patch",
+			targetNode:  node,
+			pod:         imagePullBackOffPod,
+			seedCache:   true,
+			wantErr:     ek_errors.BalloonPodNotRunningError.Error(),
+			expectPatch: false,
+		},
+		{
+			desc:        "balloon pod not reported by Kubelet yet returns BalloonPodNotRunningError without patch",
+			targetNode:  node,
+			pod:         notStartedPod,
+			seedCache:   true,
+			wantErr:     ek_errors.BalloonPodNotRunningError.Error(),
 			expectPatch: false,
 		},
 		{

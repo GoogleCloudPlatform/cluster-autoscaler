@@ -1582,6 +1582,13 @@ func TestBalloonPodIpprMetrics_Downsize(t *testing.T) {
 			wantDurations: ipprFallbackDurations(direction),
 		},
 		{
+			desc:          "not running pod fallback records reason pod_not_running",
+			ipprEnabled:   true,
+			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.BalloonPodNotRunningError), nil),
+			wantEvents:    ipprFallbackEvents(direction, metrics.IpprFallbackReasonPodNotRunning),
+			wantDurations: ipprFallbackDurations(direction),
+		},
+		{
 			desc:          "fallback recreation failure still records fallback event",
 			ipprEnabled:   true,
 			setupResizer:  downsizeFallbackResizer(fmt.Errorf("wrapped: %w", ek_errors.ResizeTimeoutError), errors.New("recreation failed")),

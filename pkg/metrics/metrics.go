@@ -124,6 +124,8 @@ const (
 	IpprFallbackReasonPatchError IpprFallbackReason = "patch_error"
 	// IpprFallbackReasonNoActivePod indicates no active balloon pod was found on the node.
 	IpprFallbackReasonNoActivePod IpprFallbackReason = "no_active_pod"
+	// IpprFallbackReasonPodNotRunning indicates the balloon pod's container has not started yet.
+	IpprFallbackReasonPodNotRunning IpprFallbackReason = "pod_not_running"
 	// IpprFallbackReasonIncompatibleQoS indicates the balloon pod predates the move to
 	// the Burstable QoS class, so resizing it in place would change its QoS class.
 	IpprFallbackReasonIncompatibleQoS IpprFallbackReason = "incompatible_qos"
