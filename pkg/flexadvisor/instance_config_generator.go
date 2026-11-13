@@ -163,6 +163,7 @@ func (g *instanceConfigGenerator) generateInstanceConfigs(flexibilityScopeKey st
 func (g *instanceConfigGenerator) generateInstanceConfigsForRule(rule rules.Rule, rank int) ([]*api.InstanceConfig, []error) {
 	if len(rule.NodePoolNames()) > 0 {
 		configs, errs := g.instanceConfigsForNodePools(rule, rank)
+		configs = g.expandConfigsByMinEstimatedUptime(rule, configs)
 		return configs, errs
 	}
 
@@ -429,7 +430,11 @@ func (g *instanceConfigGenerator) experimentsManager() experiments.Manager {
 }
 
 func (g *instanceConfigGenerator) expandConfigsByMinEstimatedUptime(rule rules.Rule, instanceConfigs []*api.InstanceConfig) []*api.InstanceConfig {
-	if !rule.Spot() || !experiments.IsFlexAdvisorSpotUptimeEnabled(g.experimentsManager()) {
+	if !experiments.IsFlexAdvisorSpotUptimeEnabled(g.experimentsManager()) {
+		return instanceConfigs
+	}
+
+	if !rule.Spot() && len(rule.NodePoolNames()) == 0 {
 		return instanceConfigs
 	}
 

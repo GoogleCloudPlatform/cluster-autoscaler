@@ -24,6 +24,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	container "google.golang.org/api/container/v1beta1"
@@ -3252,6 +3253,211 @@ func TestGenerateInstanceConfigs_MinEstimatedUptimeMinutes(t *testing.T) {
 			assert.Empty(t, errs)
 			if assert.NotNil(t, generated) {
 				assert.Equal(t, tc.wantConfigs, generated.Configs)
+			}
+		})
+	}
+}
+
+func TestGenerateInstanceConfigs_NodePoolsMinEstimatedSpotUptime(t *testing.T) {
+	registerOnce.Do(metrics.RegisterAll)
+
+	spotE2MIG := gke.NewTestGkeMigBuilder().
+		SetNodePoolName("spot-e2-pool").
+		SetSpec(&gkeclient.NodePoolSpec{Locations: []string{"us-west1-a"}, MachineType: "e2-standard-2", Spot: true}).
+		Build()
+	spotN2MIG := gke.NewTestGkeMigBuilder().
+		SetNodePoolName("spot-n2-pool").
+		SetSpec(&gkeclient.NodePoolSpec{Locations: []string{"us-west1-a"}, MachineType: "n2-standard-2", Spot: true}).
+		Build()
+	standardE2MIG := gke.NewTestGkeMigBuilder().
+		SetNodePoolName("standard-e2-pool").
+		SetSpec(&gkeclient.NodePoolSpec{Locations: []string{"us-west1-a"}, MachineType: "e2-standard-2", Spot: false}).
+		Build()
+
+	spotNodePoolOnlyWithUptimeCRD := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-np-only-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			PriorityDefaults: &v1.PriorityDefaults{
+				MinEstimatedSpotUptimeMinutes: ptr.To(60),
+			},
+			Priorities: []v1.Priority{
+				{Nodepools: []string{"spot-e2-pool"}},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotNodePoolOnlyUnsetCRD := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-np-only-unset-ccc"},
+		Spec: v1.ComputeClassSpec{
+			Priorities: []v1.Priority{
+				{Nodepools: []string{"spot-e2-pool"}},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	standardNodePoolOnlyWithUptimeCRD := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "standard-np-only-uptime-ccc"},
+		Spec: v1.ComputeClassSpec{
+			PriorityDefaults: &v1.PriorityDefaults{
+				MinEstimatedSpotUptimeMinutes: ptr.To(60),
+			},
+			Priorities: []v1.Priority{
+				{Nodepools: []string{"standard-e2-pool"}},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotNodePoolAndSameShapeSpotPriorityCRD := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-np-same-shape-ccc"},
+		Spec: v1.ComputeClassSpec{
+			PriorityDefaults: &v1.PriorityDefaults{
+				MinEstimatedSpotUptimeMinutes: ptr.To(60),
+			},
+			Priorities: []v1.Priority{
+				{Nodepools: []string{"spot-e2-pool"}},
+				{
+					MachineType: ptr.To("e2-standard-2"),
+					Spot:        ptr.To(true),
+					Location:    &v1.Location{Zones: []string{"us-west1-b"}},
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotNodePoolAndDistinctShapeSpotPriorityCRD := ccc.NewCccCrd(&v1.ComputeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: "spot-np-distinct-shape-ccc"},
+		Spec: v1.ComputeClassSpec{
+			PriorityDefaults: &v1.PriorityDefaults{
+				MinEstimatedSpotUptimeMinutes: ptr.To(60),
+			},
+			Priorities: []v1.Priority{
+				{Nodepools: []string{"spot-n2-pool"}},
+				{
+					MachineType: ptr.To("e2-standard-2"),
+					Spot:        ptr.To(true),
+				},
+			},
+		},
+	}, "", false, crd.TestDefaultDataProvider(), nil)
+
+	spotE2With60MinCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a"), api.WithMinEstimatedSpotUptime(60),
+	)
+	spotE2With10MinCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a"), api.WithMinEstimatedSpotUptime(10),
+	)
+	spotE2UnsetCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a"),
+	)
+	standardE2UnsetCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 1, instanceavailability.Standard, api.EmptyMaxRunDuration, set.New("us-west1-a"),
+	)
+	spotE2MergedZones60MinCfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a", "us-west1-b"), api.WithMinEstimatedSpotUptime(60),
+	)
+	spotN2With60MinRank1Cfg := api.NewInstanceConfigWithZones(
+		"n2-standard-2", "", 0, 1, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a"), api.WithMinEstimatedSpotUptime(60),
+	)
+	spotE2With60MinRank2Cfg := api.NewInstanceConfigWithZones(
+		"e2-standard-2", "", 0, 2, instanceavailability.Spot, api.EmptyMaxRunDuration, set.New("us-west1-a"), api.WithMinEstimatedSpotUptime(60),
+	)
+
+	for _, tc := range []struct {
+		name        string
+		scope       string
+		manager     experiments.Manager
+		wantConfigs map[string]*api.InstanceConfig
+	}{
+		{
+			name:    "spot_nodepool_only_uses_ccc_uptime",
+			scope:   "spot-np-only-uptime-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotE2With60MinCfg.Signature(): spotE2With60MinCfg,
+			},
+		},
+		{
+			name:    "spot_nodepool_only_unset_with_default_flag_off_stays_unset",
+			scope:   "spot-np-only-unset-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotE2UnsetCfg.Signature(): spotE2UnsetCfg,
+			},
+		},
+		{
+			name:    "spot_nodepool_only_unset_with_default_flag_on_uses_default_10m",
+			scope:   "spot-np-only-unset-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotE2With10MinCfg.Signature(): spotE2With10MinCfg,
+			},
+		},
+		{
+			name:    "standard_nodepool_only_stays_unset",
+			scope:   "standard-np-only-uptime-ccc",
+			manager: experiments.NewMockManager(experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag),
+			wantConfigs: map[string]*api.InstanceConfig{
+				standardE2UnsetCfg.Signature(): standardE2UnsetCfg,
+			},
+		},
+		{
+			name:    "spot_nodepool_and_same_shape_spot_priority_share_60m_and_union_zones",
+			scope:   "spot-np-same-shape-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotE2MergedZones60MinCfg.Signature(): spotE2MergedZones60MinCfg,
+			},
+		},
+		{
+			name:    "spot_nodepool_and_distinct_shape_spot_priority_both_get_60m",
+			scope:   "spot-np-distinct-shape-ccc",
+			manager: experiments.NewMockManager(),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotN2With60MinRank1Cfg.Signature(): spotN2With60MinRank1Cfg,
+				spotE2With60MinRank2Cfg.Signature(): spotE2With60MinRank2Cfg,
+			},
+		},
+		{
+			name:  "spot_nodepool_with_spot_uptime_disabled_stays_unset",
+			scope: "spot-np-only-uptime-ccc",
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{},
+				map[string]bool{
+					experiments.FlexAdvisorSpotUptimeEnabledFlag:             false,
+					experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: true,
+				},
+				nil,
+			),
+			wantConfigs: map[string]*api.InstanceConfig{
+				spotE2UnsetCfg.Signature(): spotE2UnsetCfg,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := newMockInstanceConfigCloudProvider(
+				[]string{"us-west1-a"},
+				[]*gke.GkeMig{spotE2MIG, spotN2MIG, standardE2MIG},
+				machinetypes.E2,
+				true,
+				nil,
+			)
+			tracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, tc.manager)
+			g := NewInstanceConfigGenerator(t.Context(), lister.NewMockCrdLister([]crd.CRD{
+				spotNodePoolOnlyWithUptimeCRD,
+				spotNodePoolOnlyUnsetCRD,
+				standardNodePoolOnlyWithUptimeCRD,
+				spotNodePoolAndSameShapeSpotPriorityCRD,
+				spotNodePoolAndDistinctShapeSpotPriorityCRD,
+			}), provider, tracker)
+			generated, errs := g.generateInstanceConfigs(tc.scope)
+			if len(errs) != 0 {
+				t.Errorf("generateInstanceConfigs(%q) errs = %v, want empty", tc.scope, errs)
+			}
+			if generated == nil {
+				t.Fatalf("generateInstanceConfigs(%q) = nil, want non-nil artifacts", tc.scope)
+			}
+			if diff := cmp.Diff(tc.wantConfigs, generated.Configs, cmp.AllowUnexported(api.InstanceConfig{})); diff != "" {
+				t.Errorf("generateInstanceConfigs(%q) configs diff (-want +got):\n%s", tc.scope, diff)
 			}
 		})
 	}
