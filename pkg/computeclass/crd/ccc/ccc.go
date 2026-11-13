@@ -352,8 +352,8 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		ruleOpts = append(ruleOpts, rules.WithTpuRule(p.Tpu.Type, p.Tpu.Count, p.Tpu.Topology))
 	}
 
-	if p.Spot != nil && *p.Spot && p.MinEstimatedUptimeMinutes != nil {
-		ruleOpts = append(ruleOpts, rules.WithMinEstimatedUptimeRule(p.MinEstimatedUptimeMinutes))
+	if p.Spot != nil && *p.Spot && ccc.Spec.PriorityDefaults != nil && ccc.Spec.PriorityDefaults.MinEstimatedSpotUptimeMinutes != nil {
+		ruleOpts = append(ruleOpts, rules.WithMinEstimatedUptimeRule(ccc.Spec.PriorityDefaults.MinEstimatedSpotUptimeMinutes))
 	}
 
 	if p.MaxRunDurationSeconds != nil {

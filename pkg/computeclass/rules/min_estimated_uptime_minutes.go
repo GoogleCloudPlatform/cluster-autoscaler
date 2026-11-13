@@ -22,20 +22,20 @@ import (
 // It is not a node group matching constraint, but exposes the setting to Flex Advisor.
 type MinEstimatedUptimeRule interface {
 	BaseRule
-	MinEstimatedUptimeMinutes() *int
+	MinEstimatedSpotUptimeMinutes() *int
 }
 
 type minEstimatedUptimeRule struct {
 	minEstimatedUptimeMinutes *int
 }
 
-// Matches returns true. MinEstimatedUptimeMinutes is not a matching constraint.
+// Matches returns true. MinEstimatedSpotUptimeMinutes is not a matching constraint.
 func (r *minEstimatedUptimeRule) Matches(nodeGroup cloudprovider.NodeGroup) bool {
 	return true
 }
 
-// MinEstimatedUptimeMinutes returns the minimum estimated uptime in minutes of the rule.
-func (r *minEstimatedUptimeRule) MinEstimatedUptimeMinutes() *int {
+// MinEstimatedSpotUptimeMinutes returns the minimum estimated Spot uptime in minutes of the rule.
+func (r *minEstimatedUptimeRule) MinEstimatedSpotUptimeMinutes() *int {
 	if r == nil {
 		return nil
 	}

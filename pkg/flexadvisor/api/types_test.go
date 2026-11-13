@@ -97,10 +97,10 @@ func TestInstanceConfig_Signature(t *testing.T) {
 		{
 			name: "spot_excludes_min_estimated_uptime",
 			config: &InstanceConfig{
-				machineType:        "e2-medium",
-				provisioningMode:   instanceavailability.Spot,
-				zones:              set.New[string]("us-central1-b"),
-				minEstimatedUptime: MinUptime1Hour,
+				machineType:            "e2-medium",
+				provisioningMode:       instanceavailability.Spot,
+				zones:                  set.New[string]("us-central1-b"),
+				minEstimatedSpotUptime: 60,
 			},
 			wantSignature: "machineType: e2-medium, provisioningMode: SPOT",
 		},
@@ -118,20 +118,23 @@ func TestInstanceConfig_SubRankAndDeepCopy(t *testing.T) {
 	defaultCfg := NewInstanceConfig("e2-standard-4", "", 0, 1, instanceavailability.Standard, EmptyMaxRunDuration)
 	assert.Equal(t, 1, defaultCfg.Rank())
 	assert.Equal(t, 0, defaultCfg.SubRank())
-	assert.Equal(t, MinUptimeUnset, defaultCfg.MinEstimatedUptime())
-	assert.False(t, defaultCfg.MinEstimatedUptime().IsSet())
+	assert.Equal(t, 0, defaultCfg.MinEstimatedUptime())
 
-	cfgWithOpts := NewInstanceConfig("e2-standard-4", "", 0, 2, instanceavailability.Spot, EmptyMaxRunDuration, WithSubRank(5), WithMinEstimatedUptime(MinUptime1Hour))
+	cfgWithOpts := NewInstanceConfig("e2-standard-4", "", 0, 2, instanceavailability.Spot, EmptyMaxRunDuration, WithSubRank(5), WithMinEstimatedSpotUptime(60))
 	assert.Equal(t, 2, cfgWithOpts.Rank())
 	assert.Equal(t, 5, cfgWithOpts.SubRank())
-	assert.Equal(t, MinUptime1Hour, cfgWithOpts.MinEstimatedUptime())
+	assert.Equal(t, 60, cfgWithOpts.MinEstimatedUptime())
 
 	copied := DeepCopyInstanceConfig(cfgWithOpts)
 	assert.Equal(t, 2, copied.Rank())
 	assert.Equal(t, 5, copied.SubRank())
-	assert.Equal(t, MinUptime1Hour, copied.MinEstimatedUptime())
+	assert.Equal(t, 60, copied.MinEstimatedUptime())
 
-	copied.SetMinEstimatedUptime(MinUptimeUnset)
-	assert.Equal(t, MinUptimeUnset, copied.MinEstimatedUptime())
-	assert.Equal(t, MinUptime1Hour, cfgWithOpts.MinEstimatedUptime())
+	copied.SetMinEstimatedUptime(0)
+	assert.Equal(t, 0, copied.MinEstimatedUptime())
+	assert.Equal(t, 60, cfgWithOpts.MinEstimatedUptime())
+
+	copied.SetMinEstimatedUptime(10)
+	assert.Equal(t, 10, copied.MinEstimatedUptime())
+	assert.Equal(t, 60, cfgWithOpts.MinEstimatedUptime())
 }

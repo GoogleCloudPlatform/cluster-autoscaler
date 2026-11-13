@@ -51,7 +51,7 @@ func TestMinEstimatedUptimeRule_MinEstimatedUptimeMinutes(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.rule.MinEstimatedUptimeMinutes())
+			assert.Equal(t, tc.expected, tc.rule.MinEstimatedSpotUptimeMinutes())
 		})
 	}
 }
@@ -62,6 +62,6 @@ func TestWithMinEstimatedUptimeRule(t *testing.T) {
 	opt := WithMinEstimatedUptimeRule(&val)
 	opt(r)
 
-	assert.NotNil(t, r.minEstimatedUptimeRule.MinEstimatedUptimeMinutes())
-	assert.Equal(t, 60, *r.minEstimatedUptimeRule.MinEstimatedUptimeMinutes())
+	assert.NotNil(t, r.minEstimatedUptimeRule.MinEstimatedSpotUptimeMinutes())
+	assert.Equal(t, 60, *r.minEstimatedUptimeRule.MinEstimatedSpotUptimeMinutes())
 }
