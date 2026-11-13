@@ -140,6 +140,7 @@ func TestNewCccCrd(t *testing.T) {
 					),
 					rules.NewRule(
 						rules.WithNodePoolsRule([]string{"np1"}),
+						rules.WithMinEstimatedUptimeRule(ptr.To(60)),
 					),
 				}),
 			),

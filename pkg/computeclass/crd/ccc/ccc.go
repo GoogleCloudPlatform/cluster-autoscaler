@@ -309,10 +309,21 @@ func (ccc *cccCrd) withPriorityScore() bool {
 	return false
 }
 
+func (ccc *cccCrd) minEstimatedSpotUptimeMinutes() *int {
+	if ccc.Spec.PriorityDefaults == nil {
+		return nil
+	}
+	return ccc.Spec.PriorityDefaults.MinEstimatedSpotUptimeMinutes
+}
+
 // buildRuleFromPriority builds Rule from CCC priority.
 func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 	if p.Nodepools != nil {
-		return rules.NewRule(rules.WithNodePoolsRule(p.Nodepools), rules.WithAllocationStrategyRule(p.AllocationStrategy))
+		return rules.NewRule(
+			rules.WithNodePoolsRule(p.Nodepools),
+			rules.WithAllocationStrategyRule(p.AllocationStrategy),
+			rules.WithMinEstimatedUptimeRule(ccc.minEstimatedSpotUptimeMinutes()),
+		)
 	}
 
 	generalPurposeFamilies := ccc.getGeneralPurposeFamilies(p.PodFamily)
@@ -352,8 +363,8 @@ func (ccc *cccCrd) buildRuleFromPriority(p v1.Priority, idx int) rules.Rule {
 		ruleOpts = append(ruleOpts, rules.WithTpuRule(p.Tpu.Type, p.Tpu.Count, p.Tpu.Topology))
 	}
 
-	if p.Spot != nil && *p.Spot && ccc.Spec.PriorityDefaults != nil && ccc.Spec.PriorityDefaults.MinEstimatedSpotUptimeMinutes != nil {
-		ruleOpts = append(ruleOpts, rules.WithMinEstimatedUptimeRule(ccc.Spec.PriorityDefaults.MinEstimatedSpotUptimeMinutes))
+	if p.Spot != nil && *p.Spot {
+		ruleOpts = append(ruleOpts, rules.WithMinEstimatedUptimeRule(ccc.minEstimatedSpotUptimeMinutes()))
 	}
 
 	if p.MaxRunDurationSeconds != nil {

@@ -215,15 +215,11 @@ func (i *InstanceConfig) MergeZones(zones set.Set[string]) {
 // CCC priority priorityScore is not part of the signature. If two CCC priorities
 // produce the same configuration, mergeNewInstanceConfigs merges them.
 // Zones are not included in the signature. Including zones makes it impossible search InstanceConfig from information gathered from a mig.
-// The signature does not include minEstimatedUptime. Node pools do not carry
-// minEstimatedUptime, so a lookup from a MIG cannot rebuild it.
+// The signature does not include minEstimatedSpotUptime. Node pools do not
+// carry minEstimatedSpotUptime, so a lookup from a MIG cannot rebuild it.
 //
-// Known limitation: mergeNewInstanceConfigs merges the configs of Spot
-// priorities that have the same signature but a different minEstimatedUptime.
-// The config of the highest-priority rule (lowest rank, then subRank, then
-// list order) wins, and the merged config gets the union of the zones. CA does
-// not support a tiered uptime fallback between Spot priorities with the same
-// signature yet.
+// All Spot configs in a ComputeClass (including Spot nodepools) share the
+// same priorityDefaults.minEstimatedSpotUptimeMinutes value.
 func (i *InstanceConfig) Signature() string {
 	builder := strings.Builder{}
 	builder.WriteString("machineType: ")
