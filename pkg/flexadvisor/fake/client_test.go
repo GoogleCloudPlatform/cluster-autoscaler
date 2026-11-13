@@ -269,16 +269,46 @@ func TestFakeFlexAdvisorClientFilters(t *testing.T) {
 			capacityGuidances: []CapacityGuidance{
 				NewGuidance(machineType).
 					WithProvisioningMode(spotMode).
-					WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min).
+					WithMinEstimatedSpotUptime(10).
 					WithCapacity(45).
 					WithScore(0.75),
 			},
 			config: flexadvisorapi.NewInstanceConfigWithZones(
 				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
-				flexadvisorapi.WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min),
+				flexadvisorapi.WithMinEstimatedSpotUptime(10),
 			),
 			expectedCapacity: 45,
 			expectedScore:    0.75,
+		},
+		{
+			name: "match_on_unset_min_estimated_uptime",
+			capacityGuidances: []CapacityGuidance{
+				NewGuidance(machineType).
+					WithProvisioningMode(spotMode).
+					WithMinEstimatedSpotUptime(0).
+					WithCapacity(42).
+					WithScore(0.72),
+			},
+			config: flexadvisorapi.NewInstanceConfigWithZones(
+				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
+			),
+			expectedCapacity: 42,
+			expectedScore:    0.72,
+		},
+		{
+			name: "match_on_wildcard_min_estimated_uptime",
+			capacityGuidances: []CapacityGuidance{
+				NewGuidance(machineType).
+					WithProvisioningMode(spotMode).
+					WithCapacity(47).
+					WithScore(0.77),
+			},
+			config: flexadvisorapi.NewInstanceConfigWithZones(
+				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
+				flexadvisorapi.WithMinEstimatedSpotUptime(10),
+			),
+			expectedCapacity: 47,
+			expectedScore:    0.77,
 		},
 		{
 			name: "match on workload policies",
@@ -356,13 +386,29 @@ func TestFakeFlexAdvisorClientFilters(t *testing.T) {
 			capacityGuidances: []CapacityGuidance{
 				NewGuidance(machineType).
 					WithProvisioningMode(spotMode).
-					WithMinEstimatedUptime(flexadvisorapi.MinUptime1Hour).
+					WithMinEstimatedSpotUptime(60).
 					WithCapacity(999).
 					WithScore(0.9),
 			},
 			config: flexadvisorapi.NewInstanceConfigWithZones(
 				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
-				flexadvisorapi.WithMinEstimatedUptime(flexadvisorapi.MinUptime10Min),
+				flexadvisorapi.WithMinEstimatedSpotUptime(10),
+			),
+			expectedCapacity: DefaultZonalCapacity,
+			expectedScore:    DefaultZonalScore,
+		},
+		{
+			name: "mismatch_on_unset_min_estimated_uptime_when_config_has_uptime",
+			capacityGuidances: []CapacityGuidance{
+				NewGuidance(machineType).
+					WithProvisioningMode(spotMode).
+					WithMinEstimatedSpotUptime(0).
+					WithCapacity(999).
+					WithScore(0.9),
+			},
+			config: flexadvisorapi.NewInstanceConfigWithZones(
+				machineType, "", 0, 0, instanceavailability.Spot, "", set.New(zoneA),
+				flexadvisorapi.WithMinEstimatedSpotUptime(10),
 			),
 			expectedCapacity: DefaultZonalCapacity,
 			expectedScore:    DefaultZonalScore,

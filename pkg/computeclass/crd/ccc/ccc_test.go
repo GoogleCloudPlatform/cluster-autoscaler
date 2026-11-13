@@ -109,17 +109,21 @@ func TestNewCccCrd(t *testing.T) {
 			),
 		},
 		{
-			name: "ccc rules with minEstimatedUptimeMinutes",
+			name: "ccc rules with minEstimatedSpotUptimeMinutes",
 			ccc: &v1.ComputeClass{
 				Spec: v1.ComputeClassSpec{
+					PriorityDefaults: &v1.PriorityDefaults{
+						MinEstimatedSpotUptimeMinutes: ptr.To(60),
+					},
 					Priorities: []v1.Priority{
 						{
-							Spot:                      proto.Bool(true),
-							MinEstimatedUptimeMinutes: ptr.To(60),
+							Spot: proto.Bool(true),
 						},
 						{
-							Spot:                      proto.Bool(false),
-							MinEstimatedUptimeMinutes: ptr.To(60),
+							Spot: proto.Bool(false),
+						},
+						{
+							Nodepools: []string{"np1"},
 						},
 					},
 				},
@@ -133,6 +137,9 @@ func TestNewCccCrd(t *testing.T) {
 					),
 					rules.NewRule(
 						rules.WithSpotRule(proto.Bool(false)),
+					),
+					rules.NewRule(
+						rules.WithNodePoolsRule([]string{"np1"}),
 					),
 				}),
 			),

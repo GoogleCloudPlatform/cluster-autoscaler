@@ -59,10 +59,11 @@ func WithSubRank(subRank int) InstanceOption {
 	}
 }
 
-// WithMinEstimatedUptime sets the minimum estimated uptime for Spot instances.
-func WithMinEstimatedUptime(minEstimatedUptime MinEstimatedUptime) InstanceOption {
+// WithMinEstimatedSpotUptime sets the minimum estimated uptime in minutes for
+// Spot instances.
+func WithMinEstimatedSpotUptime(minEstimatedUptimeInMinutes int) InstanceOption {
 	return func(instanceConfig *InstanceConfig) {
-		instanceConfig.SetMinEstimatedUptime(minEstimatedUptime)
+		instanceConfig.SetMinEstimatedUptime(minEstimatedUptimeInMinutes)
 	}
 }
 
@@ -77,7 +78,7 @@ type InstanceConfig struct {
 	subRank                 int
 	zones                   set.Set[string]
 	maxRunDurationInSeconds string
-	minEstimatedUptime      MinEstimatedUptime
+	minEstimatedSpotUptime  int
 	workloadPolicies        WorkloadPolicies
 }
 
@@ -116,7 +117,7 @@ func DeepCopyInstanceConfig(config *InstanceConfig) *InstanceConfig {
 		config.zones.Clone(),
 		WithWorkloadPolicies(config.workloadPolicies),
 		WithSubRank(config.subRank),
-		WithMinEstimatedUptime(config.minEstimatedUptime),
+		WithMinEstimatedSpotUptime(config.minEstimatedSpotUptime),
 	)
 }
 
@@ -160,9 +161,9 @@ func (i *InstanceConfig) MaxRunDurationInSeconds() string {
 	return i.maxRunDurationInSeconds
 }
 
-// MinEstimatedUptime returns the minimum estimated uptime for Spot instances.
-func (i *InstanceConfig) MinEstimatedUptime() MinEstimatedUptime {
-	return i.minEstimatedUptime
+// MinEstimatedUptime returns minimum estimated uptime
+func (i *InstanceConfig) MinEstimatedUptime() int {
+	return i.minEstimatedSpotUptime
 }
 
 // WorkloadPolicies returns the workload policies.
@@ -195,9 +196,9 @@ func (i *InstanceConfig) SetMaxRunDurationInSeconds(maxRunDurationInSeconds stri
 	i.maxRunDurationInSeconds = maxRunDurationInSeconds
 }
 
-// SetMinEstimatedUptime sets the minimum estimated uptime for Spot instances.
-func (i *InstanceConfig) SetMinEstimatedUptime(minEstimatedUptime MinEstimatedUptime) {
-	i.minEstimatedUptime = minEstimatedUptime
+// SetMinEstimatedUptime sets the minimum estimated uptime
+func (i *InstanceConfig) SetMinEstimatedUptime(minEstimatedUptime int) {
+	i.minEstimatedSpotUptime = minEstimatedUptime
 }
 
 // InsertZone adds a zone to the configuration's set of zones.

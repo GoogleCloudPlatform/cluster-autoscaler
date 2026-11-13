@@ -46,7 +46,8 @@ import (
 )
 
 const (
-	machineErrorCacheTtl = 10 * time.Minute
+	machineErrorCacheTtl     = 10 * time.Minute
+	defaultSpotUptimeMinutes = 10
 )
 
 type machineErrorCacheKey struct {
@@ -433,18 +434,14 @@ func (g *instanceConfigGenerator) expandConfigsByMinEstimatedUptime(rule rules.R
 		return instanceConfigs
 	}
 
-	minEstimatedUptime, err := api.MinEstimatedUptimeFromMinutes(rule.MinEstimatedUptimeMinutes())
-	if err != nil {
-		metrics.Metrics.RegisterFlexAdvisorGenerationError(metrics.InvalidMinEstimatedUptime)
-		return instanceConfigs
-	}
-
-	// If minEstimatedUptime is not set and default change experiment is not enabled return unchanged configs.
-	if !minEstimatedUptime.IsSet() {
+	var minEstimatedUptime int
+	if ruleUptime := rule.MinEstimatedSpotUptimeMinutes(); ruleUptime != nil {
+		minEstimatedUptime = *ruleUptime
+	} else {
 		if !experiments.IsFlexAdvisorDefaultSpotUptimeEnabled(g.experimentsManager()) {
 			return instanceConfigs
 		}
-		minEstimatedUptime = api.MinUptime10Min
+		minEstimatedUptime = defaultSpotUptimeMinutes
 	}
 
 	for _, config := range instanceConfigs {

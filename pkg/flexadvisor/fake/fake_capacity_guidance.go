@@ -31,7 +31,7 @@ type CapacityGuidance struct {
 	Rank                    *int
 	Zone                    *string
 	MaxRunDurationInSeconds *string
-	MinEstimatedUptime      *flexadvisorapi.MinEstimatedUptime
+	MinEstimatedSpotUptime  *int
 	WorkloadPolicies        *flexadvisorapi.WorkloadPolicies
 
 	// Response:
@@ -62,7 +62,7 @@ func (g CapacityGuidance) matches(realConfig *flexadvisorapi.InstanceConfig, zon
 	if g.MaxRunDurationInSeconds != nil && *g.MaxRunDurationInSeconds != realConfig.MaxRunDurationInSeconds() {
 		return false
 	}
-	if g.MinEstimatedUptime != nil && *g.MinEstimatedUptime != realConfig.MinEstimatedUptime() {
+	if g.MinEstimatedSpotUptime != nil && *g.MinEstimatedSpotUptime != realConfig.MinEstimatedUptime() {
 		return false
 	}
 	if g.WorkloadPolicies != nil && g.WorkloadPolicies.AcceleratorTopology != realConfig.WorkloadPolicies().AcceleratorTopology {
@@ -132,9 +132,10 @@ func (g CapacityGuidance) WithMaxRunDurationInSeconds(duration string) CapacityG
 	return g
 }
 
-// WithMinEstimatedUptime sets the target minimum estimated uptime filter.
-func (g CapacityGuidance) WithMinEstimatedUptime(uptime flexadvisorapi.MinEstimatedUptime) CapacityGuidance {
-	g.MinEstimatedUptime = &uptime
+// WithMinEstimatedSpotUptime sets the target minimum estimated uptime filter in
+// minutes. A value of 0 matches configs without a Spot uptime filter.
+func (g CapacityGuidance) WithMinEstimatedSpotUptime(uptimeInMinutes int) CapacityGuidance {
+	g.MinEstimatedSpotUptime = &uptimeInMinutes
 	return g
 }
 
