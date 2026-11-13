@@ -677,6 +677,8 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 		zone         string
 		nodeCount    int
 		nodePrice    float64
+		spot         bool
+		preemptible  bool
 
 		wantTotalReservations int64
 		wantTotalNodePrice    float64
@@ -770,6 +772,34 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 			wantTotalReservations: 10,
 			wantTotalNodePrice:    20.0,
 		},
+		{
+			name: "spot node group doesn't get the reservation discount",
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-A", 10),
+			},
+			machineType: "some-machine",
+			zone:        "zone-A",
+			nodeCount:   10,
+			nodePrice:   100.0,
+			spot:        true,
+
+			wantTotalReservations: 0,
+			wantTotalNodePrice:    1000.0,
+		},
+		{
+			name: "preemptible node group doesn't get the reservation discount",
+			reservations: []*reservation.Reservation{
+				reservations.BuildAvailableReservation("some-machine", "zone-A", 10),
+			},
+			machineType: "some-machine",
+			zone:        "zone-A",
+			nodeCount:   10,
+			nodePrice:   100.0,
+			preemptible: true,
+
+			wantTotalReservations: 0,
+			wantTotalNodePrice:    1000.0,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -777,7 +807,11 @@ func TestBestOption_ReservationsIncludedInTotalNodePrice(t *testing.T) {
 			node.Labels[apiv1.LabelInstanceType] = tc.machineType
 
 			nodeGroup := gke.NewTestGkeMigBuilder().
-				SetSpec(&gkeclient.NodePoolSpec{MachineType: tc.machineType}).
+				SetSpec(&gkeclient.NodePoolSpec{
+					MachineType: tc.machineType,
+					Spot:        tc.spot,
+					Preemptible: tc.preemptible,
+				}).
 				SetGceRef(gce.GceRef{Name: "ng", Zone: tc.zone}).Build()
 
 			nodeInfo := framework.NewTestNodeInfo(node)

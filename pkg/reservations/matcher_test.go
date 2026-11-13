@@ -593,6 +593,49 @@ func TestMatchingUnusedReservations(t *testing.T) {
 			allowAggregate:    true,
 			wantMatchingCount: 0,
 		},
+		{
+			name: "Spot node group with matching shape - No matching",
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation(defaultMachineType,
+					defaultZone,
+					/*availableCount=*/ 3),
+			},
+			nodeGroup: gke.NewTestGkeMigBuilder().SetGceRefZone(defaultZone).SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: defaultMachineType,
+				Spot:        true,
+			}).Build(),
+			allowAggregate:    false,
+			wantMatchingCount: 0,
+		},
+		{
+			name: "Spot node group with matching shape and Any affinity - No matching",
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation(defaultMachineType,
+					defaultZone,
+					/*availableCount=*/ 3),
+			},
+			nodeGroup: gke.NewTestGkeMigBuilder().SetGceRefZone(defaultZone).SetSpec(&gkeclient.NodePoolSpec{
+				MachineType:         defaultMachineType,
+				Spot:                true,
+				ReservationAffinity: &gke_api_beta.ReservationAffinity{ConsumeReservationType: gkeclient.ReservationAffinityAny},
+			}).Build(),
+			allowAggregate:    false,
+			wantMatchingCount: 0,
+		},
+		{
+			name: "Preemptible node group with matching shape - No matching",
+			reservations: []*reservation.Reservation{
+				BuildAvailableReservation(defaultMachineType,
+					defaultZone,
+					/*availableCount=*/ 3),
+			},
+			nodeGroup: gke.NewTestGkeMigBuilder().SetGceRefZone(defaultZone).SetSpec(&gkeclient.NodePoolSpec{
+				MachineType: defaultMachineType,
+				Preemptible: true,
+			}).Build(),
+			allowAggregate:    false,
+			wantMatchingCount: 0,
+		},
 	}
 
 	for _, tc := range testCases {

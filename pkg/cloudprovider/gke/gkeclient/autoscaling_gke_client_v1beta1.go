@@ -247,6 +247,7 @@ func (m *autoscalingGkeClientV1beta1) GetCluster() (Cluster, error) {
 				ExtendedDurationPods:          getExtendedDurationPods(pool),
 				MinCpuPlatform:                pool.Config.MinCpuPlatform,
 				ReservationAffinity:           pool.Config.ReservationAffinity,
+				Preemptible:                   pool.Config.Preemptible,
 				Spot:                          pool.Config.Spot,
 				FlexStart:                     pool.Config.FlexStart,
 				MaxRunDurationInSeconds:       getMaxRunDurationInSeconds(pool),

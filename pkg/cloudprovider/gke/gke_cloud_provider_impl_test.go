@@ -3276,6 +3276,8 @@ func TestIsReservationCompatible(t *testing.T) {
 		reservationName        string
 		specificReservationReq bool
 		nilAffinity            bool
+		spot                   bool
+		preemptible            bool
 		want                   bool
 	}{
 		{
@@ -3380,12 +3382,56 @@ func TestIsReservationCompatible(t *testing.T) {
 			nilAffinity:            true,
 			want:                   true,
 		},
+		{
+			name:                   "Spot, Nil affinity, Specific reservation not required",
+			reservationName:        "res-1",
+			specificReservationReq: false,
+			nilAffinity:            true,
+			spot:                   true,
+			want:                   false,
+		},
+		{
+			name:                   "Spot, Any affinity, Specific reservation not required",
+			affinityType:           gkeclient.ReservationAffinityAny,
+			reservationName:        "res-1",
+			specificReservationReq: false,
+			spot:                   true,
+			want:                   false,
+		},
+		{
+			name:                   "Spot, Specific affinity with matching name",
+			affinityType:           gkeclient.ReservationAffinitySpecific,
+			affinityName:           "res-1",
+			reservationName:        "res-1",
+			specificReservationReq: true,
+			spot:                   true,
+			want:                   false,
+		},
+		{
+			name:                   "Preemptible, Nil affinity, Specific reservation not required",
+			reservationName:        "res-1",
+			specificReservationReq: false,
+			nilAffinity:            true,
+			preemptible:            true,
+			want:                   false,
+		},
+		{
+			name:                   "Preemptible, Any affinity, Specific reservation not required",
+			affinityType:           gkeclient.ReservationAffinityAny,
+			reservationName:        "res-1",
+			specificReservationReq: false,
+			preemptible:            true,
+			want:                   false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mig := &GkeMig{
-				spec: &gkeclient.NodePoolSpec{},
+				spec: &gkeclient.NodePoolSpec{
+					Spot:        tt.spot,
+					Preemptible: tt.preemptible,
+				},
 			}
 			if !tt.nilAffinity {
 				mig.spec.ReservationAffinity = &gke_api_beta.ReservationAffinity{

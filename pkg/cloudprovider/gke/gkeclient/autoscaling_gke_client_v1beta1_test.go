@@ -6575,3 +6575,52 @@ func TestGetCluster_AutopilotManaged(t *testing.T) {
 		})
 	}
 }
+
+func TestGetCluster_Preemption(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		nodeConfig      string
+		wantSpot        bool
+		wantPreemptible bool
+	}{
+		{
+			name:       "on-demand node pool",
+			nodeConfig: `{}`,
+		},
+		{
+			name:       "spot node pool",
+			nodeConfig: `{"spot": true}`,
+			wantSpot:   true,
+		},
+		{
+			name:            "preemptible node pool",
+			nodeConfig:      `{"preemptible": true}`,
+			wantPreemptible: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := test_util.NewHttpServerMock()
+			defer server.Close()
+
+			apiClusterResponse := fmt.Sprintf(`{
+			  "createTime": "2017-10-24T12:20:00+00:00",
+			  "nodePools": [
+				{
+				  "name": "pool-1",
+				  "config": %s,
+				  "status": "RUNNING"
+				}
+			  ]
+			}`, tc.nodeConfig)
+			server.On("handle", "/v1beta1/projects/project1/locations/us-central1-b/clusters/cluster-1").Return(apiClusterResponse).Once()
+			client := newTestAutoscalingGkeClientV1beta1(t, "project1", "us-central1-b", "cluster-1", server.URL)
+
+			cluster, err := client.GetCluster()
+			assert.NoError(t, err)
+			if assert.Equal(t, 1, len(cluster.NodePools)) {
+				assert.Equal(t, tc.wantSpot, cluster.NodePools[0].Spec.Spot)
+				assert.Equal(t, tc.wantPreemptible, cluster.NodePools[0].Spec.Preemptible)
+			}
+		})
+	}
+}
