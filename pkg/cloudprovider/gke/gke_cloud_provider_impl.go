@@ -2339,6 +2339,11 @@ func (mig *GkeMig) ShallowCopyInZone(z string) *GkeMig {
 
 // IsReservationCompatible checks if given reservation is compatible with the created MIG.
 func (mig *GkeMig) IsReservationCompatible(rsv *reservation.Reservation) (bool, string) {
+	// Spot and preemptible VMs can't consume reservations, regardless of the reservation affinity.
+	if mig.Spec().Spot || mig.Spec().Preemptible {
+		return false, fmt.Sprintf("spot and preemptible VMs can't consume reservations, mig spot=%t, mig preemptible=%t", mig.Spec().Spot, mig.Spec().Preemptible)
+	}
+
 	migReservationAffinity := mig.Spec().ReservationAffinity
 	migReservationAffinityType := gkeclient.ReservationAffinityAny
 	migReservationAffinityName := ""

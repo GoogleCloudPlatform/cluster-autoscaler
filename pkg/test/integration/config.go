@@ -1215,6 +1215,20 @@ func (b NodePoolBuilder) WithSpot() NodePoolBuilder {
 	return b
 }
 
+// WithPreemptible configures the node pool to use legacy preemptible VMs.
+func (b NodePoolBuilder) WithPreemptible() NodePoolBuilder {
+	if b.NodePool.Config == nil {
+		b.NodePool.Config = &gke_api_beta.NodeConfig{}
+	}
+	b.NodePool.Config.Preemptible = true
+	if b.NodePool.Config.Labels == nil {
+		b.NodePool.Config.Labels = make(map[string]string)
+	}
+	b.NodePool.Config.Labels[gkelabels.ProvisioningLabel] = gkelabels.PreemptibleProvisioningValue
+	b.NodePool.Config.Labels[gkelabels.PreemptibleLabel] = gkelabels.PreemptionValue
+	return b
+}
+
 // WithOptions applies functional options to the node pool builder.
 func (b NodePoolBuilder) WithOptions(opts ...Option[*gke_api_beta.NodePool]) NodePoolBuilder {
 	Apply(b.NodePool, opts...)
