@@ -207,6 +207,17 @@ var DurationBuckets1sTo24h = []float64{
 	1800, 3600, 7200, 14400, 28800, 86400,
 }
 
+// ReactionTimeBucketsMs provides explicit millisecond buckets for
+// reaction_time_milliseconds from 0ms to 60m (MaxReactionTime), with exact
+// boundaries at SLO thresholds (150s, 180s, 225s, 300s) and the 60m timeout.
+var ReactionTimeBucketsMs = []float64{
+	0, 1e3, 2e3, 3e3, 5e3, 7.5e3, 10e3, // 0s-10s
+	15e3, 20e3, 30e3, 45e3, 60e3, 75e3, 90e3, // 15s-90s
+	105e3, 120e3, 135e3, 150e3, 165e3, 180e3, 210e3, 225e3, 240e3, 270e3, 300e3, // 105s-300s
+	360e3, 420e3, 480e3, 600e3, 900e3, // 6m-15m
+	1200e3, 1800e3, 2400e3, 3000e3, 3600e3, // 20m-60m
+}
+
 // String returns the string representation of a ReactionType for logging and metrics.
 func (rt ReactionType) String() string {
 	if s, ok := reactionTypeToString[rt]; ok {
@@ -344,7 +355,7 @@ var (
 			Namespace: caNamespace,
 			Name:      "reaction_time_milliseconds",
 			Help:      "How long it takes for CA to react for a new pod.",
-			Buckets:   k8smetrics.ExponentialBucketsRange(1, float64(MaxReactionTime.Milliseconds()), 50),
+			Buckets:   ReactionTimeBucketsMs,
 		},
 		[]string{"system_pod", "has_pvc", "has_csi", "reaction_type", "fake_pod_type", "capacity_buffer_provisioning_strategy", "device_allocation_mode"},
 	)
