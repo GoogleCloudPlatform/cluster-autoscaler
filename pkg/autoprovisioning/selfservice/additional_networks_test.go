@@ -399,3 +399,273 @@ func TestAdditionalNetworks(t *testing.T) {
 		assert.Equal(t, map[string]string{"foo": "bar"}, labels)
 	})
 }
+
+func TestAdditionalNetworksToNodepoolRepeatedNetwork(t *testing.T) {
+	testCases := []struct {
+		name             string
+		networks         []v1.AdditionalNetwork
+		existing         []*container.AdditionalNodeNetworkConfig
+		wantNodeNetworks []*container.AdditionalNodeNetworkConfig
+		wantPodNetworks  []*container.AdditionalPodNetworkConfig
+	}{
+		{
+			name:     "identical entries are all kept",
+			networks: identicalRDMANetworks(),
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("frontend-net", "frontend-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub"),
+			},
+		},
+		{
+			name:     "one network with a subnet per interface",
+			networks: subnetPerRDMANetworks(),
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("gvnic-net", "gvnic-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub-0"),
+				testNodeNetwork("rdma-net", "rdma-sub-1"),
+				testNodeNetwork("rdma-net", "rdma-sub-2"),
+				testNodeNetwork("rdma-net", "rdma-sub-3"),
+			},
+		},
+		{
+			name:     "repeated network replaces existing interfaces in order",
+			networks: subnetPerRDMANetworks(),
+			existing: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("gvnic-net", "gvnic-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub-0"),
+				testNodeNetwork("rdma-net", "rdma-sub-1"),
+				testNodeNetwork("rdma-net", "rdma-sub-2"),
+				testNodeNetwork("rdma-net", "rdma-sub-3"),
+			},
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("gvnic-net", "gvnic-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub-0"),
+				testNodeNetwork("rdma-net", "rdma-sub-1"),
+				testNodeNetwork("rdma-net", "rdma-sub-2"),
+				testNodeNetwork("rdma-net", "rdma-sub-3"),
+			},
+		},
+		{
+			name: "repeated network replaces the existing interface and appends the rest",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("rdma-net", "rdma-sub-0", ""),
+				testAdditionalNetwork("rdma-net", "rdma-sub-1", ""),
+			},
+			existing: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("other-net", "other-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub-9"),
+			},
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("other-net", "other-sub"),
+				testNodeNetwork("rdma-net", "rdma-sub-0"),
+				testNodeNetwork("rdma-net", "rdma-sub-1"),
+			},
+		},
+		{
+			name: "existing interfaces with full resource paths are matched in order",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("rdma-net", "rdma-sub-0", ""),
+				testAdditionalNetwork("rdma-net", "rdma-sub-1", ""),
+			},
+			existing: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("projects/p/global/networks/rdma-net", "rdma-sub-8"),
+				testNodeNetwork("projects/p/global/networks/rdma-net", "rdma-sub-9"),
+			},
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("rdma-net", "rdma-sub-0"),
+				testNodeNetwork("rdma-net", "rdma-sub-1"),
+			},
+		},
+		{
+			name: "repeated network with a pod range keeps one pod config per subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+			},
+			wantNodeNetworks: []*container.AdditionalNodeNetworkConfig{
+				testNodeNetwork("net-1", "subnet-1"),
+				testNodeNetwork("net-1", "subnet-1"),
+			},
+			wantPodNetworks: []*container.AdditionalPodNetworkConfig{
+				testPodNetwork("subnet-1", "pod-range-1"),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAdditionalNetworks()
+			metadata := f.FromCccSpec(v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{AdditionalNetworks: tc.networks},
+			})
+			np := &container.NodePool{
+				NetworkConfig: &container.NodeNetworkConfig{AdditionalNodeNetworkConfigs: tc.existing},
+			}
+
+			f.ToNodepool(np, metadata)
+
+			assert.Equal(t, tc.wantNodeNetworks, np.NetworkConfig.AdditionalNodeNetworkConfigs)
+			assert.Equal(t, tc.wantPodNetworks, np.NetworkConfig.AdditionalPodNetworkConfigs)
+		})
+	}
+}
+
+func TestAdditionalNetworksRepeatedNetworkRoundTrip(t *testing.T) {
+	testCases := []struct {
+		name     string
+		networks []v1.AdditionalNetwork
+	}{
+		{
+			name:     "identical entries",
+			networks: identicalRDMANetworks(),
+		},
+		{
+			name:     "one network with a subnet per interface",
+			networks: subnetPerRDMANetworks(),
+		},
+		{
+			name: "repeated network with a pod range",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+			},
+		},
+		{
+			name: "pod range set only on the first entry of a subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", ""),
+			},
+		},
+		{
+			name: "pod range set only on a later entry of a subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", ""),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+			},
+		},
+		{
+			name: "different pod ranges on one subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-2"),
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAdditionalNetworks()
+			want := f.FromCccSpec(v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{AdditionalNetworks: tc.networks},
+			})
+			np := &container.NodePool{}
+
+			f.ToNodepool(np, want)
+
+			assert.Equal(t, want, f.FromNodepool(np))
+		})
+	}
+}
+
+// TestAdditionalNetworksFromCccSpecPodRangePerSubnet checks that entries on
+// one subnet get the same pod range, the first one set for that subnet.
+func TestAdditionalNetworksFromCccSpecPodRangePerSubnet(t *testing.T) {
+	testCases := []struct {
+		name     string
+		networks []v1.AdditionalNetwork
+		want     string
+	}{
+		{
+			name: "pod range set only on the first entry of a subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", ""),
+			},
+			want: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"}]`,
+		},
+		{
+			name: "pod range set only on a later entry of a subnet",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", ""),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+			},
+			want: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"}]`,
+		},
+		{
+			name: "different pod ranges on one subnet use the first one",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-2"),
+			},
+			want: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"}]`,
+		},
+		{
+			name: "different subnets keep their own pod ranges",
+			networks: []v1.AdditionalNetwork{
+				testAdditionalNetwork("net-1", "subnet-1", "pod-range-1"),
+				testAdditionalNetwork("net-1", "subnet-2", "pod-range-2"),
+				testAdditionalNetwork("net-1", "subnet-3", ""),
+			},
+			want: `[{"network":"net-1","subnetwork":"subnet-1","podRange":"pod-range-1"},{"network":"net-1","subnetwork":"subnet-2","podRange":"pod-range-2"},{"network":"net-1","subnetwork":"subnet-3"}]`,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAdditionalNetworks()
+
+			got := f.FromCccSpec(v1.ComputeClassSpec{
+				NetworkConfig: &v1.NetworkConfig{AdditionalNetworks: tc.networks},
+			})
+
+			assert.Equal(t, Metadata{additionalNetworksKey: tc.want}, got)
+		})
+	}
+}
+
+func testAdditionalNetwork(network, subnet, podRange string) v1.AdditionalNetwork {
+	return v1.AdditionalNetwork{
+		Name:             network,
+		SubnetPriorities: []v1.SubnetPriority{{Name: subnet, PodRange: podRange}},
+	}
+}
+
+func testNodeNetwork(network, subnet string) *container.AdditionalNodeNetworkConfig {
+	return &container.AdditionalNodeNetworkConfig{Network: network, Subnetwork: subnet}
+}
+
+func testPodNetwork(subnet, podRange string) *container.AdditionalPodNetworkConfig {
+	return &container.AdditionalPodNetworkConfig{
+		Subnetwork:        subnet,
+		SecondaryPodRange: podRange,
+		MaxPodsPerNode: &container.MaxPodsConstraint{
+			MaxPodsPerNode: netutil.DefaultAdditionalMultiNetworkConfigMaxPodsPerNode,
+		},
+	}
+}
+
+func identicalRDMANetworks() []v1.AdditionalNetwork {
+	networks := []v1.AdditionalNetwork{testAdditionalNetwork("frontend-net", "frontend-sub", "")}
+	for range 8 {
+		networks = append(networks, testAdditionalNetwork("rdma-net", "rdma-sub", ""))
+	}
+	return networks
+}
+
+func subnetPerRDMANetworks() []v1.AdditionalNetwork {
+	return []v1.AdditionalNetwork{
+		testAdditionalNetwork("gvnic-net", "gvnic-sub", ""),
+		testAdditionalNetwork("rdma-net", "rdma-sub-0", ""),
+		testAdditionalNetwork("rdma-net", "rdma-sub-1", ""),
+		testAdditionalNetwork("rdma-net", "rdma-sub-2", ""),
+		testAdditionalNetwork("rdma-net", "rdma-sub-3", ""),
+	}
+}

@@ -51,6 +51,21 @@ func normalizeResourceName(name string) string {
 	return name
 }
 
+// nthNodeNetworkIndex returns the index of the n-th (zero-based) config in
+// cfgs that is attached to the given network, or -1 if there are fewer.
+func nthNodeNetworkIndex(cfgs []*container.AdditionalNodeNetworkConfig, network string, n int) int {
+	for i, cfg := range cfgs {
+		if cfg == nil || normalizeResourceName(cfg.Network) != network {
+			continue
+		}
+		if n == 0 {
+			return i
+		}
+		n--
+	}
+	return -1
+}
+
 func (f *additionalNetworks) FromNodepool(np *container.NodePool) Metadata {
 	if np == nil || np.NetworkConfig == nil || len(np.NetworkConfig.AdditionalNodeNetworkConfigs) == 0 {
 		return nil
@@ -117,6 +132,7 @@ func (f *additionalNetworks) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 	if len(entries) == 0 {
 		return nil
 	}
+	usePodRangePerSubnetwork(entries)
 
 	bytes, err := json.Marshal(entries)
 	if err != nil {
@@ -125,6 +141,24 @@ func (f *additionalNetworks) FromCccSpec(spec v1.ComputeClassSpec) Metadata {
 	}
 	return Metadata{
 		additionalNetworksKey: string(bytes),
+	}
+}
+
+// usePodRangePerSubnetwork sets the pod range of every entry to the first pod
+// range set for its subnetwork. GKE configures pod ranges per subnetwork, not
+// per interface, so FromNodepool reports one pod range for all interfaces on a
+// subnetwork. The ComputeClass CRD requires entries on one subnetwork to
+// specify the same pod range; this keeps the metadata matching the node pool
+// if they don't.
+func usePodRangePerSubnetwork(entries []additionalNetworkEntry) {
+	podRangeBySubnetwork := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		if _, found := podRangeBySubnetwork[entry.Subnetwork]; !found && entry.PodRange != "" {
+			podRangeBySubnetwork[entry.Subnetwork] = entry.PodRange
+		}
+	}
+	for i := range entries {
+		entries[i].PodRange = podRangeBySubnetwork[entries[i].Subnetwork]
 	}
 }
 
@@ -157,14 +191,19 @@ func (f *additionalNetworks) ToNodepool(np *container.NodePool, m Metadata) {
 		np.NetworkConfig = &container.NodeNetworkConfig{}
 	}
 
+	// A network can be listed more than once, with one entry per interface
+	// attached to it. The n-th entry for a network replaces the n-th interface
+	// the node pool already has on that network, so that repeated entries do
+	// not overwrite each other.
+	entriesPerNetwork := make(map[string]int, len(entries))
 	for _, entry := range entries {
 		nodeCfg := &container.AdditionalNodeNetworkConfig{
 			Network:    entry.Network,
 			Subnetwork: entry.Subnetwork,
 		}
-		if idx := slices.IndexFunc(np.NetworkConfig.AdditionalNodeNetworkConfigs, func(cfg *container.AdditionalNodeNetworkConfig) bool {
-			return cfg != nil && normalizeResourceName(cfg.Network) == entry.Network
-		}); idx != -1 {
+		n := entriesPerNetwork[entry.Network]
+		entriesPerNetwork[entry.Network]++
+		if idx := nthNodeNetworkIndex(np.NetworkConfig.AdditionalNodeNetworkConfigs, entry.Network, n); idx != -1 {
 			np.NetworkConfig.AdditionalNodeNetworkConfigs[idx] = nodeCfg
 		} else {
 			np.NetworkConfig.AdditionalNodeNetworkConfigs = append(np.NetworkConfig.AdditionalNodeNetworkConfigs, nodeCfg)
