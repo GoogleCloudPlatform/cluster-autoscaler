@@ -210,20 +210,20 @@ func TestOptionsTrackerFieldsIntegration(t *testing.T) {
 			wantRestart: true,
 		},
 		{
-			testName: "BalloonPodIpprResizeEnabled_defaults_to_enabled_when_no_experiment_is_defined",
+			testName: "BalloonPodIpprResizeEnabled_defaults_to_disabled_when_no_experiment_is_defined",
 			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
-				opts.BalloonPodIpprResizeEnabled = true
+				opts.BalloonPodIpprResizeEnabled = false
 			},
 			wantRestart: false,
 		},
 		{
-			testName: "BalloonPodIpprResizeEnabled_is_tracked_when_experiment_disables_it",
+			testName: "BalloonPodIpprResizeEnabled_is_tracked_when_MinCAVersion_enables_it",
 			setFlagValue: func(opts *internalopts.AutoscalingOptions) {
-				opts.BalloonPodIpprResizeEnabled = true
-			},
-			experimentValues: map[string]bool{experiments.BalloonPodIpprResizeFlag: false},
-			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
 				opts.BalloonPodIpprResizeEnabled = false
+			},
+			experimentValues: map[string]bool{experiments.BalloonPodIpprResizeMinCAVersionFlag: true},
+			setExpectedValue: func(opts *internalopts.AutoscalingOptions) {
+				opts.BalloonPodIpprResizeEnabled = true
 			},
 			wantRestart: false,
 		},

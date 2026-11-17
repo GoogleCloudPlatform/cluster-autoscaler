@@ -30,30 +30,47 @@ func TestBalloonPodIpprResizeEnabledFieldSetValue(t *testing.T) {
 		wantValue        bool
 	}{
 		{
-			testName:         "no experiments, expect default true",
+			testName:         "no experiments, expect default false",
 			experimentValues: nil,
-			wantValue:        true,
+			wantValue:        false,
 		},
 		{
-			testName: "experiment true, expect true",
+			testName: "MinCAVersion met, Enabled unset, expect true",
 			experimentValues: map[string]bool{
-				experiments.BalloonPodIpprResizeFlag: true,
+				experiments.BalloonPodIpprResizeMinCAVersionFlag: true,
 			},
 			wantValue: true,
 		},
 		{
-			testName: "experiment false, expect false",
+			testName: "MinCAVersion met, Enabled true, expect true",
 			experimentValues: map[string]bool{
-				experiments.BalloonPodIpprResizeFlag: false,
+				experiments.BalloonPodIpprResizeMinCAVersionFlag: true,
+				experiments.BalloonPodIpprResizeEnabledFlag:      true,
+			},
+			wantValue: true,
+		},
+		{
+			testName: "MinCAVersion met, Enabled false, expect false",
+			experimentValues: map[string]bool{
+				experiments.BalloonPodIpprResizeMinCAVersionFlag: true,
+				experiments.BalloonPodIpprResizeEnabledFlag:      false,
 			},
 			wantValue: false,
 		},
 		{
-			testName: "unrelated experiment present, expect default true",
+			testName: "MinCAVersion not met, Enabled true, expect false",
+			experimentValues: map[string]bool{
+				experiments.BalloonPodIpprResizeMinCAVersionFlag: false,
+				experiments.BalloonPodIpprResizeEnabledFlag:      true,
+			},
+			wantValue: false,
+		},
+		{
+			testName: "unrelated experiment present, expect default false",
 			experimentValues: map[string]bool{
 				"some-unrelated-experiment": true,
 			},
-			wantValue: true,
+			wantValue: false,
 		},
 	}
 

@@ -950,7 +950,8 @@ func buildBaseNode() *v1.Node {
 
 func newTestOptionsTracker(ipprEnabled bool) *tracking.OptionsTracker {
 	expManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-		experiments.BalloonPodIpprResizeFlag: ipprEnabled,
+		experiments.BalloonPodIpprResizeMinCAVersionFlag: true,
+		experiments.BalloonPodIpprResizeEnabledFlag:      ipprEnabled,
 	}, nil)
 	return tracking.NewOptionsTracker(internalopts.AutoscalingOptions{}, expManager)
 }
