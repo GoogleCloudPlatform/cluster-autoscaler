@@ -149,7 +149,7 @@ func (w *scopeWorker) run(ctx context.Context) {
 		case <-timer.C():
 			continue
 		case <-w.scope.pollingSpeedCh:
-			if !IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
+			if !IsFlexAdvisorShardBasedScheduling(w.experimentsManager) {
 				continue
 			}
 			// Potentially do faster `usualInterval * 0.5` refresh if we switched to fast polling
@@ -165,7 +165,7 @@ func (w *scopeWorker) run(ctx context.Context) {
 }
 
 func (w *scopeWorker) currentRefreshInterval() time.Duration {
-	if IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
+	if IsFlexAdvisorShardBasedScheduling(w.experimentsManager) {
 		return getRefreshIntervalForPollingSpeed(w.experimentsManager, w.scope.getPollingSpeed())
 	}
 	return getRefreshIntervalForPollingSpeed(w.experimentsManager, pollingSpeedFast)
@@ -306,7 +306,7 @@ func (w *scopeWorker) sendProvisioningDecision(ctx context.Context, decision api
 
 func newFlexibilityScope(provider instanceavailability.Provider, flexibilityScopeKey string, experimentsManager experiments.Manager, cancelFunc context.CancelFunc) *flexibilityScope {
 	speed := pollingSpeedFast
-	if IsFlexAdvisorAdaptivePollingEnabled(experimentsManager) {
+	if IsFlexAdvisorShardBasedScheduling(experimentsManager) {
 		speed = pollingSpeedSlow
 	}
 	scope := &flexibilityScope{

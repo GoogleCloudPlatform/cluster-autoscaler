@@ -340,3 +340,57 @@ func TestProcess_RegistersScopesAndEmitsMetrics(t *testing.T) {
 	provider.AssertExpectations(t)
 	mockMetrics.AssertExpectations(t)
 }
+
+func TestPodListProcessor_ResetRejectedScopes(t *testing.T) {
+	testCases := []struct {
+		name               string
+		nilProcessor       bool
+		nilMetrics         bool
+		experimentsManager experiments.Manager
+		wantReset          bool
+	}{
+		{
+			name:               "processing enabled - resets rejected scopes gauge to 0",
+			experimentsManager: experiments.NewMockManager(),
+			wantReset:          true,
+		},
+		{
+			name: "processing disabled - does not update rejected scopes gauge",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			}, nil),
+		},
+		{
+			name:               "nil receiver - does not panic",
+			nilProcessor:       true,
+			experimentsManager: experiments.NewMockManager(),
+		},
+		{
+			name:               "nil metrics - does not panic",
+			nilMetrics:         true,
+			experimentsManager: experiments.NewMockManager(),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockMetrics := &mockPodListProcessorMetrics{}
+			if tc.wantReset {
+				mockMetrics.On("UpdateFlexAdvisorRejectedScopes", 0).Return().Once()
+			}
+
+			var processor *PodListProcessor
+			if !tc.nilProcessor {
+				var metricsArg podListProcessorMetrics = mockMetrics
+				if tc.nilMetrics {
+					metricsArg = nil
+				}
+				processor = NewPodListProcessor(&instanceavailability.MockProvider{}, nil, tc.experimentsManager, withPodListProcessorMetrics(metricsArg))
+			}
+
+			processor.ResetRejectedScopes()
+
+			mockMetrics.AssertExpectations(t)
+		})
+	}
+}

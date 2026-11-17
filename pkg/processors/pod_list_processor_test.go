@@ -19,12 +19,16 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
+	"github.com/stretchr/testify/mock"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -33,15 +37,22 @@ import (
 	"k8s.io/autoscaler/cluster-autoscaler/apis/capacitybuffer/autoscaling.x-k8s.io/v1beta1"
 	"k8s.io/client-go/informers"
 	kubefake "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/component-base/metrics/legacyregistry"
+	"k8s.io/component-base/metrics/testutil"
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	npc_lister "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	cb_metrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/capacitybuffer"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podsharding"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podtopologyspread"
 	metrics_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/processors/safeguard"
@@ -50,6 +61,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/cluster-autoscaler/pkg/capacitybuffer/fakepods"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
+	"sigs.k8s.io/cluster-autoscaler/pkg/processors/callbacks"
 	cbprocessors "sigs.k8s.io/cluster-autoscaler/pkg/processors/capacitybuffer"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection"
 	podinjectionbackoff "sigs.k8s.io/cluster-autoscaler/pkg/processors/podinjection/backoff"
@@ -1082,5 +1094,206 @@ func TestScaleToZeroReceivesPodsOwnedByOtherInstances(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGkeInternalPodListProcessor_FlexAdvisorSchedulingMode(t *testing.T) {
+	pod := test.BuildTestPod("p1", 100, 1)
+	pod.Spec.NodeSelector = map[string]string{gkelabels.ComputeClassLabel: "ccc-1"}
+	crd1 := ccc.NewCccCrd(&cccv1.ComputeClass{ObjectMeta: metav1.ObjectMeta{Name: "ccc-1"}}, "", false, nil, nil)
+	mockLister := npc_lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, gkelabels.ComputeClassLabel)
+
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+		wantRegistered     bool
+		wantEarly          bool
+	}{
+		{
+			name:               "default mode (shard-based) - does not register CCC in PodListProcessor",
+			experimentsManager: experiments.NewMockManager(),
+			wantRegistered:     false,
+		},
+		{
+			name: "explicit classic mode - registers CCC before defaultPodListerProcessor",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeClassic),
+			}),
+			wantRegistered: true,
+			wantEarly:      true,
+		},
+		{
+			name: "explicit late mode - registers CCC after defaultPodListerProcessor",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeLate),
+			}),
+			wantRegistered: true,
+			wantEarly:      false,
+		},
+		{
+			name: "explicit shard-based mode - does not register CCC in PodListProcessor",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeShardBased),
+			}),
+			wantRegistered: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultProcessor := &mockDefaultPodListProcessor{}
+			provider := &instanceavailability.MockProvider{}
+			var registeredBeforeDefault bool
+			if tc.wantRegistered {
+				provider.On("RegisterFlexibilityScope", "ccc-1").Run(func(_ mock.Arguments) {
+					registeredBeforeDefault = !defaultProcessor.called
+				}).Return(nil).Once()
+			}
+
+			faPodListProcessor := flexadvisor.NewPodListProcessor(provider, mockLister, tc.experimentsManager)
+			processor := &GkeInternalPodListProcessor{
+				defaultPodListerProcessor:   defaultProcessor,
+				flexAdvisorPodListProcessor: faPodListProcessor,
+				podStatusAggregator:         metrics_processors.NewPodStatusAggregator(),
+				experimentsManager:          tc.experimentsManager,
+			}
+
+			_, err := processor.Process(t.Context(), &ca_context.AutoscalingContext{}, []*v1.Pod{pod})
+			if err != nil {
+				t.Fatalf("processor.Process() unexpected error: %v", err)
+			}
+			provider.AssertExpectations(t)
+			if tc.wantRegistered && registeredBeforeDefault != tc.wantEarly {
+				t.Errorf("processor.Process() registered scope before defaultPodListerProcessor = %v, want %v", registeredBeforeDefault, tc.wantEarly)
+			}
+		})
+	}
+}
+
+var registerFlexAdvisorMetricsOnce sync.Once
+
+type passthroughPodShardFilter struct{}
+
+func (passthroughPodShardFilter) FilterPods(_ *ca_context.AutoscalingContext, _ *podsharding.PodShard, _ []*podsharding.PodShard, pods []*v1.Pod) (podsharding.PodFilteringResult, error) {
+	return podsharding.PodFilteringResult{Pods: pods}, nil
+}
+
+func TestGkeInternalPodListProcessor_FlexAdvisorRejectedScopesReset(t *testing.T) {
+	registerFlexAdvisorMetricsOnce.Do(metrics.RegisterAll)
+	t.Cleanup(func() {
+		metrics.Metrics.UpdateFlexAdvisorRejectedScopes(0)
+	})
+
+	pod := test.BuildTestPod("p1", 100, 1)
+	pod.Spec.NodeSelector = map[string]string{gkelabels.ComputeClassLabel: "ccc-1"}
+	crd1 := ccc.NewCccCrd(&cccv1.ComputeClass{ObjectMeta: metav1.ObjectMeta{Name: "ccc-1"}}, "", false, nil, nil)
+	mockLister := npc_lister.NewMockCrdListerWithLabel([]crd.CRD{crd1}, gkelabels.ComputeClassLabel)
+
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+		inputPods          []*v1.Pod
+		withSharding       bool
+		defragDropsAllPods bool
+		wantRejected       int
+	}{
+		{
+			name:               "shard-based mode with 0 unschedulable pods - resets gauge to 0",
+			experimentsManager: experiments.NewMockManager(),
+			withSharding:       true,
+			wantRejected:       0,
+		},
+		{
+			name:               "shard-based mode when defrag drains all unschedulable pods - resets gauge to 0",
+			experimentsManager: experiments.NewMockManager(),
+			inputPods:          []*v1.Pod{pod},
+			withSharding:       true,
+			defragDropsAllPods: true,
+			wantRejected:       0,
+		},
+		{
+			name:               "shard-based mode with nil podShardingProcessor - resets gauge to 0",
+			experimentsManager: experiments.NewMockManager(),
+			inputPods:          []*v1.Pod{pod},
+			withSharding:       false,
+			wantRejected:       0,
+		},
+		{
+			name:               "shard-based mode with non-empty pods reaching sharding - defers gauge update to ShardProcessor",
+			experimentsManager: experiments.NewMockManager(),
+			inputPods:          []*v1.Pod{pod},
+			withSharding:       true,
+			wantRejected:       2,
+		},
+		{
+			name: "shard-based mode with FlexAdvisorProcessing disabled and 0 pods - leaves gauge untouched",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeShardBased),
+			}),
+			withSharding: true,
+			wantRejected: 2,
+		},
+		{
+			name: "classic mode with 0 pods - resets gauge to 0 via PodListProcessor",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeClassic),
+			}),
+			withSharding: true,
+			wantRejected: 0,
+		},
+		{
+			name: "late mode with 0 pods - resets gauge to 0 via PodListProcessor",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(flexadvisor.SchedulingModeLate),
+			}),
+			withSharding: true,
+			wantRejected: 0,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics.Metrics.UpdateFlexAdvisorRejectedScopes(2)
+
+			var shardingProcessor *podsharding.PodShardingProcessor
+			if tc.withSharding {
+				sharder := podsharding.NewCompositePodSharder(nil, false, tc.experimentsManager)
+				shardingProcessor = podsharding.NewPodShardingProcessor(sharder, podsharding.NewLruPodShardSelector(nil), passthroughPodShardFilter{})
+			}
+			var defragProcessor DefragProcessor
+			if tc.defragDropsAllPods {
+				defragProcessor = &mockDefragProcessor{
+					pickedCandidate: true,
+					podsToReturn:    []*v1.Pod{},
+				}
+			}
+
+			processor := &GkeInternalPodListProcessor{
+				defaultPodListerProcessor:   &mockDefaultPodListProcessor{},
+				defragProcessor:             defragProcessor,
+				podShardingProcessor:        shardingProcessor,
+				flexAdvisorPodListProcessor: flexadvisor.NewPodListProcessor(&instanceavailability.MockProvider{}, mockLister, tc.experimentsManager),
+				podStatusAggregator:         metrics_processors.NewPodStatusAggregator(),
+				experimentsManager:          tc.experimentsManager,
+			}
+
+			autoscalingCtx := &ca_context.AutoscalingContext{
+				ProcessorCallbacks: callbacks.NewTestProcessorCallbacks(),
+			}
+			if _, err := processor.Process(t.Context(), autoscalingCtx, tc.inputPods); err != nil {
+				t.Fatalf("processor.Process(ctx, autoscalingCtx, pods=%d) unexpected error: %v", len(tc.inputPods), err)
+			}
+
+			wantMetric := fmt.Sprintf(`
+# HELP cluster_autoscaler_flexadvisor_rejected_scopes [ALPHA] Number of Flex Advisor scopes rejected in the current loop due to throttling.
+# TYPE cluster_autoscaler_flexadvisor_rejected_scopes gauge
+cluster_autoscaler_flexadvisor_rejected_scopes %d
+`, tc.wantRejected)
+			if err := testutil.GatherAndCompare(legacyregistry.DefaultGatherer, strings.NewReader(wantMetric), "cluster_autoscaler_flexadvisor_rejected_scopes"); err != nil {
+				t.Errorf("processor.Process(ctx, autoscalingCtx, pods=%d) metric mismatch: %v", len(tc.inputPods), err)
+			}
+		})
 	}
 }

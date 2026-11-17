@@ -53,12 +53,12 @@ type Provider interface {
 	// IncrementFlexAdvisorCacheQueryCount attaches additional debugging info, emits the metric
 	IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, flexibilityScopeKey string, instanceConfigKey string)
 	// ActivateFastPolling switches an existing flexibility scope to fast
-	// background polling (when adaptive polling is enabled) and extends its
-	// keep-alive to the active keep-alive TTL. No-op if the scope is not registered.
+	// background polling and extends its keep-alive to the active keep-alive TTL in
+	// shard-based scheduling mode. No-op if the scope is not registered.
 	ActivateFastPolling(flexibilityScopeKey string)
 	// DeactivateFastPolling switches an existing flexibility scope to slow
-	// background polling when adaptive polling is enabled. No-op if the scope is
-	// not registered.
+	// background polling and sets its keep-alive to the post-scale-up cooldown TTL in
+	// shard-based scheduling mode. No-op if the scope is not registered.
 	DeactivateFastPolling(flexibilityScopeKey string)
 }
 

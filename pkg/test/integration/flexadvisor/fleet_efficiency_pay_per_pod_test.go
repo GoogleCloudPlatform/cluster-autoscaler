@@ -533,6 +533,118 @@ func TestFleetEfficiency_PayPerPod_ConcurrentMixedArchAutopilotWorkloads(t *test
 	})
 }
 
+// TestFleetEfficiency_PayPerPod_ShardBasedScheduling verifies that when
+// FlexAdvisor::SchedulingMode is set to shard-based (where PodListProcessor is
+// skipped before sharding), Autopilot Pay-Per-Pod workloads are tagged on
+// PodShard.HasPayPerPodWorkloads, registered in
+// ShardProcessor.ProcessIncomingShards, awaited via the shared
+// BinpackerExpanderAwaitBudget in FleetEfficiencyFilter across initial fetch
+// latency without prior cache priming, and scaled up with the fleet-efficiency
+// allocation strategy, while VM-billed Autopilot workloads do not register any
+// Pay-Per-Pod scope.
+func TestFleetEfficiency_PayPerPod_ShardBasedScheduling(t *testing.T) {
+	testCases := []struct {
+		name                       string
+		podOptions                 []func(*apiv1.Pod)
+		guidances                  []fake.CapacityGuidance
+		binpackerBlockDisabled     bool
+		primeCache                 bool
+		expectedMachineType        string
+		expectedFlexAdvisorQueried bool
+		expectedSource             metrics.AllocationStrategySource
+	}{
+		{
+			name: "default x86 Autopilot workload in shard-based mode - registers general-purpose, awaits initial fetch in FE expander, and selects highest scored machine type",
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(lowPreferenceScore),
+				fake.NewGuidance("e2-standard-8").WithScore(highPreferenceScore),
+			},
+			expectedMachineType:        "e2-standard-8",
+			expectedFlexAdvisorQueried: true,
+			expectedSource:             metrics.AllocationStrategySourceAutopilotWorkload,
+		},
+		{
+			name: "default ARM Autopilot workload in shard-based mode - registers unified general-purpose scope, awaits initial fetch in FE expander, and selects highest scored machine type",
+			podOptions: []func(*apiv1.Pod){
+				pod.WithNodeSelectorEntry(apiv1.LabelArchStable, "arm64"),
+				withTolerationForTaintKey(apiv1.LabelArchStable),
+				withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("c4a-standard-4").WithScore(lowPreferenceScore),
+				fake.NewGuidance("c4a-standard-8").WithScore(highPreferenceScore),
+			},
+			expectedMachineType:        "c4a-standard-8",
+			expectedFlexAdvisorQueried: true,
+			expectedSource:             metrics.AllocationStrategySourceAutopilotWorkload,
+		},
+		{
+			name:                   "default x86 Autopilot workload in shard-based mode with BinpackerBlock disabled and cache primed - registers general-purpose in ShardProcessor and selects highest scored machine type",
+			binpackerBlockDisabled: true,
+			primeCache:             true,
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(lowPreferenceScore),
+				fake.NewGuidance("e2-standard-8").WithScore(highPreferenceScore),
+			},
+			expectedMachineType:        "e2-standard-8",
+			expectedFlexAdvisorQueried: true,
+			expectedSource:             metrics.AllocationStrategySourceAutopilotWorkload,
+		},
+		{
+			name: "VM-billed workload pinning machine family in shard-based mode - does not register Pay-Per-Pod scope and selects lowest cost",
+			podOptions: []func(*apiv1.Pod){
+				pod.WithNodeSelectorEntry(gkelabels.MachineFamilyLabel, "n2"),
+				withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("n2-standard-4").WithScore(lowPreferenceScore),
+				fake.NewGuidance("n2-standard-8").WithScore(highPreferenceScore),
+			},
+			expectedMachineType:        "n2-standard-4",
+			expectedFlexAdvisorQueried: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			boolFlags, stringFlags := payPerPodExperimentFlags(payPerPodExperimentEnabled)
+			boolFlags[experiments.FlexAdvisorBinpackerBlockEnabledFlag] = !tc.binpackerBlockDisabled
+			stringFlags[experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag] = "0.0.0"
+			stringFlags[experiments.FlexAdvisorSchedulingModeFlag] = "shard-based"
+			testConfig := newPayPerPodTestConfig(true, payPerPodExperimentEnabled).
+				WithExperimentOverrides(boolFlags, stringFlags)
+
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				infra := integration.SetupInfrastructure(ctx, t)
+				infra.Fakes.FlexAdvisorClient.SetResponseLatency(500 * time.Millisecond)
+				infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(tc.guidances...)
+
+				autoscaler := integration.MustSetupAutoscaler(ctx, t, testConfig, infra)
+				defer integration_synctest.TearDown(cancel)
+
+				if tc.primeCache {
+					PrimeFlexAdvisorCacheForPod(ctx, t, autoscaler, infra, tc.podOptions...)
+					time.Sleep(time.Second)
+					synctest.Wait()
+					assert.Greater(t, infra.Fakes.FlexAdvisorClient.GetFetchCapacityCalls(), 0, "Expected ShardProcessor.ProcessIncomingShards to register and fetch scope during cache priming")
+				}
+				metrics.ResetAllForTest()
+
+				machineType := runPayPerPodScaleUp(ctx, t, autoscaler, infra, buildPayPerPodTestPod(tc.podOptions...))
+				assert.Equal(t, tc.expectedMachineType, machineType)
+				if tc.expectedFlexAdvisorQueried {
+					assert.Greater(t, infra.Fakes.FlexAdvisorClient.GetFetchCapacityCalls(), 0, "Expected the workload to be registered in Flex Advisor")
+					assertAllocationStrategyMetrics(t, string(v1.AllocationStrategyFleetEfficiency), metrics.AllocationStrategyFallbackNone, tc.expectedSource, tc.expectedMachineType)
+				} else {
+					assert.Equal(t, 0, infra.Fakes.FlexAdvisorClient.GetFetchCapacityCalls(), "Expected the workload not to be registered in Flex Advisor")
+					assertNoAllocationStrategyMetrics(t, tc.expectedMachineType)
+				}
+			})
+		})
+	}
+}
+
 // TestFleetEfficiency_PayPerPod_PodFamilyComputeClass verifies that on Standard clusters pods matching a
 // general-purpose or general-purpose-arm podFamily priority rule of a Custom Compute Class (pre-installed,
 // custom or default) are scaled up with the fleet-efficiency allocation strategy, unless the rule explicitly

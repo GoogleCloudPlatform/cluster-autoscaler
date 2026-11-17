@@ -27,6 +27,7 @@ import (
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/gkeclient"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor/api"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podsharding"
 	"k8s.io/utils/ptr"
 )
 
@@ -2202,6 +2204,14 @@ func TestFlexAdvisor_BumpScopeTtl_AndReadMethodsDoNotUpdateKeepAlive(t *testing.
 			wantActiveFor:   10 * time.Minute,
 		},
 		{
+			name: "bumpScopeTtl with cooldownScopeTtl on existing scope - keep-alive set to 5m",
+			action: func(t *testing.T, f *flexAdvisor) {
+				assert.NotNil(t, f.bumpScopeTtl("scope-1", f.cooldownScopeTtl()))
+			},
+			wantScopeExists: true,
+			wantActiveFor:   5 * time.Minute,
+		},
+		{
 			name: "BumpScopeTtl on non-existent scope - returns error without registering scope",
 			action: func(t *testing.T, f *flexAdvisor) {
 				err := f.BumpScopeTtl("non-existent-scope")
@@ -2347,6 +2357,508 @@ func TestFlexAdvisor_UnifiedGetAndAwaitWithTimeout(t *testing.T) {
 				} else {
 					assert.NoError(t, callErr)
 					assert.Equal(t, tc.wantSnapshotOk, snap != nil)
+				}
+			})
+		})
+	}
+}
+
+func TestGetFlexAdvisorSchedulingMode(t *testing.T) {
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+		want               SchedulingMode
+	}{
+		{
+			name:               "nil manager - defaults to shard-based",
+			experimentsManager: nil,
+			want:               SchedulingModeShardBased,
+		},
+		{
+			name:               "unset flag - defaults to shard-based",
+			experimentsManager: experiments.NewMockManager(),
+			want:               SchedulingModeShardBased,
+		},
+		{
+			name: "explicit classic mode - returns classic",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: "classic",
+			}),
+			want: SchedulingModeClassic,
+		},
+		{
+			name: "explicit late mode - returns late",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: "late",
+			}),
+			want: SchedulingModeLate,
+		},
+		{
+			name: "explicit shard-based mode - returns shard-based",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: "shard-based",
+			}),
+			want: SchedulingModeShardBased,
+		},
+		{
+			name: "invalid mode value - falls back to shard-based",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: "invalid-mode",
+			}),
+			want: SchedulingModeShardBased,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, GetFlexAdvisorSchedulingMode(tc.experimentsManager))
+			assert.Equal(t, tc.want == SchedulingModeShardBased, IsFlexAdvisorShardBasedScheduling(tc.experimentsManager))
+		})
+	}
+}
+
+func TestIsFlexAdvisorShardBasedSchedulingPrefetchEnabled(t *testing.T) {
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+		want               bool
+	}{
+		{
+			name:               "nil manager - defaults to true",
+			experimentsManager: nil,
+			want:               true,
+		},
+		{
+			name:               "unset flag - defaults to true",
+			experimentsManager: experiments.NewMockManager(),
+			want:               true,
+		},
+		{
+			name: "flag explicitly enabled - returns true",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag: true,
+			}, nil),
+			want: true,
+		},
+		{
+			name: "flag disabled - returns false",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag: false,
+			}, nil),
+			want: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isFlexAdvisorShardBasedSchedulingPrefetchEnabled(tc.experimentsManager))
+		})
+	}
+}
+
+func TestFlexAdvisor_CooldownScopeTtl(t *testing.T) {
+	testCases := []struct {
+		name              string
+		nilOptionsTracker bool
+		nilManager        bool
+		stringFlags       map[string]string
+		want              time.Duration
+	}{
+		{
+			name:              "nil optionsTracker - returns default 5m",
+			nilOptionsTracker: true,
+			want:              5 * time.Minute,
+		},
+		{
+			name:       "nil experimentsManager - returns default 5m",
+			nilManager: true,
+			want:       5 * time.Minute,
+		},
+		{
+			name:        "unset flag - returns default 5m",
+			stringFlags: nil,
+			want:        5 * time.Minute,
+		},
+		{
+			name: "custom valid interval 120s - returns 2m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "120",
+			},
+			want: 120 * time.Second,
+		},
+		{
+			name: "zero value - falls back to default 5m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "0",
+			},
+			want: 5 * time.Minute,
+		},
+		{
+			name: "negative value - falls back to default 5m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "-30",
+			},
+			want: 5 * time.Minute,
+		},
+		{
+			name: "invalid value - falls back to default 5m",
+			stringFlags: map[string]string{
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "invalid",
+			},
+			want: 5 * time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var optionsTracker *optstracking.OptionsTracker
+			if !tc.nilOptionsTracker {
+				var manager experiments.Manager
+				if !tc.nilManager {
+					manager = experiments.NewMockManagerWithOptions(version.Version{}, nil, tc.stringFlags)
+				}
+				optionsTracker = optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, manager)
+			}
+			fa := &flexAdvisor{optionsTracker: optionsTracker}
+			assert.Equal(t, tc.want, fa.cooldownScopeTtl())
+		})
+	}
+}
+
+func TestFlexAdvisor_ActivateAndDeactivateFastPolling(t *testing.T) {
+	testCases := []struct {
+		name               string
+		experimentsManager experiments.Manager
+		sleepBeforeAction  time.Duration
+		initialSpeed       *pollingSpeed
+		action             func(fa *flexAdvisor)
+		registerScope      bool
+		reRegisterAfter    bool
+		wantPollingSpeed   pollingSpeed
+		wantTtl            time.Duration
+	}{
+		{
+			name: "ActivateFastPolling in shard-based mode after cooldown - switches scope to pollingSpeedFast and restores 10m keep-alive",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			action: func(fa *flexAdvisor) {
+				fa.DeactivateFastPolling(testScopeKey)
+				fa.ActivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedFast,
+			wantTtl:          keepAliveInterval,
+		},
+		{
+			name:               "ActivateFastPolling in default mode (shard-based) - switches scope to pollingSpeedFast and restores 10m keep-alive",
+			experimentsManager: experiments.NewMockManager(),
+			action: func(fa *flexAdvisor) {
+				fa.DeactivateFastPolling(testScopeKey)
+				fa.ActivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedFast,
+			wantTtl:          keepAliveInterval,
+		},
+		{
+			name:               "DeactivateFastPolling in default mode (shard-based) - switches to pollingSpeedSlow and updates scope TTL to default 5m cooldown",
+			experimentsManager: experiments.NewMockManager(),
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+				fa.DeactivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          defaultShardBasedSchedulingCooldown,
+		},
+		{
+			name: "ActivateFastPolling in explicit late scheduling mode - no-op, keeps pollingSpeedFast and leaves TTL untouched",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeLate),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedFast,
+			wantTtl:          8 * time.Minute,
+		},
+		{
+			name: "ActivateFastPolling in classic scheduling mode - no-op, keeps pollingSpeedFast and leaves TTL untouched",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeClassic),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedFast,
+			wantTtl:          8 * time.Minute,
+		},
+		{
+			name: "DeactivateFastPolling in shard-based mode - switches to pollingSpeedSlow and updates scope TTL to default 5m cooldown",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+				fa.DeactivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          defaultShardBasedSchedulingCooldown,
+		},
+		{
+			name: "DeactivateFastPolling in shard-based mode with custom 120s cooldown - updates scope TTL to 120s",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag:                      string(SchedulingModeShardBased),
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "120",
+			}),
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+				fa.DeactivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          120 * time.Second,
+		},
+		{
+			name: "DeactivateFastPolling in shard-based mode with non-positive cooldown - falls back to default 5m cooldown",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag:                      string(SchedulingModeShardBased),
+				experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag: "0",
+			}),
+			action:           func(fa *flexAdvisor) { fa.DeactivateFastPolling(testScopeKey) },
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          defaultShardBasedSchedulingCooldown,
+		},
+		{
+			name: "DeactivateFastPolling in explicit late scheduling mode - no-op, keeps pollingSpeedFast and leaves TTL untouched",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeLate),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			action:            func(fa *flexAdvisor) { fa.DeactivateFastPolling(testScopeKey) },
+			registerScope:     true,
+			wantPollingSpeed:  pollingSpeedFast,
+			wantTtl:           8 * time.Minute,
+		},
+		{
+			name: "DeactivateFastPolling in classic scheduling mode - no-op, keeps pollingSpeedFast and leaves TTL untouched",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeClassic),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			action:            func(fa *flexAdvisor) { fa.DeactivateFastPolling(testScopeKey) },
+			registerScope:     true,
+			wantPollingSpeed:  pollingSpeedFast,
+			wantTtl:           8 * time.Minute,
+		},
+		{
+			name: "DeactivateFastPolling in shard-based mode followed by re-registration - restores 10m keep-alive",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			action:           func(fa *flexAdvisor) { fa.DeactivateFastPolling(testScopeKey) },
+			registerScope:    true,
+			reRegisterAfter:  true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          keepAliveInterval,
+		},
+		{
+			name: "ActivateFastPolling when FlexAdvisorProcessing is disabled - no-op on speed and TTL",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedSlow,
+			wantTtl:          8 * time.Minute,
+		},
+		{
+			name: "DeactivateFastPolling when FlexAdvisorProcessing is disabled - no-op on speed and TTL",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag: false,
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			sleepBeforeAction: 2 * time.Minute,
+			initialSpeed:      new(pollingSpeedFast),
+			action: func(fa *flexAdvisor) {
+				fa.DeactivateFastPolling(testScopeKey)
+			},
+			registerScope:    true,
+			wantPollingSpeed: pollingSpeedFast,
+			wantTtl:          8 * time.Minute,
+		},
+		{
+			name: "ActivateFastPolling and DeactivateFastPolling on unregistered scope - no-op without inserting scope",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
+			action: func(fa *flexAdvisor) {
+				fa.ActivateFastPolling(testScopeKey)
+				fa.DeactivateFastPolling(testScopeKey)
+			},
+			registerScope: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx := t.Context()
+
+				fa, mockProvider := newTestFlexAdvisorWithServer(t, ctx, tc.experimentsManager)
+				mockProvider.On("FetchCapacityGuidance").Return(testAvailabilityResponse(), nil).Maybe()
+
+				if tc.registerScope {
+					assert.NoError(t, fa.RegisterFlexibilityScope(testScopeKey))
+					synctest.Wait()
+					if tc.initialSpeed != nil {
+						scope, _, _ := fa.getScope(testScopeKey)
+						scope.setPollingSpeed(*tc.initialSpeed)
+					}
+					if tc.sleepBeforeAction > 0 {
+						time.Sleep(tc.sleepBeforeAction)
+						synctest.Wait()
+					}
+				}
+
+				now := fa.clock.Now()
+				tc.action(fa)
+
+				if tc.reRegisterAfter {
+					assert.NoError(t, fa.RegisterFlexibilityScope(testScopeKey))
+				}
+
+				fa.rwMutex.RLock()
+				scope, exists := fa.scopes[testScopeKey]
+				activeUntil, hasTtl := fa.scopesActiveUntil[testScopeKey]
+				var gotPollingSpeed pollingSpeed
+				if scope != nil {
+					gotPollingSpeed = scope.getPollingSpeed()
+				}
+				fa.rwMutex.RUnlock()
+
+				if !tc.registerScope {
+					assert.False(t, exists)
+					assert.False(t, hasTtl)
+					return
+				}
+				assert.True(t, exists)
+				assert.Equal(t, tc.wantPollingSpeed, gotPollingSpeed)
+				assert.Equal(t, now.Add(tc.wantTtl), activeUntil)
+			})
+		})
+	}
+}
+
+func TestFlexAdvisor_ShardProcessorLazyPrefetchLifecycle(t *testing.T) {
+	makeCrd := func(name string) crd.CRD {
+		return ccc.NewCccCrd(&v1.ComputeClass{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Spec:       v1.ComputeClassSpec{Priorities: []v1.Priority{{MachineType: ptr.To("e2-standard-2")}}},
+		}, "", false, crd.TestDefaultDataProvider(), nil)
+	}
+
+	testCases := []struct {
+		name            string
+		prefetchEnabled bool
+		incomingShards  []*podsharding.PodShard
+		wantPrefetched  bool
+	}{
+		{
+			name:            "prefetch enabled with scope-2 next - stays absent during loop, registers in slow polling with active TTL on scale-up end, promotes to fast on next loop",
+			prefetchEnabled: true,
+			incomingShards:  []*podsharding.PodShard{cccShard("scope-1"), cccShard("scope-2"), cccShard("scope-3")},
+			wantPrefetched:  true,
+		},
+		{
+			name:            "prefetch enabled with non-scope provreq shard next - does not skip ahead to register scope-2",
+			prefetchEnabled: true,
+			incomingShards:  []*podsharding.PodShard{cccShard("scope-1"), provReqShard("scope-pr"), cccShard("scope-2")},
+			wantPrefetched:  false,
+		},
+		{
+			name:            "prefetch disabled - does not register scope-2 on scale-up end",
+			prefetchEnabled: false,
+			incomingShards:  []*podsharding.PodShard{cccShard("scope-1"), cccShard("scope-2")},
+			wantPrefetched:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+
+				em := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+					experiments.FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag: tc.prefetchEnabled,
+				}, map[string]string{
+					experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+				})
+				cccLister := lister.NewMockCrdLister([]crd.CRD{makeCrd("scope-1"), makeCrd("scope-2"), makeCrd("scope-3")})
+				mockProvider := &mockAdviceProvider{}
+				mockProvider.On("FetchCapacityGuidance").Return(testAvailabilityResponse(), nil).Maybe()
+				instanceConfigCloudProvider := newMockInstanceConfigCloudProvider([]string{"us-west1-a"}, nil, machinetypes.E2, true, nil)
+				optionsTracker := optstracking.TestOptionsTracker(options.AutoscalingOptions{}, gkeclient.Cluster{}, em)
+				fa, err := NewFlexAdvisor(ctx, mockProvider, cccLister, instanceConfigCloudProvider, optionsTracker, nil, nil)
+				assert.NoError(t, err)
+
+				sp := NewShardProcessor(fa, cccLister, em)
+				sp.ProcessIncomingShards(tc.incomingShards)
+				synctest.Wait()
+
+				// During the active loop only scope-1 is registered (fast polling).
+				fa.rwMutex.RLock()
+				s1, s1Exists := fa.scopes["scope-1"]
+				_, s2ExistsDuringLoop := fa.scopes["scope-2"]
+				_, s3ExistsDuringLoop := fa.scopes["scope-3"]
+				fa.rwMutex.RUnlock()
+				require.True(t, s1Exists)
+				assert.Equal(t, pollingSpeedFast, s1.getPollingSpeed())
+				assert.False(t, s2ExistsDuringLoop)
+				assert.False(t, s3ExistsDuringLoop)
+
+				// End of active scale-up: deactivate scope-1, then run OnScaleUpEnd twice (Salvo pass check).
+				endTime := fa.clock.Now()
+				fa.DeactivateFastPolling("scope-1")
+				sp.OnScaleUpEnd()
+				sp.OnScaleUpEnd()
+				synctest.Wait()
+
+				fa.rwMutex.RLock()
+				s1After, s1AfterExists := fa.scopes["scope-1"]
+				s1TtlAfter := fa.scopesActiveUntil["scope-1"].Sub(endTime)
+				s2After, s2Exists := fa.scopes["scope-2"]
+				s2TtlAfter := fa.scopesActiveUntil["scope-2"].Sub(endTime)
+				_, s3Exists := fa.scopes["scope-3"]
+				fa.rwMutex.RUnlock()
+
+				require.True(t, s1AfterExists)
+				assert.Equal(t, pollingSpeedSlow, s1After.getPollingSpeed())
+				assert.Equal(t, defaultShardBasedSchedulingCooldown, s1TtlAfter)
+				assert.False(t, s3Exists)
+				require.Equal(t, tc.wantPrefetched, s2Exists)
+				if tc.wantPrefetched {
+					assert.Equal(t, pollingSpeedSlow, s2After.getPollingSpeed())
+					assert.Equal(t, keepAliveInterval, s2TtlAfter)
+
+					// Next loop selects scope-2 and promotes it from slow to fast polling.
+					sp.ProcessIncomingShards([]*podsharding.PodShard{cccShard("scope-2"), cccShard("scope-1")})
+					synctest.Wait()
+					assert.Equal(t, pollingSpeedFast, s2After.getPollingSpeed())
 				}
 			})
 		})

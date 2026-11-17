@@ -25,8 +25,9 @@ import (
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 )
 
-// ScaleUpStatusProcessor switches the selected pod shard's flexibility scope back to slow polling
-// when a scale-up pass was skipped before entering WrapperOrchestrator.ScaleUp (e.g. MaxNodesTotal or cooldown).
+// ScaleUpStatusProcessor deactivates fast polling (switching to slow polling
+// and cooldown TTL) for the selected pod shard's scope in shard-based mode when
+// scale-up was skipped before WrapperOrchestrator.ScaleUp.
 type ScaleUpStatusProcessor struct {
 	provider           instanceavailability.Provider
 	cccLister          lister.Lister
@@ -46,20 +47,22 @@ func NewScaleUpStatusProcessor(
 	}
 }
 
-// Process switches the selected pod shard's scope back to slow polling when scale-up was skipped.
+// Process deactivates fast polling for the selected pod shard's scope when
+// scale-up was skipped before entering WrapperOrchestrator.ScaleUp.
 func (p *ScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	if p.provider == nil || autoscalingCtx == nil || autoscalingCtx.ProcessorCallbacks == nil || scaleUpStatus == nil {
 		return
 	}
-	if !IsFlexAdvisorAdaptivePollingEnabled(p.experimentsManager) {
+	if !IsFlexAdvisorProcessingEnabled(p.experimentsManager) || !IsFlexAdvisorShardBasedScheduling(p.experimentsManager) {
 		return
 	}
-	// This condition should enter and deregister scope from fast polling in cases when
-	// pod sharder calculated new shard, but wrapperOrchestrator.ScaleUp was not even called due to shouldScaleUp() returning false
-	// (ie in case of ScaleUpLimitedByMaxNodesTotal, ScaleUpInCooldown, ScaleUpNotNeeded, ScaleUpNotTried)
-	if scaleUpStatus.Result != status.ScaleUpSuccessful &&
-		scaleUpStatus.Result != status.ScaleUpError &&
-		scaleUpStatus.Result != status.ScaleUpNoOptionsAvailable {
+	// Deactivate fast polling when pod sharder selected a shard, but
+	// WrapperOrchestrator.ScaleUp was never called due to shouldScaleUp()
+	// returning false (e.g. ScaleUpLimitedByMaxNodesTotal, ScaleUpInCooldown,
+	// ScaleUpNotNeeded, ScaleUpNotTried). Guard on Result first so async
+	// HTNAP or DWS InitializeNodeGroup callbacks do not touch the
+	// unsynchronized ProcessorCallbacks map.
+	if scaleUpStatus.Result != status.ScaleUpSuccessful && scaleUpStatus.Result != status.ScaleUpError && scaleUpStatus.Result != status.ScaleUpNoOptionsAvailable {
 		shard := podsharding.GetSelectedPodShard(autoscalingCtx)
 		if key, found := flexibilityScopeKeyFromShard(shard, p.cccLister); found {
 			p.provider.DeactivateFastPolling(key)

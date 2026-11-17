@@ -89,6 +89,15 @@ func (p *PodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_conte
 	return unschedulablePods, nil
 }
 
+// ResetRejectedScopes resets the rejected-scopes gauge to 0 for loops in
+// shard-based mode where no unschedulable pods reach ShardProcessor.
+func (p *PodListProcessor) ResetRejectedScopes() {
+	if p == nil || p.metrics == nil || !IsFlexAdvisorProcessingEnabled(p.experimentsManager) {
+		return
+	}
+	p.metrics.UpdateFlexAdvisorRejectedScopes(0)
+}
+
 // CleanUp is a no-op
 func (p *PodListProcessor) CleanUp() {
 }

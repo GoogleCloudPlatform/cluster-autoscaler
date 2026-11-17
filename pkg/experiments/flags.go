@@ -220,7 +220,6 @@ const FlexAdvisorPCCSupportMinCAVersionFlag = "FlexAdvisorPCCSupport::MinCAVersi
 
 const FlexAdvisorProcessingEnabledFlag = "FlexAdvisorProcessing::Enabled"
 const FlexAdvisorProcessingMinCAVersionFlag = "FlexAdvisorProcessing::MinCAVersion"
-const FlexAdvisorLateRegistrationFeature = "FlexAdvisorLateRegistration"
 
 const FlexAdvisorRecommendationsBypassEnabledFlag = "FlexAdvisor::RecommendationsBypassEnabled"
 const FlexAdvisorRecommendationsBypassMinCAVersionFlag = "FlexAdvisor::RecommendationsBypassMinCAVersion"
@@ -295,16 +294,31 @@ const FlexAdvisorBinpackerBlockMinCAVersionFlag = "FlexAdvisor::BinpackerBlockMi
 // scale-up pass, waiting for the initial fetch of a flexibility scope (default: 3s, 0 disables blocking).
 const FlexAdvisorBinpackerBlockTimeBudgetFlag = "FlexAdvisor::BinpackerBlockTimeBudget"
 
-// FlexAdvisorAdaptivePollingEnabledFlag enables switching flexibility scopes into a slower background polling interval
-// at the end of a scale-up pass and restoring fast polling when the scope's shard is selected as active.
-const FlexAdvisorAdaptivePollingEnabledFlag = "FlexAdvisor::AdaptivePollingEnabled"
-const FlexAdvisorAdaptivePollingMinCAVersionFlag = "FlexAdvisor::AdaptivePollingMinCAVersion"
-
-// FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag controls the background polling interval in seconds while a flexibility
-// scope is in slow polling mode (default: 20s). Fast polling continues to use FlexAdvisor::ScopeRefreshIntervalSeconds (default: 10s).
+// FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag controls the background
+// polling interval in seconds while a flexibility scope is in slow polling in
+// shard-based scheduling mode (default: 20s). Fast polling continues to use
+// FlexAdvisor::ScopeRefreshIntervalSeconds (default: 10s).
 // Note: if slow polling interval is >= scope staleness threshold (default: 30s), adaptive polling effectiveness goes to zero,
 // because recommendations won't be used anyway / will be considered stale.
 const FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag = "FlexAdvisor::AdaptivePollingSlowIntervalSeconds"
+
+// FlexAdvisorSchedulingModeFlag controls where and how many flexibility scopes
+// are registered and polled: "classic" (before FilterOutSchedulable), "late"
+// (after FilterOutSchedulable, before sharding), or "shard-based" (default:
+// registers the active shard before scale-up, lazily prefetches the immediate
+// next shard at scale-up end when FlexAdvisor::ShardBasedSchedulingPrefetchEnabled
+// is true, and uses adaptive polling with a cooldown TTL).
+const FlexAdvisorSchedulingModeFlag = "FlexAdvisor::SchedulingMode"
+
+// FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag controls whether
+// shard-based scheduling prefetches the immediate next shard's flexibility
+// scope in slow polling mode at the end of a scale-up pass (default: true).
+const FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag = "FlexAdvisor::ShardBasedSchedulingPrefetchEnabled"
+
+// FlexAdvisorShardBasedSchedulingCooldownSecondsFlag controls how long in
+// seconds a flexibility scope is kept alive after the scale-up pass that used
+// it finishes in shard-based scheduling mode (default: 300s / 5m).
+const FlexAdvisorShardBasedSchedulingCooldownSecondsFlag = "FlexAdvisor::ShardBasedSchedulingCooldownSeconds"
 
 const SalvoScaleUpEnabledFlag = "SalvoScaleUp::Enabled"
 const SalvoScaleUpMinCAVersionFlag = "SalvoScaleUp::MinCAVersion"
