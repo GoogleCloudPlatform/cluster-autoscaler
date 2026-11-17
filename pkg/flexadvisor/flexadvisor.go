@@ -666,13 +666,9 @@ func IsFlexAdvisorPCCSupportEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorPCCSupportMinCAVersionFlag, true)
 }
 
-// FlexAdvisorProcessingEnabledFlag can be used to disable FA without restarting CAs
+// IsFlexAdvisorProcessingEnabled returns whether Flex Advisor processing is dynamically enabled.
 func IsFlexAdvisorProcessingEnabled(manager experiments.Manager) bool {
-	if manager == nil {
-		return true
-	}
-	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorProcessingEnabledFlag, true) &&
-		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorProcessingMinCAVersionFlag, true)
+	return experiments.IsFlexAdvisorProcessingEnabled(manager)
 }
 
 // IsFlexAdvisorLateRegistrationEnabled returns whether FA late registration is enabled.

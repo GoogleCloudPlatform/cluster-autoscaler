@@ -15,8 +15,10 @@
 package podsharding
 
 import (
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 )
 
@@ -39,18 +41,29 @@ type FeatureShardComputeFunction struct {
 // functions to compute shard value for given feature.
 type CompositePodSharder struct {
 	featureShardComputeFunctions []FeatureShardComputeFunction
+	payPerPodTaggingEnabled      bool
+	experimentsManager           experiments.Manager
 }
 
-// NewCompositePodSharder creates new instance of CompositePodSharder
-func NewCompositePodSharder(computeFunctions []FeatureShardComputeFunction) *CompositePodSharder {
+// NewCompositePodSharder creates new instance of CompositePodSharder.
+func NewCompositePodSharder(
+	computeFunctions []FeatureShardComputeFunction,
+	payPerPodTaggingEnabled bool,
+	experimentsManager experiments.Manager,
+) *CompositePodSharder {
 	return &CompositePodSharder{
 		featureShardComputeFunctions: append([]FeatureShardComputeFunction{}, computeFunctions...),
+		payPerPodTaggingEnabled:      payPerPodTaggingEnabled,
+		experimentsManager:           experimentsManager,
 	}
 }
 
-// ComputePodShards computes sharding for given set of pods
+// ComputePodShards computes sharding for given set of pods.
 func (sharder *CompositePodSharder) ComputePodShards(pods []*v1.Pod) []*PodShard {
 	podShards := make(map[ShardSignature]*PodShard)
+	shouldComputePayPerPodProperty := sharder.payPerPodTaggingEnabled &&
+		experiments.IsFlexAdvisorProcessingEnabled(sharder.experimentsManager) &&
+		experiments.IsPayPerPodFleetEfficiencyEnabled(sharder.experimentsManager)
 
 	for _, pod := range pods {
 		req := podrequirements.GetRequirements(pod)
@@ -67,6 +80,11 @@ func (sharder *CompositePodSharder) ComputePodShards(pods []*v1.Pod) []*PodShard
 			}
 		}
 		podShards[shardSignature].PodUids[pod.UID] = true
+		if shouldComputePayPerPodProperty &&
+			!podShards[shardSignature].HasPayPerPodWorkloads &&
+			billing.IsDefaultPayPerPodAutopilotWorkloadWithRequirements(pod, req) {
+			podShards[shardSignature].HasPayPerPodWorkloads = true
+		}
 	}
 
 	var result []*PodShard

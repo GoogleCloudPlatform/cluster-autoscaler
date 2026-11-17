@@ -100,8 +100,8 @@ func (p *PodShardingProcessor) Process(ctx context.Context, autoscalingCtx *ca_c
 	if err != nil {
 		return []*apiv1.Pod{}, errors.ToAutoscalerError(errors.InternalError, err)
 	}
-	klog.Infof("Selected pods shard %v; NodeGroupDescriptor=%#v; shardPodsCount=%v; extendedPodsCount=%v; zoneAgnostic=%v",
-		podShard.Signature(), podShard.NodeGroupDescriptor, len(podShard.PodUids), len(filteringResult.Pods), filteringResult.ZoneAgnostic)
+	klog.Infof("Selected pods shard %v; NodeGroupDescriptor=%#v; shardPodsCount=%v; extendedPodsCount=%v; zoneAgnostic=%v; hasPayPerPodWorkloads=%v",
+		podShard.Signature(), podShard.NodeGroupDescriptor, len(podShard.PodUids), len(filteringResult.Pods), filteringResult.ZoneAgnostic, podShard.HasPayPerPodWorkloads)
 
 	autoscalingCtx.ProcessorCallbacks.SetExtraValue(selectPodShardContextKey, podShard)
 	autoscalingCtx.ProcessorCallbacks.SetExtraValue(unschedulablePodsZoneAgnosticContextKey, filteringResult.ZoneAgnostic)

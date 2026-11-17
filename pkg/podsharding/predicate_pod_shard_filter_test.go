@@ -485,7 +485,7 @@ func TestPredicatePodShardFilterNoGPUSelector(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().WithAutoprovisioningEnabled(false).WithNodeLocations("us-central1-c").Build()
-			sharder := NewGkePodSharder(provider, false, nil)
+			sharder := NewGkePodSharder(provider, false, nil, false, nil)
 			ctx := &context.AutoscalingContext{CloudProvider: provider, ClusterSnapshot: testsnapshot.NewTestSnapshotOrDie(t)}
 			p := NewPredicatePodShardFilter(lister.NewMockCrdLister([]crd.CRD{}), false)
 

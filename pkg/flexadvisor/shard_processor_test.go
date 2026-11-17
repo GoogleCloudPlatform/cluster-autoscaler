@@ -48,6 +48,12 @@ func plainShard(label string) *podsharding.PodShard {
 	}
 }
 
+func payPerPodShard(label string) *podsharding.PodShard {
+	shard := plainShard(label)
+	shard.HasPayPerPodWorkloads = true
+	return shard
+}
+
 func provReqShard(cccName string) *podsharding.PodShard {
 	return &podsharding.PodShard{
 		NodeGroupDescriptor: podsharding.NodeGroupDescriptor{
@@ -136,6 +142,9 @@ func TestShardProcessor_ProcessIncomingShards(t *testing.T) {
 		experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
 		experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: true,
 	}
+
+	taggedProvReqShard := provReqShard("")
+	taggedProvReqShard.HasPayPerPodWorkloads = true
 
 	testCases := []struct {
 		name                string
@@ -236,6 +245,26 @@ func TestShardProcessor_ProcessIncomingShards(t *testing.T) {
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, adaptivePollingFlags, nil),
 			cccLister:          mockShardTestLister(),
 			shards:             []*podsharding.PodShard{nil, cccShard("ccc-1")},
+		},
+		{
+			name:                "tagged pay-per-pod active shard without default CCC - activates fast polling for general-purpose",
+			experimentsManager:  experiments.NewMockManagerWithOptions(version.Version{}, adaptivePollingFlags, nil),
+			cccLister:           mockShardTestLister(),
+			shards:              []*podsharding.PodShard{payPerPodShard("a"), cccShard("ccc-1")},
+			wantNormalPollScope: ccc.AutopilotPodFamilyCrdName,
+		},
+		{
+			name:                "tagged pay-per-pod active shard with default CCC enabled - prefers default CCC over general-purpose",
+			experimentsManager:  experiments.NewMockManagerWithOptions(version.Version{}, adaptivePollingFlags, nil),
+			cccLister:           mockShardTestListerWithDefault(),
+			shards:              []*podsharding.PodShard{payPerPodShard("a")},
+			wantNormalPollScope: labels.DefaultCCCName,
+		},
+		{
+			name:               "tagged ProvisioningRequest shard - skipped without activating fast polling",
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, adaptivePollingFlags, nil),
+			cccLister:          mockShardTestLister(),
+			shards:             []*podsharding.PodShard{taggedProvReqShard},
 		},
 	}
 

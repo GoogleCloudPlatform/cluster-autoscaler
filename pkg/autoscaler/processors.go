@@ -517,7 +517,7 @@ func (b *Builder) setUpProcessors(
 		edpMetrics               *edps.Metrics
 	)
 
-	podSharder := podsharding.NewGkePodSharder(provider, options.CSNEnabled, allowlistedSystemLabelsMatcher)
+	podSharder := podsharding.NewGkePodSharder(provider, options.CSNEnabled, allowlistedSystemLabelsMatcher, options.GCEFlexAdvisorEnabled, experimentsManager)
 	var flexAdvisorShardProcessor podsharding.ShardProcessor
 	if options.GCEFlexAdvisorEnabled {
 		flexAdvisorShardProcessor = flexadvisor.NewShardProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)

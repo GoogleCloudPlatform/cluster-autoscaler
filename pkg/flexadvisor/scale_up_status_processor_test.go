@@ -20,6 +20,7 @@ import (
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -30,6 +31,9 @@ import (
 )
 
 func TestScaleUpStatusProcessor_Process(t *testing.T) {
+	taggedProvReqShard := provReqShard("")
+	taggedProvReqShard.HasPayPerPodWorkloads = true
+
 	testCases := []struct {
 		name               string
 		experimentsManager experiments.Manager
@@ -189,6 +193,29 @@ func TestScaleUpStatusProcessor_Process(t *testing.T) {
 			cccLister:          mockShardTestLister(),
 			scaleUpStatus:      nil,
 			selectedShard:      cccShard("ccc-1"),
+		},
+		{
+			name:               "ScaleUpLimitedByMaxNodesTotal with tagged pay-per-pod shard - calls DeactivateFastPolling for general-purpose",
+			experimentsManager: experiments.NewMockManager(),
+			cccLister:          mockShardTestLister(),
+			scaleUpStatus:      &status.ScaleUpStatus{Result: status.ScaleUpLimitedByMaxNodesTotal},
+			selectedShard:      payPerPodShard("a"),
+			wantSlowPollScope:  ccc.AutopilotPodFamilyCrdName,
+		},
+		{
+			name:               "ScaleUpLimitedByMaxNodesTotal with tagged shard and default CCC enabled - deactivates default CCC",
+			experimentsManager: experiments.NewMockManager(),
+			cccLister:          mockShardTestListerWithDefault(),
+			scaleUpStatus:      &status.ScaleUpStatus{Result: status.ScaleUpLimitedByMaxNodesTotal},
+			selectedShard:      payPerPodShard("a"),
+			wantSlowPollScope:  labels.DefaultCCCName,
+		},
+		{
+			name:               "ScaleUpLimitedByMaxNodesTotal with tagged ProvisioningRequest shard - skipped",
+			experimentsManager: experiments.NewMockManager(),
+			cccLister:          mockShardTestLister(),
+			scaleUpStatus:      &status.ScaleUpStatus{Result: status.ScaleUpLimitedByMaxNodesTotal},
+			selectedShard:      taggedProvReqShard,
 		},
 	}
 

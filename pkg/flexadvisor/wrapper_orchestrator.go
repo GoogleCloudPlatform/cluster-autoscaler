@@ -19,7 +19,6 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -147,23 +146,12 @@ func (o *WrapperOrchestrator) ScaleUp(
 	shard := podsharding.GetSelectedPodShard(o.autoscalingCtx)
 	flexibilityScopeKey, _ := flexibilityScopeKeyFromShard(shard, o.cccLister)
 
-	if IsFlexAdvisorAdaptivePollingEnabled(o.experimentsManager) {
-		if o.flexAdvisor != nil && flexibilityScopeKey != "" {
-			// In salvo mode ScaleUp() and ScaleUpStatusProcessors are called multiple times per single shard, in case it was switched to slow polling
-			// we switch it back to fast. This change can be picked up by scope worker, but unless significant time passed, refresh will not be retriggered
-			o.flexAdvisor.ActivateFastPolling(flexibilityScopeKey)
-			defer o.flexAdvisor.DeactivateFastPolling(flexibilityScopeKey)
-		}
-
-		if o.flexAdvisor != nil && flexibilityScopeKey == "" && shard != nil && shard.NodeGroupDescriptor.ProvisioningClassName == "" {
-			// This is a non-CCC, non-provreq shard: activate fast polling for the
-			// synthetic pay-per-pod scope. ActivateFastPolling and
-			// DeactivateFastPolling are no-ops unless the scope was previously
-			// registered (e.g. by PodListProcessor for pending default Autopilot
-			// workloads).
-			o.flexAdvisor.ActivateFastPolling(ccc.AutopilotPodFamilyCrdName)
-			defer o.flexAdvisor.DeactivateFastPolling(ccc.AutopilotPodFamilyCrdName)
-		}
+	if o.flexAdvisor != nil && flexibilityScopeKey != "" && IsFlexAdvisorProcessingEnabled(o.experimentsManager) {
+		// Gated on FlexAdvisorProcessing rather than adaptive polling so ActivateFastPolling still refreshes activeScopeTtl when adaptive polling is disabled.
+		// In salvo mode ScaleUp() and ScaleUpStatusProcessors are called multiple times per single shard, in case it was switched to slow polling
+		// we switch it back to fast. This change can be picked up by scope worker, but unless significant time passed, refresh will not be retriggered
+		o.flexAdvisor.ActivateFastPolling(flexibilityScopeKey)
+		defer o.flexAdvisor.DeactivateFastPolling(flexibilityScopeKey)
 	}
 
 	if !isFlexAdvisorRecommendationsBypassEnabled(o.experimentsManager) || o.bypassTracker == nil || o.cccLister == nil {
