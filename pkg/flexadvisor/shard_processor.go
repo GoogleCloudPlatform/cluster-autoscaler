@@ -17,6 +17,7 @@ package flexadvisor
 import (
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -63,8 +64,13 @@ func (p *ShardProcessor) ProcessIncomingShards(shards []*podsharding.PodShard) {
 	}
 }
 
-// flexibilityScopeKeyFromShard derives the CCC flexibility scope key for a pod shard:
-// an explicit CCC selector maps to the CCC name, pods without a selector map to the default CCC when it is enabled.
+// flexibilityScopeKeyFromShard derives the FlexAdvisor flexibility scope key for a pod shard:
+//  1. An explicit ComputeClass label maps to the CCC name.
+//  2. Shards without an explicit selector map to the default CCC when enabled.
+//  3. Shards tagged with HasPayPerPodWorkloads map to the synthetic
+//     "general-purpose" scope (Autopilot mode and experiment flags are already
+//     checked when setting HasPayPerPodWorkloads during pod sharding).
+//
 // Provisioning Request shards are skipped.
 func flexibilityScopeKeyFromShard(shard *podsharding.PodShard, cccLister lister.Lister) (string, bool) {
 	if shard == nil || shard.NodeGroupDescriptor.ProvisioningClassName != "" {
@@ -77,6 +83,9 @@ func flexibilityScopeKeyFromShard(shard *podsharding.PodShard, cccLister lister.
 		if _, defaultName, _ := cccLister.PodCrd(&apiv1.Pod{}); defaultName != "" {
 			return defaultName, true
 		}
+	}
+	if shard.HasPayPerPodWorkloads {
+		return ccc.AutopilotPodFamilyCrdName, true
 	}
 	return "", false
 }

@@ -21,6 +21,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	gketpu "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	pr_pods "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/pods"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
@@ -30,10 +31,11 @@ import (
 
 type machineConfigProvider interface {
 	MachineConfigProvider() *machinetypes.MachineConfigProvider
+	IsAutopilotEnabled() bool
 }
 
 // NewGkePodSharder creates instance of PodSharder for use in GKE environment
-func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *gkelabels.Matcher) PodSharder {
+func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *gkelabels.Matcher, gceFlexAdvisorEnabled bool, experimentsManager experiments.Manager) PodSharder {
 	computeFunctions := []FeatureShardComputeFunction{
 		{
 			"tpu_type",
@@ -70,7 +72,8 @@ func NewGkePodSharder(provider machineConfigProvider, csnEnabled bool, matcher *
 		"provisioning_request",
 		provisioningRequestShard,
 	})
-	return NewCompositePodSharder(computeFunctions)
+	payPerPodTaggingEnabled := gceFlexAdvisorEnabled && provider != nil && provider.IsAutopilotEnabled()
+	return NewCompositePodSharder(computeFunctions, payPerPodTaggingEnabled, experimentsManager)
 }
 
 func computeGpuTypeShard(provider machineConfigProvider, pod *v1.Pod, req *podrequirements.Requirements, nodeGroupDescriptor *NodeGroupDescriptor) {

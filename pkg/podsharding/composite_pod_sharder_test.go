@@ -19,9 +19,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"k8s.io/api/core/v1"
+	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apitypes "k8s.io/apimachinery/pkg/types"
+	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
 
 type shardFeatureParts map[string]string
@@ -119,7 +127,7 @@ func TestCompositePodSharderBasic(t *testing.T) {
 					})
 			}
 
-			podSharder := NewCompositePodSharder(computeFunctions)
+			podSharder := NewCompositePodSharder(computeFunctions, false, nil)
 
 			var pods []*v1.Pod
 			for _, podFeaturesEntry := range tc.podsFeatures {
@@ -159,7 +167,7 @@ func TestCompositePodSharderNodeDescriptor(t *testing.T) {
 		buildComputeFunction("b"),
 	}
 
-	sharder := NewCompositePodSharder(computeFunctions)
+	sharder := NewCompositePodSharder(computeFunctions, false, nil)
 
 	p1 := podForUID("p1")
 	p1.Labels = make(map[string]string)
@@ -262,4 +270,254 @@ func getAllFeaturesSorted(features podFeatureParts) []string {
 	}
 	sort.Strings(allFeatures)
 	return allFeatures
+}
+
+func TestCompositePodSharderDefaultPayPerPodTagging(t *testing.T) {
+	computeFunctions := []FeatureShardComputeFunction{
+		{
+			Feature: "ccc",
+			Function: func(pod *v1.Pod, req *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				if name, found := req.LabelReq.GetSingleValue(gkelabels.ComputeClassLabel); found {
+					ngd.SystemLabels[gkelabels.ComputeClassLabel] = name
+				}
+			},
+		},
+		{
+			Feature: "gpu",
+			Function: func(pod *v1.Pod, req *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				if q := req.PodRequests[gpu.ResourceNvidiaGPU]; q.Value() > 0 {
+					ngd.RequiresGPU = true
+				}
+			},
+		},
+		{
+			Feature: "tpu",
+			Function: func(pod *v1.Pod, req *podrequirements.Requirements, ngd *NodeGroupDescriptor) {
+				if q := req.PodRequests[tpu.ResourceGoogleTPU]; q.Value() > 0 {
+					ngd.SystemLabels[gkelabels.TPULabel] = tpu.DefaultTPU
+				}
+			},
+		},
+	}
+
+	plainPod := func(uid apitypes.UID) *v1.Pod {
+		return podForUID(uid)
+	}
+	machineFamilyPod := func(uid apitypes.UID, family string) *v1.Pod {
+		p := podForUID(uid)
+		p.Spec.NodeSelector = map[string]string{gkelabels.MachineFamilyLabel: family}
+		return p
+	}
+	cccPod := func(uid apitypes.UID, cccName string) *v1.Pod {
+		p := podForUID(uid)
+		p.Spec.NodeSelector = map[string]string{gkelabels.ComputeClassLabel: cccName}
+		return p
+	}
+	multiValueCccPod := func(uid apitypes.UID, op v1.NodeSelectorOperator, values ...string) *v1.Pod {
+		return &v1.Pod{
+			ObjectMeta: metav1.ObjectMeta{UID: uid},
+			Spec: v1.PodSpec{
+				Affinity: &v1.Affinity{
+					NodeAffinity: &v1.NodeAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: &v1.NodeSelector{
+							NodeSelectorTerms: []v1.NodeSelectorTerm{
+								{
+									MatchExpressions: []v1.NodeSelectorRequirement{
+										{
+											Key:      gkelabels.ComputeClassLabel,
+											Operator: op,
+											Values:   values,
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+	gpuLimitOnlyPod := func(uid apitypes.UID) *v1.Pod {
+		p := podForUID(uid)
+		p.Spec.Containers = []v1.Container{
+			{
+				Resources: v1.ResourceRequirements{
+					Limits: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+				},
+			},
+		}
+		return p
+	}
+	gpuRequestPod := func(uid apitypes.UID) *v1.Pod {
+		p := podForUID(uid)
+		p.Spec.Containers = []v1.Container{
+			{
+				Resources: v1.ResourceRequirements{
+					Requests: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+				},
+			},
+		}
+		return p
+	}
+	tpuRequestPod := func(uid apitypes.UID) *v1.Pod {
+		p := podForUID(uid)
+		p.Spec.Containers = []v1.Container{
+			{
+				Resources: v1.ResourceRequirements{
+					Requests: v1.ResourceList{tpu.ResourceGoogleTPU: resource.MustParse("1")},
+				},
+			},
+		}
+		return p
+	}
+
+	payPerPodEnabledManager := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+		experiments.FlexAdvisorProcessingEnabledFlag:         true,
+		experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+		experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+	}, nil)
+
+	testCases := []struct {
+		name                    string
+		payPerPodTaggingEnabled bool
+		experimentsManager      experiments.Manager
+		pods                    []*v1.Pod
+		wantTags                map[ShardSignature]bool
+	}{
+		{
+			name:                    "nil experiments manager on autopilot - leaves HasPayPerPodWorkloads false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      nil,
+			pods:                    []*v1.Pod{plainPod("p1")},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "standard cluster with PayPerPodFleetEfficiency enabled - leaves HasPayPerPodWorkloads false",
+			payPerPodTaggingEnabled: false,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{plainPod("p1")},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with FlexAdvisorProcessing disabled - leaves HasPayPerPodWorkloads false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.FlexAdvisorProcessingEnabledFlag:         false,
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods:     []*v1.Pod{plainPod("p1")},
+			wantTags: map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with PayPerPodFleetEfficiency disabled - leaves HasPayPerPodWorkloads false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      false,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods:     []*v1.Pod{plainPod("p1")},
+			wantTags: map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with PayPerPodFleetEfficiency min CA version unmet - leaves HasPayPerPodWorkloads false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: false,
+			}, nil),
+			pods:     []*v1.Pod{plainPod("p1")},
+			wantTags: map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with empty pod list - returns empty shards",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    nil,
+			wantTags:                map[ShardSignature]bool{},
+		},
+		{
+			name:                    "autopilot with plain pods - tags shard true without altering signature",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{plainPod("p1"), plainPod("p2")},
+			wantTags:                map[ShardSignature]bool{"_": true},
+		},
+		{
+			name:                    "autopilot with machine-family pods only - tags shard false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{machineFamilyPod("n2-1", "n2"), machineFamilyPod("n2-2", "n2")},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with machine-family pod before plain pod in same shard - tags shard true",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{machineFamilyPod("n2-1", "n2"), plainPod("p1")},
+			wantTags:                map[ShardSignature]bool{"_": true},
+		},
+		{
+			name:                    "autopilot with plain pod before machine-family pod in same shard - preserves true tag",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{plainPod("p1"), machineFamilyPod("n2-1", "n2")},
+			wantTags:                map[ShardSignature]bool{"_": true},
+		},
+		{
+			name:                    "autopilot with explicit single compute-class label - tags shard false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{cccPod("p1", "custom-ccc")},
+			wantTags:                map[ShardSignature]bool{"SystemLabels(cloud.google.com/compute-class=custom-ccc)": false},
+		},
+		{
+			name:                    "autopilot with multi-value compute-class In affinity - stays false in plain shard",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{multiValueCccPod("p1", v1.NodeSelectorOpIn, "ccc-a", "ccc-b")},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with compute-class Exists affinity - stays false in plain shard",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{multiValueCccPod("p1", v1.NodeSelectorOpExists)},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with GPU request - tags shard false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{gpuRequestPod("p1")},
+			wantTags:                map[ShardSignature]bool{"RequiresGPU(true)": false},
+		},
+		{
+			name:                    "autopilot with GPU limit only - falls through to billing check and tags false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{gpuLimitOnlyPod("p1")},
+			wantTags:                map[ShardSignature]bool{"_": false},
+		},
+		{
+			name:                    "autopilot with TPU request - tags shard false",
+			payPerPodTaggingEnabled: true,
+			experimentsManager:      payPerPodEnabledManager,
+			pods:                    []*v1.Pod{tpuRequestPod("p1")},
+			wantTags:                map[ShardSignature]bool{ShardSignature("SystemLabels(cloud.google.com/gke-tpu-accelerator=" + tpu.DefaultTPU + ")"): false},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sharder := NewCompositePodSharder(computeFunctions, tc.payPerPodTaggingEnabled, tc.experimentsManager)
+			shards := sharder.ComputePodShards(tc.pods)
+			require.Len(t, shards, len(tc.wantTags))
+			for _, shard := range shards {
+				want, ok := tc.wantTags[shard.Signature()]
+				require.True(t, ok, "unexpected shard signature %q", shard.Signature())
+				assert.Equal(t, want, shard.HasPayPerPodWorkloads, "shard %q", shard.Signature())
+			}
+		})
+	}
 }

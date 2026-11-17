@@ -16,6 +16,17 @@ package experiments
 
 const defaultSpotUptimeMinutes = 10
 
+// IsFlexAdvisorProcessingEnabled returns whether Flex Advisor processing is dynamically enabled.
+// Can be used as a kill-switch to disable Flex Advisor without restarting Cluster Autoscaler.
+func IsFlexAdvisorProcessingEnabled(manager Manager) bool {
+	if manager == nil {
+		return true
+	}
+
+	return manager.EvaluateBoolFlagOrFailsafe(FlexAdvisorProcessingEnabledFlag, true) &&
+		manager.EvaluateMinimumVersionFlagOrFailsafe(FlexAdvisorProcessingMinCAVersionFlag, true)
+}
+
 // IsFlexAdvisorSendRankEnabled returns whether sending Rank in FlexAdvisor recommendation requests is dynamically enabled.
 func IsFlexAdvisorSendRankEnabled(manager Manager) bool {
 	if manager == nil {

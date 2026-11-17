@@ -108,6 +108,11 @@ func (descriptor *NodeGroupDescriptor) signature() ShardSignature {
 type PodShard struct {
 	PodUids             map[types.UID]bool
 	NodeGroupDescriptor NodeGroupDescriptor
+	// HasPayPerPodWorkloads reports whether at least one pod in this
+	// shard qualifies as a default Autopilot pay-per-pod workload (synthetic
+	// "general-purpose" flexibility scope). Intentionally excluded from
+	// NodeGroupDescriptor so shard signatures and pod grouping stay unchanged.
+	HasPayPerPodWorkloads bool
 }
 
 // Signature computes string signature for pod shard

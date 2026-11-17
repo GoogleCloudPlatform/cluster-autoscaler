@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,7 +29,9 @@ import (
 	gkelabels "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/labels"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/csn/metadata"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/provisioningrequests/queuedwrapper"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
@@ -474,7 +478,7 @@ func TestPodSharderWithoutProvReq(t *testing.T) {
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
-	testPodSharder(t, NewGkePodSharder(provider, false, nil), testCases)
+	testPodSharder(t, NewGkePodSharder(provider, false, nil, false, nil), testCases)
 }
 
 // TODO(b/343908373): add test for case from gkecl/1585885/comment/a8d6bb1e_1e104758
@@ -635,7 +639,7 @@ func TestProvisioningRequestShardComputeFunction(t *testing.T) {
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
-	testPodSharder(t, NewGkePodSharder(provider, false, nil), testCases)
+	testPodSharder(t, NewGkePodSharder(provider, false, nil, false, nil), testCases)
 }
 
 func TestCccShardComputeFunction(t *testing.T) {
@@ -679,7 +683,7 @@ func TestCccShardComputeFunction(t *testing.T) {
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
-	testPodSharder(t, NewGkePodSharder(provider, false, nil), testCases)
+	testPodSharder(t, NewGkePodSharder(provider, false, nil, false, nil), testCases)
 }
 
 func TestCSNShardComputeFunction(t *testing.T) {
@@ -731,7 +735,7 @@ func TestCSNShardComputeFunction(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			sharder := NewGkePodSharder(provider, tc.csnEnabled, nil)
+			sharder := NewGkePodSharder(provider, tc.csnEnabled, nil, false, nil)
 			shards := sharder.ComputePodShards([]*v1.Pod{&tc.pod})
 			if len(shards) != 1 {
 				t.Fatalf("Expected to get precisely 1 shard, but got %d. Shards: %v", len(shards), shards)
@@ -926,7 +930,7 @@ func BenchmarkComputePodShards(b *testing.B) {
 	provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
 		WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
 		Build()
-	sharder := NewGkePodSharder(provider, true, nil)
+	sharder := NewGkePodSharder(provider, true, nil, false, nil)
 
 	for _, numPods := range []int{100, 1000, 5000} {
 		pods := buildBenchmarkPods(numPods)
@@ -1089,4 +1093,189 @@ func buildBenchmarkPods(numPods int) []*v1.Pod {
 		pods = append(pods, pod)
 	}
 	return pods
+}
+
+func TestGkePodSharderDefaultPayPerPodTagging(t *testing.T) {
+	testCases := []struct {
+		name               string
+		autopilot          bool
+		flexAdvisorEnabled bool
+		experimentsManager experiments.Manager
+		pods               []*v1.Pod
+		wantByUID          map[types.UID]bool
+	}{
+		{
+			name:               "autopilot with PayPerPodFleetEfficiency enabled - tags plain, ARM64, workload-separated, and plain ProvReq shards true; skips CCC, GPU, and TPU",
+			autopilot:          true,
+			flexAdvisorEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "plain-x86"},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "workload-sep"},
+					Spec: v1.PodSpec{
+						NodeSelector: map[string]string{"team": "alpha"},
+						Tolerations:  []v1.Toleration{{Key: "team", Operator: v1.TolerationOpEqual, Value: "alpha", Effect: v1.TaintEffectNoSchedule}},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "arm64-wl"},
+					Spec: v1.PodSpec{
+						NodeSelector: map[string]string{
+							v1.LabelArchStable: "arm64",
+							"team":             "arm",
+						},
+						Tolerations: []v1.Toleration{{Key: "team", Operator: v1.TolerationOpEqual, Value: "arm", Effect: v1.TaintEffectNoSchedule}},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "explicit-ccc"},
+					Spec: v1.PodSpec{
+						NodeSelector: map[string]string{gkelabels.ComputeClassLabel: "custom-ccc"},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "gpu-pod"},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Resources: v1.ResourceRequirements{
+									Requests: v1.ResourceList{gpu.ResourceNvidiaGPU: resource.MustParse("1")},
+								},
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "tpu-pod"},
+					Spec: v1.PodSpec{
+						Containers: []v1.Container{
+							{
+								Resources: v1.ResourceRequirements{
+									Requests: v1.ResourceList{tpu.ResourceGoogleTPU: resource.MustParse("1")},
+								},
+							},
+						},
+					},
+				},
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						UID: "provreq",
+						Annotations: map[string]string{
+							"cluster-autoscaler.kubernetes.io/consume-provisioning-request": "pr-1",
+							"cluster-autoscaler.kubernetes.io/provisioning-class-name":      provreqv1.ProvisioningClassCheckCapacity,
+						},
+					},
+				},
+			},
+			wantByUID: map[types.UID]bool{
+				"plain-x86":    true,
+				"workload-sep": true,
+				"arm64-wl":     true,
+				"explicit-ccc": false,
+				"gpu-pod":      false,
+				"tpu-pod":      false,
+				"provreq":      true,
+			},
+		},
+		{
+			name:               "autopilot with VM-billed pod - keeps shard false",
+			autopilot:          true,
+			flexAdvisorEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "n2-pod"},
+					Spec: v1.PodSpec{
+						NodeSelector: map[string]string{
+							gkelabels.MachineFamilyLabel: "n2",
+						},
+					},
+				},
+			},
+			wantByUID: map[types.UID]bool{
+				"n2-pod": false,
+			},
+		},
+		{
+			name:               "autopilot with GCEFlexAdvisor disabled - leaves all shards false",
+			autopilot:          true,
+			flexAdvisorEnabled: false,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "plain-x86"},
+				},
+			},
+			wantByUID: map[types.UID]bool{
+				"plain-x86": false,
+			},
+		},
+		{
+			name:               "standard cluster with PayPerPodFleetEfficiency enabled - leaves all shards false",
+			autopilot:          false,
+			flexAdvisorEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "plain-x86"},
+				},
+			},
+			wantByUID: map[types.UID]bool{
+				"plain-x86": false,
+			},
+		},
+		{
+			name:               "autopilot with PayPerPodFleetEfficiency disabled - leaves all shards false",
+			autopilot:          true,
+			flexAdvisorEnabled: true,
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:      false,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag: true,
+			}, nil),
+			pods: []*v1.Pod{
+				{
+					ObjectMeta: metav1.ObjectMeta{UID: "plain-x86"},
+				},
+			},
+			wantByUID: map[types.UID]bool{
+				"plain-x86": false,
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				WithAutopilotEnabled(tc.autopilot).
+				Build()
+			sharder := NewGkePodSharder(provider, false, nil, tc.flexAdvisorEnabled, tc.experimentsManager)
+			shards := sharder.ComputePodShards(tc.pods)
+			seen := make(map[types.UID]bool, len(tc.wantByUID))
+			for _, shard := range shards {
+				for uid := range shard.PodUids {
+					seen[uid] = true
+					want, ok := tc.wantByUID[uid]
+					require.True(t, ok, "unexpected pod UID %q in shard %q", uid, shard.Signature())
+					assert.Equal(t, want, shard.HasPayPerPodWorkloads, "pod UID %q in shard %q", uid, shard.Signature())
+				}
+			}
+			assert.Len(t, seen, len(tc.wantByUID))
+		})
+	}
 }
