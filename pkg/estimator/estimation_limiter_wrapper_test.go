@@ -34,6 +34,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
 	"sigs.k8s.io/cluster-autoscaler/pkg/estimator"
@@ -230,12 +231,13 @@ func TestEstimationLimiterWrapper_StartEstimation(t *testing.T) {
 			}
 			mockLister := lister.NewMockCrdListerWithLabel([]crd.CRD{crdScope1}, labels.ComputeClassLabel)
 			inner := &fakeEstimationLimiter{}
-			wrapper := NewEstimationLimiterWrapper(inner, mockProvider, mockLister, tc.experimentsManager)
+			awaitBudget := flexadvisor.NewBinpackerExpanderAwaitBudget(tc.experimentsManager)
+			wrapper := NewEstimationLimiterWrapper(inner, mockProvider, mockLister, awaitBudget)
 
 			wrapper.StartEstimation(context.Background(), nil, tc.nodeGroup, nil)
 
 			assert.True(t, inner.startCalled)
-			assert.Equal(t, tc.wantBudgetUsed, wrapper.scopeAwaitTimeoutUsed)
+			assert.Equal(t, tc.wantBudgetUsed, awaitBudget.IsUsed())
 			mockProvider.AssertExpectations(t)
 		})
 	}
@@ -259,27 +261,29 @@ func TestEstimationLimiterWrapper_BudgetLifecycleAcrossNodeGroupsAndScaleUpEnd(t
 			events = append(events, "inner_start")
 		},
 	}
-	wrapper := NewEstimationLimiterWrapper(inner, mockProvider, mockLister, binpackerBlockTestManager(true, nil))
+	em := binpackerBlockTestManager(true, nil)
+	awaitBudget := flexadvisor.NewBinpackerExpanderAwaitBudget(em)
+	wrapper := NewEstimationLimiterWrapper(inner, mockProvider, mockLister, awaitBudget)
 
 	// 1. Node group without CCC does not consume budget.
 	wrapper.StartEstimation(context.Background(), nil, ngNoCcc, nil)
-	assert.False(t, wrapper.scopeAwaitTimeoutUsed)
+	assert.False(t, awaitBudget.IsUsed())
 
 	// 2. First CCC node group in pass 1 awaits BEFORE inner.StartEstimation and consumes budget.
 	wrapper.StartEstimation(context.Background(), nil, ngScope1A, nil)
-	assert.True(t, wrapper.scopeAwaitTimeoutUsed)
+	assert.True(t, awaitBudget.IsUsed())
 
 	// 3. Second CCC node group in pass 1 does not await because budget is already used.
 	wrapper.StartEstimation(context.Background(), nil, ngScope1B, nil)
-	assert.True(t, wrapper.scopeAwaitTimeoutUsed)
+	assert.True(t, awaitBudget.IsUsed())
 
-	// 4. OnScaleUpEnd resets the budget for pass 2.
-	wrapper.OnScaleUpEnd()
-	assert.False(t, wrapper.scopeAwaitTimeoutUsed)
+	// 4. OnScaleUpEnd on BinpackerExpanderAwaitBudget resets the budget for pass 2.
+	awaitBudget.OnScaleUpEnd()
+	assert.False(t, awaitBudget.IsUsed())
 
 	// 5. First CCC node group in pass 2 awaits again.
 	wrapper.StartEstimation(context.Background(), nil, ngScope1A, nil)
-	assert.True(t, wrapper.scopeAwaitTimeoutUsed)
+	assert.True(t, awaitBudget.IsUsed())
 
 	assert.Equal(t, []string{
 		"inner_start",

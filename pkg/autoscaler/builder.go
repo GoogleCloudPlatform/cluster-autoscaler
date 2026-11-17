@@ -930,11 +930,12 @@ func (b *Builder) Build(
 	napResourceTrimmer := internalestimator.NewNapResourceTrimmer(ca, cloudProvider, autoscalingOptions.AutopilotEnabled)
 	napResourceAnalyzerFunc := napResourceTrimmer.NapResourceAnalyzerFunc()
 
+	binpackerExpanderAwaitBudget := flexadvisor.NewBinpackerExpanderAwaitBudget(experimentsManager)
 	estimationLimiter := internalestimator.NewEstimationLimiterWrapper(
 		estimator.NewThresholdBasedEstimationLimiter(thresholds),
 		flexAdvisor,
 		b.npcCrdLister,
-		experimentsManager,
+		binpackerExpanderAwaitBudget,
 	)
 
 	estimatorBuilder, err := estimator.NewEstimatorBuilder(
@@ -1072,7 +1073,8 @@ func (b *Builder) Build(
 		autoscalingOptions.GCEFlexAdvisorEnabled,
 		experimentsManager,
 		backoff,
-		b.optsTracker)
+		b.optsTracker,
+		binpackerExpanderAwaitBudget)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1090,7 +1092,7 @@ func (b *Builder) Build(
 		bypassTracker,
 		scaleUpLimiterTracker,
 		[]flexadvisor.ScaleUpEndProcessor{
-			estimationLimiter,
+			binpackerExpanderAwaitBudget,
 			flexadvisor.ScaleUpEndProcessorFunc(cloudProvider.ClearRecommendations),
 		},
 		experimentsManager,

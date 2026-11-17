@@ -50,6 +50,7 @@ import (
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/expander/provider"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
@@ -282,7 +283,7 @@ func runFleetEfficiencyTest(t *testing.T, tc fleetEfficiencyTestCase) {
 		}
 
 		optionsTracker := optstracking.NewOptionsTracker(options.AutoscalingOptions{}, em)
-		filter := NewFilter(flexAdvisor, lister, puller, nil, cloudProvider, localSSDDiskSizeProvider, tc.clusterDefaultStrategy, gceFlexAdvisorEnabled, em, tc.backoff, optionsTracker)
+		filter := NewFilter(flexAdvisor, lister, puller, nil, cloudProvider, localSSDDiskSizeProvider, tc.clusterDefaultStrategy, gceFlexAdvisorEnabled, em, tc.backoff, optionsTracker, nil)
 
 		nodeInfos := tc.nodeInfos
 		if nodeInfos == nil {
@@ -1647,7 +1648,7 @@ func TestFleetEfficiencyMetrics(t *testing.T) {
 			}
 			optionsTracker := optstracking.NewOptionsTracker(options.AutoscalingOptions{}, em)
 
-			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, clusterDefaultStrategy, true, em, tc.backoff, optionsTracker)
+			filter := NewFilter(flexAdvisor, lister, puller, fallback, cloudProvider, localSSDDiskSizeProvider, clusterDefaultStrategy, true, em, tc.backoff, optionsTracker, nil)
 
 			// We don't care about the returned options here, just that the fallback logic was triggered and recorded metrics.
 			_ = filter.BestOptions(context.TODO(), tc.options, map[string]*framework.NodeInfo{})
@@ -2699,4 +2700,121 @@ func TestGetPodCrd_NilCloudProviderAndNilPod(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Nil(t, gotCrd)
 	assert.Equal(t, metrics.AllocationStrategySourceUnknown, gotSource)
+}
+
+func TestFleetEfficiencyFilter_BinpackerExpanderAwaitBudget(t *testing.T) {
+	defaultX86Pod := &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "default-x86-pod"}}
+	ng1 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-1").SetGceRefZone("us-central1-a").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-4"}).Build()
+	ng2 := gke.NewTestGkeMigBuilder().SetNodePoolName("pool-2").SetGceRefZone("us-central1-a").SetSpec(&gkeclient.NodePoolSpec{MachineType: "e2-standard-8"}).Build()
+	x86Opt1 := expander.Option{NodeGroup: ng1, Pods: []*v1.Pod{defaultX86Pod}}
+	x86Opt2 := expander.Option{NodeGroup: ng2, Pods: []*v1.Pod{defaultX86Pod}}
+
+	testCases := []struct {
+		name               string
+		binpackerBlock     bool
+		budgetPreConsumed  bool
+		flexAdvisorSetup   func(*instanceavailability.MockProvider)
+		wantBestOptions    []expander.Option
+		wantTimeoutUsedEnd bool
+	}{
+		{
+			name:              "binpacker block enabled and budget unused - awaits general-purpose once across options and marks budget used",
+			binpackerBlock:    true,
+			budgetPreConsumed: false,
+			flexAdvisorSetup: func(flexAdvisor *instanceavailability.MockProvider) {
+				flexAdvisor.On("AwaitAvailabilitySnapshotWithTimeout", crdRules.GeneralPurposePodFamily, mock.MatchedBy(func(s string) bool {
+					return strings.Contains(s, "e2-standard-4")
+				}), 3*time.Second).Return(
+					instanceavailability.NewSnapshot(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-4", "guidance", "", nil, map[string]float64{"us-central1-a": 0.3}),
+					nil,
+				).Once()
+				setupMockSnapshotForScope(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-8", map[string]float64{"us-central1-a": 0.8})
+			},
+			wantBestOptions:    []expander.Option{x86Opt2},
+			wantTimeoutUsedEnd: true,
+		},
+		{
+			name:              "binpacker block enabled and budget already consumed by binpacker - does not await again in FE expander",
+			binpackerBlock:    true,
+			budgetPreConsumed: true,
+			flexAdvisorSetup: func(flexAdvisor *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-4", map[string]float64{"us-central1-a": 0.3})
+				setupMockSnapshotForScope(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-8", map[string]float64{"us-central1-a": 0.8})
+			},
+			wantBestOptions:    []expander.Option{x86Opt2},
+			wantTimeoutUsedEnd: true,
+		},
+		{
+			name:              "binpacker block disabled - does not await and leaves budget unused",
+			binpackerBlock:    false,
+			budgetPreConsumed: false,
+			flexAdvisorSetup: func(flexAdvisor *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-4", map[string]float64{"us-central1-a": 0.3})
+				setupMockSnapshotForScope(flexAdvisor, crdRules.GeneralPurposePodFamily, "e2-standard-8", map[string]float64{"us-central1-a": 0.8})
+			},
+			wantBestOptions:    []expander.Option{x86Opt2},
+			wantTimeoutUsedEnd: false,
+		},
+		{
+			name:              "AwaitAvailabilitySnapshotWithTimeout returns error - marks budget used and falls back without querying second option",
+			binpackerBlock:    true,
+			budgetPreConsumed: false,
+			flexAdvisorSetup: func(flexAdvisor *instanceavailability.MockProvider) {
+				flexAdvisor.On("AwaitAvailabilitySnapshotWithTimeout", crdRules.GeneralPurposePodFamily, mock.MatchedBy(func(s string) bool {
+					return strings.Contains(s, "e2-standard-4")
+				}), 3*time.Second).Return(
+					(*instanceavailability.Snapshot)(nil),
+					errors.New("timeout waiting for initial fetch"),
+				).Once()
+			},
+			wantBestOptions:    []expander.Option{x86Opt1, x86Opt2},
+			wantTimeoutUsedEnd: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			em := experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
+				experiments.PayPerPodFleetEfficiencyEnabledFlag:       true,
+				experiments.PayPerPodFleetEfficiencyMinCAVersionFlag:  true,
+				experiments.FlexAdvisorBinpackerBlockEnabledFlag:      tc.binpackerBlock,
+				experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag: tc.binpackerBlock,
+			}, nil)
+			optionsTracker := optstracking.NewOptionsTracker(options.AutoscalingOptions{}, em)
+
+			flexAdvisor := new(instanceavailability.MockProvider)
+			tc.flexAdvisorSetup(flexAdvisor)
+
+			awaitBudget := flexadvisor.NewBinpackerExpanderAwaitBudget(em)
+			if tc.budgetPreConsumed {
+				awaitBudget.Consume()
+			}
+
+			cloudProvider := gke.NewTestAutoprovisioningCloudProviderBuilder().
+				WithMachineConfigProvider(machinetypes.NewMachineConfigProvider(nil)).
+				WithAutopilotEnabled(true).
+				Build()
+
+			lister := listerutils.NewMockCrdListerWithLabel(nil, gkelabels.ComputeClassLabel)
+			filter := NewFilter(
+				flexAdvisor,
+				lister,
+				nil,
+				nil,
+				cloudProvider,
+				localssdsize.NewSimpleLocalSSDProvider(),
+				options.ClusterDefaultAllocationStrategyLowestCost,
+				true,
+				em,
+				nil,
+				optionsTracker,
+				awaitBudget,
+			)
+
+			best := filter.BestOptions(t.Context(), []expander.Option{x86Opt1, x86Opt2}, map[string]*framework.NodeInfo{})
+			assert.Equal(t, tc.wantBestOptions, best)
+			assert.Equal(t, tc.wantTimeoutUsedEnd, awaitBudget.IsUsed())
+			flexAdvisor.AssertExpectations(t)
+		})
+	}
 }
