@@ -23,6 +23,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -33,17 +34,53 @@ import (
 )
 
 type clientFactory struct {
-	name string
-	new  func(t *testing.T, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string))
+	name          string
+	newWithClient func(t *testing.T, httpClient *http.Client, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string))
+}
+
+func (cf clientFactory) new(t *testing.T, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string)) {
+	t.Helper()
+	return cf.newWithClient(t, &http.Client{}, serverURL, pollInterval, waitTimeout)
+}
+
+func (cf clientFactory) newInProcess(t *testing.T, handler http.Handler, pollInterval, waitTimeout time.Duration) ResizeRequestClient {
+	t.Helper()
+	client, _ := cf.newWithClient(t, newInProcessHTTPClient(handler), "http://resizerequest.test", pollInterval, waitTimeout)
+	return client
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+// newInProcessHTTPClient dispatches requests directly to handler without
+// opening real sockets, which would park goroutines in the runtime netpoller
+// and block synctest from advancing its virtual clock across time.Sleep.
+func newInProcessHTTPClient(handler http.Handler) *http.Client {
+	return &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if req.Body != nil {
+				defer req.Body.Close()
+			}
+			if err := req.Context().Err(); err != nil {
+				return nil, err
+			}
+			recorder := httptest.NewRecorder()
+			handler.ServeHTTP(recorder, req)
+			return recorder.Result(), nil
+		}),
+	}
 }
 
 func bothClientFactories() []clientFactory {
 	return []clientFactory{
 		{
 			name: "v1",
-			new: func(t *testing.T, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string)) {
+			newWithClient: func(t *testing.T, httpClient *http.Client, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string)) {
 				t.Helper()
-				c, err := NewResizeRequestClientV1(&http.Client{}, "project1", "test-agent", serverURL, ResizeRequestModeQueued)
+				c, err := NewResizeRequestClientV1(httpClient, "project1", "test-agent", serverURL, ResizeRequestModeQueued)
 				require.NoError(t, err)
 				c.operationPollInterval = pollInterval
 				c.operationWaitTimeout = waitTimeout
@@ -58,9 +95,9 @@ func bothClientFactories() []clientFactory {
 		},
 		{
 			name: "beta",
-			new: func(t *testing.T, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string)) {
+			newWithClient: func(t *testing.T, httpClient *http.Client, serverURL string, pollInterval, waitTimeout time.Duration) (ResizeRequestClient, func(rrID uint64, opName, opType string)) {
 				t.Helper()
-				c, err := NewResizeRequestClientBeta(&http.Client{}, "project1", "test-agent", serverURL, ResizeRequestModeAtomic)
+				c, err := NewResizeRequestClientBeta(httpClient, "project1", "test-agent", serverURL, ResizeRequestModeAtomic)
 				require.NoError(t, err)
 				c.operationPollInterval = pollInterval
 				c.operationWaitTimeout = waitTimeout
@@ -85,55 +122,56 @@ func TestCreateResizeRequestWithRunDurationAndTransientPollError(t *testing.T) {
 	for _, cf := range bothClientFactories() {
 		t.Run(cf.name, func(t *testing.T) {
 			t.Parallel()
+			synctest.Test(t, func(t *testing.T) {
+				var insertCalls atomic.Int32
+				var pollCalls atomic.Int32
+				var capturedBody map[string]any
 
-			var insertCalls atomic.Int32
-			var pollCalls atomic.Int32
-			var capturedBody map[string]any
-
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
-					insertCalls.Add(1)
-					bodyBytes, err := io.ReadAll(r.Body)
-					assert.NoError(t, err)
-					assert.NoError(t, json.Unmarshal(bodyBytes, &capturedBody))
-					w.WriteHeader(http.StatusOK)
-					_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
-				case "/projects/project1/zones/us-west4-a/operations/op-create-1":
-					switch pollCalls.Add(1) {
-					case 1:
-						// Transient ZoneOperations.Get error must be retried rather than aborting CreateResizeRequest.
-						w.WriteHeader(http.StatusInternalServerError)
-						_, _ = w.Write([]byte(`{"error":{"code":500,"message":"transient backend error"}}`))
-					case 2:
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
+						insertCalls.Add(1)
+						bodyBytes, err := io.ReadAll(r.Body)
+						assert.NoError(t, err)
+						assert.NoError(t, json.Unmarshal(bodyBytes, &capturedBody))
 						w.WriteHeader(http.StatusOK)
-						_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING"}`))
+						_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
+					case "/projects/project1/zones/us-west4-a/operations/op-create-1":
+						switch pollCalls.Add(1) {
+						case 1:
+							// Retry transient ZoneOperations.Get
+							// errors rather than aborting.
+							w.WriteHeader(http.StatusInternalServerError)
+							_, _ = w.Write([]byte(`{"error":{"code":500,"message":"transient backend error"}}`))
+						case 2:
+							w.WriteHeader(http.StatusOK)
+							_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING"}`))
+						default:
+							w.WriteHeader(http.StatusOK)
+							_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"DONE"}`))
+						}
 					default:
-						w.WriteHeader(http.StatusOK)
-						_, _ = w.Write([]byte(`{"name":"op-create-1","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"DONE"}`))
+						t.Errorf("unexpected request path: %s", r.URL.Path)
+						w.WriteHeader(http.StatusNotFound)
 					}
-				default:
-					t.Errorf("unexpected request path: %s", r.URL.Path)
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}))
-			defer server.Close()
+				})
 
-			client, _ := cf.new(t, server.URL, 1*time.Millisecond, 500*time.Millisecond)
-			err := client.CreateResizeRequest(context.Background(), mig, ResizeRequestCreateRequest{
-				Name:                 "rr-run-dur",
-				ResizeBy:             4,
-				RequestedRunDuration: &runDur,
+				client := cf.newInProcess(t, handler, 1*time.Millisecond, 500*time.Millisecond)
+				err := client.CreateResizeRequest(t.Context(), mig, ResizeRequestCreateRequest{
+					Name:                 "rr-run-dur",
+					ResizeBy:             4,
+					RequestedRunDuration: &runDur,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, int32(1), insertCalls.Load())
+				assert.Equal(t, int32(3), pollCalls.Load())
+				assert.Equal(t, "rr-run-dur", capturedBody["name"])
+				assert.Equal(t, float64(4), capturedBody["resizeBy"])
+				durMap, ok := capturedBody["requestedRunDuration"].(map[string]any)
+				require.True(t, ok, "expected requestedRunDuration in POST body, got %v", capturedBody)
+				assert.Equal(t, "3600", durMap["seconds"])
+				assert.Equal(t, float64(500000000), durMap["nanos"])
 			})
-			require.NoError(t, err)
-			assert.Equal(t, int32(1), insertCalls.Load())
-			assert.Equal(t, int32(3), pollCalls.Load())
-			assert.Equal(t, "rr-run-dur", capturedBody["name"])
-			assert.Equal(t, float64(4), capturedBody["resizeBy"])
-			durMap, ok := capturedBody["requestedRunDuration"].(map[string]any)
-			require.True(t, ok, "expected requestedRunDuration in POST body, got %v", capturedBody)
-			assert.Equal(t, "3600", durMap["seconds"])
-			assert.Equal(t, float64(500000000), durMap["nanos"])
 		})
 	}
 }
@@ -160,48 +198,51 @@ func TestCreateResizeRequestErrorsAndTimeout(t *testing.T) {
 
 		t.Run(cf.name+"/operation_done_with_errors", func(t *testing.T) {
 			t.Parallel()
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
-					_, _ = w.Write([]byte(`{"name":"op-err","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
-				case "/projects/project1/zones/us-west4-a/operations/op-err":
-					_, _ = w.Write([]byte(`{"name":"op-err","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"DONE","error":{"errors":[{"code":"QUOTA_EXCEEDED","message":"Insufficient GPU quota"}]}}`))
-				default:
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}))
-			defer server.Close()
+			synctest.Test(t, func(t *testing.T) {
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
+						_, _ = w.Write([]byte(`{"name":"op-err","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
+					case "/projects/project1/zones/us-west4-a/operations/op-err":
+						_, _ = w.Write([]byte(`{"name":"op-err","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"DONE","error":{"errors":[{"code":"QUOTA_EXCEEDED","message":"Insufficient GPU quota"}]}}`))
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
 
-			client, _ := cf.new(t, server.URL, 1*time.Millisecond, 200*time.Millisecond)
-			err := client.CreateResizeRequest(context.Background(), mig, ResizeRequestCreateRequest{Name: "rr-quota", ResizeBy: 8})
-			require.Error(t, err)
-			var multiErr *ResizeRequestOperationMultiError
-			require.True(t, errors.As(err, &multiErr), "expected ResizeRequestOperationMultiError, got %T: %v", err, err)
-			require.Len(t, multiErr.Errors, 1)
-			assert.Equal(t, "QUOTA_EXCEEDED", multiErr.Errors[0].Code)
+				client := cf.newInProcess(t, handler, 1*time.Millisecond, 200*time.Millisecond)
+				err := client.CreateResizeRequest(t.Context(), mig, ResizeRequestCreateRequest{Name: "rr-quota", ResizeBy: 8})
+				require.Error(t, err)
+				var multiErr *ResizeRequestOperationMultiError
+				require.True(t, errors.As(err, &multiErr), "expected ResizeRequestOperationMultiError, got %T: %v", err, err)
+				require.Len(t, multiErr.Errors, 1)
+				assert.Equal(t, "QUOTA_EXCEEDED", multiErr.Errors[0].Code)
+			})
 		})
 
 		t.Run(cf.name+"/polling_timeout", func(t *testing.T) {
 			t.Parallel()
-			var polls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
-					_, _ = w.Write([]byte(`{"name":"op-slow","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
-				case "/projects/project1/zones/us-west4-a/operations/op-slow":
-					polls.Add(1)
-					_, _ = w.Write([]byte(`{"name":"op-slow","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING"}`))
-				default:
-					w.WriteHeader(http.StatusNotFound)
-				}
-			}))
-			defer server.Close()
+			synctest.Test(t, func(t *testing.T) {
+				var polls atomic.Int32
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/projects/project1/zones/us-west4-a/instanceGroupManagers/mig-name/resizeRequests":
+						_, _ = w.Write([]byte(`{"name":"op-slow","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING","targetLink":"target-rr"}`))
+					case "/projects/project1/zones/us-west4-a/operations/op-slow":
+						polls.Add(1)
+						_, _ = w.Write([]byte(`{"name":"op-slow","operationType":"compute.instanceGroupManagerResizeRequests.insert","status":"RUNNING"}`))
+					default:
+						w.WriteHeader(http.StatusNotFound)
+					}
+				})
 
-			client, _ := cf.new(t, server.URL, 2*time.Millisecond, 15*time.Millisecond)
-			err := client.CreateResizeRequest(context.Background(), mig, ResizeRequestCreateRequest{Name: "rr-slow", ResizeBy: 1})
-			require.Error(t, err)
-			assert.ErrorContains(t, err, "timeout while waiting for ResizeRequest")
-			assert.GreaterOrEqual(t, polls.Load(), int32(1))
+				client := cf.newInProcess(t, handler, 2*time.Millisecond, 15*time.Millisecond)
+				err := client.CreateResizeRequest(t.Context(), mig, ResizeRequestCreateRequest{Name: "rr-slow", ResizeBy: 1})
+				require.Error(t, err)
+				assert.ErrorContains(t, err, "timeout while waiting for ResizeRequest")
+				// Polls run at t=2, 4, ..., 14ms before t >= 15ms.
+				assert.Equal(t, int32(7), polls.Load())
+			})
 		})
 	}
 }
