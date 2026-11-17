@@ -198,7 +198,7 @@ func TestScaleUpStatusProcessor_Process(t *testing.T) {
 			mockProvider := &instanceavailability.MockProvider{}
 			if !tc.nilProvider {
 				if tc.wantSlowPollScope != "" {
-					mockProvider.On("SetPollingMode", tc.wantSlowPollScope, PollingModeSlow).Return().Once()
+					mockProvider.On("DeactivateFastPolling", tc.wantSlowPollScope).Return().Once()
 				}
 				provider = mockProvider
 			}

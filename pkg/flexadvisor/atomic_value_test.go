@@ -28,20 +28,20 @@ func TestAtomicValue(t *testing.T) {
 		{
 			name: "uninitialized Load and Swap - return zero value",
 			run: func(t *testing.T) {
-				var v atomicValue[PollingMode]
-				assert.Equal(t, PollingModeNormal, v.Load())
-				assert.Equal(t, PollingModeNormal, v.Swap(PollingModeSlow))
-				assert.Equal(t, PollingModeSlow, v.Load())
+				var v atomicValue[pollingSpeed]
+				assert.Equal(t, pollingSpeedFast, v.Load())
+				assert.Equal(t, pollingSpeedFast, v.Swap(pollingSpeedSlow))
+				assert.Equal(t, pollingSpeedSlow, v.Load())
 			},
 		},
 		{
 			name: "Store followed by Swap - returns previous value and updates stored value",
 			run: func(t *testing.T) {
-				var v atomicValue[PollingMode]
-				v.Store(PollingModeSlow)
-				assert.Equal(t, PollingModeSlow, v.Load())
-				assert.Equal(t, PollingModeSlow, v.Swap(PollingModeNormal))
-				assert.Equal(t, PollingModeNormal, v.Load())
+				var v atomicValue[pollingSpeed]
+				v.Store(pollingSpeedSlow)
+				assert.Equal(t, pollingSpeedSlow, v.Load())
+				assert.Equal(t, pollingSpeedSlow, v.Swap(pollingSpeedFast))
+				assert.Equal(t, pollingSpeedFast, v.Load())
 			},
 		},
 	}

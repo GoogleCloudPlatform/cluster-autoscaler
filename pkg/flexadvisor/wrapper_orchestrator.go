@@ -151,21 +151,18 @@ func (o *WrapperOrchestrator) ScaleUp(
 		if o.flexAdvisor != nil && flexibilityScopeKey != "" {
 			// In salvo mode ScaleUp() and ScaleUpStatusProcessors are called multiple times per single shard, in case it was switched to slow polling
 			// we switch it back to fast. This change can be picked up by scope worker, but unless significant time passed, refresh will not be retriggered
-			o.flexAdvisor.SetPollingMode(flexibilityScopeKey, PollingModeNormal)
-			defer o.flexAdvisor.SetPollingMode(flexibilityScopeKey, PollingModeSlow)
+			o.flexAdvisor.ActivateFastPolling(flexibilityScopeKey)
+			defer o.flexAdvisor.DeactivateFastPolling(flexibilityScopeKey)
 		}
 
 		if o.flexAdvisor != nil && flexibilityScopeKey == "" && shard != nil && shard.NodeGroupDescriptor.ProvisioningClassName == "" {
-			// This is a non-CCC, non-provreq shard - try to activate the
-			// synthetic pay-per-pod scope. SetPollingMode only changes its mode if
-			// it was previously registered, meaning there are unschedulable pods
-			// pending that were picked up by pod list processor for the default
-			// Autopilot scope (or the scope was used recently and has not yet
-			// expired). We don't check explicitly whether the synthetic CCC will
-			// actually be used in this shard as 1. cost of checking is high 2.
-			// cost of just activating it is low.
-			o.flexAdvisor.SetPollingMode(ccc.AutopilotPodFamilyCrdName, PollingModeNormal)
-			defer o.flexAdvisor.SetPollingMode(ccc.AutopilotPodFamilyCrdName, PollingModeSlow)
+			// This is a non-CCC, non-provreq shard: activate fast polling for the
+			// synthetic pay-per-pod scope. ActivateFastPolling and
+			// DeactivateFastPolling are no-ops unless the scope was previously
+			// registered (e.g. by PodListProcessor for pending default Autopilot
+			// workloads).
+			o.flexAdvisor.ActivateFastPolling(ccc.AutopilotPodFamilyCrdName)
+			defer o.flexAdvisor.DeactivateFastPolling(ccc.AutopilotPodFamilyCrdName)
 		}
 	}
 

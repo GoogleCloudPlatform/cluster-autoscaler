@@ -479,9 +479,9 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 
 	syntheticPayPerPodScopes := []string{ccc.AutopilotPodFamilyCrdName}
 	syntheticPayPerPodOrder := []string{
-		"SetPollingMode:general-purpose:normal",
+		"ActivateFastPolling:general-purpose",
 		"innerScaleUp",
-		"SetPollingMode:general-purpose:slow",
+		"DeactivateFastPolling:general-purpose",
 	}
 
 	testCases := []struct {
@@ -498,13 +498,13 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 		wantExpectedOrder  []string
 	}{
 		{
-			name:               "adaptive polling enabled, explicit CCC shard - sets PollingModeNormal before and PollingModeSlow after inner ScaleUp",
+			name:               "adaptive polling enabled, explicit CCC shard - calls ActivateFastPolling before and DeactivateFastPolling after inner ScaleUp",
 			crds:               []crd.CRD{crdScope1},
 			unschedulablePods:  []*apiv1.Pod{podScope1},
 			selectedShard:      cccShard("scope-1"),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"scope-1"},
-			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},
 		},
 		{
 			name:               "adaptive polling enabled, mixed shard with plain pod at unschedulablePods[0] without default CCC - resolves explicit CCC scope from autoscalingCtx",
@@ -513,7 +513,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			selectedShard:      cccShard("scope-1"),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"scope-1"},
-			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},
 		},
 		{
 			name:               "adaptive polling enabled, mixed shard with plain pod at unschedulablePods[0] and default CCC enabled - resolves explicit CCC scope instead of default",
@@ -523,10 +523,10 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			selectedShard:      cccShard("scope-1"),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"scope-1"},
-			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},
 		},
 		{
-			name:              "adaptive polling enabled, recommendations bypass disabled (early return path) - still sets PollingModeNormal before and PollingModeSlow after inner ScaleUp",
+			name:              "adaptive polling enabled, recommendations bypass disabled (early return path) - still calls ActivateFastPolling before and DeactivateFastPolling after inner ScaleUp",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
 			selectedShard:     cccShard("scope-1"),
@@ -535,17 +535,17 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			}, nil),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"scope-1"},
-			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},
 		},
 		{
-			name:               "adaptive polling enabled, plain shard with default CCC enabled - sets PollingModeNormal before and PollingModeSlow after inner ScaleUp for default scope",
+			name:               "adaptive polling enabled, plain shard with default CCC enabled - calls ActivateFastPolling before and DeactivateFastPolling after inner ScaleUp for default scope",
 			crds:               []crd.CRD{crdScope1, crdDefault},
 			defaultCccEnabled:  true,
 			unschedulablePods:  []*apiv1.Pod{podWithoutCCC},
 			selectedShard:      plainShard("basic"),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"default"},
-			wantExpectedOrder:  []string{"SetPollingMode:default:normal", "innerScaleUp", "SetPollingMode:default:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:default", "innerScaleUp", "DeactivateFastPolling:default"},
 		},
 		{
 			name:               "adaptive polling enabled, plain shard without default CCC - activates synthetic Pay-Per-Pod scopes before and demotes after inner ScaleUp",
@@ -557,7 +557,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  syntheticPayPerPodOrder,
 		},
 		{
-			name:               "adaptive polling enabled, provisioning request shard - skipped without calling SetPollingMode",
+			name:               "adaptive polling enabled, provisioning request shard - skipped without calling ActivateFastPolling",
 			crds:               []crd.CRD{crdScope1},
 			unschedulablePods:  []*apiv1.Pod{podScope1},
 			selectedShard:      provReqShard("scope-1"),
@@ -565,7 +565,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:               "adaptive polling enabled, no selected shard in autoscalingCtx - does not call SetPollingMode",
+			name:               "adaptive polling enabled, no selected shard in autoscalingCtx - does not call ActivateFastPolling",
 			crds:               []crd.CRD{crdScope1},
 			unschedulablePods:  []*apiv1.Pod{podScope1},
 			selectedShard:      nil,
@@ -573,7 +573,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:              "adaptive polling disabled via bool flag - does not call SetPollingMode",
+			name:              "adaptive polling disabled via bool flag - does not call ActivateFastPolling",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
 			selectedShard:     plainShard("ignored"),
@@ -584,7 +584,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:              "adaptive polling disabled via min CA version flag - does not call SetPollingMode",
+			name:              "adaptive polling disabled via min CA version flag - does not call ActivateFastPolling",
 			crds:              []crd.CRD{crdScope1, crdDefault},
 			defaultCccEnabled: true,
 			unschedulablePods: []*apiv1.Pod{podWithoutCCC, podScope1},
@@ -597,7 +597,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:              "adaptive polling disabled, plain pod without default CCC - does not call SetPollingMode",
+			name:              "adaptive polling disabled, plain pod without default CCC - does not call ActivateFastPolling",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podWithoutCCC},
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
@@ -607,7 +607,7 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:              "adaptive polling disabled, empty unschedulable pods - does not call SetPollingMode",
+			name:              "adaptive polling disabled, empty unschedulable pods - does not call ActivateFastPolling",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: nil,
 			selectedShard:     cccShard("scope-1"),
@@ -618,14 +618,14 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:               "inner ScaleUp returns error - still sets PollingModeSlow via defer",
+			name:               "inner ScaleUp returns error - still calls DeactivateFastPolling via defer",
 			crds:               []crd.CRD{crdScope1},
 			unschedulablePods:  []*apiv1.Pod{podScope1},
 			selectedShard:      cccShard("scope-1"),
 			innerScaleUpResult: status.ScaleUpError,
 			innerScaleUpErr:    errors.NewAutoscalerError(errors.CloudProviderError, "simulated error"),
 			wantScopes:         []string{"scope-1"},
-			wantExpectedOrder:  []string{"SetPollingMode:scope-1:normal", "innerScaleUp", "SetPollingMode:scope-1:slow"},
+			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},
 		},
 		{
 			name:               "nil provider - does not panic",
@@ -649,11 +649,11 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			var provider instanceavailability.Provider
 			if !tc.nilProvider {
 				for _, scope := range tc.wantScopes {
-					mockProvider.On("SetPollingMode", scope, PollingModeNormal).Run(func(args mock.Arguments) {
-						callOrder = append(callOrder, "SetPollingMode:"+args.String(0)+":normal")
+					mockProvider.On("ActivateFastPolling", scope).Run(func(args mock.Arguments) {
+						callOrder = append(callOrder, "ActivateFastPolling:"+args.String(0))
 					}).Once()
-					mockProvider.On("SetPollingMode", scope, PollingModeSlow).Run(func(args mock.Arguments) {
-						callOrder = append(callOrder, "SetPollingMode:"+args.String(0)+":slow")
+					mockProvider.On("DeactivateFastPolling", scope).Run(func(args mock.Arguments) {
+						callOrder = append(callOrder, "DeactivateFastPolling:"+args.String(0))
 					}).Once()
 				}
 				provider = mockProvider

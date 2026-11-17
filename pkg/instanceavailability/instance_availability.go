@@ -29,26 +29,6 @@ const (
 	FlexStart ProvisioningMode = "FLEX_START"
 )
 
-// PollingMode controls the background refresh cadence of a flexibility scope.
-type PollingMode int
-
-const (
-	PollingModeNormal PollingMode = iota
-	PollingModeSlow
-)
-
-// String returns a human-readable representation of PollingMode.
-func (m PollingMode) String() string {
-	switch m {
-	case PollingModeNormal:
-		return "normal"
-	case PollingModeSlow:
-		return "slow"
-	default:
-		return fmt.Sprintf("PollingMode(%d)", m)
-	}
-}
-
 type Provider interface {
 	// GetAvailabilitySnapshot returns a Snapshot of instance availability if available, or an error otherwise. Will trigger RegisterFlexibilityScope if flexibilityScopeKey is missing. Non-blocking.
 	// Does not update keep-alive of an existing scope.
@@ -72,8 +52,14 @@ type Provider interface {
 	// TODO(b/514577515): move balancing phase metrics reporting to single place, remove IncrementFlexAdvisorCacheQueryCount from this interface
 	// IncrementFlexAdvisorCacheQueryCount attaches additional debugging info, emits the metric
 	IncrementFlexAdvisorCacheQueryCount(result metrics.FACacheQueryResult, flexibilityScopeKey string, instanceConfigKey string)
-	// SetPollingMode sets the background refresh polling mode for an existing flexibility scope. No-op if the scope is not registered.
-	SetPollingMode(flexibilityScopeKey string, mode PollingMode)
+	// ActivateFastPolling switches an existing flexibility scope to fast
+	// background polling (when adaptive polling is enabled) and extends its
+	// keep-alive to the active keep-alive TTL. No-op if the scope is not registered.
+	ActivateFastPolling(flexibilityScopeKey string)
+	// DeactivateFastPolling switches an existing flexibility scope to slow
+	// background polling when adaptive polling is enabled. No-op if the scope is
+	// not registered.
+	DeactivateFastPolling(flexibilityScopeKey string)
 }
 
 type Snapshot struct {

@@ -62,7 +62,7 @@ func (p *ScaleUpStatusProcessor) Process(ctx context.Context, autoscalingCtx *ca
 		scaleUpStatus.Result != status.ScaleUpNoOptionsAvailable {
 		shard := podsharding.GetSelectedPodShard(autoscalingCtx)
 		if key, found := flexibilityScopeKeyFromShard(shard, p.cccLister); found {
-			p.provider.SetPollingMode(key, PollingModeSlow)
+			p.provider.DeactivateFastPolling(key)
 		}
 	}
 }

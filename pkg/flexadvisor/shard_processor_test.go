@@ -245,7 +245,7 @@ func TestShardProcessor_ProcessIncomingShards(t *testing.T) {
 			mockProvider := &instanceavailability.MockProvider{}
 			if !tc.nilProvider {
 				if tc.wantNormalPollScope != "" {
-					mockProvider.On("SetPollingMode", tc.wantNormalPollScope, PollingModeNormal).Return().Once()
+					mockProvider.On("ActivateFastPolling", tc.wantNormalPollScope).Return().Once()
 				}
 				provider = mockProvider
 			}
