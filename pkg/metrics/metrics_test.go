@@ -569,3 +569,24 @@ func TestUpdateComponentFlagOverrides(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, float64(2), redundantVal)
 }
+
+func TestObservePodLoopsWaited(t *testing.T) {
+	registerOnce.Do(RegisterAll)
+	ResetAllForTest()
+
+	Metrics.ObservePodLoopsWaited(3, ScaleUp)
+	Metrics.ObservePodLoopsWaited(5, ScaleUp)
+	Metrics.ObservePodLoopsWaited(0, Scheduled)
+
+	scaleUpCount, err := testutil.GetHistogramMetricCount(podLoopsWaited.WithLabelValues(ScaleUp.String()))
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(2), scaleUpCount)
+
+	scaleUpSum, err := testutil.GetHistogramMetricValue(podLoopsWaited.WithLabelValues(ScaleUp.String()))
+	assert.NoError(t, err)
+	assert.Equal(t, float64(8), scaleUpSum)
+
+	scheduledCount, err := testutil.GetHistogramMetricCount(podLoopsWaited.WithLabelValues(Scheduled.String()))
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(1), scheduledCount)
+}
