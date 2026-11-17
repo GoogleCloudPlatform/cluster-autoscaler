@@ -1052,6 +1052,8 @@ memory:
   physicalBytes: 1073741824
   reservedBytes: 63025152
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
@@ -1128,6 +1130,7 @@ memory:
   nodeVersions:
   - 1.36.4-gke.2202002
   - 1.36.4-gke.2304000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -1151,6 +1154,7 @@ memory:
   nodeVersions:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -2196,6 +2200,8 @@ memory:
   physicalBytes: 1824522240
   reservedBytes: 76902400
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
   - 1.36.0-gke.3009002
@@ -2264,6 +2270,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 1824522240
+  reservedBytes: 76935168
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 1824522240
   reservedBytes: 78008320
   nodeVersions:
   - 1.37.1-gke.1552000
@@ -2284,6 +2297,13 @@ memory:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 1824522240
+  reservedBytes: 78180352
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -3334,6 +3354,8 @@ memory:
   physicalBytes: 2147483648
   reservedBytes: 81375232
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
@@ -3410,6 +3432,7 @@ memory:
   reservedBytes: 81408000
   nodeVersions:
   - 1.36.5-gke.2262000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -3440,6 +3463,7 @@ memory:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -4483,6 +4507,8 @@ memory:
   physicalBytes: 3221225472
   reservedBytes: 101019648
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.3009002
   - 1.36.0-gke.3070003
@@ -4554,6 +4580,7 @@ memory:
   reservedBytes: 101052416
   nodeVersions:
   - 1.36.4-gke.2326000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -4584,6 +4611,7 @@ memory:
   reservedBytes: 102297600
   nodeVersions:
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -5724,6 +5752,8 @@ memory:
   physicalBytes: 4026531840
   reservedBytes: 181506048
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
   - 1.36.0-gke.2684000
@@ -5786,6 +5816,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 4026531840
+  reservedBytes: 181530624
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 4026531840
   reservedBytes: 181534720
   nodeVersions:
   - 1.36.4-gke.2202002
@@ -5829,6 +5866,7 @@ memory:
   reservedBytes: 182779904
   nodeVersions:
   - 1.37.1-gke.3020000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -6974,6 +7012,7 @@ memory:
   physicalBytes: 4294967296
   reservedBytes: 185970688
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.3302004
   - 1.36.3-gke.1253000
 - osDistribution: cos
@@ -6992,6 +7031,7 @@ memory:
   physicalBytes: 4294967296
   reservedBytes: 185978880
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
@@ -7074,6 +7114,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 4294967296
+  reservedBytes: 186011648
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 4294967296
   reservedBytes: 187068416
   nodeVersions:
   - 1.37.1-gke.1552000
@@ -7091,6 +7138,13 @@ memory:
   reservedBytes: 187224064
   nodeVersions:
   - 1.37.1-gke.2097000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 4294967296
+  reservedBytes: 187228160
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -8243,6 +8297,8 @@ memory:
   physicalBytes: 8589934592
   reservedBytes: 259371008
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.35.9-gke.1505000
   - 1.36.0-gke.2684000
   - 1.36.0-gke.3302001
@@ -8329,6 +8385,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 8589934592
+  reservedBytes: 259403776
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 8589934592
   reservedBytes: 259407872
   nodeVersions:
   - 1.36.4-gke.2377000
@@ -8370,6 +8433,13 @@ memory:
   reservedBytes: 260636672
   nodeVersions:
   - 1.37.2-gke.1042000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 8589934592
+  reservedBytes: 260640768
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -9497,6 +9567,8 @@ memory:
   physicalBytes: 17179869184
   reservedBytes: 406724608
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2684000
   - 1.36.0-gke.3009002
@@ -9580,6 +9652,7 @@ memory:
   nodeVersions:
   - 1.36.4-gke.2377000
   - 1.36.5-gke.1982000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -9608,6 +9681,7 @@ memory:
   reservedBytes: 407953408
   nodeVersions:
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -10748,6 +10822,7 @@ memory:
   reservedBytes: 701431808
   nodeVersions:
   - 1.34.12-gke.1539000
+  - 1.35.10-gke.1122000
   - 1.36.2-gke.2281000
 - osDistribution: cos
   architecture: amd64
@@ -10785,6 +10860,7 @@ memory:
   physicalBytes: 34359738368
   reservedBytes: 701444096
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.2-gke.1346000
   - 1.36.2-gke.1498000
   - 1.36.3-gke.1244000
@@ -10844,6 +10920,7 @@ memory:
   - 1.36.4-gke.2202002
   - 1.36.4-gke.2377000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -10873,6 +10950,7 @@ memory:
   nodeVersions:
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -12013,6 +12091,7 @@ memory:
   physicalBytes: 68719476736
   reservedBytes: 1290858496
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.35.9-gke.1673000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.3070003
@@ -12029,6 +12108,7 @@ memory:
   physicalBytes: 68719476736
   reservedBytes: 1290862592
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.0-gke.3009002
   - 1.36.3-gke.1244000
   - 1.36.3-gke.1253000
@@ -12112,6 +12192,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 68719476736
+  reservedBytes: 1290899456
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 68719476736
   reservedBytes: 1291730944
   nodeVersions:
   - 1.37.1-gke.1697000
@@ -12143,6 +12230,13 @@ memory:
   reservedBytes: 1291902976
   nodeVersions:
   - 1.37.2-gke.1042000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 68719476736
+  reservedBytes: 1291907072
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -13238,6 +13332,7 @@ memory:
   nodeVersions:
   - 1.34.11-gke.1209000
   - 1.34.12-gke.1776000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.2-gke.2064000
   - 1.37.0-gke.2941000
@@ -13262,6 +13357,7 @@ memory:
   reservedBytes: 2369048576
   nodeVersions:
   - 1.34.12-gke.1209000
+  - 1.34.13-gke.1051000
   - 1.35.8-gke.1626000
   - 1.36.0-gke.3302001
   - 1.36.3-gke.1244000
@@ -13359,6 +13455,7 @@ memory:
   reservedBytes: 2369089536
   nodeVersions:
   - 1.36.4-gke.1495003
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -13380,6 +13477,13 @@ memory:
   reservedBytes: 2369695744
   nodeVersions:
   - 1.37.1-gke.1697000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 137438953472
+  reservedBytes: 2369839104
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -14550,6 +14654,7 @@ memory:
   physicalBytes: 274877906944
   reservedBytes: 4427132928
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.3302001
   - 1.36.0-gke.4447000
@@ -14570,6 +14675,7 @@ memory:
   physicalBytes: 274877906944
   reservedBytes: 4427141120
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.4-gke.1495000
   - 1.36.4-gke.2046002
   - 1.36.4-gke.2202002
@@ -14603,6 +14709,7 @@ memory:
   - 1.36.4-gke.1247000
   - 1.36.4-gke.1495002
   - 1.36.4-gke.2304000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -14646,6 +14753,13 @@ memory:
   reservedBytes: 4427427840
   nodeVersions:
   - 1.37.1-gke.2097000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 274877906944
+  reservedBytes: 4427436032
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -15884,6 +15998,7 @@ memory:
   physicalBytes: 2063731785728
   reservedBytes: 32385802240
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.35.6-gke.1250001
   - 1.36.4-gke.2046003
   - 1.37.0-gke.2155000
@@ -15914,6 +16029,7 @@ memory:
   physicalBytes: 2063731785728
   reservedBytes: 32385814528
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.35.6-gke.1638000
   - 1.36.0-gke.4447000
   - 1.36.2-gke.1498000
@@ -15976,6 +16092,13 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 2063731785728
+  reservedBytes: 32385855488
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 2063731785728
   reservedBytes: 32386080768
   nodeVersions:
   - 1.37.1-gke.1697000
@@ -16007,6 +16130,13 @@ memory:
   reservedBytes: 32386281472
   nodeVersions:
   - 1.37.2-gke.1325000
+- osDistribution: cos
+  architecture: amd64
+  confidential: false
+  physicalBytes: 2063731785728
+  reservedBytes: 32386285568
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: false
@@ -17221,6 +17351,7 @@ memory:
   physicalBytes: 8589934592
   reservedBytes: 734777344
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.4681000
   - 1.36.2-gke.1346000
   - 1.36.2-gke.1498000
@@ -17231,6 +17362,7 @@ memory:
   physicalBytes: 8589934592
   reservedBytes: 734781440
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.0-gke.3009002
   - 1.36.0-gke.3070003
   - 1.36.0-gke.3302001
@@ -17268,6 +17400,13 @@ memory:
   architecture: amd64
   confidential: true
   physicalBytes: 8589934592
+  reservedBytes: 734801920
+  nodeVersions:
+  - 1.36.6-gke.1146000
+- osDistribution: cos
+  architecture: amd64
+  confidential: true
+  physicalBytes: 8589934592
   reservedBytes: 734810112
   nodeVersions:
   - 1.36.4-gke.2377000
@@ -17295,6 +17434,7 @@ memory:
   - 1.37.1-gke.2097000
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -18489,6 +18629,7 @@ memory:
   reservedBytes: 1425285120
   nodeVersions:
   - 1.34.11-gke.1209000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2684000
@@ -18508,6 +18649,7 @@ memory:
   physicalBytes: 17179869184
   reservedBytes: 1425289216
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.0-gke.2459000
   - 1.36.0-gke.3302001
   - 1.36.0-gke.3712000
@@ -18571,6 +18713,7 @@ memory:
   reservedBytes: 1425317888
   nodeVersions:
   - 1.36.4-gke.2326000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -18606,6 +18749,7 @@ memory:
   reservedBytes: 1426513920
   nodeVersions:
   - 1.37.1-gke.3020000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -19801,6 +19945,7 @@ memory:
   physicalBytes: 34359738368
   reservedBytes: 1720000512
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2459000
   - 1.36.0-gke.2684000
@@ -19819,6 +19964,7 @@ memory:
   physicalBytes: 34359738368
   reservedBytes: 1720004608
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.3070003
   - 1.36.0-gke.3302001
   - 1.36.0-gke.3712000
@@ -19877,6 +20023,7 @@ memory:
   - 1.36.4-gke.2326000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -19914,6 +20061,7 @@ memory:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -21073,6 +21221,8 @@ memory:
   physicalBytes: 68719476736
   reservedBytes: 2309435392
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.3009002
   - 1.36.0-gke.3302001
   - 1.36.0-gke.3302004
@@ -21148,6 +21298,7 @@ memory:
   reservedBytes: 2309464064
   nodeVersions:
   - 1.36.4-gke.2202002
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -21169,6 +21320,13 @@ memory:
   reservedBytes: 2310443008
   nodeVersions:
   - 1.37.1-gke.2097000
+- osDistribution: cos
+  architecture: amd64
+  confidential: true
+  physicalBytes: 68719476736
+  reservedBytes: 2310455296
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -22341,6 +22499,8 @@ memory:
   physicalBytes: 137438953472
   reservedBytes: 3387625472
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2253000
   - 1.36.0-gke.2684000
@@ -22417,6 +22577,7 @@ memory:
   - 1.36.4-gke.1495003
   - 1.36.4-gke.2377000
   - 1.36.5-gke.2262000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -22453,6 +22614,13 @@ memory:
   reservedBytes: 3388391424
   nodeVersions:
   - 1.37.1-gke.3020000
+- osDistribution: cos
+  architecture: amd64
+  confidential: true
+  physicalBytes: 137438953472
+  reservedBytes: 3388395520
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -23637,6 +23805,7 @@ memory:
   reservedBytes: 5647028224
   nodeVersions:
   - 1.34.12-gke.1209000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.1626001
   - 1.35.9-gke.1505000
   - 1.36.0-gke.1759000
@@ -23709,6 +23878,7 @@ memory:
   physicalBytes: 274877906944
   reservedBytes: 5647052800
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.36.4-gke.2202002
 - osDistribution: cos
   architecture: amd64
@@ -23717,6 +23887,7 @@ memory:
   reservedBytes: 5647056896
   nodeVersions:
   - 1.36.4-gke.2326000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -23776,6 +23947,13 @@ memory:
   reservedBytes: 5647286272
   nodeVersions:
   - 1.37.2-gke.1042000
+- osDistribution: cos
+  architecture: amd64
+  confidential: true
+  physicalBytes: 274877906944
+  reservedBytes: 5647294464
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -24940,6 +25118,7 @@ memory:
   nodeVersions:
   - 1.34.11-gke.1044000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.8-gke.1278000
   - 1.34.9-gke.1322000
   - 1.34.9-gke.1322001
@@ -24999,6 +25178,7 @@ memory:
   physicalBytes: 687194767360
   reservedBytes: 11895197696
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.4447000
   - 1.36.2-gke.1346000
@@ -25068,6 +25248,7 @@ memory:
   reservedBytes: 11895238656
   nodeVersions:
   - 1.36.5-gke.1259000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: amd64
   confidential: true
@@ -25090,6 +25271,7 @@ memory:
   reservedBytes: 11895291904
   nodeVersions:
   - 1.37.1-gke.2097000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -26193,6 +26375,8 @@ memory:
   nodeVersions:
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.2308000
   - 1.35.9-gke.1505000
   - 1.35.9-gke.1673000
@@ -26252,6 +26436,7 @@ memory:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -26282,6 +26467,7 @@ memory:
   nodeVersions:
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -27452,6 +27638,7 @@ memory:
   nodeVersions:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1776000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.2308000
   - 1.35.9-gke.1505000
   - 1.36.0-gke.1759000
@@ -27471,6 +27658,7 @@ memory:
   reservedBytes: 432238592
   nodeVersions:
   - 1.34.12-gke.1698000
+  - 1.34.13-gke.1051000
   - 1.35.9-gke.1673000
   - 1.36.0-gke.2459000
   - 1.36.0-gke.2684000
@@ -27519,6 +27707,7 @@ memory:
   - 1.36.4-gke.2377000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -27558,6 +27747,13 @@ memory:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+- osDistribution: cos
+  architecture: arm64
+  confidential: false
+  physicalBytes: 17179869184
+  reservedBytes: 433958912
+  nodeVersions:
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -28756,6 +28952,7 @@ memory:
   physicalBytes: 68719476736
   reservedBytes: 1415548928
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.35.9-gke.1505000
   - 1.35.9-gke.1673000
   - 1.36.0-gke.2253000
@@ -28775,6 +28972,7 @@ memory:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.2308000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.2459000
@@ -28824,6 +29022,7 @@ memory:
   - 1.36.5-gke.1259000
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -28870,6 +29069,7 @@ memory:
   nodeVersions:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -30041,6 +30241,8 @@ memory:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.0-gke.1759000
   - 1.36.0-gke.3070003
   - 1.36.0-gke.3302001
@@ -30107,6 +30309,7 @@ memory:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
 - osDistribution: cos
   architecture: arm64
   confidential: false
@@ -30152,6 +30355,7 @@ memory:
   reservedBytes: 3941376000
   nodeVersions:
   - 1.37.2-gke.1042000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -30659,6 +30863,7 @@ memory:
   - 1.36.4-gke.2046002
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
@@ -30668,7 +30873,16 @@ memory:
   physicalBytes: 1073741824
   reservedBytes: 68812800
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.36.5-gke.1982000
+  - 1.37.2-gke.1606000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 1073741824
+  reservedBytes: 68816896
+  nodeVersions:
+  - 1.34.13-gke.1051000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -31698,6 +31912,7 @@ memory:
   - 1.36.4-gke.2377000
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.1552000
   - 1.37.1-gke.2097000
   - 1.37.1-gke.3020000
@@ -31710,6 +31925,8 @@ memory:
   reservedBytes: 82608128
   nodeVersions:
   - 1.34.11-gke.1209000
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.1439001
   - 1.35.8-gke.1626000
   - 1.35.9-gke.1673000
@@ -31717,6 +31934,7 @@ memory:
   - 1.36.4-gke.2046000
   - 1.36.5-gke.2262000
   - 1.37.1-gke.1697000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -32761,6 +32979,7 @@ memory:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.2097000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
@@ -32770,7 +32989,10 @@ memory:
   physicalBytes: 2147483648
   reservedBytes: 87166976
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.37.1-gke.3020000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -33794,6 +34016,7 @@ memory:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.1552000
   - 1.37.1-gke.2097000
   - 1.37.1-gke.3020000
@@ -33808,11 +34031,20 @@ memory:
   - 1.34.12-gke.1153000
   - 1.34.12-gke.1209000
   - 1.34.12-gke.1776000
+  - 1.35.10-gke.1122000
   - 1.35.8-gke.1439000
   - 1.35.8-gke.1626001
   - 1.36.4-gke.2046000
   - 1.37.1-gke.1697000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 3221225472
+  reservedBytes: 106725376
+  nodeVersions:
+  - 1.34.13-gke.1051000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -34840,6 +35072,7 @@ memory:
   - 1.34.11-gke.1044000
   - 1.34.11-gke.1056000
   - 1.34.12-gke.1363000
+  - 1.34.13-gke.1051000
   - 1.35.7-gke.1027000
   - 1.35.7-gke.1150000
   - 1.35.7-gke.1222000
@@ -34885,6 +35118,7 @@ memory:
   - 1.36.4-gke.2377000
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.3165000
   - 1.37.1-gke.1552000
   - 1.37.1-gke.1697000
@@ -34896,7 +35130,9 @@ memory:
   physicalBytes: 4026531840
   reservedBytes: 187207680
   nodeVersions:
+  - 1.35.10-gke.1122000
   - 1.37.1-gke.2097000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -35989,6 +36225,7 @@ memory:
   - 1.36.3-gke.1767000
   - 1.36.4-gke.1082000
   - 1.36.4-gke.1247000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -36035,6 +36272,15 @@ memory:
   - 1.36.5-gke.2370000
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 4294967296
+  reservedBytes: 191766528
+  nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -37187,6 +37433,7 @@ memory:
   nodeVersions:
   - 1.34.12-gke.1011000
   - 1.34.12-gke.1363000
+  - 1.34.13-gke.1051000
   - 1.35.8-gke.1626000
   - 1.35.8-gke.1796000
   - 1.35.8-gke.2308000
@@ -37196,6 +37443,7 @@ memory:
   - 1.36.4-gke.2202002
   - 1.36.4-gke.2326000
   - 1.36.4-gke.2377000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2941000
   - 1.37.1-gke.2097000
 - osDistribution: ubuntu
@@ -37205,9 +37453,11 @@ memory:
   reservedBytes: 265170944
   nodeVersions:
   - 1.34.12-gke.1776000
+  - 1.35.10-gke.1122000
   - 1.35.9-gke.1673000
   - 1.36.4-gke.1391002
   - 1.36.4-gke.2046000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -38400,9 +38650,12 @@ memory:
   reservedBytes: 412688384
   nodeVersions:
   - 1.34.12-gke.1698000
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2370000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -38412,6 +38665,7 @@ memory:
   - 1.34.12-gke.1539000
   - 1.35.9-gke.1673000
   - 1.36.5-gke.2262000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.3020000
 - osDistribution: ubuntu
   architecture: amd64
@@ -39636,6 +39890,15 @@ memory:
   architecture: amd64
   confidential: false
   physicalBytes: 34359738368
+  reservedBytes: 707743744
+  nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
+  - 1.36.6-gke.1146000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 34359738368
   reservedBytes: 707747840
   nodeVersions:
   - 1.34.12-gke.1698000
@@ -39647,6 +39910,7 @@ memory:
   nodeVersions:
   - 1.35.9-gke.1505000
   - 1.36.5-gke.1982000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -40900,7 +41164,10 @@ memory:
   physicalBytes: 68719476736
   reservedBytes: 1297854464
   nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
   - 1.35.9-gke.1505000
+  - 1.36.6-gke.1146000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -40917,6 +41184,7 @@ memory:
   reservedBytes: 1297862656
   nodeVersions:
   - 1.36.5-gke.2262000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -42292,14 +42560,24 @@ memory:
   - 1.35.8-gke.2308000
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.2-gke.1042000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
   physicalBytes: 137438953472
   reservedBytes: 2377408512
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.35.9-gke.1505000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 137438953472
+  reservedBytes: 2377412608
+  nodeVersions:
+  - 1.35.10-gke.1122000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -44291,6 +44569,7 @@ memory:
   reservedBytes: 4438372352
   nodeVersions:
   - 1.33.9-gke.1117000
+  - 1.35.10-gke.1122000
   - 1.36.5-gke.1259000
 - osDistribution: ubuntu
   architecture: amd64
@@ -44316,6 +44595,7 @@ memory:
   physicalBytes: 274877906944
   reservedBytes: 4438384640
   nodeVersions:
+  - 1.34.13-gke.1051000
   - 1.35.8-gke.2308000
 - osDistribution: ubuntu
   architecture: amd64
@@ -44327,6 +44607,7 @@ memory:
   - 1.35.2-gke.1691000
   - 1.35.9-gke.1673000
   - 1.36.5-gke.2262000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -44335,6 +44616,7 @@ memory:
   nodeVersions:
   - 1.35.9-gke.1505000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.1-gke.3020000
 - osDistribution: ubuntu
   architecture: amd64
@@ -46401,6 +46683,7 @@ memory:
   nodeVersions:
   - 1.32.13-gke.1059000
   - 1.35.2-gke.1485000
+  - 1.36.6-gke.1146000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -46491,6 +46774,15 @@ memory:
   - 1.34.12-gke.1698000
   - 1.35.9-gke.1673000
   - 1.37.2-gke.1325000
+- osDistribution: ubuntu
+  architecture: amd64
+  confidential: false
+  physicalBytes: 2063731785728
+  reservedBytes: 32398454784
+  nodeVersions:
+  - 1.34.13-gke.1051000
+  - 1.35.10-gke.1122000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   confidential: false
@@ -47132,6 +47424,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -47187,6 +47480,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -47279,6 +47573,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -47294,6 +47589,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   physicalBytes: 107374182400
@@ -47908,6 +48204,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -47963,6 +48260,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -48055,6 +48353,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -48070,6 +48369,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   physicalBytes: 1073741824000
@@ -48684,6 +48984,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -48739,6 +49040,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -48831,6 +49133,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -48846,6 +49149,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: amd64
   physicalBytes: 10737418240000
@@ -49434,6 +49738,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -49489,6 +49794,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -49581,6 +49887,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -49596,6 +49903,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   physicalBytes: 10737418240
@@ -50215,6 +50523,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -50270,6 +50579,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -50362,6 +50672,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -50372,6 +50683,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   physicalBytes: 107374182400
@@ -50960,6 +51272,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -51015,6 +51328,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -51107,6 +51421,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -51117,6 +51432,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   physicalBytes: 1073741824000
@@ -51705,6 +52021,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -51760,6 +52077,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -51852,6 +52170,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -51862,6 +52181,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: cos
   architecture: arm64
   physicalBytes: 10737418240000
@@ -52450,6 +52770,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -52505,6 +52826,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -52597,6 +52919,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -52607,6 +52930,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   physicalBytes: 10737418240
@@ -53236,6 +53560,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -53291,6 +53616,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -53383,6 +53709,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -53393,6 +53720,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   physicalBytes: 107374182400
@@ -54012,6 +54340,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -54067,6 +54396,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -54159,6 +54489,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -54169,6 +54500,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   physicalBytes: 1073741824000
@@ -54788,6 +55120,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -54843,6 +55176,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -54935,6 +55269,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -54945,6 +55280,7 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
 - osDistribution: ubuntu
   architecture: amd64
   physicalBytes: 10737418240000
@@ -55538,6 +55874,7 @@ disk:
   - 1.34.12-gke.1539000
   - 1.34.12-gke.1698000
   - 1.34.12-gke.1776000
+  - 1.34.13-gke.1051000
   - 1.34.3-gke.1051000
   - 1.34.3-gke.1051003
   - 1.34.3-gke.1136000
@@ -55593,6 +55930,7 @@ disk:
   - 1.35.1-gke.1396001
   - 1.35.1-gke.1396002
   - 1.35.1-gke.1616000
+  - 1.35.10-gke.1122000
   - 1.35.2-gke.1269000
   - 1.35.2-gke.1269001
   - 1.35.2-gke.1485000
@@ -55685,6 +56023,7 @@ disk:
   - 1.36.5-gke.1982000
   - 1.36.5-gke.2262000
   - 1.36.5-gke.2370000
+  - 1.36.6-gke.1146000
   - 1.37.0-gke.2155000
   - 1.37.0-gke.2941000
   - 1.37.0-gke.3165000
@@ -55695,3 +56034,4 @@ disk:
   - 1.37.1-gke.3020000
   - 1.37.2-gke.1042000
   - 1.37.2-gke.1325000
+  - 1.37.2-gke.1606000
