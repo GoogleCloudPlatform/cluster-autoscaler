@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	cccv1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
 	apiv1 "k8s.io/api/core/v1"
@@ -42,6 +43,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/reservations"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/cluster-autoscaler/pkg/expander"
+	ossmetrics "sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
 	base_backoff "sigs.k8s.io/cluster-autoscaler/pkg/utils/backoff"
 )
@@ -65,6 +67,7 @@ type fleetEfficiencyFilter struct {
 	// exclude zones in which !mig.exists node groups cannot currently be scaled up. May be nil.
 	backoff        base_backoff.Backoff
 	optionsTracker *optstracking.OptionsTracker
+	awaitBudget    *flexadvisor.BinpackerExpanderAwaitBudget
 }
 
 // NewFilter creates a new instance of the fleet efficiency Filter.
@@ -80,6 +83,7 @@ func NewFilter(
 	experimentsManager experiments.Manager,
 	backoff base_backoff.Backoff,
 	optionsTracker *optstracking.OptionsTracker,
+	awaitBudget *flexadvisor.BinpackerExpanderAwaitBudget,
 ) *fleetEfficiencyFilter {
 	return &fleetEfficiencyFilter{
 		flexAdvisor:                      flexAdvisor,
@@ -93,6 +97,7 @@ func NewFilter(
 		experimentsManager:               experimentsManager,
 		backoff:                          backoff,
 		optionsTracker:                   optionsTracker,
+		awaitBudget:                      awaitBudget,
 	}
 }
 
@@ -142,7 +147,7 @@ func (f *fleetEfficiencyFilter) BestOptions(ctx context.Context, expansionOption
 	scores := make([]float64, len(expansionOptions))
 	maxScore := -1.0
 	for i, option := range expansionOptions {
-		score, err := f.scoreOption(nodeGroupSets[i], crd, nodeInfo)
+		score, err := f.scoreOption(ctx, nodeGroupSets[i], crd, nodeInfo)
 		if err != nil {
 			nodeGroupId := "unknown"
 			if option.NodeGroup != nil {
@@ -266,13 +271,13 @@ func (f *fleetEfficiencyFilter) fallbackAndRecordMetric(ctx context.Context, exp
 	return expansionOptions
 }
 
-func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSet, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
+func (f *fleetEfficiencyFilter) scoreOption(ctx context.Context, nodeGroupSet flexadvisor.NodeGroupSet, crd crd.CRD, nodeInfos map[string]*framework.NodeInfo) (float64, error) {
 	nodeGroup := nodeGroupSet.Representative()
 	instanceRef, err := flexadvisor.ConstructInstanceReferenceForScope(nodeGroup, crd.Name(), f.experimentsManager)
 	if err != nil {
 		return 0, fmt.Errorf("failed to construct instance reference: %w", err)
 	}
-	snapshot, err := f.flexAdvisor.GetAvailabilitySnapshot(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
+	snapshot, err := f.availabilitySnapshot(ctx, instanceRef)
 	if err != nil {
 		return 0, fmt.Errorf("%w for keys: scope=%q, config=%s, err=%v", ErrSnapshotNotFound, instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, err)
 	}
@@ -304,6 +309,18 @@ func (f *fleetEfficiencyFilter) scoreOption(nodeGroupSet flexadvisor.NodeGroupSe
 	}
 
 	return totalScore / float64(len(targetZones)), nil
+}
+
+func (f *fleetEfficiencyFilter) availabilitySnapshot(ctx context.Context, instanceRef *flexadvisor.InstanceReference) (*instanceavailability.Snapshot, error) {
+	if timeout, ok := f.awaitBudget.Consume(); ok && timeout > 0 {
+		waitStart := time.Now()
+		snapshot, err := f.flexAdvisor.AwaitAvailabilitySnapshotWithTimeout(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey, timeout)
+		if waitDuration := time.Since(waitStart); waitDuration > 100*time.Millisecond {
+			ossmetrics.UpdateDuration(ctx, "FlexAdvisor:ExpanderAwaitInstanceAvailability", waitDuration)
+		}
+		return snapshot, err
+	}
+	return f.flexAdvisor.GetAvailabilitySnapshot(instanceRef.FlexibilityScopeKey, instanceRef.InstanceConfigKey)
 }
 
 // resolveOptionsCrd returns the ComputeClass CRD shared by every pod across expansionOptions, or

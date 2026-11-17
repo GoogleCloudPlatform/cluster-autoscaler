@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/flexadvisor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/klog/v2"
@@ -28,8 +27,6 @@ import (
 	oss_metrics "sigs.k8s.io/cluster-autoscaler/pkg/metrics"
 )
 
-const defaultBinpackerBlockTimeBudget = 3 * time.Second
-
 // EstimationLimiterWrapper wraps an OSS estimator.EstimationLimiter to allow running
 // custom GKE logic around estimation lifecycle methods (e.g. before StartEstimation starts
 // the per-node-group estimation timer).
@@ -37,8 +34,7 @@ type EstimationLimiterWrapper struct {
 	inner                        estimator.EstimationLimiter
 	instanceAvailabilityProvider instanceavailability.Provider
 	cccLister                    lister.Lister
-	experimentsManager           experiments.Manager
-	scopeAwaitTimeoutUsed        bool
+	binpackerExpanderAwaitBudget *flexadvisor.BinpackerExpanderAwaitBudget
 }
 
 // NewEstimationLimiterWrapper creates a new EstimationLimiterWrapper around inner.
@@ -46,27 +42,30 @@ func NewEstimationLimiterWrapper(
 	inner estimator.EstimationLimiter,
 	instanceAvailabilityProvider instanceavailability.Provider,
 	cccLister lister.Lister,
-	experimentsManager experiments.Manager,
+	binpackerExpanderAwaitBudget *flexadvisor.BinpackerExpanderAwaitBudget,
 ) *EstimationLimiterWrapper {
 	return &EstimationLimiterWrapper{
 		inner:                        inner,
 		instanceAvailabilityProvider: instanceAvailabilityProvider,
 		cccLister:                    cccLister,
-		experimentsManager:           experimentsManager,
+		binpackerExpanderAwaitBudget: binpackerExpanderAwaitBudget,
 	}
 }
 
 // StartEstimation runs pre-estimation logic before delegating to the inner EstimationLimiter.
 func (w *EstimationLimiterWrapper) StartEstimation(ctx context.Context, podEquivalenceGroups []estimator.PodEquivalenceGroup, nodeGroup cloudprovider.NodeGroup, estimationContext estimator.EstimationContext) {
-	// If nodeGroup references CCC we wait binpackerBlockTimeout (default: 3sec) amount of time for recommendation to be fetched if it haven't been fetched yet
-	// This wait is a best-effort and is applied only once per whole loop (estimations for subsequent node groups will not wait even if data is not available)
-	// Wait time contributes only to main binpacking time limit and not to that specific nodeGroup limit (binpacking uses two limits, former is ~5 minutes, latter is 7 seconds per node group)
+	// If nodeGroup references a CCC, consume the shared
+	// binpackerExpanderAwaitBudget (default: 3s, shared with
+	// FleetEfficiencyFilter) to await initial availability data at most
+	// once per scale-up pass; subsequent estimations in the pass do not
+	// wait. Wait time contributes only to the main binpacking time limit
+	// (~5m) and not to the per-nodeGroup limit (7s).
 	w.awaitScopeAvailabilityIfNeeded(ctx, nodeGroup)
 	w.inner.StartEstimation(ctx, podEquivalenceGroups, nodeGroup, estimationContext)
 }
 
 func (w *EstimationLimiterWrapper) awaitScopeAvailabilityIfNeeded(ctx context.Context, nodeGroup cloudprovider.NodeGroup) {
-	if w.scopeAwaitTimeoutUsed || nodeGroup == nil || w.instanceAvailabilityProvider == nil || w.cccLister == nil || !flexadvisor.IsFlexAdvisorBinpackerBlockEnabled(w.experimentsManager) {
+	if nodeGroup == nil || w.instanceAvailabilityProvider == nil || w.cccLister == nil || !w.binpackerExpanderAwaitBudget.CanConsume() {
 		return
 	}
 	// NodeGroupCrd only resolves CCC-backed scopes and returns "" for Pay-Per-Pod Autopilot
@@ -78,8 +77,10 @@ func (w *EstimationLimiterWrapper) awaitScopeAvailabilityIfNeeded(ctx context.Co
 	if err != nil || flexibilityScopeKey == "" {
 		return
 	}
-	w.scopeAwaitTimeoutUsed = true
-	timeout := w.binpackerBlockTimeout()
+	timeout, ok := w.binpackerExpanderAwaitBudget.Consume()
+	if !ok {
+		return
+	}
 	if timeout <= 0 {
 		klog.Warningf("FlexAdvisor: timeout=%v, not awaiting in bin packer, flexibilityScopeKey=%v", timeout, flexibilityScopeKey)
 		return
@@ -93,26 +94,6 @@ func (w *EstimationLimiterWrapper) awaitScopeAvailabilityIfNeeded(ctx context.Co
 	if err != nil {
 		klog.Warningf("FlexAdvisor: got err=%v when awaiting in binpacker flexibilityScopeKey=%v", err, flexibilityScopeKey)
 	}
-
-}
-
-func (w *EstimationLimiterWrapper) binpackerBlockTimeout() time.Duration {
-	if w.experimentsManager == nil {
-		return defaultBinpackerBlockTimeBudget
-	}
-	timeout := w.experimentsManager.EvaluateDurationSecondsFlagOrFailsafe(
-		experiments.FlexAdvisorBinpackerBlockTimeBudgetFlag,
-		defaultBinpackerBlockTimeBudget,
-	)
-	if timeout < 0 {
-		return defaultBinpackerBlockTimeBudget
-	}
-	return timeout
-}
-
-// OnScaleUpEnd resets the per-scale-up-pass await budget.
-func (w *EstimationLimiterWrapper) OnScaleUpEnd() {
-	w.scopeAwaitTimeoutUsed = false
 }
 
 // EndEstimation delegates to the inner EstimationLimiter.
