@@ -1278,10 +1278,15 @@ func TestProcess(t *testing.T) {
 			}
 
 			p.Preprocess(unschedulablePods)
-			unschedulablePods, err := p.Process(context.Background(), autoscalingContext, unschedulablePods)
+			inputPods := slices.Clone(unschedulablePods)
+			unschedulablePods, err := p.Process(context.Background(), autoscalingContext, inputPods)
 
 			if err != nil {
 				t.Fatalf("failed to process pods: %v", err)
+			}
+			assert.Len(t, inputPods, len(tc.pods))
+			for i := range tc.pods {
+				assert.Same(t, tc.pods[i], inputPods[i], "Process() mutated caller slice at index %d", i)
 			}
 
 			allPodsAfterProcessing := make(map[string]*apiv1.Pod)
