@@ -2217,16 +2217,20 @@ func testPollUntilActionStopsStopsEarly(t *testing.T, action InstanceAction) {
 // requestLatenciesMetricName is the fully qualified name of the histogram EmitGceLatency feeds.
 const requestLatenciesMetricName = "cluster_autoscaler_request_latencies"
 
-// registerGkeMetrics makes the GKE metrics observable: component-base metrics silently drop
-// observations until they are registered, and the default registry rejects a second registration.
-var registerGkeMetrics = sync.OnceFunc(gke_metrics.RegisterMetrics)
+// registerMetrics makes the GKE and GCE metrics (including request_latencies) observable:
+// component-base metrics silently drop observations until they are registered, and the default
+// registry rejects a second registration.
+var registerMetrics = sync.OnceFunc(func() {
+	gke_metrics.RegisterMetrics()
+	gce.RegisterMetrics()
+})
 
 // actionPollingLatencyCounts returns how many observations the polling latency metric of action
 // holds so far, keyed by the status label of the outcome: "200" for instances that stopped running
 // the action, "timeout" for the ones the poll gave up on.
 func actionPollingLatencyCounts(t *testing.T, action InstanceAction) map[string]uint64 {
 	t.Helper()
-	registerGkeMetrics()
+	registerMetrics()
 
 	families, err := legacyregistry.DefaultGatherer.Gather()
 	assert.NoError(t, err)

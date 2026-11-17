@@ -19,7 +19,7 @@ import (
 
 	k8smetrics "k8s.io/component-base/metrics"
 	"k8s.io/component-base/metrics/legacyregistry"
-	"k8s.io/klog/v2"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gce"
 )
 
 type NodePoolOperationType string
@@ -44,18 +44,6 @@ var (
 			Name:      "gke_request_count",
 			Help:      "Counter of GKE API requests for each verb and API resource.",
 		}, []string{"resource", "verb"},
-	)
-
-	requestLatencies = k8smetrics.NewHistogramVec(
-		&k8smetrics.HistogramOpts{
-			Namespace: caNamespace,
-			Name:      "request_latencies",
-			Help:      "Latencies of requests made by Cluster Autoscaler, measured in seconds.",
-			Buckets: []float64{
-				0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 3, 4, 5, 6, 7, 8, 16, 32, 64, 128,
-				256, 512, 1024, 2048, 4096,
-			},
-		}, []string{"service", "resource", "verb", "status"},
 	)
 
 	invalidAtomicScaleDowns = k8smetrics.NewCounter(
@@ -107,7 +95,6 @@ var (
 // RegisterMetrics registerMetrics registers all GKE metrics.
 func RegisterMetrics() {
 	legacyregistry.MustRegister(requestCounter)
-	legacyregistry.MustRegister(requestLatencies)
 	legacyregistry.MustRegister(invalidAtomicScaleDowns)
 	legacyregistry.MustRegister(unexpectedNodePools)
 	legacyregistry.MustRegister(nodePoolOperationDuration)
@@ -120,11 +107,6 @@ func emitRequest(resource string, verb string) {
 	requestCounter.WithLabelValues(resource, verb).Add(1.0)
 }
 
-// emitRequestLatency emits latency of the call to the GKE and GCE APIs.
-func emitRequestLatency(service, resource, verb, status string, duration time.Duration) {
-	requestLatencies.WithLabelValues(service, resource, verb, status).Observe(duration.Seconds())
-}
-
 // Emits both request latency and request counter metrics for a given event.
 // Expects the `response` argument to be either nil, a struct or a pointer to a struct
 // that contains a field named `ServerResponse` of `googleapi.ServerResponse` type.
@@ -132,13 +114,7 @@ func emitRequestLatency(service, resource, verb, status string, duration time.Du
 // the sake of compatibility it needs to be the http method of the underyling call.
 // TODO(b/432195815): Deprecate the RegisterRequest call when dashboards are migrated to use RequestLatency instead.
 func emitRequestLatencyMetric(service, resource, verb string, response any, err error, start time.Time, withReason bool) {
-	duration := time.Since(start)
-	serverResponse := serverResponseFromAny(response)
-	if response != nil && serverResponse == nil {
-		klog.Warningf("failed to retrieve ServerResponse object from response for a call with label values { service: %s, resource: %s, verb: %s }", service, resource, verb)
-	}
-	status := determineResponseStatusForLatencyMetric(serverResponse, err, withReason)
-	emitRequestLatency(service, resource, verb, status, duration)
+	gce.EmitRequestLatencyMetric(service, resource, verb, response, err, start, withReason)
 	emitRequest(resource, verb)
 }
 
