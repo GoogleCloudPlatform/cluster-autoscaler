@@ -216,6 +216,17 @@ var ReactionTimeBucketsMs = []float64{
 	1200e3, 1800e3, 2400e3, 3000e3, 3600e3, // 20m-60m
 }
 
+// PodLoopsWaitedBuckets provides explicit loop-count buckets for
+// pod_loops_waited. A pod that times out after 60m (MaxReactionTime) waits
+// roughly 360 loops at the default 10s scan interval, or 720 at 5s, so the
+// top bucket of 1000 leaves headroom for loops that CA starts early.
+var PodLoopsWaitedBuckets = []float64{
+	0, 1, 2, 3, 4, 5, 6, 8, 10,
+	15, 20, 30, 40, 50,
+	75, 100, 150, 200, 300,
+	400, 600, 1000,
+}
+
 // String returns the string representation of a ReactionType for logging and metrics.
 func (rt ReactionType) String() string {
 	if s, ok := reactionTypeToString[rt]; ok {
@@ -356,6 +367,16 @@ var (
 			Buckets:   ReactionTimeBucketsMs,
 		},
 		[]string{"system_pod", "has_pvc", "has_csi", "reaction_type", "fake_pod_type", "capacity_buffer_provisioning_strategy", "device_allocation_mode"},
+	)
+
+	podLoopsWaited = k8smetrics.NewHistogramVec(
+		&k8smetrics.HistogramOpts{
+			Namespace: caNamespace,
+			Name:      "pod_loops_waited",
+			Help:      "Number of CA loops a real pod waited between becoming eligible for CA and CA's first reaction to it.",
+			Buckets:   PodLoopsWaitedBuckets,
+		},
+		[]string{"reaction_type"},
 	)
 
 	longUnschedulablePodsCount = k8smetrics.NewGaugeVec(
@@ -1307,6 +1328,7 @@ var allMetrics = []k8smetrics.Registerable{
 	unschedulablePodDuration,
 	podSchedulingDuration,
 	reactionTimeMilliseconds,
+	podLoopsWaited,
 	longUnschedulablePodsCount,
 	podSchedulableResets,
 	filteredFalsePositiveSchedulablePodsEvents,
@@ -1461,6 +1483,12 @@ func (m *prometheusMetrics) ObserveFirstReactionTime(duration time.Duration, sys
 		"capacity_buffer_provisioning_strategy": "",
 		"device_allocation_mode":                allocationMode,
 	}).Observe(float64(duration.Milliseconds()))
+}
+
+// ObservePodLoopsWaited reports how many CA loops a real pod waited before its
+// first reaction.
+func (m *prometheusMetrics) ObservePodLoopsWaited(loopsWaited int, reactionType ReactionType) {
+	podLoopsWaited.WithLabelValues(reactionType.String()).Observe(float64(loopsWaited))
 }
 
 // ObserveCapacityBufferFakePodReactionTime reports reaction time metric for capacity buffer pods.
