@@ -343,7 +343,8 @@ const DefaultReservedResourcesMinCAVersionFlag = "DefaultReservedResources::MinC
 const AutopilotNapDefaultFallbackEnabledFlag = "AutopilotNapDefaultFallback::Enabled"
 const AutopilotNapDefaultFallbackMinCAVersionFlag = "AutopilotNapDefaultFallback::MinCAVersion"
 
-const BalloonPodIpprResizeFlag = "Autopilot::BalloonPodIpprResize"
+const BalloonPodIpprResizeEnabledFlag = "BalloonPodIpprResize::Enabled"
+const BalloonPodIpprResizeMinCAVersionFlag = "BalloonPodIpprResize::MinCAVersion"
 
 const PayPerPodFleetEfficiencyEnabledFlag = "PayPerPodFleetEfficiency::Enabled"
 const PayPerPodFleetEfficiencyMinCAVersionFlag = "PayPerPodFleetEfficiency::MinCAVersion"

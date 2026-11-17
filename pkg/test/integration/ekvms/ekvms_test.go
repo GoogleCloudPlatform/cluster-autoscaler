@@ -37,6 +37,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	ekvmsize "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvmtypes "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/types"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration"
 	integration_synctest "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/test/integration/synctest"
 	"k8s.io/kubernetes/pkg/util/taints"
@@ -289,6 +290,7 @@ func TestEkvmsUpsizeAndBalloonPodIppr(t *testing.T) {
 					WithNodePools(np).
 					WithResizableVmClient(rvClient).
 					WithNodeSizeRecommenderFactory(recommender.factory()).
+					WithExperiments(experiments.BalloonPodIpprResizeMinCAVersionFlag).
 					WithOverrides(integration.WithEkvmsEnabled(true))
 
 				autoscaler := integration.MustSetupAutoscaler(ctx, t, cfg, infra)

@@ -30,7 +30,9 @@ var balloonPodIpprResizeEnabledField = trackedField{
 		return fmt.Sprintf("%v", opts.BalloonPodIpprResizeEnabled)
 	},
 	setValue: func(optsFromFlags internalopts.AutoscalingOptions, experimentsManager experiments.Manager, optsToModify *internalopts.AutoscalingOptions) error {
-		optsToModify.BalloonPodIpprResizeEnabled = experimentsManager.DirectLaunchBoolFlag(experiments.BalloonPodIpprResizeFlag)
+		enabled := experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.BalloonPodIpprResizeEnabledFlag, true)
+		currentVersionSupported := experimentsManager.EvaluateMinimumVersionFlagOrFailsafe(experiments.BalloonPodIpprResizeMinCAVersionFlag, false)
+		optsToModify.BalloonPodIpprResizeEnabled = enabled && currentVersionSupported
 		return nil
 	},
 	caRestartNeededOnValueChange: false,
