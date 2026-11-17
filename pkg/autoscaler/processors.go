@@ -395,6 +395,7 @@ func (b *Builder) setUpProcessors(
 	lookaheadBufferStrategyProvider *lookaheadbuffer_strategy.Provider,
 	reservationBlocksPuller *reservations.BlocksPuller,
 	instanceAvailabilityProvider instanceavailability.Provider,
+	flexAdvisorShardProcessor *flexadvisor.ShardProcessor,
 	resourcePolicyPuller placement.ResourcePolicyPuller,
 	resizableVmCustomThresholdsProvider ekvms_customthresholds.CustomThresholdsProvider,
 	churnTrackerConfigProvider ekvms_churntracker.ConfigProvider,
@@ -518,14 +519,16 @@ func (b *Builder) setUpProcessors(
 	)
 
 	podSharder := podsharding.NewGkePodSharder(provider, options.CSNEnabled, allowlistedSystemLabelsMatcher, options.GCEFlexAdvisorEnabled, experimentsManager)
-	var flexAdvisorShardProcessor podsharding.ShardProcessor
+	var podShardProcessor podsharding.ShardProcessor
+	if flexAdvisorShardProcessor != nil {
+		podShardProcessor = flexAdvisorShardProcessor
+	}
 	if options.GCEFlexAdvisorEnabled {
-		flexAdvisorShardProcessor = flexadvisor.NewShardProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)
 		if err := scaleUpProcessorChain.AddProcessor(flexadvisor.NewScaleUpStatusProcessor(instanceAvailabilityProvider, ccLister, experimentsManager)); err != nil {
 			return nil, err
 		}
 	}
-	podShardSelector := podsharding.NewLruPodShardSelector(flexAdvisorShardProcessor)
+	podShardSelector := podsharding.NewLruPodShardSelector(podShardProcessor)
 	podShardFilter := podsharding.NewPredicatePodShardFilter(ccLister, options.CSNEnabled)
 	podShardingProcessor := podsharding.NewPodShardingProcessor(podSharder, podShardSelector, podShardFilter)
 

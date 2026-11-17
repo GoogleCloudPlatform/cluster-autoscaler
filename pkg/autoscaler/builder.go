@@ -893,6 +893,7 @@ func (b *Builder) Build(
 	var flexAdvisor instanceavailability.Provider
 	var scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker
 	var bypassTracker flexadvisor.RecommendationsBypassTracker
+	var flexAdvisorShardProcessor *flexadvisor.ShardProcessor
 	if autoscalingOptions.GCEFlexAdvisorEnabled {
 		scaleUpLimiterTracker = flexadvisor.NewScaleUpLimiterTracker(autoscalingOptions.GCEFlexAdvisorEnabled, experimentsManager)
 		bypassTracker = flexadvisor.NewRecommendationsBypassTracker(experimentsManager)
@@ -901,6 +902,7 @@ func (b *Builder) Build(
 			klog.Errorf("cannot create Flex Advisor. Error: %v", err)
 			return nil, nil, err
 		}
+		flexAdvisorShardProcessor = flexadvisor.NewShardProcessor(flexAdvisor, b.npcCrdLister, experimentsManager)
 	}
 
 	thresholds := []estimator.Threshold{
@@ -1063,6 +1065,7 @@ func (b *Builder) Build(
 		lookaheadBufferStrategyProvider,
 		reservationBlocksPuller,
 		flexAdvisor,
+		flexAdvisorShardProcessor,
 		resourcePolicyPuller,
 		resizableVmCustomThresholdsProvider,
 		churnTrackerConfigProvider,
@@ -1108,6 +1111,13 @@ func (b *Builder) Build(
 		prOrchestrator := provreqorchestrator.New(b.prClient, []provreqorchestrator.ProvisioningClass{checkcapacity.New(b.prClient, b.prInjector), besteffortatomic.New(b.prClient), scaleup_pr.NewQueuedProvisioningClass(cloudProvider, b.prClient, b.prCache, autoscalingOptions.MaxProvReqBinpackingDuration, autoscalingOptions.AutoscalingOptions.FastpathBinpackingEnabled, experimentsManager, napResourceAnalyzerFunc)})
 		baseOrchestrator = provreqorchestrator.NewWrapperOrchestrator(prOrchestrator)
 	}
+	scaleUpEndProcessors := []flexadvisor.ScaleUpEndProcessor{
+		binpackerExpanderAwaitBudget,
+		flexadvisor.ScaleUpEndProcessorFunc(cloudProvider.ClearRecommendations),
+	}
+	if flexAdvisorShardProcessor != nil {
+		scaleUpEndProcessors = append(scaleUpEndProcessors, flexAdvisorShardProcessor)
+	}
 	var scaleUpOrchestrator scaleup.Orchestrator
 	scaleUpOrchestrator = flexadvisor.NewWrapperOrchestrator(
 		baseOrchestrator,
@@ -1115,10 +1125,7 @@ func (b *Builder) Build(
 		b.npcCrdLister,
 		bypassTracker,
 		scaleUpLimiterTracker,
-		[]flexadvisor.ScaleUpEndProcessor{
-			binpackerExpanderAwaitBudget,
-			flexadvisor.ScaleUpEndProcessorFunc(cloudProvider.ClearRecommendations),
-		},
+		scaleUpEndProcessors,
 		experimentsManager,
 	)
 	if autoscalingOptions.KarpenterEnabled {

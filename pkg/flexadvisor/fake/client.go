@@ -37,18 +37,28 @@ type FakeFlexAdvisorClient struct {
 	fetchCapacityCalls int32
 	capacityGuidances  []CapacityGuidance
 	delay              time.Duration
+	responseLatency    time.Duration
 	experimentsManager experiments.Manager
 }
 
 func (c *FakeFlexAdvisorClient) FetchCapacityGuidance(ctx context.Context, flexibilityScopeKey string, instanceConfigs map[string]*flexadvisorapi.InstanceConfig) (map[string]*flexadvisorapi.InstanceAvailability, error) {
 	c.mu.RLock()
 	delay := c.delay
+	responseLatency := c.responseLatency
 	c.mu.RUnlock()
 
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
 			return nil, context.DeadlineExceeded
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	if responseLatency > 0 {
+		select {
+		case <-time.After(responseLatency):
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -168,4 +178,11 @@ func (c *FakeFlexAdvisorClient) SetDelay(delay time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.delay = delay
+}
+
+// SetResponseLatency delays successful FetchCapacityGuidance responses without failing.
+func (c *FakeFlexAdvisorClient) SetResponseLatency(latency time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.responseLatency = latency
 }

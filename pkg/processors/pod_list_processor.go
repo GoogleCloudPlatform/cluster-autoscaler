@@ -204,7 +204,7 @@ func newSafeguardedDefaultPodListProcessor(nodeFilter func(*framework.NodeInfo) 
 func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext,
 	unschedulablePods []*apiv1.Pod) ([]*apiv1.Pod, error) {
 
-	registerFlexAdvisorLate := flexadvisor.IsFlexAdvisorLateRegistrationEnabled(p.experimentsManager)
+	flexAdvisorSchedulingMode := flexadvisor.GetFlexAdvisorSchedulingMode(p.experimentsManager)
 
 	// Start the fairness loop before any processor calls Admit: the min
 	// capacity processor runs before defrag.
@@ -257,7 +257,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 		}
 	}
 
-	if p.flexAdvisorPodListProcessor != nil && !registerFlexAdvisorLate {
+	if p.flexAdvisorPodListProcessor != nil && flexAdvisorSchedulingMode == flexadvisor.SchedulingModeClassic {
 		_, err = p.flexAdvisorPodListProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
@@ -350,7 +350,7 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 	p.observePods(removedPods, metrics.NoActionNeeded)
 	klog.Infof("Unschedulable pods count after filtering out schedulable: %v", len(unschedulablePods))
 
-	if p.flexAdvisorPodListProcessor != nil && registerFlexAdvisorLate {
+	if p.flexAdvisorPodListProcessor != nil && flexAdvisorSchedulingMode == flexadvisor.SchedulingModeLate {
 		_, err = p.flexAdvisorPodListProcessor.Process(context.TODO(), autoscalingCtx, unschedulablePods)
 		if err != nil {
 			klog.Errorf("Error while processing Flex Advisor pod list processor. err: %v", err)
@@ -478,6 +478,12 @@ func (p *GkeInternalPodListProcessor) Process(ctx context.Context, autoscalingCt
 			return []*apiv1.Pod{}, err
 		}
 		klog.Infof("Unschedulable pods count after cluster scale-to-0 processor: %v", len(unschedulablePods))
+	}
+
+	// In shard based mode we need to reset gauge here as (most of) paths calling our handlers are returning early on len(unschedulablePods) == 0
+	skipShardRegistration := p.podShardingProcessor == nil || len(unschedulablePods) == 0
+	if p.flexAdvisorPodListProcessor != nil && flexAdvisorSchedulingMode == flexadvisor.SchedulingModeShardBased && skipShardRegistration {
+		p.flexAdvisorPodListProcessor.ResetRejectedScopes()
 	}
 
 	if p.podShardingProcessor != nil {

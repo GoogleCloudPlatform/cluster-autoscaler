@@ -196,14 +196,14 @@ func TestWrapperOrchestrator_ScaleUp(t *testing.T) {
 			expectedMetrics:           1,
 		},
 		{
-			name:              "mixed shard with plain pod first and adaptive polling disabled - still resolves explicit CCC scope from autoscalingCtx instead of default",
+			name:              "mixed shard with plain pod first in classic scheduling mode - still resolves explicit CCC scope from autoscalingCtx instead of default",
 			crds:              []crd.CRD{crdScope1, crdDefault},
 			defaultCccEnabled: true,
 			unschedulablePods: []*apiv1.Pod{podWithoutCCC, podScope1},
 			selectedShard:     cccShard("scope-1"),
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
-			}, nil),
+			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, nil, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeClassic),
+			}),
 			setupTrackers: func(bypassTracker RecommendationsBypassTracker, _ ScaleUpLimiterTracker) {
 				bypassTracker.MarkBlocked([]string{"scope-1"})
 				bypassTracker.MarkBlocked([]string{"scope-1"})
@@ -591,14 +591,15 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 			wantExpectedOrder:  []string{"innerScaleUp"},
 		},
 		{
-			name:              "adaptive polling disabled with FlexAdvisorProcessing enabled - still calls ActivateFastPolling and DeactivateFastPolling to refresh active TTL",
+			name:              "late scheduling mode with FlexAdvisorProcessing enabled - still delegates ActivateFastPolling and DeactivateFastPolling to provider",
 			crds:              []crd.CRD{crdScope1},
 			unschedulablePods: []*apiv1.Pod{podScope1},
 			selectedShard:     cccShard("scope-1"),
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorProcessingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
-			}, nil),
+				experiments.FlexAdvisorProcessingEnabledFlag: true,
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeLate),
+			}),
 			innerScaleUpResult: status.ScaleUpSuccessful,
 			wantScopes:         []string{"scope-1"},
 			wantExpectedOrder:  []string{"ActivateFastPolling:scope-1", "innerScaleUp", "DeactivateFastPolling:scope-1"},

@@ -147,9 +147,9 @@ func (o *WrapperOrchestrator) ScaleUp(
 	flexibilityScopeKey, _ := flexibilityScopeKeyFromShard(shard, o.cccLister)
 
 	if o.flexAdvisor != nil && flexibilityScopeKey != "" && IsFlexAdvisorProcessingEnabled(o.experimentsManager) {
-		// Gated on FlexAdvisorProcessing rather than adaptive polling so ActivateFastPolling still refreshes activeScopeTtl when adaptive polling is disabled.
 		// In salvo mode ScaleUp() and ScaleUpStatusProcessors are called multiple times per single shard, in case it was switched to slow polling
-		// we switch it back to fast. This change can be picked up by scope worker, but unless significant time passed, refresh will not be retriggered
+		// we switch it back to fast. Gated on FlexAdvisorProcessing here; ActivateFastPolling/DeactivateFastPolling
+		// are no-ops outside shard-based scheduling mode.
 		o.flexAdvisor.ActivateFastPolling(flexibilityScopeKey)
 		defer o.flexAdvisor.DeactivateFastPolling(flexibilityScopeKey)
 	}

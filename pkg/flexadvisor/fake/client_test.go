@@ -522,6 +522,47 @@ func TestFakeFlexAdvisorClientDelay(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
+func TestFakeFlexAdvisorClientResponseLatency(t *testing.T) {
+	testCases := []struct {
+		name           string
+		latency        time.Duration
+		contextTimeout time.Duration
+		wantErr        error
+		wantCalls      int
+	}{
+		{
+			name:           "latency within context timeout - returns response and increments call counter",
+			latency:        10 * time.Millisecond,
+			contextTimeout: 200 * time.Millisecond,
+			wantCalls:      1,
+		},
+		{
+			name:           "context expires during latency - returns DeadlineExceeded without incrementing call counter",
+			latency:        100 * time.Millisecond,
+			contextTimeout: 10 * time.Millisecond,
+			wantErr:        context.DeadlineExceeded,
+			wantCalls:      0,
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &FakeFlexAdvisorClient{}
+			client.SetResponseLatency(tc.latency)
+
+			ctx, cancel := context.WithTimeout(t.Context(), tc.contextTimeout)
+			defer cancel()
+
+			_, err := client.FetchCapacityGuidance(ctx, "scope", nil)
+			if tc.wantErr != nil {
+				assert.ErrorIs(t, err, tc.wantErr)
+			} else {
+				assert.NoError(t, err)
+			}
+			assert.Equal(t, tc.wantCalls, client.GetFetchCapacityCalls())
+		})
+	}
+}
+
 func TestFakeFlexAdvisorClientClearCapacityGuidances(t *testing.T) {
 	client := &FakeFlexAdvisorClient{}
 	machineType := "n1-standard-4"

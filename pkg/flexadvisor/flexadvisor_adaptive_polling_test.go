@@ -28,11 +28,17 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 )
 
-func adaptivePollingTestManager(enabled bool, stringFlags map[string]string) experiments.Manager {
-	return experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-		experiments.FlexAdvisorAdaptivePollingEnabledFlag:      enabled,
-		experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: enabled,
-	}, stringFlags)
+func adaptivePollingTestManager(shardBased bool, stringFlags map[string]string) experiments.Manager {
+	sf := make(map[string]string, len(stringFlags)+1)
+	for k, v := range stringFlags {
+		sf[k] = v
+	}
+	if shardBased {
+		sf[experiments.FlexAdvisorSchedulingModeFlag] = string(SchedulingModeShardBased)
+	} else {
+		sf[experiments.FlexAdvisorSchedulingModeFlag] = string(SchedulingModeLate)
+	}
+	return experiments.NewMockManagerWithOptions(version.Version{}, nil, sf)
 }
 
 func TestFlexAdvisor_AdaptivePollingCadence(t *testing.T) {
@@ -45,7 +51,7 @@ func TestFlexAdvisor_AdaptivePollingCadence(t *testing.T) {
 		wantFetchTimes     []time.Duration
 	}{
 		{
-			name:               "adaptive polling disabled - new scope starts in pollingSpeedFast and DeactivateFastPolling keeps 10s cadence",
+			name:               "late mode - new scope starts in pollingSpeedFast and DeactivateFastPolling keeps 10s cadence",
 			experimentsManager: adaptivePollingTestManager(false, nil),
 			scenario: func(t *testing.T, f *flexAdvisor, at func(target time.Duration)) {
 				scope, found, _ := f.getScope(testScopeKey)
@@ -63,7 +69,7 @@ func TestFlexAdvisor_AdaptivePollingCadence(t *testing.T) {
 			},
 		},
 		{
-			name:               "adaptive polling enabled, new scope starts in pollingSpeedSlow by default - refreshes every 20s",
+			name:               "shard-based mode, new scope starts in pollingSpeedSlow by default - refreshes every 20s",
 			experimentsManager: adaptivePollingTestManager(true, nil),
 			scenario: func(t *testing.T, f *flexAdvisor, at func(target time.Duration)) {
 				scope, found, _ := f.getScope(testScopeKey)
@@ -79,7 +85,7 @@ func TestFlexAdvisor_AdaptivePollingCadence(t *testing.T) {
 			},
 		},
 		{
-			name: "adaptive polling enabled with custom 45s slow interval - refreshes every 45s in slow polling",
+			name: "shard-based mode with custom 45s slow interval - refreshes every 45s in slow polling",
 			experimentsManager: adaptivePollingTestManager(true, map[string]string{
 				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "45",
 			}),
@@ -93,7 +99,7 @@ func TestFlexAdvisor_AdaptivePollingCadence(t *testing.T) {
 			},
 		},
 		{
-			name: "adaptive polling enabled with non-positive slow interval - falls back to default 20s",
+			name: "shard-based mode with non-positive slow interval - falls back to default 20s",
 			experimentsManager: adaptivePollingTestManager(true, map[string]string{
 				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "0",
 			}),
@@ -324,31 +330,31 @@ func TestFlexAdvisor_StalenessThreshold_WithAdaptivePolling(t *testing.T) {
 			wantThreshold:      30 * time.Second,
 		},
 		{
-			name:               "adaptive polling disabled - returns max(30s, 3 * 10s) = 30s",
+			name:               "late mode - returns max(30s, 3 * 10s) = 30s",
 			experimentsManager: adaptivePollingTestManager(false, nil),
 			wantThreshold:      30 * time.Second,
 		},
 		{
-			name:               "adaptive polling enabled with default 20s slow interval - ignores slow interval and returns 30s",
+			name:               "shard-based mode with default 20s slow interval - ignores slow interval and returns 30s",
 			experimentsManager: adaptivePollingTestManager(true, nil),
 			wantThreshold:      30 * time.Second,
 		},
 		{
-			name: "adaptive polling enabled with 45s slow interval - ignores slow interval and uses fast interval (30s)",
+			name: "shard-based mode with 45s slow interval - ignores slow interval and uses fast interval (30s)",
 			experimentsManager: adaptivePollingTestManager(true, map[string]string{
 				experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag: "45",
 			}),
 			wantThreshold: 30 * time.Second,
 		},
 		{
-			name: "adaptive polling enabled with 20s fast refresh interval - returns 3 * 20s = 60s",
+			name: "shard-based mode with 20s fast refresh interval - returns 3 * 20s = 60s",
 			experimentsManager: adaptivePollingTestManager(true, map[string]string{
 				experiments.FlexAdvisorScopeRefreshIntervalSecondsFlag: "20",
 			}),
 			wantThreshold: 60 * time.Second,
 		},
 		{
-			name: "adaptive polling enabled with explicit ScopeStalenessThresholdSeconds override - honors explicit override",
+			name: "shard-based mode with explicit ScopeStalenessThresholdSeconds override - honors explicit override",
 			experimentsManager: adaptivePollingTestManager(true, map[string]string{
 				experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag: "60",
 			}),
@@ -366,63 +372,6 @@ func TestFlexAdvisor_StalenessThreshold_WithAdaptivePolling(t *testing.T) {
 	}
 }
 
-func TestIsFlexAdvisorAdaptivePollingEnabled(t *testing.T) {
-	testCases := []struct {
-		name               string
-		experimentsManager experiments.Manager
-		want               bool
-	}{
-		{
-			name:               "nil experiments manager - defaults to true",
-			experimentsManager: nil,
-			want:               true,
-		},
-		{
-			name:               "default flags - defaults to true",
-			experimentsManager: experiments.NewMockManager(),
-			want:               true,
-		},
-		{
-			name: "bool flag enabled and min CA version met - returns true",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: true,
-			}, nil),
-			want: true,
-		},
-		{
-			name: "bool flag disabled - returns false",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
-			}, nil),
-			want: false,
-		},
-		{
-			name: "bool flag enabled but min CA version not met - returns false",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: false,
-			}, nil),
-			want: false,
-		},
-		{
-			name: "bool flag enabled and min CA version met but FlexAdvisorProcessing disabled - returns false",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorProcessingEnabledFlag:           false,
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: true,
-			}, nil),
-			want: false,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, IsFlexAdvisorAdaptivePollingEnabled(tc.experimentsManager))
-		})
-	}
-}
-
 func TestFlexibilityScope_SetPollingSpeed(t *testing.T) {
 	testCases := []struct {
 		name               string
@@ -432,38 +381,45 @@ func TestFlexibilityScope_SetPollingSpeed(t *testing.T) {
 		wantSignaled       bool
 	}{
 		{
-			name: "speed unchanged with debug logs disabled - does not signal pollingSpeedCh",
+			name: "shard-based mode, speed unchanged with debug logs disabled - does not signal pollingSpeedCh",
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 				experiments.FlexAdvisorEnableDebugLogsFlag: false,
-			}, nil),
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
 			initialSpeed: pollingSpeedSlow,
 			targetSpeed:  pollingSpeedSlow,
 			wantSignaled: false,
 		},
 		{
-			name: "speed changed from slow to fast with debug logs disabled - updates speed and signals pollingSpeedCh",
+			name: "shard-based mode, speed changed from slow to fast with debug logs disabled - updates speed and signals pollingSpeedCh",
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 				experiments.FlexAdvisorEnableDebugLogsFlag: false,
-			}, nil),
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
 			initialSpeed: pollingSpeedSlow,
 			targetSpeed:  pollingSpeedFast,
 			wantSignaled: true,
 		},
 		{
-			name: "speed changed from slow to fast with debug logs enabled - updates speed and signals pollingSpeedCh",
+			name: "shard-based mode, speed changed from slow to fast with debug logs enabled - updates speed and signals pollingSpeedCh",
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
 				experiments.FlexAdvisorEnableDebugLogsFlag: true,
-			}, nil),
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeShardBased),
+			}),
 			initialSpeed: pollingSpeedSlow,
 			targetSpeed:  pollingSpeedFast,
 			wantSignaled: true,
 		},
 		{
-			name: "adaptive polling disabled on newFlexibilityScope with debug logs enabled - starts in fast polling and signals on change to slow",
+			name: "late mode (non-shard-based) on newFlexibilityScope with debug logs enabled - starts in fast polling and signals on change to slow",
 			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag: false,
-				experiments.FlexAdvisorEnableDebugLogsFlag:        true,
-			}, nil),
+				experiments.FlexAdvisorEnableDebugLogsFlag: true,
+			}, map[string]string{
+				experiments.FlexAdvisorSchedulingModeFlag: string(SchedulingModeLate),
+			}),
 			initialSpeed: pollingSpeedFast,
 			targetSpeed:  pollingSpeedSlow,
 			wantSignaled: true,
@@ -485,147 +441,6 @@ func TestFlexibilityScope_SetPollingSpeed(t *testing.T) {
 			default:
 			}
 			assert.Equal(t, tc.wantSignaled, signaled)
-		})
-	}
-}
-
-func TestFlexAdvisor_ActivateAndDeactivateFastPolling(t *testing.T) {
-	testCases := []struct {
-		name               string
-		experimentsManager experiments.Manager
-		registerScope      bool
-		sleepBeforeAction  time.Duration
-		initialSpeed       *pollingSpeed
-		action             func(fa *flexAdvisor)
-		wantSpeed          pollingSpeed
-		wantRemainingTtl   time.Duration
-	}{
-		{
-			name:               "ActivateFastPolling with adaptive polling enabled - switches to fast polling and refreshes 10m TTL",
-			experimentsManager: adaptivePollingTestManager(true, nil),
-			registerScope:      true,
-			sleepBeforeAction:  2 * time.Minute,
-			action: func(fa *flexAdvisor) {
-				fa.ActivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedFast,
-			wantRemainingTtl: keepAliveInterval,
-		},
-		{
-			name:               "ActivateFastPolling with adaptive polling disabled - keeps fast polling and still refreshes 10m TTL",
-			experimentsManager: adaptivePollingTestManager(false, nil),
-			registerScope:      true,
-			sleepBeforeAction:  2 * time.Minute,
-			action: func(fa *flexAdvisor) {
-				fa.ActivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedFast,
-			wantRemainingTtl: keepAliveInterval,
-		},
-		{
-			name:               "DeactivateFastPolling with adaptive polling enabled - switches back to slow polling without altering TTL",
-			experimentsManager: adaptivePollingTestManager(true, nil),
-			registerScope:      true,
-			sleepBeforeAction:  2 * time.Minute,
-			initialSpeed:       new(pollingSpeedFast),
-			action: func(fa *flexAdvisor) {
-				fa.DeactivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedSlow,
-			wantRemainingTtl: 8 * time.Minute,
-		},
-		{
-			name:               "DeactivateFastPolling with adaptive polling disabled - keeps fast polling and leaves TTL untouched",
-			experimentsManager: adaptivePollingTestManager(false, nil),
-			registerScope:      true,
-			sleepBeforeAction:  2 * time.Minute,
-			action: func(fa *flexAdvisor) {
-				fa.DeactivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedFast,
-			wantRemainingTtl: 8 * time.Minute,
-		},
-		{
-			name: "ActivateFastPolling when FlexAdvisorProcessing is disabled - no-op on speed and TTL",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorProcessingEnabledFlag:           false,
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: true,
-			}, nil),
-			registerScope:     true,
-			sleepBeforeAction: 2 * time.Minute,
-			initialSpeed:      new(pollingSpeedSlow),
-			action: func(fa *flexAdvisor) {
-				fa.ActivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedSlow,
-			wantRemainingTtl: 8 * time.Minute,
-		},
-		{
-			name: "DeactivateFastPolling when FlexAdvisorProcessing is disabled - no-op on speed and TTL",
-			experimentsManager: experiments.NewMockManagerWithOptions(version.Version{}, map[string]bool{
-				experiments.FlexAdvisorProcessingEnabledFlag:           false,
-				experiments.FlexAdvisorAdaptivePollingEnabledFlag:      true,
-				experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag: true,
-			}, nil),
-			registerScope:     true,
-			sleepBeforeAction: 2 * time.Minute,
-			initialSpeed:      new(pollingSpeedFast),
-			action: func(fa *flexAdvisor) {
-				fa.DeactivateFastPolling(testScopeKey)
-			},
-			wantSpeed:        pollingSpeedFast,
-			wantRemainingTtl: 8 * time.Minute,
-		},
-		{
-			name:               "unregistered scope - ActivateFastPolling and DeactivateFastPolling are no-ops",
-			experimentsManager: adaptivePollingTestManager(true, nil),
-			registerScope:      false,
-			action: func(fa *flexAdvisor) {
-				fa.ActivateFastPolling(testScopeKey)
-				fa.DeactivateFastPolling(testScopeKey)
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-
-				fa, mockProvider := newTestFlexAdvisorWithServer(t, ctx, tc.experimentsManager)
-				mockProvider.On("FetchCapacityGuidance").Return(testAvailabilityResponse(), nil).Maybe()
-
-				if tc.registerScope {
-					assert.NoError(t, fa.RegisterFlexibilityScope(testScopeKey))
-					synctest.Wait()
-					if tc.initialSpeed != nil {
-						scope, _, _ := fa.getScope(testScopeKey)
-						scope.setPollingSpeed(*tc.initialSpeed)
-					}
-					if tc.sleepBeforeAction > 0 {
-						time.Sleep(tc.sleepBeforeAction)
-						synctest.Wait()
-					}
-				}
-
-				now := fa.clock.Now()
-				tc.action(fa)
-
-				scope, found, _ := fa.getScope(testScopeKey)
-				assert.Equal(t, tc.registerScope, found)
-				fa.rwMutex.RLock()
-				activeUntil, hasTtl := fa.scopesActiveUntil[testScopeKey]
-				fa.rwMutex.RUnlock()
-				if !tc.registerScope {
-					assert.False(t, hasTtl)
-					return
-				}
-				assert.True(t, hasTtl)
-				assert.Equal(t, tc.wantSpeed, scope.getPollingSpeed())
-				assert.Equal(t, now.Add(tc.wantRemainingTtl), activeUntil)
-			})
 		})
 	}
 }

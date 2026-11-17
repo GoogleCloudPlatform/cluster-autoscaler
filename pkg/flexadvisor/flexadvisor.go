@@ -35,12 +35,22 @@ import (
 )
 
 const (
-	keepAliveInterval          = 10 * time.Minute
-	defaultMaxScopes           = 50
-	defaultMaxInstanceConfigs  = 200
-	scopeStalenessThreshold    = 30 * time.Second
-	defaultFastRefreshInterval = 10 * time.Second
-	defaultSlowRefreshInterval = 20 * time.Second
+	keepAliveInterval                   = 10 * time.Minute
+	defaultMaxScopes                    = 50
+	defaultMaxInstanceConfigs           = 200
+	scopeStalenessThreshold             = 30 * time.Second
+	defaultFastRefreshInterval          = 10 * time.Second
+	defaultSlowRefreshInterval          = 20 * time.Second
+	defaultShardBasedSchedulingCooldown = 5 * time.Minute
+)
+
+// SchedulingMode controls where and how many flexibility scopes are registered during a scale-up loop.
+type SchedulingMode string
+
+const (
+	SchedulingModeClassic    SchedulingMode = "classic"
+	SchedulingModeLate       SchedulingMode = "late"
+	SchedulingModeShardBased SchedulingMode = "shard-based"
 )
 
 func formatBoolPtr(b *bool) string {
@@ -343,32 +353,32 @@ func (f *flexAdvisor) activeScopeTtl() time.Duration {
 	return duration
 }
 
-// setPollingSpeed sets the background refresh polling speed for an existing
-// flexibility scope when adaptive polling is enabled. No-op if the scope is not
-// registered.
-func (f *flexAdvisor) setPollingSpeed(flexibilityScopeKey string, speed pollingSpeed) {
-	if !IsFlexAdvisorAdaptivePollingEnabled(f.experimentsManager()) {
-		return
+// cooldownScopeTtl returns the post-scale-up cooldown keep-alive duration for a
+// flexibility scope in shard-based scheduling mode.
+func (f *flexAdvisor) cooldownScopeTtl() time.Duration {
+	manager := f.experimentsManager()
+	if manager == nil {
+		return defaultShardBasedSchedulingCooldown
 	}
-	scope, found, _ := f.getScope(flexibilityScopeKey)
-	if !found || scope == nil {
-		return
+	cooldown := manager.EvaluateDurationSecondsFlagOrFailsafe(
+		experiments.FlexAdvisorShardBasedSchedulingCooldownSecondsFlag,
+		defaultShardBasedSchedulingCooldown,
+	)
+	if cooldown <= 0 {
+		return defaultShardBasedSchedulingCooldown
 	}
-	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
-		klog.Infof("FlexAdvisor: setting pollingSpeed=%v for flexibilityScopeKey=%v", speed, flexibilityScopeKey)
-	}
-	scope.setPollingSpeed(speed)
+	return cooldown
 }
 
 // ActivateFastPolling switches an existing flexibility scope to fast
-// background polling (when adaptive polling is enabled) and extends its
-// keep-alive to activeScopeTtl. No-op if the scope is not registered.
+// background polling and extends its keep-alive to activeScopeTtl in
+// shard-based scheduling mode. No-op if the scope is not registered.
 func (f *flexAdvisor) ActivateFastPolling(flexibilityScopeKey string) {
-	if !IsFlexAdvisorProcessingEnabled(f.experimentsManager()) {
+	if !IsFlexAdvisorProcessingEnabled(f.experimentsManager()) || !IsFlexAdvisorShardBasedScheduling(f.experimentsManager()) {
 		return
 	}
 	scope := f.bumpScopeTtl(flexibilityScopeKey, f.activeScopeTtl())
-	if scope == nil || !IsFlexAdvisorAdaptivePollingEnabled(f.experimentsManager()) {
+	if scope == nil {
 		return
 	}
 	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
@@ -378,10 +388,20 @@ func (f *flexAdvisor) ActivateFastPolling(flexibilityScopeKey string) {
 }
 
 // DeactivateFastPolling switches an existing flexibility scope to slow
-// background polling when adaptive polling is enabled. No-op if the scope is
-// not registered.
+// background polling and updates its keep-alive to cooldownScopeTtl in
+// shard-based scheduling mode. No-op if the scope is not registered.
 func (f *flexAdvisor) DeactivateFastPolling(flexibilityScopeKey string) {
-	f.setPollingSpeed(flexibilityScopeKey, pollingSpeedSlow)
+	if !IsFlexAdvisorProcessingEnabled(f.experimentsManager()) || !IsFlexAdvisorShardBasedScheduling(f.experimentsManager()) {
+		return
+	}
+	scope := f.bumpScopeTtl(flexibilityScopeKey, f.cooldownScopeTtl())
+	if scope == nil {
+		return
+	}
+	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
+		klog.Infof("FlexAdvisor: setting pollingSpeed=%v for flexibilityScopeKey=%v", pollingSpeedSlow, flexibilityScopeKey)
+	}
+	scope.setPollingSpeed(pollingSpeedSlow)
 }
 
 func getRefreshIntervalForPollingSpeed(manager experiments.Manager, speed pollingSpeed) time.Duration {
@@ -635,6 +655,26 @@ func (b *backOffManager) Backoff() clock.Timer {
 	return b.backoffTimer
 }
 
+// GetFlexAdvisorSchedulingMode returns the configured FlexAdvisor scope scheduling mode.
+// When FlexAdvisor::SchedulingMode is unset or invalid, it defaults to SchedulingModeShardBased.
+func GetFlexAdvisorSchedulingMode(manager experiments.Manager) SchedulingMode {
+	if manager != nil {
+		switch mode := SchedulingMode(manager.EvaluateStringFlagOrFailsafe(experiments.FlexAdvisorSchedulingModeFlag, "")); mode {
+		case SchedulingModeClassic, SchedulingModeLate, SchedulingModeShardBased:
+			return mode
+		case "":
+		default:
+			klog.Errorf("FlexAdvisor: invalid value for flag %s: %q, falling back to default scheduling mode", experiments.FlexAdvisorSchedulingModeFlag, mode)
+		}
+	}
+	return SchedulingModeShardBased
+}
+
+// IsFlexAdvisorShardBasedScheduling returns whether FlexAdvisor is configured to use shard-based scope scheduling.
+func IsFlexAdvisorShardBasedScheduling(manager experiments.Manager) bool {
+	return GetFlexAdvisorSchedulingMode(manager) == SchedulingModeShardBased
+}
+
 func isFlexAdvisorDWSEnabled(manager experiments.Manager) bool {
 	return manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorDWSEnabledFlag, true) &&
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorDWSMinCAVersionFlag, false)
@@ -669,14 +709,6 @@ func IsFlexAdvisorPCCSupportEnabled(manager experiments.Manager) bool {
 // IsFlexAdvisorProcessingEnabled returns whether Flex Advisor processing is dynamically enabled.
 func IsFlexAdvisorProcessingEnabled(manager experiments.Manager) bool {
 	return experiments.IsFlexAdvisorProcessingEnabled(manager)
-}
-
-// IsFlexAdvisorLateRegistrationEnabled returns whether FA late registration is enabled.
-func IsFlexAdvisorLateRegistrationEnabled(manager experiments.Manager) bool {
-	if manager == nil {
-		return true
-	}
-	return manager.IsFeatureEnabled(experiments.FlexAdvisorLateRegistrationFeature, true)
 }
 
 func isFlexAdvisorGeneratorMachineErrorsCacheEnabled(manager experiments.Manager) bool {
@@ -741,12 +773,12 @@ func IsFlexAdvisorBinpackerBlockEnabled(manager experiments.Manager) bool {
 		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorBinpackerBlockMinCAVersionFlag, true)
 }
 
-// IsFlexAdvisorAdaptivePollingEnabled returns whether adaptive (fast/slow) background polling is enabled.
-func IsFlexAdvisorAdaptivePollingEnabled(manager experiments.Manager) bool {
+func isFlexAdvisorShardBasedSchedulingPrefetchEnabled(manager experiments.Manager) bool {
 	if manager == nil {
 		return true
 	}
-	return IsFlexAdvisorProcessingEnabled(manager) &&
-		manager.EvaluateBoolFlagOrFailsafe(experiments.FlexAdvisorAdaptivePollingEnabledFlag, true) &&
-		manager.EvaluateMinimumVersionFlagOrFailsafe(experiments.FlexAdvisorAdaptivePollingMinCAVersionFlag, true)
+	return manager.EvaluateBoolFlagOrFailsafe(
+		experiments.FlexAdvisorShardBasedSchedulingPrefetchEnabledFlag,
+		true,
+	)
 }

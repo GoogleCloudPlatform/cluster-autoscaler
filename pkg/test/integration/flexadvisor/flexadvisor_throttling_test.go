@@ -16,6 +16,7 @@ package flexadvisor
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -88,16 +89,20 @@ func TestFlexAdvisorThrottlingEndToEndCapEnforcement(t *testing.T) {
 			t.Logf("Pod %s NodeName: %q", p, pod.Spec.NodeName)
 		}
 
-		expectedMetric := `
+		// In default shard-based mode with MaxActiveScopes=1 and 3 pending shards:
+		//   - Run 1 registers shards[0] (accepted, 1/1) and tries to prefetch shards[1] at
+		//     scale-up end (rejected) -> gauge = 1.
+		//   - Run 2 retries shards[1] (rejected) and tries to prefetch shards[2] (rejected) -> gauge = 2.
+		//   - Run 3 retries shards[2] (rejected, no next shard to prefetch) -> gauge = 1.
+		compareRejectedScopes := func(want int) error {
+			expectedMetric := `
 # HELP cluster_autoscaler_flexadvisor_rejected_scopes [ALPHA] Number of Flex Advisor scopes rejected in the current loop due to throttling.
 # TYPE cluster_autoscaler_flexadvisor_rejected_scopes gauge
-cluster_autoscaler_flexadvisor_rejected_scopes 2
+cluster_autoscaler_flexadvisor_rejected_scopes ` + strconv.Itoa(want) + `
 `
-		// We only check the metric after the first run because throttling is applied during the initial scope creation process.
-		// In subsequent runs, the set of unscheduled pods and thus the scopes might change, and the metric's value depends on
-		// whether new scopes are being proposed and rejected, which isn't the primary focus of this test after the initial cap enforcement.
-		err = testutil.GatherAndCompare(legacyregistry.DefaultGatherer, strings.NewReader(expectedMetric), "cluster_autoscaler_flexadvisor_rejected_scopes")
-		assert.NoError(t, err)
+			return testutil.GatherAndCompare(legacyregistry.DefaultGatherer, strings.NewReader(expectedMetric), "cluster_autoscaler_flexadvisor_rejected_scopes")
+		}
+		assert.NoError(t, compareRejectedScopes(1), "run 1")
 
 		// After 1st run, 1 pod should be scheduled and 2 unscheduled (because pod sharding restricts standard CA to 1 shard per loop)
 		scheduledCount := 0
@@ -114,10 +119,11 @@ cluster_autoscaler_flexadvisor_rejected_scopes 2
 		assert.Equal(t, 1, scheduledCount, "expected exactly 1 pod to be scheduled after 1st run")
 		assert.Equal(t, 2, unscheduledCount, "expected exactly 2 pods to remain unscheduled after 1st run")
 
-		// Run 2 more times
-		for i := 0; i < 2; i++ {
+		// Run 2 more times and check rejected_scopes reflects the active + lazy prefetch rejections per loop.
+		for i, wantRejected := range []int{2, 1} {
 			integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 2*time.Second)
 			infra.Fakes.RunScheduler(ctx, t)
+			assert.NoError(t, compareRejectedScopes(wantRejected), "run %d", i+2)
 		}
 
 		// Verify that ultimately all 3 pods got scheduled meaning FA was not consulted for the third pod.
@@ -135,5 +141,9 @@ cluster_autoscaler_flexadvisor_rejected_scopes 2
 
 		assert.Equal(t, 3, scheduledCount, "expected all 3 pods to be scheduled after 3 runs")
 		assert.Equal(t, 0, unscheduledCount, "expected 0 pods to remain unscheduled")
+
+		// Idle loop (0 unschedulable pods) resets the rejected_scopes gauge back to 0.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, 2*time.Second)
+		assert.NoError(t, compareRejectedScopes(0), "idle run 4")
 	})
 }
