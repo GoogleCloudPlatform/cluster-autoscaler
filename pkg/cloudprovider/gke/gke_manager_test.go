@@ -649,7 +649,7 @@ func (m *migInfoProviderStub) IsTpuMig(_ gce.GceRef) bool {
 	return false
 }
 
-func (m *migInfoProviderStub) GetListManagedInstancesResults(_ gce.GceRef) (string, error) {
+func (m *migInfoProviderStub) GetListManagedInstancesResults(_ context.Context, _ gce.GceRef) (string, error) {
 	return "", nil
 }
 
@@ -665,7 +665,7 @@ func (m *migInfoProviderStub) GetMigTargetSize(ctx context.Context, _ gce.GceRef
 	return 0, nil
 }
 
-func (m *migInfoProviderStub) GetMigIsStable(_ gce.GceRef) (bool, error) {
+func (m *migInfoProviderStub) GetMigIsStable(_ context.Context, _ gce.GceRef) (bool, error) {
 	return true, nil
 }
 
@@ -685,7 +685,7 @@ func (m *migInfoProviderStub) GetMigMachineType(ctx context.Context, _ gce.GceRe
 	return gce.MachineType{}, nil
 }
 
-func (m *migInfoProviderStub) RefreshMigInfo(_ gce.GceRef) error {
+func (m *migInfoProviderStub) RefreshMigInfo(_ context.Context, _ gce.GceRef) error {
 	return nil
 }
 

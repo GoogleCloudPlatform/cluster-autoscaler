@@ -343,6 +343,6 @@ func (m *testMig) UpdateNodePoolLabels(labels map[string]string) error {
 	return nil
 }
 
-func (m *testMig) IsStable() (bool, error) {
+func (m *testMig) IsStable(ctx context.Context) (bool, error) {
 	return true, nil
 }

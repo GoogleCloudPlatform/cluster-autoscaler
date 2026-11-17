@@ -1170,7 +1170,7 @@ func (mig *TestGkeNodeGroup) Zone() string {
 	return mig.zone
 }
 
-func (mig *TestGkeNodeGroup) IsStable() (bool, error) {
+func (mig *TestGkeNodeGroup) IsStable(ctx context.Context) (bool, error) {
 	return mig.isStable, nil
 }
 

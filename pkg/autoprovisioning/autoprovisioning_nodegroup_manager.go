@@ -571,7 +571,7 @@ func (m *AutoprovisioningNodeGroupManager) RemoveUnneededNodeGroups(ctx context.
 		}
 
 		// We are only able to delete a MIG if there are no ongoing operations on it.
-		isStable, err := nodePoolMig.IsStable()
+		isStable, err := nodePoolMig.IsStable(ctx)
 		if err != nil {
 			return nil, err
 		}

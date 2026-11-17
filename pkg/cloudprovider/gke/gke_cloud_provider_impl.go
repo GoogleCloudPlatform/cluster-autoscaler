@@ -1289,7 +1289,7 @@ func (mig *GkeMig) GceRef() gce.GceRef {
 }
 
 // IsStable returns whether the MIG is stable.
-func (mig *GkeMig) IsStable() (bool, error) {
+func (mig *GkeMig) IsStable(ctx context.Context) (bool, error) {
 	return mig.gkeManager.IsMigStable(mig)
 }
 
