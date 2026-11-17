@@ -43,7 +43,7 @@ func (m *FakeMig) GceRef() gce.GceRef {
 }
 
 // IsStable returns true as fake MIGs are always stable.
-func (m *FakeMig) IsStable() (bool, error) {
+func (m *FakeMig) IsStable(ctx context.Context) (bool, error) {
 	return true, nil
 }
 

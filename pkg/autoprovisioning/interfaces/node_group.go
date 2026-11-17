@@ -15,6 +15,7 @@
 package interfaces
 
 import (
+	"context"
 	"reflect"
 
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -59,7 +60,7 @@ type AutoprovisionedNodeGroup interface {
 	// Returns immediately. Executed finalizer when node group is deleted.
 	DeleteAsync(finalizer AsyncNodeGroupFinalizer) error
 	// IsStable returns true iff there are no ongoing operations on the node group.
-	IsStable() (bool, error)
+	IsStable(ctx context.Context) (bool, error)
 }
 
 // AsyncNodeGroupUpdater responsible for updating asynchroneously created node groups before they are created.

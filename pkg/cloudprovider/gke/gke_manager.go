@@ -1604,7 +1604,7 @@ func (m *gkeManagerImpl) SetMigSize(mig gce.Mig, size int64) error {
 
 // IsMigStable returns whether the MIG is stable.
 func (m *gkeManagerImpl) IsMigStable(mig gce.Mig) (bool, error) {
-	return m.migInfoProvider.GetMigIsStable(mig.GceRef())
+	return m.migInfoProvider.GetMigIsStable(context.TODO(), mig.GceRef())
 }
 
 func (m *gkeManagerImpl) CreateInstances(mig gce.Mig, delta int64) error {
@@ -3079,7 +3079,7 @@ func (m *gkeManagerImpl) InstanceByRef(ref gce.GceRef) *gce.GceInstance {
 }
 
 func (m *gkeManagerImpl) GetListManagedInstancesResults(migRef gce.GceRef) (string, error) {
-	return m.migInfoProvider.GetListManagedInstancesResults(migRef)
+	return m.migInfoProvider.GetListManagedInstancesResults(context.TODO(), migRef)
 }
 
 func (m *gkeManagerImpl) ResumeInstances(migRef gce.GceRef, instances []gce.GceRef) error {
