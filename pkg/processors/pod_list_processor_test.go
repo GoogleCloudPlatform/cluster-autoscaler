@@ -823,9 +823,13 @@ func TestPodTopologySpreadObservesPodState(t *testing.T) {
 					experimentsManager:         em,
 				}
 
-				gotPods, err := processor.Process(t.Context(), &ca_context.AutoscalingContext{ClusterSnapshot: snapshot}, tc.unschedulablePods)
+				input := slices.Clone(tc.unschedulablePods)
+				gotPods, err := processor.Process(t.Context(), &ca_context.AutoscalingContext{ClusterSnapshot: snapshot}, input)
 				if err != nil {
 					t.Fatalf("processor.Process() unexpected error: %v", err)
+				}
+				if diff := cmp.Diff(tc.unschedulablePods, input); diff != "" {
+					t.Errorf("processor.Process() mutated caller slice (-want +got):\n%s", diff)
 				}
 
 				var gotNames []string

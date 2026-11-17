@@ -329,6 +329,8 @@ func removeScheduledPods(unscheduledPods []*apiv1.Pod, statuses []scheduling.Sta
 }
 
 func replacePods(pods []*apiv1.Pod, replacedPods map[types.UID]*apiv1.Pod) []*apiv1.Pod {
+	// Clone so that Process doesn't mutate the caller's slice.
+	pods = slices.Clone(pods)
 	for idx, pod := range pods {
 		if newPod, found := replacedPods[pod.UID]; found {
 			pods[idx] = newPod
