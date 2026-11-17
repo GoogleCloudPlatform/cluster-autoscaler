@@ -295,20 +295,28 @@ func (f *flexAdvisor) waitForFirstFetchWithTimeout(scope *flexibilityScope, time
 	}
 }
 
+// bumpScopeTtl sets the keep-alive expiration of an existing scope to now + ttl
+// and returns the scope, or nil if the flexibility scope is not registered.
+func (f *flexAdvisor) bumpScopeTtl(flexibilityScopeKey string, ttl time.Duration) *flexibilityScope {
+	f.rwMutex.Lock()
+	defer f.rwMutex.Unlock()
+
+	scope, found := f.scopes[flexibilityScopeKey]
+	if !found {
+		return nil
+	}
+	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(ttl)
+	return scope
+}
+
 // BumpScopeTtl extends the keep-alive of an existing scope by the regular TTL.
 // Returns an error if the flexibility scope does not exist.
 // Consumers that act on availability data (the balancer) must call it explicitly, as read methods
 // (GetAvailabilitySnapshot, AwaitAvailabilitySnapshotWithTimeout) never extend a scope's keep-alive implicitly.
 func (f *flexAdvisor) BumpScopeTtl(flexibilityScopeKey string) error {
-	scopeTtl := f.getScopeTtl()
-
-	f.rwMutex.Lock()
-	defer f.rwMutex.Unlock()
-
-	if _, found := f.scopes[flexibilityScopeKey]; !found {
+	if f.bumpScopeTtl(flexibilityScopeKey, f.activeScopeTtl()) == nil {
 		return fmt.Errorf("flexibility scope not found for key: %s", flexibilityScopeKey)
 	}
-	f.scopesActiveUntil[flexibilityScopeKey] = f.clock.Now().Add(scopeTtl)
 	return nil
 }
 
@@ -319,9 +327,26 @@ func (f *flexAdvisor) experimentsManager() experiments.Manager {
 	return f.optionsTracker.ExperimentsManager()
 }
 
-// SetPollingMode sets the background refresh polling mode for an existing flexibility scope when adaptive polling is enabled.
-// No-op if the scope is not registered.
-func (f *flexAdvisor) SetPollingMode(flexibilityScopeKey string, mode PollingMode) {
+// activeScopeTtl returns the default keep-alive duration for a flexibility scope.
+func (f *flexAdvisor) activeScopeTtl() time.Duration {
+	manager := f.experimentsManager()
+	if manager == nil {
+		return keepAliveInterval
+	}
+	duration := manager.EvaluateDurationSecondsFlagOrFailsafe(
+		experiments.FlexAdvisorScopeKeepAliveSecondsFlag,
+		keepAliveInterval,
+	)
+	if duration <= 0 {
+		return keepAliveInterval
+	}
+	return duration
+}
+
+// setPollingSpeed sets the background refresh polling speed for an existing
+// flexibility scope when adaptive polling is enabled. No-op if the scope is not
+// registered.
+func (f *flexAdvisor) setPollingSpeed(flexibilityScopeKey string, speed pollingSpeed) {
 	if !IsFlexAdvisorAdaptivePollingEnabled(f.experimentsManager()) {
 		return
 	}
@@ -330,17 +355,41 @@ func (f *flexAdvisor) SetPollingMode(flexibilityScopeKey string, mode PollingMod
 		return
 	}
 	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
-		klog.Infof("FlexAdvisor: setting pollingMode=%v for flexibilityScopeKey=%v", mode, flexibilityScopeKey)
+		klog.Infof("FlexAdvisor: setting pollingSpeed=%v for flexibilityScopeKey=%v", speed, flexibilityScopeKey)
 	}
-	scope.setPollingMode(mode)
+	scope.setPollingSpeed(speed)
 }
 
-func getRefreshIntervalForPollingMode(manager experiments.Manager, pollingMode PollingMode) time.Duration {
+// ActivateFastPolling switches an existing flexibility scope to fast
+// background polling (when adaptive polling is enabled) and extends its
+// keep-alive to activeScopeTtl. No-op if the scope is not registered.
+func (f *flexAdvisor) ActivateFastPolling(flexibilityScopeKey string) {
+	if !IsFlexAdvisorProcessingEnabled(f.experimentsManager()) {
+		return
+	}
+	scope := f.bumpScopeTtl(flexibilityScopeKey, f.activeScopeTtl())
+	if scope == nil || !IsFlexAdvisorAdaptivePollingEnabled(f.experimentsManager()) {
+		return
+	}
+	if isFlexAdvisorDebugLogsEnabled(f.experimentsManager()) {
+		klog.Infof("FlexAdvisor: setting pollingSpeed=%v for flexibilityScopeKey=%v", pollingSpeedFast, flexibilityScopeKey)
+	}
+	scope.setPollingSpeed(pollingSpeedFast)
+}
+
+// DeactivateFastPolling switches an existing flexibility scope to slow
+// background polling when adaptive polling is enabled. No-op if the scope is
+// not registered.
+func (f *flexAdvisor) DeactivateFastPolling(flexibilityScopeKey string) {
+	f.setPollingSpeed(flexibilityScopeKey, pollingSpeedSlow)
+}
+
+func getRefreshIntervalForPollingSpeed(manager experiments.Manager, speed pollingSpeed) time.Duration {
 	if manager == nil {
 		return defaultFastRefreshInterval
 	}
-	switch pollingMode {
-	case PollingModeSlow:
+	switch speed {
+	case pollingSpeedSlow:
 		if interval := manager.EvaluateDurationSecondsFlagOrFailsafe(
 			experiments.FlexAdvisorAdaptivePollingSlowIntervalSecondsFlag,
 			defaultSlowRefreshInterval,
@@ -360,13 +409,14 @@ func getRefreshIntervalForPollingMode(manager experiments.Manager, pollingMode P
 }
 
 // getScopeStalenessThreshold returns the staleness threshold for a flexibility scope.
-// Derive default staleness from PollingModeNormal (not Slow) so cached slow-polled data still respects the normal freshness budget.
+// Derive default staleness from pollingSpeedFast (not Slow) so cached
+// slow-polled data still respects the normal freshness budget.
 func (f *flexAdvisor) getScopeStalenessThreshold() time.Duration {
 	manager := f.experimentsManager()
 	if manager == nil {
 		return scopeStalenessThreshold
 	}
-	refInterval := getRefreshIntervalForPollingMode(manager, PollingModeNormal)
+	refInterval := getRefreshIntervalForPollingSpeed(manager, pollingSpeedFast)
 	defaultThreshold := max(scopeStalenessThreshold, 3*refInterval)
 	threshold := manager.EvaluateDurationSecondsFlagOrFailsafe(
 		experiments.FlexAdvisorScopeStalenessThresholdSecondsFlag,
@@ -531,26 +581,11 @@ func (f *flexAdvisor) getScope(flexibilityScopeKey string) (*flexibilityScope, b
 	return scope, scopeFound, isAtCapacity
 }
 
-func (f *flexAdvisor) getScopeTtl() time.Duration {
-	manager := f.experimentsManager()
-	if manager == nil {
-		return keepAliveInterval
-	}
-	duration := manager.EvaluateDurationSecondsFlagOrFailsafe(
-		experiments.FlexAdvisorScopeKeepAliveSecondsFlag,
-		keepAliveInterval,
-	)
-	if duration <= 0 {
-		return keepAliveInterval
-	}
-	return duration
-}
-
 // getOrAddFlexibilityScope returns the scope, registering it (which starts its background refresh) if missing.
 // If the scope is already registered, its keep-alive is extended only when bumpScopeTtl is true.
 // TODO(b/577169261): we should not have to upsert the scope if we remove the async expiration
 func (f *flexAdvisor) getOrAddFlexibilityScope(flexibilityScopeKey string, bumpScopeTtl bool) (*flexibilityScope, error) {
-	scopeTtl := f.getScopeTtl()
+	scopeTtl := f.activeScopeTtl()
 
 	f.rwMutex.Lock()
 	defer f.rwMutex.Unlock()

@@ -69,6 +69,10 @@ func (m *MockProvider) IncrementFlexAdvisorCacheQueryCount(result metrics.FACach
 	m.Called(result, flexibilityScopeKey, instanceConfigKey)
 }
 
-func (m *MockProvider) SetPollingMode(flexibilityScopeKey string, mode PollingMode) {
-	m.Called(flexibilityScopeKey, mode)
+func (m *MockProvider) ActivateFastPolling(flexibilityScopeKey string) {
+	m.Called(flexibilityScopeKey)
+}
+
+func (m *MockProvider) DeactivateFastPolling(flexibilityScopeKey string) {
+	m.Called(flexibilityScopeKey)
 }

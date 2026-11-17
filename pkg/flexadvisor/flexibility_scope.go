@@ -37,13 +37,25 @@ import (
 
 const provisioningDecisionNotificationChanSize = 10
 
-// PollingMode is an alias for instanceavailability.PollingMode.
-type PollingMode = instanceavailability.PollingMode
+// pollingSpeed controls the background refresh cadence of a flexibility scope.
+type pollingSpeed int
 
 const (
-	PollingModeNormal = instanceavailability.PollingModeNormal
-	PollingModeSlow   = instanceavailability.PollingModeSlow
+	pollingSpeedFast pollingSpeed = iota
+	pollingSpeedSlow
 )
+
+// String returns a human-readable representation of pollingSpeed.
+func (s pollingSpeed) String() string {
+	switch s {
+	case pollingSpeedFast:
+		return "fast"
+	case pollingSpeedSlow:
+		return "slow"
+	default:
+		return fmt.Sprintf("pollingSpeed(%d)", s)
+	}
+}
 
 type flexibilityScope struct {
 	provider                instanceavailability.Provider
@@ -53,8 +65,8 @@ type flexibilityScope struct {
 	mutex                   sync.RWMutex
 	firstFetchWG            sync.WaitGroup
 	firstFetchFinished      atomic.Bool
-	pollingMode             atomicValue[PollingMode]
-	pollingModeCh           chan struct{}
+	pollingSpeed            atomicValue[pollingSpeed]
+	pollingSpeedCh          chan struct{}
 	cancelFunc              context.CancelFunc
 	lastErr                 error
 	lastSuccessfulRefreshAt time.Time
@@ -120,7 +132,7 @@ func (w *scopeWorker) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		w.drainPollingModeCh()
+		w.drainPollingSpeedCh()
 		// if previous loop ended not because of timer, make sure to reset and drain it
 		stopTimer(timer)
 		// Make sure since last refresh try (successful or not) it hasn't elapsed more than expected refresh interval (starvation bug)
@@ -136,12 +148,12 @@ func (w *scopeWorker) run(ctx context.Context) {
 		select {
 		case <-timer.C():
 			continue
-		case <-w.scope.pollingModeCh:
+		case <-w.scope.pollingSpeedCh:
 			if !IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
 				continue
 			}
 			// Potentially do faster `usualInterval * 0.5` refresh if we switched to fast polling
-			if w.scope.getPollingMode() == PollingModeNormal && w.clock.Since(w.scope.getLastRefreshAttemptAt()) >= w.currentRefreshInterval()/2 {
+			if w.scope.getPollingSpeed() == pollingSpeedFast && w.clock.Since(w.scope.getLastRefreshAttemptAt()) >= w.currentRefreshInterval()/2 {
 				w.refreshScope(ctx)
 			}
 		case decision := <-w.provisioningDecisionChan:
@@ -154,14 +166,14 @@ func (w *scopeWorker) run(ctx context.Context) {
 
 func (w *scopeWorker) currentRefreshInterval() time.Duration {
 	if IsFlexAdvisorAdaptivePollingEnabled(w.experimentsManager) {
-		return getRefreshIntervalForPollingMode(w.experimentsManager, w.scope.getPollingMode())
+		return getRefreshIntervalForPollingSpeed(w.experimentsManager, w.scope.getPollingSpeed())
 	}
-	return getRefreshIntervalForPollingMode(w.experimentsManager, PollingModeNormal)
+	return getRefreshIntervalForPollingSpeed(w.experimentsManager, pollingSpeedFast)
 }
 
-func (w *scopeWorker) drainPollingModeCh() {
+func (w *scopeWorker) drainPollingSpeedCh() {
 	select {
-	case <-w.scope.pollingModeCh:
+	case <-w.scope.pollingSpeedCh:
 	default:
 	}
 }
@@ -293,36 +305,36 @@ func (w *scopeWorker) sendProvisioningDecision(ctx context.Context, decision api
 }
 
 func newFlexibilityScope(provider instanceavailability.Provider, flexibilityScopeKey string, experimentsManager experiments.Manager, cancelFunc context.CancelFunc) *flexibilityScope {
-	pollingMode := PollingModeNormal
+	speed := pollingSpeedFast
 	if IsFlexAdvisorAdaptivePollingEnabled(experimentsManager) {
-		pollingMode = PollingModeSlow
+		speed = pollingSpeedSlow
 	}
 	scope := &flexibilityScope{
 		provider:            provider,
 		flexibilityScopeKey: flexibilityScopeKey,
 		experimentsManager:  experimentsManager,
 		instanceConfigs:     make(map[string]*api.InstanceAvailability),
-		pollingModeCh:       make(chan struct{}, 1),
+		pollingSpeedCh:      make(chan struct{}, 1),
 		cancelFunc:          cancelFunc,
 	}
-	scope.pollingMode.Store(pollingMode)
+	scope.pollingSpeed.Store(speed)
 	scope.firstFetchWG.Add(1)
 	return scope
 }
 
-// setPollingMode sets pollingMode and issues message to a channel if pollingMode has changed
-func (s *flexibilityScope) setPollingMode(pollingMode PollingMode) {
-	if prevMode := s.pollingMode.Swap(pollingMode); prevMode != pollingMode {
-		klog.Infof("FlexAdvisor: changed pollingMode %v to %v for flexibilityScopeKey=%v", prevMode, pollingMode, s.flexibilityScopeKey)
+// setPollingSpeed sets pollingSpeed and issues message to a channel if pollingSpeed has changed
+func (s *flexibilityScope) setPollingSpeed(speed pollingSpeed) {
+	if prevSpeed := s.pollingSpeed.Swap(speed); prevSpeed != speed {
+		klog.Infof("FlexAdvisor: changed pollingSpeed %v to %v for flexibilityScopeKey=%v", prevSpeed, speed, s.flexibilityScopeKey)
 		select {
-		case s.pollingModeCh <- struct{}{}:
+		case s.pollingSpeedCh <- struct{}{}:
 		default:
 		}
 	}
 }
 
-func (s *flexibilityScope) getPollingMode() PollingMode {
-	return s.pollingMode.Load()
+func (s *flexibilityScope) getPollingSpeed() pollingSpeed {
+	return s.pollingSpeed.Load()
 }
 
 func (s *flexibilityScope) getAvailabilityData(instanceConfigKey string) *api.InstanceAvailability {

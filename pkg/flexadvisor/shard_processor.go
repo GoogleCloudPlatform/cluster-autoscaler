@@ -25,7 +25,8 @@ import (
 )
 
 // ShardProcessor processes incoming pod shards selected by LruPodShardSelector.
-// When adaptive polling is enabled, it restores the active shard's flexibility scope to normal polling mode.
+// When adaptive polling is enabled, it activates fast polling for the active
+// shard's flexibility scope.
 type ShardProcessor struct {
 	provider           instanceavailability.Provider
 	cccLister          lister.Lister
@@ -50,20 +51,15 @@ func (p *ShardProcessor) ShouldProcess() bool {
 	return p != nil && p.provider != nil && IsFlexAdvisorAdaptivePollingEnabled(p.experimentsManager)
 }
 
-// ProcessIncomingShards moves the active shard's flexibility scope (shards[0]) back to normal polling mode
+// ProcessIncomingShards activates fast polling for the active shard's flexibility scope (shards[0])
 // when adaptive polling is enabled.
 func (p *ShardProcessor) ProcessIncomingShards(shards []*podsharding.PodShard) {
-	if !p.ShouldProcess() {
-		klog.Infof("FlexAdvisor: not setting polling mode based on incoming shard, FlexAdvisor::AdaptivePollingEnabled not enabled")
-		return
-	}
-	if len(shards) == 0 {
-		klog.Infof("FlexAdvisor: not setting polling mode based on incoming shard, len(shards) == 0")
+	if !p.ShouldProcess() || len(shards) == 0 {
 		return
 	}
 	if key, found := flexibilityScopeKeyFromShard(shards[0], p.cccLister); found {
-		klog.Infof("FlexAdvisor: setting polling mode based on incoming shard flexibilityScopeKey=%v", key)
-		p.provider.SetPollingMode(key, PollingModeNormal)
+		klog.Infof("FlexAdvisor: activating fast polling based on incoming shard flexibilityScopeKey=%v", key)
+		p.provider.ActivateFastPolling(key)
 	}
 }
 

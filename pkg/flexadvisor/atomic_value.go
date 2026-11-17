@@ -16,7 +16,7 @@ package flexadvisor
 
 import "sync/atomic"
 
-// atomicValue is a type-safe generic wrapper around sync/atomic.Value for value and enum types (e.g. PollingMode).
+// atomicValue is a type-safe generic wrapper around sync/atomic.Value for value and enum types (e.g. pollingSpeed).
 //
 // The Go standard library's sync/atomic package does not provide a generic atomic.Value[T]:
 //   - atomic.Value operates on untyped any: it lacks compile-time type safety (mismatched concrete types panic at
@@ -25,7 +25,7 @@ import "sync/atomic"
 //   - atomic.Pointer[T] is the only generic type in sync/atomic, which requires pointer indirection/allocations for
 //     small value enums and exposes nil states instead of value semantics.
 //   - atomic.Int32 / atomic.Int64 are concrete primitive types, requiring manual integer casts at every call site for
-//     custom defined types like PollingMode (and cannot hold non-integer types such as string-based enums).
+//     custom defined types like pollingSpeed (and cannot hold non-integer types such as string-based enums).
 type atomicValue[T comparable] struct {
 	v atomic.Value
 }
