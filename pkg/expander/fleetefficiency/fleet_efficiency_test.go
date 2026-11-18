@@ -2172,6 +2172,28 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			},
 		},
 	}
+	defaultMultiArchPod := &v1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-multi-arch-pod"},
+		Spec: v1.PodSpec{
+			Affinity: &v1.Affinity{
+				NodeAffinity: &v1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &v1.NodeSelector{
+						NodeSelectorTerms: []v1.NodeSelectorTerm{
+							{
+								MatchExpressions: []v1.NodeSelectorRequirement{
+									{
+										Key:      v1.LabelArchStable,
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{"arm64", "amd64"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 	balancedPod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "balanced-pod"},
 		Spec: v1.PodSpec{
@@ -2268,6 +2290,8 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 	x86Opt1, x86Opt2 := makeOptions(defaultX86Pod)
 	armOpt1 := expander.Option{NodeGroup: armNg1, Pods: []*v1.Pod{defaultArmPod}}
 	armOpt2 := expander.Option{NodeGroup: armNg2, Pods: []*v1.Pod{defaultArmPod}}
+	multiArchX86Opt := expander.Option{NodeGroup: ng1, Pods: []*v1.Pod{defaultMultiArchPod}}
+	multiArchArmOpt := expander.Option{NodeGroup: armNg1, Pods: []*v1.Pod{defaultMultiArchPod}}
 	balOpt1 := expander.Option{NodeGroup: balNg1, Pods: []*v1.Pod{balancedPod}}
 	balOpt2 := expander.Option{NodeGroup: balNg2, Pods: []*v1.Pod{balancedPod}}
 	soOpt1 := expander.Option{NodeGroup: soNg1, Pods: []*v1.Pod{scaleOutPod}}
@@ -2301,16 +2325,28 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			expectedBestOptions: []expander.Option{x86Opt2},
 		},
 		{
-			name:                   "Default Autopilot ARM pod with experiment enabled synthesizes general-purpose-arm CRD and scores options",
+			name:                   "Default Autopilot ARM pod with experiment enabled synthesizes unified general-purpose CRD and scores options",
 			autopilotEnabled:       true,
 			boolExperimentValues:   enabledExps,
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
 			options:                []expander.Option{armOpt1, armOpt2},
 			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
-				setupMockSnapshotForScope(m, crdRules.GeneralPurposeArmPodFamily, "c4a-standard-4", map[string]float64{"us-central1-a": 0.9})
-				setupMockSnapshotForScope(m, crdRules.GeneralPurposeArmPodFamily, "c4a-standard-8", map[string]float64{"us-central1-a": 0.4})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-4", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-8", map[string]float64{"us-central1-a": 0.4})
 			},
 			expectedBestOptions: []expander.Option{armOpt1},
+		},
+		{
+			name:                   "Default Autopilot multi-arch pod with experiment enabled synthesizes unified general-purpose CRD and scores x86 and ARM options",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options:                []expander.Option{multiArchX86Opt, multiArchArmOpt},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.4})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-4", map[string]float64{"us-central1-a": 0.9})
+			},
+			expectedBestOptions: []expander.Option{multiArchArmOpt},
 		},
 		{
 			name:                   "Predefined Compute Class Balanced on Autopilot with experiment enabled synthesizes PCC CRD and scores options",
@@ -2454,24 +2490,45 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			expectedBestOptions:    []expander.Option{cccOpt1, cccOpt2},
 		},
 		{
-			name:                   "Ambiguous architecture across expansion options (ARM first, x86 second) falls back to lowest-cost",
+			name:                   "Mixed x86 and ARM default Autopilot pods across expansion options (ARM first, x86 second) share unified CRD and score options",
 			autopilotEnabled:       true,
 			boolExperimentValues:   enabledExps,
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
 			options:                []expander.Option{armOpt1, x86Opt1},
-			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
-			expectedBestOptions:    []expander.Option{armOpt1, x86Opt1},
-			expectedErrorLog:       ambiguousComputeClassLog,
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-4", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.4})
+			},
+			expectedBestOptions: []expander.Option{armOpt1},
 		},
 		{
-			name:                   "Ambiguous architecture across expansion options (x86 first, ARM second) falls back to lowest-cost",
+			name:                   "Mixed x86 and ARM default Autopilot pods across expansion options (x86 first, ARM second) share unified CRD and score options",
 			autopilotEnabled:       true,
 			boolExperimentValues:   enabledExps,
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
 			options:                []expander.Option{x86Opt1, armOpt1},
-			flexAdvisorSetup:       flexAdvisorNotCalledSetup,
-			expectedBestOptions:    []expander.Option{x86Opt1, armOpt1},
-			expectedErrorLog:       ambiguousComputeClassLog,
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.8})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-4", map[string]float64{"us-central1-a": 0.3})
+			},
+			expectedBestOptions: []expander.Option{x86Opt1},
+		},
+		{
+			name:                   "Mixed x86, ARM, and multi-arch default Autopilot pods across options share unified CRD and score options",
+			autopilotEnabled:       true,
+			boolExperimentValues:   enabledExps,
+			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
+			options: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{defaultX86Pod, defaultMultiArchPod}},
+				{NodeGroup: armNg1, Pods: []*v1.Pod{defaultArmPod, defaultMultiArchPod}},
+			},
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.85})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "c4a-standard-4", map[string]float64{"us-central1-a": 0.4})
+			},
+			expectedBestOptions: []expander.Option{
+				{NodeGroup: ng1, Pods: []*v1.Pod{defaultX86Pod, defaultMultiArchPod}},
+			},
 		},
 		{
 			name:                   "Ambiguous pay-per-pod and VM-billed pods across expansion options (pay-per-pod first) falls back to lowest-cost",
@@ -2555,7 +2612,7 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			},
 		},
 		{
-			name:                   "Ambiguous architecture across replicas of the same controller falls back to lowest-cost",
+			name:                   "Mixed x86 and ARM replicas of the same controller share unified CRD and score options",
 			autopilotEnabled:       true,
 			boolExperimentValues:   enabledExps,
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
@@ -2563,12 +2620,13 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
 				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
 			},
-			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.3})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-8", map[string]float64{"us-central1-a": 0.8})
+			},
 			expectedBestOptions: []expander.Option{
-				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
 				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsA}},
 			},
-			expectedErrorLog: ambiguousComputeClassLog,
 		},
 		{
 			name:                   "Ambiguous pay-per-pod and VM-billed pods owned by the same multi-template controller fall back to lowest-cost",
@@ -2587,7 +2645,7 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 			expectedErrorLog: ambiguousComputeClassLog,
 		},
 		{
-			name:                   "Ambiguous architecture across replicas of different controllers within a single expansion option falls back to lowest-cost",
+			name:                   "Mixed x86 and ARM replicas of different controllers within a single expansion option share unified CRD and score options",
 			autopilotEnabled:       true,
 			boolExperimentValues:   enabledExps,
 			clusterDefaultStrategy: options.ClusterDefaultAllocationStrategyLowestCost,
@@ -2595,12 +2653,13 @@ func TestFleetEfficiencyFilter_PayPerPodWorkloads(t *testing.T) {
 				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
 				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
 			},
-			flexAdvisorSetup: flexAdvisorNotCalledSetup,
+			flexAdvisorSetup: func(m *instanceavailability.MockProvider) {
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-4", map[string]float64{"us-central1-a": 0.9})
+				setupMockSnapshotForScope(m, ccc.AutopilotPodFamilyCrdName, "e2-standard-8", map[string]float64{"us-central1-a": 0.4})
+			},
 			expectedBestOptions: []expander.Option{
 				{NodeGroup: ng1, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
-				{NodeGroup: ng2, Pods: []*v1.Pod{x86ReplicaOfRsA, armReplicaOfRsB}},
 			},
-			expectedErrorLog: ambiguousComputeClassLog,
 		},
 		{
 			name:                   "Ambiguous ComputeClass source across expansion options (Custom ComputeClass and virtual CRD of the same name) falls back to lowest-cost",

@@ -254,6 +254,16 @@ func TestFlexAdvisorAutopilotPayPerPodScopesFollowGuidanceOfBothProvisioningMode
 			onDemandMachineType: "e2-standard-4",
 			spotMachineType:     "e2-standard-8",
 		},
+		"general-purpose ARM workload": {
+			podOptions: []func(*apiv1.Pod){
+				pod.WithNodeSelectorEntry(apiv1.LabelArchStable, "arm64"),
+				withTolerationForTaintKey(apiv1.LabelArchStable),
+				withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+			},
+			onDemandMachineType: "c4a-standard-4",
+			spotMachineType:     "c4a-standard-8",
+			otherMachineTypes:   []string{"n4a-standard-4"},
+		},
 	}
 	workloads := map[string]instanceavailability.ProvisioningMode{
 		"On-Demand pod": instanceavailability.Standard,

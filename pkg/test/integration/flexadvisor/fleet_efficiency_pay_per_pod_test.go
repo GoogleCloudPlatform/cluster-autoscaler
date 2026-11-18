@@ -144,6 +144,30 @@ func newPayPerPodTestConfig(autopilot bool, mode payPerPodExperimentMode) *integ
 		)
 }
 
+// withMultiArchAffinity configures a required node affinity accepting both
+// arm64 and amd64 architectures.
+func withMultiArchAffinity() func(*apiv1.Pod) {
+	return func(p *apiv1.Pod) {
+		p.Spec.Affinity = &apiv1.Affinity{
+			NodeAffinity: &apiv1.NodeAffinity{
+				RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+					NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+						{
+							MatchExpressions: []apiv1.NodeSelectorRequirement{
+								{
+									Key:      apiv1.LabelArchStable,
+									Operator: apiv1.NodeSelectorOpIn,
+									Values:   []string{"arm64", "amd64"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+}
+
 // withTolerationForTaintKey tolerates every NoSchedule taint with the given key. Autopilot pods get such
 // tolerations (e.g. for the compute class, machine family or architecture taints) from the Autopilot webhook.
 func withTolerationForTaintKey(key string) func(*apiv1.Pod) {
@@ -263,8 +287,8 @@ func assertNoAllocationStrategyMetrics(t *testing.T, machineType string) {
 // clusters are scaled up with the fleet-efficiency allocation strategy, i.e. that the autoprovisioned node
 // pool uses the machine type with the highest Flex Advisor preference score among the machine families of
 // the workload:
-//   - default x86 workloads (no compute class) are evaluated against the general-purpose pod family,
-//   - default ARM workloads are evaluated against the general-purpose-arm pod family,
+//   - default x86, ARM, and multi-arch workloads (no compute class) share the unified synthetic CRD
+//     containing general-purpose followed by general-purpose-arm,
 //   - Balanced and Scale-Out predefined compute class workloads are evaluated against the machine families
 //     of the compute class.
 func TestFleetEfficiency_PayPerPod_AutopilotWorkloads(t *testing.T) {
@@ -293,6 +317,19 @@ func TestFleetEfficiency_PayPerPod_AutopilotWorkloads(t *testing.T) {
 				fake.NewGuidance("c4a-standard-8").WithScore(highPreferenceScore),
 			},
 			expectedMachineType: "c4a-standard-8",
+			expectedSource:      metrics.AllocationStrategySourceAutopilotWorkload,
+		},
+		"default multi-arch workload - highest scored general-purpose machine type": {
+			podOptions: []func(*apiv1.Pod){
+				withMultiArchAffinity(),
+				withTolerationForTaintKey(apiv1.LabelArchStable),
+				withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+			},
+			guidances: []fake.CapacityGuidance{
+				fake.NewGuidance("e2-standard-4").WithScore(lowPreferenceScore),
+				fake.NewGuidance("e2-standard-8").WithScore(highPreferenceScore),
+			},
+			expectedMachineType: "e2-standard-8",
 			expectedSource:      metrics.AllocationStrategySourceAutopilotWorkload,
 		},
 		"Balanced compute class workload - highest scored Balanced machine type": {
@@ -343,6 +380,157 @@ func TestFleetEfficiency_PayPerPod_AutopilotWorkloads(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestFleetEfficiency_PayPerPod_Amd64AndMultiArchAutopilotWorkloads verifies
+// that concurrent amd64 and multi-arch (`kubernetes.io/arch In [arm64, amd64]`)
+// default Autopilot pods share the unified synthetic CRD and scale up on the
+// highest-scored general-purpose machine type without falling back to
+// lowest-cost.
+func TestFleetEfficiency_PayPerPod_Amd64AndMultiArchAutopilotWorkloads(t *testing.T) {
+	testConfig := newPayPerPodTestConfig(true, payPerPodExperimentEnabled)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("e2-standard-4").WithScore(lowPreferenceScore),
+			fake.NewGuidance("e2-standard-8").WithScore(highPreferenceScore),
+		)
+
+		autoscaler := integration.MustSetupAutoscaler(ctx, t, testConfig, infra)
+		defer integration_synctest.TearDown(cancel)
+
+		PrimeFlexAdvisorCacheForPod(ctx, t, autoscaler, infra)
+		metrics.ResetAllForTest()
+
+		amd64Pod := tu.BuildTestPod("amd64-pod", payPerPodTestPodCpuMillis, payPerPodTestPodMemory,
+			tu.MarkUnschedulable(),
+			pod.WithNodeSelectorEntry(apiv1.LabelArchStable, "amd64"),
+		)
+		multiArchPod := tu.BuildTestPod("multi-arch-pod", payPerPodTestPodCpuMillis, payPerPodTestPodMemory,
+			tu.MarkUnschedulable(),
+			withMultiArchAffinity(),
+			withTolerationForTaintKey(apiv1.LabelArchStable),
+			withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+		)
+		infra.Fakes.K8s.AddPod(amd64Pod)
+		infra.Fakes.K8s.AddPod(multiArchPod)
+
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		nodePool := infra.Fakes.GkeService.MustGetSingleAutoprovisionedNodePool(t)
+		assert.Equal(t, "e2-standard-8", nodePool.Config.MachineType, "Expected fleet-efficiency to choose the highest scored machine type without fallback")
+
+		for _, podName := range []string{"amd64-pod", "multi-arch-pod"} {
+			gotPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+			if assert.NoError(t, err) {
+				assert.Contains(t, gotPod.Spec.NodeName, nodePool.Name, "Expected pod %s to be scheduled on %s", podName, nodePool.Name)
+			}
+		}
+		assertAllocationStrategyMetrics(t, string(v1.AllocationStrategyFleetEfficiency), metrics.AllocationStrategyFallbackNone, metrics.AllocationStrategySourceAutopilotWorkload, "e2-standard-8")
+		assertNoStrategyMetrics(t, v1.AllocationStrategyLowestCost, "e2-standard-4")
+		assertNoStrategyMetrics(t, v1.AllocationStrategyLowestCost, "e2-standard-8")
+	})
+}
+
+// TestFleetEfficiency_PayPerPod_ConcurrentMixedArchAutopilotWorkloads verifies
+// that concurrent amd64, arm64, and multi-arch default Autopilot pods all
+// resolve to the unified synthetic CRD and scale up with fleet-efficiency
+// without conflicting or falling back to lowest-cost.
+func TestFleetEfficiency_PayPerPod_ConcurrentMixedArchAutopilotWorkloads(t *testing.T) {
+	testConfig := newPayPerPodTestConfig(true, payPerPodExperimentEnabled)
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		infra := integration.SetupInfrastructure(ctx, t)
+		infra.Fakes.FlexAdvisorClient.AddCapacityGuidances(
+			fake.NewGuidance("e2-standard-4").WithScore(lowPreferenceScore),
+			fake.NewGuidance("e2-standard-8").WithScore(highPreferenceScore),
+			fake.NewGuidance("c4a-standard-4").WithScore(lowPreferenceScore),
+			fake.NewGuidance("c4a-standard-8").WithScore(highPreferenceScore),
+		)
+
+		autoscaler := integration.MustSetupAutoscaler(ctx, t, testConfig, infra)
+		defer integration_synctest.TearDown(cancel)
+
+		// A single default Autopilot pod primes the unified scope for both
+		// x86 and ARM.
+		PrimeFlexAdvisorCacheForPod(ctx, t, autoscaler, infra)
+		metrics.ResetAllForTest()
+
+		amd64Pod := tu.BuildTestPod("amd64-pod", payPerPodTestPodCpuMillis, payPerPodTestPodMemory,
+			tu.MarkUnschedulable(),
+			pod.WithNodeSelectorEntry(apiv1.LabelArchStable, "amd64"),
+		)
+		arm64Pod := tu.BuildTestPod("arm64-pod", payPerPodTestPodCpuMillis, payPerPodTestPodMemory,
+			tu.MarkUnschedulable(),
+			pod.WithNodeSelectorEntry(apiv1.LabelArchStable, "arm64"),
+			withTolerationForTaintKey(apiv1.LabelArchStable),
+			withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+		)
+		multiArchPod := tu.BuildTestPod("multi-arch-pod", payPerPodTestPodCpuMillis, payPerPodTestPodMemory,
+			tu.MarkUnschedulable(),
+			withMultiArchAffinity(),
+			withTolerationForTaintKey(apiv1.LabelArchStable),
+			withTolerationForTaintKey(gkelabels.MachineFamilyLabel),
+		)
+		infra.Fakes.K8s.AddPod(amd64Pod)
+		infra.Fakes.K8s.AddPod(arm64Pod)
+		infra.Fakes.K8s.AddPod(multiArchPod)
+
+		// Two cycles provision one pool per architecture; multi-arch-pod
+		// schedules onto whichever architecture NAP selects first.
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+		integration_synctest.MustRunOnceAfter(ctx, t, autoscaler, time.Second)
+		infra.Fakes.RunScheduler(ctx, t)
+
+		napNodePools := infra.Fakes.GkeService.GetAutoprovisionedNodePools()
+		if !assert.Len(t, napNodePools, 2, "Expected two autoprovisioned node pools (one x86 and one ARM)") {
+			t.FailNow()
+		}
+		poolByMachineType := make(map[string]string, len(napNodePools))
+		for _, np := range napNodePools {
+			poolByMachineType[np.Config.MachineType] = np.Name
+		}
+		assert.Contains(t, poolByMachineType, "e2-standard-8")
+		assert.Contains(t, poolByMachineType, "c4a-standard-8")
+
+		getPodNode := func(podName string) string {
+			t.Helper()
+			gotPod, err := infra.Fakes.KubeClient.CoreV1().Pods("default").Get(ctx, podName, metav1.GetOptions{})
+			if !assert.NoError(t, err) {
+				return ""
+			}
+			return gotPod.Spec.NodeName
+		}
+		assert.Contains(t, getPodNode("amd64-pod"), poolByMachineType["e2-standard-8"])
+		assert.Contains(t, getPodNode("arm64-pod"), poolByMachineType["c4a-standard-8"])
+		assert.NotEmpty(t, getPodNode("multi-arch-pod"), "Expected multi-arch-pod to be scheduled")
+
+		// Both scale-ups must use fleet-efficiency with zero fallback.
+		scaleupCount, err := metrics.GetScaleupsWithAllocationStrategyCountForTest(
+			string(v1.AllocationStrategyFleetEfficiency),
+			metrics.AllocationStrategyFallbackNone,
+			metrics.AllocationStrategySourceAutopilotWorkload,
+		)
+		assert.NoError(t, err)
+		assert.Equal(t, float64(2), scaleupCount)
+		for _, machineType := range []string{"e2-standard-8", "c4a-standard-8"} {
+			nodesCount, err := metrics.GetNodesWithAllocationStrategyCountForTest(
+				string(v1.AllocationStrategyFleetEfficiency),
+				metrics.AllocationStrategyFallbackNone,
+				machineType,
+			)
+			assert.NoError(t, err)
+			assert.Equal(t, float64(1), nodesCount, "Expected 1 fleet-efficiency node for %s", machineType)
+		}
+		for _, machineType := range []string{"e2-standard-4", "e2-standard-8", "c4a-standard-4", "c4a-standard-8"} {
+			assertNoStrategyMetrics(t, v1.AllocationStrategyLowestCost, machineType)
+		}
+	})
 }
 
 // TestFleetEfficiency_PayPerPod_PodFamilyComputeClass verifies that on Standard clusters pods matching a

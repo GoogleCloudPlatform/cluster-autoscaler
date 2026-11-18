@@ -19,6 +19,7 @@ import (
 
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/billing"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
@@ -105,8 +106,8 @@ func (p *PodListProcessor) flexibilityScopeKeyFromPod(pod *apiv1.Pod, isAutopilo
 	if key != "" {
 		return key, true
 	}
-	if isAutopilot && experiments.IsPayPerPodFleetEfficiencyEnabled(p.experimentsManager) {
-		return billing.GetPodFamilyForPayPerPodAutopilotWorkload(pod)
+	if isAutopilot && experiments.IsPayPerPodFleetEfficiencyEnabled(p.experimentsManager) && billing.IsDefaultPayPerPodAutopilotWorkload(pod) {
+		return ccc.AutopilotPodFamilyCrdName, true
 	}
 	return "", false
 }

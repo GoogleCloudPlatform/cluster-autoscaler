@@ -29,7 +29,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podsharding"
@@ -478,12 +477,10 @@ func TestWrapperOrchestrator_ScaleUp_SetPollingMode(t *testing.T) {
 	podScope1 := testPod("scope-1")
 	podWithoutCCC := &apiv1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "basic-pod"}}
 
-	syntheticPayPerPodScopes := []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily}
+	syntheticPayPerPodScopes := []string{ccc.AutopilotPodFamilyCrdName}
 	syntheticPayPerPodOrder := []string{
 		"SetPollingMode:general-purpose:normal",
-		"SetPollingMode:general-purpose-arm:normal",
 		"innerScaleUp",
-		"SetPollingMode:general-purpose-arm:slow",
 		"SetPollingMode:general-purpose:slow",
 	}
 

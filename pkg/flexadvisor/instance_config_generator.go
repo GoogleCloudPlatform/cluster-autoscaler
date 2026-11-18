@@ -599,12 +599,12 @@ func (g *instanceConfigGenerator) findGkeMig(nodePoolName string) *gke.GkeMig {
 	return nil
 }
 
-// isPayPerPodPodFamilyScope returns whether flexibilityScopeKey is a synthetic podFamily scope
-// (general-purpose / general-purpose-arm) registered for pay-per-pod Autopilot workloads.
-// Such scopes are not backed by a ComputeClass CRD and are only active on Autopilot clusters
-// with the PayPerPodFleetEfficiency experiment enabled.
+// isPayPerPodPodFamilyScope returns whether flexibilityScopeKey is the
+// synthetic podFamily scope registered for default pay-per-pod Autopilot
+// workloads. This scope is not backed by a ComputeClass CRD and is only active
+// on Autopilot clusters with the PayPerPodFleetEfficiency experiment enabled.
 func (g *instanceConfigGenerator) isPayPerPodPodFamilyScope(flexibilityScopeKey string) bool {
-	return rules.IsPodFamily(flexibilityScopeKey) &&
+	return flexibilityScopeKey == ccc.AutopilotPodFamilyCrdName &&
 		g.provider.IsAutopilotEnabled() &&
 		g.optionsTracker != nil &&
 		experiments.IsPayPerPodFleetEfficiencyEnabled(g.optionsTracker.ExperimentsManager())
@@ -616,7 +616,7 @@ func (g *instanceConfigGenerator) matchingCrd(flexibilityScopeKey string) (crd.C
 	}
 	if g.isPayPerPodPodFamilyScope(flexibilityScopeKey) {
 		projectId, _, _ := g.provider.GetClusterInfo()
-		return ccc.NewPodFamilyCrd(flexibilityScopeKey, projectId, true, g.provider, g.optionsTracker), nil
+		return ccc.NewAutopilotPodFamilyCrd(projectId, true, g.provider, g.optionsTracker), nil
 	}
 	crd, err := g.cccLister.GetCrd(flexibilityScopeKey)
 	if err != nil {

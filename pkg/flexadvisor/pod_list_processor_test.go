@@ -30,7 +30,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"sigs.k8s.io/cluster-autoscaler/pkg/cloudprovider"
@@ -140,6 +139,28 @@ func TestProcess_PayPerPodAutopilotWorkloads(t *testing.T) {
 			},
 		},
 	}
+	defaultMultiArchPod := &apiv1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-multi-arch"},
+		Spec: apiv1.PodSpec{
+			Affinity: &apiv1.Affinity{
+				NodeAffinity: &apiv1.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &apiv1.NodeSelector{
+						NodeSelectorTerms: []apiv1.NodeSelectorTerm{
+							{
+								MatchExpressions: []apiv1.NodeSelectorRequirement{
+									{
+										Key:      apiv1.LabelArchStable,
+										Operator: apiv1.NodeSelectorOpIn,
+										Values:   []string{"arm64", "amd64"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
 	machineFamilyExcludedPod := &apiv1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "excluded-machine-family"},
 		Spec: apiv1.PodSpec{
@@ -176,21 +197,21 @@ func TestProcess_PayPerPodAutopilotWorkloads(t *testing.T) {
 			autopilotEnabled:  true,
 			experimentEnabled: true,
 			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultX86Pod},
-			expectedScopes:    []string{rules.GeneralPurposePodFamily},
+			expectedScopes:    []string{ccc.AutopilotPodFamilyCrdName},
 		},
 		{
-			name:              "Autopilot with experiment enabled registers general-purpose-arm for default ARM pod",
+			name:              "Autopilot with experiment enabled registers unified general-purpose scope for default ARM pod",
 			autopilotEnabled:  true,
 			experimentEnabled: true,
 			unschedulablePods: []*apiv1.Pod{defaultArmPod},
-			expectedScopes:    []string{rules.GeneralPurposeArmPodFamily},
+			expectedScopes:    []string{ccc.AutopilotPodFamilyCrdName},
 		},
 		{
-			name:              "Autopilot with experiment enabled registers both x86 and ARM scopes and PCC",
+			name:              "Autopilot with experiment enabled registers single unified scope for x86, ARM, and multi-arch pods and PCC",
 			autopilotEnabled:  true,
 			experimentEnabled: true,
-			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultArmPod, pccPod},
-			expectedScopes:    []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily, "Balanced"},
+			unschedulablePods: []*apiv1.Pod{defaultX86Pod, defaultArmPod, defaultMultiArchPod, pccPod},
+			expectedScopes:    []string{ccc.AutopilotPodFamilyCrdName, "Balanced"},
 		},
 		{
 			name:              "Autopilot with experiment enabled skips pods with VM-based billing exclusions",

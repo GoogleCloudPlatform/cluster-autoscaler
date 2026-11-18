@@ -19,8 +19,8 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	apiv1 "k8s.io/api/core/v1"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/lister"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/instanceavailability"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -156,15 +156,16 @@ func (o *WrapperOrchestrator) ScaleUp(
 		}
 
 		if o.flexAdvisor != nil && flexibilityScopeKey == "" && shard != nil && shard.NodeGroupDescriptor.ProvisioningClassName == "" {
-			// This is a non-CCC, non-provreq shard - try to register synthetic CCCs
-			// SetPollingMode will only actually change their mode if they have been previously registered, meaning
-			// there are some unschedulablePods pending that were picked up by pod list processor that will use general-purpose or general-purpose-arm (or such scope has been used recently
-			// and has not yet expired)
-			// We don't check explicitly whether these synthetic CCCs will actually be used in this shard as 1. cost of checking is high 2. cost of just activating them is low
-			for _, syntheticPayPerPodCcc := range []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily} {
-				o.flexAdvisor.SetPollingMode(syntheticPayPerPodCcc, PollingModeNormal)
-				defer o.flexAdvisor.SetPollingMode(syntheticPayPerPodCcc, PollingModeSlow)
-			}
+			// This is a non-CCC, non-provreq shard - try to activate the
+			// synthetic pay-per-pod scope. SetPollingMode only changes its mode if
+			// it was previously registered, meaning there are unschedulable pods
+			// pending that were picked up by pod list processor for the default
+			// Autopilot scope (or the scope was used recently and has not yet
+			// expired). We don't check explicitly whether the synthetic CCC will
+			// actually be used in this shard as 1. cost of checking is high 2.
+			// cost of just activating it is low.
+			o.flexAdvisor.SetPollingMode(ccc.AutopilotPodFamilyCrdName, PollingModeNormal)
+			defer o.flexAdvisor.SetPollingMode(ccc.AutopilotPodFamilyCrdName, PollingModeSlow)
 		}
 	}
 
