@@ -57,6 +57,25 @@ RUN curl -fLO https://github.com/protocolbuffers/protobuf/releases/download/v${P
     unzip -o ${PROTOC_ZIP} -d /usr/local 'include/*' && \
     rm -f ${PROTOC_ZIP}
 
+ARG HELM_VERSION=3.22.1
+ARG HELM_TGZ=helm-v${HELM_VERSION}-linux-amd64.tar.gz
+ARG HELM_SHA256=896cf63684a42a723d61c980369d6e588330927deb13676ca0d85006dd6da0ea
+RUN curl -fLO https://get.helm.sh/${HELM_TGZ} && \
+    echo "${HELM_SHA256}  ${HELM_TGZ}" | sha256sum -c - && \
+    tar -xzf ${HELM_TGZ} -C /usr/local/bin --strip-components=1 linux-amd64/helm && \
+    rm -f ${HELM_TGZ}
+
+ARG HELM_UNITTEST_VERSION=1.2.1
+ARG HELM_UNITTEST_TGZ=helm-unittest-linux-amd64-${HELM_UNITTEST_VERSION}.tgz
+ARG HELM_UNITTEST_SHA256=48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
+# Outside of the home directory, so that the plugin is found whichever user runs helm.
+ENV HELM_PLUGINS=/usr/local/share/helm/plugins
+RUN curl -fLO https://github.com/helm-unittest/helm-unittest/releases/download/v${HELM_UNITTEST_VERSION}/${HELM_UNITTEST_TGZ} && \
+    echo "${HELM_UNITTEST_SHA256}  ${HELM_UNITTEST_TGZ}" | sha256sum -c - && \
+    mkdir -p ${HELM_PLUGINS}/unittest && \
+    tar -xzf ${HELM_UNITTEST_TGZ} -C ${HELM_PLUGINS}/unittest && \
+    rm -f ${HELM_UNITTEST_TGZ}
+
 
 ARG PROTOC_GEN_GO_VERSION=v1.36.12
 ARG GOLANGCI_LINT_VERSION=v2.9.0
