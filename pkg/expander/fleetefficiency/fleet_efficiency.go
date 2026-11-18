@@ -391,8 +391,8 @@ func (f *fleetEfficiencyFilter) getPodCrd(pod *apiv1.Pod) (crd.CRD, metrics.Allo
 			}
 			return nil, metrics.AllocationStrategySourceUnknown, nil
 		}
-		if podFamily, ok := billing.GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements(pod, req); ok {
-			return ccc.NewPodFamilyCrd(podFamily, projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourceAutopilotWorkload, nil
+		if billing.IsDefaultPayPerPodAutopilotWorkloadWithRequirements(pod, req) {
+			return ccc.NewAutopilotPodFamilyCrd(projectId, true, f.cloudProvider, f.optionsTracker), metrics.AllocationStrategySourceAutopilotWorkload, nil
 		}
 	}
 	return nil, metrics.AllocationStrategySourceUnknown, nil

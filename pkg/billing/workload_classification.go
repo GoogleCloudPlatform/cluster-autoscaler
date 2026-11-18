@@ -21,9 +21,7 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/tpu"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd/ccc"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/rules"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/podrequirements"
-	kubeletapis "k8s.io/kubelet/pkg/apis"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/gpu"
 )
 
@@ -99,21 +97,22 @@ func hasAcceleratorResource(containers []apiv1.Container) bool {
 	return false
 }
 
-// GetPodFamilyForPayPerPodAutopilotWorkload returns the podFamily (general-purpose or general-purpose-arm)
-// for standard pay-per-pod Autopilot workloads (unlabelled, non-SoHW, non-accelerator, non-custom CCC).
-// If the pod does not qualify as a default pay-per-pod Autopilot workload, it returns ("", false).
-func GetPodFamilyForPayPerPodAutopilotWorkload(pod *apiv1.Pod) (string, bool) {
+// IsDefaultPayPerPodAutopilotWorkload returns true if the pod is a default
+// pay-per-pod Autopilot workload (no compute class label and no VM-based
+// billing exclusions), regardless of CPU architecture.
+func IsDefaultPayPerPodAutopilotWorkload(pod *apiv1.Pod) bool {
 	if pod == nil {
-		return "", false
+		return false
 	}
-	return GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements(pod, podrequirements.GetRequirements(pod))
+	return IsDefaultPayPerPodAutopilotWorkloadWithRequirements(pod, podrequirements.GetRequirements(pod))
 }
 
-// GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements returns the podFamily for standard
-// pay-per-pod Autopilot workloads using the pre-extracted pod requirements.
-func GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements(pod *apiv1.Pod, req *podrequirements.Requirements) (string, bool) {
+// IsDefaultPayPerPodAutopilotWorkloadWithRequirements returns true if the pod
+// is a default pay-per-pod Autopilot workload, using the pre-extracted pod
+// requirements.
+func IsDefaultPayPerPodAutopilotWorkloadWithRequirements(pod *apiv1.Pod, req *podrequirements.Requirements) bool {
 	if pod == nil {
-		return "", false
+		return false
 	}
 	if req == nil {
 		req = podrequirements.GetRequirements(pod)
@@ -121,49 +120,11 @@ func GetPodFamilyForPayPerPodAutopilotWorkloadWithRequirements(pod *apiv1.Pod, r
 
 	// Must not specify a compute class (default Autopilot workload).
 	if _, exists := req.LabelReq.GetValues(gkelabels.ComputeClassLabel); exists {
-		return "", false
+		return false
 	}
 
 	// Must not have VM-based billing exclusions.
-	if HasVmBasedBillingExclusionsWithRequirements(pod, req) {
-		return "", false
-	}
-
-	// Determine architecture (defaults to x86/general-purpose unless ARM requested).
-	if IsArmAutopilotWorkloadWithRequirements(pod, req) {
-		return rules.GeneralPurposeArmPodFamily, true
-	}
-	return rules.GeneralPurposePodFamily, true
-}
-
-// IsArmAutopilotWorkload returns true if the workload requests ARM architecture.
-func IsArmAutopilotWorkload(pod *apiv1.Pod) bool {
-	if pod == nil {
-		return false
-	}
-	return IsArmAutopilotWorkloadWithRequirements(pod, podrequirements.GetRequirements(pod))
-}
-
-// IsArmAutopilotWorkloadWithRequirements returns true if the workload requests ARM architecture,
-// using the pre-extracted pod requirements.
-func IsArmAutopilotWorkloadWithRequirements(pod *apiv1.Pod, req *podrequirements.Requirements) bool {
-	if pod == nil {
-		return false
-	}
-	if req == nil {
-		req = podrequirements.GetRequirements(pod)
-	}
-	if archVals, exists := req.LabelReq.GetValues(apiv1.LabelArchStable); exists {
-		if archVals.Get()["arm64"] {
-			return true
-		}
-	}
-	if archVals, exists := req.LabelReq.GetValues(kubeletapis.LabelArch); exists {
-		if archVals.Get()["arm64"] {
-			return true
-		}
-	}
-	return false
+	return !HasVmBasedBillingExclusionsWithRequirements(pod, req)
 }
 
 // BillingModel represents the billing model classification for a workload or compute class.

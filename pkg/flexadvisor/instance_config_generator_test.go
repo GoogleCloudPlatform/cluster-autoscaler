@@ -2235,38 +2235,41 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 		autopilotEnabled      bool
 		payPerPodEnabled      bool
 		wantErr               bool
-		wantPodFamily         string
+		wantPodFamilies       []string
 		wantGroupedRulesCount int
 		wantFleetEfficiency   bool
 	}{
 		{
-			name:                  "general-purpose on Autopilot with PayPerPodFleetEfficiency enabled",
-			flexibilityScopeKey:   rules.GeneralPurposePodFamily,
-			autopilotEnabled:      true,
-			payPerPodEnabled:      true,
-			wantPodFamily:         rules.GeneralPurposePodFamily,
-			wantGroupedRulesCount: 1,
+			name:                "general-purpose on Autopilot with PayPerPodFleetEfficiency enabled",
+			flexibilityScopeKey: ccc.AutopilotPodFamilyCrdName,
+			autopilotEnabled:    true,
+			payPerPodEnabled:    true,
+			wantPodFamilies: []string{
+				rules.GeneralPurposePodFamily,
+				rules.GeneralPurposePodFamily,
+				rules.GeneralPurposeArmPodFamily,
+				rules.GeneralPurposeArmPodFamily,
+			},
+			wantGroupedRulesCount: 4,
 			wantFleetEfficiency:   true,
 		},
 		{
-			name:                  "general-purpose-arm on Autopilot with PayPerPodFleetEfficiency enabled",
-			flexibilityScopeKey:   rules.GeneralPurposeArmPodFamily,
-			autopilotEnabled:      true,
-			payPerPodEnabled:      true,
-			wantPodFamily:         rules.GeneralPurposeArmPodFamily,
-			wantGroupedRulesCount: 1,
-			wantFleetEfficiency:   true,
+			name:                "general-purpose-arm on Autopilot with PayPerPodFleetEfficiency enabled returns error",
+			flexibilityScopeKey: rules.GeneralPurposeArmPodFamily,
+			autopilotEnabled:    true,
+			payPerPodEnabled:    true,
+			wantErr:             true,
 		},
 		{
 			name:                "general-purpose on Autopilot with PayPerPodFleetEfficiency disabled returns error",
-			flexibilityScopeKey: rules.GeneralPurposePodFamily,
+			flexibilityScopeKey: ccc.AutopilotPodFamilyCrdName,
 			autopilotEnabled:    true,
 			payPerPodEnabled:    false,
 			wantErr:             true,
 		},
 		{
 			name:                "general-purpose on Standard cluster with PayPerPodFleetEfficiency enabled returns error",
-			flexibilityScopeKey: rules.GeneralPurposePodFamily,
+			flexibilityScopeKey: ccc.AutopilotPodFamilyCrdName,
 			autopilotEnabled:    false,
 			payPerPodEnabled:    true,
 			wantErr:             true,
@@ -2332,9 +2335,12 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			assert.Equal(t, tc.flexibilityScopeKey, matchedCrd.Name())
 			assert.Len(t, matchedCrd.GroupedRules(), tc.wantGroupedRulesCount)
 
-			for _, r := range matchedCrd.Rules() {
-				if tc.wantPodFamily != "" {
-					assert.Equal(t, tc.wantPodFamily, r.PodFamilyName())
+			if len(tc.wantPodFamilies) > 0 {
+				assert.Len(t, matchedCrd.Rules(), len(tc.wantPodFamilies))
+			}
+			for i, r := range matchedCrd.Rules() {
+				if len(tc.wantPodFamilies) > 0 {
+					assert.Equal(t, tc.wantPodFamilies[i], r.PodFamilyName())
 				}
 				if sr, ok := r.(rules.AllocationStrategyRule); ok {
 					if tc.wantFleetEfficiency {
@@ -2353,13 +2359,61 @@ func TestMatchingCrdAndGenerateConfigs_PodFamilyAndPCC(t *testing.T) {
 			// Synthetic podFamily and PCC CRDs include priorities for both provisioning modes, so both
 			// Standard and Spot instance configs must be generated.
 			assert.ElementsMatch(t, []instanceavailability.ProvisioningMode{instanceavailability.Standard, instanceavailability.Spot}, provisioningModesOf(artifacts.Configs))
-			if tc.wantPodFamily != "" {
-				prioritizedFamilies := computeclass.PrioritizedFamiliesForRule(matchedCrd.Rules()[0], provider)
-				wantRanks := make(map[string]familyRankExpectation, len(prioritizedFamilies))
-				for idx, fam := range prioritizedFamilies {
-					wantRanks[fam.Name()] = familyRankExpectation{rank: 1, subRank: idx}
+			if len(tc.wantPodFamilies) > 0 {
+				// Verify exact (rank, subRank) for every rule without capping,
+				// where each sequential priority gets its own rank
+				// (general-purpose Standard=1, Spot=2; general-purpose-arm
+				// Standard=3, Spot=4).
+				gUncapped := NewInstanceConfigGenerator(context.Background(), lister.NewMockCrdLister([]crd.CRD{}), provider, optionsTracker, WithMaxInstanceConfigs(1000))
+				uncapped, uncappedErrs := gUncapped.generateInstanceConfigs(tc.flexibilityScopeKey)
+				assert.Empty(t, uncappedErrs)
+				assert.NotNil(t, uncapped)
+
+				type familyModeKey struct {
+					family string
+					mode   instanceavailability.ProvisioningMode
 				}
-				assertConfigFamilyRanks(t, provider, artifacts.Configs, wantRanks)
+				wantRanks := make(map[familyModeKey]familyRankExpectation)
+				for ruleIdx, rule := range matchedCrd.Rules() {
+					mode := instanceavailability.Standard
+					if rule.Spot() {
+						mode = instanceavailability.Spot
+					}
+					for famIdx, fam := range computeclass.PrioritizedFamiliesForRule(rule, provider) {
+						wantRanks[familyModeKey{family: fam.Name(), mode: mode}] = familyRankExpectation{
+							rank:    ruleIdx + 1,
+							subRank: famIdx,
+						}
+					}
+				}
+				seen := make(map[familyModeKey]bool, len(wantRanks))
+				for _, cfg := range uncapped.Configs {
+					fam, famErr := provider.MachineConfigProvider().GetMachineFamilyFromMachineName(cfg.MachineType())
+					if !assert.NoError(t, famErr) {
+						continue
+					}
+					key := familyModeKey{family: fam.Name(), mode: cfg.ProvisioningMode()}
+					seen[key] = true
+					exp, ok := wantRanks[key]
+					if !assert.True(t, ok, "unexpected (family=%s, mode=%s) for %s", fam.Name(), cfg.ProvisioningMode(), cfg.MachineType()) {
+						continue
+					}
+					assert.Equal(t, exp.rank, cfg.Rank(), "unexpected rank for %s (%s)", cfg.MachineType(), cfg.ProvisioningMode())
+					assert.Equal(t, exp.subRank, cfg.SubRank(), "unexpected subRank for %s (%s)", cfg.MachineType(), cfg.ProvisioningMode())
+				}
+				for key := range wantRanks {
+					assert.True(t, seen[key], "expected (family=%s, mode=%s) to be present", key.family, key.mode)
+				}
+
+				// Under defaultMaxInstanceConfigs capping, general-purpose
+				// (ranks 1-2) and general-purpose-arm On-Demand (rank 3) are
+				// preserved ahead of lower-priority Spot configs.
+				assert.Len(t, artifacts.Configs, defaultMaxInstanceConfigs)
+				for sig, cfg := range uncapped.Configs {
+					if cfg.Rank() <= 3 {
+						assert.Contains(t, artifacts.Configs, sig, "expected rank %d config %s to survive capping", cfg.Rank(), sig)
+					}
+				}
 			} else {
 				for _, cfg := range artifacts.Configs {
 					if tc.wantGroupedRulesCount == 1 {

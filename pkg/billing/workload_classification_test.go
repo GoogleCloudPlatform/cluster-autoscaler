@@ -262,40 +262,35 @@ func TestHasVmBasedBillingExclusions(t *testing.T) {
 	}
 }
 
-func TestGetPodFamilyForPayPerPodAutopilotWorkload(t *testing.T) {
+func TestIsDefaultPayPerPodAutopilotWorkload(t *testing.T) {
 	testCases := []struct {
-		name           string
-		pod            *corev1.Pod
-		expectedFamily string
-		expectedOk     bool
+		name string
+		pod  *corev1.Pod
+		want bool
 	}{
 		{
-			name:           "nil pod",
-			pod:            nil,
-			expectedFamily: "",
-			expectedOk:     false,
+			name: "nil pod",
+			pod:  nil,
+			want: false,
 		},
 		{
-			name:           "default x86 Autopilot workload",
-			pod:            makePodWithNodeSelector(nil),
-			expectedFamily: rules.GeneralPurposePodFamily,
-			expectedOk:     true,
+			name: "default x86 Autopilot workload",
+			pod:  makePodWithNodeSelector(nil),
+			want: true,
 		},
 		{
 			name: "ARM Autopilot workload via LabelArchStable nodeSelector",
 			pod: makePodWithNodeSelector(map[string]string{
 				corev1.LabelArchStable: "arm64",
 			}),
-			expectedFamily: rules.GeneralPurposeArmPodFamily,
-			expectedOk:     true,
+			want: true,
 		},
 		{
 			name: "ARM Autopilot workload via beta arch nodeSelector",
 			pod: makePodWithNodeSelector(map[string]string{
 				"beta.kubernetes.io/arch": "arm64",
 			}),
-			expectedFamily: rules.GeneralPurposeArmPodFamily,
-			expectedOk:     true,
+			want: true,
 		},
 		{
 			name: "ARM Autopilot workload via nodeAffinity",
@@ -310,64 +305,71 @@ func TestGetPodFamilyForPayPerPodAutopilotWorkload(t *testing.T) {
 					},
 				},
 			}),
-			expectedFamily: rules.GeneralPurposeArmPodFamily,
-			expectedOk:     true,
+			want: true,
+		},
+		{
+			name: "multi-arch Autopilot workload via nodeAffinity",
+			pod: makePodWithNodeAffinity([]corev1.NodeSelectorTerm{
+				{
+					MatchExpressions: []corev1.NodeSelectorRequirement{
+						{
+							Key:      corev1.LabelArchStable,
+							Operator: corev1.NodeSelectorOpIn,
+							Values:   []string{"arm64", "amd64"},
+						},
+					},
+				},
+			}),
+			want: true,
 		},
 		{
 			name: "disqualified by compute class label",
 			pod: makePodWithNodeSelector(map[string]string{
 				gkelabels.ComputeClassLabel: "Balanced",
 			}),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 		{
 			name: "disqualified by machine family selector",
 			pod: makePodWithNodeSelector(map[string]string{
 				gkelabels.MachineFamilyLabel: "c3",
 			}),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 		{
 			name: "disqualified by GPU request",
 			pod: makePodWithContainerResources(corev1.ResourceList{
 				gpu.ResourceNvidiaGPU: *resource.NewQuantity(1, resource.DecimalSI),
 			}, nil),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 		{
 			name: "disqualified by TPU selector",
 			pod: makePodWithNodeSelector(map[string]string{
 				gkelabels.TPULabel: "tpu-v4-lite-device",
 			}),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 		{
 			name: "disqualified by local SSD selector",
 			pod: makePodWithNodeSelector(map[string]string{
 				gkelabels.EphemeralLocalSsdLabel: "true",
 			}),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 		{
 			name: "disqualified by SoHW pod-slots",
 			pod: makePodWithNodeSelector(map[string]string{
 				gkelabels.PodCapacityLabel: "1",
 			}),
-			expectedFamily: "",
-			expectedOk:     false,
+			want: false,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			family, ok := GetPodFamilyForPayPerPodAutopilotWorkload(tc.pod)
-			assert.Equal(t, tc.expectedOk, ok)
-			assert.Equal(t, tc.expectedFamily, family)
+			got := IsDefaultPayPerPodAutopilotWorkload(tc.pod)
+			assert.Equal(t, tc.want, got)
 		})
 	}
 }

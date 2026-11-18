@@ -3653,33 +3653,63 @@ func TestAtomicGroupLabels_DefensiveCopy(t *testing.T) {
 	assert.Equal(t, "label1", ccc.(*cccCrd).Spec.ActiveMigration.ReconciliationPolicy.AtomicGroupLabels[0], "The original slice was mutated, defensive copy is missing!")
 }
 
-func TestNewPodFamilyCrd(t *testing.T) {
-	for _, podFamily := range []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily} {
-		t.Run(podFamily, func(t *testing.T) {
-			c := NewPodFamilyCrd(podFamily, "test-project", true, crd.TestDefaultDataProvider(), testOptionsTracker(nil))
+func TestNewAutopilotPodFamilyCrd(t *testing.T) {
+	type ruleExpectation struct {
+		podFamily string
+		spot      bool
+	}
+	testCases := []struct {
+		name      string
+		tracker   *optstracking.OptionsTracker
+		wantRules []ruleExpectation
+	}{
+		{
+			name:    "FlexAdvisorSkipUnneededSpotConfigs enabled",
+			tracker: testOptionsTracker(nil),
+			wantRules: []ruleExpectation{
+				{podFamily: rules.GeneralPurposePodFamily, spot: false},
+				{podFamily: rules.GeneralPurposePodFamily, spot: true},
+				{podFamily: rules.GeneralPurposeArmPodFamily, spot: false},
+				{podFamily: rules.GeneralPurposeArmPodFamily, spot: true},
+			},
+		},
+		{
+			name:    "FlexAdvisorSkipUnneededSpotConfigs disabled",
+			tracker: testOptionsTrackerWithExperimentFlags(map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false}),
+			wantRules: []ruleExpectation{
+				{podFamily: rules.GeneralPurposePodFamily, spot: false},
+				{podFamily: rules.GeneralPurposeArmPodFamily, spot: false},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewAutopilotPodFamilyCrd("test-project", true, crd.TestDefaultDataProvider(), tc.tracker)
 			assert.NotNil(t, c)
-			assert.Equal(t, podFamily, c.Name())
+			assert.Equal(t, AutopilotPodFamilyCrdName, c.Name())
 			assert.Equal(t, CrdType, c.CrdType())
-			assert.Len(t, c.Rules(), 2)
-			assert.Len(t, c.GroupedRules(), 1)
-			assert.False(t, c.Rules()[0].Spot())
-			assert.True(t, c.Rules()[1].Spot())
-			for _, rule := range c.Rules() {
-				assert.Equal(t, podFamily, rule.PodFamilyName())
+			assert.Len(t, c.Rules(), len(tc.wantRules))
+			// Priorities omit PriorityScore, so each rule forms its own
+			// sequential group.
+			assert.Len(t, c.GroupedRules(), len(tc.wantRules))
+
+			for i, want := range tc.wantRules {
+				rule := c.Rules()[i]
+				assert.Equal(t, want.podFamily, rule.PodFamilyName())
+				assert.Equal(t, want.spot, rule.Spot())
 				if sr, ok := rule.(rules.AllocationStrategyRule); assert.True(t, ok) {
 					assert.NotNil(t, sr.AllocationStrategy())
 					assert.Equal(t, v1.AllocationStrategyFleetEfficiency, *sr.AllocationStrategy())
 				}
+				assert.Len(t, c.GroupedRules()[i], 1)
 			}
-		})
 
-		t.Run(podFamily+" with FlexAdvisorSkipUnneededSpotConfigs disabled", func(t *testing.T) {
-			tracker := testOptionsTrackerWithExperimentFlags(map[string]bool{experiments.FlexAdvisorSkipUnneededSpotConfigsEnabledFlag: false})
-			c := NewPodFamilyCrd(podFamily, "test-project", true, crd.TestDefaultDataProvider(), tracker)
-			assert.NotNil(t, c)
-			assert.Len(t, c.Rules(), 1)
-			assert.False(t, c.Rules()[0].Spot())
-			assert.Equal(t, podFamily, c.Rules()[0].PodFamilyName())
+			defaults := c.AllocationStrategyDefaults()
+			if assert.NotNil(t, defaults) {
+				assert.Equal(t, ptr.To(v1.AllocationStrategyFleetEfficiency), defaults.OnDemand)
+				assert.Equal(t, ptr.To(v1.AllocationStrategyFleetEfficiency), defaults.Spot)
+			}
 		})
 	}
 }

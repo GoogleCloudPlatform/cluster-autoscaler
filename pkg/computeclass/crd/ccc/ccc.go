@@ -47,10 +47,14 @@ import (
 
 const (
 	// CrdType is the CCC CRD type name
-	CrdType           = "CCC"
-	scaleUpAnyway     = "ScaleUpAnyway"
-	doNotScaleUp      = "DoNotScaleUp"
-	clientCallTimeout = 5 * time.Second
+	CrdType = "CCC"
+	// AutopilotPodFamilyCrdName is the name (and FlexAdvisor flexibility scope key)
+	// of the synthetic CustomComputeClass CRD used for default pay-per-pod
+	// Autopilot workloads across all CPU architectures.
+	AutopilotPodFamilyCrdName = rules.GeneralPurposePodFamily
+	scaleUpAnyway             = "ScaleUpAnyway"
+	doNotScaleUp              = "DoNotScaleUp"
+	clientCallTimeout         = 5 * time.Second
 )
 
 type cccCrd struct {
@@ -136,26 +140,31 @@ func NewPccCrd(pcc machinetypes.PredefinedComputeClass, projectId string, autopi
 	return NewCccCrd(cc, projectId, autopilotEnabled && pcc.IsSliceOfHardware(), provider, optionsTracker)
 }
 
-// NewPodFamilyCrd builds a synthetic CustomComputeClass CRD for a podFamily (e.g. general-purpose, general-purpose-arm).
-func NewPodFamilyCrd(podFamily string, projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
-	priorityScore := 100
+// NewAutopilotPodFamilyCrd builds a synthetic CustomComputeClass CRD for
+// default pay-per-pod Autopilot workloads. It lists general-purpose before
+// general-purpose-arm in sequential priority order (without PriorityScore) so
+// x86, ARM, and multi-arch workloads share a single flexibility scope while
+// preserving CA's preference for general-purpose.
+func NewAutopilotPodFamilyCrd(projectId string, autopilotEnabled bool, provider DataProvider, optionsTracker *optstracking.OptionsTracker) crd.CRD {
 	strategy := v1.AllocationStrategyFleetEfficiency
 	// Pay-per-pod Autopilot workloads can request either On-Demand or Spot (via
-	// cloud.google.com/gke-spot: "true"), so include priorities for both provisioning modes
-	// when FlexAdvisorSkipUnneededSpotConfigs is enabled.
+	// cloud.google.com/gke-spot: "true"), so include priorities for both
+	// provisioning modes when FlexAdvisorSkipUnneededSpotConfigs is enabled.
+	spotModes := provisioningModesForSyntheticCrd(optionsTracker)
 	var priorities []v1.Priority
-	for _, spot := range provisioningModesForSyntheticCrd(optionsTracker) {
-		priorities = append(priorities, v1.Priority{
-			PodFamily:          &podFamily,
-			Spot:               spot,
-			PriorityScore:      &priorityScore,
-			AllocationStrategy: &strategy,
-		})
+	for _, podFamily := range []string{rules.GeneralPurposePodFamily, rules.GeneralPurposeArmPodFamily} {
+		for _, spot := range spotModes {
+			priorities = append(priorities, v1.Priority{
+				PodFamily:          ptr.To(podFamily),
+				Spot:               spot,
+				AllocationStrategy: &strategy,
+			})
+		}
 	}
 
 	cc := &v1.ComputeClass{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: podFamily,
+			Name: AutopilotPodFamilyCrdName,
 		},
 		Spec: v1.ComputeClassSpec{
 			Priorities: priorities,
