@@ -410,11 +410,9 @@ func newTestPodStateObserver(t *testing.T, pendingPods ...*v1.Pod) (*podstate.Po
 		reactionMetrics,
 		systempods.NewClassifier([]string{metav1.NamespaceSystem}),
 		npc_lister.NewMockCrdLister(nil),
-		false, // enablePendingPodsMetric
-		false, // enablePendingPodsPerCccMetric
-		-10,   // expendablePodsPriorityCutoff
-		nil,   // allowedSchedulers
-		0,     // newPodScaleUpDelay
+		podstate.Options{
+			ExpendablePodsPriorityCutoff: -10,
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewPodStateObserver() unexpected error: %v", err)

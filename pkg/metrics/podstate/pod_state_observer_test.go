@@ -953,7 +953,11 @@ func TestPodStateObserver(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{unownedCccs: map[string]bool{"unowned-ccc": true}}, periodicCheckFrequency, fakeClock, false, false, -10, tc.allowedSchedulers, tc.newPodScaleUpDelay)
+				psObserver, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{unownedCccs: map[string]bool{"unowned-ccc": true}}, periodicCheckFrequency, fakeClock, Options{
+					ExpendablePodsPriorityCutoff: -10,
+					AllowedSchedulers:            tc.allowedSchedulers,
+					NewPodScaleUpDelay:           tc.newPodScaleUpDelay,
+				})
 				stopCh := make(chan struct{})
 				defer close(stopCh)
 				informerFactory.Start(stopCh)
@@ -1279,7 +1283,9 @@ func TestCalculatePendingPodsLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, false, false, -10, nil, 0)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{}, time.Minute, fakeClock, Options{
+					ExpendablePodsPriorityCutoff: -10,
+				})
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
@@ -1594,7 +1600,9 @@ func TestCalculatePendingPodsPerCccLifecycle(t *testing.T) {
 				testMetrics := &testReactionTimeMetrics{}
 				fakeClock := clock.NewFakeClock(st)
 				podsClassifier := systempods.NewClassifier([]string{metav1.NamespaceSystem})
-				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds, unownedCccs: map[string]bool{"unowned-ccc": true}}, time.Minute, fakeClock, false, false, -10, nil, 0)
+				observer, err := newPodStateObserver(informerFactory, testMetrics, podsClassifier, &mockNpcCrdLister{fallbackCcc: tc.fallbackCcc, crds: tc.crds, unownedCccs: map[string]bool{"unowned-ccc": true}}, time.Minute, fakeClock, Options{
+					ExpendablePodsPriorityCutoff: -10,
+				})
 				assert.NoError(t, err)
 				stopCh := make(chan struct{})
 				defer close(stopCh)
