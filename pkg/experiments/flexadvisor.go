@@ -14,6 +14,8 @@
 
 package experiments
 
+const defaultSpotUptimeMinutes = 10
+
 // IsFlexAdvisorSendRankEnabled returns whether sending Rank in FlexAdvisor recommendation requests is dynamically enabled.
 func IsFlexAdvisorSendRankEnabled(manager Manager) bool {
 	if manager == nil {
@@ -48,8 +50,9 @@ func IsFlexAdvisorSpotUptimeEnabled(manager Manager) bool {
 }
 
 // IsFlexAdvisorDefaultSpotUptimeEnabled returns whether Spot instance configs without an explicit
-// minEstimatedUptimeMinutes default to 10m in FlexAdvisor (default off; fleet-wide rollout via
-// MinCAVersion, per-cluster/project override via Enabled).
+// minEstimatedSpotUptimeMinutes value receive a default Spot uptime filter in FlexAdvisor
+// (default off; fleet-wide rollout via MinCAVersion, per-cluster/project override via Enabled;
+// see DefaultSpotUptimeMinutes).
 func IsFlexAdvisorDefaultSpotUptimeEnabled(manager Manager) bool {
 	if manager == nil {
 		return false
@@ -57,4 +60,19 @@ func IsFlexAdvisorDefaultSpotUptimeEnabled(manager Manager) bool {
 
 	return manager.EvaluateMinimumVersionFlagOrFailsafe(FlexAdvisorDefaultSpotUptimeMinCAVersionFlag, false) &&
 		manager.EvaluateBoolFlagOrFailsafe(FlexAdvisorDefaultSpotUptimeEnabledFlag, true)
+}
+
+// DefaultSpotUptimeMinutes returns the default Spot uptime in minutes for Spot
+// instance configs without an explicit minEstimatedSpotUptimeMinutes value
+// when FlexAdvisorDefaultSpotUptime is enabled (default 10).
+func DefaultSpotUptimeMinutes(manager Manager) int {
+	if manager == nil {
+		return defaultSpotUptimeMinutes
+	}
+
+	minutes := manager.EvaluateIntFlagOrFailsafe(FlexAdvisorDefaultSpotUptimeMinutesFlag, defaultSpotUptimeMinutes)
+	if minutes <= 0 {
+		return defaultSpotUptimeMinutes
+	}
+	return minutes
 }

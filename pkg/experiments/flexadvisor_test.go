@@ -335,3 +335,75 @@ func TestIsFlexAdvisorDefaultSpotUptimeEnabled(t *testing.T) {
 		})
 	}
 }
+
+func TestDefaultSpotUptimeMinutes(t *testing.T) {
+	testCases := []struct {
+		name    string
+		manager Manager
+		want    int
+	}{
+		{
+			name:    "nil_manager_defaults_to_10",
+			manager: nil,
+			want:    10,
+		},
+		{
+			name:    "unconfigured_flag_defaults_to_10",
+			manager: NewMockManager(),
+			want:    10,
+		},
+		{
+			name: "configured_flag_overrides_default",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinutesFlag: "60",
+				},
+			),
+			want: 60,
+		},
+		{
+			name: "invalid_flag_falls_back_to_10",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinutesFlag: "invalid",
+				},
+			),
+			want: 10,
+		},
+		{
+			name: "zero_flag_falls_back_to_10",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinutesFlag: "0",
+				},
+			),
+			want: 10,
+		},
+		{
+			name: "negative_flag_falls_back_to_10",
+			manager: NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				map[string]bool{},
+				map[string]string{
+					FlexAdvisorDefaultSpotUptimeMinutesFlag: "-5",
+				},
+			),
+			want: 10,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DefaultSpotUptimeMinutes(tc.manager)
+			if got != tc.want {
+				t.Errorf("DefaultSpotUptimeMinutes(%+v) = %d, want %d", tc.manager, got, tc.want)
+			}
+		})
+	}
+}
