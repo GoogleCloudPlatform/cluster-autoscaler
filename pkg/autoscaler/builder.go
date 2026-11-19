@@ -103,6 +103,7 @@ import (
 	informerutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/kubernetes/informers"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/filter"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics/podstate"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/multitenancy"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/networking"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/nodequota"
@@ -1002,6 +1003,28 @@ func (b *Builder) Build(
 		}),
 	}
 
+	// Created here rather than with the other loopStartObservers above
+	// because it needs b.npcCrdLister's cloud provider and the refreshed
+	// autoscalingOptions.
+	psObserver, err := podstate.NewPodStateObserver(
+		informerFactory,
+		internalmetrics.Metrics,
+		systemPodsClassifier,
+		b.npcCrdLister,
+		podstate.Options{
+			EnablePendingPodsMetric:       autoscalingOptions.PendingPodsMetricEnabled,
+			EnablePendingPodsPerCccMetric: autoscalingOptions.MetricsPerCccEnabled && autoscalingOptions.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag),
+			ExpendablePodsPriorityCutoff:  autoscalingOptions.ExpendablePodsPriorityCutoff,
+			AllowedSchedulers:             autoscalingOptions.AllowedSchedulers,
+			NewPodScaleUpDelay:            autoscalingOptions.NewPodScaleUpDelay,
+		},
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	loopStartObservers = append(loopStartObservers, psObserver)
+	go psObserver.Run(bgContext)
+
 	autoscalingProcessors, err := b.setUpProcessors(
 		bgContext,
 		b.manager,
@@ -1050,7 +1073,8 @@ func (b *Builder) Build(
 		minCapacityObserver,
 		defragMinQuotasTrackerFactory,
 		minQuotasTrackerOptions.NodeFilter,
-		scaleUpLimiterTracker)
+		scaleUpLimiterTracker,
+		psObserver)
 	if err != nil {
 		return nil, nil, err
 	}

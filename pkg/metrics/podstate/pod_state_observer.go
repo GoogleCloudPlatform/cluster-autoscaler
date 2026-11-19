@@ -37,6 +37,7 @@ import (
 	"k8s.io/utils/clock"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
 	coreutils "sigs.k8s.io/cluster-autoscaler/pkg/core/utils"
+	"sigs.k8s.io/cluster-autoscaler/pkg/observers/loopstart"
 	"sigs.k8s.io/cluster-autoscaler/pkg/processors/status"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/annotations"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/klogx"
@@ -57,6 +58,7 @@ var (
 
 type reactionTimeMetrics interface {
 	ObserveFirstReactionTime(duration time.Duration, systemPod bool, hasPVC bool, hasCSI bool, reactionType metrics.ReactionType, deviceAllocationMode string)
+	ObservePodLoopsWaited(loopsWaited int, reactionType metrics.ReactionType)
 }
 
 // Options configures PodStateObserver behavior.
@@ -92,6 +94,8 @@ type PodStateObserver struct {
 	unreportedPodStates map[types.UID]*podStateData
 	reportedPodStates   map[types.UID]*podStateData
 }
+
+var _ loopstart.Observer = &PodStateObserver{}
 
 // NewPodStateObserver returns a new PodStateObserver.
 func NewPodStateObserver(informerFactory informers.SharedInformerFactory, reactionMetrics reactionTimeMetrics, podsClassifier systempods.Classifier, npcCrdLister npc_lister.Lister, opts Options) (*PodStateObserver, error) {
@@ -154,6 +158,22 @@ func (o *PodStateObserver) Run(ctx context.Context) {
 	}
 }
 
+// Refresh implements loopstart.Observer. StaticAutoscaler.RunOnce calls it
+// once per CA loop, after CloudProvider.Refresh succeeds, so loops that end
+// before that are not counted. Because Refresh uses o.clock.Now() rather than
+// RunOnce's loop start time, a pod whose scale-up delay expires in between can
+// be counted one loop early. It records the loop for every unreported pod that
+// is already unschedulable and eligible for CA scale-up.
+func (o *PodStateObserver) Refresh(_ context.Context) {
+	now := o.clock.Now()
+	o.mux.Lock()
+	defer o.mux.Unlock()
+
+	for _, sd := range o.unreportedPodStates {
+		sd.observeLoop(now)
+	}
+}
+
 // Process analyses the scale up status and emits appropriate visibility events.
 func (o *PodStateObserver) Process(ctx context.Context, autoscalingCtx *ca_context.AutoscalingContext, scaleUpStatus *status.ScaleUpStatus) {
 	o.ObserveReaction(scaleUpStatus.PodsTriggeredScaleUp, metrics.ScaleUp)
@@ -172,9 +192,9 @@ func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.
 	reactionDataToReportReactionTime := o.updateAndGetReactionDataToReport(filteredPods, reactionType)
 	for pod, sd := range reactionDataToReportReactionTime {
 		t := sd.elapsedReactionTime(now)
-		o.reactionTimeMetrics.ObserveFirstReactionTime(t, sd.systemPod, sd.hasPVC, sd.hasCSI, reactionType, sd.allocationMode.String())
+		o.recordFirstReaction(t, sd, reactionType)
 		if t > loggingThreshold {
-			klogx.V(1).UpTo(loggingQuota).Infof("PodStateObserver: overdue reaction for pod %v (UID=%v) - %v after %v", pod.Name, pod.UID, reactionType, t)
+			klogx.V(1).UpTo(loggingQuota).Infof("PodStateObserver: overdue reaction for pod %v (UID=%v) - %v after %v (%d loops waited)", pod.Name, pod.UID, reactionType, t, sd.loopsWaited)
 		}
 	}
 	klogx.V(1).Over(loggingQuota).Infof("PodStateObserver: There are also %d other pods experiencing overdue reaction %v", -loggingQuota.Left(), reactionType)
@@ -183,6 +203,11 @@ func (o *PodStateObserver) ObserveReaction(pods []*v1.Pod, reactionType metrics.
 // CleanUp cleans up
 func (o *PodStateObserver) CleanUp() {
 	o.reportTimeoutPods()
+}
+
+func (o *PodStateObserver) recordFirstReaction(duration time.Duration, sd podStateData, reactionType metrics.ReactionType) {
+	o.reactionTimeMetrics.ObserveFirstReactionTime(duration, sd.systemPod, sd.hasPVC, sd.hasCSI, reactionType, sd.allocationMode.String())
+	o.reactionTimeMetrics.ObservePodLoopsWaited(sd.loopsWaited, reactionType)
 }
 
 // shouldIgnorePod reports whether the pod is out of scope for the reaction
@@ -370,16 +395,16 @@ func (o *PodStateObserver) observeReactionAndForgetPod(pod *v1.Pod, reactionType
 	reactionTime := info.elapsedReactionTime(o.clock.Now())
 	var logMessage string
 	var logLevel klog.Level
-	o.reactionTimeMetrics.ObserveFirstReactionTime(reactionTime, info.systemPod, info.hasPVC, info.hasCSI, reactionType, info.allocationMode.String())
+	o.recordFirstReaction(reactionTime, *info, reactionType)
 	if reactionTime > loggingThreshold {
-		logMessage = "PodStateObserver: overdue reaction for pod %v (UID=%v) - %v after %v"
+		logMessage = "PodStateObserver: overdue reaction for pod %v (UID=%v) - %v after %v (%d loops waited)"
 		logLevel = klog.Level(1)
 	} else {
-		logMessage = "PodStateObserver: Pod %v (UID=%v) %v after %v"
+		logMessage = "PodStateObserver: Pod %v (UID=%v) %v after %v (%d loops waited)"
 		logLevel = klog.Level(5)
 	}
 
-	o.logLimiter.Logf(logLevel, logMessage, pod.Name, pod.UID, reactionType, reactionTime)
+	o.logLimiter.Logf(logLevel, logMessage, pod.Name, pod.UID, reactionType, reactionTime, info.loopsWaited)
 }
 
 func (o *PodStateObserver) getReactionDataAndRemove(pod *v1.Pod) *podStateData {
@@ -448,8 +473,8 @@ func (o *PodStateObserver) reportTimeoutPods() {
 	loggingQuota := logging.OverdueReactionsLoggingQuota()
 	timeoutPods := o.processTimedOutPods()
 	for uid, info := range timeoutPods {
-		o.reactionTimeMetrics.ObserveFirstReactionTime(metrics.MaxReactionTime, info.systemPod, info.hasPVC, info.hasCSI, metrics.Timeout, info.allocationMode.String())
-		klogx.V(1).UpTo(loggingQuota).Infof("PodStateObserver: timeout for pod (systemPod=%v, hasPVC=%v, hasCSI=%v) with UID=%v", info.systemPod, info.hasPVC, info.hasCSI, uid)
+		o.recordFirstReaction(metrics.MaxReactionTime, info, metrics.Timeout)
+		klogx.V(1).UpTo(loggingQuota).Infof("PodStateObserver: timeout for pod (systemPod=%v, hasPVC=%v, hasCSI=%v, loopsWaited=%d) with UID=%v", info.systemPod, info.hasPVC, info.hasCSI, info.loopsWaited, uid)
 	}
 	klogx.V(1).Over(loggingQuota).Infof("PodStateObserver: There are also %d other pods experiencing timeout for reaction", -loggingQuota.Left())
 }
