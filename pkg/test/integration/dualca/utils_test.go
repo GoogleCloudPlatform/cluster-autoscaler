@@ -16,7 +16,6 @@ package dualca
 
 import (
 	"context"
-	"slices"
 	"testing"
 
 	v1 "github.com/googlecloudplatform/compute-class-api/api/cloud.google.com/v1"
@@ -77,11 +76,10 @@ func newDualCATestConfig(autoscalerNames []string, stdPool, solverPool *gke_api_
 	return integration.NewTestConfig().
 		WithOverrides(
 			integration.WithAutoscalerNames(autoscalerNames...),
-			// Mirror the production manifests: only the instance handling
-			// unannotated ComputeClasses runs
-			// ProvisioningRequests, and so does a single CA without autoscaler
-			// names.
-			integration.WithProvisioningRequestEnabled(len(autoscalerNames) == 0 || slices.Contains(autoscalerNames, options.UnannotatedAutoscalerName)),
+			// Mirror the production manifests: only a single CA or the
+			// instance handling unannotated ComputeClasses runs
+			// ProvisioningRequests.
+			integration.WithProvisioningRequestEnabled(options.HandlesUnannotated(autoscalerNames)),
 		).
 		WithNodePools(stdPool, solverPool).
 		WithCccCrds(

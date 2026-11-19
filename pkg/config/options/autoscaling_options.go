@@ -15,6 +15,7 @@
 package options
 
 import (
+	"slices"
 	"time"
 
 	apiv1 "k8s.io/api/core/v1"
@@ -30,6 +31,15 @@ const (
 	StandardAutoscalerName    = "autoscaling.gke.io/standard"
 	SolverAutoscalerName      = "autoscaling.gke.io/solver"
 )
+
+// HandlesUnannotated returns true if this CA instance handles unannotated
+// ComputeClasses, i.e. if it's a single CA or the instance with
+// UnannotatedAutoscalerName.
+// Controllers that mustn't run in multiple CA instances run only in
+// the instance that handles unannotated ComputeClasses.
+func HandlesUnannotated(autoscalerNames []string) bool {
+	return len(autoscalerNames) == 0 || slices.Contains(autoscalerNames, UnannotatedAutoscalerName)
+}
 
 type AutoscalingOptions struct {
 	config.AutoscalingOptions // OSS options
