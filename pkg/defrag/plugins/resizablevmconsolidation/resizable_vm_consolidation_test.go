@@ -285,6 +285,59 @@ func TestNewCandidate(t *testing.T) {
 			wantCandidateNodeNames:    nil,
 			wantLatestUnfitNodesCount: 0,
 		},
+		{
+			name:                  "Node at 25 percent of physical max size is eligible for consolidation",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(2000, 8, 8000, 32),
+				"ek-node-2": buildTestResizableNodeObject(2000, 8, 8000, 32),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestPod("ek-node-1-pod", "ek-node-1", 1000, 4),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 6000, 24),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 2000, 8),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 6000, 24),
+				},
+			},
+			nodeNames:                 []string{"ek-node-1"},
+			wantCandidateNodeNames:    []string{"ek-node-1"},
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "Nodes above 25 percent of physical max size on CPU or memory are skipped",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(2001, 8, 8000, 32),
+				"ek-node-2": buildTestResizableNodeObject(2000, 9, 8000, 32),
+				"ek-node-3": buildTestResizableNodeObject(1000, 4, 8000, 32),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-3", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestPod("ek-node-1-pod", "ek-node-1", 1000, 4),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 1000, 4),
+				},
+				"ek-node-3": {
+					buildTestPod("ek-node-3-pod", "ek-node-3", 1000, 4),
+				},
+			},
+			nodeNames:                 []string{"ek-node-1", "ek-node-2"},
+			wantCandidateNodeNames:    nil,
+			wantLatestUnfitNodesCount: 0,
+		},
 	}
 
 	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {

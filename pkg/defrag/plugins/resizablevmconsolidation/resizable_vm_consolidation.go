@@ -175,7 +175,7 @@ func (p *plugin) LatestUnfitNodesCount() int {
 func (p *plugin) isSmallNode(node operationtracker.ResizableNode) bool {
 	cpuRatio := float64(node.DesiredSize.MilliCpus) / float64(node.PhysicalMaxSize.MilliCpus)
 	memoryRatio := float64(node.DesiredSize.KBytes) / float64(node.PhysicalMaxSize.KBytes)
-	return cpuRatio < cpuConsolidationRatio && memoryRatio < memoryConsolidationRatio
+	return cpuRatio <= cpuConsolidationRatio && memoryRatio <= memoryConsolidationRatio
 }
 
 func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.ClusterSnapshot, destinationNodesSnapshot operationtracker.ResizableNodesSnapshot, nodeName string, isCandidate map[string]bool) bool {
