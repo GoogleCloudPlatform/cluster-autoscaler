@@ -2835,6 +2835,19 @@ func TestExpandConfigsByMinEstimatedUptime(t *testing.T) {
 			wantSpotUptime: 10,
 		},
 		{
+			name: "unset_spot_rule_uses_configured_default_minutes_flag",
+			rule: rules.NewRule(rules.WithSpotRule(ptr.To(true))),
+			manager: experiments.NewMockManagerWithOptions(
+				version.Version{1, 38, 0, 0},
+				nil,
+				map[string]string{
+					experiments.FlexAdvisorDefaultSpotUptimeMinCAVersionFlag: "0.0.0",
+					experiments.FlexAdvisorDefaultSpotUptimeMinutesFlag:      "60",
+				},
+			),
+			wantSpotUptime: 60,
+		},
+		{
 			name: "explicit_1m_overrides_10m_default",
 			rule: rules.NewRule(
 				rules.WithSpotRule(ptr.To(true)),

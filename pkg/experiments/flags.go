@@ -277,11 +277,14 @@ const FlexAdvisorSpotUptimeEnabledFlag = "FlexAdvisorSpotUptime::Enabled"
 // FlexAdvisorSpotUptimeMinCAVersionFlag controls fleet-wide enablement/disablement (minimum CA version, or "999.999.999" as the fleet-wide kill switch) for sending Spot uptime filters to GCE Flex Advisor.
 const FlexAdvisorSpotUptimeMinCAVersionFlag = "FlexAdvisorSpotUptime::MinCAVersion"
 
-// FlexAdvisorDefaultSpotUptimeEnabledFlag controls selective per-cluster/per-project enablement or disablement of the 10m default Spot uptime filter.
+// FlexAdvisorDefaultSpotUptimeEnabledFlag controls selective per-cluster/per-project enablement or disablement of the default Spot uptime filter (see FlexAdvisorDefaultSpotUptimeMinutesFlag).
 const FlexAdvisorDefaultSpotUptimeEnabledFlag = "FlexAdvisorDefaultSpotUptime::Enabled"
 
-// FlexAdvisorDefaultSpotUptimeMinCAVersionFlag controls fleet-wide rollout/disablement (minimum CA version) for defaulting unset Spot priorities to a 10m uptime filter.
+// FlexAdvisorDefaultSpotUptimeMinCAVersionFlag controls fleet-wide rollout/disablement (minimum CA version) of the default Spot uptime filter for unset Spot priorities (see FlexAdvisorDefaultSpotUptimeMinutesFlag).
 const FlexAdvisorDefaultSpotUptimeMinCAVersionFlag = "FlexAdvisorDefaultSpotUptime::MinCAVersion"
+
+// FlexAdvisorDefaultSpotUptimeMinutesFlag controls the default Spot uptime in minutes applied to Spot priorities without an explicit minEstimatedSpotUptimeMinutes value when FlexAdvisorDefaultSpotUptime is enabled (default: 10).
+const FlexAdvisorDefaultSpotUptimeMinutesFlag = "FlexAdvisorDefaultSpotUptime::Minutes"
 
 // FlexAdvisorBinpackerBlockEnabledFlag enables blocking (within the per-loop time budget) in the bin packer
 // when waiting for the initial fetch of a flexibility scope.
