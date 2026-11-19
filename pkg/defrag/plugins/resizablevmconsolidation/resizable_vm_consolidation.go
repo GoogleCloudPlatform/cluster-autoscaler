@@ -25,7 +25,6 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/operationtracker"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
-	ekvms_utils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/utils"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/klog/v2"
 	ca_context "sigs.k8s.io/cluster-autoscaler/pkg/context"
@@ -90,8 +89,10 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 			continue
 		}
 
-		if nodeInfo, err := clusterSnapshot.GetNodeInfo(nodeName); err == nil && processor.HasLookaheadPods(nodeInfo) {
-			continue
+		if nodeInfo, err := clusterSnapshot.GetNodeInfo(nodeName); err == nil { // if NO error
+			if processor.HasLookaheadPods(nodeInfo) || len(p.selectRecreatablePods(nodeInfo)) == 0 {
+				continue
+			}
 		}
 
 		potentialCandidates = append(potentialCandidates, nodeName)
@@ -186,7 +187,13 @@ func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.Clust
 		return false
 	}
 
-	pods := p.selectWorkloadPods(nodeInfo)
+	pods := p.selectRecreatablePods(nodeInfo)
+	if len(pods) == 0 {
+		// Leave truly empty nodes to normal scale-down rather than immediate
+		// defrag deletion.
+		klog.V(5).Infof("Defrag %s: node %q has no recreatable pods, skipping consolidation", PluginName, nodeName)
+		return false
+	}
 
 	// Prevent simulation on non resizable nodes or current candidates
 	isNodeAcceptable := func(schedulingCandidateNodeInfo *framework.NodeInfo) bool {
@@ -218,20 +225,20 @@ func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.Clust
 	return true
 }
 
-func (p *plugin) selectWorkloadPods(nodeInfo *framework.NodeInfo) []*v1.Pod {
-	pods := []*v1.Pod{}
+func (p *plugin) selectRecreatablePods(nodeInfo *framework.NodeInfo) []*v1.Pod {
+	pods := make([]*v1.Pod, 0, len(nodeInfo.Pods()))
 	for _, podInfo := range nodeInfo.Pods() {
 		pod := podInfo.Pod
-		if !ekvms_utils.IsUserWorkloadPod(pod) {
+		if operationtracker.IsBalloonPod(pod) {
 			continue
 		}
 		pods = append(pods, pod)
 	}
-	return podutils.ClearPodNodeNames(pods)
+	return podutils.FilterRecreatablePods(pods)
 }
 
 func (p *plugin) trySchedulePods(clusterSnapshot clustersnapshot.ClusterSnapshot, pods []*v1.Pod, isNodeAcceptable func(*framework.NodeInfo) bool) ([]*v1.Pod, error) {
-	res, err := p.simulator.TrySchedulePods(context.Background(), clusterSnapshot, pods, false, clustersnapshot.SchedulingOptions{
+	res, err := p.simulator.TrySchedulePods(context.Background(), clusterSnapshot, podutils.ClearPodNodeNames(pods), false, clustersnapshot.SchedulingOptions{
 		IsNodeAcceptable: isNodeAcceptable,
 	})
 	if err != nil {
