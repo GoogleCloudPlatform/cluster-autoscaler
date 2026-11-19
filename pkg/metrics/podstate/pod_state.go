@@ -21,10 +21,11 @@ import (
 	podutils "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/utils/pod"
 )
 
-// podStateData tracks a pending pod's wait timing and observed reaction for
-// reaction-time and pending-pod metrics. Entries stored in PodStateObserver maps
-// may only be accessed with mux held; call methods without mux only on value
-// copies or entries removed from the maps.
+// podStateData tracks a pending pod's wait timing, scale-up eligibility, loop
+// count, and observed reaction for reaction-time and pending-pod metrics.
+// Entries stored in PodStateObserver maps may only be accessed with mux held;
+// call methods without mux only on value copies or entries removed from the
+// maps.
 type podStateData struct {
 	systemPod          bool
 	hasPVC             bool
@@ -36,12 +37,32 @@ type podStateData struct {
 	// scaleUpEligibleAt is when the pod's scale-up delay ends. See
 	// PodStateObserver.scaleUpEligibleAt.
 	scaleUpEligibleAt time.Time
+	// loopsWaited is the number of CA loops in which the pod was eligible for
+	// scale-up. See observeLoop.
+	loopsWaited int
 }
 
 func (sd *podStateData) setUnschedulableSinceIfUnset(t *time.Time) {
 	if sd.unschedulableSince == nil {
 		sd.unschedulableSince = t
 	}
+}
+
+// observeLoop increments loopsWaited if the pod is unschedulable and eligible
+// for CA scale-up as of loopTime.
+func (sd *podStateData) observeLoop(loopTime time.Time) {
+	if sd.isEligibleForLoop(loopTime) {
+		sd.loopsWaited++
+	}
+}
+
+func (sd *podStateData) isEligibleForLoop(loopTime time.Time) bool {
+	if sd.unschedulableSince == nil {
+		return false
+	}
+	// Strict After (>) skips the exact boundary (podAge == scaleUpDelay),
+	// matching StaticAutoscaler.filterOutYoungPods which requires podAge > delay.
+	return !loopTime.Before(*sd.unschedulableSince) && loopTime.After(sd.scaleUpEligibleAt)
 }
 
 func (sd *podStateData) isTimedOut(now time.Time) bool {

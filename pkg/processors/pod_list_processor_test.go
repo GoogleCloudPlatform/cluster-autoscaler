@@ -397,6 +397,8 @@ func (m *mockReactionTimeMetrics) ObserveFirstReactionTime(_ time.Duration, syst
 	})
 }
 
+func (m *mockReactionTimeMetrics) ObservePodLoopsWaited(_ int, _ metrics.ReactionType) {}
+
 // newTestPodStateObserver returns a PodStateObserver that already tracks the
 // given pending pods, and the fake that records the reactions it reports.
 // It must be called inside a synctest bubble.

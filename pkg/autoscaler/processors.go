@@ -404,7 +404,8 @@ func (b *Builder) setUpProcessors(
 	minCapacityObserver npc_processors.MinCapacityObserver,
 	minQuotasTrackerFactory *resourcequotas.TrackerFactory,
 	minQuotasNodeFilter resourcequotas.NodeFilter,
-	scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker) (*processors.AutoscalingProcessors, error) {
+	scaleUpLimiterTracker flexadvisor.ScaleUpLimiterTracker,
+	psObserver *podstate.PodStateObserver) (*processors.AutoscalingProcessors, error) {
 
 	allowlistedSystemLabelsMatcher, err := labels.NewMatcher(systemLabelPatterns)
 	if err != nil {
@@ -776,26 +777,9 @@ func (b *Builder) setUpProcessors(
 		internalmetrics.Metrics,
 		laChurnTracker)
 
-	psObserver, err := podstate.NewPodStateObserver(
-		informerFactory,
-		internalmetrics.Metrics,
-		systemPodsClassifier,
-		ccLister,
-		podstate.Options{
-			EnablePendingPodsMetric:       options.PendingPodsMetricEnabled,
-			EnablePendingPodsPerCccMetric: options.MetricsPerCccEnabled && options.PendingPodsPerCccMetricEnabled && experimentsManager.DirectLaunchBoolFlag(experiments.ClusterPendingPodsPerCccFlag),
-			ExpendablePodsPriorityCutoff:  options.ExpendablePodsPriorityCutoff,
-			AllowedSchedulers:             options.AllowedSchedulers,
-			NewPodScaleUpDelay:            options.NewPodScaleUpDelay,
-		},
-	)
 	if options.MetricsPerCccEnabled && options.ScaleUpPerCccMetricsEnabled {
 		autoscalingProcessors.ScaleStateNotifier.Register(metricsccc.NewNodeGroupChangePerCCCMetricsProducer(ccLister))
 	}
-	if err != nil {
-		return nil, err
-	}
-	go psObserver.Run(context)
 
 	ptsDomainDiscoveries := []podtopologyspread.PTSDomainDiscovery{
 		podtopologyspread.NewCCCDomainDiscovery(experimentsManager, ccLister),

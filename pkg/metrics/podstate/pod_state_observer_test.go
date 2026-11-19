@@ -58,8 +58,14 @@ type testReactionMetric struct {
 	allocationType string
 }
 
+type testLoopsWaitedMetric struct {
+	loopsWaited  int
+	reactionType metrics.ReactionType
+}
+
 type testReactionTimeMetrics struct {
-	calls []testReactionMetric
+	calls     []testReactionMetric
+	loopCalls []testLoopsWaitedMetric
 }
 
 func (m *testReactionTimeMetrics) ObserveFirstReactionTime(duration time.Duration, systemPod bool, hasPVC bool, hasCSI bool, reactionType metrics.ReactionType, allocationType string) {
@@ -70,6 +76,13 @@ func (m *testReactionTimeMetrics) ObserveFirstReactionTime(duration time.Duratio
 		hasCSI:         hasCSI,
 		reactionType:   reactionType,
 		allocationType: allocationType,
+	})
+}
+
+func (m *testReactionTimeMetrics) ObservePodLoopsWaited(loopsWaited int, reactionType metrics.ReactionType) {
+	m.loopCalls = append(m.loopCalls, testLoopsWaitedMetric{
+		loopsWaited:  loopsWaited,
+		reactionType: reactionType,
 	})
 }
 
@@ -84,6 +97,8 @@ const (
 	timeoutEvent            eventType = iota
 	cleanUpEvent            eventType = iota
 	classifiedAsSchedulable eventType = iota
+	refreshEvent            eventType = iota
+	ekUpsizeEvent           eventType = iota
 	// tombstoneDeleteEvent delivers a cache.DeletedFinalStateUnknown, which the
 	// fake clientset never emits on its own.
 	tombstoneDeleteEvent eventType = iota
@@ -285,6 +300,7 @@ func TestPodStateObserver(t *testing.T) {
 		observedPVC               bool
 		observedCSI               bool
 		observedReactionTimes     []time.Duration
+		observedLoopsWaited       []int
 		observedAllocationType    string
 		expectedFinalReactionType map[types.UID]metrics.ReactionType
 	}{
@@ -943,6 +959,201 @@ func TestPodStateObserver(t *testing.T) {
 			observedAllocationType: podutils.AllocationModeMixed.String(),
 			observedReactionTimes:  []time.Duration{time.Second * 20},
 		},
+		{
+			desc: "Counts loops waited before ScaleUp",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				{t: st.Add(20 * time.Second), et: refreshEvent},
+				{t: st.Add(30 * time.Second), et: refreshEvent},
+				{t: st.Add(32 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{32 * time.Second},
+			observedLoopsWaited:    []int{3},
+		},
+		{
+			desc: "CA reaction before any loop records 0 loops waited",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(time.Second), et: ekUpsizeEvent, pod: pu},
+			},
+			observedReactionType:   metrics.EkUpsize,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second},
+			observedLoopsWaited:    []int{0},
+		},
+		{
+			desc: "Scheduled before any loop records 0 loops waited",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(2 * time.Second), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.Scheduled,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{2 * time.Second},
+			observedLoopsWaited:    []int{0},
+		},
+		{
+			desc: "Deleted after 2 loops records 2 loops waited",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				{t: st.Add(20 * time.Second), et: refreshEvent},
+				{t: st.Add(25 * time.Second), et: deletePodEvent, pod: pu},
+			},
+			observedReactionType:   metrics.Deleted,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{25 * time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc: "Timeout after 4 loops records 4 loops waited",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(10 * time.Minute), et: refreshEvent},
+				{t: st.Add(20 * time.Minute), et: refreshEvent},
+				{t: st.Add(30 * time.Minute), et: refreshEvent},
+				{t: st.Add(40 * time.Minute), et: refreshEvent},
+				{t: st.Add(metrics.MaxReactionTime), et: timeoutEvent},
+			},
+			observedReactionType:   metrics.Timeout,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{metrics.MaxReactionTime},
+			observedLoopsWaited:    []int{4},
+		},
+		{
+			desc: "Loops before PodScheduled=False and Unschedulable do not count",
+			events: []event{
+				{t: st, et: newPodEvent, pod: p},
+				{t: st.Add(2 * time.Second), et: refreshEvent},
+				{t: st.Add(4 * time.Second), et: refreshEvent},
+				{t: st.Add(5 * time.Second), et: updatePodEvent, pod: pu5sec},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				{t: st.Add(20 * time.Second), et: refreshEvent},
+				{t: st.Add(25 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu5sec}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{20 * time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc: "Loops while SchedulingGated or before Unschedulable after ungating do not count",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pGated},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				{t: st.Add(20 * time.Second), et: updatePodEvent, pod: pUngated},
+				{t: st.Add(30 * time.Second), et: refreshEvent},
+				{t: st.Add(40 * time.Second), et: updatePodEvent, pod: pUngatedUnschedulable},
+				{t: st.Add(50 * time.Second), et: refreshEvent},
+				{t: st.Add(60 * time.Second), et: refreshEvent},
+				{t: st.Add(65 * time.Second), et: unhelpablePodEvent, pod: pUngatedUnschedulable},
+			},
+			observedReactionType:   metrics.Unhelpable,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{25 * time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc: "Loops up to and including pod-scale-up-delay boundary do not count",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				// podAge == 3m: still withheld by filterOutYoungPods.
+				{t: st.Add(3 * time.Minute), et: refreshEvent},
+				// 1st and 2nd eligible loops.
+				{t: st.Add(3*time.Minute + 10*time.Second), et: refreshEvent},
+				{t: st.Add(3*time.Minute + 20*time.Second), et: refreshEvent},
+				{t: st.Add(3*time.Minute + 25*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelay3m}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{25 * time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc:               "Respects --new-pod-scale-up-delay when longer than annotation for loops waited",
+			newPodScaleUpDelay: 4 * time.Minute,
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				{t: st.Add(3*time.Minute + 10*time.Second), et: refreshEvent},
+				// podAge == 4m: still withheld.
+				{t: st.Add(4 * time.Minute), et: refreshEvent},
+				// 1st eligible loop.
+				{t: st.Add(4*time.Minute + 10*time.Second), et: refreshEvent},
+				{t: st.Add(4*time.Minute + 15*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelay3m}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{15 * time.Second},
+			observedLoopsWaited:    []int{1},
+		},
+		{
+			desc:               "Ignores invalid pod-scale-up-delay annotation and falls back to --new-pod-scale-up-delay for loops waited",
+			newPodScaleUpDelay: 4 * time.Minute,
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelayInvalid},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				// Still withheld by 4m --new-pod-scale-up-delay.
+				{t: st.Add(4 * time.Minute), et: refreshEvent},
+				// 1st and 2nd eligible loops.
+				{t: st.Add(4*time.Minute + 10*time.Second), et: refreshEvent},
+				{t: st.Add(4*time.Minute + 20*time.Second), et: refreshEvent},
+				{t: st.Add(4*time.Minute + 25*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{puScaleUpDelayInvalid}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{25 * time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc: "Dynamic pod-scale-up-delay annotation update refreshes loop eligibility",
+			events: []event{
+				{t: st, et: newPodEvent, pod: puScaleUpDelay3m},
+				// Extend delay to 10m; loop at 4m is ignored.
+				{t: st.Add(time.Minute), et: updatePodEvent, pod: puScaleUpDelay10mUpdated},
+				{t: st.Add(4 * time.Minute), et: refreshEvent},
+				// Removing the annotation makes the pod eligible for subsequent loops.
+				{t: st.Add(5 * time.Minute), et: updatePodEvent, pod: pu5secUpdated},
+				{t: st.Add(5*time.Minute + 10*time.Second), et: refreshEvent},
+				{t: st.Add(5*time.Minute + 20*time.Second), et: refreshEvent},
+				{t: st.Add(5*time.Minute + 25*time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu5secUpdated}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{5*time.Minute + 20*time.Second},
+			observedLoopsWaited:    []int{2},
+		},
+		{
+			desc: "Subsequent reactions do not emit a second loops waited sample",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu},
+				{t: st.Add(10 * time.Second), et: refreshEvent},
+				{t: st.Add(12 * time.Second), et: unhelpablePodEvent, pod: pu},
+				{t: st.Add(20 * time.Second), et: refreshEvent},
+				{t: st.Add(22 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu}}},
+				{t: st.Add(30 * time.Second), et: updatePodEvent, pod: ps},
+			},
+			observedReactionType:   metrics.Unhelpable,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{12 * time.Second},
+			observedLoopsWaited:    []int{1},
+		},
+		{
+			desc: "Loops before unschedulableSince do not count even when past scale-up delay",
+			events: []event{
+				{t: st, et: newPodEvent, pod: pu5sec},
+				{t: st.Add(3 * time.Second), et: refreshEvent},
+				{t: st.Add(5 * time.Second), et: refreshEvent},
+				{t: st.Add(6 * time.Second), et: scaleUpEvent, scaleUp: &status.ScaleUpStatus{PodsTriggeredScaleUp: []*v1.Pod{pu5sec}}},
+			},
+			observedReactionType:   metrics.ScaleUp,
+			observedAllocationType: podutils.AllocationModeNone.String(),
+			observedReactionTimes:  []time.Duration{time.Second},
+			observedLoopsWaited:    []int{1},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -980,6 +1191,12 @@ func TestPodStateObserver(t *testing.T) {
 						psObserver.CleanUp()
 					case classifiedAsSchedulable:
 						psObserver.ObserveReaction([]*v1.Pod{e.pod}, metrics.NoActionNeeded)
+					case unhelpablePodEvent:
+						psObserver.ObserveReaction([]*v1.Pod{e.pod}, metrics.Unhelpable)
+					case refreshEvent:
+						psObserver.Refresh(t.Context())
+					case ekUpsizeEvent:
+						psObserver.ObserveReaction([]*v1.Pod{e.pod}, metrics.EkUpsize)
 					case tombstoneDeleteEvent:
 						psObserver.onDelete(cache.DeletedFinalStateUnknown{Key: e.pod.Namespace + "/" + e.pod.Name, Obj: e.pod})
 					}
@@ -988,6 +1205,7 @@ func TestPodStateObserver(t *testing.T) {
 				}
 				if tc.observedReactionType == metrics.NoReaction {
 					assert.Empty(t, testMetrics.calls)
+					assert.Empty(t, testMetrics.loopCalls)
 				} else {
 					expectedCalls := make([]testReactionMetric, 0, len(tc.observedReactionTimes))
 					for _, observedReactionTime := range tc.observedReactionTimes {
@@ -1001,6 +1219,18 @@ func TestPodStateObserver(t *testing.T) {
 						})
 					}
 					assert.ElementsMatch(t, expectedCalls, testMetrics.calls)
+					expectedLoopsWaited := tc.observedLoopsWaited
+					if expectedLoopsWaited == nil {
+						expectedLoopsWaited = make([]int, len(expectedCalls))
+					}
+					expectedLoopCalls := make([]testLoopsWaitedMetric, 0, len(expectedLoopsWaited))
+					for _, loopsWaited := range expectedLoopsWaited {
+						expectedLoopCalls = append(expectedLoopCalls, testLoopsWaitedMetric{
+							loopsWaited:  loopsWaited,
+							reactionType: tc.observedReactionType,
+						})
+					}
+					assert.ElementsMatch(t, expectedLoopCalls, testMetrics.loopCalls)
 				}
 				if len(tc.expectedFinalReactionType) > 0 {
 					for uid, expectedReactionType := range tc.expectedFinalReactionType {
