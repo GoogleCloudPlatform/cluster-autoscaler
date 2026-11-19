@@ -57,6 +57,7 @@ func TestNewCandidate(t *testing.T) {
 		wantCandidateNodeNames    []string
 		wantLatestUnfitNodesCount int
 		experimentFlags           map[string]bool
+		wantFilterMode            operationtracker.SnapshotFilterMode
 	}{
 		{
 			name:                  "Resizing is disabled - no candidates",
@@ -200,6 +201,90 @@ func TestNewCandidate(t *testing.T) {
 			wantCandidateNodeNames:    nil,
 			wantLatestUnfitNodesCount: 0,
 		},
+		{
+			name:                  "Non-resizable spillover source consolidates onto resizable peer when downsize non-resizable flag enabled",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"spillover-node-1": buildTestNonResizableNodeObject(1500, 5, 8000, 32),
+				"resizable-node-2": buildTestResizableNodeObject(2000, 8, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "spillover-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "resizable-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"spillover-node-1": {
+					buildTestPod("spillover-pod", "spillover-node-1", 1500, 5),
+					buildTestBalloonPod("spillover-balloon", "spillover-node-1", 6000, 25),
+				},
+				"resizable-node-2": {
+					buildTestPod("resizable-pod", "resizable-node-2", 1500, 5),
+					buildTestBalloonPod("resizable-balloon", "resizable-node-2", 5500, 22),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.EkDownsizeNonResizableFlag: true,
+			},
+			wantFilterMode:            operationtracker.DownsizableOnly,
+			nodeNames:                 []string{"spillover-node-1"},
+			wantCandidateNodeNames:    []string{"spillover-node-1"},
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "Non-resizable spillover node is not accepted as a consolidation destination",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"resizable-node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				"spillover-node-2": buildTestNonResizableNodeObject(1500, 5, 8000, 32),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "resizable-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "spillover-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"resizable-node-1": {
+					buildTestPod("resizable-pod", "resizable-node-1", 1500, 5),
+					buildTestBalloonPod("resizable-balloon", "resizable-node-1", 6000, 25),
+				},
+				"spillover-node-2": {
+					buildTestPod("spillover-pod", "spillover-node-2", 1000, 4),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.EkDownsizeNonResizableFlag: true,
+			},
+			wantFilterMode:            operationtracker.DownsizableOnly,
+			nodeNames:                 []string{"resizable-node-1"},
+			wantCandidateNodeNames:    nil,
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "All non-resizable spillover nodes with no resizable destinations - no candidates",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"spillover-node-1": buildTestNonResizableNodeObject(1500, 5, 8000, 32),
+				"spillover-node-2": buildTestNonResizableNodeObject(1500, 5, 8000, 32),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "spillover-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "spillover-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"spillover-node-1": {
+					buildTestPod("spillover-pod-1", "spillover-node-1", 1000, 4),
+				},
+				"spillover-node-2": {
+					buildTestPod("spillover-pod-2", "spillover-node-2", 1000, 4),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.EkDownsizeNonResizableFlag: true,
+			},
+			wantFilterMode:            operationtracker.DownsizableOnly,
+			nodeNames:                 []string{"spillover-node-1"},
+			wantCandidateNodeNames:    nil,
+			wantLatestUnfitNodesCount: 0,
+		},
 	}
 
 	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
@@ -213,6 +298,7 @@ func TestNewCandidate(t *testing.T) {
 			wantCandidateNodeNames    []string
 			wantLatestUnfitNodesCount int
 			experimentFlags           map[string]bool
+			wantFilterMode            operationtracker.SnapshotFilterMode
 		}{
 			{
 				name:                  fmt.Sprintf("%s: Nodes are big enough - no candidates", family),
@@ -509,7 +595,7 @@ func TestNewCandidate(t *testing.T) {
 			ctx := &context.AutoscalingContext{ClusterSnapshot: cs}
 
 			resizableVmManager := &mockResizableVmManager{}
-			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.ResizableOnly).Return(tc.resizableNodesSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", false, tc.wantFilterMode).Return(tc.resizableNodesSnapshot)
 
 			plugin := NewPlugin(config.PluginsConfig{
 				ResizableVmManager:    resizableVmManager,
@@ -517,6 +603,7 @@ func TestNewCandidate(t *testing.T) {
 				MaxCandidateNodeCount: tc.maxCandidateNodeCount,
 			})
 			candidate := plugin.NewCandidate(ctx, tc.nodeNames)
+			resizableVmManager.AssertExpectations(t)
 
 			if len(tc.wantCandidateNodeNames) == 0 {
 				assert.Nil(t, candidate)
@@ -545,6 +632,7 @@ func TestValidCandidateNodes(t *testing.T) {
 		podsPerNode             map[string][]*v1.Pod
 		wantValidCandidateNodes []string
 		experimentFlags         map[string]bool
+		wantFilterMode          operationtracker.SnapshotFilterMode
 	}{
 		{
 			name:                  "Resizing is disabled",
@@ -758,6 +846,90 @@ func TestValidCandidateNodes(t *testing.T) {
 			nodeNames:               []string{"ek-node-1"},
 			wantValidCandidateNodes: nil,
 		},
+		{
+			name:                  "Non-resizable spillover candidate remains valid with resizable peer when flag enabled",
+			maxCandidateNodeCount: 1,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"spillover-node-1": buildTestNonResizableNodeObject(2000, 8, 8000, 32),
+				"resizable-node-2": buildTestResizableNodeObject(2000, 8, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "spillover-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "resizable-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"spillover-node-1": {
+					buildTestPod("spillover-pod", "spillover-node-1", 1500, 5),
+					buildTestBalloonPod("spillover-balloon", "spillover-node-1", 6000, 24),
+				},
+				"resizable-node-2": {
+					buildTestPod("resizable-pod", "resizable-node-2", 1500, 5),
+					buildTestBalloonPod("resizable-balloon", "resizable-node-2", 5500, 22),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.EkDownsizeNonResizableFlag: true,
+			},
+			wantFilterMode:          operationtracker.DownsizableOnly,
+			nodeNames:               []string{"spillover-node-1"},
+			wantValidCandidateNodes: []string{"spillover-node-1"},
+		},
+		{
+			name:                  "Non-resizable spillover peer is not accepted as destination during revalidation",
+			maxCandidateNodeCount: 1,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"resizable-node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				"spillover-node-2": buildTestNonResizableNodeObject(1500, 5, 8000, 32),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "resizable-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "spillover-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"resizable-node-1": {
+					buildTestPod("resizable-pod", "resizable-node-1", 1500, 5),
+					buildTestBalloonPod("resizable-balloon", "resizable-node-1", 6000, 25),
+				},
+				"spillover-node-2": {
+					buildTestPod("spillover-pod", "spillover-node-2", 1000, 4),
+				},
+			},
+			experimentFlags: map[string]bool{
+				experiments.EkDownsizeNonResizableFlag: true,
+			},
+			wantFilterMode:          operationtracker.DownsizableOnly,
+			nodeNames:               []string{"resizable-node-1"},
+			wantValidCandidateNodes: nil,
+		},
+		{
+			name:                  "Candidate missing from current source snapshot is dropped",
+			maxCandidateNodeCount: 2,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-2": buildTestResizableNodeObject(2500, 10, 7500, 30),
+				"ek-node-3": buildTestResizableNodeObject(24000, 10, 30000, 120),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+				node32(machinetypes.EK.Name(), "ek-node-3", 32000, 128),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestPod("ek-node-1-pod", "ek-node-1", 2500, 5),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 4000, 25),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 2500, 5),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 4000, 25),
+				},
+				"ek-node-3": {
+					buildTestPod("ek-node-3-pod", "ek-node-3", 24000, 10),
+					buildTestBalloonPod("ek-node-3-balloon-pod", "ek-node-3", 6000, 20),
+				},
+			},
+			nodeNames:               []string{"ek-node-1", "ek-node-2"},
+			wantValidCandidateNodes: []string{"ek-node-2"},
+		},
 	}
 
 	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
@@ -770,6 +942,7 @@ func TestValidCandidateNodes(t *testing.T) {
 			podsPerNode             map[string][]*v1.Pod
 			wantValidCandidateNodes []string
 			experimentFlags         map[string]bool
+			wantFilterMode          operationtracker.SnapshotFilterMode
 		}{
 			{
 				name:                  fmt.Sprintf("%s: Not all pods are schedulable", family),
@@ -957,7 +1130,7 @@ func TestValidCandidateNodes(t *testing.T) {
 			ctx := &context.AutoscalingContext{ClusterSnapshot: cs}
 
 			resizableVmManager := &mockResizableVmManager{}
-			resizableVmManager.On("FilteredNodesSnapshot", false, operationtracker.ResizableOnly).Return(tc.resizableNodesSnapshot)
+			resizableVmManager.On("FilteredNodesSnapshot", false, tc.wantFilterMode).Return(tc.resizableNodesSnapshot)
 
 			plugin := NewPlugin(config.PluginsConfig{
 				ResizableVmManager:    resizableVmManager,
@@ -966,6 +1139,7 @@ func TestValidCandidateNodes(t *testing.T) {
 			})
 
 			assert.Equal(t, tc.wantValidCandidateNodes, plugin.ValidCandidateNodes(ctx, tc.nodeNames))
+			resizableVmManager.AssertExpectations(t)
 		})
 	}
 }
@@ -1013,6 +1187,19 @@ func buildTestResizableNodeObject(desiredCPU, desiredMem, upsizableMaxCPU, upsiz
 		PhysicalMaxSize: size.Allocatable{
 			MilliCpus: upsizableMaxCPU,
 			KBytes:    upsizableMaxMem * giBToKiB,
+		},
+	}
+}
+
+func buildTestNonResizableNodeObject(desiredCPU, desiredMem, physicalMaxCPU, physicalMaxMem int64) operationtracker.ResizableNode {
+	return operationtracker.ResizableNode{
+		DesiredSize: size.Allocatable{
+			MilliCpus: desiredCPU,
+			KBytes:    desiredMem * giBToKiB,
+		},
+		PhysicalMaxSize: size.Allocatable{
+			MilliCpus: physicalMaxCPU,
+			KBytes:    physicalMaxMem * giBToKiB,
 		},
 	}
 }

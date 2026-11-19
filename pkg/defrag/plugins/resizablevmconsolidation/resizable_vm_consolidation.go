@@ -66,8 +66,8 @@ func (p *plugin) String() string {
 }
 
 func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []string) *defrag.Candidate {
-	resizableNodesSnapshot := p.prepareResizableNodesSnapshot()
-	if resizableNodesSnapshot == nil {
+	sourceNodesSnapshot, destinationNodesSnapshot := p.prepareNodesSnapshots()
+	if len(destinationNodesSnapshot) == 0 {
 		return nil
 	}
 
@@ -78,14 +78,14 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 
 	potentialCandidates := []string{}
 	for _, nodeName := range nodeNames {
-		// Checks if node is resizable
-		resizableNode, found := resizableNodesSnapshot[nodeName]
+		// Checks if node is eligible for consolidation.
+		node, found := sourceNodesSnapshot[nodeName]
 		if !found {
 			continue
 		}
 
 		// Checks if node is small enough for consolidation
-		if !p.isSmallNode(resizableNode) {
+		if !p.isSmallNode(node) {
 			continue
 		}
 
@@ -98,7 +98,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 		potentialCandidates = append(potentialCandidates, nodeName)
 	}
 
-	if len(potentialCandidates) == 0 || !adjustBalloonPodsSize(clusterSnapshot, resizableNodesSnapshot) {
+	if len(potentialCandidates) == 0 || !adjustBalloonPodsSize(clusterSnapshot, destinationNodesSnapshot) {
 		return nil
 	}
 
@@ -108,7 +108,7 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 	candidates := []string{}
 	isCandidate := map[string]bool{}
 	for _, nodeName := range potentialCandidates {
-		if p.podsFromNodeReschedulable(clusterSnapshot, resizableNodesSnapshot, nodeName, isCandidate) {
+		if p.podsFromNodeReschedulable(clusterSnapshot, destinationNodesSnapshot, nodeName, isCandidate) {
 			isCandidate[nodeName] = true
 			candidates = append(candidates, nodeName)
 		}
@@ -122,8 +122,8 @@ func (p *plugin) NewCandidate(ctx *ca_context.AutoscalingContext, nodeNames []st
 }
 
 func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNames []string) []string {
-	resizableNodesSnapshot := p.prepareResizableNodesSnapshot()
-	if resizableNodesSnapshot == nil {
+	sourceNodesSnapshot, destinationNodesSnapshot := p.prepareNodesSnapshots()
+	if len(destinationNodesSnapshot) == 0 {
 		return nil
 	}
 
@@ -132,7 +132,7 @@ func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNam
 	clusterSnapshot.Fork()
 	defer clusterSnapshot.Revert()
 
-	if !adjustBalloonPodsSize(clusterSnapshot, resizableNodesSnapshot) {
+	if !adjustBalloonPodsSize(clusterSnapshot, destinationNodesSnapshot) {
 		return nil
 	}
 
@@ -143,7 +143,11 @@ func (p *plugin) ValidCandidateNodes(ctx *ca_context.AutoscalingContext, nodeNam
 
 	var candidateNodes []string
 	for _, nodeName := range nodeNames {
-		if p.podsFromNodeReschedulable(clusterSnapshot, resizableNodesSnapshot, nodeName, isCandidate) {
+		if _, found := sourceNodesSnapshot[nodeName]; !found {
+			klog.V(4).Infof("Defrag %s: node %s is no longer a consolidation candidate", PluginName, nodeName)
+			continue
+		}
+		if p.podsFromNodeReschedulable(clusterSnapshot, destinationNodesSnapshot, nodeName, isCandidate) {
 			candidateNodes = append(candidateNodes, nodeName)
 		} else {
 			klog.V(4).Infof("Defrag %s: pods from node %s cannot be rescheduled", PluginName, nodeName)
@@ -174,8 +178,7 @@ func (p *plugin) isSmallNode(node operationtracker.ResizableNode) bool {
 	return cpuRatio < cpuConsolidationRatio && memoryRatio < memoryConsolidationRatio
 }
 
-func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.ClusterSnapshot, resizableNodesSnapshot operationtracker.ResizableNodesSnapshot, nodeName string, isCandidate map[string]bool) bool {
-	// Collecting workload pods from node
+func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.ClusterSnapshot, destinationNodesSnapshot operationtracker.ResizableNodesSnapshot, nodeName string, isCandidate map[string]bool) bool {
 	nodeInfo, err := clusterSnapshot.GetNodeInfo(nodeName)
 	if err != nil {
 		klog.Errorf("Defrag %s: failed to get node info for node %v: %v", PluginName, nodeName, err)
@@ -195,10 +198,10 @@ func (p *plugin) podsFromNodeReschedulable(clusterSnapshot clustersnapshot.Clust
 		return false
 	}
 
-	// Prevent simulation on non resizable nodes or current candidates
+	// Prevent simulation on non-resizable nodes or current candidates.
 	isNodeAcceptable := func(schedulingCandidateNodeInfo *framework.NodeInfo) bool {
 		node := schedulingCandidateNodeInfo.Node()
-		_, found := resizableNodesSnapshot[node.Name]
+		_, found := destinationNodesSnapshot[node.Name]
 		if !found {
 			return false
 		}
@@ -260,17 +263,31 @@ func (p *plugin) trySchedulePods(clusterSnapshot clustersnapshot.ClusterSnapshot
 	return unschedulable, nil
 }
 
-func (p *plugin) prepareResizableNodesSnapshot() operationtracker.ResizableNodesSnapshot {
+func (p *plugin) prepareNodesSnapshots() (sourceNodes, destinationNodes operationtracker.ResizableNodesSnapshot) {
 	if p.resizableVmManager == nil {
 		klog.V(4).Infof("Defrag %s: Resizable VM manager is not initialized", PluginName)
-		return nil
+		return nil, nil
 	}
-	resizableNodesSnapshot := p.resizableVmManager.FilteredNodesSnapshot(false, operationtracker.ResizableOnly)
-	if len(resizableNodesSnapshot) == 0 {
-		klog.V(4).Infof("Defrag %s: No resizable nodes found", PluginName)
-		return nil
+	filterMode := operationtracker.ResizableOnly
+	if p.experimentsManager != nil && p.experimentsManager.EvaluateBoolFlagOrFailsafe(experiments.EkDownsizeNonResizableFlag, false) {
+		filterMode = operationtracker.DownsizableOnly
 	}
-	return resizableNodesSnapshot
+	sourceNodes = p.resizableVmManager.FilteredNodesSnapshot(false, filterMode)
+	if len(sourceNodes) == 0 {
+		klog.V(4).Infof("Defrag %s: No consolidation candidate nodes found (mode: %s)", PluginName, filterMode)
+		return nil, nil
+	}
+	destinationNodes = make(operationtracker.ResizableNodesSnapshot, len(sourceNodes))
+	for nodeName, node := range sourceNodes {
+		if node.IsResizable() {
+			destinationNodes[nodeName] = node
+		}
+	}
+	if len(destinationNodes) == 0 {
+		klog.V(4).Infof("Defrag %s: No resizable destination nodes found", PluginName)
+		return nil, nil
+	}
+	return sourceNodes, destinationNodes
 }
 
 func adjustBalloonPodsSize(clusterSnapshot clustersnapshot.ClusterSnapshot, resizableNodesSnapshot operationtracker.ResizableNodesSnapshot) bool {
