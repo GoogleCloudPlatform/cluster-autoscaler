@@ -20,13 +20,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/util/version"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/crd"
 	cc_processors "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/processors"
-	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
-
-	v1 "k8s.io/api/core/v1"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/defrag/plugins/config"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/lookaheadbuffer"
@@ -34,9 +32,12 @@ import (
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/processor"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/size"
 	ekvms_test "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/ekvms/test"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"sigs.k8s.io/cluster-autoscaler/pkg/context"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/clustersnapshot/testsnapshot"
 	"sigs.k8s.io/cluster-autoscaler/pkg/simulator/framework"
+	"sigs.k8s.io/cluster-autoscaler/pkg/utils/drain"
+	podutils "sigs.k8s.io/cluster-autoscaler/pkg/utils/pod"
 	"sigs.k8s.io/cluster-autoscaler/pkg/utils/test"
 )
 
@@ -122,6 +123,82 @@ func TestNewCandidate(t *testing.T) {
 			nodeNames:                 []string{"ek-node-1"},
 			wantCandidateNodeNames:    []string{"ek-node-1"},
 			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "Movable kube-system pod fits on resizable peer - node is candidate",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(5000, 20, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestSystemPod("konnectivity-agent", "ek-node-1", 500, 1),
+					buildTestDaemonSetPod("fluentbit", "ek-node-1", 200, 1),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 6000, 25),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 5000, 20),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 2500, 10),
+				},
+			},
+			nodeNames:                 []string{"ek-node-1"},
+			wantCandidateNodeNames:    []string{"ek-node-1"},
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "Movable kube-system pod cannot fit on resizable peer - no candidates",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(7000, 29, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestSystemPod("konnectivity-agent", "ek-node-1", 1000, 2),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 6000, 25),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 7000, 29),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 500, 1),
+				},
+			},
+			nodeNames:                 []string{"ek-node-1"},
+			wantCandidateNodeNames:    nil,
+			wantLatestUnfitNodesCount: 1,
+		},
+		{
+			name:                  "Node with no recreatable pods is skipped for default scale down",
+			maxCandidateNodeCount: 5,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(1500, 5, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(2000, 8, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestDaemonSetPod("fluentbit", "ek-node-1", 200, 1),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 6000, 25),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 2000, 8),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 5500, 22),
+				},
+			},
+			nodeNames:                 []string{"ek-node-1"},
+			wantCandidateNodeNames:    nil,
+			wantLatestUnfitNodesCount: 0,
 		},
 	}
 
@@ -608,6 +685,79 @@ func TestValidCandidateNodes(t *testing.T) {
 				experiments.E4aPreventScheduleOnLookaheadNodesFlag: false,
 			},
 		},
+		{
+			name:                  "Movable kube-system pod fits on resizable peer - candidate remains valid",
+			maxCandidateNodeCount: 1,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(2500, 10, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(5000, 20, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestSystemPod("konnectivity-agent", "ek-node-1", 500, 1),
+					buildTestDaemonSetPod("fluentbit", "ek-node-1", 200, 1),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 5000, 20),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 5000, 20),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 2500, 10),
+				},
+			},
+			nodeNames:               []string{"ek-node-1"},
+			wantValidCandidateNodes: []string{"ek-node-1"},
+		},
+		{
+			name:                  "Movable kube-system pod cannot fit on resizable peer - candidate invalidated",
+			maxCandidateNodeCount: 1,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(2500, 10, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(7000, 29, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestSystemPod("konnectivity-agent", "ek-node-1", 1000, 2),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 5000, 20),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 7000, 29),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 500, 1),
+				},
+			},
+			nodeNames:               []string{"ek-node-1"},
+			wantValidCandidateNodes: nil,
+		},
+		{
+			name:                  "Candidate with no recreatable pods is invalidated for default scale down",
+			maxCandidateNodeCount: 1,
+			resizableNodesSnapshot: operationtracker.ResizableNodesSnapshot{
+				"ek-node-1": buildTestResizableNodeObject(2500, 10, 7500, 30),
+				"ek-node-2": buildTestResizableNodeObject(2500, 10, 7500, 30),
+			},
+			nodes: []*v1.Node{
+				node8(machinetypes.EK.Name(), "ek-node-1", 8000, 32),
+				node8(machinetypes.EK.Name(), "ek-node-2", 8000, 32),
+			},
+			podsPerNode: map[string][]*v1.Pod{
+				"ek-node-1": {
+					buildTestDaemonSetPod("fluentbit", "ek-node-1", 200, 1),
+					buildTestBalloonPod("ek-node-1-balloon-pod", "ek-node-1", 5000, 20),
+				},
+				"ek-node-2": {
+					buildTestPod("ek-node-2-pod", "ek-node-2", 2500, 5),
+					buildTestBalloonPod("ek-node-2-balloon-pod", "ek-node-2", 4000, 25),
+				},
+			},
+			nodeNames:               []string{"ek-node-1"},
+			wantValidCandidateNodes: nil,
+		},
 	}
 
 	for _, family := range []string{machinetypes.EK.Name(), machinetypes.E4A.Name(), machinetypes.E4.Name()} {
@@ -869,6 +1019,26 @@ func buildTestResizableNodeObject(desiredCPU, desiredMem, upsizableMaxCPU, upsiz
 
 func buildTestPod(name, nodeName string, cpu, mem int64) *v1.Pod {
 	return test.BuildTestPod(name, cpu, mem*giBToBytes, func(pod *v1.Pod) {
+		pod.Spec.NodeName = nodeName
+	})
+}
+
+func buildTestSystemPod(name, nodeName string, cpu, mem int64) *v1.Pod {
+	return test.BuildTestPod(name, cpu, mem*giBToBytes, func(pod *v1.Pod) {
+		pod.ObjectMeta.Namespace = "kube-system"
+		pod.ObjectMeta.Annotations = map[string]string{
+			drain.PodSafeToEvictKey: "true",
+		}
+		pod.Spec.NodeName = nodeName
+	})
+}
+
+func buildTestDaemonSetPod(name, nodeName string, cpu, mem int64) *v1.Pod {
+	return test.BuildTestPod(name, cpu, mem*giBToBytes, func(pod *v1.Pod) {
+		pod.ObjectMeta.Namespace = "kube-system"
+		pod.ObjectMeta.Annotations = map[string]string{
+			podutils.DaemonSetPodAnnotationKey: "true",
+		}
 		pod.Spec.NodeName = nodeName
 	})
 }
