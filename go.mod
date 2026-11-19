@@ -44,7 +44,7 @@ require (
 	k8s.io/kubelet v0.37.2
 	k8s.io/kubernetes v1.37.2
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
-	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261110134206-b0acfe39ee90
+	sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261116133223-dc6df3b03377
 	sigs.k8s.io/controller-runtime v0.25.2
 	sigs.k8s.io/karpenter v1.15.1
 	sigs.k8s.io/structured-merge-diff/v4 v4.7.0
@@ -223,4 +223,4 @@ replace github.com/golang/glog => ./modreplaces/glog
 
 replace k8s.io/autoscaler/cluster-autoscaler => k8s.io/autoscaler/cluster-autoscaler v0.0.0-20260924204426-714dd7841448
 
-replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261110134206-b0acfe39ee90
+replace sigs.k8s.io/cluster-autoscaler => sigs.k8s.io/cluster-autoscaler v0.0.0-k8s.v1.37.0.0.20261116133223-dc6df3b03377
