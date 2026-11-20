@@ -37,7 +37,7 @@ import dataclasses
 import json
 import re
 from collections.abc import Mapping
-from typing import Any, Self
+from typing import Any
 
 import versions
 
@@ -73,7 +73,7 @@ class TagEntry:
     release_notes: list[str]
 
     @classmethod
-    def from_dict(cls, data: object, where: str) -> Self:
+    def from_dict(cls, data: object, where: str) -> "TagEntry":
         entry = cls(**_object(data, cls, where))
         if not all(
             isinstance(value, str) and value for value in (entry.date, entry.gerrit_commit, entry.github_commit)
@@ -96,7 +96,7 @@ class TrackEntry:
     tags: dict[str, TagEntry] = dataclasses.field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: object, where: str) -> Self:
+    def from_dict(cls, data: object, where: str) -> "TrackEntry":
         tags = _object(data, cls, where)["tags"]
         if not isinstance(tags, dict):
             raise versions.ErrorOccurred(f"{where}: tags must be a JSON object")
@@ -121,7 +121,7 @@ class Manifest:
     releases: dict[str, TrackEntry] = dataclasses.field(default_factory=dict)
 
     @classmethod
-    def loads(cls, text: str, where: str = PATH) -> Self:
+    def loads(cls, text: str, where: str = PATH) -> "Manifest":
         try:
             data = _object(json.loads(text), cls, where)
         except json.JSONDecodeError as e:
