@@ -56,11 +56,13 @@ import (
 	componentopts "k8s.io/component-base/config/options"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/config"
+	internalautoscaler "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/autoscaler"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/cloudprovider/gke/machinetypes"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/computeclass/controller/capacitybuffers"
 	internalopts "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/cli"
 	optstracking "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/config/options/tracking"
+	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/experiments"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/gkedebuggingsnapshot"
 	"k8s.io/gke-autoscaling/cluster-autoscaler/pkg/lockwatchdog"
 	internalmetrics "k8s.io/gke-autoscaling/cluster-autoscaler/pkg/metrics"
@@ -97,13 +99,56 @@ func (f runOnceFunc) RunOnce(ctx context.Context, currentTime time.Time) caerror
 	return f(ctx, currentTime)
 }
 
-func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter, lockWatchdog *lockwatchdog.Watchdog) {
+// startExperimentsManager starts experimentsManager in a background goroutine
+// and returns a stop function that cancels it and waits for it to exit.
+func startExperimentsManager(ctx context.Context, experimentsManager experiments.Manager) func() {
+	expCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := experimentsManager.Start(expCtx); err != nil {
+			klog.Errorf("Experiments manager exited with error: %v", err)
+		}
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func run(ctx context.Context, healthCheck *metrics.HealthCheck, optionsFromFlags internalopts.AutoscalingOptions, optsTracker *optstracking.OptionsTracker, gkeDebuggingSnapshotter *gkedebuggingsnapshot.GkeDebuggingSnapshotter, lockWatchdog *lockwatchdog.Watchdog) {
+	experimentsManager := optsTracker.ExperimentsManager()
+	// Start the experiments manager before stand-by waits (e.g. ConfigMap
+	// watch; Giraffe already refreshes in the background), so experiment
+	// updates can wake a sleeping instance and options stay fresh.
+	stopExperiments := startExperimentsManager(ctx, experimentsManager)
+	defer stopExperiments()
+
+	opts := optsTracker.Options()
+	// A CA instance that handles only annotated ComputeClasses, e.g. the
+	// solver, doesn't start until it owns one. Once started, it doesn't go back
+	// to waiting.
+	// It waits before registering metrics, so that while waiting it exports
+	// none, like a replica that isn't the leader. Registered but never set,
+	// gauges like cluster_safe_to_autoscale would read 0.
+	if !internalopts.HandlesUnannotated(opts.AutoscalerNames) {
+		if err := internalautoscaler.WaitForOwnedComputeClass(ctx, opts, experimentsManager); err != nil {
+			klog.Infof("Stopped waiting for an owned ComputeClass: %v", err)
+			return
+		}
+		// WaitForOwnedComputeClass can block for days or weeks, during which
+		// the experiments ConfigMap may change. Rebuild OptionsTracker from
+		// the live experimentsManager before building the autoscaler so it
+		// doesn't start with stale options.
+		optsTracker = optstracking.NewOptionsTracker(optionsFromFlags, experimentsManager)
+		opts = optsTracker.Options()
+	}
+
 	schedulermetrics.Register()
 	metrics.RegisterAll(false)
 	internalmetrics.RegisterAll()
-
-	opts := optsTracker.Options()
 	internalmetrics.UpdateComponentFlagOverrides(opts.FlagOverrideResult.Stats)
+
 	restConfig := kube_util.GetKubeConfig(opts.KubeClientOpts)
 	mgr, err := ctrl.NewManager(restConfig, ctrl.Options{
 		Scheme: scheme,
@@ -131,10 +176,6 @@ func run(ctx context.Context, healthCheck *metrics.HealthCheck, optsTracker *opt
 	})
 	if err != nil {
 		klog.Fatalf("Failed to create manager: %v", err)
-	}
-
-	if err := mgr.Add(optsTracker.ExperimentsManager()); err != nil {
-		klog.Fatalf("Failed to add experiments manager to manager: %v", err)
 	}
 
 	builder := initBuilder(ctx, optsTracker, mgr)
@@ -331,7 +372,7 @@ func main() {
 	}()
 
 	if !leaderElection.LeaderElect {
-		run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
+		run(rootCtx, healthCheck, optionsFromFlags, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
 	} else {
 		id, err := os.Hostname()
 		if err != nil {
@@ -379,7 +420,7 @@ func main() {
 						// Termination was requested while acquiring the lease: don't start, just release it.
 						return
 					}
-					run(rootCtx, healthCheck, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
+					run(rootCtx, healthCheck, optionsFromFlags, optsTracker, gkeDebuggingSnapshotter, lockWatchdog)
 				},
 				OnStoppedLeading: func() {
 					if electionCtx.Err() != nil {

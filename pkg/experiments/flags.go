@@ -392,3 +392,10 @@ const LockWaitWatchdogEnabledFlag = "LockWaitWatchdog::Enabled"
 const LockWaitWatchdogMinCAVersionFlag = "LockWaitWatchdog::MinCAVersion"
 
 const AutopilotManagedNodePoolDefaultSurgeSettingsFlag = "Autopilot::ManagedNodePoolDefaultSurgeSettings" // Direct launch.
+
+// StandbyModeFeature gates stand-by mode (waiting before starting when a non-*
+// CA instance owns no ComputeClasses) via StandbyMode::MinCAVersion and
+// StandbyMode::Enabled. Defaults to enabled (failsafe=true) when unset.
+// Note: evaluated before GkeManager fetches the Cluster proto, so Giraffe rules
+// targeting release_channel won't match here.
+const StandbyModeFeature = "StandbyMode"
