@@ -9,6 +9,21 @@
           "github_commit": "ee04c73b035ca0bbd9821682739538231157a4a1",
           "qualified": true,
           "release_notes": []
+        },
+        "cluster-autoscaler-v37.248.0": {
+          "date": "2026-11-16T11:06:23Z",
+          "gerrit_commit": "e904cf6b43251d8afcf58ee28b3d8d3cd23df926",
+          "github_commit": "53c480085a09ea1f0e4039c2280399f4ee2a5a32",
+          "qualified": false,
+          "release_notes": [
+            "Cluster autoscaler noScaleUp visibility events now list node pools that were rejected only because of insufficient resources (NodeResourcesFit) first.",
+            "refreshMachinesCache now runs asynchronous refreshes after initial fetch, GetMachineType treats resulting cache authoritatively without falling back to GET MachineType requests",
+            "ComputeClasses whose name is longer than 63 characters are now reported as CrdMisconfigured (reason InvalidComputeClassName) and Health=False, and cluster autoscaler no longer tries to provision their minimum capacity.",
+            "Extended the histogram bucket boundaries for binpacking_node_groups_total,",
+            "Fixed NAP node templates predicting the iam.gke.io/gke-metadata-server-enabled and iam.gke.io/workload-identity-image-pull-enabled labels for ComputeClass node pools with workloadMetadata GCE_METADATA, Autopilot-managed node pools with image streaming, and during rollback-safe upgrades.",
+            "Enables nested virtualization support on E4 machine types.",
+            "Cluster autoscaler no longer repeats GCE MIG list and get requests to a zone after listing the MIGs in that zone failed earlier in the same loop, for example when the GCE read requests quota is exhausted."
+          ]
         }
       }
     }
