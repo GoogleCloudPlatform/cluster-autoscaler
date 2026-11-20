@@ -1,0 +1,56 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Publishes releases.json as GitHub tags and releases, see hack/selfhosted/publish-releases.py.
+#
+# Runs whenever releases.json changes on main: changes to it are reviewed before they are
+# exported here, so the merge is the approval.
+name: Publish releases
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - releases.json
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: publish-releases
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Manual runs can be started on any branch, they are ignored outside of main.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # A run of an older commit, queued behind a newer push or re-run by hand, would publish an
+      # outdated manifest, e.g. move the latest release back. Only the tip of main is published.
+      - name: Check that the commit is the tip of main
+        run: |
+          tip="$(git ls-remote "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" refs/heads/main | cut -f1)"
+          [ "${tip}" = "${GITHUB_SHA}" ] || { echo "::error::${GITHUB_SHA} is not the tip of main (${tip})"; exit 1; }
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 hack/selfhosted/publish-releases.py --yes
