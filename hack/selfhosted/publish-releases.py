@@ -23,6 +23,7 @@ import argparse
 import pathlib
 import subprocess
 import sys
+import urllib.error
 
 import manifest
 import releases
@@ -51,16 +52,12 @@ def parse_args() -> argparse.Namespace:
         help="Manifest to publish (default: %(default)s)",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the changes without asking to apply them")
-    parser.add_argument(
-        "--plan-file",
-        type=pathlib.Path,
-        help="Write the changes to this file without logs, like 'terraform plan', and change nothing",
-    )
     parser.add_argument("--yes", action="store_true", help="Apply the changes without asking, e.g. in CI")
-    args = parser.parse_args()
-    if args.plan_file and args.yes:
-        parser.error("--plan-file never applies the changes, it cannot be combined with --yes")
-    return args
+    return parser.parse_args()
+
+
+def gh(*args: str) -> str:
+    return subprocess.run(["gh", *args], capture_output=True, text=True, check=True).stdout
 
 
 def format_release_body(release: releases.Release) -> str:
@@ -76,7 +73,7 @@ def state_flags(state: releases.ReleaseState) -> list[str]:
 
 
 def create_tag(release: releases.Release) -> None:
-    releases.gh(
+    gh(
         "api",
         "--method",
         "POST",
@@ -93,11 +90,11 @@ def create_release(release: releases.Release) -> None:
     cmd += ["--notes", format_release_body(release), "--generate-notes"]
     if release.previous:
         cmd += ["--notes-start-tag", release.previous.tag]
-    releases.gh(*cmd, *state_flags(release.state))
+    gh(*cmd, *state_flags(release.state))
 
 
 def update_release(release: releases.Release) -> None:
-    releases.gh("release", "edit", release.tag, "--repo", REPO, *state_flags(release.state))
+    gh("release", "edit", release.tag, "--repo", REPO, *state_flags(release.state))
 
 
 def confirm(assume_yes: bool) -> bool:
@@ -124,34 +121,8 @@ def apply_plan(plan: releases.Plan) -> None:
 def main() -> None:
     args = parse_args()
 
-    existing_tags = releases.list_tags()
-    github_states = releases.list_releases()
-    print(f">>> {REPO}: {len(existing_tags)} release tags, {len(github_states)} releases.")
-    to_publish = releases.load_releases(args.manifest, github_states)
-    print(f">>> {args.manifest}: {len(to_publish)} releases.")
-
-    conflicts = [
-        release
-        for release in to_publish
-        if release.tag in existing_tags and existing_tags[release.tag] != release.github_commit
-    ]
-    for release in conflicts:
-        print(
-            f">>> Conflict: {release.tag} exists at {existing_tags[release.tag]}, "
-            f"manifest says {release.github_commit}",
-            file=sys.stderr,
-        )
-    if conflicts:
-        raise versions.ErrorOccurred("tags are never moved, resolve the conflicts above manually")
-
-    plan = releases.make_plan(to_publish, existing_tags)
-    current_latest = next((tag for tag, state in github_states.items() if state is releases.ReleaseState.LATEST), None)
-    plan_text = plan.format(current_latest)
+    plan, plan_text = releases.plan_manifest(manifest.Manifest.loads(args.manifest.read_text(), str(args.manifest)))
     print(plan_text, end="")
-    if args.plan_file:
-        args.plan_file.write_text(plan_text)
-        print(f">>> Plan written to {args.plan_file}, nothing was changed.")
-        return
     if plan.empty():
         return
     if args.dry_run:
@@ -173,4 +144,7 @@ if __name__ == "__main__":
         print(f">>> Error: '{' '.join(map(str, e.cmd))}' failed with exit code {e.returncode}", file=sys.stderr)
         if e.stderr:
             print(e.stderr.strip(), file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.HTTPError as e:
+        print(f">>> Error: {e.url} failed with HTTP {e.code} {e.reason}", file=sys.stderr)
         sys.exit(1)
