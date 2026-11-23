@@ -26,3 +26,7 @@ wiktork@google.com
 witkiewicz@google.com
 
 per-file go.mod,go.mod-extra.internal,go.sum,main.go,Makefile,oss.sync,push_image.sh,update_toc.py,version.go,vendor/**=*
+
+# Changes to releases.json are reviewed by the CA OSS team.
+per-file releases.json=set noparent
+per-file releases.json=file:/hack/internal/oss/release/OWNERS
